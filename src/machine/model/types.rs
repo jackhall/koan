@@ -18,8 +18,8 @@ pub use resolver::{elaborate_type_expr, ElabResult, Elaborator};
 #[allow(unused_imports)]
 pub use signature::Specificity;
 pub use signature::{
-    is_keyword_token, Argument, DeferredReturn, ExpressionSignature, ReturnType, SignatureElement,
-    UntypedElement, UntypedKey,
+    is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, ExpressionSignature,
+    ReturnType, SignatureElement, UntypedElement, UntypedKey,
 };
 pub use typed_field_list::{
     parse_typed_field_list_via_elaborator, FieldListOutcome, FieldNameKind,

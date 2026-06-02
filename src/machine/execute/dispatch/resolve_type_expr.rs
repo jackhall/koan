@@ -196,6 +196,8 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
                     self.stack.push(ctor);
                 }
                 // Leaves / wildcards: no nested user‑type references at this level.
+                // `DeferredReturn` carries only a hashable surface shadow (no nested
+                // `KType`), so it bottoms out here.
                 KType::Number
                 | KType::Str
                 | KType::Bool
@@ -208,6 +210,7 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
                 | KType::AnySignature
                 | KType::Any
                 | KType::AnyUserType { .. }
+                | KType::DeferredReturn(_)
                 | KType::RecursiveRef(_) => {}
             }
         }

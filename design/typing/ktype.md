@@ -10,7 +10,9 @@
   so a function-typed slot's identity is its parameters by name and type
   (order-blind). The sibling `KFunctor { params: Record<KType>, ret }` shares the
   storage and identity rules; the variant tag keeps the two families admissibly
-  disjoint (see [functors.md](functors.md)).
+  disjoint (see [functors.md](functors.md)). When a function's source return is
+  per-call-elaborated, its `ret` box holds a `DeferredReturn(DeferredReturnSurface)`
+  carrier — see [Record fields and `KType` hashing](#record-fields-and-ktype-hashing).
 - Structural record: `Record(Box<Record<KType>>)` — an identifier-keyed field schema
   (`:{x :Number, y :Str}`), distinct from the nominal `UserType { kind: Struct }`
   (records are structural, structs nominal). A record *value* (`KObject::Record`,
@@ -158,6 +160,18 @@ genuinely incomparable — an `(x :Any) -> R` value against both
 dispatch ties and surfaces `AmbiguousDispatch`. The `List` / `Dict` covariance
 is observable the same way: `(xs :(LIST OF Number))` strictly outranks
 `(xs :(LIST OF Any))` for a number-list call.
+
+**Return admission splits on whether the value's return is resolved or
+deferred.** A `Resolved` value return admits covariantly as above — `sig_ret ==
+ret || sig_ret ≺ ret`. A *deferred* value return (a per-call-elaborated functor
+return like `-> Er`) carries no resolved `KType`, so `function_compat` admits it
+by **syntactic equality of its surface shadow**: an `Any` slot admits any
+deferred return; a slot whose `ret` is a `KType::DeferredReturn` carrier admits
+iff its `DeferredReturnSurface` shadow equals the candidate's; any resolved slot
+rejects, since a deferred return is opaque until per-call elaboration and refines
+nothing more precise than its own shadow. The specificity short-circuit
+`DeferredReturn ≺ Any` (covariant, via the `Any` arm) keeps a deferred-return
+slot strictly more specific than an `Any`-return one.
 
 **Record values subtype the dual way to function params.** A record value is
 ranked by `record_value_more_specific`
@@ -518,6 +532,17 @@ hashes exactly the fields its `PartialEq` arm compares. The arena-pointer varian
 their stable identity key — `Module` / `AbstractType` hash `scope_id()`, `Signature`
 hashes `sig_id()` — never the raw pointer, and `UserTypeKind`'s payload-ignoring
 equality is mirrored by a discriminant-only `Hash`.
+
+`KType::DeferredReturn(DeferredReturnSurface)` is a confined hashable leaf: it
+holds the type-language shadow of a per-call-elaborated function return —
+`TypeExpr(TypeName)` for parser-preserved leaf forms, `Expression(String)` for
+the canonical `summarize()` render of a parens-form return (the live
+`KExpression` impls neither `Eq` nor `Hash`). It hashes and compares by that
+shadow, so two functions differing only in their deferred returns are distinct
+structural types. The variant is valid *only* inside a synthesized
+`KFunction` / `KFunctor` `ret` box that `function_value_ktype` builds; no runtime
+value's `ktype()` returns it free-standing, and it admits nothing on its own
+(`accepts_part` is `false`).
 
 The same `Record<V>` substrate also backs the first-class structural record type
 `KType::Record(Record<KType>)` and its value `KObject::Record(Record<KObject>, …)`

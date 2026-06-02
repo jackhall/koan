@@ -61,6 +61,15 @@ site needs.
   walk that locates each type parameter inside a parameter slot (`LIST OF Ty`,
   `Result Ty E`, nested containers, a name repeated across slots) lives here,
   matching the slot's elaborated `KType` against the value's carried `KType`.
+- *Deferred-parameter type precision — open.* A parameter slot referencing a
+  type parameter not yet solved by implicit-functor resolution has no carrier in
+  the `params: Record<KType>` storage, so it coarsens to `KType::Any` and admission
+  reads `Any` on both sides. The deferred-*return* case already ships its fix — a
+  confined `KType::DeferredReturn` shadow carried in the `ret` box, admitted by
+  syntactic shadow equality
+  ([ktype.md § Variance](../../design/typing/ktype.md#variance)); the parameter side
+  wants the contravariant mirror. Recommended: reuse the surface-shadow shape for
+  symmetry, decided alongside the resolution that first produces such a slot.
 - *Implicit-parameter declaration syntax — open.* The function signature
   needs a slot for implicit module parameters; surface form follows stage
   1's conventions but the exact spelling is unsettled.
@@ -96,11 +105,6 @@ site needs.
 
 **Requires:**
 
-- [Structural KFunction admission across deferred return types](../type_language/kfunction-deferred-ret-precision.md)
-  — implicit search over functor-shaped candidates whose return
-  types reference per-call parameters needs precision-aware
-  structural-`KType` comparison; today's coarsening collapses
-  `Deferred(_)` to `KType::Any` at the structural-synthesis site.
 - [VAL-slot ATTR re-tagging](../type_language/val-slot-attr-retagging.md)
   — implicit search dispatches on parameter types; VAL-slot reads
   must carry the SIG's abstract identity so dispatch keys align with

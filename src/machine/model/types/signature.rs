@@ -78,6 +78,34 @@ pub enum DeferredReturn<'a> {
     Expression(KExpression<'a>),
 }
 
+/// Hashable type-language shadow of a [`DeferredReturn`], stored inside
+/// `KType::DeferredReturn`. The `Expression` carrier holds the canonical `summarize()`
+/// render — NOT the live `KExpression`, which impls neither `Eq` nor `Hash`. Identity is
+/// syntactic, matching `DeferredReturn`'s own `PartialEq` (`TypeExpr` by name, `Expression`
+/// by canonical render), so a synthesized `KType::DeferredReturn` ret slot compares,
+/// hashes, and ranks by the same surface form `ExpressionSignature::exact_equal` uses.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum DeferredReturnSurface {
+    TypeExpr(TypeName),
+    Expression(String),
+}
+
+impl DeferredReturnSurface {
+    pub fn from_deferred(d: &DeferredReturn<'_>) -> Self {
+        match d {
+            DeferredReturn::TypeExpr(t) => Self::TypeExpr(t.clone()),
+            DeferredReturn::Expression(e) => Self::Expression(e.summarize()),
+        }
+    }
+
+    pub fn render(&self) -> String {
+        match self {
+            Self::TypeExpr(t) => t.render(),
+            Self::Expression(s) => s.clone(),
+        }
+    }
+}
+
 impl<'a> Clone for ReturnType<'a> {
     fn clone(&self) -> Self {
         match self {

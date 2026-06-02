@@ -429,6 +429,9 @@ impl<'a> KType<'a> {
             },
             KType::Mu { body, .. } => body.accepts_part(part),
             KType::RecursiveRef(_) => true,
+            // Confined to a synthesized FN/FUNCTOR `ret` slot — never a free-standing
+            // argument slot, so it admits nothing on its own.
+            KType::DeferredReturn(_) => false,
             // Meta-type path: no runtime carrier synthesizes a `ConstructorApply`
             // `ktype()`, so admit only `Future(KTypeValue(_))` with structurally-equal
             // inner `KType`.
@@ -519,12 +522,15 @@ pub fn result_field_param_index(carrier_name: &str, tag: &str) -> Option<usize> 
 /// Sound, order-blind, name-keyed function subtyping: does the value function `sig`
 /// fill the slot whose params record is `params` and return type is `ret`? Reasoned
 /// against call-by-name invocation (params arrive name-keyed), so the variance is:
-/// - Return covariant: `sig_ret == ret || sig_ret ≺ ret` — a value returning a subtype
-///   of the slot's promised return fills the slot. A `Deferred(_)` return collapses to
-///   `KType::Any`, and `Any ≺ _` is `false`, so a deferred-return candidate still only
-///   fills an `Any`-return slot; the covariant `false` is its safety net (no expansion
-///   into deferred-ret precision here — see
-///   [roadmap/kfunction-deferred-ret-precision.md](../../../../roadmap/type_language/kfunction-deferred-ret-precision.md)).
+/// - Return covariant for a `Resolved` value return: `sig_ret == ret || sig_ret ≺ ret`
+///   — a value returning a subtype of the slot's promised return fills the slot.
+/// - Return *syntactic* for a `Deferred` value return: the deferred surface form is
+///   compared against the slot's `ret`. An `Any` slot admits any deferred return; a
+///   `KType::DeferredReturn` slot (synthesized from another deferred-return FN) admits
+///   iff its surface shadow equals the candidate's; every other slot rejects, because a
+///   deferred return is opaque until per-call elaboration and so refines nothing more
+///   precise than its own shadow. See
+///   [ktype.md § Variance](../../../../design/typing/ktype.md#variance).
 /// - Params contravariant with width-drop: every `Argument` the value declares must
 ///   appear in `params` (a value-required param the slot doesn't promise is a width
 ///   violation → `false`); for a shared name, the slot's param must be equal-or-more-
@@ -537,20 +543,16 @@ pub(super) fn function_compat<'a>(
     ret: &KType<'a>,
     _slot_is_functor: bool,
 ) -> bool {
-    use crate::machine::model::types::ReturnType;
-    let sig_ret_kt: &KType<'a> = match &sig.return_type {
-        ReturnType::Resolved(kt) => kt,
-        ReturnType::Deferred(_) => {
-            debug_assert!(
-                matches!(ret, KType::Any),
-                "Deferred-return FN candidate against non-Any slot ret ({:?}) — \
-                 see ktype_predicates.rs::function_compat for the unresolved case",
-                ret,
-            );
-            &KType::Any
-        }
+    use crate::machine::model::types::{DeferredReturnSurface, ReturnType};
+    let ret_ok = match &sig.return_type {
+        ReturnType::Resolved(kt) => kt == ret || kt.is_more_specific_than(ret),
+        ReturnType::Deferred(d) => match ret {
+            KType::Any => true,
+            KType::DeferredReturn(slot) => &DeferredReturnSurface::from_deferred(d) == slot,
+            _ => false,
+        },
     };
-    if !(sig_ret_kt == ret || sig_ret_kt.is_more_specific_than(ret)) {
+    if !ret_ok {
         return false;
     }
     for el in &sig.elements {

@@ -11,6 +11,7 @@
 //! arena pointers; every other variant is owned data and ignores the parameter.
 
 use super::record::Record;
+use super::signature::DeferredReturnSurface;
 use crate::machine::core::{CallArena, ScopeId};
 use crate::machine::model::values::{Module, Signature};
 use std::collections::HashMap;
@@ -137,6 +138,17 @@ pub enum KType<'a> {
         params: Record<KType<'a>>,
         ret: Box<KType<'a>>,
     },
+    /// Confined carrier for a synthesized FN/FUNCTOR `ret` slot whose source return is a
+    /// `ReturnType::Deferred` — a per-call-elaborated return like `-> Er` or
+    /// `-> (MODULE_TYPE_OF Er Type)`. Holds only the hashable surface shadow
+    /// ([`DeferredReturnSurface`]) so equality/hashing/specificity read the deferred
+    /// shape directly instead of coarsening it to `Any`. Valid *only* inside a
+    /// `KFunction`/`KFunctor` `ret` box that `function_value_ktype` builds; no runtime
+    /// value's `ktype()` returns it, and it admits nothing on its own
+    /// (`accepts_part` is `false`). Admission against a precise slot is syntactic
+    /// equality of the surface shadow — see
+    /// [ktype.md § Variance](../../../../design/typing/ktype.md#variance).
+    DeferredReturn(DeferredReturnSurface),
     Identifier,
     /// Lazy slot: accepts an unevaluated `ExpressionPart::Expression` so the builtin chooses
     /// when (or whether) to run it.
@@ -235,6 +247,7 @@ impl<'a> KType<'a> {
                     ret.name()
                 )
             }
+            KType::DeferredReturn(s) => s.render(),
             KType::Identifier => "Identifier".into(),
             KType::KExpression => "KExpression".into(),
             KType::TypeExprRef => "TypeExprRef".into(),
@@ -387,6 +400,7 @@ impl<'a> PartialEq for KType<'a> {
                 c1 == c2 && a1 == a2
             }
             (RecursiveRef(n1), RecursiveRef(n2)) => n1 == n2,
+            (DeferredReturn(a), DeferredReturn(b)) => a == b,
             _ => false,
         }
     }
@@ -456,6 +470,7 @@ impl<'a> std::hash::Hash for KType<'a> {
                 args.hash(state);
             }
             RecursiveRef(n) => n.hash(state),
+            DeferredReturn(s) => s.hash(state),
         }
     }
 }
