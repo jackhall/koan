@@ -88,7 +88,7 @@ fn bare_type_leaf_short_circuits() {
     );
 }
 
-/// User-facing named-arg path. `f (x = 7)` against a signature with a leading
+/// User-facing named-arg path. `f {x = 7}` against a signature with a leading
 /// keyword `DOUBLE` elides the keyword via the fast lane's named-arg admission,
 /// reconstructs the positional expression, and binds directly with
 /// `picked = Some(f)` — no entry into `resolve_dispatch`.
@@ -98,24 +98,24 @@ fn function_value_call_named_args_short_circuits() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET f = (FN (DOUBLE x :Number) -> Number = (x))");
-    let expr = parse_one("f (x = 7)");
+    let expr = parse_one("f {x = 7}");
     reset_resolve_dispatch_entry_count();
     let result = dispatch_one(scope, expr);
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
-        "(f (x = 7)) with f = (FN (DOUBLE x :Number) ...) must fast-lane bypass \
-         resolve_dispatch via matches_without_keywords; counter was {}",
+        "(f {{x = 7}}) with f = (FN (DOUBLE x :Number) ...) must fast-lane bypass \
+         resolve_dispatch; counter was {}",
         resolve_dispatch_entry_count(),
     );
     assert!(
         matches!(result, KObject::Number(n) if (*n - 7.0).abs() < 1e-9),
-        "(f (x = 7)) must evaluate to 7.0 (DOUBLE returns x); got {}",
+        "(f {{x = 7}}) must evaluate to 7.0 (DOUBLE returns x); got {}",
         result.summarize(),
     );
 }
 
-/// Named-arg path with reordering. `f (b = 2, a = 1)` against a signature
+/// Named-arg path with reordering. `f {b = 2, a = 1}` against a signature
 /// `(a :Number PICK b :Number)` is order-independent at the name-keyed lookup;
 /// reconstruction weaves keywords back in at their signature positions.
 #[test]
@@ -127,7 +127,7 @@ fn function_value_call_named_args_out_of_order_short_circuits() {
         scope,
         "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
     );
-    let expr = parse_one("f (b = 2, a = 1)");
+    let expr = parse_one("f {b = 2, a = 1}");
     reset_resolve_dispatch_entry_count();
     let result = dispatch_one(scope, expr);
     assert_eq!(
@@ -138,7 +138,7 @@ fn function_value_call_named_args_out_of_order_short_circuits() {
     );
     assert!(
         matches!(result, KObject::Number(n) if (*n - 1.0).abs() < 1e-9),
-        "(f (b = 2, a = 1)) returning `a` must yield 1.0; got {}",
+        "(f {{b = 2, a = 1}}) returning `a` must yield 1.0; got {}",
         result.summarize(),
     );
 }
@@ -156,7 +156,7 @@ fn function_value_call_named_args_missing_short_circuits() {
         scope,
         "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
     );
-    let expr = parse_one("f (a = 1)");
+    let expr = parse_one("f {a = 1}");
     reset_resolve_dispatch_entry_count();
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
@@ -186,7 +186,7 @@ fn function_value_call_named_args_missing_short_circuits() {
 // case rather than falling through.
 // =====================================================================
 
-/// `f (x = 7)` against `(FN (DOUBLE x :Number) ...)` — function-value call via
+/// `f {x = 7}` against `(FN (DOUBLE x :Number) ...)` — function-value call via
 /// named-arg admission, fast-lane bound directly.
 #[test]
 fn fast_lane_fn_callable_via_named_args() {
@@ -195,7 +195,7 @@ fn fast_lane_fn_callable_via_named_args() {
     let scope = run_root_silent(&arena);
     run(scope, "LET f = (FN (DOUBLE x :Number) -> Number = (x))");
     reset_resolve_dispatch_entry_count();
-    let result = run_one(scope, parse_one("f (x = 7)"));
+    let result = run_one(scope, parse_one("f {x = 7}"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -218,7 +218,7 @@ fn fast_lane_weaves_internal_keyword() {
         "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
     );
     reset_resolve_dispatch_entry_count();
-    let result = run_one(scope, parse_one("f (a = 1, b = 2)"));
+    let result = run_one(scope, parse_one("f {a = 1, b = 2}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(matches!(result, KObject::Number(n) if *n == 1.0));
 }
@@ -235,17 +235,18 @@ fn fast_lane_named_args_order_independent() {
         "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
     );
     reset_resolve_dispatch_entry_count();
-    let result = run_one(scope, parse_one("f (b = 2, a = 1)"));
+    let result = run_one(scope, parse_one("f {b = 2, a = 1}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(matches!(result, KObject::Number(n) if *n == 1.0));
 }
 
-/// Unknown named-arg fires after missing-arg precedence is satisfied. `(a = 1,
-/// b = 2, c = 3)` covers required names plus an extra `c`.
+/// Width-drop: a named arg with no matching declared parameter is dropped, not
+/// rejected. `(a = 1, b = 2, c = 3)` covers the required names plus an extra `c`; the
+/// surplus `c` goes unbound on the reconstructed exact-arity expression and the call
+/// returns `Number(1)`.
 #[test]
-fn fast_lane_unknown_named_arg() {
-    use crate::builtins::test_support::{run, run_one_err, run_root_silent};
-    use crate::machine::KErrorKind;
+fn fast_lane_extra_named_arg_dropped() {
+    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -253,18 +254,16 @@ fn fast_lane_unknown_named_arg() {
         "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
     );
     reset_resolve_dispatch_entry_count();
-    let err = run_one_err(scope, parse_one("f (a = 1, b = 2, c = 3)"));
+    let result = run_one(scope, parse_one("f {a = 1, b = 2, c = 3}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
-    assert!(
-        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("unknown name") && msg.contains("`c`")),
-        "expected ShapeError on unknown name c, got {err}",
-    );
+    assert!(matches!(result, KObject::Number(n) if *n == 1.0));
 }
 
-/// Malformed pair shape (`f (a 1)` — missing `=` / `:`-separator) surfaces a
-/// `ShapeError` from `NamedPairs::parse` inside `reconstruct_positional`.
+/// The legacy paren named-arg form `f (a 1)` no longer binds — a function call's
+/// arguments are a record literal `{a = 1}`. The fast lane rejects the paren body
+/// loudly (`DispatchFailed`) without entering `resolve_dispatch`.
 #[test]
-fn fast_lane_missing_separator() {
+fn fast_lane_legacy_paren_args_rejected() {
     use crate::builtins::test_support::{run, run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
     let arena = RuntimeArena::new();
@@ -274,12 +273,12 @@ fn fast_lane_missing_separator() {
     let err = run_one_err(scope, parse_one("f (a 1)"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(
-        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`:`") || msg.contains("separator") || msg.contains("triples")),
-        "expected ShapeError on missing colon, got {err}",
+        matches!(&err.kind, KErrorKind::DispatchFailed { reason, .. } if reason.contains("record literal")),
+        "expected loud rejection of the paren named-arg form, got {err}",
     );
 }
 
-/// Duplicate named-arg is caught by `NamedPairs::parse` at construction time.
+/// Duplicate named-arg is caught by `NamedPairs::from_fields` at construction time.
 #[test]
 fn fast_lane_duplicate_named_arg() {
     use crate::builtins::test_support::{run, run_one_err, run_root_silent};
@@ -288,7 +287,7 @@ fn fast_lane_duplicate_named_arg() {
     let scope = run_root_silent(&arena);
     run(scope, "LET f = (FN (DOUBLE x :Number) -> Number = (x))");
     reset_resolve_dispatch_entry_count();
-    let err = run_one_err(scope, parse_one("f (x = 1, x = 2)"));
+    let err = run_one_err(scope, parse_one("f {x = 1, x = 2}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`x`")),
@@ -308,7 +307,7 @@ fn fast_lane_on_non_function_returns_error() {
     let scope = run_root_silent(&arena);
     run(scope, "LET x = 42");
     reset_resolve_dispatch_entry_count();
-    let err = run_one_err(scope, parse_one("x (foo = 7)"));
+    let err = run_one_err(scope, parse_one("x {foo = 7}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(
         matches!(
@@ -370,7 +369,7 @@ fn fast_lane_on_struct_type_constructs() {
     let scope = run_root_silent(&arena);
     run(scope, "LET pt = (STRUCT Pt = (x :Number, y :Number))");
     reset_resolve_dispatch_entry_count();
-    let result = run_one(scope, parse_one("pt (x = 3, y = 4)"));
+    let result = run_one(scope, parse_one("pt {x = 3, y = 4}"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -439,7 +438,7 @@ fn fast_lane_unbound_returns_error() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     reset_resolve_dispatch_entry_count();
-    let err = run_one_err(scope, parse_one("undefined (foo = 7)"));
+    let err = run_one_err(scope, parse_one("undefined {foo = 7}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(name) if name == "undefined"),
@@ -463,7 +462,7 @@ fn fast_lane_closure_escapes_outer_call_and_remains_invocable() {
         "FN (MAKE) -> :(FN () -> Str) = (FN (INNER) -> Str = (\"hi\"))\n\
          LET f = (MAKE)",
     );
-    let result = run_one(scope, parse_one("f ()"));
+    let result = run_one(scope, parse_one("f {}"));
     assert!(
         matches!(result, KObject::KString(s) if s == "hi"),
         "expected KString(\"hi\"), got {}",
@@ -483,7 +482,7 @@ fn fast_lane_escaped_closure_with_param_returns_body_value() {
         "FN (MAKE) -> :(FN (x :Number) -> Number) = (FN (ECHO x :Number) -> Number = (x))\n\
          LET f = (MAKE)",
     );
-    let result = run_one(scope, parse_one("f (x = 42)"));
+    let result = run_one(scope, parse_one("f {x = 42}"));
     assert!(matches!(result, KObject::Number(n) if *n == 42.0));
 }
 
@@ -521,7 +520,7 @@ fn fast_lane_list_of_closures_escapes_outer_call_with_rc_attached() {
     }
 }
 
-/// `f (x = 7)` submitted as a forward reference: `f` is installed as a
+/// `f {x = 7}` submitted as a forward reference: `f` is installed as a
 /// `Placeholder` on `scope` before the slot is dispatched. The fast lane's
 /// `FunctionValueCall` handler hits the `Placeholder` arm on head-resolution
 /// (before the args-shape check), installs a combined park, and never enters
@@ -553,7 +552,7 @@ fn function_value_call_forward_ref_parks() {
         .install_placeholder("f".to_string(), producer, BindingIndex::BUILTIN)
         .expect("install_placeholder should succeed");
 
-    let f_call = parse_one("f (x = 7)");
+    let f_call = parse_one("f {x = 7}");
     let _f_call_id = sched.add_dispatch(f_call, scope);
 
     reset_resolve_dispatch_entry_count();
@@ -589,18 +588,18 @@ fn keyworded_unchanged() {
 // tests above which observe the dispatch counter.
 // =====================================================================
 
-/// `(MyStruct (x = 1, y = 2))` — leaf-Type head, single nested-`Expression`
+/// `(MyStruct {x = 1, y = 2})` — leaf-Type head, single nested-`Expression`
 /// body. Classifier must route to `ConstructorCall`, not `Keyworded`.
 #[test]
 fn classifier_struct_construct_routes_to_type_constructor_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
-    let expr = parse_one("MyStruct (x = 1, y = 2)");
+    let expr = parse_one("MyStruct {x = 1, y = 2}");
     assert!(
         matches!(
             classify_dispatch_shape(&expr),
             DispatchShape::ConstructorCall
         ),
-        "expected ConstructorCall for `MyStruct (x = 1, y = 2)`",
+        "expected ConstructorCall for `MyStruct {{x = 1, y = 2}}`",
     );
 }
 

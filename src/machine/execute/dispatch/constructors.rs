@@ -13,7 +13,7 @@ use crate::machine::core::source::Spanned;
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::KType;
-use crate::machine::model::KObject;
+use crate::machine::model::{KObject, Record};
 use crate::machine::{NodeId, Scope};
 
 use super::super::nodes::{NodeOutput, NodeStep};
@@ -32,12 +32,12 @@ pub(in crate::machine::execute) fn dispatch_construct_struct<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     name: String,
     scope_id: ScopeId,
-    fields: Rc<Vec<(String, KType<'a>)>>,
-    args_parts: Vec<Spanned<ExpressionPart<'a>>>,
+    fields: Rc<Record<KType<'a>>>,
+    record_fields: Vec<(String, ExpressionPart<'a>)>,
     scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
-    let value_parts = match struct_value::prepare_value_parts(&fields, args_parts) {
+    let value_parts = match struct_value::prepare_value_parts(&fields, record_fields) {
         Ok(v) => v,
         Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
     };

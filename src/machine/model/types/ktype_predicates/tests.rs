@@ -1,5 +1,6 @@
 use super::*;
 use crate::machine::core::ScopeId;
+use crate::machine::model::Record;
 
 #[test]
 fn is_more_specific_concrete_beats_any() {
@@ -31,18 +32,119 @@ fn is_more_specific_dict_refines_value() {
     assert!(!loose.is_more_specific_than(&strict));
 }
 
+/// Width-subset specificity: a nullary function `{}` is strictly more specific than a
+/// unary `{x}` (its param key set is a subset, so it fills the wider slot under
+/// call-by-name width drop), and the unary is not more specific than the nullary
+/// (the unary declares a param the nullary lacks → contravariant width violation).
 #[test]
-fn is_more_specific_function_arity_mismatch_incomparable() {
+fn is_more_specific_function_width_subset() {
     let unary = KType::KFunction {
-        args: vec![KType::Number],
+        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
         ret: Box::new(KType::Number),
     };
     let nullary = KType::KFunction {
-        args: vec![],
+        params: Record::new(),
         ret: Box::new(KType::Number),
     };
+    assert!(nullary.is_more_specific_than(&unary));
     assert!(!unary.is_more_specific_than(&nullary));
-    assert!(!nullary.is_more_specific_than(&unary));
+}
+
+/// Depth-contravariant function specificity: `(x :Any) -> R ≺ (x :Number) -> R`. The
+/// more-general param (`Any` ⊐ `Number`) makes the function more specific, because a
+/// value accepting `Any` fills a slot that promised only `Number`.
+#[test]
+fn is_more_specific_function_param_contravariant() {
+    let any_param = KType::KFunction {
+        params: Record::from_pairs(vec![("x".into(), KType::Any)]),
+        ret: Box::new(KType::Str),
+    };
+    let number_param = KType::KFunction {
+        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
+        ret: Box::new(KType::Str),
+    };
+    assert!(any_param.is_more_specific_than(&number_param));
+    assert!(!number_param.is_more_specific_than(&any_param));
+}
+
+/// Return-covariant function specificity: `(x) -> Number ≺ (x) -> Any`. The narrower
+/// return makes the function more specific.
+#[test]
+fn is_more_specific_function_return_covariant() {
+    let number_ret = KType::KFunction {
+        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
+        ret: Box::new(KType::Number),
+    };
+    let any_ret = KType::KFunction {
+        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
+        ret: Box::new(KType::Any),
+    };
+    assert!(number_ret.is_more_specific_than(&any_ret));
+    assert!(!any_ret.is_more_specific_than(&number_ret));
+}
+
+fn record_ty<'a>(fields: Vec<(&str, KType<'a>)>) -> KType<'a> {
+    KType::Record(Box::new(Record::from_pairs(
+        fields.into_iter().map(|(n, t)| (n.to_string(), t)),
+    )))
+}
+
+/// Record-value subtyping is the *dual* of function-param subtyping: a *wider* record is
+/// strictly more specific (a `{x, y}` value fills an `{x}` slot, dropping `y`).
+#[test]
+fn record_width_superset_more_specific() {
+    let wide = record_ty(vec![("x", KType::Number), ("y", KType::Str)]);
+    let narrow = record_ty(vec![("x", KType::Number)]);
+    assert!(wide.is_more_specific_than(&narrow));
+    assert!(!narrow.is_more_specific_than(&wide));
+}
+
+/// Covariant depth: `:{x :Number} ≺ :{x :Any}`.
+#[test]
+fn record_depth_covariant() {
+    let number = record_ty(vec![("x", KType::Number)]);
+    let any = record_ty(vec![("x", KType::Any)]);
+    assert!(number.is_more_specific_than(&any));
+    assert!(!any.is_more_specific_than(&number));
+}
+
+/// Disjoint field sets are incomparable (`{x, y}` vs `{x, z}`) — dispatch ambiguity, not
+/// an ordering.
+#[test]
+fn record_disjoint_fields_incomparable() {
+    let xy = record_ty(vec![("x", KType::Number), ("y", KType::Str)]);
+    let xz = record_ty(vec![("x", KType::Number), ("z", KType::Str)]);
+    assert!(!xy.is_more_specific_than(&xz));
+    assert!(!xz.is_more_specific_than(&xy));
+}
+
+/// A `{x = 1, y = "a"}` value (carried type `:{x :Number, y :Str}`) admits and matches a
+/// narrower `:{x :Number}` slot (width drop); rejects a field-type mismatch (`:{x :Str}`)
+/// and a slot demanding a field the value lacks (`:{x :Number, q :Bool}`). A bare record
+/// literal admits any record slot shape-only.
+#[test]
+fn record_value_admission_and_matches() {
+    use crate::machine::core::RuntimeArena;
+    let arena = RuntimeArena::new();
+    let value: &KObject<'_> = arena.alloc(KObject::record(Record::from_pairs(vec![
+        ("x".to_string(), KObject::Number(1.0)),
+        ("y".to_string(), KObject::KString("a".into())),
+    ])));
+
+    let narrow = record_ty(vec![("x", KType::Number)]);
+    assert!(narrow.accepts_part(&ExpressionPart::Future(value)));
+    assert!(narrow.matches_value(value));
+
+    let mismatch = record_ty(vec![("x", KType::Str)]);
+    assert!(!mismatch.accepts_part(&ExpressionPart::Future(value)));
+    assert!(!mismatch.matches_value(value));
+
+    let extra = record_ty(vec![("x", KType::Number), ("q", KType::Bool)]);
+    assert!(!extra.accepts_part(&ExpressionPart::Future(value)));
+    assert!(!extra.matches_value(value));
+
+    // Unevaluated literal admits shape-only (defer-then-reevaluate on the typed value).
+    assert!(mismatch.accepts_part(&ExpressionPart::RecordLiteral(vec![])));
 }
 
 #[test]
@@ -124,9 +226,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         scope_id: ScopeId::SENTINEL,
     }));
     let struct_token: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::UserType {
-        kind: UserTypeKind::Struct {
-            fields: Rc::new(Vec::new()),
-        },
+        kind: UserTypeKind::struct_sentinel(),
         name: "Point".into(),
         scope_id: ScopeId::SENTINEL,
     }));
@@ -296,7 +396,7 @@ fn is_type_denoting_table() {
     assert!(!KType::List(Box::new(KType::Number)).is_type_denoting());
     assert!(!KType::Dict(Box::new(KType::Str), Box::new(KType::Number),).is_type_denoting());
     assert!(!KType::KFunction {
-        args: vec![KType::Number],
+        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
         ret: Box::new(KType::Number),
     }
     .is_type_denoting());

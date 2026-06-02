@@ -28,37 +28,6 @@ What's shipped that the open items below build on:
   transparent-scope `outer` chain.
 - *FUNCTOR binder.* A dedicated `FUNCTOR` binder with its `:(FUNCTOR (params) -> R)`
   type-position sigil and the one-way `KFunctor` / `KFunction` admissibility wall.
-- *Effects design.* [design/effects.md](design/effects.md) captures the in-language
-  monadic side-effects design (tracked in
-  [roadmap/libraries/monadic-side-effects.md](roadmap/libraries/monadic-side-effects.md)).
-- *Lexical-provenance chain.* Every dispatched node carries an immutable cactus-chain
-  `LexicalFrame { scope_id, index, parent }` attached at block entry; top-level,
-  `MODULE`, `SIG`, FN-body, and MATCH / TRY arm submissions all funnel through one
-  `Scheduler::enter_block` primitive, and each MATCH / TRY arm is its own lexical
-  block — closing the divergent-bind hazard structurally and giving the remaining
-  dispatch-fix phases a queue-order-independent provenance signal to read from.
-- *Index-gated name resolution.* `Scope::resolve_with_chain` and the function-bucket
-  `OverloadBucket::pick` filter every hit through the `idx < cutoff` visibility
-  predicate (with a `nominal_binder` carve-out for `STRUCT` / named `UNION` / `SIG` /
-  `FUNCTOR` / `MODULE`), so forward references resolve by lexical position rather
-  than by queue arrival order and `UnboundName` becomes structural rather than
-  transient.
-- *Recursive binder submission.* `Scheduler::add_with_chain` walks each binder-shaped
-  Dispatch's eager Expression-slot parts and submits them as sub-Dispatches at the
-  same outermost submission point, so nested binders' placeholders all install before
-  any sibling can dispatch. The pre-submitted children ride through `NodeWork::Dispatch.pre_subs`
-  into the fused dispatch walk, which reuses them instead of allocating fresh sub-Dispatches.
-- *Visibility-aware `Bindings` lookups.* Production reads go through
-  `Bindings::lookup_value` / `lookup_type` / `lookup_function`, each taking a
-  `chain_cutoff: Option<usize>` and applying the per-entry visibility predicate
-  inside the lookup. `lookup_function` returns a
-  `FunctionLookup::{Bucket, Pending, None}` shape pre-filtered for per-overload
-  visibility and folds the bucket / `pending_overloads` fall-through into the
-  single dispatch ancestor walk. The five raw `RefCell` map accessors
-  (`data` / `types` / `functions` / `placeholders` / `pending_overloads`) are
-  gated `#[cfg(test)]`; production sites that legitimately sweep all members
-  (module surface mirroring, signature shape-check, REPL reflection) use the
-  value-yielding `iter_data` / `iter_types` / `iter_functions`.
 - *Type language via dispatch.* The `:(...)` sigil is a parse-context marker
   emitting `ExpressionPart::SigiledTypeExpr(Box<KExpression>)` with no inner
   shape-folding; the dispatcher's `SigiledTypeExpr` fast lane tail-replaces
@@ -74,80 +43,6 @@ What's shipped that the open items below build on:
   pre-resolved to a `RecursiveRef` carrier by `rewrite_threaded_self_refs`
   before the sub-Dispatch, so it lowers to `List(RecursiveRef("Tree"))`
   instead of deadlocking on its own placeholder.
-- *Unified walk + strict-only admission.* Each `run_dispatch` builds a
-  per-call `bare_outcomes` cache (one `NameOutcome` per bare-name part)
-  shared between the resolver's strict admission and the fused
-  splice / park / eager-sub walk, so each bare name resolves exactly
-  once per call. Strict admission reads cached `Resolved` outcomes via
-  `KType::accepts_part`, while `Parked` and `Unbound` fall back to
-  shape-only admission so the post-pick walk can surface precise per-slot
-  diagnostics. When no bucket admits, a post-walk fallback reads the cache
-  by fixed precedence — placeholders > eager > unbound > pending overload
-  > Unmatched — and `is_more_specific_than` ranks concrete carriers above
-  the unconstrained-name slot types (`Identifier` / `TypeExprRef`) so an
-  `ATTR <s:Struct>` overload beats an `ATTR <s:Identifier>` fallback.
-  No-keyword shapes (`BareIdentifier`, `BareTypeLeaf`,
-  `ConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`,
-  `LiteralPassThrough`) ride dedicated fast-lane handlers that never
-  enter the candidate walk. With `LiteralPassThrough` covering
-  single-part literal-shaped expressions (`(99)`, `("x")`, `([1 2 3])`,
-  `((inner))`), the fast-lane axis is exhaustive over keyword-free
-  expressions: `Keyworded` ⟺ at-least-one keyword.
-- *Direct constructor dispatch.* `STRUCT` and `UNION` constructions
-  route through `execute::dispatch::constructors` directly — no
-  registered `struct_construct` / `tagged_union_construct` primitives,
-  no `BodyResult::Tail` re-dispatch through the Keyworded bucket. The
-  `ConstructorCall` fast lane (leaf-Type head) and the
-  `FunctionValueCall` fast lane (Identifier head resolving to a
-  `KTypeValue(UserType{..})` alias) both dispatch into
-  `constructors::dispatch_construct_struct` / `dispatch_construct_tagged`,
-  which read the field / variant schema straight from the
-  `UserTypeKind` identity, stage value-cells as per-slot eager
-  sub-Dispatches, and call `struct_value::construct` /
-  `tagged_union::construct` directly. The parked-on-eager-subs case
-  rides `CtorState`'s resume arm.
-- *Stateful dispatch driver.* Every `DispatchShape` variant runs on the
-  state-bearing `run_dispatch` driver, which is now the sole dispatch
-  body. The carrier shape (`DispatchState` enum + per-variant
-  structs), `recent_wakes` wake-attribution side-channel, six
-  fast-lane variants, the `Keyworded` variant with its eager-subs /
-  bare-name-park / overload-park tracks, and the `FunctionValueCall`
-  fast lane with its eager-subs / head-placeholder tracks all carry
-  progress in the slot and advance by one edge per callback (no
-  per-wake reclassification, no `bare_outcomes` rebuild, no
-  `NodeWork::Bind` spawn on any dispatch path). The stateful resume /
-  install-time short-circuit invocations go through an
-  `invoke_to_step_pinned` helper that holds a sibling clone of
-  `active_frame` across the call so `try_reset_for_tail`'s
-  uniqueness check refuses the reset that would otherwise deallocate
-  the arena `scope` lives in. A per-slot reserve frame ping-pongs
-  across `NodeStep::Replace` so iteration 3+ of a recursive
-  eager-subs resume swaps a two-iteration-old reserve into
-  `active_frame` and tail-reuses *it* instead of allocating fresh
-  — recovering the per-iteration `CallArena` shell allocation the
-  pin-only shape would otherwise pay.
-- *Per-call arena protocol doc.* [design/per-call-arena-protocol.md](design/per-call-arena-protocol.md)
-  is the single named owner of the `Rc<CallArena>` contract — carriers, the
-  lift-time anchor decision, the `alloc_object` cycle gate, active-frame
-  propagation, the `outer_frame` chain for builtin-built frames, TCO frame
-  reuse, and the ping-pong reserve rotation. The five docs that previously
-  carried fragments (memory-model, execution-model, error-handling,
-  typing/functors, typing/modules) keep their topic-specific narrative and
-  cross-link the protocol page for the mechanics.
-- *Dispatcher / scheduler facade.* The dispatch tree lives at
-  `execute::dispatch`, sibling of `execute::scheduler` (and
-  `execute::interpret` / `execute::lift`). Every dispatch entry point
-  takes [`&mut DispatchCtx<'a, '_>`](src/machine/execute/dispatch/ctx.rs) —
-  a newtype over `&mut Scheduler<'a>` exposing exactly the scheduler
-  operations the dispatcher uses (slot queries, `DepGraph` mutations,
-  sub-submission, the recent-wakes side-channel, list/dict-literal
-  scheduling, plus the dispatcher-only `build_bare_outcomes` /
-  `install_eager_subs` / `replace_with_parked_dispatch` /
-  `resume_eager_subs` / `invoke_to_step{,_pinned}` ops). `DispatchCtx`
-  also implements [`SchedulerHandle`](src/machine/core/kfunction/scheduler_handle.rs),
-  so builtin sub-slot routing inherits the dispatcher's contextual
-  frame/chain via the facade rather than re-borrowing the bare
-  scheduler.
 - *Type-only nominal identities.* `STRUCT` / `UNION` / `MODULE` / `Result`
   declarations write only `bindings.types`: each per-declaration
   `KType::UserType` identity carries its own schema payload
@@ -176,6 +71,53 @@ What's shipped that the open items below build on:
   `from_type_expr` → `from_name` match per call. The three leaf-resolution
   contexts (`elaborate_type_expr`, `coerce_type_token_value`, `resolve_for`) stay
   distinct but share one `resolve_type_with_chain` + `from_name` lookup.
+- *Record substrate.* [`Record<V>`](src/machine/model/types/record.rs) — an ordered
+  identifier-keyed map with order-blind equality and a commutative name+value hash
+  (`wrapping_add` fold over `mix(hash(name), hash(value))`) — backs the struct schema
+  (`UserTypeKind::Struct` carries `Rc<Record<KType>>`) and FN/FUNCTOR parameter
+  identity (`KType::KFunction` / `KFunctor` carry `params: Record<KType>`, so parameter
+  names round-trip through `KType::name()` and slot identity is order-blind by name and
+  type; the retired `FUNCTION_OF` builtin gives way to the `:(FN …)` carrier). `KType`
+  gained a hand-written `Hash` consistent with its manual `PartialEq`, so a record type
+  can key a dispatch / memo map. The dict carrier stays a sibling. See
+  [design/typing/ktype.md](design/typing/ktype.md#record-fields-and-ktype-hashing).
+- *Function subtyping.* `function_compat` and `is_more_specific_than` admit and rank
+  function-typed slots by sound function subtyping — contravariant parameter records
+  with width-drop, covariant return — instead of strict structural equality. A value
+  `(x :Any) -> Str` fills a `:(FN (x :Number) -> Str)` slot, a unary value fills a binary
+  slot (the surplus slot param arrives unbound under call-by-name, and the call-by-name
+  binder drops surplus named args), and incomparable function slots now tie as
+  `AmbiguousDispatch`. See
+  [design/typing/ktype.md § Variance](design/typing/ktype.md#variance).
+- *Structural records.* A first-class `KType::Record(Record<KType>)` type
+  (`:{x :Number, y :Str}`) and anonymous record value (`{x = 1, y = "a"}` — `=` pairs;
+  `:` pairs stay a dict, mixing them is a parse error), with width/depth subtyping: a
+  wider record value is more specific (the dual of function-param width-drop), depth
+  covariant (sound under value immutability), so record-typed FN overloads dispatch by
+  width and depth and incomparable arms tie as `AmbiguousDispatch`. Structs stay
+  nominal; the record variant is structural-only. The
+  [`FROM` projection](src/builtins/record_projection.rs) closes the projection direction:
+  `(x y) FROM r` re-tags a record value's carried type to the named fields (`Rc`-sharing
+  the backing record whole) so a caller can break an incomparable-arm tie. See
+  [design/typing/ktype.md § Variance](design/typing/ktype.md#variance).
+- *Named-argument surface.* The record literal `{x = 1}` is the sole named-argument form
+  across struct construction (`Point {x = 1, y = 2}`), function-value calls (`f {x = 1}`),
+  and functor application (`:(MyFunctor {T = IntOrd})`); the `(x = 1)` paren-kwarg and
+  `{x: 3}` dict forms are retired, and an empty `{}` is the empty record so a nullary call
+  spells `f {}`. The dispatch lanes classify a call body as named (record literal) or
+  positional (paren group — tagged-union / newtype construction) via `extract_call_body`,
+  and the resolved [`ArgumentBundle`](src/machine/core/kfunction/argument_bundle.rs) carries
+  its arguments on the same [`Record<V>`](src/machine/model/types/record.rs) shape as the
+  surface literal and the struct value. See
+  [design/typing/type-language-via-dispatch.md](design/typing/type-language-via-dispatch.md).
+- *In-walk dispatch precedence.* Overload resolution decides each scope's park / defer /
+  pick contribution at the scope that raised it instead of in a scope-blind post-walk
+  ladder, so lexical shadowing holds regardless of finalize or evaluation order: a visible
+  pending sibling parks its scope even over a same-scope finalized strict-Pick, and a
+  strict-Empty bucket runs one relaxed-admission pass per candidate (parked-lean ⇒ park,
+  eager-lean ⇒ defer, dead unbound lean ⇒ a held-back `UnboundName`). `lookup_function`
+  surfaces finalized overloads and the earliest visible pending producer together. See
+  [design/typing/scheduler.md § In-walk dispatch precedence](design/typing/scheduler.md#in-walk-dispatch-precedence).
 
 ## Next items
 
@@ -186,16 +128,10 @@ without first landing something else:
   a codebase can span more than one source file and files become modules.
 - [Group-based operators](roadmap/libraries/group-based-operators.md) — paired `+`/`-`-style
   operators as a group; the syntax-level shorthand variant has no hard prerequisites.
-- [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
-  — free type-parameter names in parameter slots bind per call, from either an
-  argument's carried type structure or an earlier parameter's value.
-- [Branch-arm return-type agreement](roadmap/branch-arm-return-type.md) — give MATCH and
+- [Branch-arm return-type agreement](roadmap/type_language/branch-arm-return-type.md) — give MATCH and
   TRY a static return type (arms-agree vs synthesized-union vs hybrid), closing the
   divergent-result hazard symmetric to the divergent-bind hazard the lexical-provenance
   phase closes structurally.
-- [RETURN from anywhere](roadmap/early-return.md) — explicit `(RETURN <expr>)` form
-  that ends the enclosing FN's body from any position and TCO-optimizes when `<expr>`
-  is a function call, decoupling tail-call position from "last statement in the body".
 
 ## Open items
 
@@ -236,19 +172,14 @@ Rust builtins:
 ### Type language — [roadmap/type_language/](roadmap/type_language/)
 
 Engine-level type-language substrate — how modules, signatures, functors,
-deferred-return FNs, dependent parameter annotations, generic value-slot
-binding, record-shaped parameter binding, and VAL-slot identity are
-represented in `KType` and routed through dispatch. The substrate the
+deferred-return FNs, record-shaped parameter binding, and VAL-slot identity
+are represented in `KType` and routed through dispatch. The substrate the
 predicate-typing stages and the stdlib's functor-heavy collections both
 build on:
 
-- [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
+- [Branch-arm return-type agreement](roadmap/type_language/branch-arm-return-type.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 - [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)
-- [Record substrate for identifier-keyed binding](roadmap/type_language/record-substrate.md)
-- [FN/FUNCTOR named identity](roadmap/type_language/fn-named-identity.md)
-- [Record structural subtyping and projection](roadmap/type_language/record-subtyping.md)
-- [Argument-binding unification](roadmap/type_language/argument-binding-unification.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

@@ -32,6 +32,14 @@ site needs.
   Multi-parameter dispatch on declared types is already native to FN; what's
   new is the implicit-search side picking witnesses whose signatures span
   multiple abstract types.
+- *Generic functions resolve through one mechanism.* A generic function is a
+  functor over its type parameters
+  ([design/typing/generics.md](../../design/typing/generics.md)); implicit
+  resolution selects and applies it. `head(xs)` and `sort(xs)` become the same
+  surface and the same engine — purely parametric generics (no operations on the
+  type parameter) and operation-bearing ones (consulting a witness) alike, with
+  the parametric case reducing to a direct read of the argument's carried
+  element type.
 
 **Directions.**
 
@@ -43,6 +51,16 @@ site needs.
   of a typed module slot whose argument is resolved by search rather
   than supplied at the call site. Stage 1 shipped the unconstrained
   `AnyModule` slot; this stage tightens it.
+- *Type-parameterized implicit functors — decided.* Implicit candidates include
+  functors taking one or more `:Type` parameters, not only module-parameterized
+  ones. The resolver solves such a functor's type argument by reading the call's
+  carried argument type (`List(Number)` yields `Number`) — a projection, not a
+  search. This keeps the higher-order restriction intact: type arguments come
+  from carried types, module arguments come from search, so a `:Type`-parameterized
+  implicit functor does not itself take an implicit parameter. The structural
+  walk that locates each type parameter inside a parameter slot (`LIST OF Ty`,
+  `Result Ty E`, nested containers, a name repeated across slots) lives here,
+  matching the slot's elaborated `KType` against the value's carried `KType`.
 - *Implicit-parameter declaration syntax — open.* The function signature
   needs a slot for implicit module parameters; surface form follows stage
   1's conventions but the exact spelling is unsettled.

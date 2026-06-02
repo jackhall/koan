@@ -17,7 +17,7 @@ kind; there is no `KType::TypeVar`.
 The mechanism:
 
 - **Type-returning builtins are ordinary builtins.** `LIST_OF`,
-  `DICT_OF`, `FUNCTION_OF`, `MODULE_TYPE_OF` and the like dispatch and
+  `DICT_OF`, `MODULE_TYPE_OF` and the like dispatch and
   execute on the value path; their result is the elaborated type carried
   in `KObject::KTypeValue(KType)`. A `LET MyList = (LIST_OF Number)`
   binding finalizes once and makes `MyList` available as a type name in
@@ -70,39 +70,70 @@ after its dependents have already run). The implicit-search work in
 [open-work.md](open-work.md) is the most plausible motivation for a
 tighten-after-the-fact scheduler primitive.
 
-## Post-walk dispatch fallback precedence
+## In-walk dispatch precedence
 
-When [`Scope::resolve_dispatch_with_chain`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
-walks every visible scope without any bucket admitting strictly, it falls
-through to a cache-driven post-walk fallback that picks one of five
-outcomes by fixed precedence:
+[`Scope::resolve_dispatch_with_chain`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
+walks visible scopes innermost-first and decides each scope's contribution
+from its [`FunctionLookup`](../../src/machine/core/bindings.rs) — finalized
+overloads and the earliest-visible in-flight pending producer, surfaced
+together. The innermost scope that reaches a *terminal* decision wins, so
+lexical shadowing holds: an inner overload — finalized, pending, or
+admitting-once-its-eager-part-evaluates — shadows outer-scope overloads
+regardless of finalize or evaluation order. The per-scope precedence:
 
-**Placeholders > eager parts > Unbound > pending overload > Unmatched.**
+1. **Visible pending ⇒ park.** A pending sibling on this scope's bucket key
+   would shadow any finalized overload here once it finalizes, so the scope
+   parks (`ParkOnProducers`) — even over a finalized strict-Pick at the same
+   scope (Decision 5 below). Any forward-reference producers the relaxed pass
+   would lean on union into the park list so a single wake re-runs the full
+   resolution.
+2. **Strict Pick / Tie.** Over the finalized overloads, the strict gate
+   [`OverloadBucket::pick_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
+   Picks the most-specific admitting candidate (`Resolved`), or surfaces a
+   genuine tie as `Ambiguous` — except a tie with an unevaluated eager part
+   `Defer`s, since the eager value may break it.
+3. **Strict-Empty ⇒ one relaxed-admission pass per candidate.** When no
+   finalized overload strictly admits, each candidate runs a single relaxed
+   pass that assumes every *unresolved* slot satisfiable and records which kind
+   it leaned on: a `Parked` bare name (a producer exists), an unevaluated eager
+   part, or a `Dead` unbound bare name (no producer will ever bind it). A
+   candidate that rejects on a hard already-resolved / literal / keyword slot
+   admits nothing even relaxed and contributes nothing. The leaned-on kinds
+   resolve by precedence: a **parked** lean ⇒ `ParkOnProducers`; otherwise an
+   **eager** lean ⇒ `Deferred`; otherwise a **dead** lean records an
+   `UnboundName` blocker without terminating the walk.
 
-1. **Placeholders** — any `NameOutcome::Parked(_)` in the `bare_outcomes`
-   cache ⇒ `ResolveOutcome::ParkOnProducers` on the deduplicated producer
-   list. Wake re-dispatches; strict admission rebuilds the cache against
-   the now-bound type.
-2. **Eager parts** — otherwise, if `expr` carries any eager-shaped part
-   (`Expression` / `SigiledTypeExpr` / `ListLiteral` / `DictLiteral`) ⇒
-   `Deferred`. The driver sub-Dispatches the eager parts and re-resolves
-   against the spliced expression.
-3. **Unbound** — otherwise, any `NameOutcome::Unbound(name)` ⇒
-   `UnboundName(name)`.
-4. **Pending overload** — otherwise, an innermost-visible
-   `pending_overloads[key]` recorded during the walk ⇒
-   `ParkOnProducers(vec![producer])` (a sibling FN / FUNCTOR parked on
-   its own Combine has installed the bucket; wake re-dispatches against
-   the now-registered overload).
-5. **Unmatched** — otherwise, `ResolveOutcome::Unmatched`.
+Only two outcomes are decided *post-walk*, after every scope reported
+`Continue`:
 
-**Why eager outranks Unbound.** An Expression-in-Type-slot dispatch like
-`(maybe) some 42` has a head that *does* resolve, but only after one
-sub-Dispatch evaluates `(maybe)` to the schema. Surfacing `UnboundName`
-on the unresolved sibling would pre-empt that sub-Dispatch and report
-the wrong diagnostic. Eager evaluation may also itself surface the
-precise per-slot error, so it gets first refusal.
+- **`UnboundName(name)`** when some scope's relaxed pass leaned on a dead
+  unbound name. It is held back rather than terminating at the scope so an
+  outer scope can still strict-Pick the bare name shape-only as an
+  `:Identifier` / `:Any` slot — a dead inner lean must not pre-empt an outer
+  Pick.
+- **`Unmatched`** when no scope contributed even a dead lean.
 
-The companion driver-side view of this precedence — what each outcome
-routes to in the dispatch pipeline — lives at
+**One relaxed pass covers parked and eager slots uniformly.** The relaxed pass
+([`relaxed_admits`](../../src/machine/execute/dispatch/resolve_dispatch.rs))
+treats a parked bare name as just an eager part whose value arrives from a
+producer instead of a sub-Dispatch, so both kinds flow through the same
+per-candidate classification. The dead-slot arm only labels the `UnboundName`
+terminal — an unbound name never arrives, so it never triggers a wait. This
+keeps the deferral honest: when no candidate can admit even relaxed — the
+failure is a hard slot, e.g. a non-record operand to
+[`FROM`](../../src/builtins/record_projection.rs) or a bare anonymous
+`UNION (…)` — the walk surfaces the precise `UnboundName` / `Unmatched`
+diagnostic at the call rather than eagerly evaluating an unrelated operand and
+leaking its error.
+
+**Decision 5: a bucket mixing finalized and pending parks until finalize.**
+[`try_install_pending_overload`](../../src/machine/core/bindings.rs) records a
+pending sibling *alongside* any live finalized overload on the same bucket key,
+so `FunctionLookup` can surface both. When it does, the scope always parks until
+the pending finalizes, then re-resolves the now-complete bucket — resolving
+early when a finalized candidate is unambiguously most-specific is a later
+optimization.
+
+The companion driver-side view — what each outcome routes to in the dispatch
+pipeline — lives at
 [execution-model.md § post-walk fallback](../execution-model.md#dispatch).

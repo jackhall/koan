@@ -4,8 +4,19 @@
 
 - Scalars: `Number`, `Str`, `Bool`, `Null`.
 - Containers: `List(Box<KType>)`, `Dict(Box<KType>, Box<KType>)`,
-  `KFunction { args: Vec<KType>, ret: Box<KType> }`. Always parameterized; see
+  `KFunction { params: Record<KType>, ret: Box<KType> }`. Always parameterized; see
   [Container type parameterization](#container-type-parameterization) below.
+  `params` is a name-keyed [parameter `Record<KType>`](#record-fields-and-ktype-hashing),
+  so a function-typed slot's identity is its parameters by name and type
+  (order-blind). The sibling `KFunctor { params: Record<KType>, ret }` shares the
+  storage and identity rules; the variant tag keeps the two families admissibly
+  disjoint (see [functors.md](functors.md)).
+- Structural record: `Record(Box<Record<KType>>)` — an identifier-keyed field schema
+  (`:{x :Number, y :Str}`), distinct from the nominal `UserType { kind: Struct }`
+  (records are structural, structs nominal). A record *value* (`KObject::Record`,
+  surface `{x = 1, y = "a"}`) memoizes its per-field type record as its carried type.
+  Width/depth subtyping orders record *values* in the dispatch lattice — see
+  [Variance](#variance).
 - Other function-like: `KExpression` (a captured-but-unevaluated expression).
 - Meta-type for type-position slots: `TypeExprRef` — see
   [Type-position slot kinds](#type-position-slot-kinds).
@@ -94,7 +105,7 @@ anchored to the `:` — every sigil emits one
 [`ExpressionPart::SigiledTypeExpr(Box<KExpression>)`](../../src/machine/model/ast.rs)
 wrapping the raw inner expression verbatim, with no shape recognition at
 parse time. Shape decisions (keyworded `:(LIST OF Number)`, user-functor
-`:(MyFunctor (T = IntOrd))`, etc.) are the dispatcher's responsibility — the
+`:(MyFunctor {T = IntOrd})`, etc.) are the dispatcher's responsibility — the
 parser's only job is to flag "this slot evaluates to a type". `<` and `>` flow through unencumbered as keyword
 tokens, leaving the arithmetic comparison operators available. The framing
 logic lives in [frame.rs](../../src/parse/frame.rs) (`Frame::TypeExpr`);
@@ -108,7 +119,7 @@ sigil-and-dispatch contract.
 constructors — `LIST OF`, `MAP _ -> _`, `FN <sig> -> _`, and
 `FUNCTOR <sig> -> _` — register in
 [`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs)
-alongside the older `LIST_OF` / `DICT_OF` / `FUNCTION_OF` /
+alongside the older `LIST_OF` / `DICT_OF` /
 `MODULE_TYPE_OF` builtins in
 [`type_ops/`](../../src/builtins/type_ops.rs). Both surfaces produce
 `KObject::KTypeValue(KType::...)` carriers; the keyworded forms are the
@@ -119,28 +130,54 @@ dispatched type-expression sub-expressions assemble through.
 ### Variance
 
 Variance is split across the parameterized constructors. `List` and `Dict` are
-covariant in their parameter positions; `Function` is invariant in args and
-return. The split falls out of the underlying check in each case rather than
-being a deliberate design dial — both choices are the natural one given how
-the constructor's values are matched, and the conservative `Function`-invariant
-rule keeps dispatch unambiguous.
+covariant in their parameter positions. `Function` is **contravariant in its
+parameter record (with width drop) and covariant in its return** — sound
+function subtyping reasoned against call-by-name invocation, where a parameter
+arrives name-keyed and a value fills a slot by being usable wherever the slot's
+type is expected. The split falls out of the underlying check in each case
+rather than being a deliberate design dial — each choice is the natural one
+given how the constructor's values are matched.
 
 Three sites consume parameterized types, and each has its own behavior:
 
 | Site | What it does | Variance |
 | --- | --- | --- |
 | `matches_value` | Walks a runtime value against a declared type at an ascription boundary (FN return, FN argument, `LET`). | **Covariant** for `List` / `Dict`: `:(LIST OF Any)` accepts any list because `Any.matches_value(_)` is always true; `:(MAP Str -> Any)` accepts a `{a: 1, b: "x"}` value. **Invariant** for `Function`: delegates to `function_compat`. |
-| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. Concrete carrier types also outrank the unconstrained-name slot types `Identifier` and `TypeExprRef`, so an `ATTR <s:Struct>` overload beats an `ATTR <s:Identifier>` fallback when both admit. | **Covariant in every parameter position** (element, key, value, arg, ret): `:(LIST OF Number)` ≺ `:(LIST OF Any)`, `:(MAP Str -> Number)` ≺ `:(MAP Str -> Any)`, `:(FN (Number) -> Str)` ≺ `:(FN (Any) -> Any)`. |
-| `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Strict structural equality** — invariant. A function declared `(x :Number) -> Str` fills only `:(FN (Number) -> Str)`, not `:(FN (Any) -> Str)`. |
+| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. Concrete carrier types also outrank the unconstrained-name slot types `Identifier` and `TypeExprRef`, so an `ATTR <s:Struct>` overload beats an `ATTR <s:Identifier>` fallback when both admit. | **Covariant** for `List` / `Dict` (element, key, value): `:(LIST OF Number)` ≺ `:(LIST OF Any)`, `:(MAP Str -> Number)` ≺ `:(MAP Str -> Any)`. **Contravariant params (with width-subset) + covariant return** for `Function` / `Functor`, matching `function_compat`: `:(FN (x :Any) -> Str)` ≺ `:(FN (x :Number) -> Str)` (more-general param wins), `:(FN (x) -> Number)` ≺ `:(FN (x) -> Any)` (narrower return wins), and a nullary `:(FN () -> R)` ≺ a unary `:(FN (x) -> R)` (narrower width wins). |
+| `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Function subtyping** — contravariant params (width + depth) + covariant return. A value `(x :Any) -> Str` fills a slot typed `:(FN (x :Number) -> Str)`; a value `(x :Number) -> Number` fills `:(FN (x :Number) -> Any)`; a unary value fills a binary slot (the extra slot param arrives unbound under call-by-name). A value requiring a param the slot doesn't promise is a non-match. |
 
-The combination is sound for dispatch even though `is_more_specific_than`
-ranks `Function`-typed slots covariantly while `function_compat` is invariant.
-The covariant ranking only matters when two parameterized function slots both
-match the same call; with `function_compat`'s strict equality, a function
-value matches at most one parameterized function slot, so the ranking has no
-tie to break in that case. The covariance is observable for `List` / `Dict`
-tournaments — `(xs :(LIST OF Number))` strictly outranks `(xs :(LIST OF Any))` for a
-number-list call — and benign for `Function`.
+Admission (`function_compat`) and specificity (`is_more_specific_than`) share
+**one** relation for function slots — contravariant params with width-subset,
+covariant return — so most-specific-wins is consistent: the same value can now
+fill several function slots at once (e.g. an `(x :Any) -> R` value fills both
+`:(FN (x :Number) -> R)` and `:(FN (x :Any) -> R)`), and the ranking orders
+those slots the same way admission does. Where one admitting slot is strictly
+more specific than the others it wins outright; where two admitting slots are
+genuinely incomparable — an `(x :Any) -> R` value against both
+`:(FN (x :Number) -> R)` and `:(FN (x :Str) -> R)`, neither more specific —
+dispatch ties and surfaces `AmbiguousDispatch`. The `List` / `Dict` covariance
+is observable the same way: `(xs :(LIST OF Number))` strictly outranks
+`(xs :(LIST OF Any))` for a number-list call.
+
+**Record values subtype the dual way to function params.** A record value is
+ranked by `record_value_more_specific`
+([ktype_predicates.rs](../../src/machine/model/types/ktype_predicates.rs)): a
+*wider* record is **more specific** — a `{x = 1, y = "a"}` value (carried type
+`:{x :Number, y :Str}`) fills a narrower `:{x :Number}` slot by dropping `y`, so the
+superset arm wins a dispatch tie. Depth is **covariant** in the field types
+(`:{x :Number}` ≺ `:{x :Any}`), sound because koan values are immutable
+([memory-model](../memory-model.md)). The relation is the dual of
+`param_record_more_specific` (contravariant params with width-*drop* for
+call-by-name) — records and function params share the `Record` substrate but order
+opposite ways, so the two helpers stay separate. Incomparable record arms
+(`:{x :Number, y :Str}` vs `:{x :Number, z :Str}`, filled by a value carrying all of
+`x`, `y`, `z`) tie as `AmbiguousDispatch`; the [`FROM` projection
+builtin](../../src/builtins/record_projection.rs) breaks the tie at the call site —
+`(x y) FROM r` re-tags the record value's carried field-type record to exactly the
+named fields (`Rc`-sharing the backing value record whole), so only the `:{x, y}` arm
+admits. Admission mirrors `List` / `Dict`: an unevaluated `{x = …}` literal admits
+shape-only, while an evaluated record compares its memoized field-type record against
+the slot via `satisfied_by` (no field walk).
 
 Concretely:
 
@@ -161,11 +198,19 @@ BAD   # → TypeMismatch: expected :(LIST OF Number), got :(LIST OF Any)
 ```
 
 ```
-FN (USE f :(FN (Number) -> Str)) -> Str = ("got fn")
+FN (USE f :(FN (x :Number) -> Str)) -> Str = ("got fn")
 
-USE (FN (SHOW x :Number) -> Str = ("hi"))   # → "got fn"   (function_compat: equal)
-USE (FN (SHOW x :Any)    -> Str = ("hi"))   # → DispatchFailed
-                                            #   (function_compat: invariant, not equal)
+USE (FN (SHOW x :Number) -> Str = ("hi"))   # → "got fn"   (function_compat: equal by name+type)
+USE (FN (SHOW x :Any)    -> Str = ("hi"))   # → "got fn"   (contravariant param: a value
+                                            #   accepting Any fills a slot promising only Number)
+```
+
+```
+FN (USE f :(FN (x :Number, y :Str) -> Str)) -> Str = ("got fn")
+
+USE (FN (SHOW x :Number) -> Str = ("hi"))   # → "got fn"   (width drop: a unary value fills a
+                                            #   binary slot; the extra slot param `y` arrives
+                                            #   unbound under call-by-name)
 ```
 
 **Element-type inference for literals** is the join of element types via
@@ -177,8 +222,10 @@ each carry their element types directly (`List(Rc<Vec<…>>, Box<KType>)`,
 [`KObject::ktype`](../../src/machine/model/values/kobject.rs) reads the carried
 type in O(1) rather than re-walking the contents on every call. Values are
 immutable `Rc`, so the join is sound to compute exactly once. Functions project
-their declared signature (`KObject::KFunction(f, _)` → `KFunction { args, ret }`
-read off `f.signature`).
+their declared signature (`KObject::KFunction(f, _)` → `KFunction { params, ret }`,
+the parameter record read off `f.signature`'s named slots). `KType::join` joins
+two same-shape `KFunction`s (and same-shape `KFunctor`s) name-keyed, coarsening a
+mismatched parameter-name set or a function-vs-functor pair to `Any`.
 
 **Empty containers carry no element type to infer**, so an unstamped empty `[]`
 / `{}` (element type memoized as `Any`, never stamped by an annotation) is an
@@ -413,11 +460,11 @@ later-sibling overload is hidden, and dispatch falls through to outer scopes
 unaffected by the not-yet-visible registration. The `nominal_binder` carve-out
 does **not** apply to FN-bucket overloads — they're value-style gated.
 [`OverloadBucket::pick_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
-receives the pre-filtered survivor list (a non-empty `FunctionLookup::Bucket`
-arm) and runs only the admit predicate over it. When no bucket admits at a
-given scope but a `pending_overloads[key]` entry is visible, the same lookup
-falls through to `FunctionLookup::Pending(NodeId)` and the dispatcher records
-the innermost such producer for a park-and-replay on wake.
+receives the pre-filtered survivor list (the `FunctionLookup`'s `overloads`)
+and runs only the admit predicate over it. The same lookup also surfaces the
+earliest-index visible `pending_overloads[key]` producer in `FunctionLookup`'s
+`pending` field; a visible pending parks that scope for a park-and-replay on
+wake, since it would shadow once finalized.
 
 The result: an FN reference resolves under the same lexical-position rule as a
 value-LET reference. Forward calls between sibling FNs work through the
@@ -428,6 +475,59 @@ forward reference inside a sibling expression surfaces `UnboundName` directly:
 visibility is lexical, and the parking edges are reserved for visible-but-not-ready
 producers.
 
+## Record fields and `KType` hashing
+
+A struct schema's fields are a [`Record<V>`](../../src/machine/model/types/record.rs) —
+an ordered identifier-keyed map, generic over its value, so the type level stores
+`Record<KType>` and a value level can later store `Record<KObject>`.
+`UserTypeKind::Struct` carries `Rc<Record<KType>>`; the `STRUCT` elaborator wraps the
+parser's declaration-ordered `(name, KType)` pairs into a `Record` once, at the
+`finalize_struct` boundary.
+
+The same `Record<KType>` substrate backs `KFunction` / `KFunctor` parameter
+identity: both variants store their parameters as `params: Record<KType>`
+(`(name → type)`), built by `finalize_carrier` in
+[`type_constructors.rs`](../../src/builtins/type_constructors.rs) from the
+shared field-list parser STRUCT / UNION use. A function-typed slot is thus
+identified by its parameter names and types order-blind — `:(FN (x :Number,
+y :Str) -> Bool)` equals `:(FN (y :Str, x :Number) -> Bool)`. Function
+admission compares the two records under width-drop subtyping (see
+[Variance](#variance)): a value that requires a parameter the slot doesn't
+declare is a non-match, while extra *slot* parameters the value doesn't declare
+are fine — they arrive unbound under call-by-name. `KType::join` reuses the
+record join for both arms.
+
+The shape has two defining properties:
+
+- **Insertion order is preserved** for rendering and positional construction
+  (`Record::iter` walks declaration order), but **equality ignores it**:
+  `(x :Number, y :Str)` and `(y :Str, x :Number)` are the same record. The
+  order-blind `PartialEq` is `IndexMap`'s, forwarded directly. Names are unique
+  within a record — a structural property `IndexMap` keys carry for free, and one
+  `parse_pair_list` already enforces by rejecting a duplicate field name.
+- **Hashing agrees with that order-blind equality**: a commutative fold
+  (`wrapping_add`) over a per-field `mix(hash(name), hash(value))`. The `mix` binds
+  name to value before the fold, so `{x: Number}` and `{y: Number}` hash apart; the
+  symmetric accumulator makes the result independent of field order. Wrapping-add
+  rather than XOR, which would cancel on a duplicate.
+
+`Record<V>: Hash` needs `V: Hash`, so `KType` implements `Hash`, kept consistent with
+its hand-written `PartialEq` arm-for-arm: the discriminant leads (so distinct variants
+never alias and the unit variants need no further mixing), then each compound arm
+hashes exactly the fields its `PartialEq` arm compares. The arena-pointer variants hash
+their stable identity key — `Module` / `AbstractType` hash `scope_id()`, `Signature`
+hashes `sig_id()` — never the raw pointer, and `UserTypeKind`'s payload-ignoring
+equality is mirrored by a discriminant-only `Hash`.
+
+The same `Record<V>` substrate also backs the first-class structural record type
+`KType::Record(Record<KType>)` and its value `KObject::Record(Record<KObject>, …)`
+(surface `{x = 1, y = "a"}`). The dict carrier (`KType::Dict`, `KObject::Dict`) stays
+a sibling: records restrict keys to identifiers and admit heterogeneous per-field
+types, while dicts admit arbitrary value keys and one homogeneous value type. The two
+never share a key representation, and the value surfaces disambiguate at parse time —
+a brace literal with `=` pairs (`{x = 1}`) is a record, with `:` pairs (`{k: v}`) a
+dict (see [type-language-via-dispatch.md § Record-type sigil](type-language-via-dispatch.md#record-type-sigil)).
+
 ## Known limitations
 
 - **TCO collapses frames.** When A tail-calls B, only B's return type is
@@ -437,20 +537,3 @@ producers.
   declared return types are honest but unenforced.
 The two-phase execution work in [open-work.md](open-work.md) closes both
 uniformly.
-
-## Open work
-
-- [Record substrate for identifier-keyed binding](../../roadmap/type_language/record-substrate.md) —
-  `KType::KFunction { args: Vec<KType> }` / `KFunctor { params: Vec<KType> }`
-  become an ordered identifier-keyed record (the `(name, KType)` shape
-  `UserTypeKind::Struct` already carries), with order-blind equality and a
-  name+type hash; the dict carrier stays a sibling.
-- [FN/FUNCTOR named identity](../../roadmap/type_language/fn-named-identity.md) —
-  parameter names round-trip into `KFunction` / `KFunctor` identity and
-  rendering, so a function-typed slot records the names callers must use.
-- [Record structural subtyping and projection](../../roadmap/type_language/record-subtyping.md) —
-  relaxes the `Function`-invariant / strict-`function_compat` rule (above) to
-  structural record subtyping: width/depth on records (depth sound under value
-  immutability), contravariant parameter records and covariant returns for
-  functions, plus a `FROM` projection builtin to disambiguate incomparable
-  dispatch arms.

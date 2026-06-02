@@ -110,6 +110,134 @@ fn fn_with_typed_function_param_accepts_matching_function() {
     assert_eq!(bytes, b"got fn\n");
 }
 
+/// `function_compat` is name-keyed: a function whose parameter name differs from the
+/// slot's (`n` vs `x`) does not fill the slot. With no other overload, the call surfaces
+/// `DispatchFailed` rather than binding the structurally-similar function.
+#[test]
+fn fn_with_typed_function_param_rejects_name_mismatch() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")",
+    );
+    let mut sched = Scheduler::new();
+    sched.add_dispatch(
+        parse_one("USE (FN (SHOW n :Number) -> Str = (\"hi\"))"),
+        scope,
+    );
+    let error = sched
+        .execute()
+        .expect_err("a function with param name `n` must not fill a `(x :Number)` slot");
+    assert!(
+        matches!(error.kind, KErrorKind::DispatchFailed { .. }),
+        "expected DispatchFailed on parameter-name mismatch, got {error:?}",
+    );
+}
+
+/// Depth-contravariant admit: a value whose param accepts `Any` fills a slot promising
+/// only a `Number` param. Under call-by-name, a `Number` argument is a valid `Any`, so
+/// the more-general value param subsumes the slot's narrower promise.
+#[test]
+fn fn_with_typed_function_param_admits_contravariant_param() {
+    let bytes = capture_program_output(
+        "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")\n\
+         PRINT (USE (FN (SHOW x :Any) -> Str = (\"hi\")))",
+    );
+    assert_eq!(bytes, b"got fn\n");
+}
+
+/// Covariant-return admit: a value returning a `Number` subtype fills a slot promising
+/// an `Any` return. The slot's caller only relies on the wider `Any`, which the
+/// narrower `Number` return satisfies.
+#[test]
+fn fn_with_typed_function_param_admits_covariant_return() {
+    let bytes = capture_program_output(
+        "FN (USE f :(FN (x :Number) -> Any)) -> Str = (\"got fn\")\n\
+         PRINT (USE (FN (SHOW x :Number) -> Number = (1)))",
+    );
+    assert_eq!(bytes, b"got fn\n");
+}
+
+/// Width-drop admit + callable: a unary value fills a binary slot. The extra slot
+/// param (`y`) is unbound under call-by-name, and the bound function still runs.
+#[test]
+fn fn_with_typed_function_param_admits_width_drop() {
+    let bytes = capture_program_output(
+        "FN (USE f :(FN (x :Number, y :Str) -> Str)) -> Str = (\"got fn\")\n\
+         PRINT (USE (FN (SHOW x :Number) -> Str = (\"hi\")))",
+    );
+    assert_eq!(bytes, b"got fn\n");
+}
+
+/// Width-extra reject: a value declaring a param (`y`) the slot doesn't promise fails
+/// to fill the slot — the value requires an argument call-by-name can't supply. With no
+/// other overload the call surfaces `DispatchFailed`.
+#[test]
+fn fn_with_typed_function_param_rejects_width_extra() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")",
+    );
+    let mut sched = Scheduler::new();
+    sched.add_dispatch(
+        parse_one("USE (FN (SHOW x :Number, y :Str) -> Str = (\"hi\"))"),
+        scope,
+    );
+    let error = sched
+        .execute()
+        .expect_err("a value declaring an extra param `y` must not fill a `(x :Number)` slot");
+    assert!(
+        matches!(error.kind, KErrorKind::DispatchFailed { .. }),
+        "expected DispatchFailed on width-extra value param, got {error:?}",
+    );
+}
+
+/// Contravariant specificity tie-break: with overloads keyed on `(x :Number)` and
+/// `(x :Any)` function slots, a value param of `Any` admits both but picks the
+/// `(x :Any)` overload (the value's `Any` param is contravariantly most specific for
+/// the `(x :Any)` slot), and a value param of `Number` picks the `(x :Number)` overload.
+#[test]
+fn fn_typed_function_param_contravariant_tiebreak() {
+    let any_value = capture_program_output(
+        "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"narrow\")\n\
+         FN (USE f :(FN (x :Any) -> Str)) -> Str = (\"wide\")\n\
+         PRINT (USE (FN (GET x :Any) -> Str = (\"v\")))",
+    );
+    assert_eq!(any_value, b"wide\n");
+    let number_value = capture_program_output(
+        "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"narrow\")\n\
+         FN (USE f :(FN (x :Any) -> Str)) -> Str = (\"wide\")\n\
+         PRINT (USE (FN (GET x :Number) -> Str = (\"v\")))",
+    );
+    assert_eq!(number_value, b"narrow\n");
+}
+
+/// Incomparable overloads tie as ambiguous: a value param of `Any` fills both the
+/// `(x :Number)` and `(x :Str)` function slots (contravariantly), but the two slots
+/// are mutually incomparable, so neither wins → `AmbiguousDispatch`.
+#[test]
+fn fn_typed_function_param_incomparable_is_ambiguous() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"num\")",
+    );
+    run(scope, "FN (USE f :(FN (x :Str) -> Str)) -> Str = (\"str\")");
+    let mut sched = Scheduler::new();
+    sched.add_dispatch(parse_one("USE (FN (GET x :Any) -> Str = (\"v\"))"), scope);
+    let error = sched
+        .execute()
+        .expect_err("an `Any`-param value matching two incomparable slots must be ambiguous");
+    assert!(
+        matches!(error.kind, KErrorKind::AmbiguousDispatch { .. }),
+        "expected AmbiguousDispatch across incomparable function slots, got {error:?}",
+    );
+}
+
 /// When two overloads share the same untyped shape and both match, the more
 /// specific one wins: `(xs: List<Number>)` over `(xs: List<Any>)` for a number-list
 /// call.

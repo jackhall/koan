@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::body;
 use crate::builtins::default_scope;
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::execute::Scheduler;
+use crate::machine::model::types::Record;
 use crate::machine::model::{KObject, KType};
 use crate::machine::ArgumentBundle;
 
@@ -14,7 +14,7 @@ fn let_inserts_binding_into_scope() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     let mut sched = Scheduler::new();
-    let mut args = HashMap::new();
+    let mut args = Record::new();
     args.insert("name".to_string(), Rc::new(KObject::KString("x".into())));
     args.insert("value".to_string(), Rc::new(KObject::Number(42.0)));
 

@@ -149,10 +149,11 @@ src/
 │   ├── branch_walk.rs        shared <tag> -> <body> walker for MATCH and TRY
 │   ├── result.rs             Result tagged-union builtin
 │   ├── type_constructors.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
-│   ├── type_ops.rs           LIST_OF / DICT_OF / FUNCTION_OF / MODULE_TYPE_OF / TEMPLATE / SIG_WITH
+│   ├── type_ops.rs           LIST_OF / DICT_OF / MODULE_TYPE_OF / TEMPLATE / SIG_WITH
 │   ├── union.rs
 │   ├── struct_def.rs
 │   ├── struct_value.rs       shared struct-construction representation
+│   ├── record_projection.rs  FROM — `(x y) FROM r` re-tags a record value's carried type to the named fields
 │   ├── tagged_union.rs       shared tagged-union representation
 │   ├── newtype_def.rs        NEWTYPE
 │   ├── module_def.rs         MODULE
@@ -172,13 +173,13 @@ src/
     │   ├── types.rs
     │   ├── types/
     │   │   ├── ktype.rs           KType — type tag for slots, return types, and runtime values
+    │   │   ├── record.rs          Record<V> — ordered identifier-keyed map backing struct schemas and FN/FUNCTOR parameter identity
     │   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
     │   │   ├── ktype_resolution.rs   surface-name and TypeName elaboration (from_name, from_type_expr, join)
     │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking and per-scope resolution memo
     │   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
     │   │   ├── ktraits.rs         Parseable / Executable / Iterable / Serializable / Monadic
-    │   │   ├── typed_field_list.rs  shared parser for `(name :Type ...)` schemas
-    │   │   └── unify.rs           unify_slot — generic-destructuring unifier binding type-parameter names per call
+    │   │   └── typed_field_list.rs  shared parser for `(name :Type ...)` schemas
     │   ├── values.rs
     │   └── values/
     │       ├── kobject.rs         runtime value type

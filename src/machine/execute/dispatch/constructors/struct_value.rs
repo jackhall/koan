@@ -1,5 +1,5 @@
 //! Struct construction. `prepare_value_parts` reorders the call-site
-//! `NamedPairs` into schema declaration order; `construct` validates
+//! record fields into schema declaration order; `construct` validates
 //! each value against its field type and emits the `KObject::Struct`.
 //! See [`constructors::dispatch_construct`](super::dispatch_construct)
 //! for the dispatch entry.
@@ -8,21 +8,19 @@ use std::rc::Rc;
 
 use indexmap::IndexMap;
 
-use crate::machine::core::source::Spanned;
 use crate::machine::core::{KError, KErrorKind, ScopeId};
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::KType;
+use crate::machine::model::ast::ExpressionPart;
+use crate::machine::model::types::{KType, Record};
 use crate::machine::model::values::{KObject, NamedPairs};
 
 /// Reorder call-site args into schema declaration order. Error
 /// precedence is missing-field before unknown-field: telling the user
 /// "you forgot `y`" is more actionable than "you have a stray `z`".
 pub(in crate::machine::execute) fn prepare_value_parts<'a>(
-    fields: &Rc<Vec<(String, KType<'a>)>>,
-    args_parts: Vec<Spanned<ExpressionPart<'a>>>,
+    fields: &Rc<Record<KType<'a>>>,
+    record_fields: Vec<(String, ExpressionPart<'a>)>,
 ) -> Result<Vec<ExpressionPart<'a>>, KError> {
-    let tmp_expr = KExpression::new(args_parts);
-    let mut pairs = NamedPairs::parse(&tmp_expr, "struct construction")
+    let mut pairs = NamedPairs::from_fields(record_fields)
         .map_err(|msg| KError::new(KErrorKind::ShapeError(msg)))?;
     let mut ordered: Vec<ExpressionPart<'a>> = Vec::with_capacity(fields.len());
     for (field_name, _) in fields.iter() {
@@ -45,7 +43,7 @@ pub(in crate::machine::execute) fn prepare_value_parts<'a>(
 pub(in crate::machine::execute) fn construct<'a>(
     type_name: &str,
     scope_id: ScopeId,
-    fields: &[(String, KType<'a>)],
+    fields: &Record<KType<'a>>,
     values: &[&'a KObject<'a>],
 ) -> Result<KObject<'a>, KError> {
     if values.len() != fields.len() {

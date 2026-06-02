@@ -68,8 +68,8 @@ operations:
 ```
 SIG OrderedSig = (
   (LET Type = ...)
-  (VAL compare :(FN (Type, Type) -> Number))
-  (VAL gen :(FN (Random) -> Type))
+  (VAL compare :(FN (x :Type, y :Type) -> Number))
+  (VAL gen :(FN (r :Random) -> Type))
 
   (AXIOM #((compare x x) = 0))
   (AXIOM #((sign (compare x y)) = (- (sign (compare y x)))))
@@ -97,7 +97,7 @@ non-transitive comparisons, hashes that disagree with their own equality,
 monoids whose identity isn't.
 
 **Generators live in modules; the signature requires them.** A
-`(VAL gen :(FN (Random) -> Type))` slot in a signature body is an
+`(VAL gen :(FN (r :Random) -> Type))` slot in a signature body is an
 obligation: every ascribing module must supply a generator for the abstract
 type. This folds
 generator presence into the existing structural-conformance check —

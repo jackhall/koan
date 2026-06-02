@@ -406,12 +406,12 @@ the type rather than as a two-Option convention.
 The bucket vec is what admits multiple sibling FN/FUNCTOR binders
 sharing one bucket key: each install appends a distinct entry at its
 own `BindingIndex`. A consumer looking up the bucket via
-[`Bindings::lookup_function`](../src/machine/core/bindings.rs) gets
-`FunctionLookup::Pending(NodeId)` for the *earliest-index visible*
-entry — the most-likely-first-finalizer. On that producer's finalize,
-only the matching entry is removed from the vec (others stay
-pending); the consumer wakes, re-dispatches, and either picks from
-the now-live `functions[bucket]` or re-parks on the next-earliest
+[`Bindings::lookup_function`](../src/machine/core/bindings.rs) gets the
+*earliest-index visible* `pending_overloads[key]` entry in the returned
+`FunctionLookup`'s `pending` field — the most-likely-first-finalizer. On
+that producer's finalize, only the matching entry is removed from the vec
+(others stay pending); the consumer wakes, re-dispatches, and either picks
+from the now-live `functions[bucket]` or re-parks on the next-earliest
 pending sibling. Each re-dispatch is cheap, and the expected case
 (consumer's match lands in the first 1–2 siblings) avoids the cost
 entirely.
@@ -428,15 +428,17 @@ walks ancestors, the `Bindings::lookup_*` accessors apply the
 predicates accept or reject the candidate. The placeholder mechanism
 extends the value- and function-side lookups so a still-running visible
 producer surfaces as `Resolution::Placeholder(NodeId)` /
-`FunctionLookup::Pending(NodeId)` rather than `UnboundName` —
+`FunctionLookup { pending: Some(_), .. }` rather than `UnboundName` —
 [`Bindings::lookup_value`](../src/machine/core/bindings.rs) consults
 `data` then `placeholders`, and
-[`Bindings::lookup_function`](../src/machine/core/bindings.rs) consults
-`functions[key]` (per-overload visibility-filtered) and falls through to
-`pending_overloads[key]` only when no live bucket admits. The dispatcher
-records the innermost `Pending` arm during its ancestor walk and parks
-on it only if no bucket admits anywhere, so the bucket /
-pending-overload pair surfaces from one traversal rather than two. The
+[`Bindings::lookup_function`](../src/machine/core/bindings.rs) surfaces
+the visibility-filtered `functions[key]` overloads and the earliest-index
+visible `pending_overloads[key]` producer *together* in one
+`FunctionLookup`. The dispatcher decides each scope's contribution from
+that pair as it walks (a visible pending parks the scope; see
+[scheduler.md § In-walk dispatch precedence](typing/scheduler.md#in-walk-dispatch-precedence)),
+so the bucket / pending-overload pair surfaces from one traversal rather
+than two. The
 raw map accessors (`data` / `types` / `functions` / `placeholders` /
 `pending_overloads`) are gated `#[cfg(test)]`; production sites that
 genuinely sweep all members (`MODULE` member mirroring, signature
@@ -566,28 +568,38 @@ the per-slot index buckets `r.slots` carries (`wrap_indices`,
 `Future(_)`) routes to `stateful_install_eager_only`, which sub-Dispatches
 every eager-shaped part, installs the eager-subs track on this slot, and
 re-resolves dispatch against the spliced expression at track completion;
-`ParkOnProducers(_)` and `UnboundName(_)` come from the post-walk fallback
-below.
+`ParkOnProducers(_)` and `UnboundName(_)` are decided inside the scope walk
+as described below.
 
-The post-walk fallback inside `resolve_dispatch_with_chain` triggers when
-no scope's bucket admitted. It reads the cache by fixed precedence —
-**placeholders > eager > unbound > pending overload > Unmatched**:
+`resolve_dispatch_with_chain` decides each visible scope's contribution as
+it walks innermost-first, from the finalized overloads and the visible
+in-flight pending producer the scope's `FunctionLookup` surfaces together.
+The innermost scope to reach a terminal outcome wins; only `UnboundName` and
+`Unmatched` are decided post-walk. Per scope:
 
-1. Any `NameOutcome::Parked(_)` ⇒ `ParkOnProducers` on the deduplicated
-   producer list. Wake re-dispatches; strict admission rebuilds the cache
-   against the now-bound type.
-2. Otherwise, if `expr` carries any eager (`Expression` / `SigiledTypeExpr`
-   / `ListLiteral` / `DictLiteral`) part ⇒ `Deferred`. Eager outranks
-   Unbound because an eager part's evaluation may itself surface the
-   precise diagnostic, and surfacing `UnboundName` here would pre-empt an
-   Expression-in-Type-slot dispatch (`(maybe) some 42`) whose head
-   evaluates to the schema after one sub-Dispatch.
-3. Otherwise, any `NameOutcome::Unbound(name)` ⇒ `UnboundName(name)`.
-4. Otherwise, an innermost-visible `pending_overloads[key]` entry
-   recorded during the walk ⇒ `ParkOnProducers(vec![producer])` (FN /
-   FUNCTOR sibling parked on its own Combine has installed the bucket;
-   wake re-dispatches against the now-registered overload).
-5. Otherwise ⇒ `Unmatched`.
+1. A visible pending sibling parks the scope (`ParkOnProducers`) — it would
+   shadow any finalized overload here once it finalizes, so the scope
+   resolves nothing until it does, even over a same-scope finalized
+   strict-Pick. The wake re-dispatches against the now-registered overload.
+2. Otherwise the strict gate Picks the most-specific admitting overload
+   (`Resolved`), surfaces a genuine tie (`Ambiguous`), or — on a tie with an
+   unevaluated eager part that may break it — `Deferred`.
+3. Otherwise (strict-Empty) one relaxed-admission pass per candidate assumes
+   every unresolved slot satisfiable and resolves by what each leaned on: a
+   `Parked` bare name (a producer exists) ⇒ `ParkOnProducers`; otherwise an
+   unevaluated eager part ⇒ `Deferred`; otherwise a `Dead` unbound bare name
+   records an `UnboundName` blocker without terminating — an unbound name
+   never arrives, so it never parks, and holding it back lets an outer scope
+   still strict-Pick the bare name shape-only as an `:Identifier` / `:Any`
+   slot.
+
+After the walk: a recorded dead-lean blocker ⇒ `UnboundName(name)`; nothing
+contributed even a dead lean ⇒ `Unmatched`. Parked outranks eager (a parked
+bare name is just an eager part whose value arrives from a producer), and
+eager outranks the dead-lean `UnboundName` because an eager part's evaluation
+may itself surface the precise diagnostic — surfacing `UnboundName` first
+would pre-empt an Expression-in-Type-slot dispatch (`(maybe) some 42`) whose
+head evaluates to the schema after one sub-Dispatch.
 
 The rails the dispatch driver feeds:
 
@@ -636,7 +648,7 @@ The rails the dispatch driver feeds:
     site does. See
     [type-language-via-dispatch.md](typing/type-language-via-dispatch.md)
     for the full type-language dispatch contract.
-  - `FunctionValueCall` (`f (x = 7)`) — `stateful_fast_lane_function_value_call`
+  - `FunctionValueCall` (`f {x = 7}`) — `stateful_fast_lane_function_value_call`
     resolves the `Identifier` head and handles every admission outcome
     directly. The call shape admits iff `expr.parts[1..]` is exactly one
     nested-parens part (the *only* call shape — koan has no `f 1 2`
@@ -1247,8 +1259,3 @@ for test fixtures and builtin-registration paths.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
-- **Argument-binding unification**
-  ([roadmap/argument-binding-unification.md](../roadmap/type_language/argument-binding-unification.md)).
-  The invoke path's per-entry install into `Bindings.data` collapses to a
-  single record-block install under one frame-level `BindingIndex`, since every
-  parameter of a call shares the same installing position.

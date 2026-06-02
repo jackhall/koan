@@ -206,7 +206,7 @@ type of a tagged-union variant (`some :Number`). Ascriptions use the
 glued-right `:` sigil with no space between the `:` and the type — `x :Number`,
 not `x: Number`. Parameterized type expressions extend the same form into an
 S-expression group: `:(LIST OF Number)`, `:(MAP Str -> Number)`,
-`:(FN (Number) -> Str)`. Bare non-parameterized type tokens in
+`:(FN (x :Number) -> Str)`. Bare non-parameterized type tokens in
 non-ascription positions (e.g. the RHS of `LET Type = Number`) keep working
 without the sigil.
 
@@ -263,17 +263,17 @@ it would shadow `value_lookup`/`value_pass`.
 
 ```
 LET f = (FN (DOUBLE x :Number) -> Number = (x))
-f (x: 21)        # → 21, via call_by_name (named arguments)
+f {x = 21}        # → 21, via call_by_name (named arguments)
 ```
 
 Function calls through `call_by_name` use **named arguments**: each value is
-introduced by its parameter name and a colon. Order is independent of the
-declaration:
+introduced by its parameter name and `=`, inside one record literal `{...}`.
+Order is independent of the declaration:
 
 ```
 LET pair = (FN (a :Number TIMES b :Number) -> Number = (a))
-pair (a: 3, b: 4)        # → 3
-pair (b: 4, a: 3)        # → 3 (same call, different argument order)
+pair {a = 3, b = 4}        # → 3
+pair {b = 4, a = 3}        # → 3 (same call, different argument order)
 ```
 
 Missing names error with `KErrorKind::MissingArg`; unknown names with
@@ -337,14 +337,14 @@ STRUCT Point = (x :Number, y :Number)
 STRUCT User = (id :Number, name :Str, active :Bool)
 ```
 
-Construction is **named**: each value is introduced by its field name and a
-colon. Order is independent of the declaration — the constructor reorders the
-pairs into schema order before validating types:
+Construction is **named**: each value is introduced by its field name and `=`,
+inside one record literal `{...}`. Order is independent of the declaration — the
+constructor reorders the fields into schema order before validating types:
 
 ```
-LET p = (Point (x: 3, y: 4))
-LET u = (User (id: 42, name: "alice", active: true))
-LET q = (Point (y: 4, x: 3))             # same struct as p
+LET p = (Point {x = 3, y = 4})
+LET u = (User {id = 42, name = "alice", active = true})
+LET q = (Point {y = 4, x = 3})             # same struct as p
 ```
 
 Bare identifiers on the value side resolve through scope just like literals do —
@@ -353,17 +353,17 @@ no extra parens needed:
 ```
 LET vx = 7
 LET vy = 11
-LET q = (Point (x: vx, y: vy))
+LET q = (Point {x = vx, y = vy})
 ```
 
 Missing or unknown field names, and wrong field-type values, all error at
 construction time:
 
 ```
-LET bad = (Point (x: "oops", y: 4))
+LET bad = (Point {x = "oops", y = 4})
 # error: type mismatch for argument 'x': expected Number, got Str
 
-LET partial = (Point (x: 3))
+LET partial = (Point {x = 3})
 # error: missing argument 'y'
 ```
 
@@ -381,7 +381,7 @@ LET dx = p.x                             # 3
 PRINT (p.y)                              # 4
 
 STRUCT Line = (start :Struct, finish :Struct)
-LET seg = (Line (start: p, finish: q))
+LET seg = (Line {start = p, finish = q})
 LET tipx = seg.finish.x                  # chained: 3
 ```
 
@@ -437,7 +437,7 @@ The representation can be any type, including another struct:
 STRUCT Point = (x :Number, y :Number)
 NEWTYPE Boxed = Point
 
-LET p = (Point (x: 1, y: 2))
+LET p = (Point {x = 1, y = 2})
 LET b = (Boxed p)
 ```
 
@@ -589,9 +589,10 @@ One line per surface form. Sources under
 | `NEWTYPE <Name> = <Repr>`                | Declare a fresh nominal identity over a transparent representation. `Name(value)` constructs.    | [newtype_def.rs](src/builtins/newtype_def.rs)        |
 | `MATCH <value:Tagged> WITH (<branches>)` | Branch by tag; only the matching branch's body runs. `it` binds the inner value.                | [match_case.rs](src/builtins/match_case.rs)          |
 | `TRY (<expr>) WITH (<branches>)`         | Evaluate `<expr>` in a catching context; branch on `ok` / the `KErrorKind` tags / `_`. `it` is the value (success) or per-variant payload (error). | [try_with.rs](src/builtins/try_with.rs)              |
-| `<verb:TypeExprRef> (<args>)`            | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point (x: 3, y: 4)`.             | [dispatch/single_poll.rs](src/machine/execute/dispatch/single_poll.rs) (`ConstructorCall` fast lane) |
+| `<verb:TypeExprRef> (<args>)`            | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point {x = 3, y = 4}`.             | [dispatch/single_poll.rs](src/machine/execute/dispatch/single_poll.rs) (`ConstructorCall` fast lane) |
 | `<verb:Identifier> (<args>)`             | Call a function, tagged-union type, or struct type bound under `<verb>`.                        | [dispatch/fn_value.rs](src/machine/execute/dispatch/fn_value.rs) (`FunctionValueCall` fast lane) |
 | `<s>.<field>` (`ATTR <s> <field>`)       | Read `<field>` off a struct value. Compound-token `.` operator; `s.x.y` chains.                  | [attr.rs](src/builtins/attr.rs)                      |
+| `(<fields>) FROM <r:{}>`                 | Project a record value to the named fields, e.g. `(x y) FROM r` — re-tags the carried type to `{x, y}` to pick one of two incomparable dispatch arms. | [record_projection.rs](src/builtins/record_projection.rs) |
 | `<v:Identifier>` (single-part)           | Look up `<v>` in scope.                                                                         | [dispatch/single_poll.rs](src/machine/execute/dispatch/single_poll.rs) (`BareIdentifier` fast lane) |
 | `<v>` (single-part literal/expr)         | Pass the value through (lets `(99)`, `("x")`, etc. dispatch as expressions).                    | [dispatch/single_poll.rs](src/machine/execute/dispatch/single_poll.rs) (`LiteralPassThrough` fast lane) |
 | `#(<expr>)`                              | Quote: capture the body's AST as a `KExpression` value with no evaluation.                       | [quote.rs](src/builtins/quote.rs)                    |

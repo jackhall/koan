@@ -346,7 +346,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "STRUCT Point = (x :Number, y :Number)\nLET p = (Point (x = 3, y = 4))",
+            "STRUCT Point = (x :Number, y :Number)\nLET p = (Point {x = 3, y = 4})",
         );
         let result = run_one(scope, parse_one("p.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 3.0));
@@ -358,7 +358,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "STRUCT Point = (x :Number, y :Number)\nLET p = (Point (x = 3, y = 4))",
+            "STRUCT Point = (x :Number, y :Number)\nLET p = (Point {x = 3, y = 4})",
         );
         assert!(matches!(run_one(scope, parse_one("p.x")), KObject::Number(n) if *n == 3.0));
         assert!(matches!(run_one(scope, parse_one("p.y")), KObject::Number(n) if *n == 4.0));
@@ -372,9 +372,9 @@ mod tests {
             scope,
             "STRUCT Point = (x :Number, y :Number)\n\
              STRUCT Line = (start :Struct, finish :Struct)\n\
-             LET origin = (Point (x = 0, y = 0))\n\
-             LET tip = (Point (x = 3, y = 4))\n\
-             LET seg = (Line (start = origin, finish = tip))",
+             LET origin = (Point {x = 0, y = 0})\n\
+             LET tip = (Point {x = 3, y = 4})\n\
+             LET seg = (Line {start = origin, finish = tip})",
         );
         let result = run_one(scope, parse_one("seg.finish.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 3.0));
@@ -413,7 +413,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "STRUCT Point = (x :Number, y :Number)\nLET p = (Point (x = 3, y = 4))",
+            "STRUCT Point = (x :Number, y :Number)\nLET p = (Point {x = 3, y = 4})",
         );
         let err = run_one_err(scope, parse_one("p.z"));
         assert!(
@@ -431,9 +431,9 @@ mod tests {
             scope,
             "STRUCT Point = (x :Number, y :Number)\n\
              STRUCT Line = (start :Struct, finish :Struct)\n\
-             LET origin = (Point (x = 0, y = 0))\n\
-             LET tip = (Point (x = 3, y = 4))\n\
-             LET seg = (Line (start = origin, finish = tip))",
+             LET origin = (Point {x = 0, y = 0})\n\
+             LET tip = (Point {x = 3, y = 4})\n\
+             LET seg = (Line {start = origin, finish = tip})",
         );
         let err = run_one_err(scope, parse_one("seg.start.bogus"));
         assert!(
@@ -452,7 +452,7 @@ mod tests {
             scope,
             "STRUCT Point = (x :Number, y :Number)\n\
              NEWTYPE Boxed = Point\n\
-             LET p = (Point (x = 1, y = 2))\n\
+             LET p = (Point {x = 1, y = 2})\n\
              LET b = (Boxed (p))",
         );
         assert!(matches!(run_one(scope, parse_one("b.x")), KObject::Number(n) if *n == 1.0));
@@ -490,7 +490,7 @@ mod tests {
             scope,
             "STRUCT Point = (x :Number, y :Number)\n\
              NEWTYPE Boxed = Point\n\
-             LET p = (Point (x = 1, y = 2))\n\
+             LET p = (Point {x = 1, y = 2})\n\
              LET b = (Boxed (p))",
         );
         let err = run_one_err(scope, parse_one("b.z"));

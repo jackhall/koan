@@ -42,16 +42,22 @@ pub enum Resolution<'a> {
 }
 
 /// Outcome of a per-scope `lookup_function` call. Visibility (per
-/// `chain_cutoff`) is applied inside the lookup; `Bucket` is non-empty.
-pub enum FunctionLookup<'a> {
-    Bucket(Vec<&'a KFunction<'a>>),
-    /// No live bucket but a visible `pending_overloads` entry — a sibling
-    /// FN/FUNCTOR binder has dispatched a matching overload whose body hasn't
-    /// finalized. The consumer parks on the earliest-index visible producer;
-    /// on wake it re-dispatches and either picks from the now-live bucket or
-    /// re-parks on the next-earliest pending sibling.
-    Pending(NodeId),
-    None,
+/// `chain_cutoff`) is applied inside the lookup; `overloads` holds only
+/// visible finalized overloads (may be empty) and `pending` the earliest-index
+/// visible in-flight producer (if any). Both are surfaced together so the
+/// scope walk can decide pending-vs-finalized precedence at the scope that
+/// raised them — a bucket may hold a finalized overload AND an in-flight
+/// pending sibling at once. A no-hit lookup is `overloads.is_empty() &&
+/// pending.is_none()`.
+///
+/// `pending` names a visible `pending_overloads` entry — a sibling FN/FUNCTOR
+/// binder has dispatched a matching overload whose body hasn't finalized. The
+/// consumer parks on the earliest-index visible producer; on wake it
+/// re-dispatches and either picks from the now-live bucket or re-parks on the
+/// next-earliest pending sibling.
+pub struct FunctionLookup<'a> {
+    pub overloads: Vec<&'a KFunction<'a>>,
+    pub pending: Option<NodeId>,
 }
 
 /// Lexical position of a binding's installing statement.
@@ -171,40 +177,42 @@ impl<'a> Bindings<'a> {
         }
     }
 
-    /// Per-scope dispatch-bucket lookup. Filters `functions[key]` by
-    /// per-overload visibility; on empty falls through to a visible
-    /// `pending_overloads[key]` entry.
+    /// Per-scope dispatch-bucket lookup. Surfaces visible finalized overloads
+    /// (`functions[key]`, filtered per-overload) AND the earliest-index visible
+    /// `pending_overloads[key]` producer together — one pass over each map. The
+    /// scope walk decides pending-vs-finalized precedence with both in hand.
     pub fn lookup_function(
         &self,
         key: &UntypedKey,
         chain_cutoff: Option<usize>,
     ) -> FunctionLookup<'a> {
-        let functions = self.functions.borrow();
-        if let Some(bucket) = functions.get(key) {
-            let visible: Vec<&'a KFunction<'a>> = bucket
-                .iter()
-                .filter(|(_, idx)| Self::visible(*idx, chain_cutoff))
-                .map(|(f, _)| *f)
-                .collect();
-            if !visible.is_empty() {
-                return FunctionLookup::Bucket(visible);
-            }
-        }
-        drop(functions);
-        let pending = self.pending_overloads.borrow();
-        if let Some(entries) = pending.get(key) {
-            // Earliest-index visible producer: most likely to finalize first;
-            // on wake the consumer re-dispatches and picks the live bucket or
-            // re-parks on the next-earliest sibling.
-            let earliest = entries
-                .iter()
-                .filter(|(_, idx)| Self::visible(*idx, chain_cutoff))
-                .min_by_key(|(_, idx)| idx.idx);
-            if let Some((producer, _)) = earliest {
-                return FunctionLookup::Pending(*producer);
-            }
-        }
-        FunctionLookup::None
+        let overloads: Vec<&'a KFunction<'a>> = self
+            .functions
+            .borrow()
+            .get(key)
+            .map(|bucket| {
+                bucket
+                    .iter()
+                    .filter(|(_, idx)| Self::visible(*idx, chain_cutoff))
+                    .map(|(f, _)| *f)
+                    .collect()
+            })
+            .unwrap_or_default();
+        // Earliest-index visible producer: most likely to finalize first; on
+        // wake the consumer re-dispatches and picks the live bucket or re-parks
+        // on the next-earliest sibling.
+        let pending = self
+            .pending_overloads
+            .borrow()
+            .get(key)
+            .and_then(|entries| {
+                entries
+                    .iter()
+                    .filter(|(_, idx)| Self::visible(*idx, chain_cutoff))
+                    .min_by_key(|(_, idx)| idx.idx)
+                    .map(|(producer, _)| *producer)
+            });
+        FunctionLookup { overloads, pending }
     }
 
     /// Snapshot every `(name, value)` pair in `data`, ignoring visibility.
@@ -460,17 +468,15 @@ impl<'a> Bindings<'a> {
     /// the producing binder lands in `functions[bucket]`; other siblings stay
     /// pending as wake sources.
     ///
-    /// Lenient when the bucket is already live in `functions` (concurrent
-    /// finalize): silent no-op.
+    /// Recorded even when the bucket is already live in `functions`: a pending
+    /// sibling sits *alongside* a finalized overload so the scope walk can park
+    /// the bucket until the sibling finalizes (Decision 5).
     pub fn try_install_pending_overload(
         &self,
         bucket: UntypedKey,
         idx: NodeId,
         index: BindingIndex,
     ) -> Result<(), KError> {
-        if self.functions.borrow().contains_key(&bucket) {
-            return Ok(());
-        }
         let mut pending = self.pending_overloads.borrow_mut();
         pending.entry(bucket).or_default().push((idx, index));
         Ok(())

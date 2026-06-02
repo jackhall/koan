@@ -41,9 +41,13 @@ matching the three lookup kinds:
 - [`Scope::resolve_dispatch_with_chain`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
   — function-bucket lookup. Per-ancestor calls
   [`Bindings::lookup_function`](../../src/machine/core/bindings.rs)
-  and, on a non-empty bucket, hands it to
+  and decides the scope's contribution from the returned
+  [`FunctionLookup`](../../src/machine/core/bindings.rs): a visible pending
+  producer parks the scope, otherwise the finalized overloads go to
   [`OverloadBucket::pick_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
-  for the per-overload admit pass.
+  for the per-overload admit pass. The innermost scope to reach a terminal
+  decision wins (see
+  [scheduler.md § In-walk dispatch precedence](scheduler.md#in-walk-dispatch-precedence)).
 
 [`Scope::resolve`](../../src/machine/core/scope.rs) is the chainless
 shorthand — it reads as "see everything" and is reserved for test
@@ -71,12 +75,15 @@ before inserting, so a binding never appears in both `data` /
   type-side symmetry: consults `types` then `placeholders` and surfaces
   the same three-arm result.
 - [`Bindings::lookup_function`](../../src/machine/core/bindings.rs)
-  consults `functions[key]` first, filtered per-overload by visibility,
-  and falls through to `pending_overloads[key]` only when no live
-  bucket admits. Returns `FunctionLookup::Bucket(Vec<&KFunction>)`
-  (non-empty, pre-filtered), `FunctionLookup::Pending(NodeId)` (an
-  in-flight FN / FUNCTOR binder's producer to park on), or
-  `FunctionLookup::None`.
+  surfaces both maps in one pass as a `FunctionLookup` struct:
+  `overloads` is the visibility-filtered `functions[key]` bucket (possibly
+  empty) and `pending` is the earliest-index visible `pending_overloads[key]`
+  producer (an in-flight FN / FUNCTOR binder to park on, if any). The two are
+  returned together — a bucket may hold a finalized overload *and* an in-flight
+  pending sibling at once — so the scope walk decides pending-vs-finalized
+  precedence with both in hand rather than the lookup shadowing one. A scope
+  contributes nothing to the walk when `overloads.is_empty() &&
+  pending.is_none()`.
 
 The visibility predicate is one line —
 [`visible(b: BindingIndex, chain_cutoff: Option<usize>)`](../../src/machine/core/bindings.rs)

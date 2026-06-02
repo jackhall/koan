@@ -512,6 +512,11 @@ fn part_walk<'a>(
                     new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
                     continue;
                 }
+                ExpressionPart::RecordLiteral(fields) => {
+                    staged_subs.push((i, PendingSub::RecordLit(fields)));
+                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+                    continue;
+                }
                 other => new_parts.push(Spanned { value: other, span }),
             }
         } else {

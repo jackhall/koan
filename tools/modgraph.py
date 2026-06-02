@@ -5,15 +5,20 @@ Reads a cargo-modules DOT file, recursively walks the module tree from
 `--root`, and reports per node:
   index(m)   = cross_edges(m) + alpha * feedback_weight(m) + beta
   size(m)    = gamma * eff_loc(m) * log(1 + eff_loc(m) / pivot)
-The aggregate is reported as a single normalised number — the per-root-loc
-score, split into three components:
-  per-loc    = (Σ (cross + α·fb)(m) · loc(m)        ← coupling
+The aggregate is reported as a single number — the total cost scaled by a
+fixed denominator D (default 1000), split into three components:
+  score      = (Σ (cross + α·fb)(m) · loc(m)        ← coupling
               + Σ (β · scale)(m) · loc(m)           ← nesting
-              + Σ size(m)) / loc(root)              ← size
+              + Σ size(m)) / D                       ← size
 The split lets you see whether complexity is coupling (cross/feedback
 edges at each wrapper), nesting (wrapper layers themselves), or per-file
-(large files). The absolute totals are intentionally not surfaced — only
-the per-loc number is calibrated to compare against prior runs.
+(large files). D is a constant scale, not the tree's LOC: the score is
+proportional to total structural cost, so deleting code always lowers it
+and growing the tree always raises it. (An earlier version divided by the
+root subtree's LOC; that made deleting below-average-density code look like
+a regression — the denominator shrank faster than the numerator, and a
+`--reference-loc` flag was needed to freeze the divisor for fair comparison.
+The fixed D makes that workaround unconditional.)
 
 Three LOC measures are used. Production LOC (`own_loc` / `subtree_loc`)
 filters out test files and `#[cfg(test)] mod` blocks and is what the
@@ -50,10 +55,9 @@ than them spreading across the dst_group's submodules. Without it, the
 metric is indifferent to whether 5 consumers all funnel through
 `dispatch::ctx` or each pick a different dispatch internal.
 
-The per-loc number is normalised by the root subtree's LOC (a fixed
-constant for a given root). This is what makes nesting cost something:
-every interior level contributes its own loc to the sum, so adding a
-wrapper around a heavy subtree adds (β + cross + α·fb) · loc.
+Nesting costs something because every interior level contributes its own
+loc to the *numerator*: adding a wrapper around a heavy subtree adds
+(β + cross + α·fb) · loc to the sum, before the fixed-denominator divide.
 
 `beta` is the per-non-leaf charge (default 20). `beta-children-pivot` P
 (default 3) scales it by `max(1, P/children)`, so a 2-child wrapper pays
@@ -122,7 +126,7 @@ class Score:
     """The three per-loc components: coupling (cross + α·fb at each
     wrapper, loc-weighted), nesting (β·scale at each wrapper, loc-weighted),
     and size (γ·L·log per file). Sums over a subtree compose by addition;
-    `per(root_loc)` produces the reported per-root-loc breakdown."""
+    `per(denominator)` produces the reported fixed-denominator breakdown."""
     coupling: float = 0.0
     nesting: float = 0.0
     size: float = 0.0
@@ -568,10 +572,10 @@ def fractal_report(
     owner_pivot: float,
     lambda_facade: float,
     prose_redirect: dict[Path, Path] | None = None,
-    reference_loc: int | None = None,
+    denominator: float = 1000.0,
 ) -> Score:
     """Walk the subtree, print the per-module report, and return the
-    per-root-loc Score breakdown."""
+    fixed-denominator Score breakdown."""
     modules = discover_modules(edges)
     root_loc = subtree_loc(root, modules, src_root)
     prose_attribution, hop_count = build_prose_attribution(src_root, prose_redirect)
@@ -619,25 +623,18 @@ def fractal_report(
         return sum((walk(f"{module}::{c}", depth + 1) for c in children), here)
 
     totals = walk(root, 0)
-    divisor = reference_loc if reference_loc else root_loc
-    per = totals.per(divisor)
+    per = totals.per(denominator)
     print()
-    if divisor:
-        tag = (f"loc({root}) = {root_loc}"
-               if reference_loc is None
-               else f"ref-loc = {reference_loc} (current loc({root}) = {root_loc})")
-        print(f"per root-loc ({tag}, γ={gamma}, T={pivot:g}):  "
-              f"{per.total:.2f}   "
-              f"(coupling {per.coupling:.2f}, nesting {per.nesting:.2f}, size {per.size:.2f})")
-    else:
-        print("per root-loc: 0.00  (root loc = 0)")
+    print(f"score (denominator {denominator:g}, loc({root}) = {root_loc}, "
+          f"γ={gamma}, T={pivot:g}):  {per.total:.2f}   "
+          f"(coupling {per.coupling:.2f}, nesting {per.nesting:.2f}, size {per.size:.2f})")
     return per
 
 
 BASELINE_HEADER = (
-    "# columns: date  short-sha  per-loc  coupling  nesting  size  root-loc\n"
-    "# (the four scoring columns are per root-loc; root-loc is the absolute\n"
-    "#  subtree LOC, read back as --reference-loc when scoring candidates)\n"
+    "# columns: date  short-sha  score  coupling  nesting  size  root-loc\n"
+    "# (the four scoring columns are total cost / fixed denominator D=1000;\n"
+    "#  root-loc is the absolute subtree LOC, tracked for context only)\n"
     "# managed by tools/modgraph.py --baseline; newest first, capped to 5 entries\n"
 )
 BASELINE_LIMIT = 5
@@ -669,26 +666,6 @@ def _parse_baseline_line(line: str) -> tuple[str, str, float] | None:
         return parts[0], parts[1], float(parts[2])
     except ValueError:
         return None
-
-
-def _read_baseline_root_loc(path: Path) -> int | None:
-    """Return the top entry's `root-loc` column from a baseline file, or None
-    if the file is missing, empty, or pre-dates the column. Used to auto-set
-    `--reference-loc` when comparing candidates against a stored baseline."""
-    if not path.exists():
-        return None
-    for line in path.read_text().splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        parts = stripped.split()
-        if len(parts) < 7:
-            return None
-        try:
-            return int(parts[6])
-        except ValueError:
-            return None
-    return None
 
 
 def update_baseline(path: Path, score: Score, root_loc: int) -> None:
@@ -732,11 +709,11 @@ def update_baseline(path: Path, score: Score, root_loc: int) -> None:
     path.write_text(BASELINE_HEADER + "\n".join(kept[:BASELINE_LIMIT]) + "\n")
 
     if prior is None:
-        print(f"\nbaseline: per-loc {per_loc:.2f} — first run (recorded to {path}).")
+        print(f"\nbaseline: score {per_loc:.2f} — first run (recorded to {path}).")
     else:
         prior_date, prior_sha, prior_per_loc = prior
         delta = per_loc - prior_per_loc
-        print(f"\nbaseline: per-loc {per_loc:.2f} vs prior {prior_per_loc:.2f} "
+        print(f"\nbaseline: score {per_loc:.2f} vs prior {prior_per_loc:.2f} "
               f"from {prior_date} {prior_sha} (Δ {delta:+.2f}, recorded to {path}).")
 
 
@@ -836,15 +813,13 @@ def main() -> int:
                     help="prose-loc pivot P_o in the owner credit (default 100). "
                          "Concepts smaller than P_o don't deserve their own module; "
                          "above P_o the credit grows super-linearly.")
-    ap.add_argument("--reference-loc", type=int, default=None, metavar="N",
-                    help="normalise the per-root-loc aggregate by N instead of "
-                         "the live root subtree's LOC. Use this when comparing a "
-                         "candidate against a baseline — pass the baseline's "
-                         "root_loc so both runs share a divisor. Without it, "
-                         "deleting dead code that has below-average cost density "
-                         "looks like a regression (denominator shrinks faster "
-                         "than numerator); fixing the divisor makes any total-"
-                         "cost reduction show as a per-loc improvement.")
+    ap.add_argument("--denominator", type=float, default=1000.0, metavar="D",
+                    help="fixed divisor for the bottom-line score (default 1000). "
+                         "The score is total structural+size cost / D — a constant "
+                         "scale, not the tree's LOC, so deleting code always lowers "
+                         "the score and growing the tree always raises it. Replaces "
+                         "the old LOC normalisation, which made deleting "
+                         "below-average-density code look like a regression.")
     ap.add_argument("--exact-threshold", type=int, default=6,
                     help="use exact search for N <= this many groups (default 6)")
     ap.add_argument("--baseline", type=Path, metavar="FILE",
@@ -872,13 +847,6 @@ def main() -> int:
         old, new = spec.split("=", 1)
         prose_redirect[Path(old)] = Path(new)
 
-    # Auto-derive --reference-loc from the baseline file when the user passes
-    # --baseline but not --reference-loc — that's the candidate-vs-baseline
-    # comparison case, where we want both runs to share a divisor.
-    reference_loc = args.reference_loc
-    if reference_loc is None and args.baseline is not None:
-        reference_loc = _read_baseline_root_loc(args.baseline)
-
     modules = discover_modules(edges)
     root_loc = subtree_loc(args.root, modules, args.src_root)
     score = fractal_report(
@@ -889,7 +857,7 @@ def main() -> int:
         args.epsilon, args.owner_pivot,
         args.lambda_facade,
         prose_redirect or None,
-        reference_loc,
+        args.denominator,
     )
     if args.baseline is not None:
         update_baseline(args.baseline, score, root_loc)

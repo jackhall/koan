@@ -64,7 +64,7 @@ fn struct_construction_via_type_token() {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
     run(scope, "STRUCT Point = (x :Number, y :Number)");
-    let result = run_one(scope, parse_one("Point (x = 3, y = 4)"));
+    let result = run_one(scope, parse_one("Point {x = 3, y = 4}"));
     match result {
         KObject::Struct {
             name: type_name,
@@ -86,7 +86,7 @@ fn struct_construction_missing_field_errors() {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
     run(scope, "STRUCT Point = (x :Number, y :Number)");
-    let err = run_one_err(scope, parse_one("Point (x = 3)"));
+    let err = run_one_err(scope, parse_one("Point {x = 3}"));
     assert!(
         matches!(&err.kind, KErrorKind::MissingArg(name) if name == "y"),
         "expected MissingArg(\"y\"), got {err}",
@@ -99,7 +99,7 @@ fn struct_construction_unknown_field_errors() {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
     run(scope, "STRUCT Point = (x :Number, y :Number)");
-    let err = run_one_err(scope, parse_one("Point (x = 3, y = 4, z = 5)"));
+    let err = run_one_err(scope, parse_one("Point {x = 3, y = 4, z = 5}"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("unknown field") && msg.contains("`z`")),
         "expected ShapeError on unknown field z, got {err}",
@@ -112,7 +112,7 @@ fn struct_construction_value_type_mismatch() {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
     run(scope, "STRUCT Point = (x :Number, y :Number)");
-    let err = run_one_err(scope, parse_one("Point (x = 3, y = \"oops\")"));
+    let err = run_one_err(scope, parse_one("Point {x = 3, y = \"oops\"}"));
     match &err.kind {
         KErrorKind::TypeMismatch { arg, expected, got } => {
             assert_eq!(arg, "y");
@@ -132,7 +132,7 @@ fn struct_construction_with_identifier_arg() {
         scope,
         "STRUCT Point = (x :Number, y :Number)\nLET ax = 7\nLET ay = 9",
     );
-    let result = run_one(scope, parse_one("Point (x = ax, y = ay)"));
+    let result = run_one(scope, parse_one("Point {x = ax, y = ay}"));
     match result {
         KObject::Struct { fields, .. } => {
             assert!(matches!(fields.get("x"), Some(KObject::Number(n)) if *n == 7.0));
@@ -148,7 +148,7 @@ fn struct_construction_order_independent() {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
     run(scope, "STRUCT Point = (x :Number, y :Number)");
-    let result = run_one(scope, parse_one("Point (y = 4, x = 3)"));
+    let result = run_one(scope, parse_one("Point {y = 4, x = 3}"));
     match result {
         KObject::Struct { fields, .. } => {
             assert!(matches!(fields.get("x"), Some(KObject::Number(n)) if *n == 3.0));
@@ -159,15 +159,12 @@ fn struct_construction_order_independent() {
 }
 
 #[test]
-fn struct_construction_missing_colon_errors() {
-    let arena = RuntimeArena::new();
-    let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = build_scope(&arena, captured);
-    run(scope, "STRUCT Point = (x :Number, y :Number)");
-    let err = run_one_err(scope, parse_one("Point (x 3, y 4)"));
+fn struct_construction_missing_separator_is_parse_error() {
+    // With the record-literal surface, a field without `=` is rejected at parse time,
+    // before construction is ever reached.
     assert!(
-        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`:`") || msg.contains("separator") || msg.contains("triples")),
-        "expected ShapeError on missing colon, got {err}",
+        parse("Point {x 3, y 4}").is_err(),
+        "a record field without `=` must be a parse error",
     );
 }
 
@@ -177,7 +174,7 @@ fn struct_construction_duplicate_name_errors() {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
     run(scope, "STRUCT Point = (x :Number, y :Number)");
-    let err = run_one_err(scope, parse_one("Point (x = 1, x = 2)"));
+    let err = run_one_err(scope, parse_one("Point {x = 1, x = 2}"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`x`")),
         "expected ShapeError on duplicate name, got {err}",
@@ -189,7 +186,7 @@ fn struct_construction_unbound_type_token_errors() {
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
-    let err = run_one_err(scope, parse_one("Bogus (x = 1, y = 2)"));
+    let err = run_one_err(scope, parse_one("Bogus {x = 1, y = 2}"));
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(name) if name == "Bogus"),
         "expected UnboundName(\"Bogus\"), got {err}",
@@ -205,7 +202,7 @@ fn struct_value_iterates_in_declaration_order() {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
     run(scope, "STRUCT Triple = (z :Number, a :Number, m :Number)");
-    let result = run_one(scope, parse_one("Triple (a = 2, m = 3, z = 1)"));
+    let result = run_one(scope, parse_one("Triple {a = 2, m = 3, z = 1}"));
     match result {
         KObject::Struct { fields, .. } => {
             let keys: Vec<&str> = fields.keys().map(|s| s.as_str()).collect();
@@ -230,7 +227,7 @@ fn struct_value_summarizes_with_type_name_and_fields() {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
     run(scope, "STRUCT Point = (x :Number, y :Number)");
-    let result = run_one(scope, parse_one("Point (x = 3, y = 4)"));
+    let result = run_one(scope, parse_one("Point {x = 3, y = 4}"));
     let summary = crate::machine::model::types::Parseable::summarize(result);
     assert!(
         summary.starts_with("Point("),

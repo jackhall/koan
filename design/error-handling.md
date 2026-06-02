@@ -131,7 +131,7 @@ carrier. Type-position application of `Result`'s two parameters is not yet
 wired: the `AS` constructor-application form
 ([functors.md § Higher-kinded type slots](typing/functors.md#higher-kinded-type-slots))
 is arity-1, and multi-parameter application is tracked in
-[type-parameter-binding](../roadmap/type_language/type-parameter-binding.md).
+[modular implicits](../roadmap/predicate_typing/modular-implicits.md).
 
 The identity's `(name, scope_id)` fields use the root scope's `ScopeId` — the
 scope that owns the registration, not `ScopeId::SENTINEL` — so every `Result`
@@ -152,7 +152,7 @@ the `error` payload (a `KError`) does not satisfy `MyErr`. Ascription at an
 annotated boundary stamps the carrier's `type_args` to the declared instantiation;
 the remaining per-call parameter-slot binding for generic value-slot functions is
 tracked under
-[runtime carriers for type parameters](../roadmap/type_language/type-parameter-binding.md).
+[modular implicits](../roadmap/predicate_typing/modular-implicits.md).
 
 ## `TRY-WITH`
 

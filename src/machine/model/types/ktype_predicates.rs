@@ -3,6 +3,7 @@
 //! [design/typing/ktype.md](../../../../design/typing/ktype.md).
 
 use super::ktype::{KType, UserTypeKind};
+use super::record::Record;
 use super::signature::{ExpressionSignature, SignatureElement};
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
 use crate::machine::model::values::KObject;
@@ -62,18 +63,26 @@ impl<'a> KType<'a> {
                 let v_eq = va == vb;
                 (k_more && (v_more || v_eq)) || (k_eq && v_more)
             }
-            (KFunction { args: aa, ret: ar }, KFunction { args: ba, ret: br })
-                if aa.len() == ba.len() =>
-            {
-                let args_more = aa
-                    .iter()
-                    .zip(ba.iter())
-                    .any(|(x, y)| x.is_more_specific_than(y));
-                let args_eq = aa == ba;
-                let ret_more = ar.is_more_specific_than(br);
-                let ret_eq = ar == br;
-                (args_more && (ret_more || ret_eq)) || (args_eq && ret_more)
-            }
+            // Record-value subtyping: width-superset + covariant depth (the dual of the
+            // contravariant width-drop `param_record_more_specific` for function params).
+            (Record(a), Record(b)) => record_value_more_specific(a, b),
+            // Function subtyping: contravariant params with width-subset, covariant
+            // return (see `param_record_more_specific`). A param the more-specific side
+            // doesn't declare is fine (width drop); a param it declares but the other
+            // side lacks makes them incomparable, so the helper's `keys()` guard returns
+            // `false`. The variant tags stay matched separately (KFunction never compares
+            // against KFunctor), but the shared `params`/`ret` shape lets both arms
+            // delegate to one helper.
+            (
+                KFunction {
+                    params: pa,
+                    ret: ra,
+                },
+                KFunction {
+                    params: pb,
+                    ret: rb,
+                },
+            ) => param_record_more_specific(pa, ra, pb, rb),
             (
                 KFunctor {
                     params: pa,
@@ -83,16 +92,7 @@ impl<'a> KType<'a> {
                     params: pb,
                     ret: rb,
                 },
-            ) if pa.len() == pb.len() => {
-                let params_more = pa
-                    .iter()
-                    .zip(pb.iter())
-                    .any(|(x, y)| x.is_more_specific_than(y));
-                let params_eq = pa == pb;
-                let ret_more = ra.is_more_specific_than(rb);
-                let ret_eq = ra == rb;
-                (params_more && (ret_more || ret_eq)) || (params_eq && ret_more)
-            }
+            ) => param_record_more_specific(pa, ra, pb, rb),
             // Constraint role: `:S` (a module satisfying `S`) is more specific than the
             // `:Module` wildcard.
             (Signature { .. }, AnyModule) => true,
@@ -177,12 +177,23 @@ impl<'a> KType<'a> {
                 }),
                 _ => false,
             },
-            KType::KFunction { args, ret } => match obj {
+            // Every slot field must be present in the value and match (depth). Extra value
+            // fields are fine — a wider record value is more specific than a narrower slot.
+            KType::Record(fields) => match obj {
+                KObject::Record(values, _) => fields.iter().all(|(name, ft)| {
+                    values
+                        .get(name)
+                        .map(|v| ft.matches_value(v))
+                        .unwrap_or(false)
+                }),
+                _ => false,
+            },
+            KType::KFunction { params, ret } => match obj {
                 KObject::KFunction(f, _) => {
                     if f.is_functor {
                         return false;
                     }
-                    function_compat(&f.signature, args, ret, false)
+                    function_compat(&f.signature, params, ret, false)
                 }
                 KObject::KFuture(_, _) => true,
                 _ => false,
@@ -306,12 +317,23 @@ impl<'a> KType<'a> {
                 }
                 _ => false,
             },
-            KType::KFunction { args, ret } => match part {
+            // Mirrors the List/Dict split: an unevaluated record literal admits
+            // shape-only (field types unknown until evaluation, so two record-typed
+            // overloads tie and defer-then-reevaluate); an evaluated record compares its
+            // memoized field-type record against the slot via `satisfied_by`.
+            KType::Record(_) => match part {
+                ExpressionPart::RecordLiteral(_) => true,
+                ExpressionPart::Future(KObject::Record(_, carried)) => {
+                    self.satisfied_by(&KType::Record(carried.clone()))
+                }
+                _ => false,
+            },
+            KType::KFunction { params, ret } => match part {
                 ExpressionPart::Future(KObject::KFunction(f, _)) => {
                     if f.is_functor {
                         return false;
                     }
-                    function_compat(&f.signature, args, ret, false)
+                    function_compat(&f.signature, params, ret, false)
                 }
                 ExpressionPart::Future(KObject::KFuture(_, _)) => true,
                 _ => false,
@@ -418,6 +440,69 @@ impl<'a> KType<'a> {
     }
 }
 
+/// Shared name-keyed specificity for the structurally-identical `KFunction` /
+/// `KFunctor` arms of [`KType::is_more_specific_than`]. Function subtyping is
+/// contravariant in parameters (with width-subset) and covariant in the return,
+/// matching the value-into-slot gate in [`function_compat`] so most-specific-wins
+/// stays consistent. `self` (the `a` side) is strictly more specific than `other`
+/// (the `b` side) iff:
+/// - width-subset: `pa.keys() ⊆ pb.keys()` (the more-specific function declares no
+///   more parameters — guard returns `false` otherwise);
+/// - per shared name, contravariant: `pb[name] == pa[name] || pb[name] ≺ pa[name]`
+///   (the more-specific function's params are equal-or-more-general);
+/// - covariant return: `ra == rb || ra ≺ rb`;
+/// - at least one strict edge (narrower width, a strictly-more-general param, or a
+///   strictly-more-specific return).
+fn param_record_more_specific<'a>(
+    pa: &Record<KType<'a>>,
+    ra: &KType<'a>,
+    pb: &Record<KType<'a>>,
+    rb: &KType<'a>,
+) -> bool {
+    if !pa.keys().all(|k| pb.get(k).is_some()) {
+        return false;
+    }
+    let params_ok = pa.iter().all(|(name, s)| {
+        let o = pb.get(name).unwrap();
+        o == s || o.is_more_specific_than(s)
+    });
+    let params_more = pa
+        .keys()
+        .any(|k| pb.get(k).unwrap().is_more_specific_than(pa.get(k).unwrap()));
+    let ret_more = ra.is_more_specific_than(rb);
+    let ret_ok = ra == rb || ret_more;
+    let width_strict = pa.len() < pb.len();
+    params_ok && ret_ok && (width_strict || params_more || ret_more)
+}
+
+/// Width/depth specificity for *record values* — the **dual** of
+/// [`param_record_more_specific`]. A record value's fields are covariant (the value is
+/// immutable — see [memory-model](../../../../design/memory-model.md)), and a *wider*
+/// record is more specific: a `{x, y}` value fills an `{x}` slot. So `a` is strictly more
+/// specific than `b` iff:
+/// - width-superset: `b.keys() ⊆ a.keys()` (`a` declares every field `b` does, maybe
+///   more — guard returns `false` otherwise);
+/// - per shared name, covariant: `a[name] == b[name] || a[name] ≺ b[name]`;
+/// - at least one strict edge (wider width, or a strictly-more-specific shared field).
+///
+/// Contrast `param_record_more_specific`, which is *contravariant* with width-*drop* for
+/// call-by-name function parameters. Records and function params share the `Record`
+/// substrate but order opposite ways — do **not** unify the two helpers.
+fn record_value_more_specific<'a>(a: &Record<KType<'a>>, b: &Record<KType<'a>>) -> bool {
+    if !b.keys().all(|k| a.get(k).is_some()) {
+        return false;
+    }
+    let depth_ok = b.iter().all(|(name, bt)| {
+        let at = a.get(name).unwrap();
+        at == bt || at.is_more_specific_than(bt)
+    });
+    let depth_more = b
+        .keys()
+        .any(|k| a.get(k).unwrap().is_more_specific_than(b.get(k).unwrap()));
+    let width_strict = a.len() > b.len();
+    depth_ok && (width_strict || depth_more)
+}
+
 /// Field→type-parameter linkage for the builtin `Result` parameterized union:
 /// `ok`→0 (`T`), `error`→1 (`E`), mirroring the `param_names: ["T", "E"]` registered
 /// in [`crate::builtins::result`]. Returns `None` for any other carrier — user UNIONs
@@ -431,14 +516,24 @@ pub fn result_field_param_index(carrier_name: &str, tag: &str) -> Option<usize> 
     }
 }
 
-/// Strict structural equality between `sig`'s declared arg/return types and the
-/// slot's expectations — not subtyping. A function declared `(x: Number) -> Str`
-/// only fills a slot typed `Function<(Number) -> Str>`, not `Function<(Any) -> Str>`.
-/// A `Deferred(_)` return collapses to `KType::Any` for this check; see
-/// [roadmap/kfunction-deferred-ret-precision.md](../../../../roadmap/type_language/kfunction-deferred-ret-precision.md).
+/// Sound, order-blind, name-keyed function subtyping: does the value function `sig`
+/// fill the slot whose params record is `params` and return type is `ret`? Reasoned
+/// against call-by-name invocation (params arrive name-keyed), so the variance is:
+/// - Return covariant: `sig_ret == ret || sig_ret ≺ ret` — a value returning a subtype
+///   of the slot's promised return fills the slot. A `Deferred(_)` return collapses to
+///   `KType::Any`, and `Any ≺ _` is `false`, so a deferred-return candidate still only
+///   fills an `Any`-return slot; the covariant `false` is its safety net (no expansion
+///   into deferred-ret precision here — see
+///   [roadmap/kfunction-deferred-ret-precision.md](../../../../roadmap/type_language/kfunction-deferred-ret-precision.md)).
+/// - Params contravariant with width-drop: every `Argument` the value declares must
+///   appear in `params` (a value-required param the slot doesn't promise is a width
+///   violation → `false`); for a shared name, the slot's param must be equal-or-more-
+///   specific than the value's (`slot_pt == &a.ktype || slot_pt ≺ &a.ktype`). Extra
+///   slot params the value doesn't declare are fine — under call-by-name they arrive
+///   unbound (width drop), so there is no exhaustiveness check.
 pub(super) fn function_compat<'a>(
     sig: &ExpressionSignature<'a>,
-    args: &[KType<'a>],
+    params: &Record<KType<'a>>,
     ret: &KType<'a>,
     _slot_is_functor: bool,
 ) -> bool {
@@ -455,19 +550,22 @@ pub(super) fn function_compat<'a>(
             &KType::Any
         }
     };
-    if sig_ret_kt != ret {
+    if !(sig_ret_kt == ret || sig_ret_kt.is_more_specific_than(ret)) {
         return false;
     }
-    let mut i = 0;
     for el in &sig.elements {
         if let SignatureElement::Argument(a) = el {
-            if i >= args.len() || a.ktype != args[i] {
-                return false;
+            match params.get(&a.name) {
+                None => return false,
+                Some(slot_pt) => {
+                    if !(slot_pt == &a.ktype || slot_pt.is_more_specific_than(&a.ktype)) {
+                        return false;
+                    }
+                }
             }
-            i += 1;
         }
     }
-    i == args.len()
+    true
 }
 
 #[cfg(test)]

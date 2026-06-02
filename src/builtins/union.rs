@@ -4,7 +4,7 @@ use std::rc::Rc;
 use crate::machine::core::{PendingBinderGuard, PendingTypeEntry};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::types::{
-    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
+    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
 };
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
@@ -62,8 +62,12 @@ pub fn body<'a>(
     let mut elaborator = Elaborator::new(scope)
         .with_threaded([name.clone()])
         .with_current_decl(name.clone(), UserTypeKind::tagged_sentinel(), scope_id);
-    let outcome =
-        parse_typed_field_list_via_elaborator(&schema_expr, "UNION schema", &mut elaborator);
+    let outcome = parse_typed_field_list_via_elaborator(
+        &schema_expr,
+        "UNION schema",
+        FieldNameKind::Identifier,
+        &mut elaborator,
+    );
     let bind_index = sched
         .current_lexical_chain()
         .map(|chain| BindingIndex::nominal(chain.index))
@@ -172,6 +176,7 @@ fn defer_union_via_combine<'a>(
         match parse_typed_field_list_via_elaborator(
             &spliced_schema,
             "UNION schema",
+            FieldNameKind::Identifier,
             &mut elaborator,
         ) {
             FieldListOutcome::Done(fields) => {
@@ -262,18 +267,26 @@ mod tests {
         );
     }
 
-    /// No anonymous `UNION (...)` form: the inner sub-expression classifies as a
-    /// `FunctionValueCall` with bare identifier `ok` as head, surfacing `UnboundName`
-    /// on the slot rather than a scheduler-level `DispatchFailed`.
+    /// No anonymous `UNION (...)` form: the bare two-part shape matches no UNION
+    /// overload (the declarator is `UNION <name> = (<schema>)`, four elements), so
+    /// dispatch fails cleanly with `DispatchFailed` rather than eagerly evaluating the
+    /// `(ok …)` operand and leaking `UnboundName("ok")` — the relaxed admission pass
+    /// keeps it a clean miss (see
+    /// [scheduler.md § In-walk dispatch precedence](../../design/typing/scheduler.md#in-walk-dispatch-precedence)).
     #[test]
     fn anonymous_union_fails_dispatch() {
+        use crate::machine::execute::Scheduler;
+
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let err = run_one_err(scope, parse_one("UNION (ok :Number err :Str)"));
+        let mut sched = Scheduler::new();
+        sched.add_dispatch(parse_one("UNION (ok :Number err :Str)"), scope);
+        let err = sched
+            .execute()
+            .expect_err("a bare anonymous UNION (...) must fail dispatch");
         assert!(
-            matches!(&err.kind, KErrorKind::UnboundName(name) if name == "ok"),
-            "expected UnboundName(\"ok\") on bare UNION (...) (sub-expression `ok` \
-             is unbound in the fast lane); got {err}",
+            matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
+            "expected DispatchFailed on bare UNION (...) (matches no UNION overload); got {err}",
         );
     }
 
@@ -386,10 +399,10 @@ mod tests {
             }) => fields.clone(),
             other => panic!("expected Wrap Struct identity, got {other:?}"),
         };
+        let wrap_m = wrap_fields.get("m").expect("Wrap.m field");
         assert!(
-            matches!(&wrap_fields[0].1, KType::UserType { kind: UserTypeKind::Tagged { .. }, name, .. } if name == "Maybe"),
-            "Wrap.m expected UserType{{Tagged Maybe}}, got {:?}",
-            wrap_fields[0].1,
+            matches!(wrap_m, KType::UserType { kind: UserTypeKind::Tagged { .. }, name, .. } if name == "Maybe"),
+            "Wrap.m expected UserType{{Tagged Maybe}}, got {wrap_m:?}",
         );
         let maybe_schema = match scope.resolve_type("Maybe") {
             Some(KType::UserType {

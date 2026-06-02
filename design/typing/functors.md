@@ -3,7 +3,8 @@
 A **functor** is a module parameterized by another module — a function from
 modules to modules. Koan presents this through a dedicated `FUNCTOR` binder
 that layers definition-time static guarantees over the same per-call dispatch
-machinery ordinary FNs use.
+machinery ordinary FNs use. A functor may also take a bare `:Type` parameter;
+generic functions are built this way — see [generics.md](generics.md).
 
 - *Surface semantics* — modules are part of the **type language**. A
   signature-typed FUNCTOR parameter (`Er: OrderedSig`) is a type-language
@@ -76,13 +77,24 @@ dispatch.
 
 ## Type identity and the one-way wall
 
-`KType::KFunctor { params, ret }` is a distinct structural variant. The
-admissibility helper at [`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
-matches `KFunctor → KFunctor` on the same structural rules used for
-`KFunction → KFunction`, but refuses both directions of the
-`KFunctor`/`KFunction` cross — a functor cannot be passed where a function
-is expected, and vice versa. The wall lives entirely at the type-admission
-layer; the underlying `KFunctionValue` is shared.
+`KType::KFunctor { params, ret }` is a distinct structural variant.
+`params` is a name-keyed [parameter `Record<KType>`](ktype.md#record-fields-and-ktype-hashing) —
+the same substrate `KFunction` uses — so a functor's parameter names (including
+capitalized `Type`-token names like `Ty` / `Er`) are part of its identity and
+round-trip through `KType::name()`. Identity is the record's order-blind
+equality: `:(FUNCTOR (T :Sig, U :Sig2) -> M)` equals the same two parameters
+declared in either order. The admissibility helper at
+[`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
+matches `KFunctor → KFunctor` on the same function-subtyping rules used for
+`KFunction → KFunction` — contravariant params with width-drop, covariant
+return (see [ktype.md § Variance](ktype.md#variance)) — but refuses both
+directions of the `KFunctor`/`KFunction` cross — a functor cannot be passed
+where a function is expected, and vice versa. The wall lives entirely at the type-admission
+layer; the underlying `KFunctionValue` is shared. `KType::join` mirrors the
+wall: it joins two same-shape `KFunctor`s to a shared `KFunctor` (so a list
+literal of same-shape functors infers `List<:(FUNCTOR …)>`) and two
+`KFunction`s to a shared `KFunction`, but a function joined with a functor
+falls through to `Any`.
 
 This rules out the surface-level confusion of "I have a value that returns
 a module, can I pass it to something expecting a functor?" — the answer is
@@ -246,8 +258,8 @@ a type parameter — so parametric abstractions like the `Monad` signature in
 ```
 SIG Monad = (
   (LET Wrap = (TEMPLATE Type))
-  (VAL pure :(FN (Number) -> :(Number AS Wrap)))
-  (VAL bind :(FN (:(Number AS Wrap), :(FN (Number) -> :(Number AS Wrap))) -> :(Number AS Wrap)))
+  (VAL pure :(FN (x :Number) -> :(Number AS Wrap)))
+  (VAL bind :(FN (m :(Number AS Wrap), f :(FN (x :Number) -> :(Number AS Wrap))) -> :(Number AS Wrap)))
 )
 ```
 
@@ -333,14 +345,3 @@ Sharing constraints, modular-implicit signature constraints, and
 witness-typed instantiations share this one builtin family. The
 implicit *marker* itself (which parameter is implicit) is orthogonal —
 see [implicits.md](implicits.md).
-
-## Open work
-
-- [Record substrate for identifier-keyed binding](../../roadmap/type_language/record-substrate.md) —
-  `KType::KFunctor { params }` becomes an ordered identifier-keyed record,
-  sharing equality and hashing with the struct schema and FN parameter types.
-- [FN/FUNCTOR named identity](../../roadmap/type_language/fn-named-identity.md) —
-  functor parameter names round-trip into `KFunctor` identity.
-- [Record structural subtyping and projection](../../roadmap/type_language/record-subtyping.md) —
-  functor-parameter records admit contravariantly under the same width/depth
-  record subtyping as functions.

@@ -35,10 +35,11 @@ fn extract_binder_install<'a>(
     // Visibility-unfiltered lookup: this runs before the dispatch's chain is
     // assembled, so `chain_cutoff = None`.
     for s in scope.ancestors() {
-        let bucket_fns = match s.bindings().lookup_function(&key, None) {
-            FunctionLookup::Bucket(b) => b,
-            FunctionLookup::Pending(_) | FunctionLookup::None => continue,
-        };
+        let FunctionLookup { overloads, .. } = s.bindings().lookup_function(&key, None);
+        if overloads.is_empty() {
+            continue;
+        }
+        let bucket_fns = overloads;
         let picked: Option<(&KFunction<'a>, BinderKey)> = bucket_fns.iter().find_map(|f| {
             if let Some(name) = f.binder_name.and_then(|extractor| extractor(expr)) {
                 Some((*f, BinderKey::Name(name)))

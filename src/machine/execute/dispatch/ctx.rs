@@ -121,6 +121,14 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
         self.sched.schedule_dict_literal(pairs, scope)
     }
 
+    pub(super) fn schedule_record_literal(
+        &mut self,
+        fields: Vec<(String, ExpressionPart<'a>)>,
+        scope: &'a Scope<'a>,
+    ) -> NodeId {
+        self.sched.schedule_record_literal(fields, scope)
+    }
+
     pub(super) fn free(&mut self, idx: usize) {
         self.sched.free(idx);
     }
@@ -235,6 +243,7 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
                 PendingSub::Dispatch(sub_expr) => self.add_dispatch(sub_expr, scope),
                 PendingSub::ListLit(items) => self.schedule_list_literal(items, scope),
                 PendingSub::DictLit(pairs) => self.schedule_dict_literal(pairs, scope),
+                PendingSub::RecordLit(fields) => self.schedule_record_literal(fields, scope),
             };
             if self.is_result_ready(sub_id) {
                 match self.read_result(sub_id) {

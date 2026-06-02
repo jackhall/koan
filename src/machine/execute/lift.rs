@@ -214,6 +214,9 @@ fn part_borrows_arena<'b>(part: &ExpressionPart<'b>, arena: &RuntimeArena) -> bo
         ExpressionPart::DictLiteral(pairs) => pairs
             .iter()
             .any(|(k, v)| part_borrows_arena(k, arena) || part_borrows_arena(v, arena)),
+        ExpressionPart::RecordLiteral(fields) => {
+            fields.iter().any(|(_, v)| part_borrows_arena(v, arena))
+        }
         _ => false,
     }
 }

@@ -97,10 +97,10 @@ fn val_function_typed_slot() {
     };
     let compare = s.decl_scope().bindings().expect_value("compare");
     match compare {
-        KObject::KTypeValue(KType::KFunction { args, ret }) => {
-            assert_eq!(args.len(), 2);
-            assert_eq!(args[0], KType::Number);
-            assert_eq!(args[1], KType::Number);
+        KObject::KTypeValue(KType::KFunction { params, ret }) => {
+            assert_eq!(params.len(), 2);
+            assert_eq!(params.get("x"), Some(&KType::Number));
+            assert_eq!(params.get("y"), Some(&KType::Number));
             assert_eq!(**ret, KType::Number);
         }
         other => panic!("expected KFunction-typed slot, got {:?}", other.ktype()),

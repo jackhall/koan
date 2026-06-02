@@ -249,6 +249,225 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     );
 }
 
+/// An inner-scope pending overload shadows an outer-scope strict Pick: the
+/// pending sibling would shadow the outer match once it finalizes, so the inner
+/// scope parks rather than letting the outer Pick win on finalize order.
+#[test]
+fn inner_scope_pending_overload_shadows_outer_strict_pick() {
+    use crate::machine::NodeId;
+    let arena = RuntimeArena::new();
+    let outer = run_root_bare(&arena);
+    // Outer finalized overload that strictly Picks `(MARK <number>)`.
+    let outer_sig = ExpressionSignature {
+        return_type: ReturnType::Resolved(KType::Any),
+        elements: vec![
+            SignatureElement::Keyword("MARK".into()),
+            SignatureElement::Argument(Argument {
+                name: "v".into(),
+                ktype: KType::Number,
+            }),
+        ],
+    };
+    register_builtin(outer, "outer_mark", outer_sig, body_a);
+
+    let inner = arena.alloc_scope(outer.child_for_call());
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("MARK".into())),
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
+    ]);
+    // Inner pending sibling on the same bucket key, body not yet finalized.
+    scope_install_pending(inner, &expr, NodeId(55));
+
+    let chain = LexicalFrame::detached();
+    match inner.resolve_dispatch(&expr, Some(&chain), &[]) {
+        ResolveOutcome::ParkOnProducers(ps) => assert_eq!(
+            ps,
+            vec![NodeId(55)],
+            "inner pending must shadow the outer strict Pick",
+        ),
+        other => panic!(
+            "expected ParkOnProducers([55]), got {}",
+            std::any::type_name_of_val(&other),
+        ),
+    }
+}
+
+/// An inner-scope candidate that is strict-Empty but admits once its eager part
+/// evaluates (`:Number` slot against a nested `Expression`) shadows an outer
+/// strict Pick: the inner scope `Deferred`s rather than letting the outer win.
+#[test]
+fn inner_scope_eager_lean_shadows_outer_strict_pick() {
+    let arena = RuntimeArena::new();
+    let outer = run_root_bare(&arena);
+    // Outer overload that would strictly Pick once the eager sub resolves.
+    register_builtin(
+        outer,
+        "outer_plus",
+        two_slot_sig(KType::Number, KType::Number),
+        body_a,
+    );
+    let inner = arena.alloc_scope(outer.child_for_call());
+    register_builtin(
+        inner,
+        "inner_plus",
+        two_slot_sig(KType::Number, KType::Number),
+        body_b,
+    );
+    let nested = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
+        "deep_call".into(),
+    ))]);
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Expression(Box::new(nested))),
+        Spanned::bare(ExpressionPart::Keyword("OP".into())),
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
+    ]);
+    let chain = LexicalFrame::detached();
+    assert!(
+        matches!(
+            inner.resolve_dispatch(&expr, Some(&chain), &[]),
+            ResolveOutcome::Deferred
+        ),
+        "inner eager-lean must Defer at its scope, not fall through to outer",
+    );
+}
+
+/// A dead (unbound) bare-name lean at an inner scope must NOT pre-empt an outer
+/// `:Identifier` strict Pick: the inner `:Number` overload rejects the bare name
+/// (dead lean → continue), and the outer `:Identifier` slot Picks it shape-only.
+#[test]
+fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
+    use crate::machine::NameOutcome;
+    let arena = RuntimeArena::new();
+    let outer = run_root_bare(&arena);
+    // Outer `:Identifier` overload that owns the bare name (shape-only admit).
+    register_builtin(
+        outer,
+        "outer_id",
+        one_slot_sig("v", KType::Identifier),
+        body_a,
+    );
+    let inner = arena.alloc_scope(outer.child_for_call());
+    // Inner `:Number` overload: the unbound bare name rejects its shape, so the
+    // inner scope's only contribution is a dead lean (must not terminate).
+    register_builtin(
+        inner,
+        "inner_num",
+        one_slot_sig("v", KType::Number),
+        body_b,
+    );
+    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
+        "fwd".into(),
+    ))]);
+    let bare_outcomes = vec![Some(NameOutcome::Unbound("fwd".into()))];
+    let chain = LexicalFrame::detached();
+    match inner.resolve_dispatch(&expr, Some(&chain), &bare_outcomes) {
+        ResolveOutcome::Resolved(r) => assert!(
+            matches!(
+                r.function.signature.elements.first(),
+                Some(SignatureElement::Argument(arg)) if arg.ktype == KType::Identifier
+            ),
+            "outer `:Identifier` overload must Pick the bare name shape-only",
+        ),
+        other => panic!(
+            "dead inner lean must not pre-empt the outer `:Identifier` Pick; got {}",
+            std::any::type_name_of_val(&other),
+        ),
+    }
+}
+
+/// A bucket holding a finalized overload that strictly Picks AND an in-flight
+/// pending sibling parks until the sibling finalizes — pending park takes
+/// precedence even over a same-scope finalized strict Pick (Decision 5). Once
+/// the pending entry is removed at finalize, the bucket resolves.
+#[test]
+fn finalized_pick_with_pending_sibling_parks_until_finalize() {
+    use crate::machine::core::kfunction::{Body, KFunction};
+    use crate::machine::model::values::KObject;
+    use crate::machine::NodeId;
+    let arena = RuntimeArena::new();
+    let scope = run_root_bare(&arena);
+    // Finalized `(PICK <number>)` overload that strictly Picks.
+    let pick_num = ExpressionSignature {
+        return_type: ReturnType::Resolved(KType::Any),
+        elements: vec![
+            SignatureElement::Keyword("PICK".into()),
+            SignatureElement::Argument(Argument {
+                name: "v".into(),
+                ktype: KType::Number,
+            }),
+        ],
+    };
+    register_builtin(scope, "pick_num", pick_num, body_a);
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("PICK".into())),
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
+    ]);
+    // In-flight pending sibling on the same bucket key, finalizing at index 3.
+    scope
+        .install_pending_overload(expr.untyped_key(), NodeId(77), BindingIndex::value(3))
+        .expect("install_pending_overload");
+
+    let chain = LexicalFrame::detached();
+    match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
+        ResolveOutcome::ParkOnProducers(ps) => assert_eq!(
+            ps,
+            vec![NodeId(77)],
+            "finalized Pick must park on the in-flight pending sibling",
+        ),
+        other => panic!(
+            "expected ParkOnProducers([77]) while pending sibling is in flight; got {}",
+            std::any::type_name_of_val(&other),
+        ),
+    }
+
+    // Finalize the pending sibling: registering a same-bucket overload at the
+    // pending's index removes its `pending_overloads` entry (mirrors the real
+    // finalize-clear path, which retains-by-`BindingIndex`).
+    let pick_str = ExpressionSignature {
+        return_type: ReturnType::Resolved(KType::Any),
+        elements: vec![
+            SignatureElement::Keyword("PICK".into()),
+            SignatureElement::Argument(Argument {
+                name: "v".into(),
+                ktype: KType::Str,
+            }),
+        ],
+    };
+    let sibling = arena.alloc_function(KFunction::new(
+        pick_str,
+        Body::Builtin(super::body_no_op),
+        scope,
+    ));
+    let sibling_obj = arena.alloc(KObject::KFunction(sibling, None));
+    scope
+        .register_function(
+            "pick_str".to_string(),
+            sibling,
+            sibling_obj,
+            BindingIndex::value(3),
+        )
+        .expect("register sibling overload");
+
+    match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
+        ResolveOutcome::Resolved(_) => {}
+        other => panic!(
+            "bucket must resolve once the pending sibling finalizes; got {}",
+            std::any::type_name_of_val(&other),
+        ),
+    }
+}
+
+/// Install a pending overload keyed by `expr`'s bucket key onto `scope`.
+fn scope_install_pending<'a>(
+    scope: &'a Scope<'a>,
+    expr: &KExpression<'a>,
+    producer: crate::machine::NodeId,
+) {
+    scope
+        .install_pending_overload(expr.untyped_key(), producer, BindingIndex::BUILTIN)
+        .expect("install_pending_overload");
+}
+
 /// Two sibling binders that share a bucket key each install their own
 /// `pending_overloads[bucket]` entry — coalescing or rejecting the second would
 /// drop a distinct wake source. A consumer parks on the earliest-index visible

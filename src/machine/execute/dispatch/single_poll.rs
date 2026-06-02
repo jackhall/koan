@@ -16,11 +16,14 @@ use crate::machine::core::source::Spanned;
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::types::UserTypeKind;
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, KType, Record};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
-use super::{extract_named_call_inner, keyworded::KeywordedState, DispatchCtx, Initialized};
+use super::{
+    body_shape_err, extract_call_body, keyworded::KeywordedState, CallBody, DispatchCtx,
+    Initialized, NAMED_ONLY, POSITIONAL_ONLY,
+};
 
 pub(in crate::machine::execute) struct BareIdState<'a> {
     pub(in crate::machine::execute) init: Initialized,
@@ -55,7 +58,7 @@ pub(in crate::machine::execute) enum CtorKind<'a> {
     Struct {
         name: String,
         scope_id: ScopeId,
-        fields: Rc<Vec<(String, KType<'a>)>>,
+        fields: Rc<Record<KType<'a>>>,
     },
     Tagged {
         schema: Rc<HashMap<String, KType<'a>>>,
@@ -257,7 +260,11 @@ pub(super) fn literal_pass_through<'a>(
             let producer = ctx.schedule_dict_literal(pairs, scope);
             park_on_literal_producer(ctx, producer, idx)
         }
-        _ => unreachable!("LiteralPassThrough classifier only routes Literal/Future/Expression/ListLiteral/DictLiteral"),
+        ExpressionPart::RecordLiteral(fields) => {
+            let producer = ctx.schedule_record_literal(fields, scope);
+            park_on_literal_producer(ctx, producer, idx)
+        }
+        _ => unreachable!("LiteralPassThrough classifier only routes Literal/Future/Expression/ListLiteral/DictLiteral/RecordLiteral"),
     }
 }
 
@@ -300,8 +307,8 @@ pub(super) fn constructor_call<'a>(
         ExpressionPart::Type(t) => t.clone(),
         _ => unreachable!("ConstructorCall shape implies leaf Type head"),
     };
-    let inner_parts = match extract_named_call_inner(&expr) {
-        Ok(parts) => parts,
+    let body = match extract_call_body(&expr) {
+        Ok(b) => b,
         Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
     };
     let chain = ctx.chain_deref();
@@ -330,52 +337,66 @@ pub(super) fn constructor_call<'a>(
         }
     };
     match identity {
+        // Named construction: `Point {x = 1, y = 2}` (record-literal body).
         KType::UserType {
             kind: UserTypeKind::Struct { fields },
             scope_id,
             name,
-        } => constructors::dispatch_construct_struct(
-            ctx,
-            name.clone(),
-            *scope_id,
-            Rc::clone(fields),
-            inner_parts,
-            scope,
-            idx,
-        ),
+        } => match body {
+            CallBody::Named(record_fields) => constructors::dispatch_construct_struct(
+                ctx,
+                name.clone(),
+                *scope_id,
+                Rc::clone(fields),
+                record_fields,
+                scope,
+                idx,
+            ),
+            CallBody::Positional(_) => body_shape_err(&expr, NAMED_ONLY),
+        },
+        // Positional construction: `Outcome (err "x")` (paren-group body).
         KType::UserType {
             kind: UserTypeKind::Tagged { schema },
             scope_id,
             name,
-        } => constructors::dispatch_construct_tagged(
-            ctx,
-            name.clone(),
-            *scope_id,
-            Rc::clone(schema),
-            inner_parts,
-            scope,
-            idx,
-        ),
+        } => match body {
+            CallBody::Positional(parts) => constructors::dispatch_construct_tagged(
+                ctx,
+                name.clone(),
+                *scope_id,
+                Rc::clone(schema),
+                parts,
+                scope,
+                idx,
+            ),
+            CallBody::Named(_) => body_shape_err(&expr, POSITIONAL_ONLY),
+        },
         KType::UserType {
             kind: UserTypeKind::Newtype { .. },
             ..
-        } => {
-            let body = newtype_construct(scope, ctx, identity, inner_parts);
-            schedule_constructor_body(ctx, body, idx)
-        }
+        } => match body {
+            CallBody::Positional(parts) => {
+                let body = newtype_construct(scope, ctx, identity, parts);
+                schedule_constructor_body(ctx, body, idx)
+            }
+            CallBody::Named(_) => body_shape_err(&expr, POSITIONAL_ONLY),
+        },
         KType::UserType {
             kind: UserTypeKind::TypeConstructor { schema, .. },
             scope_id,
             name,
-        } => constructors::dispatch_construct_tagged(
-            ctx,
-            name.clone(),
-            *scope_id,
-            Rc::clone(schema),
-            inner_parts,
-            scope,
-            idx,
-        ),
+        } => match body {
+            CallBody::Positional(parts) => constructors::dispatch_construct_tagged(
+                ctx,
+                name.clone(),
+                *scope_id,
+                Rc::clone(schema),
+                parts,
+                scope,
+                idx,
+            ),
+            CallBody::Named(_) => body_shape_err(&expr, POSITIONAL_ONLY),
+        },
         _ => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
             expected: "constructible Type".to_string(),

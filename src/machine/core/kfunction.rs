@@ -2,7 +2,6 @@
 //! a `Body` (builtin `fn` pointer or captured user-defined `KExpression`), and the
 //! lexical scope captured at definition time.
 
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -11,7 +10,7 @@ use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use crate::machine::core::{KError, KErrorKind, KFuture, Scope};
-use crate::machine::model::types::{ExpressionSignature, Parseable, SignatureElement};
+use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
 use crate::machine::model::values::{KObject, NamedPairs};
 
 pub mod argument_bundle;
@@ -128,7 +127,7 @@ impl<'a> KFunction<'a> {
                 got: expr.parts.len(),
             }));
         }
-        let mut args: HashMap<String, Rc<KObject<'a>>> = HashMap::new();
+        let mut args: Record<Rc<KObject<'a>>> = Record::new();
         for (el, part) in self.signature.elements.iter().zip(expr.parts.iter()) {
             let part_value = &part.value;
             match el {
@@ -169,17 +168,20 @@ impl<'a> KFunction<'a> {
         })
     }
 
-    /// Validation precedence (first wins): malformed pair shape (`ShapeError` from
-    /// `NamedPairs::parse`) → missing arg (`MissingArg`) → unknown arg
-    /// (`ShapeError("unknown name ...")`). Arity is implicit — `NamedPairs` rejects
-    /// duplicate names at parse time, so consuming every declared argument and
-    /// finding the residual empty witnesses an exact match.
+    /// Reorder a call's named arguments (the `{name = value}` record literal's fields)
+    /// into this signature's positional element order. Validation precedence (first
+    /// wins): duplicate name (`ShapeError` from `NamedPairs::from_fields`) → missing arg
+    /// (`MissingArg`). Width-drop semantics: a named arg with no matching declared
+    /// parameter is ignored, not an error — this is the value side of function-subtyping
+    /// width drop, where a value fills a slot that promised extra parameters and the
+    /// surplus named args simply go unbound on the reconstructed exact-arity expression.
+    /// `NamedPairs` rejects duplicate names, so consuming every declared argument
+    /// witnesses an exact-arity reconstruction regardless of leftover (now-dropped) names.
     pub fn reconstruct_positional<'b>(
         &self,
-        args: Vec<Spanned<ExpressionPart<'b>>>,
+        fields: Vec<(String, ExpressionPart<'b>)>,
     ) -> Result<KExpression<'b>, KError> {
-        let tmp_expr = KExpression::new(args);
-        let mut pairs = NamedPairs::parse(&tmp_expr, "function call")
+        let mut pairs = NamedPairs::from_fields(fields)
             .map_err(|msg| KError::new(KErrorKind::ShapeError(msg)))?;
         let mut parts: Vec<Spanned<ExpressionPart<'b>>> =
             Vec::with_capacity(self.signature.elements.len());
@@ -196,11 +198,8 @@ impl<'a> KFunction<'a> {
                 },
             }
         }
-        if let Some(unknown) = pairs.into_unknown() {
-            return Err(KError::new(KErrorKind::ShapeError(format!(
-                "unknown name `{unknown}` in function call",
-            ))));
-        }
+        // Leftover named args (no matching declared param) are dropped, not rejected:
+        // call-by-name width drop.
         Ok(KExpression::new(parts))
     }
 }
@@ -394,7 +393,8 @@ mod tests {
         let functor_obj = KObject::KFunction(arena.alloc_function(functor), None);
         match functor_obj.ktype() {
             KType::KFunctor { params, ret } => {
-                assert_eq!(params, vec![KType::Number]);
+                assert_eq!(params.get("x"), Some(&KType::Number));
+                assert_eq!(params.len(), 1);
                 assert_eq!(*ret, KType::Number);
             }
             other => panic!("expected KFunctor, got {:?}", other),

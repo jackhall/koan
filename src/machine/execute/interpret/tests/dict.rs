@@ -35,18 +35,21 @@ fn lookup_bool_key<'a, 'b>(
     d.get(&probe)
 }
 
-/// Mirrors the empty-list rule: bare `{}` through an untyped `LET` has no key/value
-/// types to infer and no upstream annotation, so the empty-container rule rejects it.
+/// Unlike the empty-list / empty-dict rule, bare `{}` is the empty record (the top of
+/// the record lattice), which is well-typed on its own — so binding it through an untyped
+/// `LET` succeeds rather than tripping the empty-container rule.
 #[test]
-fn let_binds_an_empty_dict_literal_errors() {
-    use crate::machine::execute::interpret_with_writer;
-    let result = interpret_with_writer("LET d = {}\n", Box::new(std::io::sink()));
-    match result {
-        Err(e) => assert!(
-            matches!(&e.kind, KErrorKind::ShapeError(msg) if msg.contains("empty container")),
-            "expected empty-container ShapeError, got {e}",
+fn let_binds_an_empty_record_literal() {
+    let arena = RuntimeArena::new();
+    let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+    let scope = run("LET d = {}", &arena, captured);
+    let data = scope.bindings().data();
+    match data.get("d").map(|(o, _)| *o) {
+        Some(KObject::Record(fields, _)) => assert!(fields.is_empty(), "expected empty record"),
+        other => panic!(
+            "expected `d` bound to an empty Record, got {:?}",
+            other.map(|o| o.ktype().name())
         ),
-        Ok(()) => panic!("expected empty-container error binding `{{}}`"),
     }
 }
 

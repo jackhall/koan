@@ -3,6 +3,7 @@
 use super::*;
 use crate::builtins::default_scope;
 use crate::machine::core::source::Spanned;
+use crate::machine::model::types::Record;
 use crate::machine::model::KObject;
 use crate::machine::CallArena;
 use crate::parse::parse;
@@ -103,7 +104,7 @@ fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
         parsed: KExpression::new(vec![]),
         function: kf_ref,
         bundle: ArgumentBundle {
-            args: HashMap::new(),
+            args: Record::new(),
         },
     };
 
@@ -291,7 +292,6 @@ fn kfuture_bundle_arg_with_local_kfunction_anchors() {
 #[test]
 fn kfuture_with_local_function_anchors() {
     use crate::machine::core::kfunction::ArgumentBundle;
-    use std::collections::HashMap;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallArena::new(scope, None);
@@ -301,7 +301,7 @@ fn kfuture_with_local_function_anchors() {
         parsed: KExpression::new(vec![]),
         function: kf_ref,
         bundle: ArgumentBundle {
-            args: HashMap::new(),
+            args: Record::new(),
         },
     };
     let obj = KObject::KFuture(future, None);

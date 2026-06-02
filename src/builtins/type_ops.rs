@@ -1,4 +1,4 @@
-//! Type-constructor builtins — `LIST_OF`, `DICT_OF`, `FUNCTION_OF`,
+//! Type-constructor builtins — `LIST_OF`, `DICT_OF`,
 //! `MODULE_TYPE_OF`, `TEMPLATE`, `SIG_WITH`. Each ships as a
 //! scheduled `KFunction` over `TypeExprRef`-typed slots, so a
 //! parameterized type assembles via sub-expression evaluation:
@@ -7,7 +7,6 @@
 //! [design/typing/scheduler.md](../../design/typing/scheduler.md).
 
 mod dict_of;
-mod function_of;
 mod list_of;
 mod module_type_of;
 mod sig_with;
@@ -40,20 +39,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         dict_of::body,
-    );
-    register_builtin(
-        scope,
-        "FUNCTION_OF",
-        sig(
-            KType::TypeExprRef,
-            vec![
-                kw("FUNCTION_OF"),
-                arg("args", KType::KExpression),
-                kw("->"),
-                arg("ret", KType::TypeExprRef),
-            ],
-        ),
-        function_of::body,
     );
     register_builtin(
         scope,

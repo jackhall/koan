@@ -213,14 +213,3 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   under `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB and zero process-exit
   leaks, signing off the memory model as it stands today. The canonical
   slate list lives in [observe/miri_slate.md](../observe/miri_slate.md).
-
-## Open work
-
-- [Record substrate for identifier-keyed binding](../roadmap/type_language/record-substrate.md) —
-  the runtime name→value carriers (`Bindings.data`, `Struct.fields`, and
-  dispatch's `ArgumentBundle`) converge on one ordered identifier-keyed record
-  shape, with order-blind equality and a name+type hash defined once.
-- [Argument-binding unification](../roadmap/type_language/argument-binding-unification.md) —
-  a call's resolved arguments install into the callee scope as one record block
-  under a single frame-level `BindingIndex`, instead of per-entry
-  `(value, index)` tagging.

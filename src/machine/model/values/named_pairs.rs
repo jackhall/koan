@@ -1,69 +1,32 @@
-//! Shared parser for named-argument lists. Two surface forms are accepted:
-//!
-//! - `Point (x = 3, y = 4)` — paren-expr walked as `<Identifier> <Keyword("=")> <value>`
-//!   triples via [`parse_keyword_triple_list`].
-//! - `Point {x: 3, y: 4}` — single dict literal whose keys are the field names. The
-//!   dict-frame `:` keeps its pair-separator role, so this form is the natural surface
-//!   for users coming from dict literals.
-//!
-//! A single `ExpressionPart::DictLiteral` routes to the dict-form path; anything else
-//! routes through the keyword-triple walker.
+//! Consume-by-name view over a call's named arguments — the fields of a `{name = value}`
+//! record literal, reordered into a declaration's parameter / field order by struct
+//! construction ([`struct_value`](crate::machine::execute)) and function / functor calls
+//! ([`KFunction::reconstruct_positional`](crate::machine::core::kfunction::KFunction)).
 
 use std::collections::HashMap;
 
-use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
-use crate::parse::parse_keyword_triple_list;
-
-/// Walk an expression's parts as a named-value list (see module docs for accepted
-/// forms) and assemble the resulting ordered list of `(name, value-part)` pairs.
-/// Errors with a `ShapeError`-string on malformed shapes or duplicate names.
-pub fn parse_named_value_pairs<'a>(
-    expr: &KExpression<'a>,
-    context: &str,
-) -> Result<Vec<(String, ExpressionPart<'a>)>, String> {
-    if let [Spanned {
-        value: ExpressionPart::DictLiteral(pairs),
-        ..
-    }] = expr.parts.as_slice()
-    {
-        let mut out: Vec<(String, ExpressionPart<'a>)> = Vec::with_capacity(pairs.len());
-        for (key, value) in pairs {
-            let name = match key {
-                ExpressionPart::Identifier(s) => s.clone(),
-                ExpressionPart::Literal(KLiteral::String(s)) => s.clone(),
-                other => {
-                    return Err(format!(
-                        "{context} dict-form key must be a bare identifier or string, got {}",
-                        other.summarize(),
-                    ));
-                }
-            };
-            if out.iter().any(|(n, _)| n == &name) {
-                return Err(format!("duplicate name `{}` in {context}", name));
-            }
-            out.push((name, value.clone()));
-        }
-        return Ok(out);
-    }
-    parse_keyword_triple_list(expr, context, "=", |part, _name| Ok(part.clone()))
-}
+use crate::machine::model::ast::ExpressionPart;
 
 /// Consume-by-name view over a named-argument list. Callers `take(name)` for each
-/// declared slot and call [`into_unknown`](Self::into_unknown) at the end to surface
-/// any unconsumed name. Duplicates are rejected during parsing, so each `take` is
-/// unique.
+/// declared slot and call [`into_unknown`](Self::into_unknown) at the end to surface any
+/// unconsumed name. Built from a record literal's `(name, value)` fields.
+#[derive(Debug)]
 pub struct NamedPairs<'a> {
     map: HashMap<String, ExpressionPart<'a>>,
 }
 
 impl<'a> NamedPairs<'a> {
-    /// Parse `expr` as a named-value list and wrap it for consume-by-name access.
-    pub fn parse(expr: &KExpression<'a>, context: &str) -> Result<Self, String> {
-        let pairs = parse_named_value_pairs(expr, context)?;
-        Ok(Self {
-            map: pairs.into_iter().collect(),
-        })
+    /// Wrap a record literal's fields for consume-by-name access. Errors on a duplicate
+    /// field name: a record *value* last-wins on duplicates, but a named-argument list
+    /// must reject them so a doubly-supplied argument fails loudly rather than silently.
+    pub fn from_fields(fields: Vec<(String, ExpressionPart<'a>)>) -> Result<Self, String> {
+        let mut map = HashMap::with_capacity(fields.len());
+        for (name, value) in fields {
+            if map.insert(name.clone(), value).is_some() {
+                return Err(format!("duplicate name `{name}`"));
+            }
+        }
+        Ok(Self { map })
     }
 
     /// Pop the value bound to `name`, or `None` if the caller did not provide it.
@@ -84,101 +47,14 @@ mod tests {
     use super::*;
     use crate::machine::model::ast::KLiteral;
 
-    fn ident(s: &str) -> ExpressionPart<'static> {
-        ExpressionPart::Identifier(s.to_string())
-    }
-    fn eq_kw() -> ExpressionPart<'static> {
-        ExpressionPart::Keyword("=".to_string())
-    }
     fn num(n: f64) -> ExpressionPart<'static> {
         ExpressionPart::Literal(KLiteral::Number(n))
     }
-    fn sp(p: ExpressionPart<'static>) -> Spanned<ExpressionPart<'static>> {
-        Spanned::bare(p)
-    }
 
     #[test]
-    fn empty_parts_returns_empty_vec() {
-        let expr = KExpression::new(vec![]);
-        let pairs = parse_named_value_pairs(&expr, "ctx").unwrap();
-        assert!(pairs.is_empty());
-    }
-
-    #[test]
-    fn single_eq_pair_round_trips() {
-        let expr = KExpression::new(vec![sp(ident("x")), sp(eq_kw()), sp(num(3.0))]);
-        let pairs = parse_named_value_pairs(&expr, "ctx").unwrap();
-        assert_eq!(pairs.len(), 1);
-        assert_eq!(pairs[0].0, "x");
-        assert!(matches!(pairs[0].1, ExpressionPart::Literal(KLiteral::Number(n)) if n == 3.0));
-    }
-
-    #[test]
-    fn multiple_eq_pairs_preserve_order() {
-        let expr = KExpression::new(vec![
-            sp(ident("y")),
-            sp(eq_kw()),
-            sp(num(4.0)),
-            sp(ident("x")),
-            sp(eq_kw()),
-            sp(num(3.0)),
-        ]);
-        let pairs = parse_named_value_pairs(&expr, "ctx").unwrap();
-        assert_eq!(pairs.len(), 2);
-        assert_eq!(pairs[0].0, "y");
-        assert_eq!(pairs[1].0, "x");
-    }
-
-    #[test]
-    fn duplicate_name_errors() {
-        let expr = KExpression::new(vec![
-            sp(ident("x")),
-            sp(eq_kw()),
-            sp(num(1.0)),
-            sp(ident("x")),
-            sp(eq_kw()),
-            sp(num(2.0)),
-        ]);
-        let err = parse_named_value_pairs(&expr, "ctx").unwrap_err();
-        assert!(err.contains("duplicate name"), "got: {err}");
-        assert!(err.contains("`x`"), "got: {err}");
-    }
-
-    #[test]
-    fn missing_eq_separator_errors() {
-        let expr = KExpression::new(vec![sp(ident("x")), sp(num(3.0)), sp(ident("y"))]);
-        let err = parse_named_value_pairs(&expr, "ctx").unwrap_err();
-        assert!(
-            err.contains("`=`") || err.contains("separator"),
-            "got: {err}"
-        );
-    }
-
-    #[test]
-    fn non_identifier_name_errors() {
-        let expr = KExpression::new(vec![sp(num(7.0)), sp(eq_kw()), sp(num(3.0))]);
-        let err = parse_named_value_pairs(&expr, "ctx").unwrap_err();
-        assert!(err.contains("bare identifier"), "got: {err}");
-    }
-
-    #[test]
-    fn non_multiple_of_three_errors() {
-        let expr = KExpression::new(vec![sp(ident("x")), sp(eq_kw())]);
-        let err = parse_named_value_pairs(&expr, "ctx").unwrap_err();
-        assert!(err.contains("triples"), "got: {err}");
-    }
-
-    #[test]
-    fn named_pairs_take_consumes_by_name() {
-        let expr = KExpression::new(vec![
-            sp(ident("x")),
-            sp(eq_kw()),
-            sp(num(3.0)),
-            sp(ident("y")),
-            sp(eq_kw()),
-            sp(num(4.0)),
-        ]);
-        let mut pairs = NamedPairs::parse(&expr, "ctx").unwrap();
+    fn take_consumes_by_name() {
+        let mut pairs =
+            NamedPairs::from_fields(vec![("x".into(), num(3.0)), ("y".into(), num(4.0))]).unwrap();
         assert!(
             matches!(pairs.take("y"), Some(ExpressionPart::Literal(KLiteral::Number(n))) if n == 4.0)
         );
@@ -190,29 +66,18 @@ mod tests {
     }
 
     #[test]
-    fn named_pairs_into_unknown_reports_residual() {
-        let expr = KExpression::new(vec![
-            sp(ident("x")),
-            sp(eq_kw()),
-            sp(num(3.0)),
-            sp(ident("z")),
-            sp(eq_kw()),
-            sp(num(9.0)),
-        ]);
-        let mut pairs = NamedPairs::parse(&expr, "ctx").unwrap();
+    fn into_unknown_reports_residual() {
+        let mut pairs =
+            NamedPairs::from_fields(vec![("x".into(), num(3.0)), ("z".into(), num(9.0))]).unwrap();
         let _ = pairs.take("x");
         assert_eq!(pairs.into_unknown().as_deref(), Some("z"));
     }
 
     #[test]
-    fn dict_literal_form_round_trips() {
-        let expr = KExpression::new(vec![sp(ExpressionPart::DictLiteral(vec![
-            (ident("x"), num(3.0)),
-            (ident("y"), num(4.0)),
-        ]))]);
-        let pairs = parse_named_value_pairs(&expr, "ctx").unwrap();
-        assert_eq!(pairs.len(), 2);
-        assert_eq!(pairs[0].0, "x");
-        assert_eq!(pairs[1].0, "y");
+    fn duplicate_name_errors() {
+        let err = NamedPairs::from_fields(vec![("x".into(), num(1.0)), ("x".into(), num(2.0))])
+            .unwrap_err();
+        assert!(err.contains("duplicate name"), "got: {err}");
+        assert!(err.contains("`x`"), "got: {err}");
     }
 }
