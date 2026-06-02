@@ -151,32 +151,28 @@ impl<'a> FnValueState<'a> {
                 name,
             }) => match kind {
                 UserTypeKind::Struct { fields } => match body {
-                    CallBody::Named(record_fields) => {
-                        Ok(constructors::dispatch_construct_struct(
-                            ctx,
-                            name.clone(),
-                            *scope_id,
-                            std::rc::Rc::clone(fields),
-                            record_fields,
-                            scope,
-                            idx,
-                        ))
-                    }
+                    CallBody::Named(record_fields) => Ok(constructors::dispatch_construct_struct(
+                        ctx,
+                        name.clone(),
+                        *scope_id,
+                        std::rc::Rc::clone(fields),
+                        record_fields,
+                        scope,
+                        idx,
+                    )),
                     CallBody::Positional(_) => Ok(body_shape_err(&expr, NAMED_ONLY)),
                 },
                 UserTypeKind::Tagged { schema } | UserTypeKind::TypeConstructor { schema, .. } => {
                     match body {
-                        CallBody::Positional(parts) => {
-                            Ok(constructors::dispatch_construct_tagged(
-                                ctx,
-                                name.clone(),
-                                *scope_id,
-                                std::rc::Rc::clone(schema),
-                                parts,
-                                scope,
-                                idx,
-                            ))
-                        }
+                        CallBody::Positional(parts) => Ok(constructors::dispatch_construct_tagged(
+                            ctx,
+                            name.clone(),
+                            *scope_id,
+                            std::rc::Rc::clone(schema),
+                            parts,
+                            scope,
+                            idx,
+                        )),
                         CallBody::Named(_) => Ok(body_shape_err(&expr, POSITIONAL_ONLY)),
                     }
                 }

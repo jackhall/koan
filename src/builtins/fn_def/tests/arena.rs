@@ -65,7 +65,7 @@ fn match_driven_tail_recursion_completes() {
     run(
         scope,
         "UNION Bit = (one :Null zero :Null)\n\
-         FN (HOP b :Tagged) -> Any = (MATCH (b) WITH (\
+         FN (HOP b :Tagged) -> Any = (MATCH (b) -> :Str WITH (\
              one -> (HOP (Bit (zero null)))\
              zero -> (PRINT \"done\")\
          ))",
@@ -110,7 +110,7 @@ fn body_subexpression_slots_recycle_across_calls() {
     run(
         scope,
         "UNION Bit = (one :Null zero :Null)\n\
-         FN (LOOK b :Tagged) -> Any = (MATCH (b) WITH (\
+         FN (LOOK b :Tagged) -> Any = (MATCH (b) -> :Str WITH (\
              one -> (PRINT \"one\")\
              zero -> (PRINT \"zero\")\
          ))",

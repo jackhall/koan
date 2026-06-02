@@ -331,7 +331,10 @@ fn let_type_class_in_sig_body_still_works() {
             name,
         } => {
             assert_eq!(name, "Type");
-            assert_eq!(*id, decl_scope.id, "Sig source must key on the decl_scope id");
+            assert_eq!(
+                *id, decl_scope.id,
+                "Sig source must key on the decl_scope id"
+            );
         }
         other => panic!(
             "SIG-local `LET Type = Number` should bind a Sig-rooted AbstractType, got {:?}",

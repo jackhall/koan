@@ -18,8 +18,9 @@ fn run_program(source: &str) -> Vec<u8> {
 fn success_wraps_value_in_ok() {
     // Double "v\n": PRINT both renders and returns its argument, so the ok
     // arm's `(PRINT it)` re-prints the same string CATCH captured.
-    let bytes =
-        run_program("MATCH (CATCH (PRINT \"v\")) WITH (ok -> (PRINT it) error -> (PRINT \"no\"))");
+    let bytes = run_program(
+        "MATCH (CATCH (PRINT \"v\")) -> :Str WITH (ok -> (PRINT it) error -> (PRINT \"no\"))",
+    );
     assert_eq!(bytes, b"v\nv\n");
 }
 
@@ -28,9 +29,9 @@ fn failure_wraps_to_tagged_in_error() {
     // Exercises the `KErrorKind`-tagged payload: nested MATCH dispatches on
     // the kind tag, and `.name` is the unbound_name variant's payload field.
     let bytes = run_program(
-        "MATCH (CATCH (foo)) WITH (\
+        "MATCH (CATCH (foo)) -> :Str WITH (\
             ok -> (PRINT \"no\")\
-            error -> (MATCH it WITH (unbound_name -> (PRINT it.name)))\
+            error -> (MATCH it -> :Str WITH (unbound_name -> (PRINT it.name)))\
          )",
     );
     assert_eq!(bytes, b"foo\n");
@@ -56,8 +57,8 @@ fn nested_catch_wraps_inner_result_in_outer_ok() {
     // Inner CATCH *succeeds* (producing a Result), so the outer wraps it in
     // `ok`; `it` then names the inner `error(...)` Result.
     let bytes = run_program(
-        "MATCH (CATCH (CATCH (foo))) WITH (\
-            ok -> (MATCH it WITH (ok -> (PRINT \"inner-ok\") error -> (PRINT \"inner-error\")))\
+        "MATCH (CATCH (CATCH (foo))) -> :Str WITH (\
+            ok -> (MATCH it -> :Str WITH (ok -> (PRINT \"inner-ok\") error -> (PRINT \"inner-error\")))\
             error -> (PRINT \"outer-error\")\
          )",
     );
@@ -71,7 +72,7 @@ fn catch_inside_tco_position_preserves_frame_chain() {
     // resumption context.
     let bytes = run_program(
         "UNION Bit = (one :Null zero :Null)\n\
-         FN (HOP b :Tagged) -> Any = (CATCH (MATCH (b) WITH (\
+         FN (HOP b :Tagged) -> Any = (CATCH (MATCH (b) -> :Str WITH (\
             one -> (HOP (Bit (zero null)))\
             zero -> (PRINT \"done\")\
          )))\n\

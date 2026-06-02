@@ -377,7 +377,12 @@ The return type is non-optional and runtime-enforced. The scheduler injects a
 check at user-fn slot finalization that surfaces
 [`KErrorKind::TypeMismatch`](../../src/machine/core/kerror.rs) (with a `<return>` arg
 name and a frame naming the called function) on mismatch. `Any` is the
-no-enforcement fast path for sites that genuinely don't care.
+no-enforcement fast path for sites that genuinely don't care. `MATCH` and `TRY`
+arms share this check: their mandatory `-> :T` rides the same slot carrier (a
+[`ReturnContract`](../../src/machine/core/kfunction/body.rs) — `Function` for a
+call, `Arm` for a function-less arm) and the same Done-arm check, so every arm
+agrees on `T` and the expression's value carries `T` for downstream dispatch (see
+[execution-model.md § Arms as own blocks](../execution-model.md#arms-as-own-blocks)).
 
 FN itself registers with a return type of `Any` — there's no "any function"
 KType to declare, since a function with no signature has nothing to dispatch
@@ -564,9 +569,13 @@ dict (see [type-language-via-dispatch.md § Record-type sigil](type-language-via
 ## Known limitations
 
 - **TCO collapses frames.** When A tail-calls B, only B's return type is
-  checked at runtime — the slot's `function` field is replaced at TCO time.
-- **Builtins are not runtime-checked.** They return through `BodyResult::Value`
-  with no slot frame, so the runtime check has nowhere to attach. Their
-  declared return types are honest but unenforced.
+  checked at runtime — the slot's `ReturnContract` carrier is replaced at TCO
+  time. A nested `MATCH` / `TRY` arm whose body tail-calls a function is checked
+  against the callee's contract, not the arm's `-> :T`.
+- **Value-returning builtins are not runtime-checked.** They return through
+  `BodyResult::Value` with no slot frame, so the runtime check has nowhere to
+  attach; their declared return types are honest but unenforced. `MATCH` / `TRY`
+  are the exception — they return through `BodyResult::Tail` carrying a
+  `ReturnContract::Arm`, so their `-> :T` is enforced.
 The two-phase execution work in [open-work.md](open-work.md) closes both
 uniformly.

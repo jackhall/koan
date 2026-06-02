@@ -8,6 +8,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::core::{CallArena, KError, Scope, ScopeId};
 use crate::machine::model::types::UntypedKey;
 use crate::machine::model::values::KObject;
+use crate::machine::model::KType;
 
 use super::argument_bundle::ArgumentBundle;
 use super::scheduler_handle::{NodeId, SchedulerHandle};
@@ -27,21 +28,43 @@ use super::KFunction;
 /// `DeferTo(id)` rewrites the slot's work to `Lift { from: id }`. Used by binder bodies
 /// (MODULE, SIG) that schedule a `Combine` to finalize their body statements: the
 /// binder's slot lifts its terminal off the Combine.
+/// Return-type contract a tail-replace carries to its Done arm, for both the
+/// declared-return check and the error-frame label. Generalizes what was a bare
+/// `&KFunction` carrier so a function-less return-typed tail (a MATCH / TRY arm with
+/// `-> :T`) rides the same channel as an FN call.
+///
+/// `Arm`'s `ret` is arena-borrowed so the whole contract stays `Copy`, matching the
+/// `&KFunction` it sits beside. Same TCO limitation as the `function` carrier
+/// ([`crate::machine::execute`] `Node`): a nested tail-call rewrites the contract to
+/// the callee, so the check fires only against the tail-most contract.
+#[derive(Clone, Copy)]
+pub enum ReturnContract<'a> {
+    /// An FN / builtin call: check against `signature.return_type`, label via `summarize()`.
+    Function(&'a KFunction<'a>),
+    /// A MATCH / TRY arm's `-> :T`: check the lifted value against `ret`, label with `kind`.
+    Arm {
+        ret: &'a KType<'a>,
+        kind: &'static str,
+    },
+}
+
 pub enum BodyResult<'a> {
     Value(&'a KObject<'a>),
     Tail {
         expr: KExpression<'a>,
         frame: Option<Rc<CallArena>>,
-        /// Used by the slot's Done arm to enforce `signature.return_type` and to label
-        /// the appended `Frame` on error. `None` for builtin tails that are
-        /// deferred-eval continuations, not calls.
-        function: Option<&'a KFunction<'a>>,
+        /// Return contract the slot's Done arm enforces, and the source of the `Frame`
+        /// label appended to errors. `Function` is an FN / builtin call (checks
+        /// `signature.return_type`, labels with `summarize()`); `Arm` is a MATCH / TRY
+        /// arm whose `-> :T` declares a return type with no backing `&KFunction`. `None`
+        /// for builtin tails that are deferred-eval continuations, not calls.
+        function: Option<ReturnContract<'a>>,
         /// `Some(id)` means the tail enters a fresh lexical block (MATCH / TRY arms,
         /// FN body resolved-return); `None` continues the slot's current block (CONS
         /// tail, builtin tail continuations). The reinstall site
         /// (`compute_replace_chain` in `execute/scheduler/execute.rs`) prepends
-        /// `(id, 0)` when `function` is `None`; when `function` is `Some`, the chain
-        /// is assembled via `kfunction/invoke.rs::assemble_body_chain`.
+        /// `(id, 0)` for a non-`Function` contract (`Arm` or `None`); a `Function`
+        /// contract assembles the chain via `kfunction/invoke.rs::assemble_body_chain`.
         block_entry: Option<ScopeId>,
         /// Body-scope chain index for a block-entry tail-replace. `0` for
         /// single-statement bodies. For multi-statement bodies tail-replacing into
@@ -86,19 +109,21 @@ impl<'a> BodyResult<'a> {
         BodyResult::Tail {
             expr,
             frame: Some(frame),
-            function: Some(function),
+            function: Some(ReturnContract::Function(function)),
             block_entry: Some(body_scope_id),
             body_index,
         }
     }
 
     /// Block-entry tail-replace for builtins without a `&KFunction` (MATCH / TRY arms).
+    /// `contract` is the arm's `-> :T` return contract, checked when its value lifts.
     pub fn tail_with_block(
         expr: KExpression<'a>,
         frame: Option<Rc<CallArena>>,
         scope_id: ScopeId,
+        contract: Option<ReturnContract<'a>>,
     ) -> Self {
-        Self::tail_with_block_at_index(expr, frame, scope_id, 0)
+        Self::tail_with_block_at_index(expr, frame, scope_id, 0, contract)
     }
 
     /// Block-entry tail-replace with an explicit `body_index` (see [`BodyResult::Tail`]).
@@ -107,11 +132,12 @@ impl<'a> BodyResult<'a> {
         frame: Option<Rc<CallArena>>,
         scope_id: ScopeId,
         body_index: usize,
+        contract: Option<ReturnContract<'a>>,
     ) -> Self {
         BodyResult::Tail {
             expr,
             frame,
-            function: None,
+            function: contract,
             block_entry: Some(scope_id),
             body_index,
         }

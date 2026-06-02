@@ -1,6 +1,8 @@
-//! `TRY (<expr>) WITH (<branches>)` — runtime error-catching dispatch.
+//! `TRY (<expr>) -> :<T> WITH (<branches>)` — runtime error-catching dispatch.
 //!
-//! Surface shape mirrors [`match_case`](super::match_case); arms key on `ok`, the
+//! `-> :T` is the mandatory declared return type every arm agrees on, checked and
+//! re-tagged when the selected arm's value lifts (the `ReturnContract::Arm` carried on
+//! the tail). Surface shape otherwise mirrors [`match_case`](super::match_case); arms key on `ok`, the
 //! `KErrorKind` tag from [`KError::to_tagged`](crate::machine::KError::to_tagged),
 //! or `_` (wildcard catching dispatcher-internal kinds without a public tag).
 //!
@@ -19,10 +21,11 @@ use crate::machine::{
     RuntimeArena, SchedulerHandle, Scope,
 };
 
-use super::branch_walk::find_branch_body;
+use super::branch_walk::{find_branch_body, resolve_arm_return_contract};
 use super::{arg, err, kw, register_builtin, sig};
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 use crate::machine::core::kfunction::body::split_body_statements;
+use crate::machine::core::kfunction::body::ReturnContract;
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -36,6 +39,10 @@ pub fn body<'a>(
                 "TRY expr slot must be a parenthesized expression".to_string(),
             )));
         }
+    };
+    let contract = match resolve_arm_return_contract(scope, &mut bundle, "TRY") {
+        Ok(c) => c,
+        Err(e) => return err(e),
     };
     let branches_expr = match extract_kexpression(&mut bundle, "branches") {
         Some(e) => e,
@@ -53,7 +60,7 @@ pub fn body<'a>(
     let sub_id = sub_ids[0];
     let outer_frame = sched.current_frame();
     let finish: CatchFinish<'a> = Box::new(move |scope, sched, result| {
-        dispatch_branch(scope, sched, result, branches_expr, outer_frame)
+        dispatch_branch(scope, sched, result, branches_expr, outer_frame, contract)
     });
     let catch_id = sched.add_catch(sub_id, scope, finish);
     BodyResult::DeferTo(catch_id)
@@ -67,6 +74,7 @@ fn dispatch_branch<'a>(
     result: Result<&'a KObject<'a>, KError>,
     branches_expr: crate::machine::model::ast::KExpression<'a>,
     outer_frame: Option<Rc<CallArena>>,
+    contract: ReturnContract<'a>,
 ) -> BodyResult<'a> {
     // On `ok`, `it` is the bare success value; on error, the per-variant payload
     // Struct unwrapped from `KError::to_tagged`'s Tagged carrier.
@@ -131,10 +139,10 @@ fn dispatch_branch<'a>(
                 s.add_dispatch_with_chain(stmt.clone(), child, chain.clone());
             });
         }
-        BodyResult::tail_with_block_at_index(last, Some(frame), arm_scope_id, n)
+        BodyResult::tail_with_block_at_index(last, Some(frame), arm_scope_id, n, Some(contract))
     } else {
         let only = statements.into_iter().next().expect("n >= 1");
-        BodyResult::tail_with_block(only, Some(frame), arm_scope_id)
+        BodyResult::tail_with_block(only, Some(frame), arm_scope_id, Some(contract))
     }
 }
 
@@ -147,6 +155,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             vec![
                 kw("TRY"),
                 arg("expr", KType::KExpression),
+                kw("->"),
+                arg("return_type", KType::TypeExprRef),
                 kw("WITH"),
                 arg("branches", KType::KExpression),
             ],

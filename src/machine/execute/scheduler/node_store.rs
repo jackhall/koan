@@ -15,7 +15,7 @@
 use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::{CallArena, LexicalFrame, Scope};
 use crate::machine::model::KObject;
 use crate::machine::model::Parseable;
@@ -137,7 +137,7 @@ impl<'a> NodeStore<'a> {
         frame: Rc<CallArena>,
         reserve_frame: Option<Rc<CallArena>>,
         work: NodeWork<'a>,
-        function: Option<&'a KFunction<'a>>,
+        function: Option<ReturnContract<'a>>,
         chain: Rc<LexicalFrame>,
     ) {
         // SAFETY: `frame` is about to land in `self.slots[id]`, whose span equals `'a`.

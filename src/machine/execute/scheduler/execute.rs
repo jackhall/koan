@@ -1,7 +1,8 @@
 use std::rc::Rc;
 
+use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::{assemble_body_chain, ScopeId};
-use crate::machine::{Frame, KError, KErrorKind, KFunction, LexicalFrame, NodeId};
+use crate::machine::{Frame, KError, KErrorKind, LexicalFrame, NodeId};
 
 use super::super::lift::lift_kobject;
 use super::super::nodes::{LiftState, Node, NodeOutput, NodeStep, NodeWork};
@@ -50,38 +51,51 @@ impl<'a> Scheduler<'a> {
                                 .expect("per-call scope must have an outer (its captured scope)")
                                 .arena;
                             let mut lifted_obj = lift_kobject(v, &frame);
-                            if let Some(f) = prev_function {
-                                // `Deferred` returns are checked at the per-call Combine
-                                // finish that joins the lifted body value with the
-                                // elaborated `KType`; the static carrier here can't see
-                                // that resolution.
-                                let rt = &f.signature.return_type;
-                                if let crate::machine::model::types::ReturnType::Resolved(
-                                    declared,
-                                ) = rt
+                            // The declared-return check + downstream re-tag. A `Function`
+                            // FN/builtin checks `signature.return_type` (`Deferred` returns
+                            // are checked later at the per-call Combine finish, not here);
+                            // an `Arm` is a MATCH/TRY arm's `-> :T`.
+                            let declared = match prev_function {
+                                Some(ReturnContract::Function(f)) => match &f.signature.return_type
                                 {
-                                    if !declared.matches_value(&lifted_obj) {
-                                        let err = KError::new(KErrorKind::TypeMismatch {
-                                            arg: "<return>".to_string(),
-                                            expected: rt.name(),
-                                            got: lifted_obj.ktype().name(),
-                                        })
-                                        .with_frame(Frame::bare(f.summarize(), f.summarize()));
-                                        self.finalize(idx, NodeOutput::Err(err));
-                                        continue;
+                                    crate::machine::model::types::ReturnType::Resolved(d) => {
+                                        Some((d, f.summarize()))
                                     }
-                                    // Re-tag to the declared return type so downstream
-                                    // dispatch sees the contract (may coarsen, e.g.
-                                    // `List<Number>` through `:(LIST OF Any)` -> `List<Any>`).
-                                    lifted_obj = lifted_obj.stamp_type(declared);
+                                    _ => None,
+                                },
+                                Some(ReturnContract::Arm { ret, kind }) => {
+                                    Some((ret, kind.to_string()))
                                 }
+                                None => None,
+                            };
+                            if let Some((declared, label)) = declared {
+                                if !declared.matches_value(&lifted_obj) {
+                                    let err = KError::new(KErrorKind::TypeMismatch {
+                                        arg: "<return>".to_string(),
+                                        expected: declared.name(),
+                                        got: lifted_obj.ktype().name(),
+                                    })
+                                    .with_frame(Frame::bare(label.clone(), label));
+                                    self.finalize(idx, NodeOutput::Err(err));
+                                    continue;
+                                }
+                                // Re-tag to the declared return type so downstream dispatch
+                                // sees the contract (may coarsen, e.g. `List<Number>`
+                                // through `:(LIST OF Any)` -> `List<Any>`).
+                                lifted_obj = lifted_obj.stamp_type(declared);
                             }
                             let lifted = dest.alloc(lifted_obj);
                             self.finalize(idx, NodeOutput::Value(lifted));
                         }
                         (NodeOutput::Err(e), Some(_frame)) => {
                             let with_frame = match prev_function {
-                                Some(f) => e.with_frame(Frame::bare(f.summarize(), f.summarize())),
+                                Some(contract) => {
+                                    let label = match contract {
+                                        ReturnContract::Function(f) => f.summarize(),
+                                        ReturnContract::Arm { kind, .. } => kind.to_string(),
+                                    };
+                                    e.with_frame(Frame::bare(label.clone(), label))
+                                }
                                 None => e,
                             };
                             self.finalize(idx, NodeOutput::Err(with_frame));
@@ -233,14 +247,14 @@ impl<'a> Scheduler<'a> {
 /// Cases by `block_entry` / `new_function`:
 ///
 /// - `None` — TCO in the same lexical block; chain unchanged.
-/// - `Some(scope_id)` + no function — block-entry arm (MATCH, TRY); prepend.
-/// - `Some(_)` + `Some(fn)` — FN body invoke. Chain is assembled from the FN's
+/// - `Some(scope_id)` + non-`Function` contract — block-entry arm (MATCH, TRY); prepend.
+/// - `Some(_)` + `Function(fn)` — FN body invoke. Chain is assembled from the FN's
 ///   lexical `outer` walk so depth tracks lexical nesting, not call depth
 ///   (tail-recursive loops produce equal-depth chains each iteration).
 fn compute_replace_chain<'a>(
     prev_chain: Rc<LexicalFrame>,
     block_entry: Option<ScopeId>,
-    new_function: Option<&'a KFunction<'a>>,
+    new_function: Option<ReturnContract<'a>>,
     new_frame: Option<&crate::machine::core::CallArena>,
     body_index: usize,
 ) -> Rc<LexicalFrame> {
@@ -248,7 +262,9 @@ fn compute_replace_chain<'a>(
         return prev_chain;
     };
     match (new_function, new_frame) {
-        (Some(_f), Some(frame)) => assemble_body_chain(frame.scope(), prev_chain, body_index),
+        (Some(ReturnContract::Function(_)), Some(frame)) => {
+            assemble_body_chain(frame.scope(), prev_chain, body_index)
+        }
         _ => LexicalFrame::push(Some(prev_chain), scope_id, body_index),
     }
 }

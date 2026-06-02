@@ -47,7 +47,10 @@ fn val_resolves_sig_local_type_shadow() {
             name, "Type",
             "VAL slot must record that it names the SIG-local abstract `Type`",
         ),
-        other => panic!("expected KTypeValue(AbstractType(Type)), got {:?}", other.ktype()),
+        other => panic!(
+            "expected KTypeValue(AbstractType(Type)), got {:?}",
+            other.ktype()
+        ),
     }
 }
 

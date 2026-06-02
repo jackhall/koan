@@ -401,9 +401,9 @@ fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType<'a> {
     // [ktype.md § Record fields](../../../../design/typing/ktype.md#record-fields-and-ktype-hashing).
     let ret = match &f.signature.return_type {
         ReturnType::Resolved(kt) => Box::new(kt.clone()),
-        ReturnType::Deferred(d) => {
-            Box::new(KType::DeferredReturn(DeferredReturnSurface::from_deferred(d)))
-        }
+        ReturnType::Deferred(d) => Box::new(KType::DeferredReturn(
+            DeferredReturnSurface::from_deferred(d),
+        )),
     };
     // `is_functor` projects into the disjoint `KFunctor` family; cross-arm
     // admissibility is refused in `function_compat` — see

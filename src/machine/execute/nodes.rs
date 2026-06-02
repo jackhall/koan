@@ -1,11 +1,10 @@
 use std::rc::Rc;
 
+use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::KObject;
-use crate::machine::{
-    CallArena, CatchFinish, CombineFinish, KError, KFunction, LexicalFrame, NodeId, Scope,
-};
+use crate::machine::{CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, Scope};
 
 use super::dispatch::DispatchState;
 
@@ -33,7 +32,7 @@ pub(super) enum NodeStep<'a> {
     Replace {
         work: NodeWork<'a>,
         frame: Option<Rc<CallArena>>,
-        function: Option<&'a KFunction<'a>>,
+        function: Option<ReturnContract<'a>>,
         block_entry: Option<ScopeId>,
         /// Body-scope chain index for FN-body / MATCH-arm / TRY-arm tail-replace
         /// (mirrors [`crate::machine::core::kfunction::body::BodyResult::Tail::body_index`]).
@@ -119,11 +118,14 @@ pub(super) struct Node<'a> {
     /// Set in lockstep with `frame`. Read on Done to enforce the declared return type
     /// and to append a `Frame` to errors for the call-stack trace.
     ///
-    /// TCO limitation: when A tail-calls B, this is rewritten to B, so the runtime
-    /// return-type check only fires against the tail-most function. Sound only when
-    /// intermediate frames' types agree — to be enforced statically by the future
+    /// Return contract enforced on Done — an FN/builtin call (`Function`) or a
+    /// MATCH/TRY arm's `-> :T` (`Arm`). Also the source of the error-frame label.
+    ///
+    /// TCO limitation: when A tail-calls B, this is rewritten to B's contract, so the
+    /// runtime return-type check only fires against the tail-most contract. Sound only
+    /// when intermediate frames' types agree — to be enforced statically by the future
     /// type-check pass.
-    pub(super) function: Option<&'a KFunction<'a>>,
+    pub(super) function: Option<ReturnContract<'a>>,
     /// Immutable cactus-chain naming this node's lexical position. Head frame is the
     /// innermost enclosing block; tail (`parent: None`) is top-level. See
     /// `core/lexical_frame.rs`.

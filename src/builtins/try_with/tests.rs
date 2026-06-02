@@ -16,20 +16,35 @@ fn run_program(source: &str) -> Vec<u8> {
 
 #[test]
 fn ok_arm_runs_on_success_and_binds_it_to_value() {
-    let bytes = run_program("TRY (PRINT \"hello\") WITH (ok -> (PRINT \"caught ok\"))");
+    let bytes = run_program("TRY (PRINT \"hello\") -> :Str WITH (ok -> (PRINT \"caught ok\"))");
     assert_eq!(bytes, b"hello\ncaught ok\n");
 }
 
 #[test]
 fn ok_binds_it_to_success_value() {
-    let bytes = run_program("TRY (PRINT \"value\") WITH (ok -> (PRINT it))");
+    let bytes = run_program("TRY (PRINT \"value\") -> :Str WITH (ok -> (PRINT it))");
     assert_eq!(bytes, b"value\nvalue\n");
+}
+
+#[test]
+fn arm_violating_declared_return_type_errors() {
+    // Declared `:Number`, but the `ok` arm returns a Str (PRINT's rendered string).
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    let err = run_one_err(
+        scope,
+        parse_one("TRY (PRINT \"v\") -> :Number WITH (ok -> (PRINT \"caught\"))"),
+    );
+    assert!(
+        matches!(&err.kind, KErrorKind::TypeMismatch { arg, .. } if arg == "<return>"),
+        "expected <return> TypeMismatch from the arm result, got {err}",
+    );
 }
 
 #[test]
 fn unbound_name_arm_catches_unbound_name() {
     let bytes = run_program(
-        "TRY (foo) WITH (\
+        "TRY (foo) -> :Str WITH (\
             ok -> (PRINT \"ok\")\
             unbound_name -> (PRINT it.name)\
          )",
@@ -43,7 +58,7 @@ fn shape_error_arm_catches_shape_error() {
     let bytes = run_program(
         "UNION Maybe = (some :Number none :Null)\n\
          LET m = (Maybe (some 1))\n\
-         TRY (MATCH (m) WITH (none -> (0))) WITH (\
+         TRY (MATCH (m) -> :Number WITH (none -> (0))) -> :Str WITH (\
             shape_error -> (PRINT it.message)\
          )",
     );
@@ -58,7 +73,7 @@ fn shape_error_arm_catches_shape_error() {
 fn type_mismatch_arm_catches_struct_field_type_mismatch() {
     let bytes = run_program(
         "STRUCT Point = (x :Number, y :Number)\n\
-         TRY (Point {x = \"hi\", y = 4}) WITH (\
+         TRY (Point {x = \"hi\", y = 4}) -> :Str WITH (\
             type_mismatch -> (PRINT it.expected)\
          )",
     );
@@ -71,7 +86,7 @@ fn re_raise_when_no_arm_matches_error_kind() {
     let scope = run_root_silent(&arena);
     let err = run_one_err(
         scope,
-        parse_one("TRY (foo) WITH (type_mismatch -> (PRINT \"never\"))"),
+        parse_one("TRY (foo) -> :Str WITH (type_mismatch -> (PRINT \"never\"))"),
     );
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(name) if name == "foo"),
@@ -85,7 +100,7 @@ fn missing_ok_arm_on_success_raises_shape_error() {
     let scope = run_root_silent(&arena);
     let err = run_one_err(
         scope,
-        parse_one("TRY (PRINT \"x\") WITH (type_mismatch -> (PRINT \"never\"))"),
+        parse_one("TRY (PRINT \"x\") -> :Str WITH (type_mismatch -> (PRINT \"never\"))"),
     );
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("missing ok arm")),
@@ -96,7 +111,7 @@ fn missing_ok_arm_on_success_raises_shape_error() {
 #[test]
 fn wildcard_arm_catches_when_no_specific_match() {
     let bytes = run_program(
-        "TRY (foo) WITH (\
+        "TRY (foo) -> :Str WITH (\
             type_mismatch -> (PRINT \"never\")\
             _ -> (PRINT \"caught wildcard\")\
          )",
@@ -110,7 +125,7 @@ fn wildcard_arm_catches_when_no_specific_match() {
 fn try_body_let_creates_local_binding_not_rebind() {
     let bytes = run_program(
         "LET x = 1\n\
-         TRY (LET x = 2) WITH (\
+         TRY (LET x = 2) -> :Str WITH (\
             _ -> (PRINT it.kind)\
          )",
     );
@@ -126,7 +141,7 @@ fn try_body_let_creates_local_binding_not_rebind() {
 fn try_body_let_not_visible_after_try() {
     let bytes = run_program(
         "LET x = 1\n\
-         TRY (LET y = 99) WITH (_ -> (PRINT it.kind))\n\
+         TRY (LET y = 99) -> :Str WITH (_ -> (PRINT it.kind))\n\
          PRINT x",
     );
     assert_eq!(bytes, b"1\n");
@@ -135,7 +150,7 @@ fn try_body_let_not_visible_after_try() {
 #[test]
 fn specific_arm_wins_over_wildcard() {
     let bytes = run_program(
-        "TRY (foo) WITH (\
+        "TRY (foo) -> :Str WITH (\
             _ -> (PRINT \"wildcard\")\
             unbound_name -> (PRINT \"specific\")\
          )",
@@ -149,7 +164,7 @@ fn frames_non_empty_after_recursive_call() {
     // with `[in ` and an empty list is `[]`.
     let bytes = run_program(
         "FN (BAD n :Number) -> Any = (missing_name)\n\
-         TRY (BAD 1) WITH (\
+         TRY (BAD 1) -> :Str WITH (\
             unbound_name -> (PRINT it.frames)\
          )",
     );
@@ -165,10 +180,10 @@ fn nested_try_catches_inner_separately_from_outer() {
     let bytes = run_program(
         "STRUCT Point = (x :Number, y :Number)\n\
          TRY (\
-            TRY (Point {x = \"hi\", y = 4}) WITH (\
+            TRY (Point {x = \"hi\", y = 4}) -> :Str WITH (\
                 type_mismatch -> (PRINT \"inner\")\
             )\
-         ) WITH (\
+         ) -> :Str WITH (\
             ok -> (PRINT \"outer ok\")\
          )",
     );
@@ -182,7 +197,7 @@ fn it_resolves_via_scope_for_eval_of_top_level_quoted_reference() {
     // binding is visible there.
     let bytes = run_program(
         "LET q = #(it)\n\
-         TRY (PRINT \"value\") WITH (\
+         TRY (PRINT \"value\") -> :Str WITH (\
             ok -> (PRINT $(q))\
          )",
     );
@@ -195,10 +210,10 @@ fn try_inside_tco_position_preserves_frame_chain() {
     // must keep the call-site frame Rc chained on the new frame.
     let bytes = run_program(
         "UNION Bit = (one :Null zero :Null)\n\
-         FN (HOP b :Tagged) -> Any = (TRY (MATCH (b) WITH (\
+         FN (HOP b :Tagged) -> Any = (TRY (MATCH (b) -> :Str WITH (\
             one -> (HOP (Bit (zero null)))\
             zero -> (PRINT \"done\")\
-         )) WITH (ok -> it))\n\
+         )) -> :Str WITH (ok -> it))\n\
          HOP (Bit (one null))",
     );
     assert_eq!(bytes, b"done\n");

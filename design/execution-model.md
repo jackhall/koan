@@ -1225,6 +1225,22 @@ This closes the **divergent-bind hazard** at the source level — a
 binding visible only on one arm's runtime branch can't leak into the
 enclosing block where its visibility would depend on which arm fired.
 
+The **divergent-result hazard** is closed symmetrically on the result
+side. `MATCH <v> -> :T WITH (...)` and `TRY (<e>) -> :T WITH (...)` carry
+a mandatory declared return type `T` that every arm agrees on. The
+selected arm tail-replaces carrying a
+[`ReturnContract::Arm`](../src/machine/core/kfunction/body.rs) on the
+slot, and when its value lifts the scheduler's Done arm checks it against
+`T` — [`TypeMismatch`](../src/machine/core/kerror.rs) with a `<return>`
+arg on a miss — then re-tags it to `T` so a downstream consumer dispatches
+on the declared shape regardless of which arm ran. Enforcement is runtime
+and per-arm (the arm that runs is the arm that's checked), the same
+discipline FN return types follow — see
+[typing/ktype.md § Function signatures](typing/ktype.md#function-signatures).
+`ReturnContract`
+is the slot's return carrier: `Function(&KFunction)` for an FN / builtin
+call, `Arm { ret, kind }` for a function-less MATCH / TRY arm.
+
 ### Read-side hook
 
 The chain is read by name resolution through

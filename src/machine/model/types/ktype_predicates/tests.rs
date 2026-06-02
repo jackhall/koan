@@ -728,19 +728,22 @@ fn deferred_return_admission_via_function_compat() {
     let no_params = Record::new();
 
     // Matching shadow → admit.
-    let slot_er = KType::DeferredReturn(DeferredReturnSurface::TypeExpr(TypeName::leaf(
-        "Er".into(),
-    )));
+    let slot_er =
+        KType::DeferredReturn(DeferredReturnSurface::TypeExpr(TypeName::leaf("Er".into())));
     assert!(function_compat(&candidate, &no_params, &slot_er, false));
 
     // Differing shadow → reject.
-    let slot_ar = KType::DeferredReturn(DeferredReturnSurface::TypeExpr(TypeName::leaf(
-        "Ar".into(),
-    )));
+    let slot_ar =
+        KType::DeferredReturn(DeferredReturnSurface::TypeExpr(TypeName::leaf("Ar".into())));
     assert!(!function_compat(&candidate, &no_params, &slot_ar, false));
 
     // Resolved slot → reject (opaque until elaboration).
-    assert!(!function_compat(&candidate, &no_params, &KType::Number, false));
+    assert!(!function_compat(
+        &candidate,
+        &no_params,
+        &KType::Number,
+        false
+    ));
 
     // `Any` slot → admit.
     assert!(function_compat(&candidate, &no_params, &KType::Any, false));

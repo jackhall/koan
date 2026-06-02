@@ -150,7 +150,7 @@ fn tail_call_reuses_node_slot_in_place() {
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    let exprs = crate::parse::parse("MATCH true WITH (true -> (\"hi\") false -> (\"no\"))")
+    let exprs = crate::parse::parse("MATCH true -> :Str WITH (true -> (\"hi\") false -> (\"no\"))")
         .expect("parse should succeed");
     assert_eq!(exprs.len(), 1);
     let id = sched.add_dispatch(exprs.into_iter().next().unwrap(), root);

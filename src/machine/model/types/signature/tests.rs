@@ -144,15 +144,15 @@ fn exact_equal_unaffected_by_deferred_return_synthesis() {
             })],
         }
     }
-    let er = sig_with(ReturnType::Deferred(DeferredReturn::TypeExpr(TypeName::leaf(
-        "Er".into(),
-    ))));
-    let er2 = sig_with(ReturnType::Deferred(DeferredReturn::TypeExpr(TypeName::leaf(
-        "Er".into(),
-    ))));
-    let ar = sig_with(ReturnType::Deferred(DeferredReturn::TypeExpr(TypeName::leaf(
-        "Ar".into(),
-    ))));
+    let er = sig_with(ReturnType::Deferred(DeferredReturn::TypeExpr(
+        TypeName::leaf("Er".into()),
+    )));
+    let er2 = sig_with(ReturnType::Deferred(DeferredReturn::TypeExpr(
+        TypeName::leaf("Er".into()),
+    )));
+    let ar = sig_with(ReturnType::Deferred(DeferredReturn::TypeExpr(
+        TypeName::leaf("Ar".into()),
+    )));
     assert!(er.exact_equal(&er2));
     assert!(!er.exact_equal(&ar));
 }
