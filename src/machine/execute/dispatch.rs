@@ -28,6 +28,7 @@ mod constructors;
 mod ctx;
 pub(in crate::machine::execute) mod fn_value;
 pub(in crate::machine::execute) mod keyworded;
+pub(in crate::machine::execute) mod operator_chain;
 pub(in crate::machine) mod resolve_dispatch;
 pub(in crate::machine) mod resolve_type_expr;
 pub(in crate::machine::execute) mod single_poll;
@@ -44,62 +45,12 @@ pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
 pub use resolve_type_expr::{coerce_type_token_value, ResolveTypeExprOutcome};
 use single_poll::{BareIdState, BareTypeState, CtorState, LitState, SigilState};
 
-/// Pre-walk classification of a `KExpression` into the no-keyword
-/// fast-lane shapes plus the catch-all keyword-bearing shape.
-pub(super) enum DispatchShape {
-    BareIdentifier,
-    BareTypeLeaf,
-    /// Type-constructor call: head is a leaf `Type` and `parts[1..]`
-    /// is non-empty.
-    ConstructorCall,
-    /// Function-value call: head is a lowercase `Identifier`,
-    /// followed by ≥1 non-keyword parts.
-    FunctionValueCall,
-    /// Single-part `:(...)` sigiled type-expression wrapper.
-    SigiledTypeExpr,
-    /// Single-part literal-shaped expression — `Literal`, `Future`,
-    /// nested `Expression`, `ListLiteral`, or `DictLiteral`. Surfaces
-    /// the inner value without a bucket lookup.
-    LiteralPassThrough,
-    /// A keyword appears anywhere in `expr.parts`, OR the expression
-    /// doesn't fit any fast-lane shape.
-    Keyworded,
-}
-
-/// Sweeps every part for `Keyword` first so a mixed shape like
-/// `(f IF x)` goes to `Keyworded`; only with the no-keyword
-/// precondition established do we branch on head shape.
-pub(super) fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
-    if expr
-        .parts
-        .iter()
-        .any(|p| matches!(&p.value, ExpressionPart::Keyword(_)))
-    {
-        return DispatchShape::Keyworded;
-    }
-    if let [only] = expr.parts.as_slice() {
-        return match &only.value {
-            ExpressionPart::Identifier(_) => DispatchShape::BareIdentifier,
-            ExpressionPart::Type(_) => DispatchShape::BareTypeLeaf,
-            ExpressionPart::SigiledTypeExpr(_) => DispatchShape::SigiledTypeExpr,
-            ExpressionPart::Literal(_)
-            | ExpressionPart::Future(_)
-            | ExpressionPart::Expression(_)
-            | ExpressionPart::ListLiteral(_)
-            | ExpressionPart::DictLiteral(_)
-            | ExpressionPart::RecordLiteral(_) => DispatchShape::LiteralPassThrough,
-            _ => DispatchShape::Keyworded,
-        };
-    }
-    let Some(head_part) = expr.parts.first() else {
-        return DispatchShape::Keyworded;
-    };
-    match &head_part.value {
-        ExpressionPart::Type(_) => DispatchShape::ConstructorCall,
-        ExpressionPart::Identifier(_) => DispatchShape::FunctionValueCall,
-        _ => DispatchShape::Keyworded,
-    }
-}
+/// The shape classification and classifier live in
+/// [`crate::machine::model::ast`] (pure-structural, cached on the node at parse
+/// time); re-exported here so dispatch-internal call sites and tests keep the
+/// `dispatch::{DispatchShape, classify_dispatch_shape}` path.
+#[allow(unused_imports)]
+pub use crate::machine::model::ast::{classify_dispatch_shape, DispatchShape};
 
 /// Resolve a bare-name `ExpressionPart` (Identifier or leaf Type)
 /// against `scope`. `consumer = Some(idx)` enables the cycle check;
@@ -413,7 +364,7 @@ pub(in crate::machine::execute) fn run_dispatch<'a>(
              from a parked track"
         ),
     };
-    match classify_dispatch_shape(&expr) {
+    match expr.shape() {
         DispatchShape::BareTypeLeaf => {
             debug_assert!(init.pre_subs.is_empty());
             let t = match &expr.parts[0].value {
@@ -438,6 +389,10 @@ pub(in crate::machine::execute) fn run_dispatch<'a>(
         DispatchShape::ConstructorCall => {
             debug_assert!(init.pre_subs.is_empty());
             Ok(single_poll::constructor_call(ctx, expr, scope, idx))
+        }
+        DispatchShape::OperatorChain => {
+            debug_assert!(init.pre_subs.is_empty());
+            Ok(operator_chain::run(ctx, &expr, scope))
         }
         DispatchShape::Keyworded => KeywordedState::initial(ctx, expr, init.pre_subs, scope, idx),
         DispatchShape::SigiledTypeExpr => {

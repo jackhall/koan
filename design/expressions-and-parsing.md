@@ -17,11 +17,15 @@ system.
 3. [expression_tree.rs](../src/parse/expression_tree.rs) — walk the
    paren-delimited string into a nested expression tree.
 4. [tokens.rs](../src/parse/tokens.rs) — classify each whitespace-delimited
-   token as a literal, keyword (pure-symbol like `=`, `->`, `:|`, `:!`, or
+   token as a literal, keyword (any pure-symbol token that is not a builtin
+   compound trigger — `=`, `->`, `:|`, `:!`, `+`, `|`, `<=`, `>>` — or
    alphabetic with ≥2 uppercase letters and no lowercase — `LET`, `THEN`),
    type name (uppercase-leading with at least one lowercase — `Number`,
    `KFunction`, `IntOrd`), identifier, or compound (member access, indexing,
-   prefix/suffix operators). A token that starts uppercase but classifies as
+   prefix/suffix operators). Tagging arbitrary symbol tokens as keywords is what
+   lets a post-parse detector recognize chainable operators (see the
+   `OperatorChain` shape below); the builtin triggers `.`/`?`/`!` keep their
+   compound desugaring instead. A token that starts uppercase but classifies as
    neither keyword nor type (single uppercase letter, or uppercase + digits
    only) is a parse error. See
    [typing/tokens.md](typing/tokens.md)
@@ -72,6 +76,31 @@ The `Keyword`-vs-slot split is the parser's contract with dispatch:
 
 `KExpression` is itself a first-class `KObject` variant — user code can hold an
 unevaluated expression as a value, pass it around, and evaluate it on demand.
+
+### Structural cache and dispatch shape
+
+Once a node's parts vector is final, [`KExpression`](../src/machine/model/ast.rs)
+fills a structural cache: the `untyped_key` (the bucket key dispatch matches on),
+the `DispatchShape`, and an optional operator probe. The shape is a pure function
+of expression structure — no scope, no types — so it is computed once and read by
+the dispatch driver on every call of the enclosing function rather than re-derived
+per call. The cache is filled at the construction chokepoint (`KExpression::build`)
+and refreshed at the two parse-finalization points where parts are pushed
+incrementally (frame finalization in [frame.rs](../src/parse/frame.rs) and the
+redundant-wrapper peel in [expression_tree.rs](../src/parse/expression_tree.rs)).
+It is invariant under the dispatch-time splice that swaps an eager slot part for a
+`Future` (also a slot), so the parse-time fill stays valid through execution.
+
+`DispatchShape` partitions expressions into the bare-name and single-part
+fast lanes, the type-constructor and function-value call shapes, the catch-all
+`Keyworded` shape, and `OperatorChain`. The chain shape is a refinement of
+`Keyworded`: a slot-led `Slot (Keyword Slot)+` run with two or more keyword
+positions, which nothing else produces (no builtin reaches two keywords behind a
+leading argument). It carves the track for chainable user operators — the operator
+probe caches the sorted-joined unique operators that the per-scope operator
+registry is looked up by. Folding a recognized chain into nested binary dispatches
+is future work owned by
+[user-definable n-ary operators](../roadmap/libraries/n-ary-operators.md).
 
 ## Type-expression sigil
 

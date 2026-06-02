@@ -1,5 +1,7 @@
 use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral, TypeName};
+use crate::machine::model::ast::{
+    classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, TypeName,
+};
 use crate::machine::model::types::KType;
 use crate::machine::model::{KObject, Parseable};
 
@@ -8,6 +10,9 @@ fn kw(s: &str) -> ExpressionPart<'static> {
 }
 fn ident(s: &str) -> ExpressionPart<'static> {
     ExpressionPart::Identifier(s.into())
+}
+fn ty(s: &str) -> ExpressionPart<'static> {
+    ExpressionPart::Type(TypeName::leaf(s.into()))
 }
 fn expr(parts: Vec<ExpressionPart<'static>>) -> ExpressionPart<'static> {
     ExpressionPart::expression(parts)
@@ -181,6 +186,185 @@ fn try_take_inner_expressions_split_all_expressions_returns_ok() {
     assert_eq!(preceding[0].summarize(), "a");
     assert_eq!(preceding[1].summarize(), "b");
     assert_eq!(last.summarize(), "c");
+}
+
+// ---------- Structural cache: shape, untyped_key, operator_probe ----------
+
+#[test]
+fn operator_chain_three_operand_classifies_and_probes() {
+    // `a + b + c` — Slot Keyword Slot Keyword Slot, ≥2 keyword positions.
+    let e = KExpression::new(parts_of(vec![
+        ident("a"),
+        kw("+"),
+        ident("b"),
+        kw("+"),
+        ident("c"),
+    ]));
+    assert_eq!(e.shape(), DispatchShape::OperatorChain);
+    assert_eq!(e.operator_probe(), Some("+"));
+}
+
+#[test]
+fn operator_chain_mixed_operators_probe_is_sorted_unique() {
+    // `a + b * c` — two distinct operators; probe is sorted-joined uniques.
+    let e = KExpression::new(parts_of(vec![
+        ident("a"),
+        kw("+"),
+        ident("b"),
+        kw("*"),
+        ident("c"),
+    ]));
+    assert_eq!(e.shape(), DispatchShape::OperatorChain);
+    assert_eq!(e.operator_probe(), Some("* +"));
+}
+
+#[test]
+fn union_pipe_chain_over_types_is_operator_chain() {
+    // `A | B | C` — type operands, two `|` positions.
+    let e = KExpression::new(parts_of(vec![ty("A"), kw("|"), ty("B"), kw("|"), ty("C")]));
+    assert_eq!(e.shape(), DispatchShape::OperatorChain);
+    assert_eq!(e.operator_probe(), Some("|"));
+}
+
+#[test]
+fn single_operator_is_keyworded_not_a_chain() {
+    // `a + b` — one keyword position; ordinary binary dispatch, no chain.
+    let e = KExpression::new(parts_of(vec![ident("a"), kw("+"), ident("b")]));
+    assert_eq!(e.shape(), DispatchShape::Keyworded);
+    assert_eq!(e.operator_probe(), None);
+}
+
+#[test]
+fn keyword_led_shape_is_not_a_chain() {
+    // `LET x = a + b` is keyword-led (first part a keyword), so not the
+    // slot-led chain shape even though it carries operator-like tokens.
+    let e = KExpression::new(parts_of(vec![
+        kw("LET"),
+        ident("x"),
+        kw("="),
+        ident("a"),
+        kw("+"),
+    ]));
+    assert_eq!(e.shape(), DispatchShape::Keyworded);
+    assert_eq!(e.operator_probe(), None);
+}
+
+#[test]
+fn function_value_call_shape_unchanged() {
+    // `f x y` — lowercase identifier head, no keywords.
+    let e = KExpression::new(parts_of(vec![ident("f"), ident("x"), ident("y")]));
+    assert_eq!(e.shape(), DispatchShape::FunctionValueCall);
+    assert_eq!(e.operator_probe(), None);
+}
+
+#[test]
+fn cached_fields_equal_on_demand_recompute() {
+    let e = KExpression::new(parts_of(vec![
+        ident("a"),
+        kw("+"),
+        ident("b"),
+        kw("-"),
+        ident("c"),
+    ]));
+    // Cache must match a fresh structural recompute.
+    assert_eq!(e.shape(), classify_dispatch_shape(&e));
+    let recomputed_key: crate::machine::model::types::UntypedKey = e
+        .parts
+        .iter()
+        .map(|p| match &p.value {
+            ExpressionPart::Keyword(s) => {
+                crate::machine::model::types::UntypedElement::Keyword(s.clone())
+            }
+            _ => crate::machine::model::types::UntypedElement::Slot,
+        })
+        .collect();
+    assert_eq!(e.untyped_key(), recomputed_key);
+}
+
+#[test]
+fn cache_survives_clone() {
+    let e = KExpression::new(parts_of(vec![
+        ident("a"),
+        kw("|"),
+        ident("b"),
+        kw("|"),
+        ident("c"),
+    ]));
+    let c = e.clone();
+    assert_eq!(c.shape(), DispatchShape::OperatorChain);
+    assert_eq!(c.operator_probe(), Some("|"));
+    assert_eq!(c.untyped_key(), e.untyped_key());
+}
+
+#[test]
+fn key_and_shape_invariant_across_eager_slot_variants() {
+    // The dispatch-time splice replaces an eager `Slot` part with `Future` (also a
+    // `Slot`), so shape / key / probe are invariant under it. Every eager-part
+    // variant contributes `Slot`, so the classification of an `a + <slot> + c` chain
+    // must be identical regardless of which eager variant fills the middle slot.
+    let with_expr = KExpression::new(parts_of(vec![
+        ident("a"),
+        kw("+"),
+        expr(vec![ident("b")]),
+        kw("+"),
+        ident("c"),
+    ]));
+    let with_list = KExpression::new(parts_of(vec![
+        ident("a"),
+        kw("+"),
+        ExpressionPart::ListLiteral(vec![ident("b")]),
+        kw("+"),
+        ident("c"),
+    ]));
+    let with_dict = KExpression::new(parts_of(vec![
+        ident("a"),
+        kw("+"),
+        ExpressionPart::DictLiteral(vec![(ident("k"), ident("v"))]),
+        kw("+"),
+        ident("c"),
+    ]));
+    assert_eq!(with_expr.shape(), DispatchShape::OperatorChain);
+    assert_eq!(with_expr.shape(), with_list.shape());
+    assert_eq!(with_expr.shape(), with_dict.shape());
+    assert_eq!(with_expr.untyped_key(), with_list.untyped_key());
+    assert_eq!(with_expr.untyped_key(), with_dict.untyped_key());
+    assert_eq!(with_expr.operator_probe(), with_list.operator_probe());
+}
+
+#[test]
+fn cached_key_agrees_with_expression_signature_untyped_key() {
+    use crate::machine::model::types::{
+        Argument, ExpressionSignature, ReturnType, SignatureElement,
+    };
+    // `a + b + c` against a `Slot + Slot + Slot` signature: the two
+    // `untyped_key`s MUST agree (the invariant at signature.rs:23).
+    let e = KExpression::new(parts_of(vec![
+        ident("a"),
+        kw("+"),
+        ident("b"),
+        kw("+"),
+        ident("c"),
+    ]));
+    let sig = ExpressionSignature {
+        return_type: ReturnType::Resolved(KType::Any),
+        elements: vec![
+            SignatureElement::Argument(Argument {
+                name: "x".into(),
+                ktype: KType::Any,
+            }),
+            SignatureElement::Keyword("+".into()),
+            SignatureElement::Argument(Argument {
+                name: "y".into(),
+                ktype: KType::Any,
+            }),
+            SignatureElement::Keyword("+".into()),
+            SignatureElement::Argument(Argument {
+                name: "z".into(),
+                ktype: KType::Any,
+            }),
+        ],
+    };
+    assert_eq!(e.untyped_key(), sig.untyped_key());
 }
 
 #[test]

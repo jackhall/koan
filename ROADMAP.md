@@ -130,6 +130,19 @@ What's shipped that the open items below build on:
   closes the divergent-result hazard symmetric to the divergent-bind closure of the
   lexical-provenance chain. See
   [design/execution-model.md § Arms as own blocks](design/execution-model.md#arms-as-own-blocks).
+- *Operator-chain substrate.* Pure-symbol tokens that aren't builtin compound triggers
+  classify as keywords, and [`KExpression`](src/machine/model/ast.rs) caches a
+  `DispatchShape` at parse time — including an `OperatorChain` track for the slot-led
+  `Slot (Keyword Slot)+` shape, with its sorted-joined operator probe. A per-scope
+  operator registry (`Bindings::operators`, walked by
+  `Scope::resolve_operator_group_with_chain` like every other name) resolves a chain's
+  probe to a shared `OperatorGroup`, and the `OperatorChain` dispatch arm hits that
+  registry — missing cleanly on an undeclared or cross-group mix, or reaching the fold
+  seam on a hit. The fold itself and the `OP` declaration surface are the remaining
+  open work under
+  [user-definable n-ary operators](roadmap/libraries/n-ary-operators.md) and
+  [user-defined operator modules](roadmap/libraries/user-defined-operator-modules.md).
+  See [design/expressions-and-parsing.md § Structural cache and dispatch shape](design/expressions-and-parsing.md#structural-cache-and-dispatch-shape).
 
 ## Next items
 
@@ -176,6 +189,7 @@ Rust builtins:
 - [Generalize `Scope::out` into monadic side-effect capture](roadmap/libraries/monadic-side-effects.md)
 - [Group-based operators](roadmap/libraries/group-based-operators.md)
 - [User-definable n-ary operators](roadmap/libraries/n-ary-operators.md)
+- [User-defined operator modules](roadmap/libraries/user-defined-operator-modules.md)
 - [Standard library](roadmap/libraries/standard-library.md)
 
 ### Type language — [roadmap/type_language/](roadmap/type_language/)

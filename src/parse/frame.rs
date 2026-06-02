@@ -78,6 +78,9 @@ impl<'a> Frame<'a> {
                 };
                 expr.span = Some(span);
                 expr.file = file;
+                // Parts were pushed incrementally; refresh the structural cache now
+                // that the vector is final.
+                expr.fill_cache();
                 Ok(Spanned::at(
                     ExpressionPart::Expression(Box::new(expr)),
                     span,
@@ -95,6 +98,7 @@ impl<'a> Frame<'a> {
                 };
                 expr.span = Some(body_span);
                 expr.file = file;
+                expr.fill_cache();
                 let sc =
                     sigil_cursor.expect("sigil-headed Expression frame must carry sigil_cursor");
                 let outer_span = Span { start: sc, end };
@@ -102,14 +106,14 @@ impl<'a> Frame<'a> {
                     start: sc,
                     end: sc + 1,
                 };
-                let wrapped = KExpression {
-                    parts: vec![
+                let wrapped = KExpression::build(
+                    vec![
                         Spanned::at(ExpressionPart::Keyword(head.to_string()), sigil_span),
                         Spanned::at(ExpressionPart::Expression(Box::new(expr)), body_span),
                     ],
-                    span: Some(outer_span),
+                    Some(outer_span),
                     file,
-                };
+                );
                 Ok(Spanned::at(
                     ExpressionPart::Expression(Box::new(wrapped)),
                     outer_span,
@@ -143,6 +147,7 @@ impl<'a> Frame<'a> {
                 };
                 expr.span = Some(span);
                 expr.file = file;
+                expr.fill_cache();
                 Ok(Spanned::at(
                     ExpressionPart::SigiledTypeExpr(Box::new(expr)),
                     span,
@@ -160,18 +165,19 @@ impl<'a> Frame<'a> {
                 };
                 expr.span = Some(span);
                 expr.file = file;
+                expr.fill_cache();
                 let sigil_span = Span {
                     start: span_start,
                     end: span_start + 1,
                 };
-                let wrapped = KExpression {
-                    parts: vec![
+                let wrapped = KExpression::build(
+                    vec![
                         Spanned::at(ExpressionPart::Keyword("RECORD".to_string()), sigil_span),
                         Spanned::at(ExpressionPart::Expression(Box::new(expr)), span),
                     ],
-                    span: Some(span),
+                    Some(span),
                     file,
-                };
+                );
                 Ok(Spanned::at(
                     ExpressionPart::SigiledTypeExpr(Box::new(wrapped)),
                     span,

@@ -530,6 +530,51 @@ impl<'a> Scope<'a> {
         })
     }
 
+    /// Resolve a chain's operator-group probe against this scope and the `outer`
+    /// chain, paralleling [`Self::resolve_type_with_chain`]: per-scope `operators`
+    /// hits are filtered through [`visible`], so the innermost visible registration
+    /// wins (operator shadowing falls out of the walk). `chain = None` is the
+    /// test/builtin-registration unfiltered mode.
+    pub fn resolve_operator_group_with_chain(
+        &self,
+        probe: &str,
+        chain: Option<&LexicalFrame>,
+    ) -> Option<&'a crate::machine::model::operators::OperatorGroup> {
+        self.ancestors().find_map(|scope| {
+            let cutoff = chain.and_then(|c| c.index_for(scope.id));
+            scope.bindings().lookup_operator_group(probe, cutoff)
+        })
+    }
+
+    /// Register `probe → group` in this scope's operator registry. The `OP` binder
+    /// installs one entry per size-≥2 subset of the declared operators; test fixtures
+    /// register the subsets they exercise. Same conditional-defer-free shape as the
+    /// type registry — a borrow conflict is queued is not expected here (registration
+    /// runs outside the re-entrant bind hot path), so `Conflict` panics.
+    pub fn register_operator_group(
+        &self,
+        probe: String,
+        group: &'a crate::machine::model::operators::OperatorGroup,
+        index: BindingIndex,
+    ) -> Result<(), KError> {
+        if self.bindings.is_borrowed() {
+            return self
+                .write_target()
+                .register_operator_group(probe, group, index);
+        }
+        match self
+            .bindings
+            .get()
+            .try_register_operator_group(probe.clone(), group, index)?
+        {
+            ApplyOutcome::Applied => Ok(()),
+            ApplyOutcome::Conflict => panic!(
+                "register_operator_group borrow conflict on `{probe}` — operator \
+                 registration runs outside the re-entrant bind hot path",
+            ),
+        }
+    }
+
     /// Write `bytes` to the nearest writer up the `outer` chain. Writer errors are
     /// silently dropped.
     pub fn write_out(&self, bytes: &[u8]) {

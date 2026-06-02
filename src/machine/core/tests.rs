@@ -2,6 +2,7 @@
 
 mod bindings_lookup;
 mod dispatch;
+mod operator_registry;
 mod queue;
 mod register;
 mod types;

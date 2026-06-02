@@ -228,40 +228,199 @@ impl<'a> Clone for KExpression<'a> {
             parts: self.parts.clone(),
             span: self.span,
             file: self.file,
+            untyped_key: self.untyped_key.clone(),
+            shape: self.shape,
+            operator_probe: self.operator_probe.clone(),
         }
     }
+}
+
+/// Pure-structural classification of a `KExpression` into the no-keyword fast-lane
+/// shapes, the chainable operator shape, and the catch-all keyword-bearing shape.
+///
+/// A function of expression structure only (no scope, no types), so it is computed
+/// once when the parts vector is complete and cached on [`KExpression::shape`]. The
+/// dispatch driver reads the cache rather than re-deriving per call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchShape {
+    BareIdentifier,
+    BareTypeLeaf,
+    /// Type-constructor call: head is a leaf `Type` and `parts[1..]` is non-empty.
+    ConstructorCall,
+    /// Function-value call: head is a lowercase `Identifier`, followed by ≥1
+    /// non-keyword parts.
+    FunctionValueCall,
+    /// Single-part `:(...)` sigiled type-expression wrapper.
+    SigiledTypeExpr,
+    /// Single-part literal-shaped expression — `Literal`, `Future`, nested
+    /// `Expression`, `ListLiteral`, `DictLiteral`, or `RecordLiteral`. Surfaces the
+    /// inner value without a bucket lookup.
+    LiteralPassThrough,
+    /// Chainable operator run: a slot-led key whose keywords alternate with slots,
+    /// with two or more keyword positions (`Slot (Keyword Slot)+`, first keyword at
+    /// index 1). A refinement of `Keyworded`: nothing else produces that shape, so it
+    /// carves a track that the fold pre-pass folds into nested binary sub-dispatches.
+    OperatorChain,
+    /// A keyword appears anywhere in `expr.parts` (and the chain shape did not match),
+    /// OR the expression doesn't fit any fast-lane shape.
+    Keyworded,
+}
+
+/// Sweeps every part for `Keyword` first so a mixed shape like `(f IF x)` goes to
+/// `Keyworded`; only with the no-keyword precondition established does it branch on
+/// head shape. A keyword-bearing expression is refined to `OperatorChain` when it
+/// matches the `Slot (Keyword Slot)+` shape with ≥2 keyword positions.
+pub fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
+    if expr
+        .parts
+        .iter()
+        .any(|p| matches!(&p.value, ExpressionPart::Keyword(_)))
+    {
+        if is_operator_chain_shape(&expr.parts) {
+            return DispatchShape::OperatorChain;
+        }
+        return DispatchShape::Keyworded;
+    }
+    if let [only] = expr.parts.as_slice() {
+        return match &only.value {
+            ExpressionPart::Identifier(_) => DispatchShape::BareIdentifier,
+            ExpressionPart::Type(_) => DispatchShape::BareTypeLeaf,
+            ExpressionPart::SigiledTypeExpr(_) => DispatchShape::SigiledTypeExpr,
+            ExpressionPart::Literal(_)
+            | ExpressionPart::Future(_)
+            | ExpressionPart::Expression(_)
+            | ExpressionPart::ListLiteral(_)
+            | ExpressionPart::DictLiteral(_)
+            | ExpressionPart::RecordLiteral(_) => DispatchShape::LiteralPassThrough,
+            _ => DispatchShape::Keyworded,
+        };
+    }
+    let Some(head_part) = expr.parts.first() else {
+        return DispatchShape::Keyworded;
+    };
+    match &head_part.value {
+        ExpressionPart::Type(_) => DispatchShape::ConstructorCall,
+        ExpressionPart::Identifier(_) => DispatchShape::FunctionValueCall,
+        _ => DispatchShape::Keyworded,
+    }
+}
+
+/// True iff `parts` is the `Slot (Keyword Slot)+` chainable-operator shape: odd
+/// length ≥ 5 (slot, keyword, slot, …), every odd index a `Keyword`, every even
+/// index a non-keyword slot, with ≥2 keyword positions. The first keyword sits at
+/// index 1, so no builtin (`STRUCT …`, keyword-led) collides with it.
+fn is_operator_chain_shape(parts: &[Spanned<ExpressionPart<'_>>]) -> bool {
+    // Need slot, keyword, slot, keyword, slot — at least 5 parts (2 keywords).
+    if parts.len() < 5 || parts.len().is_multiple_of(2) {
+        return false;
+    }
+    parts.iter().enumerate().all(|(i, part)| {
+        let is_keyword = matches!(&part.value, ExpressionPart::Keyword(_));
+        // Odd indices must be keywords; even indices must be non-keyword slots.
+        (i % 2 == 1) == is_keyword
+    })
+}
+
+/// The unique operator keywords of an `OperatorChain`, sorted and joined into the
+/// probe key the per-scope operator registry is looked up by. Returns `None` for any
+/// other shape.
+fn operator_probe_for(
+    parts: &[Spanned<ExpressionPart<'_>>],
+    shape: DispatchShape,
+) -> Option<String> {
+    if shape != DispatchShape::OperatorChain {
+        return None;
+    }
+    let mut ops: Vec<&str> = parts
+        .iter()
+        .filter_map(|part| match &part.value {
+            ExpressionPart::Keyword(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    ops.sort_unstable();
+    ops.dedup();
+    Some(ops.join(" "))
 }
 
 /// A parsed Koan expression: an ordered sequence of `ExpressionPart`s.
 ///
 /// `span` and `file` are `None` for hand-built ASTs.
+///
+/// `untyped_key`, `shape`, and `operator_probe` are a structural cache filled by
+/// [`KExpression::fill_cache`] whenever the parts vector is complete (construction,
+/// parse-frame finalization, redundant-wrapper peeling). They are invariant under the
+/// dispatch-time splice that replaces an eager `Slot` part with a `Future` (also a
+/// `Slot`), so the dispatch driver reads them rather than re-deriving per call. The
+/// same AST node re-dispatches on every call of its enclosing function, so the eager
+/// cache amortizes across all invocations.
 pub struct KExpression<'a> {
     pub parts: Vec<Spanned<ExpressionPart<'a>>>,
     pub span: Option<Span>,
     pub file: Option<FileId>,
+    untyped_key: UntypedKey,
+    shape: DispatchShape,
+    operator_probe: Option<String>,
 }
 
 impl<'a> KExpression<'a> {
-    /// Spanless constructor; `span`/`file` populated by later phases.
+    /// Spanless constructor; `span`/`file` populated by later phases. Fills the
+    /// structural cache from `parts`.
     pub fn new(parts: Vec<Spanned<ExpressionPart<'a>>>) -> Self {
-        KExpression {
-            parts,
-            span: None,
-            file: None,
-        }
+        Self::build(parts, None, None)
     }
 
-    /// Bucket key: `Keyword` parts contribute `Keyword(s)`; every other variant contributes
-    /// `Slot`. Must agree with `ExpressionSignature::untyped_key` for any signature that
-    /// should match.
-    pub fn untyped_key(&self) -> UntypedKey {
-        self.parts
+    /// Construction chokepoint: takes the full parts vector plus its `span`/`file` and
+    /// fills the structural cache. Every literal `KExpression { .. }` site routes here
+    /// so no node ships with a stale or unfilled cache.
+    pub fn build(
+        parts: Vec<Spanned<ExpressionPart<'a>>>,
+        span: Option<Span>,
+        file: Option<FileId>,
+    ) -> Self {
+        let mut expr = KExpression {
+            parts,
+            span,
+            file,
+            untyped_key: Vec::new(),
+            shape: DispatchShape::Keyworded,
+            operator_probe: None,
+        };
+        expr.fill_cache();
+        expr
+    }
+
+    /// Recompute the structural cache from the current `parts`. Called by every
+    /// constructor and by the parse path once a frame's parts vector is finalized.
+    pub fn fill_cache(&mut self) {
+        self.untyped_key = self
+            .parts
             .iter()
             .map(|part| match &part.value {
                 ExpressionPart::Keyword(s) => UntypedElement::Keyword(s.clone()),
                 _ => UntypedElement::Slot,
             })
-            .collect()
+            .collect();
+        self.shape = classify_dispatch_shape(self);
+        self.operator_probe = operator_probe_for(&self.parts, self.shape);
+    }
+
+    /// Cached dispatch shape (see [`classify_dispatch_shape`]).
+    pub fn shape(&self) -> DispatchShape {
+        self.shape
+    }
+
+    /// Cached operator-registry probe key: `Some` only for an `OperatorChain`, holding
+    /// the sorted-joined unique operator keywords.
+    pub fn operator_probe(&self) -> Option<&str> {
+        self.operator_probe.as_deref()
+    }
+
+    /// Bucket key: `Keyword` parts contribute `Keyword(s)`; every other variant contributes
+    /// `Slot`. Must agree with `ExpressionSignature::untyped_key` for any signature that
+    /// should match. Reads the structural cache filled at construction.
+    pub fn untyped_key(&self) -> UntypedKey {
+        self.untyped_key.clone()
     }
 
     /// Dispatch-time placeholder extractor for typed-binder builtins (`STRUCT <Name> = …`):

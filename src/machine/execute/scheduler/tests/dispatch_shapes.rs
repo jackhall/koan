@@ -832,3 +832,100 @@ fn keyworded_parked_carrier_expr_reads_state() {
         "Initialized must surface None (fall back to NodeWork expr)",
     );
 }
+
+// =====================================================================
+// OperatorChain arm: classification + registry resolution. Recognition is
+// parse-cached and structural; the arm resolves the cached operator probe through
+// the per-scope registry and either misses (structured error) or reaches the fold
+// seam.
+// =====================================================================
+
+/// `a + b + c` — slot-led, two `+` keyword positions. Classifies as `OperatorChain`,
+/// not `Keyworded`.
+#[test]
+fn classifier_operator_chain_routes_to_operator_chain() {
+    use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
+    let expr = parse_one("a + b + c");
+    assert_eq!(
+        classify_dispatch_shape(&expr),
+        DispatchShape::OperatorChain,
+        "`a + b + c` must classify as OperatorChain",
+    );
+    assert_eq!(expr.operator_probe(), Some("+"));
+}
+
+/// `a + b` — a single operator is one keyword position, so ordinary binary
+/// `Keyworded` dispatch, not a chain.
+#[test]
+fn classifier_single_operator_stays_keyworded() {
+    use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
+    let expr = parse_one("a + b");
+    assert_eq!(
+        classify_dispatch_shape(&expr),
+        DispatchShape::Keyworded,
+        "`a + b` is a single operator — Keyworded, not a chain",
+    );
+}
+
+/// An undeclared operator chain misses the (empty) registry and surfaces a
+/// structured `DispatchFailed` naming the undeclared operators.
+#[test]
+fn operator_chain_undeclared_errors_cleanly() {
+    let arena = RuntimeArena::new();
+    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let mut sched = Scheduler::new();
+    let id = sched.add_dispatch(parse_one("a + b + c"), scope);
+    sched.execute().expect("scheduler drains without deadlock");
+    let msg = match sched.read_result(id) {
+        Err(e) => e.to_string(),
+        Ok(obj) => panic!(
+            "an undeclared operator chain must terminate with an error; got {}",
+            obj.summarize()
+        ),
+    };
+    assert!(
+        msg.contains("operator group") || msg.contains("declared together"),
+        "expected an undeclared-operator-group error; got: {msg}",
+    );
+}
+
+/// A fixture-registered operator group resolves the chain's probe, so the arm reaches
+/// the fold seam — surfaced as the explicit "not yet implemented" terminal rather than
+/// a silent fallthrough.
+#[test]
+fn operator_chain_registered_reaches_fold_seam() {
+    use crate::machine::model::operators::{Associativity, OperatorEntry, OperatorGroup};
+    use std::collections::HashMap;
+
+    let arena = RuntimeArena::new();
+    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let mut members = HashMap::new();
+    members.insert(
+        "+".to_string(),
+        OperatorEntry {
+            tier: 10,
+            associativity: Associativity::Left,
+        },
+    );
+    let group = scope
+        .arena
+        .alloc_operator_group(OperatorGroup::new(members));
+    scope
+        .register_operator_group("+".to_string(), group, BindingIndex::BUILTIN)
+        .expect("register operator group");
+
+    let mut sched = Scheduler::new();
+    let id = sched.add_dispatch(parse_one("a + b + c"), scope);
+    sched.execute().expect("scheduler drains without deadlock");
+    let msg = match sched.read_result(id) {
+        Err(e) => e.to_string(),
+        Ok(obj) => panic!(
+            "a registered chain reaches the fold seam (an error); got {}",
+            obj.summarize()
+        ),
+    };
+    assert!(
+        msg.contains("not yet implemented"),
+        "a registry hit must reach the explicit fold seam; got: {msg}",
+    );
+}

@@ -574,6 +574,10 @@ fn peel_redundant<'a>(mut expr: KExpression<'a>) -> KExpression<'a> {
     if outer_file.is_some() {
         expr.file = outer_file;
     }
+    // `peel_redundant` is the universal parse-exit normalizer; the wrapper-collapse
+    // and per-part rewrite above may change the parts vector, so refresh the
+    // structural cache from the final shape.
+    expr.fill_cache();
     expr
 }
 

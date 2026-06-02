@@ -22,6 +22,7 @@ use std::collections::HashMap;
 
 use crate::machine::core::kfunction::{KFunction, NodeId};
 use crate::machine::model::ast::TypeName;
+use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::{KType, UntypedKey};
 use crate::machine::model::values::KObject;
 
@@ -118,6 +119,13 @@ pub struct Bindings<'a> {
     /// earliest-index visible one. On finalize only that entry is removed;
     /// other siblings remain as wake sources.
     pending_overloads: RefCell<HashMap<UntypedKey, Vec<(NodeId, BindingIndex)>>>,
+    /// Per-scope operator registry: a chain's sorted-joined operator probe key →
+    /// the shared [`OperatorGroup`] it resolves to. A module installs one record per
+    /// size-≥2 subset of its declared operators (the per-group powerset), each subset
+    /// key pointing at the same arena-allocated group, so any subset used in one
+    /// expression resolves in a single hit and a cross-group mix simply misses.
+    /// Walked through the scope chain like every other name (innermost visible wins).
+    operators: RefCell<HashMap<String, (&'a OperatorGroup, BindingIndex)>>,
     /// In-flight named-type binders (STRUCT / named-UNION). Consulted by the
     /// elaborator's `Resolution::Placeholder` arm to record dependency edges
     /// and run DFS cycle detection. See [`pending`] for the surface methods.
@@ -137,6 +145,7 @@ impl<'a> Bindings<'a> {
             functions: RefCell::new(HashMap::new()),
             placeholders: RefCell::new(HashMap::new()),
             pending_overloads: RefCell::new(HashMap::new()),
+            operators: RefCell::new(HashMap::new()),
             pending: PendingTypes::new(),
             type_expr_memo: RefCell::new(HashMap::new()),
         }
@@ -213,6 +222,49 @@ impl<'a> Bindings<'a> {
                     .map(|(producer, _)| *producer)
             });
         FunctionLookup { overloads, pending }
+    }
+
+    /// Per-scope operator-group lookup. Mirrors [`Self::lookup_value`] for the
+    /// `operators` map: returns the visible group registered under `probe` (the
+    /// sorted-joined unique operators of a chain), or `None` at this scope so the
+    /// caller keeps walking ancestors.
+    pub fn lookup_operator_group(
+        &self,
+        probe: &str,
+        chain_cutoff: Option<usize>,
+    ) -> Option<&'a OperatorGroup> {
+        let operators = self.operators.borrow();
+        let (group, idx) = operators.get(probe).copied()?;
+        if Self::visible(idx, chain_cutoff) {
+            Some(group)
+        } else {
+            None
+        }
+    }
+
+    /// Register `probe → group` in the operator registry. The `OP` binder installs
+    /// one entry per size-≥2 subset of the declared operators (all pointing at the
+    /// same `group`); test fixtures register the subsets they exercise. Idempotent on
+    /// a pointer-equal re-register; a different group under the same key is a
+    /// programming error (`Rebind`).
+    pub fn try_register_operator_group(
+        &self,
+        probe: String,
+        group: &'a OperatorGroup,
+        index: BindingIndex,
+    ) -> Result<ApplyOutcome, KError> {
+        let mut operators = match self.operators.try_borrow_mut() {
+            Ok(o) => o,
+            Err(_) => return Ok(ApplyOutcome::Conflict),
+        };
+        if let Some((existing, _)) = operators.get(&probe).copied() {
+            if std::ptr::eq(existing, group) {
+                return Ok(ApplyOutcome::Applied);
+            }
+            return Err(KError::new(KErrorKind::Rebind { name: probe }));
+        }
+        operators.insert(probe, (group, index));
+        Ok(ApplyOutcome::Applied)
     }
 
     /// Snapshot every `(name, value)` pair in `data`, ignoring visibility.

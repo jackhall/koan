@@ -27,6 +27,11 @@ pub(super) enum NodeOutput<'a> {
 /// `function` is `None` the reinstall site prepends `(scope_id, 0)` to the chain; when
 /// `function` is `Some(_)` the chain is rebuilt via `assemble_body_chain` (the FN-body
 /// rule that keeps chain depth = lexical nesting depth, NOT call depth).
+// `Replace` is intrinsically the large variant (it carries `NodeWork` plus the
+// frame/function/chain tail-call payload); `Done` only grows with the cached
+// `KExpression` it indirectly holds. Boxing a short-lived return value's hot tail-call
+// path to balance the variants is the wrong trade — the imbalance is inherent.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum NodeStep<'a> {
     Done(NodeOutput<'a>),
     Replace {

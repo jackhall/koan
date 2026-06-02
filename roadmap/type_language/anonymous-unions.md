@@ -49,8 +49,10 @@ construct a tagged value in every arm, or coarsen the slot to `Any`.
 
 ## Dependencies
 
-**Requires:** [User-definable n-ary operators](../libraries/n-ary-operators.md)
-— the `|` chaining surface rides its dispatched-operator machinery.
+**Requires:**
+
+- [User-definable n-ary operators](../libraries/n-ary-operators.md) — the `|`
+  chaining surface rides its dispatched-operator machinery.
 
 **Unblocks:** none tracked yet.
 

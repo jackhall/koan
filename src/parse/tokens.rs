@@ -3,6 +3,10 @@
 //! keywords / types / identifiers, and desugars compound atoms (`a.b`, `a[i]`, `!a`)
 //! into nested `ExpressionPart`s using the `operators` table.
 //!
+//! A pure-symbol token that is not a builtin compound trigger (`+`, `|`, `<=`) reaches
+//! `classify_atom` and tags as a `Keyword`, so a post-parse chain detector recognizes
+//! user operators. Builtin triggers (`.`/`?`/`!`) keep their compound desugaring.
+//!
 //! Synthetic operator keywords (ATTR / NOT / TRY) take 1-codepoint trigger spans;
 //! mid-token errors attach the enclosing token's span so the message names the
 //! offending char while the span pinpoints the token.
@@ -400,6 +404,27 @@ mod tests {
     fn pure_symbol_token_is_keyword() {
         assert_eq!(classify("=").unwrap(), "t(=)");
         assert_eq!(classify("->").unwrap(), "t(->)");
+    }
+
+    #[test]
+    fn operator_tokens_classify_as_keywords() {
+        // A whitespace-delimited operator token (single- or multi-char) that is not
+        // a builtin compound trigger reaches `classify_atom` and tags as a keyword,
+        // so a post-parse chain detector can recognize it.
+        assert_eq!(classify("+").unwrap(), "t(+)");
+        assert_eq!(classify("|").unwrap(), "t(|)");
+        assert_eq!(classify("-").unwrap(), "t(-)");
+        assert_eq!(classify("*").unwrap(), "t(*)");
+        assert_eq!(classify("<=").unwrap(), "t(<=)");
+        assert_eq!(classify(">>").unwrap(), "t(>>)");
+    }
+
+    #[test]
+    fn attr_trigger_stays_on_builtin_path_inside_operand() {
+        // `b.c` is one whitespace-delimited token; the `.` builtin trigger desugars it
+        // to an ATTR compound so an enclosing `a + b.c` sees `b.c` as one operand rather
+        // than splitting on `.`.
+        assert_eq!(classify("b.c").unwrap(), "[t(ATTR) t(b) t(c)]");
     }
 
     #[test]

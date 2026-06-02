@@ -48,6 +48,14 @@ matching the three lookup kinds:
   for the per-overload admit pass. The innermost scope to reach a terminal
   decision wins (see
   [scheduler.md § In-walk dispatch precedence](scheduler.md#in-walk-dispatch-precedence)).
+- [`Scope::resolve_operator_group_with_chain`](../../src/machine/core/scope.rs)
+  — operator-group lookup. Per-ancestor calls
+  [`Bindings::lookup_operator_group`](../../src/machine/core/bindings.rs) with
+  the chain's operator probe and returns the first visible hit. The probe is the
+  sorted-joined unique operators of a `Slot (Keyword Slot)+` chain (parse-cached
+  on the [`KExpression`](../../src/machine/model/ast.rs)); a module installs the
+  group under every size-≥2 subset of its operators, so any subset used in one
+  chain resolves in one visible hit and a cross-group mix simply misses.
 
 [`Scope::resolve`](../../src/machine/core/scope.rs) is the chainless
 shorthand — it reads as "see everything" and is reserved for test
@@ -58,9 +66,11 @@ threads a chain.
 
 [`Bindings`](../../src/machine/core/bindings.rs) owns the per-scope
 maps — `data` (values), `types` (type-name → `&KType`), `functions`
-(registered overloads), `placeholders` (in-flight name-keyed binders),
+(registered overloads), `operators` (operator probe → shared
+[`OperatorGroup`](../../src/machine/model/operators.rs)),
+`placeholders` (in-flight name-keyed binders),
 `pending_overloads` (in-flight bucket-keyed binders). The three
-visibility-aware accessors are mutually exclusive per name:
+value/type/function accessors are mutually exclusive per name:
 `bind_value` and `register_function` remove their own placeholder
 before inserting, so a binding never appears in both `data` /
 `functions` and `placeholders` at the same moment.
@@ -85,9 +95,16 @@ before inserting, so a binding never appears in both `data` /
   contributes nothing to the walk when `overloads.is_empty() &&
   pending.is_none()`.
 
+[`Bindings::lookup_operator_group`](../../src/machine/core/bindings.rs) is the
+operator-side instance: it consults the `operators` map for the chain's probe
+and returns the visible [`OperatorGroup`](../../src/machine/model/operators.rs),
+or `None` so the caller keeps walking. Unlike the value/type/function maps it
+holds no in-flight placeholder arm — operator registration is not a parkable
+producer — so the lookup is a single map read gated by `visible`.
+
 The visibility predicate is one line —
 [`visible(b: BindingIndex, chain_cutoff: Option<usize>)`](../../src/machine/core/bindings.rs)
-— shared across all three. `b.idx < c` is the strict
+— shared across all of them. `b.idx < c` is the strict
 value-style gate; the `nominal_binder` carve-out lets `STRUCT` /
 named `UNION` / `SIG` / `MODULE` / `FUNCTOR` declared names cross
 the cutoff so mutual-recursive nominal references work.

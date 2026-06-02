@@ -58,11 +58,7 @@ fn build_prefix<'a>(
         end: operand_end,
     };
     let kw = Spanned::at(ExpressionPart::Keyword(keyword.to_string()), trigger);
-    let kexp = KExpression {
-        parts: vec![kw, operand],
-        span: Some(outer),
-        file: source::current(),
-    };
+    let kexp = KExpression::build(vec![kw, operand], Some(outer), source::current());
     Spanned::at(ExpressionPart::Expression(Box::new(kexp)), outer)
 }
 
@@ -79,11 +75,7 @@ fn build_attr<'a>(
     let end = rhs.span.map(|s| s.end).unwrap_or(trigger.end);
     let outer = Span { start, end };
     let kw = Spanned::at(ExpressionPart::Keyword("ATTR".to_string()), trigger);
-    let kexp = KExpression {
-        parts: vec![kw, lhs, rhs],
-        span: Some(outer),
-        file: source::current(),
-    };
+    let kexp = KExpression::build(vec![kw, lhs, rhs], Some(outer), source::current());
     Spanned::at(ExpressionPart::Expression(Box::new(kexp)), outer)
 }
 
@@ -94,11 +86,7 @@ fn build_try<'a>(lhs: Spanned<ExpressionPart<'a>>, trigger: Span) -> Spanned<Exp
         end: trigger.end,
     };
     let kw = Spanned::at(ExpressionPart::Keyword("TRY".to_string()), trigger);
-    let kexp = KExpression {
-        parts: vec![kw, lhs],
-        span: Some(outer),
-        file: source::current(),
-    };
+    let kexp = KExpression::build(vec![kw, lhs], Some(outer), source::current());
     Spanned::at(ExpressionPart::Expression(Box::new(kexp)), outer)
 }
 

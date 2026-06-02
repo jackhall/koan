@@ -5,6 +5,7 @@ use typed_arena::Arena;
 
 use super::scope::Scope;
 use crate::machine::core::kfunction::KFunction;
+use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{KObject, Module, Signature};
 /// Run-lifetime allocator. Lives for one program run. Sub-arenas store `T<'static>`
@@ -23,6 +24,10 @@ pub struct RuntimeArena {
     /// Backs per-type identity binding storage (`Bindings::types`). Same erasure /
     /// SAFETY argument as the other sub-arenas.
     ktypes: Arena<KType<'static>>,
+    /// Backs the per-scope operator registry (`Bindings::operators`). `OperatorGroup`
+    /// is lifetime-free (owns only `String`/`HashMap`/scalars) and holds no arena
+    /// anchors, so it needs no cycle gate or `'static` erasure.
+    operator_groups: Arena<OperatorGroup>,
     /// Stable addresses of every `KObject` allocated here. Backs `owns_object` membership
     /// queries via a linear scan (no deref, no borrow). `usize` rather than `*const _` keeps
     /// the field lifetime-erased and `Send`/`Sync`-neutral.
@@ -42,6 +47,7 @@ impl RuntimeArena {
             modules: Arena::new(),
             signatures: Arena::new(),
             ktypes: Arena::new(),
+            operator_groups: Arena::new(),
             allocated_objects: RefCell::new(Vec::new()),
             escape: None,
         }
@@ -56,6 +62,7 @@ impl RuntimeArena {
             modules: Arena::new(),
             signatures: Arena::new(),
             ktypes: Arena::new(),
+            operator_groups: Arena::new(),
             allocated_objects: RefCell::new(Vec::new()),
             escape: Some(escape),
         }
@@ -110,6 +117,12 @@ impl RuntimeArena {
             unsafe { std::mem::transmute::<Signature<'a>, Signature<'static>>(s) };
         let stored: &'a mut Signature<'static> = self.signatures.alloc(static_s);
         unsafe { std::mem::transmute::<&'a mut Signature<'static>, &'a Signature<'a>>(stored) }
+    }
+
+    /// Allocate an [`OperatorGroup`] into the run-lifetime arena. No lifetime erasure
+    /// (the type carries none) and no cycle gate (it holds no arena anchors).
+    pub fn alloc_operator_group(&self, g: OperatorGroup) -> &OperatorGroup {
+        self.operator_groups.alloc(g)
     }
 
     /// When true, no value can hold a `&KFunction` pointing into this arena — see the
@@ -231,6 +244,7 @@ impl RuntimeArena {
             + self.modules.len()
             + self.signatures.len()
             + self.ktypes.len()
+            + self.operator_groups.len()
     }
 }
 
