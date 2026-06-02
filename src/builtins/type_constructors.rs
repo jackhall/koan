@@ -92,7 +92,7 @@ fn body_map<'a>(
 /// so a user-declared `TEMPLATE` head dispatches through the keyworded path like any
 /// other parameterized type — no value-construction (`ConstructorCall`) lane involved.
 /// Binary form, so arity-1 only; multi-parameter application is the
-/// [type-parameter-binding](../../roadmap/type_language/type-parameter-binding.md) follow-up.
+/// [modular implicits](../../roadmap/predicate_typing/modular-implicits.md) follow-up.
 fn body_apply_as<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,

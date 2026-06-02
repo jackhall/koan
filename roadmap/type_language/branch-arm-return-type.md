@@ -9,7 +9,7 @@ so the `Resolved`-return check in `Scheduler::execute` is a no-op for
 their values. Two arms can return different shapes; a downstream
 consumer's success or failure depends on which arm took at runtime. The
 divergent-result hazard mirrors the divergent-bind hazard already closed
-structurally by the [lexical-provenance chain](../design/execution-model.md#lexical-provenance-chain)
+structurally by the [lexical-provenance chain](../../design/execution-model.md#lexical-provenance-chain)
 making each arm its own block — the bind side is closed lexically, but
 the result side is open.
 

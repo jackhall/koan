@@ -5,12 +5,6 @@ Future work on the type and module system. Each entry points at a
 
 ## Module-system stages
 
-- [Dependent parameter annotations](../../roadmap/type_language/type-parameter-binding.md)
-  — parameter types that reference earlier parameters in the same FN
-  signature; required for OCaml-style multi-parameter functor signatures
-  with cross-parameter sharing constraints. Refines the `Deferred(_)`
-  carrier from [functors.md § Functors](functors.md) toward precise
-  structural function types instead of the current `KType::Any` coarsening.
 - [Stage 4 — Property testing and axioms](../../roadmap/predicate_typing/axioms-and-generators.md)
   — Rust-side property-testing engine kept disjoint from dispatch; axiom
   syntax in signatures (`AXIOM #(...)` over quoted bool predicates);
@@ -25,7 +19,10 @@ Future work on the type and module system. Each entry points at a
   layer over the already-first-class module + signature substrate
   ([modules.md](modules.md)); also lands the signature-bound module-typed
   dispatch the current `AnyModule` wildcard lacks, plus multi-abstract-type
-  implicit resolution for signatures spanning multiple type slots.
+  implicit resolution for signatures spanning multiple type slots, and generic
+  functions as type-parameterized functors selected by implicit resolution
+  ([generics.md](generics.md)), including dependent parameters that reference an
+  earlier type parameter in the same signature.
 - [Stage 6 — Equivalence-checked coherence](../../roadmap/predicate_typing/equivalence-checking.md)
   — cross-implicit equivalence testing using the stage-4 engine. The
   coherence story.

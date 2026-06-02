@@ -52,6 +52,10 @@ Module-system mechanics:
 - [implicits.md](implicits.md) — implicit module parameters, lexical
   resolution, axioms with property-tested checking, cross-implicit
   equivalence checking, and the resolution-and-coherence design dials.
+- [generics.md](generics.md) — generic functions as functors over their
+  type parameters, selected and applied by implicit resolution; the
+  parametric vs operation-bearing split, type-argument-from-carried-type
+  versus module-argument-from-search, and dependent parameters.
 - [scheduler.md](scheduler.md) — type inference and implicit search as
   ordinary `Dispatch` / `Bind` scheduler work, with no parallel
   `Infer` / `ImplicitSearch` node-kind track.

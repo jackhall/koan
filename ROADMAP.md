@@ -128,10 +128,7 @@ without first landing something else:
   a codebase can span more than one source file and files become modules.
 - [Group-based operators](roadmap/libraries/group-based-operators.md) — paired `+`/`-`-style
   operators as a group; the syntax-level shorthand variant has no hard prerequisites.
-- [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
-  — free type-parameter names in parameter slots bind per call, from either an
-  argument's carried type structure or an earlier parameter's value.
-- [Branch-arm return-type agreement](roadmap/branch-arm-return-type.md) — give MATCH and
+- [Branch-arm return-type agreement](roadmap/type_language/branch-arm-return-type.md) — give MATCH and
   TRY a static return type (arms-agree vs synthesized-union vs hybrid), closing the
   divergent-result hazard symmetric to the divergent-bind hazard the lexical-provenance
   phase closes structurally.
@@ -175,13 +172,12 @@ Rust builtins:
 ### Type language — [roadmap/type_language/](roadmap/type_language/)
 
 Engine-level type-language substrate — how modules, signatures, functors,
-deferred-return FNs, dependent parameter annotations, generic value-slot
-binding, record-shaped parameter binding, and VAL-slot identity are
-represented in `KType` and routed through dispatch. The substrate the
+deferred-return FNs, record-shaped parameter binding, and VAL-slot identity
+are represented in `KType` and routed through dispatch. The substrate the
 predicate-typing stages and the stdlib's functor-heavy collections both
 build on:
 
-- [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
+- [Branch-arm return-type agreement](roadmap/type_language/branch-arm-return-type.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 - [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)
 

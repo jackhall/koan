@@ -3,7 +3,8 @@
 A **functor** is a module parameterized by another module — a function from
 modules to modules. Koan presents this through a dedicated `FUNCTOR` binder
 that layers definition-time static guarantees over the same per-call dispatch
-machinery ordinary FNs use.
+machinery ordinary FNs use. A functor may also take a bare `:Type` parameter;
+generic functions are built this way — see [generics.md](generics.md).
 
 - *Surface semantics* — modules are part of the **type language**. A
   signature-typed FUNCTOR parameter (`Er: OrderedSig`) is a type-language

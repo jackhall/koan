@@ -1,38 +1,41 @@
 # Structural KFunction admission across deferred parameter and return slots
 
-**Problem.** The structural function-type language coarsens deferred
-parameter and return slots on FNs. When a `KFunction`'s
-`signature.return_type` is
-[`ReturnType::Deferred(_)`](../../src/machine/model/types/signature.rs),
-the structural `KType::KFunction { params, ret }` synthesis at
-[`function_value_ktype`](../../src/machine/model/values/kobject.rs)
-collapses `ret` to `KType::Any` because the structural language has
-no surface for "per-call elaboration of this expression." Once
-[type-parameter-binding](type-parameter-binding.md) widens parameter
-type slots to the same `ReturnType { Resolved, Deferred }` carrier, the
-synthesis Anys out *parameter* slots on the same rule. The symmetric
-coarsening on the admission side lives at
-[`function_compat`](../../src/machine/model/types/ktype_predicates.rs) —
-when a deferred candidate is admission-checked against a slot typed
-`:(FN (SpecificArgs) -> SpecificT)`, the comparison reads the
-deferred return position as `Any`. Function admission is covariant in
-the return (see [ktype.md § Variance](../../design/typing/ktype.md#variance)),
-and `Any.is_more_specific_than(_)` is `false`, so a deferred-return
-candidate still fills only an `Any`-return slot — the covariant `false`
-refuses the precise slot silently.
+**Problem.** A *deferred slot* is a function parameter or return type that
+is not a fixed `KType` but an expression elaborated per call — a functor
+return like `-> Er.Type`, or a parameter slot referencing a type parameter
+not yet solved by implicit-functor resolution
+([modular implicits](../predicate_typing/modular-implicits.md)). The
+structural function type `KType::KFunction { params, ret }` — the shape
+dispatch and ascription compare against — has no way to say "elaborated per
+call," so it collapses every deferred slot to `KType::Any`. That coarsening
+bites at the two sites that handle the structural type:
 
-Today's behavior is safe: Stage B never lifts a deferred-return FN
-into a structural `KFunction` slot whose `ret` is more specific than
-`Any`, so the refusal never fires. A `debug_assert!` at the
-coarsening branch of `function_compat` is the tripwire — it fires if
-a future test exercises a deferred-return candidate against a
-non-`Any` slot, signalling "decide now."
+- *Synthesis* —
+  [`function_value_ktype`](../../src/machine/model/values/kobject.rs) builds
+  the structural `KType` for a function value. A slot carried as
+  [`ReturnType::Deferred(_)`](../../src/machine/model/types/signature.rs)
+  is written as `Any`, so two functions differing *only* in their deferred
+  slots synthesize to identical structural types. (This item widens
+  parameter slots to the same `ReturnType { Resolved, Deferred }` carrier the
+  return slot already uses, so one rule covers both.)
+- *Admission* —
+  [`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
+  checks a candidate against a precise slot like
+  `:(FN (SpecificArgs) -> SpecificT)`. It reads the deferred return as `Any`;
+  function admission is covariant in the return
+  ([ktype.md § Variance](../../design/typing/ktype.md#variance)) and
+  `Any.is_more_specific_than(_)` is `false`, so a deferred-return candidate
+  fills only an `Any`-return slot — it *silently* refuses the precise one.
 
-The risk: two FNs differing only in their deferred carriers
-synthesize to identical structural `KType`s. Routing today uses
-`ReturnType`'s `PartialEq` directly (structure-aware), so admission
-and dispatch don't see the collision — but any consumer that reads
-the structural `KType` would.
+This does not bite yet: no shipped path lifts a deferred-return FN into a
+structural `KFunction` slot whose `ret` is more specific than `Any`, so the
+silent refusal never fires. A `debug_assert!` at that branch of
+`function_compat` is the tripwire — it fires the first time a deferred
+candidate is compared against a non-`Any` slot, signalling "decide the
+representation now." Meanwhile routing is unaffected: dispatch and ascription
+compare `ReturnType`'s own structure-aware `PartialEq`, not the synthesized
+`KType`, so the collision is invisible to them — but any consumer reading the
+synthesized structural `KType` would see it.
 
 **Impact.**
 
@@ -43,13 +46,10 @@ the structural `KType` would.
   shape comparison, not a silent refusal.
 - *Modular-implicit search
   ([Stage 5](../predicate_typing/modular-implicits.md)) over deferred-
-  return candidates becomes decidable.* Implicit resolution searches
-  by structural `KType` shape; precision-aware synthesis lets the
-  search distinguish candidates that differ only in their deferred
-  carriers.
-- *Type-class search ergonomics.* Future work on signature-bound
-  dispatch over functor-shaped candidates needs to read the
-  per-call-elaboration intent, not the coarsened `Any`.
+  return candidates becomes decidable.* Implicit resolution selects
+  generic functors by structural `KType` shape; precision-aware synthesis
+  lets the search distinguish candidates that differ only in their deferred
+  carriers, rather than seeing the coarsened `Any`.
 
 **Directions.**
 
@@ -89,11 +89,6 @@ the structural `KType` would.
 
 **Requires:**
 
-- [Per-call type-parameter binding in parameter signatures](type-parameter-binding.md)
-  — that item widens parameter slots to the `Deferred(_)` carrier and
-  extends the existing `debug_assert!` tripwire over parameter-slot
-  deferreds. This item covers parameter and return slots in one pass
-  once the tripwire fires.
 
 **Unblocks:**
 

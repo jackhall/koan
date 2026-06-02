@@ -218,7 +218,7 @@ impl<'a> KObject<'a> {
     /// an empty `List` whose memoized element type is `Any`, or an empty `Dict` whose
     /// key and value types are both `Any`. Reaching an *untyped* resolution boundary
     /// (untyped `LET` binding, bare top-level expression result) with this shape is an
-    /// error (see [type-parameter-binding](../../../../roadmap/type_language/type-parameter-binding.md)).
+    /// error (see [ktype.md § Runtime type-parameter carriers](../../../../design/typing/ktype.md#runtime-type-parameter-carriers)).
     ///
     /// A stamped empty container is not flagged (its carrier carries a non-`Any`
     /// element type), nor is a non-empty heterogeneous literal `List<Any>` (it carries
