@@ -4,7 +4,7 @@
 //! Shape-checking is name-presence only; full type-shape checks are deferred to
 //! the inference scheduler.
 
-use crate::machine::model::types::UserTypeKind;
+use crate::machine::model::types::{AbstractSource, UserTypeKind};
 use crate::machine::model::values::Module;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
@@ -58,7 +58,7 @@ pub fn body_opaque<'a>(
                     name: name.clone(),
                 },
                 _ => KType::AbstractType {
-                    source_module: new_module,
+                    source: AbstractSource::Module(new_module),
                     name: name.clone(),
                 },
             };
@@ -69,6 +69,35 @@ pub fn body_opaque<'a>(
         let mut tm = new_module.type_members.borrow_mut();
         for (n, t) in minted {
             tm.insert(n, t);
+        }
+    }
+
+    // Thread per-call slot tags: a VAL slot whose SIG-declared type is a `Sig`-rooted
+    // abstract member (`VAL zero :Type` where `Type` is a SIG-local `LET Type = ...`) is
+    // tagged with the per-call `type_members[member]` identity. ATTR re-tags the slot read
+    // with this identity so `(int_ord.zero)` reads as the abstract `Type`, not the
+    // underlying value. Structural-form slot types (`:(FN (Type, Type) -> Number)`) are
+    // out of scope — only a bare `Sig`-rooted member naming a minted type is tagged.
+    {
+        let tm = new_module.type_members.borrow();
+        let mut tags: Vec<(String, KType<'a>)> = Vec::new();
+        for (slot_name, value) in s.decl_scope().bindings().iter_data() {
+            if let KObject::KTypeValue(KType::AbstractType {
+                source: AbstractSource::Sig(_),
+                name: member,
+            }) = value
+            {
+                if let Some(per_call) = tm.get(member) {
+                    tags.push((slot_name, per_call.clone()));
+                }
+            }
+        }
+        drop(tm);
+        if !tags.is_empty() {
+            let mut stt = new_module.slot_type_tags.borrow_mut();
+            for (slot_name, tag) in tags {
+                stt.insert(slot_name, tag);
+            }
         }
     }
 

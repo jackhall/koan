@@ -103,12 +103,8 @@ site needs.
 
 ## Dependencies
 
-**Requires:**
-
-- [VAL-slot ATTR re-tagging](../type_language/val-slot-attr-retagging.md)
-  — implicit search dispatches on parameter types; VAL-slot reads
-  must carry the SIG's abstract identity so dispatch keys align with
-  the declared abstract types.
+**Requires:** none — its substrate (the module language and VAL-slot abstract-type
+tagging) has shipped.
 
 **Unblocks:**
 

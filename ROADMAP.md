@@ -21,7 +21,10 @@ What's shipped that the open items below build on:
   sharing constraints, higher-kinded type-constructor slots (declared with `TEMPLATE`,
   applied as `:(arg AS Ctor)`), and the type-language
   collapse that puts modules and signatures in `KType` directly via `KType::Module`,
-  `KType::Signature`, and `KType::AbstractType` carriers. Values carry runtime
+  `KType::Signature`, and `KType::AbstractType` carriers (the last rooted at either a
+  SIG-declared member or a per-call opaque mint via `AbstractSource`). An opaque view's
+  VAL-slot read re-tags through the `Wrapped` carrier so it reports the abstract member
+  identity rather than the underlying representation. Values carry runtime
   type-parameter carriers, stamped at FN return, argument, and `LET` boundaries.
 - *Block-scoped module opening.* `USING … SCOPE` surfaces a module value's members as
   bare names for the duration of a block, splitting reads and writes across the
@@ -178,7 +181,6 @@ predicate-typing stages and the stdlib's functor-heavy collections both
 build on:
 
 - [Branch-arm return-type agreement](roadmap/type_language/branch-arm-return-type.md)
-- [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

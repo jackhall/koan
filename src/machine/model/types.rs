@@ -12,7 +12,7 @@ mod signature;
 mod typed_field_list;
 
 pub use ktraits::{Parseable, Serializable};
-pub use ktype::{KType, UserTypeKind};
+pub use ktype::{AbstractSource, KType, UserTypeKind};
 pub use record::Record;
 pub use resolver::{elaborate_type_expr, ElabResult, Elaborator};
 #[allow(unused_imports)]

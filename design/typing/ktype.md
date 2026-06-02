@@ -57,15 +57,22 @@
   `Signature { sig: &'a Signature<'a>, pinned_slots: Vec<(String, KType)> }`
   serves both signature roles in one variant — the introspectable value
   (carrying `decl_scope` via `sig`) *and* the dispatch constraint ("any
-  module satisfying this signature"); `AbstractType { source_module: &'a
-  Module<'a>, name: String }` is the per-abstract-type-member tag minted by
-  `:|` opaque ascription. Manual `PartialEq` keys identity on
+  module satisfying this signature"); `AbstractType { source:
+  AbstractSource<'a>, name: String }` is the per-abstract-type-member tag.
+  `AbstractSource` is `Sig(ScopeId) | Module(&'a Module<'a>)`: a
+  `Sig`-rooted member is named at SIG-declaration time (a SIG-local
+  `LET Type = ...` that would otherwise collapse to its underlying type binds
+  this name-bearing tag instead), while a `Module`-rooted member is the per-call
+  mint `:|` opaque ascription produces (`Foo.Type`, with a module to project
+  further members off). Manual `PartialEq` keys identity on
   `module.scope_id()` for `KType::Module`, `sig.sig_id()` + `pinned_slots`
   for `KType::Signature` (`sig.path` is diagnostic-only), and
-  `(source_module.scope_id(), name)` for `KType::AbstractType` — so two
+  `(source.scope_id(), name)` for `KType::AbstractType` — so two
   opaque ascriptions of the same source module produce distinct
   `KType::Module` identities (the abstraction barrier) but their
-  `AbstractType` minting for the same slot name compares equal.
+  `AbstractType` minting for the same slot name compares equal, and a
+  per-call `Module`-rooted mint stays distinct from the `Sig`-rooted member it
+  was threaded from.
   Companion wildcards `AnyModule` and `AnySignature` admit any module
   or signature value respectively; the surface keywords `Module` and
   `Signature` lower to them in
@@ -529,8 +536,9 @@ The shape has two defining properties:
 its hand-written `PartialEq` arm-for-arm: the discriminant leads (so distinct variants
 never alias and the unit variants need no further mixing), then each compound arm
 hashes exactly the fields its `PartialEq` arm compares. The arena-pointer variants hash
-their stable identity key — `Module` / `AbstractType` hash `scope_id()`, `Signature`
-hashes `sig_id()` — never the raw pointer, and `UserTypeKind`'s payload-ignoring
+their stable identity key — `Module` hashes `scope_id()`, `AbstractType` hashes its
+`source.scope_id()`, `Signature` hashes `sig_id()` — never the raw pointer, and
+`UserTypeKind`'s payload-ignoring
 equality is mirrored by a discriminant-only `Hash`.
 
 `KType::DeferredReturn(DeferredReturnSurface)` is a confined hashable leaf: it

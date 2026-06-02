@@ -11,8 +11,8 @@ for first-class module values,
 [`KType::Signature { sig, pinned_slots }`](../../src/machine/model/types/ktype.rs) for
 first-class signature values (and for the satisfies-this-signature slot
 constraint — one variant, disambiguated by position), and
-[`KType::AbstractType { source_module, name }`](../../src/machine/model/types/ktype.rs)
-for the abstract-type members opaque ascription mints — with
+[`KType::AbstractType { source, name }`](../../src/machine/model/types/ktype.rs)
+for abstract-type members (SIG-declared or minted by opaque ascription) — with
 `KType::AnyModule` and `KType::AnySignature` as the matching wildcards
 (see [modules.md](modules.md) for the carrier model).
 
@@ -160,6 +160,15 @@ resolves the verb through `scope.resolve_type_with_chain` first and branches on
 the resolved `kind`) rather than a registered builtin sharing the `[TypeExprRef,
 …]` signature bucket — a sibling primitive on that bucket would re-dispatch
 infinitely.
+
+The `Wrapped` carrier also backs **opaque VAL-slot re-tags**: an ATTR read of a
+value-side slot from an opaquely-ascribed module re-wraps the value with the
+per-call abstract identity the SIG names, so the read reports the abstract type
+rather than its representation. The two uses share the variant — distinguished by
+the `type_id`'s KType (a `UserType { kind: Newtype }` for construction, an
+`AbstractType` for the slot re-tag) — and the same collapse and ATTR fall-through
+rules apply to both. See
+[modules.md § VAL-slot reads carry the abstract member identity](modules.md#val-slot-reads-carry-the-abstract-member-identity).
 
 ATTR over a `KObject::Wrapped` falls through to `inner` via
 [`access_field`'s `Wrapped` arm](../../src/builtins/attr.rs): an ATTR

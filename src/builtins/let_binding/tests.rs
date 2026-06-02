@@ -302,10 +302,14 @@ fn let_type_class_with_functor_admits() {
 
 /// SIG-body `LET <Type-class> = ...` keeps working — the SIG-body reject only
 /// fires for the value-route, and `LET Type = Number` routes through
-/// `register_type`.
+/// `register_type`. Inside a SIG body the bound `KType` is the name-bearing
+/// `AbstractType { source: Sig(decl_scope), name }` rather than the collapsed
+/// underlying type, so a later `VAL :Type` records that the slot *names* the
+/// abstract member.
 #[test]
 fn let_type_class_in_sig_body_still_works() {
     use crate::builtins::test_support::{run, run_root_silent};
+    use crate::machine::model::types::AbstractSource;
     use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
@@ -317,11 +321,23 @@ fn let_type_class_in_sig_body_still_works() {
         Some(KType::Signature { sig, .. }) => *sig,
         other => panic!("WithType should be a Signature KType, got {:?}", other),
     };
-    let types = s.decl_scope().bindings().types();
-    assert!(
-        types.contains_key("Type"),
-        "Type binding should survive in SIG types map after Type-class LET",
-    );
+    let decl_scope = s.decl_scope();
+    let bound = decl_scope
+        .resolve_type("Type")
+        .expect("Type binding should survive in SIG types map after Type-class LET");
+    match bound {
+        KType::AbstractType {
+            source: AbstractSource::Sig(id),
+            name,
+        } => {
+            assert_eq!(name, "Type");
+            assert_eq!(*id, decl_scope.id, "Sig source must key on the decl_scope id");
+        }
+        other => panic!(
+            "SIG-local `LET Type = Number` should bind a Sig-rooted AbstractType, got {:?}",
+            other
+        ),
+    }
 }
 
 /// A Type-classified SIG alias `LET Po = OrderedSig` writes the *same* unified

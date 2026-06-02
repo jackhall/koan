@@ -157,11 +157,8 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
                 KType::Module { module, .. } => {
                     return Some((module.scope_id(), module.path.as_str()));
                 }
-                KType::AbstractType {
-                    source_module,
-                    name,
-                } => {
-                    return Some((source_module.scope_id(), name.as_str()));
+                KType::AbstractType { source, name } => {
+                    return Some((source.scope_id(), name.as_str()));
                 }
                 KType::List(inner) => self.stack.push(inner),
                 KType::Dict(k, v) => {

@@ -21,10 +21,10 @@ use super::super::types::KType;
 
 /// First-class module value. `path` is the lexical-source label (`"IntOrd"`,
 /// `"Outer.Inner"`); `type_members` maps the module's abstract type names to the `KType`
-/// they currently expose. Opaque-ascription members mint `KType::AbstractType {
-/// source_module, name }`; the module value itself rides `KType::Module { module, frame
-/// }` in the surrounding `KObject::KTypeValue` (the two are distinguished by KType
-/// variant, not by a shared `UserType` `kind` tag).
+/// they currently expose. Opaque-ascription members mint `KType::AbstractType { source:
+/// Module(self), name }`; the module value itself rides `KType::Module { module, frame }`
+/// in the surrounding `KObject::KTypeValue` (the two are distinguished by KType variant,
+/// not by a shared `UserType` `kind` tag).
 pub struct Module<'a> {
     pub path: String,
     child_scope_ptr: *const Scope<'static>,
@@ -32,6 +32,12 @@ pub struct Module<'a> {
     /// is alloc'd. `Module` is arena-pinned and never moved, so a `&'a Module<'a>` borrow
     /// stays valid alongside interior mutation.
     pub type_members: RefCell<HashMap<String, KType<'a>>>,
+    /// VAL-slot name → the per-call abstract `KType` an opaque ascription minted for the
+    /// slot's SIG-declared type. ATTR re-tags a value-side slot read with this identity so
+    /// `(int_ord.zero)` reads as the abstract `Type`, not the underlying concrete value.
+    /// Empty for unascribed and transparently-ascribed (`:!`) modules. Same `RefCell`
+    /// rationale as `type_members` — populated after the surrounding `KObject` is alloc'd.
+    pub slot_type_tags: RefCell<HashMap<String, KType<'a>>>,
     /// Sigs this module shape-checks against. `accepts_part` for a
     /// `KType::Signature { sig, .. }` slot is an O(1) `sig.sig_id()` membership check
     /// against this set. `RefCell` for the same reason as `type_members` — ascription
@@ -50,6 +56,7 @@ impl<'a> Module<'a> {
             path,
             child_scope_ptr,
             type_members: RefCell::new(HashMap::new()),
+            slot_type_tags: RefCell::new(HashMap::new()),
             compatible_sigs: RefCell::new(Vec::new()),
             _marker: std::marker::PhantomData,
         }
@@ -122,7 +129,7 @@ mod tests {
     use super::*;
     use crate::builtins::default_scope;
     use crate::machine::core::RuntimeArena;
-    use crate::machine::model::types::KType;
+    use crate::machine::model::types::{AbstractSource, KType};
     use std::io::sink;
     use std::ptr;
     #[test]
@@ -168,7 +175,7 @@ mod tests {
             tm.insert(
                 "Type".into(),
                 KType::AbstractType {
-                    source_module: module,
+                    source: AbstractSource::Module(module),
                     name: "Type".into(),
                 },
             );
@@ -176,8 +183,36 @@ mod tests {
         let bound = module.type_members.borrow().get("Type").cloned();
         assert!(matches!(
             &bound,
-            Some(KType::AbstractType { source_module, name })
-                if source_module.scope_id() == scope_id && name == "Type"
+            Some(KType::AbstractType { source, name })
+                if source.scope_id() == scope_id && name == "Type"
+        ));
+    }
+
+    /// `slot_type_tags` mutates after the surrounding `KObject` is alloc'd, same as
+    /// `type_members`: the `&'a Module<'a>` borrow is live across the `borrow_mut` +
+    /// insert, and tree borrows is strict about interior mutation under a live shared
+    /// borrow. Pinned independently so a regression attributes to this map's site.
+    #[test]
+    fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(sink()));
+        let module = arena.alloc_module(Module::new("M".into(), scope));
+        let scope_id = module.scope_id();
+        {
+            let mut tags = module.slot_type_tags.borrow_mut();
+            tags.insert(
+                "zero".into(),
+                KType::AbstractType {
+                    source: AbstractSource::Module(module),
+                    name: "Type".into(),
+                },
+            );
+        }
+        let bound = module.slot_type_tags.borrow().get("zero").cloned();
+        assert!(matches!(
+            &bound,
+            Some(KType::AbstractType { source, name })
+                if source.scope_id() == scope_id && name == "Type"
         ));
     }
 
