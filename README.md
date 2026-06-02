@@ -153,6 +153,7 @@ src/
 │   ├── union.rs
 │   ├── struct_def.rs
 │   ├── struct_value.rs       shared struct-construction representation
+│   ├── record_projection.rs  FROM — `(x y) FROM r` re-tags a record value's carried type to the named fields
 │   ├── tagged_union.rs       shared tagged-union representation
 │   ├── newtype_def.rs        NEWTYPE
 │   ├── module_def.rs         MODULE

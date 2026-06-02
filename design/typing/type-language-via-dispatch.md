@@ -110,6 +110,16 @@ on the first pairing operator, so `:` pairs (`{k: v}`) stay a dict and `=` pairs
 record, mixing the two is a parse error, and an empty `{}` is the empty record. Subtyping over
 record values is width/depth — see [ktype.md § Variance](ktype.md#variance).
 
+`(x y) FROM r` projects a record value to the named fields
+([record_projection.rs](../../src/builtins/record_projection.rs)). Unlike the
+type-returning `_OF` dispatcher ops, `FROM` is a plain value builtin: it returns a
+`BodyResult::Value`, `Rc`-sharing the backing record whole and narrowing the carried
+field-type record to the named fields — it derives its result type from the literal
+field list off the value's own carrier, never routing as a scheduled `TypeExprRef`.
+The field list arrives unevaluated through a `KExpression` slot (bare names only), so
+it re-tags a carrier to break an incomparable-arm dispatch tie without name-resolving
+the fields.
+
 ## User-functor application
 
 `FUNCTOR MyFunctor (T :SomeSig) = ...` binds `MyFunctor` to a
@@ -196,11 +206,3 @@ placeholders](../execution-model.md#dispatch-time-name-placeholders)).
 A name-keyed install would collide on the second sibling — both
 `PICK` binders trying to claim `placeholders[PICK]` — which is why
 FN / FUNCTOR do not install on the name channel.
-
-## Open work
-
-- [Record projection](../../roadmap/type_language/record-subtyping.md) — a `FROM`
-  projection builtin to narrow a record value's type and disambiguate incomparable
-  record arms. The `KType::Record` type, the `{x = 1}` value, and width/depth
-  subtyping have shipped (see [Record-type sigil](#record-type-sigil) and
-  [ktype.md § Variance](ktype.md#variance)).

@@ -18,6 +18,7 @@ mod module_def;
 pub(crate) mod newtype_def;
 mod print;
 mod quote;
+mod record_projection;
 mod result;
 mod sig_def;
 mod struct_def;
@@ -204,6 +205,7 @@ pub fn default_scope<'a>(
     sig_def::register(scope);
     val_decl::register(scope);
     ascribe::register(scope);
+    record_projection::register(scope);
     type_ops::register(scope);
     type_constructors::register(scope);
 

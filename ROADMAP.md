@@ -95,7 +95,10 @@ What's shipped that the open items below build on:
   wider record value is more specific (the dual of function-param width-drop), depth
   covariant (sound under value immutability), so record-typed FN overloads dispatch by
   width and depth and incomparable arms tie as `AmbiguousDispatch`. Structs stay
-  nominal; the record variant is structural-only. See
+  nominal; the record variant is structural-only. The
+  [`FROM` projection](src/builtins/record_projection.rs) closes the projection direction:
+  `(x y) FROM r` re-tags a record value's carried type to the named fields (`Rc`-sharing
+  the backing record whole) so a caller can break an incomparable-arm tie. See
   [design/typing/ktype.md § Variance](design/typing/ktype.md#variance).
 - *Named-argument surface.* The record literal `{x = 1}` is the sole named-argument form
   across struct construction (`Point {x = 1, y = 2}`), function-value calls (`f {x = 1}`),
@@ -124,6 +127,10 @@ without first landing something else:
   TRY a static return type (arms-agree vs synthesized-union vs hybrid), closing the
   divergent-result hazard symmetric to the divergent-bind hazard the lexical-provenance
   phase closes structurally.
+- [Eager-parts fallback masks unresolvable dispatch with a misleading diagnostic](roadmap/dispatch-fallback-misleading-diagnostic.md)
+  — a keyword-headed call that can't resolve because an already-evaluated slot rejects
+  still defers to eager sub-dispatch of an unrelated literal operand, leaking that
+  operand's error instead of a clean `Unmatched`.
 
 ## Open items
 
@@ -173,7 +180,6 @@ build on:
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 - [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)
-- [Record projection](roadmap/type_language/record-subtyping.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

@@ -106,3 +106,11 @@ precise per-slot error, so it gets first refusal.
 The companion driver-side view of this precedence — what each outcome
 routes to in the dispatch pipeline — lives at
 [execution-model.md § post-walk fallback](../execution-model.md#dispatch).
+
+## Open work
+
+- [Eager-parts fallback masks unresolvable dispatch with a misleading diagnostic](../../roadmap/dispatch-fallback-misleading-diagnostic.md)
+  — rank 2 (eager parts) above fires on any eager part present, even when the
+  admission failure is an already-evaluated slot no eager evaluation can flip; the
+  deferral then surfaces an unrelated sub-part's error instead of a clean
+  `Unmatched`.

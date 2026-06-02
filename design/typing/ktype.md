@@ -171,11 +171,13 @@ superset arm wins a dispatch tie. Depth is **covariant** in the field types
 call-by-name) — records and function params share the `Record` substrate but order
 opposite ways, so the two helpers stay separate. Incomparable record arms
 (`:{x :Number, y :Str}` vs `:{x :Number, z :Str}`, filled by a value carrying all of
-`x`, `y`, `z`) tie as `AmbiguousDispatch`, the gap a [`FROM`
-projection](../../roadmap/type_language/record-subtyping.md) closes. Admission
-mirrors `List` / `Dict`: an unevaluated `{x = …}` literal admits shape-only, while
-an evaluated record compares its memoized field-type record against the slot via
-`satisfied_by` (no field walk).
+`x`, `y`, `z`) tie as `AmbiguousDispatch`; the [`FROM` projection
+builtin](../../src/builtins/record_projection.rs) breaks the tie at the call site —
+`(x y) FROM r` re-tags the record value's carried field-type record to exactly the
+named fields (`Rc`-sharing the backing value record whole), so only the `:{x, y}` arm
+admits. Admission mirrors `List` / `Dict`: an unevaluated `{x = …}` literal admits
+shape-only, while an evaluated record compares its memoized field-type record against
+the slot via `satisfied_by` (no field walk).
 
 Concretely:
 
@@ -535,11 +537,3 @@ dict (see [type-language-via-dispatch.md § Record-type sigil](type-language-via
   declared return types are honest but unenforced.
 The two-phase execution work in [open-work.md](open-work.md) closes both
 uniformly.
-
-## Open work
-
-- [Record projection](../../roadmap/type_language/record-subtyping.md) — a `FROM`
-  projection builtin that narrows a record value's type to disambiguate the
-  incomparable record arms the [Variance](#variance) lattice can't order. The
-  `KType::Record` type, the anonymous record value, and width/depth subtyping have
-  shipped (described above).

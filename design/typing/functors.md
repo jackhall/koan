@@ -344,11 +344,3 @@ Sharing constraints, modular-implicit signature constraints, and
 witness-typed instantiations share this one builtin family. The
 implicit *marker* itself (which parameter is implicit) is orthogonal —
 see [implicits.md](implicits.md).
-
-## Open work
-
-- [Record projection](../../roadmap/type_language/record-subtyping.md) — a `FROM`
-  projection builtin to disambiguate incomparable record arms. (The `KType::Record`
-  type and width/depth record subtyping have shipped; functor parameter records admit
-  contravariantly with width-drop under the shipped function subtyping — see
-  [ktype.md § Variance](ktype.md#variance).)
