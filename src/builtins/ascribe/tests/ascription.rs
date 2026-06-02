@@ -81,7 +81,7 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
     let a_t = a.type_members.borrow().get("Type").cloned();
     let b_t = b.type_members.borrow().get("Type").cloned();
     // Post-collapse: opaque-ascription abstract-type members are minted as
-    // `KType::AbstractType { source_module, name }`.
+    // `KType::AbstractType { source: Module(view), name }`.
     assert!(matches!(
         &a_t,
         Some(KType::AbstractType { name, .. }) if name == "Type"

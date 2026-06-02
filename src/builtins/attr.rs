@@ -10,8 +10,8 @@
 //! unambiguously without a specificity tiebreaker.
 
 use crate::machine::execute::coerce_type_token_value;
-use crate::machine::model::types::UserTypeKind;
-use crate::machine::model::values::Module;
+use crate::machine::model::types::{AbstractSource, UserTypeKind};
+use crate::machine::model::values::{Module, NonWrappedRef};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
     ArgumentBundle, BodyResult, KError, KErrorKind, Resolution, SchedulerHandle, Scope,
@@ -49,9 +49,15 @@ pub fn body_identifier<'a>(
     if let Some(kt) = scope.resolve_type(&s_name) {
         match kt {
             KType::Module { module: m, .. } => return access_module_member(m, &field_name),
-            KType::AbstractType { source_module, .. } => {
-                return access_module_member(source_module, &field_name);
+            KType::AbstractType {
+                source: AbstractSource::Module(m),
+                ..
+            } => {
+                return access_module_member(m, &field_name);
             }
+            // A `Sig`-rooted abstract type has no module to project a member off; fall
+            // through to UnboundName like the scalar arms below.
+            KType::AbstractType { .. } => {}
             // Scalar type-side bindings have no members; fall through to UnboundName so
             // the diagnostic stays attributed to the lhs identifier rather than the
             // type-language side.
@@ -186,9 +192,12 @@ fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> 
             ))))
         }
         // ATTR over an opaque-ascription abstract type — project against the source module.
-        KObject::KTypeValue(KType::AbstractType { source_module, .. }) => {
-            access_module_member(source_module, field)
-        }
+        // A `Sig`-rooted abstract type has no module to project off, so it falls through to
+        // the `other` TypeMismatch arm.
+        KObject::KTypeValue(KType::AbstractType {
+            source: AbstractSource::Module(m),
+            ..
+        }) => access_module_member(m, field),
         // NEWTYPE fall-through. `Wrapped.inner` is invariantly not a `Wrapped` (the
         // construction-time collapse rule in `super::newtype_def::newtype_construct`
         // peels any `Wrapped` before re-wrapping), so this recurses exactly one level.
@@ -208,16 +217,37 @@ fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> 
 /// `MODULE Sub = (...)` and `STRUCT P = (...)`, which install into both: chained access
 /// `Outer.Inner.X` needs the inner *module value* from `data`, not its type identity,
 /// so the next ATTR step can recurse into the inner module's child scope.
+///
+/// On a value-side hit, an opaque-ascription `slot_type_tags` entry re-tags the read: the
+/// raw value is rewrapped in a `KObject::Wrapped` carrier whose `ktype()` is the per-call
+/// abstract identity the SIG named (so `(int_ord.zero)` reads as `AbstractType{int_ord,
+/// "Type"}`, not the underlying `Number`). Transparent `:!` leaves `slot_type_tags` empty,
+/// so transparent reads stay concrete.
+///
+/// The re-tag carrier (and its `type_id`) is alloc'd in the *module*'s arena, not the
+/// read-site `scope`'s: `Wrapped::deep_clone` is shallow (the NEWTYPE invariant that
+/// `type_id` is a declaration-stable `&'a KType`), so the `type_id` must outlive any
+/// lift/deep-clone of the read value — e.g. a functor body's `(Er.zero)` whose read-site
+/// scope is a per-call arena. The module and its `slot_type_tags` are declaration-stable,
+/// so the module arena is the right home; both `inner` (the slot value) and `type_id`
+/// (the abstract tag, which references the module) then live there together.
 fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
+    let module_scope = m.child_scope();
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
-        return BodyResult::Value(m.child_scope().arena.alloc(KObject::KTypeValue(kt)));
+        return BodyResult::Value(module_scope.arena.alloc(KObject::KTypeValue(kt)));
     }
-    let scope = m.child_scope();
-    if let Some(Resolution::Value(obj)) = scope.bindings().lookup_value(field, None) {
+    if let Some(Resolution::Value(obj)) = module_scope.bindings().lookup_value(field, None) {
+        if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
+            let type_id = module_scope.arena.alloc(tag);
+            return BodyResult::Value(module_scope.arena.alloc(KObject::Wrapped {
+                inner: NonWrappedRef::peel(obj),
+                type_id,
+            }));
+        }
         return BodyResult::Value(obj);
     }
-    if let Some(kt) = scope.resolve_type(field) {
-        return BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(kt.clone())));
+    if let Some(kt) = module_scope.resolve_type(field) {
+        return BodyResult::Value(module_scope.arena.alloc(KObject::KTypeValue(kt.clone())));
     }
     err(KError::new(KErrorKind::ShapeError(format!(
         "module `{}` has no member `{}`",
@@ -478,6 +508,48 @@ mod tests {
             }
             _ => panic!("expected TypeMismatch on NEWTYPE-over-Number field access, got {err}"),
         }
+    }
+
+    /// An opaque (`:|`) view re-tags a VAL-slot read with the per-call abstract identity:
+    /// `IntOrdView.zero` reads as the abstract `Type` (`ktype().name() == "Type"`), not the
+    /// underlying `Number`, so a deferred return `(MODULE_TYPE_OF Er Type)` accepts the body.
+    #[test]
+    fn opaque_view_slot_read_re_tags_with_abstract_type() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "SIG WithZero = ((LET Type = Number) (VAL zero :Type))\n\
+             MODULE IntOrd = ((LET Type = Number) (LET zero = 0))\n\
+             LET IntOrdView = (IntOrd :| WithZero)",
+        );
+        let result = run_one(scope, parse_one("IntOrdView.zero"));
+        assert_eq!(
+            result.ktype().name(),
+            "Type",
+            "opaque-view slot read must carry the abstract `Type` identity, got {:?}",
+            result.ktype(),
+        );
+    }
+
+    /// Transparent (`:!`) views leave `slot_type_tags` empty, so the slot read stays
+    /// concrete: `IntOrdView.zero` reads as the underlying `Number`, not the abstract `Type`.
+    #[test]
+    fn transparent_view_slot_read_stays_concrete() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "SIG WithZero = ((LET Type = Number) (VAL zero :Type))\n\
+             MODULE IntOrd = ((LET Type = Number) (LET zero = 0))\n\
+             LET IntOrdView = (IntOrd :! WithZero)",
+        );
+        let result = run_one(scope, parse_one("IntOrdView.zero"));
+        assert!(
+            matches!(result, KObject::Number(n) if *n == 0.0),
+            "transparent-view slot read must stay the underlying Number, got {:?}",
+            result.ktype(),
+        );
     }
 
     /// The fall-through preserves inner-struct error attribution: a missing field on a

@@ -14,7 +14,7 @@ fn tagged_union_full_program_via_type_token() {
     run(
         "UNION Outcome = (ok :Str err :Str)\n\
          LET r = (Outcome (ok \"all good\"))\n\
-         MATCH (r) WITH (ok -> (PRINT it) err -> (PRINT \"failed\"))",
+         MATCH (r) -> :Str WITH (ok -> (PRINT it) err -> (PRINT \"failed\"))",
         &arena,
         captured.clone(),
     );
@@ -29,7 +29,7 @@ fn tagged_union_full_program_via_let_bound_type() {
         "UNION Outcome = (ok :Str err :Str)\n\
          LET outcome = Outcome\n\
          LET r = (outcome (err \"oops\"))\n\
-         MATCH (r) WITH (ok -> (PRINT \"good\") err -> (PRINT it))",
+         MATCH (r) -> :Str WITH (ok -> (PRINT \"good\") err -> (PRINT it))",
         &arena,
         captured.clone(),
     );
@@ -43,7 +43,7 @@ fn tagged_union_none_branch_runs() {
     run(
         "UNION Maybe = (some :Number none :Null)\n\
          LET m = (Maybe (none null))\n\
-         MATCH (m) WITH (some -> (PRINT \"some-branch\") none -> (PRINT \"none-branch\"))",
+         MATCH (m) -> :Str WITH (some -> (PRINT \"some-branch\") none -> (PRINT \"none-branch\"))",
         &arena,
         captured.clone(),
     );

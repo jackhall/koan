@@ -129,6 +129,34 @@ fn return_type_name_covers_all_arms() {
     assert_eq!(e.name(), "FOO");
 }
 
+/// `exact_equal` (the duplicate-overload gate) keeps reading `ReturnType`'s structure-aware
+/// `PartialEq`, so synthesizing a precision-aware `KType::DeferredReturn` elsewhere does not
+/// alter routing: two same-shape signatures differing only in their deferred return are
+/// unequal, and identical deferred returns are equal.
+#[test]
+fn exact_equal_unaffected_by_deferred_return_synthesis() {
+    fn sig_with<'a>(ret: ReturnType<'a>) -> ExpressionSignature<'a> {
+        ExpressionSignature {
+            return_type: ret,
+            elements: vec![SignatureElement::Argument(Argument {
+                name: "v".into(),
+                ktype: KType::Number,
+            })],
+        }
+    }
+    let er = sig_with(ReturnType::Deferred(DeferredReturn::TypeExpr(
+        TypeName::leaf("Er".into()),
+    )));
+    let er2 = sig_with(ReturnType::Deferred(DeferredReturn::TypeExpr(
+        TypeName::leaf("Er".into()),
+    )));
+    let ar = sig_with(ReturnType::Deferred(DeferredReturn::TypeExpr(
+        TypeName::leaf("Ar".into()),
+    )));
+    assert!(er.exact_equal(&er2));
+    assert!(!er.exact_equal(&ar));
+}
+
 #[test]
 fn return_type_matches_value_deferred_always_true_resolved_delegates() {
     use crate::machine::model::values::KObject;

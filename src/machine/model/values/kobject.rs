@@ -380,7 +380,7 @@ impl<'a> KObject<'a> {
 }
 
 fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType<'a> {
-    use crate::machine::model::types::ReturnType;
+    use crate::machine::model::types::{DeferredReturnSurface, ReturnType};
     use crate::machine::model::Record;
     // The parameter record keys each `Argument` by its declared name — the names the
     // signature already holds, never the dispatch keywords. So a function value projects
@@ -394,14 +394,16 @@ fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType<'a> {
             _ => None,
         })
         .collect();
-    // Structural `KType::KFunction` / `KFunctor` can't carry a `Deferred(_)` return —
-    // the type language has no surface for "per-call elaboration of this expression".
-    // Coarsen to `KType::Any`; the precise per-call return type is observed at the
-    // dispatch boundary, not from a structural-type comparison. Tracked at
-    // [kfunction-deferred-ret-precision](../../../../roadmap/type_language/kfunction-deferred-ret-precision.md).
+    // A `Deferred(_)` source return projects into the confined `KType::DeferredReturn`
+    // carrier, holding the hashable surface shadow of the deferred form. Equality,
+    // hashing, and specificity over the structural `KType` then read the deferred shape
+    // directly instead of seeing it coarsened to `Any`. See
+    // [ktype.md § Record fields](../../../../design/typing/ktype.md#record-fields-and-ktype-hashing).
     let ret = match &f.signature.return_type {
         ReturnType::Resolved(kt) => Box::new(kt.clone()),
-        ReturnType::Deferred(_) => Box::new(KType::Any),
+        ReturnType::Deferred(d) => Box::new(KType::DeferredReturn(
+            DeferredReturnSurface::from_deferred(d),
+        )),
     };
     // `is_functor` projects into the disjoint `KFunctor` family; cross-arm
     // admissibility is refused in `function_compat` — see

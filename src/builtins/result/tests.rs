@@ -88,7 +88,7 @@ fn result_matches_ok_branch() {
     let (scope, buf) = crate::builtins::test_support::run_root_with_buf(&arena);
     run(
         scope,
-        "MATCH (Result (ok 1)) WITH (ok -> (PRINT it) error -> (PRINT \"no\"))",
+        "MATCH (Result (ok 1)) -> :Str WITH (ok -> (PRINT it) error -> (PRINT \"no\"))",
     );
     assert_eq!(buf.borrow().as_slice(), b"1\n");
 }

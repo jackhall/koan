@@ -24,7 +24,7 @@ fn interprets_match_via_print() {
     let arena = RuntimeArena::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
-        r#"PRINT (MATCH true WITH (true -> ("yes") false -> ("no")))"#,
+        r#"PRINT (MATCH true -> :Str WITH (true -> ("yes") false -> ("no")))"#,
         &arena,
         captured.clone(),
     );
@@ -39,7 +39,7 @@ fn match_branch_resolves_outer_name() {
     let arena = RuntimeArena::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
-        "LET greeting = \"hi\"\nPRINT (MATCH true WITH (true -> (greeting) false -> (\"no\")))\n",
+        "LET greeting = \"hi\"\nPRINT (MATCH true -> :Str WITH (true -> (greeting) false -> (\"no\")))\n",
         &arena,
         captured.clone(),
     );
@@ -53,7 +53,7 @@ fn match_unmatched_branch_skips_let_side_effect() {
     let arena = RuntimeArena::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
-        "MATCH false WITH (true -> (LET y = 1) false -> (null))\nPRINT \"after\"\n",
+        "MATCH false -> :Null WITH (true -> (LET y = 1) false -> (null))\nPRINT \"after\"\n",
         &arena,
         captured.clone(),
     );

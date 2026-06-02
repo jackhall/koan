@@ -123,7 +123,7 @@ mod tests {
         // through its `outer` pointer.
         let bytes = run_program(
             "UNION Bit = (one :Null zero :Null)\n\
-             FN (HOP b :Tagged) -> Any = (MATCH (b) WITH (\
+             FN (HOP b :Tagged) -> Any = (MATCH (b) -> :Str WITH (\
                  one -> $(#(HOP (Bit (zero null))))\
                  zero -> (PRINT \"done\")\
              ))\n\

@@ -21,7 +21,10 @@ What's shipped that the open items below build on:
   sharing constraints, higher-kinded type-constructor slots (declared with `TEMPLATE`,
   applied as `:(arg AS Ctor)`), and the type-language
   collapse that puts modules and signatures in `KType` directly via `KType::Module`,
-  `KType::Signature`, and `KType::AbstractType` carriers. Values carry runtime
+  `KType::Signature`, and `KType::AbstractType` carriers (the last rooted at either a
+  SIG-declared member or a per-call opaque mint via `AbstractSource`). An opaque view's
+  VAL-slot read re-tags through the `Wrapped` carrier so it reports the abstract member
+  identity rather than the underlying representation. Values carry runtime
   type-parameter carriers, stamped at FN return, argument, and `LET` boundaries.
 - *Block-scoped module opening.* `USING … SCOPE` surfaces a module value's members as
   bare names for the duration of a block, splitting reads and writes across the
@@ -118,6 +121,15 @@ What's shipped that the open items below build on:
   eager-lean ⇒ defer, dead unbound lean ⇒ a held-back `UnboundName`). `lookup_function`
   surfaces finalized overloads and the earliest visible pending producer together. See
   [design/typing/scheduler.md § In-walk dispatch precedence](design/typing/scheduler.md#in-walk-dispatch-precedence).
+- *Branch-arm return contract.* `MATCH <v> -> :T WITH (...)` and `TRY (<e>) -> :T WITH (...)`
+  carry a mandatory declared return type every arm agrees on. The generalized
+  [`ReturnContract`](src/machine/core/kfunction/body.rs) slot carrier (`Function(&KFunction)`
+  for a call, `Arm { ret, kind }` for a function-less arm) routes both FN and MATCH / TRY
+  through the one Done-arm check, so the selected arm's value is runtime-checked against `T`
+  (a `<return>` `TypeMismatch` on a miss) and re-tagged to `T` for downstream dispatch. This
+  closes the divergent-result hazard symmetric to the divergent-bind closure of the
+  lexical-provenance chain. See
+  [design/execution-model.md § Arms as own blocks](design/execution-model.md#arms-as-own-blocks).
 
 ## Next items
 
@@ -128,10 +140,6 @@ without first landing something else:
   a codebase can span more than one source file and files become modules.
 - [Group-based operators](roadmap/libraries/group-based-operators.md) — paired `+`/`-`-style
   operators as a group; the syntax-level shorthand variant has no hard prerequisites.
-- [Branch-arm return-type agreement](roadmap/type_language/branch-arm-return-type.md) — give MATCH and
-  TRY a static return type (arms-agree vs synthesized-union vs hybrid), closing the
-  divergent-result hazard symmetric to the divergent-bind hazard the lexical-provenance
-  phase closes structurally.
 
 ## Open items
 
@@ -167,6 +175,7 @@ Rust builtins:
 - [Files and imports](roadmap/libraries/files-and-imports.md)
 - [Generalize `Scope::out` into monadic side-effect capture](roadmap/libraries/monadic-side-effects.md)
 - [Group-based operators](roadmap/libraries/group-based-operators.md)
+- [User-definable n-ary operators](roadmap/libraries/n-ary-operators.md)
 - [Standard library](roadmap/libraries/standard-library.md)
 
 ### Type language — [roadmap/type_language/](roadmap/type_language/)
@@ -177,9 +186,7 @@ are represented in `KType` and routed through dispatch. The substrate the
 predicate-typing stages and the stdlib's functor-heavy collections both
 build on:
 
-- [Branch-arm return-type agreement](roadmap/type_language/branch-arm-return-type.md)
-- [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
-- [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)
+- [Anonymous structural unions](roadmap/type_language/anonymous-unions.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

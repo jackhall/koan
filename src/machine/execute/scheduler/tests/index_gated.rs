@@ -138,11 +138,11 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
     let scope = default_scope(&arena, Box::new(SharedBuf(buf.clone())));
     let exprs = parse(
         "UNION Tick = (more :Null done :Null)\n\
-         FN (PING n :Number c :Tagged) -> Number = (MATCH (c) WITH (\
+         FN (PING n :Number c :Tagged) -> Number = (MATCH (c) -> :Number WITH (\
             more -> (PONG (n) (Tick (done null)))\
             done -> (n)\
          ))\n\
-         FN (PONG n :Number c :Tagged) -> Number = (MATCH (c) WITH (\
+         FN (PONG n :Number c :Tagged) -> Number = (MATCH (c) -> :Number WITH (\
             more -> (PING (n) (Tick (done null)))\
             done -> (n)\
          ))\n\

@@ -349,12 +349,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     let inner = arena.alloc_scope(outer.child_for_call());
     // Inner `:Number` overload: the unbound bare name rejects its shape, so the
     // inner scope's only contribution is a dead lean (must not terminate).
-    register_builtin(
-        inner,
-        "inner_num",
-        one_slot_sig("v", KType::Number),
-        body_b,
-    );
+    register_builtin(inner, "inner_num", one_slot_sig("v", KType::Number), body_b);
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "fwd".into(),
     ))]);

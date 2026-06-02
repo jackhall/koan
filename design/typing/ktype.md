@@ -10,7 +10,9 @@
   so a function-typed slot's identity is its parameters by name and type
   (order-blind). The sibling `KFunctor { params: Record<KType>, ret }` shares the
   storage and identity rules; the variant tag keeps the two families admissibly
-  disjoint (see [functors.md](functors.md)).
+  disjoint (see [functors.md](functors.md)). When a function's source return is
+  per-call-elaborated, its `ret` box holds a `DeferredReturn(DeferredReturnSurface)`
+  carrier — see [Record fields and `KType` hashing](#record-fields-and-ktype-hashing).
 - Structural record: `Record(Box<Record<KType>>)` — an identifier-keyed field schema
   (`:{x :Number, y :Str}`), distinct from the nominal `UserType { kind: Struct }`
   (records are structural, structs nominal). A record *value* (`KObject::Record`,
@@ -55,15 +57,22 @@
   `Signature { sig: &'a Signature<'a>, pinned_slots: Vec<(String, KType)> }`
   serves both signature roles in one variant — the introspectable value
   (carrying `decl_scope` via `sig`) *and* the dispatch constraint ("any
-  module satisfying this signature"); `AbstractType { source_module: &'a
-  Module<'a>, name: String }` is the per-abstract-type-member tag minted by
-  `:|` opaque ascription. Manual `PartialEq` keys identity on
+  module satisfying this signature"); `AbstractType { source:
+  AbstractSource<'a>, name: String }` is the per-abstract-type-member tag.
+  `AbstractSource` is `Sig(ScopeId) | Module(&'a Module<'a>)`: a
+  `Sig`-rooted member is named at SIG-declaration time (a SIG-local
+  `LET Type = ...` that would otherwise collapse to its underlying type binds
+  this name-bearing tag instead), while a `Module`-rooted member is the per-call
+  mint `:|` opaque ascription produces (`Foo.Type`, with a module to project
+  further members off). Manual `PartialEq` keys identity on
   `module.scope_id()` for `KType::Module`, `sig.sig_id()` + `pinned_slots`
   for `KType::Signature` (`sig.path` is diagnostic-only), and
-  `(source_module.scope_id(), name)` for `KType::AbstractType` — so two
+  `(source.scope_id(), name)` for `KType::AbstractType` — so two
   opaque ascriptions of the same source module produce distinct
   `KType::Module` identities (the abstraction barrier) but their
-  `AbstractType` minting for the same slot name compares equal.
+  `AbstractType` minting for the same slot name compares equal, and a
+  per-call `Module`-rooted mint stays distinct from the `Sig`-rooted member it
+  was threaded from.
   Companion wildcards `AnyModule` and `AnySignature` admit any module
   or signature value respectively; the surface keywords `Module` and
   `Signature` lower to them in
@@ -158,6 +167,18 @@ genuinely incomparable — an `(x :Any) -> R` value against both
 dispatch ties and surfaces `AmbiguousDispatch`. The `List` / `Dict` covariance
 is observable the same way: `(xs :(LIST OF Number))` strictly outranks
 `(xs :(LIST OF Any))` for a number-list call.
+
+**Return admission splits on whether the value's return is resolved or
+deferred.** A `Resolved` value return admits covariantly as above — `sig_ret ==
+ret || sig_ret ≺ ret`. A *deferred* value return (a per-call-elaborated functor
+return like `-> Er`) carries no resolved `KType`, so `function_compat` admits it
+by **syntactic equality of its surface shadow**: an `Any` slot admits any
+deferred return; a slot whose `ret` is a `KType::DeferredReturn` carrier admits
+iff its `DeferredReturnSurface` shadow equals the candidate's; any resolved slot
+rejects, since a deferred return is opaque until per-call elaboration and refines
+nothing more precise than its own shadow. The specificity short-circuit
+`DeferredReturn ≺ Any` (covariant, via the `Any` arm) keeps a deferred-return
+slot strictly more specific than an `Any`-return one.
 
 **Record values subtype the dual way to function params.** A record value is
 ranked by `record_value_more_specific`
@@ -356,7 +377,12 @@ The return type is non-optional and runtime-enforced. The scheduler injects a
 check at user-fn slot finalization that surfaces
 [`KErrorKind::TypeMismatch`](../../src/machine/core/kerror.rs) (with a `<return>` arg
 name and a frame naming the called function) on mismatch. `Any` is the
-no-enforcement fast path for sites that genuinely don't care.
+no-enforcement fast path for sites that genuinely don't care. `MATCH` and `TRY`
+arms share this check: their mandatory `-> :T` rides the same slot carrier (a
+[`ReturnContract`](../../src/machine/core/kfunction/body.rs) — `Function` for a
+call, `Arm` for a function-less arm) and the same Done-arm check, so every arm
+agrees on `T` and the expression's value carries `T` for downstream dispatch (see
+[execution-model.md § Arms as own blocks](../execution-model.md#arms-as-own-blocks)).
 
 FN itself registers with a return type of `Any` — there's no "any function"
 KType to declare, since a function with no signature has nothing to dispatch
@@ -515,9 +541,21 @@ The shape has two defining properties:
 its hand-written `PartialEq` arm-for-arm: the discriminant leads (so distinct variants
 never alias and the unit variants need no further mixing), then each compound arm
 hashes exactly the fields its `PartialEq` arm compares. The arena-pointer variants hash
-their stable identity key — `Module` / `AbstractType` hash `scope_id()`, `Signature`
-hashes `sig_id()` — never the raw pointer, and `UserTypeKind`'s payload-ignoring
+their stable identity key — `Module` hashes `scope_id()`, `AbstractType` hashes its
+`source.scope_id()`, `Signature` hashes `sig_id()` — never the raw pointer, and
+`UserTypeKind`'s payload-ignoring
 equality is mirrored by a discriminant-only `Hash`.
+
+`KType::DeferredReturn(DeferredReturnSurface)` is a confined hashable leaf: it
+holds the type-language shadow of a per-call-elaborated function return —
+`TypeExpr(TypeName)` for parser-preserved leaf forms, `Expression(String)` for
+the canonical `summarize()` render of a parens-form return (the live
+`KExpression` impls neither `Eq` nor `Hash`). It hashes and compares by that
+shadow, so two functions differing only in their deferred returns are distinct
+structural types. The variant is valid *only* inside a synthesized
+`KFunction` / `KFunctor` `ret` box that `function_value_ktype` builds; no runtime
+value's `ktype()` returns it free-standing, and it admits nothing on its own
+(`accepts_part` is `false`).
 
 The same `Record<V>` substrate also backs the first-class structural record type
 `KType::Record(Record<KType>)` and its value `KObject::Record(Record<KObject>, …)`
@@ -531,9 +569,13 @@ dict (see [type-language-via-dispatch.md § Record-type sigil](type-language-via
 ## Known limitations
 
 - **TCO collapses frames.** When A tail-calls B, only B's return type is
-  checked at runtime — the slot's `function` field is replaced at TCO time.
-- **Builtins are not runtime-checked.** They return through `BodyResult::Value`
-  with no slot frame, so the runtime check has nowhere to attach. Their
-  declared return types are honest but unenforced.
+  checked at runtime — the slot's `ReturnContract` carrier is replaced at TCO
+  time. A nested `MATCH` / `TRY` arm whose body tail-calls a function is checked
+  against the callee's contract, not the arm's `-> :T`.
+- **Value-returning builtins are not runtime-checked.** They return through
+  `BodyResult::Value` with no slot frame, so the runtime check has nowhere to
+  attach; their declared return types are honest but unenforced. `MATCH` / `TRY`
+  are the exception — they return through `BodyResult::Tail` carrying a
+  `ReturnContract::Arm`, so their `-> :T` is enforced.
 The two-phase execution work in [open-work.md](open-work.md) closes both
 uniformly.

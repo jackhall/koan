@@ -11,6 +11,7 @@
 //! arena pointers; every other variant is owned data and ignores the parameter.
 
 use super::record::Record;
+use super::signature::DeferredReturnSurface;
 use crate::machine::core::{CallArena, ScopeId};
 use crate::machine::model::values::{Module, Signature};
 use std::collections::HashMap;
@@ -103,6 +104,25 @@ impl<'a> UserTypeKind<'a> {
     }
 }
 
+/// Root of a [`KType::AbstractType`] identity. `Sig` carries the SIG decl_scope's id for a
+/// member named at SIG-declaration time (no `&Module` to project members off); `Module`
+/// carries the per-call opaque-ascription module so `Foo.Type` can project further members.
+/// `scope_id()` is the identity key both variants contribute to `AbstractType` equality.
+#[derive(Clone, Copy)]
+pub enum AbstractSource<'a> {
+    Sig(ScopeId),
+    Module(&'a Module<'a>),
+}
+
+impl<'a> AbstractSource<'a> {
+    pub fn scope_id(&self) -> ScopeId {
+        match self {
+            AbstractSource::Sig(id) => *id,
+            AbstractSource::Module(m) => m.scope_id(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub enum KType<'a> {
     Number,
@@ -137,6 +157,17 @@ pub enum KType<'a> {
         params: Record<KType<'a>>,
         ret: Box<KType<'a>>,
     },
+    /// Confined carrier for a synthesized FN/FUNCTOR `ret` slot whose source return is a
+    /// `ReturnType::Deferred` — a per-call-elaborated return like `-> Er` or
+    /// `-> (MODULE_TYPE_OF Er Type)`. Holds only the hashable surface shadow
+    /// ([`DeferredReturnSurface`]) so equality/hashing/specificity read the deferred
+    /// shape directly instead of coarsening it to `Any`. Valid *only* inside a
+    /// `KFunction`/`KFunctor` `ret` box that `function_value_ktype` builds; no runtime
+    /// value's `ktype()` returns it, and it admits nothing on its own
+    /// (`accepts_part` is `false`). Admission against a precise slot is syntactic
+    /// equality of the surface shadow — see
+    /// [ktype.md § Variance](../../../../design/typing/ktype.md#variance).
+    DeferredReturn(DeferredReturnSurface),
     Identifier,
     /// Lazy slot: accepts an unevaluated `ExpressionPart::Expression` so the builtin chooses
     /// when (or whether) to run it.
@@ -180,11 +211,15 @@ pub enum KType<'a> {
         module: &'a Module<'a>,
         frame: Option<Rc<CallArena>>,
     },
-    /// Abstract type member of a module, minted by opaque ascription (`Foo.Type`). Manual
-    /// `PartialEq` compares `(source_module.scope_id(), name)` so two opaque-ascriptions of
-    /// the same source module with the same abstract name compare equal.
+    /// Abstract type member named by a SIG slot or minted by opaque ascription. `source`
+    /// distinguishes the two roots: `Sig(scope_id)` is the SIG-decl-time member (bound when a
+    /// SIG-local `LET Type = ...` would otherwise collapse to the underlying type), `Module`
+    /// is the per-call mint `:|` produces (`Foo.Type`). Identity keys on
+    /// `(source.scope_id(), name)`, so two opaque ascriptions of the same source module with
+    /// the same abstract name compare equal, and a per-call module mint stays distinct from
+    /// the SIG-decl-time member it was threaded from.
     AbstractType {
-        source_module: &'a Module<'a>,
+        source: AbstractSource<'a>,
         name: String,
     },
     /// `:Module` slot wildcard — admits first-class modules.
@@ -235,6 +270,7 @@ impl<'a> KType<'a> {
                     ret.name()
                 )
             }
+            KType::DeferredReturn(s) => s.render(),
             KType::Identifier => "Identifier".into(),
             KType::KExpression => "KExpression".into(),
             KType::TypeExprRef => "TypeExprRef".into(),
@@ -365,14 +401,14 @@ impl<'a> PartialEq for KType<'a> {
             }
             (
                 AbstractType {
-                    source_module: m1,
+                    source: s1,
                     name: n1,
                 },
                 AbstractType {
-                    source_module: m2,
+                    source: s2,
                     name: n2,
                 },
-            ) => m1.scope_id() == m2.scope_id() && n1 == n2,
+            ) => s1.scope_id() == s2.scope_id() && n1 == n2,
             (
                 Mu {
                     binder: b1,
@@ -387,6 +423,7 @@ impl<'a> PartialEq for KType<'a> {
                 c1 == c2 && a1 == a2
             }
             (RecursiveRef(n1), RecursiveRef(n2)) => n1 == n2,
+            (DeferredReturn(a), DeferredReturn(b)) => a == b,
             _ => false,
         }
     }
@@ -398,9 +435,10 @@ impl<'a> Eq for KType<'a> {}
 /// variants never alias and the unit variants need no further mixing; each
 /// compound arm then hashes exactly the fields its `PartialEq` arm compares.
 ///
-/// The arena-pointer variants hash their stable identity key — `Module` and
-/// `AbstractType` hash `scope_id()`, `Signature` hashes `sig_id()` — never the raw
-/// pointer, matching how `PartialEq` resolves them. `Module`'s `frame` lifecycle
+/// The arena-pointer variants hash their stable identity key — `Module` hashes
+/// `scope_id()`, `AbstractType` hashes its `source.scope_id()`, `Signature` hashes
+/// `sig_id()` — never the raw pointer, matching how `PartialEq` resolves them. `Module`'s
+/// `frame` lifecycle
 /// anchor and the payload-only `UserTypeKind` fields stay excluded (the latter via
 /// `UserTypeKind`'s discriminant-only `Hash`). Recursion bottoms out at the leaf
 /// `RecursiveRef`, so `Mu` / `ConstructorApply` hashing is bounded.
@@ -440,11 +478,8 @@ impl<'a> std::hash::Hash for KType<'a> {
                 pinned_slots.hash(state);
             }
             Module { module, .. } => module.scope_id().hash(state),
-            AbstractType {
-                source_module,
-                name,
-            } => {
-                source_module.scope_id().hash(state);
+            AbstractType { source, name } => {
+                source.scope_id().hash(state);
                 name.hash(state);
             }
             Mu { binder, body } => {
@@ -456,6 +491,7 @@ impl<'a> std::hash::Hash for KType<'a> {
                 args.hash(state);
             }
             RecursiveRef(n) => n.hash(state),
+            DeferredReturn(s) => s.hash(state),
         }
     }
 }

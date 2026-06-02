@@ -661,3 +661,109 @@ fn constructor_apply_stamped_type_args_checked_structurally() {
     };
     assert!(!slot_bad.matches_value(&stamped));
 }
+
+use crate::machine::model::ast::TypeName;
+use crate::machine::model::types::{DeferredReturn, DeferredReturnSurface, ReturnType};
+
+/// A function whose `ret` slot is a `DeferredReturn` carrier is strictly more specific
+/// than the same shape with an `Any` return (covariant short-circuit), and the reverse
+/// does not hold — `Any` never refines a precise placeholder.
+#[test]
+fn deferred_return_more_specific_than_any() {
+    let deferred = KType::KFunction {
+        params: Record::new(),
+        ret: Box::new(KType::DeferredReturn(DeferredReturnSurface::TypeExpr(
+            TypeName::leaf("Er".into()),
+        ))),
+    };
+    let any = KType::KFunction {
+        params: Record::new(),
+        ret: Box::new(KType::Any),
+    };
+    assert!(deferred.is_more_specific_than(&any));
+    assert!(!any.is_more_specific_than(&deferred));
+}
+
+/// Two functors differing only in their deferred-return shadow are distinct: not equal,
+/// neither more specific than the other, and they hash apart.
+#[test]
+fn two_functors_differ_only_in_deferred_return_are_distinct() {
+    use std::hash::{Hash, Hasher};
+    let er = KType::KFunctor {
+        params: Record::new(),
+        ret: Box::new(KType::DeferredReturn(DeferredReturnSurface::TypeExpr(
+            TypeName::leaf("Er".into()),
+        ))),
+    };
+    let ar = KType::KFunctor {
+        params: Record::new(),
+        ret: Box::new(KType::DeferredReturn(DeferredReturnSurface::TypeExpr(
+            TypeName::leaf("Ar".into()),
+        ))),
+    };
+    assert_ne!(er, ar);
+    assert!(!er.is_more_specific_than(&ar));
+    assert!(!ar.is_more_specific_than(&er));
+    // `KType` carries interior mutability, so it can't key a `HashSet` (clippy
+    // `mutable_key_type`). Hash each directly: the deferred-return shadow participates
+    // in `KType`'s hash, so the two functors hash apart.
+    let hash = |k: &KType<'_>| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        k.hash(&mut h);
+        h.finish()
+    };
+    assert_ne!(hash(&er), hash(&ar));
+}
+
+/// `function_compat` admits a deferred-return candidate against a `DeferredReturn` slot
+/// iff the surface shadows match, admits any deferred return against an `Any` slot, and
+/// rejects against a resolved (`Number`) slot — a deferred return refines nothing more
+/// precise than its own shadow.
+#[test]
+fn deferred_return_admission_via_function_compat() {
+    let candidate = ExpressionSignature {
+        return_type: ReturnType::Deferred(DeferredReturn::TypeExpr(TypeName::leaf("Er".into()))),
+        elements: vec![],
+    };
+    let no_params = Record::new();
+
+    // Matching shadow → admit.
+    let slot_er =
+        KType::DeferredReturn(DeferredReturnSurface::TypeExpr(TypeName::leaf("Er".into())));
+    assert!(function_compat(&candidate, &no_params, &slot_er, false));
+
+    // Differing shadow → reject.
+    let slot_ar =
+        KType::DeferredReturn(DeferredReturnSurface::TypeExpr(TypeName::leaf("Ar".into())));
+    assert!(!function_compat(&candidate, &no_params, &slot_ar, false));
+
+    // Resolved slot → reject (opaque until elaboration).
+    assert!(!function_compat(
+        &candidate,
+        &no_params,
+        &KType::Number,
+        false
+    ));
+
+    // `Any` slot → admit.
+    assert!(function_compat(&candidate, &no_params, &KType::Any, false));
+}
+
+/// `DeferredReturnSurface` identity is syntactic: two `Expression` shadows built from the
+/// same render are equal and hash-equal; a differing render is unequal.
+#[test]
+fn deferred_return_surface_eq_and_hash() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    fn h(s: &DeferredReturnSurface) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        s.hash(&mut hasher);
+        hasher.finish()
+    }
+    let a = DeferredReturnSurface::Expression("MODULE_TYPE_OF Er Type".into());
+    let b = DeferredReturnSurface::Expression("MODULE_TYPE_OF Er Type".into());
+    let c = DeferredReturnSurface::Expression("MODULE_TYPE_OF Ar Type".into());
+    assert_eq!(a, b);
+    assert_eq!(h(&a), h(&b));
+    assert_ne!(a, c);
+}

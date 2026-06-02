@@ -74,15 +74,53 @@ definition. Type checking forbids passing an `IntOrdAbstract.Type` value to
 anything expecting a `Number` — the abstraction barrier is enforced.
 
 Opaque ascription is **generative**: each application mints a fresh
-`KType::AbstractType { source_module, name }` per declared abstract type.
-The `source_module` field is an `&'a Module<'a>` pointer to the freshly
-allocated child module the ascription introduces; manual `PartialEq`
-compares `(source_module.scope_id(), name)`, so two opaque ascriptions of
-the same source module yield distinct `scope_id`s and therefore distinct
-types that cannot be confused, while two `KType::AbstractType` carriers
-minted from the same ascription compare equal. The carrier lives in
+`KType::AbstractType { source: Module(view), name }` per declared abstract
+type, where `view` is the freshly allocated child module the ascription
+introduces. `AbstractType`'s `source` is an
+[`AbstractSource`](../../src/machine/model/types/ktype.rs) enum —
+`Module(&'a Module<'a>)` for this per-call mint, `Sig(ScopeId)` for the
+SIG-declaration-time member (below) — and manual `PartialEq` compares
+`(source.scope_id(), name)`, so two opaque ascriptions of the same source
+module yield distinct `scope_id`s and therefore distinct types that cannot be
+confused, while two `KType::AbstractType` carriers minted from the same
+ascription compare equal. The carrier lives in
 [`KType`](../../src/machine/model/types/ktype.rs); the operators are registered as
 ordinary builtins in [`ascribe.rs`](../../src/builtins/ascribe.rs).
+
+### VAL-slot reads carry the abstract member identity
+
+A SIG-local abstract-type binding stays *named* end to end, so a slot read
+through an opaque view reports the abstract type rather than the underlying
+representation. Three sites cooperate.
+
+A SIG-local type binding (`LET Type = Number` inside a SIG body, the type-route
+under `Scope::is_in_sig_body` in
+[`let_binding.rs`](../../src/builtins/let_binding.rs)) binds the name-bearing
+`KType::AbstractType { source: Sig(decl_scope_id), name }` rather than collapsing
+to the underlying type, so a later `VAL zero :Type` records that `zero` *names*
+the abstract member `Type`. A higher-kinded `LET Wrap = (TEMPLATE T)` is the
+exception — it stays a `TypeConstructor` so ascription's per-call constructor mint
+preserves the parameterization. Outer aliases and builtin annotations (`:Number`,
+an outer `LET MyAlias = Number`) stay concrete.
+
+Opaque ascription ([`ascribe.rs`](../../src/builtins/ascribe.rs)'s `body_opaque`),
+after minting `type_members`, records on the new `Module` a `slot_type_tags` map
+(VAL-slot name → per-call `AbstractType`) for each slot whose SIG-declared type is
+a `Sig`-rooted member present in `type_members`. Transparent `:!` leaves the map
+empty, so transparent reads stay concrete.
+
+ATTR's `access_module_member`
+([`attr.rs`](../../src/builtins/attr.rs)), on a value-side slot hit with a
+`slot_type_tags` entry, re-tags the read into a
+[`KObject::Wrapped`](../../src/machine/model/values/kobject.rs) carrier whose
+`type_id` is the per-call abstract identity — the same `Wrapped` variant NEWTYPE
+uses, distinguished by its `type_id`'s KType. So `(IntOrdView.zero)` reads as the
+abstract `Type` (opaque), not the underlying `Number`, and a functor body
+`(FN (GET_ZERO Er :WithZero) -> (MODULE_TYPE_OF Er Type) = (Er.zero))` whose return
+type is the per-call abstract member admits the slot read. The carrier and its
+`type_id` are allocated in the *module's* arena (declaration-stable), so the
+`type_id` outlives any lift or deep-clone of the read value into a per-call functor
+arena.
 
 Opaque ascription is the type-abstraction primitive. It replaces the
 newtype-with-private-fields pattern that a trait system would need.
@@ -120,10 +158,11 @@ than a raw `bindings.data` lookup.
 `KType::Module` carries the live `&Module` pointer (plus the per-call
 frame anchor for functor-built modules); `KType::Signature { sig, pinned_slots }`
 carries the arena-pinned `&Signature` plus any `SIG_WITH` abstract-type
-pins; `KType::AbstractType { source_module, name }` carries the
-abstract-type member of an opaquely-ascribed module. Module identity is by
+pins; `KType::AbstractType { source, name }` carries an abstract-type member —
+either a SIG-declared member (`source: Sig(scope_id)`) or the per-call mint of an
+opaquely-ascribed module (`source: Module(view)`). Module identity is by
 `module.scope_id()`; signature identity by `sig.sig_id()` + `pinned_slots`;
-abstract-type identity by `(source_module.scope_id(), name)`. The
+abstract-type identity by `(source.scope_id(), name)`. The
 type-position wildcards `KType::AnyModule` and `KType::AnySignature`
 admit any first-class module or signature value — the surface keywords
 `Module` and `Signature` lower to them in

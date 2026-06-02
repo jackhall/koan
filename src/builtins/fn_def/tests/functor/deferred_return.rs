@@ -37,14 +37,8 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
 
 /// `(MODULE_TYPE_OF Er Type)` parens-form return type registers as
 /// `ReturnType::Deferred(Expression(...))` rather than erroring "unbound name
-/// `Er`" at FN-construction.
-///
-/// Pins only the FN-def side. End-to-end invocation `(GET_ZERO IntOrdView)`
-/// is gated on `roadmap/type_language/val-slot-attr-retagging.md`: ATTR
-/// returns the raw underlying carrier (`Number`) rather than re-tagging it
-/// with the per-call abstract identity minted by `:|`, so the lift-time slot
-/// check against the per-call `KType::UserType { kind: Module, name: "Type",
-/// .. }` rejects with the "per-call return type" diagnostic.
+/// `Er`" at FN-construction. Pins the FN-def side; the end-to-end invocation is
+/// covered by [`functor_get_zero_on_opaque_view_re_tags_slot_read`].
 #[test]
 fn functor_return_module_type_of_parameter_resolves_per_call() {
     use crate::machine::model::ReturnType;
@@ -77,6 +71,53 @@ fn functor_return_module_type_of_parameter_resolves_per_call() {
         "GET_ZERO's return type should be Deferred, got {:?}",
         f.signature.return_type,
     );
+}
+
+/// End-to-end functor-on-VAL-slot call: `(GET_ZERO IntOrdView)` succeeds where
+/// `IntOrdView` is an opaque (`:|`) view. The body `(Er.zero)` reads the VAL slot,
+/// which ATTR re-tags with the per-call abstract identity `:|` minted for
+/// `IntOrdView.Type`, so the body value satisfies the per-call return type
+/// `(MODULE_TYPE_OF Er Type)`. The result carries the abstract `Type` identity
+/// (`ktype().name()` is "Type", a `KType::AbstractType`); unwrapping the `Wrapped`
+/// carrier yields the underlying `Number(0)`.
+#[test]
+fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "SIG WithZero = ((LET Type = Number) (VAL zero :Type))\n\
+         MODULE IntOrd = ((LET Type = Number) (LET zero = 0))\n\
+         LET IntOrdView = (IntOrd :| WithZero)",
+    );
+    run(
+        scope,
+        "FN (GET_ZERO Er :WithZero) -> (MODULE_TYPE_OF Er Type) = (Er.zero)",
+    );
+    let result = run_one(scope, parse_one("GET_ZERO IntOrdView"));
+    match result {
+        KObject::Wrapped { inner, type_id } => {
+            assert!(
+                matches!(type_id, KType::AbstractType { .. }),
+                "re-tagged slot read must carry an AbstractType identity, got {:?}",
+                type_id,
+            );
+            assert_eq!(
+                type_id.name(),
+                "Type",
+                "the abstract identity is the SIG-named member `Type`",
+            );
+            assert!(
+                matches!(inner.get(), KObject::Number(n) if *n == 0.0),
+                "unwrapping the carrier yields the underlying Number(0), got {:?}",
+                inner.get().ktype(),
+            );
+        }
+        other => panic!(
+            "expected a re-tagged Wrapped carrier from (GET_ZERO IntOrdView), got {:?}",
+            other.ktype(),
+        ),
+    }
 }
 
 /// `(SIG_WITH Set ((Elt: (MODULE_TYPE_OF Er Type))))` — the sharing-constraint

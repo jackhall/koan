@@ -1,4 +1,5 @@
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::types::AbstractSource;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, SchedulerHandle, Scope,
@@ -127,6 +128,33 @@ pub fn body<'a>(
         // `(PICK x: OrderedSig)` dispatch to the same overload. LET aliasing is
         // value-style gated — no `nominal_binder` carve-out; that's reserved for
         // STRUCT / SIG / FUNCTOR / MODULE / named UNION at their own install sites.
+        //
+        // A SIG-local type binding (`LET Type = Number` inside a SIG body) binds the
+        // name-bearing `AbstractType { source: Sig(decl_scope) }` rather than the collapsed
+        // underlying type, so a later `VAL zero :Type` records that `zero` *names* the
+        // abstract member. Opaque ascription threads this into the per-call module's
+        // `slot_type_tags` and ATTR re-tags the slot read (see ascribe.rs / attr.rs). Only
+        // a bare type LET inside a SIG is wrapped; outer aliases stay concrete.
+        //
+        // A higher-kinded `LET Wrap = (TEMPLATE T)` stays a `TypeConstructor`: ascription
+        // already mints a fresh per-call constructor for those members (preserving the
+        // higher-kinded shape), so collapsing it to an abstract scalar would lose the
+        // parameterization.
+        let is_type_constructor = matches!(
+            kt,
+            KType::UserType {
+                kind: crate::machine::model::types::UserTypeKind::TypeConstructor { .. },
+                ..
+            }
+        );
+        let kt = if scope.is_in_sig_body() && !is_type_constructor {
+            KType::AbstractType {
+                source: AbstractSource::Sig(scope.id),
+                name: name.clone(),
+            }
+        } else {
+            kt
+        };
         scope.register_type(name, kt, bind_index);
     } else {
         // An untyped LET is a resolution boundary; an empty container with no

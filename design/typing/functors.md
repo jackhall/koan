@@ -224,12 +224,18 @@ gates on `ReturnType::is_resolved()` so the static-typing pathway stays
 untouched and the deferred slot check runs only inside the Combine
 finish where the per-call elaboration is in hand. The structural
 `KType::KFunctor { ret }` synthesis at
-[`function_value_ktype`](../../src/machine/model/values/kobject.rs) and the
+[`function_value_ktype`](../../src/machine/model/values/kobject.rs) preserves the
+deferred surface form structurally: a `Deferred(_)` source return projects into a
+confined `KType::DeferredReturn(DeferredReturnSurface)` carrier holding the
+deferred form's type-language shadow, rather than coarsening to `KType::Any`. The
 admission helper at
-[`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
-coarsen `Deferred(_)` to `KType::Any` because the structural function-type
-language has no surface for "per-call elaboration of this expression" —
-see [open-work.md](open-work.md) for the precision refinement.
+[`function_compat`](../../src/machine/model/types/ktype_predicates.rs) then admits
+a deferred return by syntactic shadow equality — an `Any` slot admits any deferred
+return, a `KType::DeferredReturn` slot admits iff the shadows match
+([ktype.md § Variance](ktype.md#variance)). The deferred-*parameter* half of this
+precision — a per-call parameter type that reads as `Any` — is folded into
+[modular implicits (stage 5)](../../roadmap/predicate_typing/modular-implicits.md),
+where implicit search dispatches on parameter types.
 
 Multi-argument FUNCTORs are ordinary multi-parameter binders. Currying is
 just nested FUNCTORs whose outer return type is the inner functor's type,

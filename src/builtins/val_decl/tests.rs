@@ -21,10 +21,13 @@ fn val_inside_sig_binds_typeexpr_carrier() {
 }
 
 /// Pins the parking path: sibling statement order isn't guaranteed, so VAL parks
-/// on LET's placeholder and resumes via Combine, picking the SIG-local shadow
-/// (`KType::Number`) over the meta-type builtin.
+/// on LET's placeholder and resumes via Combine, picking the SIG-local shadow over
+/// the meta-type builtin. The shadow binds a `Sig`-rooted `AbstractType` (so the
+/// slot records that it *names* the abstract member `Type`), not the collapsed
+/// underlying `Number`.
 #[test]
 fn val_resolves_sig_local_type_shadow() {
+    use crate::machine::model::types::AbstractSource;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -37,12 +40,17 @@ fn val_resolves_sig_local_type_shadow() {
     };
     let zero = s.decl_scope().bindings().expect_value("zero");
     match zero {
-        KObject::KTypeValue(kt) => assert_eq!(
-            *kt,
-            KType::Number,
-            "SIG-local `LET Type = Number` must shadow the meta-type builtin",
+        KObject::KTypeValue(KType::AbstractType {
+            source: AbstractSource::Sig(_),
+            name,
+        }) => assert_eq!(
+            name, "Type",
+            "VAL slot must record that it names the SIG-local abstract `Type`",
         ),
-        other => panic!("expected KTypeValue, got {:?}", other.ktype()),
+        other => panic!(
+            "expected KTypeValue(AbstractType(Type)), got {:?}",
+            other.ktype()
+        ),
     }
 }
 
@@ -155,10 +163,13 @@ fn val_slot_satisfied_by_module_let_member() {
 }
 
 /// Pins the canonical SIG form: abstract type via `LET Type = ...` plus a VAL
-/// slot whose declared type references it. `Type` lives in
-/// `bindings.types`, `zero` in `bindings.data`.
+/// slot whose declared type references it. `Type` lives in `bindings.types`,
+/// `zero` in `bindings.data`; both carry the `Sig`-rooted `AbstractType` identity
+/// (so opacity threads to the per-call module's `slot_type_tags`), not the
+/// collapsed underlying `Number`.
 #[test]
 fn val_with_abstract_type_member_declaration() {
+    use crate::machine::model::types::AbstractSource;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -170,7 +181,19 @@ fn val_with_abstract_type_member_declaration() {
         _ => panic!("WithZero must bind a Signature KType"),
     };
     let type_kt = s.decl_scope().bindings().expect_type("Type");
-    assert_eq!(*type_kt, KType::Number);
+    assert!(matches!(
+        type_kt,
+        KType::AbstractType {
+            source: AbstractSource::Sig(_),
+            name,
+        } if name == "Type"
+    ));
     let zero = s.decl_scope().bindings().expect_value("zero");
-    assert!(matches!(zero, KObject::KTypeValue(KType::Number)));
+    assert!(matches!(
+        zero,
+        KObject::KTypeValue(KType::AbstractType {
+            source: AbstractSource::Sig(_),
+            name,
+        }) if name == "Type"
+    ));
 }

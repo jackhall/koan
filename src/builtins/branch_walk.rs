@@ -2,9 +2,48 @@
 //! body whose tag matches a dispatched value's tag without knowing what tags mean.
 //!
 //! `TRY` opts into wildcard `_` matching for dispatcher-internal error kinds; `MATCH`'s
-//! exhaustiveness check is enforced by the caller.
+//! exhaustiveness check is enforced by the caller. [`resolve_arm_return_contract`] builds
+//! the `-> :T` return contract both arms enforce on their result.
 
+use crate::builtins::fn_def::return_type::{extract_return_type_raw, ReturnTypeRaw};
+use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
+use crate::machine::model::KType;
+use crate::machine::{ArgumentBundle, KError, KErrorKind, ResolveTypeExprOutcome, Scope};
+
+/// Resolve a MATCH / TRY `-> :T` annotation slot into the [`ReturnContract::Arm`] its
+/// arms are checked against. Reuses the FN return-type extraction, then resolves the
+/// type-expression in `scope` (MATCH / TRY take no parameters, so there is no deferred or
+/// parameter-referencing case). Only a fully-resolved type is supported; a
+/// forward-referenced or non-type slot raises `ShapeError`. `kind` (`"MATCH"` / `"TRY"`)
+/// labels both the diagnostic and the error-frame appended on a return mismatch.
+pub(crate) fn resolve_arm_return_contract<'a>(
+    scope: &'a Scope<'a>,
+    bundle: &mut ArgumentBundle<'a>,
+    kind: &'static str,
+) -> Result<ReturnContract<'a>, KError> {
+    let kt = match extract_return_type_raw(bundle)? {
+        ReturnTypeRaw::Resolved(kt) => kt,
+        ReturnTypeRaw::TypeExprCarrier(te) => match scope.resolve_type_expr(&te) {
+            ResolveTypeExprOutcome::Done(kt) => kt.clone(),
+            _ => KType::from_name(&te.render()).ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(format!(
+                    "{kind} return type `{}` is not a known type",
+                    te.render()
+                )))
+            })?,
+        },
+        ReturnTypeRaw::ExprCarrier(_) => {
+            return Err(KError::new(KErrorKind::ShapeError(format!(
+                "{kind} return type must be a type expression, not a parenthesized expression"
+            ))))
+        }
+    };
+    Ok(ReturnContract::Arm {
+        ret: scope.arena.alloc(kt),
+        kind,
+    })
+}
 
 /// Returns the body for the first triple whose tag matches `target_tag`, or — when
 /// `allow_wildcard` is true and no exact match was found — the first `_` body. Exact-tag
