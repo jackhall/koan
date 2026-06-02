@@ -203,9 +203,9 @@ mod tests {
     /// A non-record operand matches no FROM overload — the `:{}` `record` slot rejects
     /// `5`, and no evaluation of the `(x y)` operand can change that, so dispatch fails
     /// cleanly with `DispatchFailed` ("no matching function") at the call rather than
-    /// eagerly evaluating `(x y)` and leaking its `unbound name 'x'` — the post-walk
-    /// fallback's admits-modulo-eager gate keeps it a clean miss (see
-    /// [scheduler.md § Post-walk dispatch fallback precedence](../../design/typing/scheduler.md#post-walk-dispatch-fallback-precedence)).
+    /// eagerly evaluating `(x y)` and leaking its `unbound name 'x'` — the relaxed
+    /// admission pass keeps it a clean miss (see
+    /// [scheduler.md § In-walk dispatch precedence](../../design/typing/scheduler.md#in-walk-dispatch-precedence)).
     /// The root miss surfaces through `execute()` like an `AmbiguousDispatch`.
     #[test]
     fn from_non_record_operand_is_dispatch_non_match() {

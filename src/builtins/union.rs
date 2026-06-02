@@ -270,9 +270,9 @@ mod tests {
     /// No anonymous `UNION (...)` form: the bare two-part shape matches no UNION
     /// overload (the declarator is `UNION <name> = (<schema>)`, four elements), so
     /// dispatch fails cleanly with `DispatchFailed` rather than eagerly evaluating the
-    /// `(ok …)` operand and leaking `UnboundName("ok")` — the post-walk fallback's
-    /// admits-modulo-eager gate keeps it a clean miss (see
-    /// [scheduler.md § Post-walk dispatch fallback precedence](../../design/typing/scheduler.md#post-walk-dispatch-fallback-precedence)).
+    /// `(ok …)` operand and leaking `UnboundName("ok")` — the relaxed admission pass
+    /// keeps it a clean miss (see
+    /// [scheduler.md § In-walk dispatch precedence](../../design/typing/scheduler.md#in-walk-dispatch-precedence)).
     #[test]
     fn anonymous_union_fails_dispatch() {
         use crate::machine::execute::Scheduler;

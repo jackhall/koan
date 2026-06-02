@@ -5,7 +5,7 @@
 
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
-use crate::machine::core::{BindingIndex, FunctionLookup, Resolution, RuntimeArena};
+use crate::machine::core::{BindingIndex, Resolution, RuntimeArena};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
@@ -127,13 +127,10 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(99))
         .unwrap();
     let key = f.signature.untyped_key();
-    match scope.bindings().lookup_function(&key, None) {
-        FunctionLookup::Bucket(survivors) => {
-            assert_eq!(survivors.len(), 1);
-            assert!(std::ptr::eq(survivors[0], f));
-        }
-        _ => panic!("expected Bucket with one overload"),
-    }
+    let lookup = scope.bindings().lookup_function(&key, None);
+    assert_eq!(lookup.overloads.len(), 1);
+    assert!(std::ptr::eq(lookup.overloads[0], f));
+    assert!(lookup.pending.is_none());
 }
 
 #[test]
@@ -179,27 +176,19 @@ fn lookup_function_filters_per_overload_visibility() {
     scope
         .register_function("BAR".to_string(), f_late, obj_late, BindingIndex::value(7))
         .unwrap();
-    match scope.bindings().lookup_function(&key, Some(5)) {
-        FunctionLookup::Bucket(survivors) => {
-            assert_eq!(
-                survivors.len(),
-                1,
-                "only the earlier-sibling overload is visible"
-            );
-            assert!(std::ptr::eq(survivors[0], f_early));
-        }
-        _ => panic!("expected Bucket with one visible overload"),
-    }
-    match scope.bindings().lookup_function(&key, Some(9)) {
-        FunctionLookup::Bucket(survivors) => {
-            assert_eq!(survivors.len(), 2);
-        }
-        _ => panic!("expected Bucket with both overloads"),
-    }
+    let visible_early = scope.bindings().lookup_function(&key, Some(5));
+    assert_eq!(
+        visible_early.overloads.len(),
+        1,
+        "only the earlier-sibling overload is visible"
+    );
+    assert!(std::ptr::eq(visible_early.overloads[0], f_early));
+    let visible_both = scope.bindings().lookup_function(&key, Some(9));
+    assert_eq!(visible_both.overloads.len(), 2);
 }
 
 #[test]
-fn lookup_function_falls_through_to_pending_overload() {
+fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     // No bucket for this key, but a pending-overload entry stands in for an
@@ -209,18 +198,17 @@ fn lookup_function_falls_through_to_pending_overload() {
     scope
         .install_pending_overload(key.clone(), NodeId(11), BindingIndex::value(2))
         .unwrap();
-    match scope.bindings().lookup_function(&key, Some(5)) {
-        FunctionLookup::Pending(producer) => assert_eq!(producer, NodeId(11)),
-        _ => panic!("expected Pending(NodeId(11))"),
-    }
-    assert!(matches!(
-        scope.bindings().lookup_function(&key, Some(1)),
-        FunctionLookup::None,
-    ));
+    let visible = scope.bindings().lookup_function(&key, Some(5));
+    assert!(visible.overloads.is_empty());
+    assert_eq!(visible.pending, Some(NodeId(11)));
+    // Filtered out: no overloads and no visible pending — the old `None`.
+    let hidden = scope.bindings().lookup_function(&key, Some(1));
+    assert!(hidden.overloads.is_empty());
+    assert!(hidden.pending.is_none());
 }
 
 #[test]
-fn lookup_function_bucket_shadows_pending_overload() {
+fn lookup_function_surfaces_pending_overload_alongside_bucket() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     let f = arena.alloc_function(KFunction::new(
@@ -233,19 +221,18 @@ fn lookup_function_bucket_shadows_pending_overload() {
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(2))
         .unwrap();
     let key = f.signature.untyped_key();
-    // Pending install onto an already-populated bucket is a silent no-op; the
-    // live bucket continues to shadow the pending entry.
+    // A pending sibling is recorded alongside a finalized overload (no longer a
+    // no-op): the scope walk parks the bucket until the sibling finalizes.
     scope
         .install_pending_overload(key.clone(), NodeId(99), BindingIndex::value(3))
         .unwrap();
-    match scope.bindings().lookup_function(&key, Some(9)) {
-        FunctionLookup::Bucket(survivors) => assert_eq!(survivors.len(), 1),
-        _ => panic!("live bucket must shadow a pending entry"),
-    }
+    let lookup = scope.bindings().lookup_function(&key, Some(9));
+    assert_eq!(lookup.overloads.len(), 1);
+    assert_eq!(lookup.pending, Some(NodeId(99)));
 }
 
 #[test]
-fn lookup_function_empty_bucket_under_full_filter_returns_none_not_bucket() {
+fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     let f = arena.alloc_function(KFunction::new(
@@ -258,10 +245,9 @@ fn lookup_function_empty_bucket_under_full_filter_returns_none_not_bucket() {
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(9))
         .unwrap();
     let key = f.signature.untyped_key();
-    // Empty-after-filter must surface as `None`, not `Bucket(vec![])`, so the
-    // dispatch walker keeps walking ancestors.
-    assert!(matches!(
-        scope.bindings().lookup_function(&key, Some(3)),
-        FunctionLookup::None,
-    ));
+    // Empty-after-filter must surface an empty `overloads` with no pending, so
+    // the dispatch walker keeps walking ancestors.
+    let lookup = scope.bindings().lookup_function(&key, Some(3));
+    assert!(lookup.overloads.is_empty());
+    assert!(lookup.pending.is_none());
 }

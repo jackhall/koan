@@ -460,11 +460,11 @@ later-sibling overload is hidden, and dispatch falls through to outer scopes
 unaffected by the not-yet-visible registration. The `nominal_binder` carve-out
 does **not** apply to FN-bucket overloads — they're value-style gated.
 [`OverloadBucket::pick_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
-receives the pre-filtered survivor list (a non-empty `FunctionLookup::Bucket`
-arm) and runs only the admit predicate over it. When no bucket admits at a
-given scope but a `pending_overloads[key]` entry is visible, the same lookup
-falls through to `FunctionLookup::Pending(NodeId)` and the dispatcher records
-the innermost such producer for a park-and-replay on wake.
+receives the pre-filtered survivor list (the `FunctionLookup`'s `overloads`)
+and runs only the admit predicate over it. The same lookup also surfaces the
+earliest-index visible `pending_overloads[key]` producer in `FunctionLookup`'s
+`pending` field; a visible pending parks that scope for a park-and-replay on
+wake, since it would shadow once finalized.
 
 The result: an FN reference resolves under the same lexical-position rule as a
 value-LET reference. Forward calls between sibling FNs work through the

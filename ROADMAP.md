@@ -110,6 +110,14 @@ What's shipped that the open items below build on:
   its arguments on the same [`Record<V>`](src/machine/model/types/record.rs) shape as the
   surface literal and the struct value. See
   [design/typing/type-language-via-dispatch.md](design/typing/type-language-via-dispatch.md).
+- *In-walk dispatch precedence.* Overload resolution decides each scope's park / defer /
+  pick contribution at the scope that raised it instead of in a scope-blind post-walk
+  ladder, so lexical shadowing holds regardless of finalize or evaluation order: a visible
+  pending sibling parks its scope even over a same-scope finalized strict-Pick, and a
+  strict-Empty bucket runs one relaxed-admission pass per candidate (parked-lean ⇒ park,
+  eager-lean ⇒ defer, dead unbound lean ⇒ a held-back `UnboundName`). `lookup_function`
+  surfaces finalized overloads and the earliest visible pending producer together. See
+  [design/typing/scheduler.md § In-walk dispatch precedence](design/typing/scheduler.md#in-walk-dispatch-precedence).
 
 ## Next items
 
