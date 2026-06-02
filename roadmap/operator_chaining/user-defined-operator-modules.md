@@ -21,15 +21,16 @@ into it.
   so a whole family (`+ - * /`) registers and folds together.
 - *Operator meaning is module-scoped and lexically resolved* — the same `+` can
   mean different things in different modules, picked by the scope walk.
-- *Substrate for [group-based operators](group-based-operators.md)* to declare
-  paired/group operators as user code rather than builtins.
+- *Paired and grouped operators are user code.* A `+`/`-` pair or a `+ - * /`
+  family is one module-declared operator group, not a set of hand-wired builtins.
 
 **Directions.**
 
 - *Declaration surface — open.* How a module spells its operator set, the binary
   body per operator, precedence ordering, and associativity. Single-operator form
-  versus group form; whether associativity is per-group or per-tier; how the body
-  attaches. This is the gating decision; settle via `/design`.
+  versus a paired/group form (e.g. a `GROUP + - OVER t` spelling that registers a
+  family in one declaration); whether associativity is per-group or per-tier; how
+  the body attaches. This is the gating decision; settle via `/design`.
 - *Binder lowering — decided.* An `OP` skin over `FN` lowers a declaration to two
   registrations: the binary body into the ordinary function bucket under the
   operator keyword (so single binary calls dispatch with no special-casing), and
@@ -37,8 +38,8 @@ into it.
   operator registry the [n-ary mechanism](n-ary-operators.md) walks. Mechanics
   decided; only the surface above is open.
 - *Group validation — deferred.* Whether declared precedence/associativity (or
-  group laws, à la [group-based operators](group-based-operators.md)) are checked
-  at declaration or trusted is deferred to the surface decision and the
+  the laws of an algebraic group declared over the operators) are checked at
+  declaration or trusted is deferred to the surface decision and the
   property-testing engine.
 
 ## Dependencies
@@ -52,6 +53,6 @@ into it.
 
 The shipped module system is a soft prerequisite — module-scoped operator
 declaration needs modules to exist, but not the future modular-implicits stage.
-Group-based operators is a client of this surface rather than a hard dependant:
-its syntax-level shorthand can ship against the flat registry, so neither blocks
-the other.
+Algebraic structures over these operators — group laws and generic-over-groups
+functions — ride the modular-implicits stage on top of this surface; that payoff
+lives with stage 5, not here.

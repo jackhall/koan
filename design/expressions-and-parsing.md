@@ -100,7 +100,7 @@ leading argument). It carves the track for chainable user operators — the oper
 probe caches the sorted-joined unique operators that the per-scope operator
 registry is looked up by. Folding a recognized chain into nested binary dispatches
 is future work owned by
-[user-definable n-ary operators](../roadmap/libraries/n-ary-operators.md).
+[user-definable n-ary operators](../roadmap/operator_chaining/n-ary-operators.md).
 
 ## Type-expression sigil
 

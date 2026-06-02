@@ -63,7 +63,3 @@ serve.
   chaining surface rides this machinery.
 - [User-defined operator modules](user-defined-operator-modules.md) — the
   declaration surface and `OP` binder ride this mechanism.
-
-Shares the dispatched-operator mechanism with group-based operators, but neither
-hard-blocks the other: the group shorthand variant can ship against the existing
-flat registry.

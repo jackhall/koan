@@ -38,7 +38,7 @@ construct a tagged value in every arm, or coarsen the slot to `Any`.
   [execution-model.md § Arms as own blocks](../../design/execution-model.md#arms-as-own-blocks)).
 - *Surface `|` — open; rides n-ary operators.* The `:(A | B | C)` infix
   surface rides the dispatched-operator machinery from
-  [user-definable n-ary operators](../libraries/n-ary-operators.md): `|`
+  [user-definable n-ary operators](../operator_chaining/n-ary-operators.md): `|`
   desugars (the parse→dispatch bridge) to a dispatched, associative-flattening
   union builtin, so arbitrary arity falls out of associativity rather than new
   parse arity. Precedence inside `:(...)` (e.g. `List A | B`) is settled there.
@@ -51,13 +51,16 @@ construct a tagged value in every arm, or coarsen the slot to `Any`.
 
 **Requires:**
 
-- [User-definable n-ary operators](../libraries/n-ary-operators.md) — the `|`
+- [User-definable n-ary operators](../operator_chaining/n-ary-operators.md) — the `|`
   chaining surface rides its dispatched-operator machinery.
 
-**Unblocks:** none tracked yet.
+**Unblocks:**
+
+- [Collapse `UserTypeKind` into a nominal-identity wrapper](nominal-identity-wrapper.md)
+  — the structural union `KType` this item adds is the repr a nominal tagged type
+  folds into.
 
 The underlying type and constructor builtin could be prototyped against a
 variadic type-constructor overload (the `RECORD` / nominal-`UNION` path)
 before the `|` surface lands. This item lets the shipped MATCH / TRY / FN
-declared return type be spelled as a structural union `:(A | B)`, but does not
-block any open item.
+declared return type be spelled as a structural union `:(A | B)`.

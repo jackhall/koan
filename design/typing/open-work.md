@@ -41,9 +41,10 @@ Future work on the type and module system. Each entry points at a
   syntax and the identity-by-(functor, arguments) machinery let
   independent call sites resolving (via stage 5 implicit search) to the
   same module interoperate.
-- [Group-based operators](../../roadmap/libraries/group-based-operators.md) — paired
-  operators like `+`/`-` as a single algebraic declaration. Lands on top of
-  the module-system substrate.
+- [User-defined operator modules](../../roadmap/operator_chaining/user-defined-operator-modules.md)
+  — module-declared operators, including paired/group forms like `+`/`-`. Algebraic
+  structures over them (group laws, generic-over-groups) ride
+  [modular implicits](../../roadmap/predicate_typing/modular-implicits.md).
 - [Two-phase execution](../../roadmap/editor_tooling/two-phase-execution.md)
   — closes the TCO and builtin runtime-check gaps uniformly, and is the
   language's performance ceiling. The build-time scheduling

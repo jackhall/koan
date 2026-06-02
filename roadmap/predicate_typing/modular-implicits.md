@@ -40,6 +40,13 @@ site needs.
   type parameter) and operation-bearing ones (consulting a witness) alike, with
   the parametric case reducing to a direct read of the argument's carried
   element type.
+- *Algebraic structures are ordinary signatures.* A `GROUP` signature — a binary
+  operator with an identity and inverse over an abstract `t`, its paired operators
+  declared via [user-defined operator
+  modules](../operator_chaining/user-defined-operator-modules.md) — resolves implicitly, so
+  a function over "anything that forms a group" is just one with a `{Gp : GROUP}`
+  implicit parameter, its laws checked as [stage-4
+  axioms](axioms-and-generators.md). No operator-specific machinery is needed.
 
 **Directions.**
 

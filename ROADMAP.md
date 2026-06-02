@@ -140,8 +140,8 @@ What's shipped that the open items below build on:
   registry — missing cleanly on an undeclared or cross-group mix, or reaching the fold
   seam on a hit. The fold itself and the `OP` declaration surface are the remaining
   open work under
-  [user-definable n-ary operators](roadmap/libraries/n-ary-operators.md) and
-  [user-defined operator modules](roadmap/libraries/user-defined-operator-modules.md).
+  [user-definable n-ary operators](roadmap/operator_chaining/n-ary-operators.md) and
+  [user-defined operator modules](roadmap/operator_chaining/user-defined-operator-modules.md).
   See [design/expressions-and-parsing.md § Structural cache and dispatch shape](design/expressions-and-parsing.md#structural-cache-and-dispatch-shape).
 
 ## Next items
@@ -151,8 +151,22 @@ without first landing something else:
 
 - [Files and imports](roadmap/libraries/files-and-imports.md) — wire `.koan` files together so
   a codebase can span more than one source file and files become modules.
-- [Group-based operators](roadmap/libraries/group-based-operators.md) — paired `+`/`-`-style
-  operators as a group; the syntax-level shorthand variant has no hard prerequisites.
+- [Tagged-union variants as dispatchable types](roadmap/type_language/tagged-variant-types.md) —
+  promote each `UNION` variant to its own `KType` so `MATCH` collapses into type-dispatch.
+- [Plain-English type-operation surfaces](roadmap/type_language/type-operation-surfaces.md) —
+  retire the `type_ops.rs` underscore keywords into the existing spaced / dotted / infix forms.
+- [User-definable n-ary operators](roadmap/operator_chaining/n-ary-operators.md) — the fold pre-pass
+  that lets a recognized operator chain (`a + b + c`, `A | B | C`) actually evaluate.
+- [Modular implicits (predicate-typing stage 5)](roadmap/predicate_typing/modular-implicits.md) —
+  implicit module resolution; its module-language substrate has already shipped.
+- [Continue-on-error for the REPL and batch mode](roadmap/editor_tooling/continue-on-error.md) —
+  a top-level failure returns to the prompt and runs the next expression instead of ending the session.
+- [Codebase-wide naming and responsibility audit](roadmap/refactor/naming-and-responsibility-audit.md) —
+  reconcile names with behavior across `src/**` (best sequenced after the in-flight type-language items).
+- [Consolidate unsafe sites and prune the Miri slate](roadmap/refactor/unsafe-consolidation.md) —
+  funnel the scattered `unsafe` behind the arena boundary and drop slate tests that guard no distinct surface.
+- [Seed every scope with builtins to skip the root walk](roadmap/refactor/builtins-in-every-scope.md) —
+  make builtins reachable at every scope so the hottest lookups stop walking the chain to root.
 
 ## Open items
 
@@ -187,10 +201,16 @@ Rust builtins:
 
 - [Files and imports](roadmap/libraries/files-and-imports.md)
 - [Generalize `Scope::out` into monadic side-effect capture](roadmap/libraries/monadic-side-effects.md)
-- [Group-based operators](roadmap/libraries/group-based-operators.md)
-- [User-definable n-ary operators](roadmap/libraries/n-ary-operators.md)
-- [User-defined operator modules](roadmap/libraries/user-defined-operator-modules.md)
 - [Standard library](roadmap/libraries/standard-library.md)
+
+### Operator chaining — [roadmap/operator_chaining/](roadmap/operator_chaining/)
+
+User-declarable operators and the n-ary chaining mechanism that evaluates them: a
+recognized run of operators folds into binary sub-dispatches by precedence, and a
+module-scoped `OP` surface populates the per-scope operator registry the fold walks.
+
+- [User-definable n-ary operators](roadmap/operator_chaining/n-ary-operators.md)
+- [User-defined operator modules](roadmap/operator_chaining/user-defined-operator-modules.md)
 
 ### Type language — [roadmap/type_language/](roadmap/type_language/)
 
@@ -201,6 +221,9 @@ predicate-typing stages and the stdlib's functor-heavy collections both
 build on:
 
 - [Anonymous structural unions](roadmap/type_language/anonymous-unions.md)
+- [Tagged-union variants as dispatchable types](roadmap/type_language/tagged-variant-types.md)
+- [Plain-English type-operation surfaces](roadmap/type_language/type-operation-surfaces.md)
+- [Collapse `UserTypeKind` into a nominal-identity wrapper](roadmap/type_language/nominal-identity-wrapper.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 
@@ -210,3 +233,13 @@ foundation:
 
 - [Two-phase execution: build-time with pegged inputs, run-time resume](roadmap/editor_tooling/two-phase-execution.md)
 - [Continue-on-error for the REPL and batch mode](roadmap/editor_tooling/continue-on-error.md)
+
+### Refactor — [roadmap/refactor/](roadmap/refactor/)
+
+Cross-cutting cleanups that keep the engine legible and fast as it grows —
+reconciling names with behavior, merging responsibilities that have drifted apart,
+shrinking the unsafe surface, and cutting hot-path overhead:
+
+- [Codebase-wide naming and responsibility audit](roadmap/refactor/naming-and-responsibility-audit.md)
+- [Consolidate unsafe sites and prune the Miri slate](roadmap/refactor/unsafe-consolidation.md)
+- [Seed every scope with builtins to skip the root walk](roadmap/refactor/builtins-in-every-scope.md)
