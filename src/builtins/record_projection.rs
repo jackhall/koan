@@ -200,25 +200,28 @@ mod tests {
         );
     }
 
-    /// A non-record operand is a dispatch non-match: the `:{}` `record` slot rejects
-    /// `5`, so the FROM overload never admits and the body never runs.
-    ///
-    /// KNOWN BUG ([dispatch-fallback-misleading-diagnostic](../../roadmap/dispatch-fallback-misleading-diagnostic.md)):
-    /// with no FROM match, the call should surface a clean "no matching overload"
-    /// error, but the post-walk fallback instead eagerly sub-dispatches the
-    /// already-admitted `(x y)` operand and leaks `unbound name 'x'`. This test pins
-    /// the current (wrong) diagnostic — when the dispatch bug is fixed, tighten it to
-    /// assert the clean `Unmatched`. The assertion below only checks that the body
-    /// was never reached, which holds either way.
+    /// A non-record operand matches no FROM overload — the `:{}` `record` slot rejects
+    /// `5`, and no evaluation of the `(x y)` operand can change that, so dispatch fails
+    /// cleanly with `DispatchFailed` ("no matching function") at the call rather than
+    /// eagerly evaluating `(x y)` and leaking its `unbound name 'x'` — the post-walk
+    /// fallback's admits-modulo-eager gate keeps it a clean miss (see
+    /// [scheduler.md § Post-walk dispatch fallback precedence](../../design/typing/scheduler.md#post-walk-dispatch-fallback-precedence)).
+    /// The root miss surfaces through `execute()` like an `AmbiguousDispatch`.
     #[test]
     fn from_non_record_operand_is_dispatch_non_match() {
+        use crate::machine::core::KErrorKind;
+        use crate::machine::execute::Scheduler;
+
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let err = run_one_err(scope, parse_one("(x y) FROM 5"));
-        let msg = format!("{err}");
+        let mut sched = Scheduler::new();
+        sched.add_dispatch(parse_one("(x y) FROM 5"), scope);
+        let err = sched
+            .execute()
+            .expect_err("a non-record operand must fail dispatch");
         assert!(
-            !msg.contains("record has no field") && !msg.contains("FROM record operand"),
-            "non-record operand must not reach the FROM body, got: {msg}",
+            matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
+            "expected a clean DispatchFailed (not a leaked unbound-name), got: {err}",
         );
     }
 

@@ -127,10 +127,6 @@ without first landing something else:
   TRY a static return type (arms-agree vs synthesized-union vs hybrid), closing the
   divergent-result hazard symmetric to the divergent-bind hazard the lexical-provenance
   phase closes structurally.
-- [Eager-parts fallback masks unresolvable dispatch with a misleading diagnostic](roadmap/dispatch-fallback-misleading-diagnostic.md)
-  — a keyword-headed call that can't resolve because an already-evaluated slot rejects
-  still defers to eager sub-dispatch of an unrelated literal operand, leaking that
-  operand's error instead of a clean `Unmatched`.
 
 ## Open items
 

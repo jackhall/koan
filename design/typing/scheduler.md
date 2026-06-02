@@ -83,10 +83,15 @@ outcomes by fixed precedence:
    cache ⇒ `ResolveOutcome::ParkOnProducers` on the deduplicated producer
    list. Wake re-dispatches; strict admission rebuilds the cache against
    the now-bound type.
-2. **Eager parts** — otherwise, if `expr` carries any eager-shaped part
-   (`Expression` / `SigiledTypeExpr` / `ListLiteral` / `DictLiteral`) ⇒
-   `Deferred`. The driver sub-Dispatches the eager parts and re-resolves
-   against the spliced expression.
+2. **Eager parts** — otherwise, if some candidate overload would admit once
+   its unevaluated eager-shaped parts (`Expression` / `SigiledTypeExpr` /
+   `ListLiteral` / `DictLiteral` / `RecordLiteral`) evaluate — i.e. it admits
+   *modulo eager* (`signature_admits(.., modulo_eager: true)`, which treats an
+   eager part in an argument slot as satisfiable) ⇒ `Deferred`. The driver
+   sub-Dispatches the eager parts and re-resolves against the spliced
+   expression. A candidate that rejects on an already-evaluated slot fails this
+   test, so an eager part that can't change any candidate's admission doesn't
+   trigger a futile deferral.
 3. **Unbound** — otherwise, any `NameOutcome::Unbound(name)` ⇒
    `UnboundName(name)`.
 4. **Pending overload** — otherwise, an innermost-visible
@@ -96,21 +101,19 @@ outcomes by fixed precedence:
    the now-registered overload).
 5. **Unmatched** — otherwise, `ResolveOutcome::Unmatched`.
 
-**Why eager outranks Unbound.** An Expression-in-Type-slot dispatch like
+**Why eager can outrank Unbound.** An Expression-in-slot dispatch like
 `(maybe) some 42` has a head that *does* resolve, but only after one
-sub-Dispatch evaluates `(maybe)` to the schema. Surfacing `UnboundName`
-on the unresolved sibling would pre-empt that sub-Dispatch and report
-the wrong diagnostic. Eager evaluation may also itself surface the
-precise per-slot error, so it gets first refusal.
+sub-Dispatch evaluates `(maybe)` to the schema — there the rejecting slot is
+itself the eager part, so the candidate admits modulo eager and the deferral is
+warranted. Surfacing `UnboundName` on the unresolved sibling instead would
+pre-empt that sub-Dispatch and report the wrong diagnostic. The modulo-eager
+gate keeps that first-refusal honest: when no candidate can admit even after its
+eager parts evaluate — the failure is an already-evaluated slot, e.g. a non-record
+operand to [`FROM`](../../src/builtins/record_projection.rs) or a bare anonymous
+`UNION (…)` — the fallback skips the deferral and surfaces the precise `Unbound` /
+`Unmatched` diagnostic at the call, rather than eagerly evaluating an unrelated
+operand and leaking its error.
 
 The companion driver-side view of this precedence — what each outcome
 routes to in the dispatch pipeline — lives at
 [execution-model.md § post-walk fallback](../execution-model.md#dispatch).
-
-## Open work
-
-- [Eager-parts fallback masks unresolvable dispatch with a misleading diagnostic](../../roadmap/dispatch-fallback-misleading-diagnostic.md)
-  — rank 2 (eager parts) above fires on any eager part present, even when the
-  admission failure is an already-evaluated slot no eager evaluation can flip; the
-  deferral then surfaces an unrelated sub-part's error instead of a clean
-  `Unmatched`.

@@ -97,6 +97,12 @@ impl<'a> Scope<'a> {
         // Innermost pending-overload producer, surfaced post-walk only if no
         // bucket admits anywhere.
         let mut pending_producer: Option<NodeId> = None;
+        // Set when some non-admitting candidate *would* admit once its unevaluated
+        // eager-part slots evaluate — the only condition under which deferring to
+        // eager sub-dispatch can still resolve the call. A candidate rejecting on an
+        // already-evaluated (non-eager) slot can never admit, so deferring there is
+        // futile and would only leak the eager part's incidental error.
+        let mut any_eager_admissible = false;
         let picked = self
             .ancestors()
             .find_map(|scope| -> Option<ResolveOutcome<'a>> {
@@ -127,7 +133,13 @@ impl<'a> Scope<'a> {
                                 Some(ResolveOutcome::Deferred)
                             }
                             PickPass::Tie(n) => Some(ResolveOutcome::Ambiguous(n)),
-                            PickPass::Empty => None,
+                            PickPass::Empty => {
+                                if !any_eager_admissible {
+                                    any_eager_admissible =
+                                        bucket.any_admits_modulo_eager(expr, bare_outcomes);
+                                }
+                                None
+                            }
                         }
                     }
                 }
@@ -148,7 +160,14 @@ impl<'a> Scope<'a> {
         if !placeholders.is_empty() {
             return ResolveOutcome::ParkOnProducers(placeholders);
         }
-        if expr_has_eager_part(expr) {
+        // Defer to eager sub-dispatch only when it could still resolve the call —
+        // i.e. some candidate admits once its eager parts evaluate. When every
+        // candidate rejects on an already-evaluated slot (or no bucket exists), the
+        // deferral is provably futile, so fall through to the precise diagnostic
+        // (`UnboundName` / `Unmatched`) instead of evaluating an unrelated eager
+        // operand and surfacing its incidental error. See
+        // [roadmap note → design/typing/scheduler.md § Post-walk dispatch fallback precedence](../../../../design/typing/scheduler.md#post-walk-dispatch-fallback-precedence).
+        if any_eager_admissible {
             return ResolveOutcome::Deferred;
         }
         if let Some(name) = bare_outcomes.iter().find_map(|o| match o {
@@ -180,7 +199,7 @@ impl<'a> OverloadBucket<'a, '_> {
             .candidates
             .iter()
             .copied()
-            .filter(|f| signature_admits_strict(&f.signature, expr, bare_outcomes))
+            .filter(|f| signature_admits(&f.signature, expr, bare_outcomes, false))
             .collect();
         let sigs: Vec<&ExpressionSignature> = survivors.iter().map(|f| &f.signature).collect();
         match ExpressionSignature::most_specific(&sigs) {
@@ -188,6 +207,20 @@ impl<'a> OverloadBucket<'a, '_> {
             None if !survivors.is_empty() => PickPass::Tie(survivors.len()),
             None => PickPass::Empty,
         }
+    }
+
+    /// True iff some candidate would admit once its unevaluated eager-part slots
+    /// evaluate — the signal that deferring to eager sub-dispatch could still
+    /// resolve the call. A candidate that rejects on an already-evaluated
+    /// (non-eager) slot can never admit, so it doesn't count.
+    fn any_admits_modulo_eager(
+        &self,
+        expr: &KExpression<'a>,
+        bare_outcomes: &[Option<NameOutcome<'a>>],
+    ) -> bool {
+        self.candidates
+            .iter()
+            .any(|f| signature_admits(&f.signature, expr, bare_outcomes, true))
     }
 }
 
@@ -199,12 +232,20 @@ enum PickPass<'a> {
     Empty,
 }
 
-/// Strict admission against the `bare_outcomes` cache. Rule table at
+/// Admission against the `bare_outcomes` cache. Rule table at
 /// [design/typing/elaboration.md § Strict admission rules](../../../../design/typing/elaboration.md#strict-admission-rules).
-fn signature_admits_strict<'a>(
+///
+/// With `modulo_eager`, an unevaluated eager part in an argument slot is assumed
+/// satisfiable once it evaluates (it routes through `eager_indices` post-pick), so
+/// admission turns entirely on the *non-eager* slots. The post-walk fallback uses
+/// this relaxation to decide whether deferring to eager sub-dispatch could still
+/// resolve the call — a candidate that rejects on an already-evaluated slot fails
+/// both modes, and no eager evaluation can rescue it.
+fn signature_admits<'a>(
     sig: &ExpressionSignature<'a>,
     expr: &KExpression<'a>,
     bare_outcomes: &[Option<NameOutcome<'a>>],
+    modulo_eager: bool,
 ) -> bool {
     if sig.elements.len() != expr.parts.len() {
         return false;
@@ -228,66 +269,83 @@ fn signature_admits_strict<'a>(
         .zip(&expr.parts)
         .enumerate()
         .all(|(i, (el, part))| {
-            match (el, &part.value) {
-                (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
-                (SignatureElement::Keyword(_), _) => false,
-                (SignatureElement::Argument(arg), part_value) => {
-                    // Binder declaration slot: the slot owns the name, so admission
-                    // is shape-only. SigiledTypeExpr still admits speculatively (it
-                    // sub-dispatches to a type-side carrier).
-                    if matches!(arg.ktype, KType::Identifier | KType::TypeExprRef) {
-                        if matches!(part_value, ExpressionPart::SigiledTypeExpr(_)) {
-                            return true;
-                        }
-                        return arg.matches(part_value);
-                    }
-                    // SigiledTypeExpr in a non-KExpression slot sub-dispatches to a
-                    // type-side carrier.
-                    if matches!(part_value, ExpressionPart::SigiledTypeExpr(_))
-                        && !matches!(arg.ktype, KType::KExpression)
-                    {
-                        return true;
-                    }
-                    // Lazy-candidate relaxation (see `has_lazy_kexpr_slot`).
-                    if has_lazy_kexpr_slot
-                        && matches!(part_value, ExpressionPart::Expression(_))
-                        && !matches!(arg.ktype, KType::KExpression)
-                    {
-                        return true;
-                    }
-                    match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
-                        Some(NameOutcome::Resolved(obj)) => {
-                            arg.ktype.accepts_part(&ExpressionPart::Future(obj))
-                        }
-                        // Speculative admit so the splice/park walk can surface the
-                        // precise per-slot diagnostic.
-                        Some(NameOutcome::Parked(_)) | Some(NameOutcome::Unbound(_)) => {
-                            arg.matches(part_value)
-                        }
-                        Some(NameOutcome::Cycle(_)) | Some(NameOutcome::ProducerErrored(_)) => {
-                            false
-                        }
-                        None => arg.matches(part_value),
-                    }
-                }
+            // An unevaluated eager part in an *argument* slot is assumed satisfiable
+            // once it evaluates; a keyword element can't be satisfied by an eager part.
+            if modulo_eager && is_eager_part(&part.value) {
+                return matches!(el, SignatureElement::Argument(_));
             }
+            slot_admits_strict(el, &part.value, i, has_lazy_kexpr_slot, bare_outcomes)
         })
+}
+
+/// Per-slot strict admission — the element walk body of [`signature_admits`].
+fn slot_admits_strict<'a>(
+    el: &SignatureElement<'a>,
+    part_value: &ExpressionPart<'a>,
+    i: usize,
+    has_lazy_kexpr_slot: bool,
+    bare_outcomes: &[Option<NameOutcome<'a>>],
+) -> bool {
+    match (el, part_value) {
+        (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
+        (SignatureElement::Keyword(_), _) => false,
+        (SignatureElement::Argument(arg), part_value) => {
+            // Binder declaration slot: the slot owns the name, so admission
+            // is shape-only. SigiledTypeExpr still admits speculatively (it
+            // sub-dispatches to a type-side carrier).
+            if matches!(arg.ktype, KType::Identifier | KType::TypeExprRef) {
+                if matches!(part_value, ExpressionPart::SigiledTypeExpr(_)) {
+                    return true;
+                }
+                return arg.matches(part_value);
+            }
+            // SigiledTypeExpr in a non-KExpression slot sub-dispatches to a
+            // type-side carrier.
+            if matches!(part_value, ExpressionPart::SigiledTypeExpr(_))
+                && !matches!(arg.ktype, KType::KExpression)
+            {
+                return true;
+            }
+            // Lazy-candidate relaxation (see `has_lazy_kexpr_slot`).
+            if has_lazy_kexpr_slot
+                && matches!(part_value, ExpressionPart::Expression(_))
+                && !matches!(arg.ktype, KType::KExpression)
+            {
+                return true;
+            }
+            match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
+                Some(NameOutcome::Resolved(obj)) => {
+                    arg.ktype.accepts_part(&ExpressionPart::Future(obj))
+                }
+                // Speculative admit so the splice/park walk can surface the
+                // precise per-slot diagnostic.
+                Some(NameOutcome::Parked(_)) | Some(NameOutcome::Unbound(_)) => {
+                    arg.matches(part_value)
+                }
+                Some(NameOutcome::Cycle(_)) | Some(NameOutcome::ProducerErrored(_)) => false,
+                None => arg.matches(part_value),
+            }
+        }
+    }
+}
+
+/// True iff this part shape is one the scheduler's eager loop would schedule as a
+/// sub-Dispatch.
+fn is_eager_part(part: &ExpressionPart<'_>) -> bool {
+    matches!(
+        part,
+        ExpressionPart::Expression(_)
+            | ExpressionPart::SigiledTypeExpr(_)
+            | ExpressionPart::ListLiteral(_)
+            | ExpressionPart::DictLiteral(_)
+            | ExpressionPart::RecordLiteral(_)
+    )
 }
 
 /// True iff `expr` carries any part shape the scheduler's eager loop would
 /// schedule as a sub-Dispatch.
 fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
-    use crate::machine::model::ast::ExpressionPart;
-    expr.parts.iter().any(|p| {
-        matches!(
-            &p.value,
-            ExpressionPart::Expression(_)
-                | ExpressionPart::SigiledTypeExpr(_)
-                | ExpressionPart::ListLiteral(_)
-                | ExpressionPart::DictLiteral(_)
-                | ExpressionPart::RecordLiteral(_)
-        )
-    })
+    expr.parts.iter().any(|p| is_eager_part(&p.value))
 }
 
 /// Sole producer of the embedded `slots`; disjointness lives in
