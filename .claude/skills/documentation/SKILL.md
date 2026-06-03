@@ -1,6 +1,6 @@
 ---
 name: documentation
-description: Use this skill for any work touching README.md, TUTORIAL.md, ROADMAP.md, design/*.md, or roadmap/*.md — including editing, adding, deleting, renaming, or auditing docs. Reach for it before deleting or renaming a doc, after editing one, when adding a roadmap item, when finishing a PR (to delete the now-shipped roadmap item), or when the user asks to "audit", "verify", or "fix" doc links / cross-references / roadmap dependencies. Pairs with the `tools/doclinks.py` CLI for cross-reference validation.
+description: Use this skill for any work touching README.md, TUTORIAL.md, design/*.md, or roadmap/*.md (including the roadmap/README.md index) — including editing, adding, deleting, renaming, or auditing docs. Reach for it before deleting or renaming a doc, after editing one, when adding a roadmap item, when finishing a PR (to delete the now-shipped roadmap item), or when the user asks to "audit", "verify", or "fix" doc links / cross-references / roadmap dependencies. Pairs with the `tools/doclinks.py` CLI for cross-reference validation.
 ---
 
 # documentation
@@ -19,8 +19,8 @@ Each tier has a job. Keeping them disjoint is what lets a reader pick the right 
 - **`TUTORIAL.md`**. Walks a user through writing koan code. From the user's perspective, not the implementer's.
 - **`TEST.md`**. Testing and linting reference: `cargo test` conventions, clippy/fmt commands, and the canonical Miri audit-slate test list. Updated whenever a slate test is added or removed.
 - **`design/*.md`**. Describes shipped behavior — architecture, cross-cutting concerns, design rationale for what's already in the language. Update after a PR is code-complete and tested, but only if a design decision was made. If a file is being deleted or downsized, update inbound references.
-- **`roadmap/*.md`**. **Future work only.** Each file is one work item with a `## Dependencies` section. Items can reference prerequisites and unblockers.
-- **`ROADMAP.md`**. A curated index of `roadmap/*.md` items. The "What's shipped so far" prose paragraph is the running record of completed work; the bulleted "Open items" sections list active items.
+- **`roadmap/*.md`**. **Future work only.** Each work-item file is one item with a `## Dependencies` section. Items can reference prerequisites and unblockers. The lone exception is `roadmap/README.md`, the index — described next.
+- **`roadmap/README.md`**. A curated index of the `roadmap/` work items. The "What's shipped so far" prose paragraph is the running record of completed work; the bulleted "Open items" sections list active items.
 - **Source-file doc comments**. Top-of-file comments explain a file's purpose, assumptions, and links to design docs. Inline comments stay 3–4 lines max; longer rationales belong in design docs. These are kept up-to-date during implementation, not at the doc-update phase — see Claude.md for the implementation-time rules.
 
 ## Section structure
@@ -64,11 +64,11 @@ These are the rules that don't survive on vibes; they need explicit tool gates.
 
 The work item is no longer future work, so it leaves `roadmap/`.
 
-1. **Run `python3 tools/doclinks.py rm-roadmap roadmap/<item>.md`** (use `--dry-run` first if unsure). The tool deletes the file, prunes intra-roadmap dependency bullets, and strips the entry from `ROADMAP.md`'s `## Next items` and `## Open items` subsections. It does **not** touch design-doc prose, source comments, or the "What's shipped so far" paragraph — those are judgment calls.
+1. **Run `python3 tools/doclinks.py rm-roadmap roadmap/<item>.md`** (use `--dry-run` first if unsure). The tool deletes the file, prunes intra-roadmap dependency bullets, and strips the entry from `roadmap/README.md`'s `## Next items` and `## Open items` subsections. It does **not** touch design-doc prose, source comments, or the "What's shipped so far" paragraph — those are judgment calls.
 2. **Run `python3 tools/doclinks.py refs roadmap/<item>.md`** before the delete (or run `check` after) to surface the references the tool can't auto-handle: design-doc "Open work" entries, source-file `//` comments, prose mentions inside Dependencies sections.
 3. Update each remaining callsite. A `design/` doc whose "Open work" pointed to the item gets either a body section describing what shipped, or the open-work bullet removed.
 4. If the shipped behavior has explanatory value not already captured, **move that narrative into the relevant `design/*.md`** as a body section (not as an "Open work" entry — that section is for what's still future).
-5. **Update `ROADMAP.md` prose:** add a phrase to the "What's shipped so far" paragraph naming what landed. (The tool only touches the bullet lists.)
+5. **Update `roadmap/README.md` prose:** add a phrase to the "What's shipped so far" paragraph naming what landed. (The tool only touches the bullet lists.)
 6. **Re-run `doclinks check`** (below).
 
 ### When migrating prose between docs
@@ -110,7 +110,7 @@ Even non-roadmap docs:
 ### When adding a new roadmap item
 
 1. Create `roadmap/<new-item>.md` with a `## Dependencies` section listing `Requires:` and/or `Unblocks:` edges.
-2. Add a bullet to `ROADMAP.md` under the right "Open items" subsection.
+2. Add a bullet to `roadmap/README.md` under the right "Open items" subsection.
 3. If the new item is unblocked by something, add a back-edge `Unblocks: <new-item>` in that prerequisite item's Dependencies.
 4. Run `python3 tools/doclinks.py check` to confirm bidirectional dependency symmetry and that the new file is wired in (the orphans section will flag an unreferenced doc).
 
@@ -136,7 +136,7 @@ Prints four sections under `##` headers and returns a single exit code. The firs
 
 - **broken links.** Scans every `*.md` file plus `//` comments in `src/**/*.rs` for `[text](path)` links and reports any whose target doesn't exist on disk. URL fragments (`#anchor`) and rustdoc intra-doc links (`super::foo`, `crate::a::b`) are filtered out.
 - **roadmap dependencies.** Parses the `## Dependencies` section of every `roadmap/*.md` file and confirms every edge is bidirectional: `A.md` listing `B.md` under **Requires:** obliges `B.md` to list `A.md` under **Unblocks:**, and vice versa. Catches the easy mistake of updating one side of a dependency edge.
-- **orphaned design/ + roadmap/ docs.** Every `design/*.md` and `roadmap/*.md` file that no other doc, comment, or source file links to. An orphan is usually either a new doc that needs an entry in `README.md` / `ROADMAP.md`, or a stale doc that should be deleted.
+- **orphaned design/ + roadmap/ docs.** Every `design/*.md` and `roadmap/*.md` file that no other doc, comment, or source file links to. An orphan is usually either a new doc that needs an entry in `README.md` / `roadmap/README.md`, or a stale doc that should be deleted.
 - **source-tree changes vs the base ref** (informational, never gates). Every `src/**/*.rs` file added, modified, deleted, or renamed since the base, annotated with each inbound doc link. The working tree is compared to the base, so committed and uncommitted edits surface in one pass. Renames show inbound links to *both* the old path (broken until rewritten) and the new path. Use this to spot source files that may need a `README.md` "Source layout" entry, a design-doc reference, or a `fix-refs` pass to fix renamed-path links — the caller decides which warrant action.
 
 The exit code is non-zero if any of the three gating sections flags an issue. Pass `--base <ref>` to change what the source-tree section diffs against (default: `master`).
@@ -167,7 +167,7 @@ python3 tools/doclinks.py fix-refs --from-file dispatch-refactor.txt
 
 ### `rm-roadmap <roadmap/item.md>` — delete a roadmap item with cleanup
 
-When a roadmap item ships, this command deletes the file *and* prunes its inbound bullets in a single pass: every `**Requires:**` / `**Unblocks:**` bullet in other `roadmap/*.md` items that links to it, plus any bullet under `## Next items` or `## Open items` in `ROADMAP.md`. Continuation lines belonging to a removed bullet are dropped too. After the delete it runs `check` automatically and propagates its exit code, so any remaining stale references (design-doc "Open work" sections, source-file comments, prose mentions inside Dependencies sections) surface immediately. The tool does **not** touch the `What's shipped so far` paragraph or those remaining-reference sites — those need a judgment call. Use `--dry-run` to preview.
+When a roadmap item ships, this command deletes the file *and* prunes its inbound bullets in a single pass: every `**Requires:**` / `**Unblocks:**` bullet in other `roadmap/*.md` items that links to it, plus any bullet under `## Next items` or `## Open items` in `roadmap/README.md`. Continuation lines belonging to a removed bullet are dropped too. After the delete it runs `check` automatically and propagates its exit code, so any remaining stale references (design-doc "Open work" sections, source-file comments, prose mentions inside Dependencies sections) surface immediately. The tool does **not** touch the `What's shipped so far` paragraph or those remaining-reference sites — those need a judgment call. Use `--dry-run` to preview.
 
 ```sh
 python3 tools/doclinks.py rm-roadmap --dry-run roadmap/transient-node-reclamation.md

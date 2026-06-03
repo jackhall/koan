@@ -565,8 +565,8 @@ def cmd_rm_roadmap(args: argparse.Namespace) -> int:
             new_lines = lines[:section[0] + 1] + kept + lines[section[1]:]
             plan.append((f, new_lines, removed))
 
-    # 2. ROADMAP.md: prune bullets in Next items + Open items.
-    roadmap_idx = REPO / "ROADMAP.md"
+    # 2. roadmap/README.md: prune bullets in Next items + Open items.
+    roadmap_idx = REPO / "roadmap" / "README.md"
     if roadmap_idx.exists():
         idx_lines = roadmap_idx.read_text(encoding="utf-8").splitlines(keepends=True)
         cur_lines = idx_lines
@@ -1233,7 +1233,7 @@ def main(argv: list[str] | None = None) -> int:
     p_rm = sub.add_parser(
         "rm-roadmap",
         help="delete a roadmap/*.md file and prune inbound dependency / "
-             "ROADMAP.md bullets",
+             "roadmap/README.md bullets",
     )
     p_rm.add_argument("path", help="path to the roadmap item to delete")
     p_rm.add_argument(

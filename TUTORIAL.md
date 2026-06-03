@@ -600,7 +600,7 @@ One line per surface form. Sources under
 
 ## What's not in the language yet
 
-Tracked in [ROADMAP.md](ROADMAP.md):
+Tracked in [the roadmap](roadmap/README.md):
 
 - **No user-declarable traits.** `UNION` and `STRUCT` cover sum and product
   types and `.` reads fields off a struct value, but there's no syntax yet

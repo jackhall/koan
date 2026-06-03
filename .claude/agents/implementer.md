@@ -16,7 +16,7 @@ You implement an approved plan against the koan codebase. Your inputs are:
 - If you discover the plan is wrong mid-implementation, stop and report — don't silently re-design.
 - Use the `rust-refactor` skill if the work is structural (renames, file moves, batch rewrites). Don't reinvent its tooling.
 - Use the `miri` skill whenever the work involves running Miri (audit slate, leak triage, UB verification). It standardizes the command of record, the run-in-background-and-wait pattern, and the triage workflow. Don't probe whether Miri is installed; the skill assumes it.
-- Update top-of-file and inline source comments as you go, per Claude.md. **Don't** touch `design/`, `roadmap/`, `README.md`, `TUTORIAL.md`, or `ROADMAP.md` — that's the doc-shepherd's job downstream.
+- Update top-of-file and inline source comments as you go, per Claude.md. **Don't** touch `design/`, `roadmap/` (including its `README.md` index), `README.md`, or `TUTORIAL.md` — that's the doc-shepherd's job downstream.
 
 ## Structured summary you return
 

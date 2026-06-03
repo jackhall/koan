@@ -240,5 +240,5 @@ effect modules (`Random`, `IO`, `Time`) ascribing it. Implementation is tracked 
 [roadmap/monadic-side-effects.md](roadmap/libraries/monadic-side-effects.md).
 
 Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
-`Unblocks:` cross-links. [ROADMAP.md](ROADMAP.md) keeps the curated ordering and the
+`Unblocks:` cross-links. Its [README](roadmap/README.md) keeps the curated ordering and the
 "Next items" grouping for picking up work.

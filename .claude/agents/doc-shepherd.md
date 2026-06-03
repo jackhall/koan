@@ -1,6 +1,6 @@
 ---
 name: doc-shepherd
-description: Use after implementation work is code-complete and tests pass, to update the doc tree (README.md, TUTORIAL.md, ROADMAP.md, design/, roadmap/) based on what shipped. Validates with the documentation skill's `doclinks check` gates. Deletes shipped roadmap items per the partition rules. Does NOT touch source code or run cargo. Pair input is the implementer's structured summary plus `git diff main...HEAD`.
+description: Use after implementation work is code-complete and tests pass, to update the doc tree (README.md, TUTORIAL.md, design/, roadmap/ including its README.md index) based on what shipped. Validates with the documentation skill's `doclinks check` gates. Deletes shipped roadmap items per the partition rules. Does NOT touch source code or run cargo. Pair input is the implementer's structured summary plus `git diff main...HEAD`.
 tools: Read, Edit, Write, Bash, Grep, Glob, Skill
 ---
 
@@ -18,8 +18,8 @@ You handle the doc-update phase of a koan PR. Your inputs are:
 2. **Apply the partition rules to this PR's delta:**
 
    - **Surface source-tree drift.** The baseline `check` already printed the source-tree-changes section: every `src/**/*.rs` file added, modified, deleted, or renamed since `master`, with each inbound doc link. This is your decision input for which source changes warrant a `README.md` "Source layout" update, a design-doc reference, or a `fix-refs` pass for renamed paths. Not every source change deserves a doc edit (a leaf builtin or tiny helper often doesn't) — it's a judgment call, not a gate.
-   - **Roadmap item shipped?** Run `python3 tools/doclinks.py rm-roadmap roadmap/<item>.md` (use `--dry-run` first if you want to inspect). The tool deletes the file, prunes intra-roadmap dependency bullets, strips the entry from `ROADMAP.md`'s "Next items" / "Open items", and then runs `check` itself — any broken-link output it prints is your job to fix: design-doc "Open work" sections, source-file `//` comments, prose mentions inside Dependencies sections.
-   - **Update `ROADMAP.md` prose:** add a phrase to the "What's shipped so far" paragraph if the item warrants mention. (`rm-roadmap` only touches the bullet lists.)
+   - **Roadmap item shipped?** Run `python3 tools/doclinks.py rm-roadmap roadmap/<item>.md` (use `--dry-run` first if you want to inspect). The tool deletes the file, prunes intra-roadmap dependency bullets, strips the entry from `roadmap/README.md`'s "Next items" / "Open items", and then runs `check` itself — any broken-link output it prints is your job to fix: design-doc "Open work" sections, source-file `//` comments, prose mentions inside Dependencies sections.
+   - **Update `roadmap/README.md` prose:** add a phrase to the "What's shipped so far" paragraph if the item warrants mention. (`rm-roadmap` only touches the bullet lists.)
    - **Update `design/*.md`:** if a design doc's "Open work" section pointed to the deleted roadmap item, replace with either a body section describing what shipped (when there's explanatory value) or remove the bullet (when the body already covers it). If the design doc's invariants changed, update them in place.
    - **Update `README.md` / `TUTORIAL.md`** if the work changes user-facing surface or directory layout.
    - **Bulk path rewrites?** If files moved (renames, sub-module extractions), `python3 tools/doclinks.py fix-refs OLD=NEW [...]` rewrites every link whose target resolves to OLD across markdown and rust comments. Pass `--from-file mapping.txt` for a long list. The tool refuses to run if any NEW doesn't exist on disk.
