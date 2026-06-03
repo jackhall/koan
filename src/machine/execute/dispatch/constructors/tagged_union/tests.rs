@@ -77,7 +77,7 @@ fn ctor_fast_lane_rejects_value_of_wrong_type() {
     }
 }
 
-/// `ConstructorCall` fast lane (leaf-Type head) propagates the schema's tag check.
+/// `TypeCall` fast lane (leaf-Type head) propagates the schema's tag check.
 #[test]
 fn ctor_fast_lane_propagates_tag_validation_error() {
     let arena = RuntimeArena::new();

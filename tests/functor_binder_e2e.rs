@@ -142,6 +142,56 @@ fn functor_binder_e2e_makeset_produces_module() {
     );
 }
 
+/// Caveat-2 closer: a `LET`-bound functor name is applied through the
+/// `:(MyFunctor {…})` sigil surface and yields a module — end-to-end.
+///
+/// `LET ApplyIt = (FUNCTOR (APPLYIT x :Number) -> Module = …)` binds the functor
+/// *type-side* (`bindings.types[ApplyIt] = KType::KFunctor { body: Some }`, nothing
+/// in `bindings.data`). The single-part `:(ApplyIt {x = 5})` sigil routes through
+/// the `SigiledTypeExpr` fast lane → a `Type`-head `TypeCall` of `ApplyIt {x = 5}`.
+/// `resolve_type_with_chain(ApplyIt)` returns the body-bearing functor type, so the
+/// `Function` arm calls it and the body's `MODULE Inner = …` produces a module the
+/// outer `LET Got = …` binds.
+///
+/// The named-arg surface keys on the functor's param name, which must be a bare
+/// lowercase identifier to fill a record-literal field — hence a `Number` param
+/// `x`. (Satisfying a `:OrderedSig`-typed param through this named-arg path is an
+/// orthogonal signature-admission concern, independent of functor application.)
+#[test]
+fn let_bound_functor_applied_via_sigil_yields_module() {
+    let arena = RuntimeArena::new();
+    let scope = run(
+        &arena,
+        "LET ApplyIt = (FUNCTOR (APPLYIT x :Number) -> Module = \
+            (MODULE Inner = ((LET tag = x))))\n\
+         LET Got = :(ApplyIt {x = 5})",
+    );
+    // `ApplyIt` is type-bound (a functor name lands in `bindings.types`), never in
+    // `bindings.data`, and carries its callable body.
+    assert!(
+        scope.lookup("ApplyIt").is_none(),
+        "ApplyIt must NOT be value-bound — a functor name registers type-side",
+    );
+    assert!(
+        matches!(
+            scope.resolve_type("ApplyIt"),
+            Some(KType::KFunctor { body: Some(_), .. })
+        ),
+        "ApplyIt should resolve type-side to a body-bearing KFunctor",
+    );
+    // Applying the functor produced a module that the outer LET bound as `Got`.
+    let m = match scope.resolve_type("Got") {
+        Some(KType::Module { module, .. }) => *module,
+        other => panic!("Got should be a Module produced by applying ApplyIt, got {other:?}"),
+    };
+    let tag = m.child_scope().lookup("tag");
+    assert!(
+        matches!(tag, Some(KObject::Number(n)) if *n == 5.0),
+        "applied functor's body should set `tag = 5` from the named arg, got {:?}",
+        tag.map(|o| o.ktype()),
+    );
+}
+
 /// Surface-disjoint check: `FUNCTOR` at value-position binder and the new
 /// keyworded `FUNCTOR` at type-position sigil both work in the same run
 /// without collision. The all-uppercase `FUNCTOR` keyword classifies as a

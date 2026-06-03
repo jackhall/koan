@@ -245,8 +245,10 @@ impl<'a> Clone for KExpression<'a> {
 pub enum DispatchShape {
     BareIdentifier,
     BareTypeLeaf,
-    /// Type-constructor call: head is a leaf `Type` and `parts[1..]` is non-empty.
-    ConstructorCall,
+    /// Bare-`Type`-head call: head is a leaf `Type` and `parts[1..]` is non-empty.
+    /// Resolves the name synchronously and branches into a type construction or a
+    /// functor application via the shared apply-a-callable tail.
+    TypeCall,
     /// Function-value call: head is a lowercase `Identifier`, followed by ≥1
     /// non-keyword parts.
     FunctionValueCall,
@@ -261,9 +263,22 @@ pub enum DispatchShape {
     /// index 1). A refinement of `Keyworded`: nothing else produces that shape, so it
     /// carves a track that the fold pre-pass folds into nested binary sub-dispatches.
     OperatorChain,
-    /// A keyword appears anywhere in `expr.parts` (and the chain shape did not match),
-    /// OR the expression doesn't fit any fast-lane shape.
+    /// Head-deferred call: head is a nested `Expression` followed by ≥1 non-keyword
+    /// parts. The head is evaluated first; its resulting value (a function, functor,
+    /// or constructible type) is then applied to `parts[1..]` via the shared
+    /// apply-a-callable tail.
+    HeadDeferred,
+    /// Type-position head-deferred call: head is a `:(...)` sigiled type expression
+    /// followed by ≥1 non-keyword parts. Like `HeadDeferred`, but the resumed value
+    /// is admitted only when it is type-shaped (a constructible type or a functor);
+    /// a plain function or other value surfaces a type-shaped `TypeMismatch`.
+    TypeHeadDeferred,
+    /// A keyword appears anywhere in `expr.parts` (and the chain shape did not match).
     Keyworded,
+    /// Head is a non-callable surface — a literal, list, dict, or record — in a
+    /// multi-part expression. Heads are always eager and must resolve to something
+    /// callable; this shape surfaces a loud `DispatchFailed` from the dispatch entry.
+    NonCallableHead,
 }
 
 /// Sweeps every part for `Keyword` first so a mixed shape like `(f IF x)` goes to
@@ -292,16 +307,32 @@ pub fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
             | ExpressionPart::ListLiteral(_)
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_) => DispatchShape::LiteralPassThrough,
-            _ => DispatchShape::Keyworded,
+            ExpressionPart::Keyword(_) => {
+                unreachable!("no-keyword precondition: the sweep above caught every Keyword part")
+            }
         };
     }
+    // `len >= 2` here: the keyword sweep passed and the single-part block did not
+    // match, so an empty `parts` falls through as the explicit `NonCallableHead`.
     let Some(head_part) = expr.parts.first() else {
-        return DispatchShape::Keyworded;
+        return DispatchShape::NonCallableHead;
     };
     match &head_part.value {
-        ExpressionPart::Type(_) => DispatchShape::ConstructorCall,
+        ExpressionPart::Type(_) => DispatchShape::TypeCall,
         ExpressionPart::Identifier(_) => DispatchShape::FunctionValueCall,
-        _ => DispatchShape::Keyworded,
+        ExpressionPart::Expression(_) => DispatchShape::HeadDeferred,
+        ExpressionPart::SigiledTypeExpr(_) => DispatchShape::TypeHeadDeferred,
+        // A literal / list / dict / record / future head in a multi-part
+        // expression: heads are always eager and must resolve to something
+        // callable, so a non-callable head surfaces a loud `DispatchFailed`.
+        ExpressionPart::Literal(_)
+        | ExpressionPart::Future(_)
+        | ExpressionPart::ListLiteral(_)
+        | ExpressionPart::DictLiteral(_)
+        | ExpressionPart::RecordLiteral(_) => DispatchShape::NonCallableHead,
+        ExpressionPart::Keyword(_) => {
+            unreachable!("no-keyword precondition: the sweep above caught every Keyword part")
+        }
     }
 }
 

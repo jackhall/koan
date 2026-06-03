@@ -105,7 +105,7 @@ pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     expr.binder_name_from_type_part()
 }
 
-/// Construction entry reached from the `ConstructorCall` fast lane's `Newtype` arm.
+/// Construction entry reached from the `TypeCall` fast lane's `Newtype` arm.
 /// Schedules the value sub-expression through `add_dispatch`, then registers a
 /// `Combine` whose finish closure type-checks against `repr`, applies the collapse
 /// rule, and produces the `KObject::Wrapped`.
@@ -135,14 +135,14 @@ pub fn newtype_construct<'a>(
             "newtype_construct registered exactly one dep"
         );
         let value: &'a KObject<'a> = results[0];
-        // `unreachable!` is structurally guarded by the `ConstructorCall` fast lane.
+        // `unreachable!` is structurally guarded by the `TypeCall` fast lane.
         let repr: &KType = match identity {
             KType::UserType {
                 kind: UserTypeKind::Newtype { repr },
                 ..
             } => repr.as_ref(),
             _ => unreachable!(
-                "ConstructorCall fast lane routed non-Newtype identity into newtype_construct"
+                "TypeCall fast lane routed non-Newtype identity into newtype_construct"
             ),
         };
         if !repr.matches_value(value) {
@@ -166,7 +166,7 @@ pub fn newtype_construct<'a>(
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Only the declaration form is registered; construction lives in the
-    // `ConstructorCall` fast lane via `newtype_construct`.
+    // `TypeCall` fast lane via `newtype_construct`.
     register_builtin_with_binder(
         scope,
         "NEWTYPE",

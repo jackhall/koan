@@ -151,11 +151,18 @@ inner expression's parts decide its shape:
   primary caller of `coerce_type_token_value` — see
   [elaboration.md § Layers](elaboration.md#layers) § Layer 4 for the
   shared coercion seam.
-- `ConstructorCall` for a leaf-Type head with non-empty rest
-  (`:(MyStruct 1 2 3)`) — routes Struct / Tagged / Newtype heads
-  through their construction primitives.
-- `FunctionValueCall` for user-functor application
-  (`:(MyFunctor {T = IntOrd})`).
+- `TypeCall` for a leaf-Type head with non-empty rest — routes a
+  Struct / Tagged / Newtype head through its construction primitive
+  (`:(MyStruct {x = 1})`) and a `KType::KFunctor { body: Some }` head
+  through functor application (`:(MyFunctor {T = IntOrd})`), both via the
+  shared apply-a-callable tail.
+
+A single-part `:(...)` sigil wrapping the whole construction is the
+`SigiledTypeExpr` lane that tail-replaces with a `Dispatch` of the inner
+expression; a `:(...)` head *followed by* a call body
+(`:(MyFunctor {base = IntOrd})` as a head) is the `TypeHeadDeferred` lane,
+which evaluates the head to a type-shaped value and admits only a
+constructible type or a functor.
 
 The sigil boundary — "the returned carrier must be type-side
 (`KTypeValue`, `Module`, `Signature`, `UserType`, `KFunctor`)" — is

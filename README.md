@@ -209,7 +209,7 @@ src/
     └── execute/
         ├── scheduler.rs   Scheduler struct, execute loop, KFunction::invoke bridge; dep_graph/, node_store/, submit/, work_queues/, finish/, literal/, tests under it
         ├── nodes.rs       node types (NodeWork / NodeOutput / NodeStep / Node) + work_deps
-        ├── dispatch.rs    run_dispatch driver + classify_dispatch_shape + DispatchState; ctx/ (DispatchCtx facade), keyworded/, fn_value/, single_poll/ submodules
+        ├── dispatch.rs    run_dispatch driver + classify_dispatch_shape + DispatchState; ctx/ (DispatchCtx facade), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/ (shared callable tail) submodules
         ├── lift.rs        lift_kobject — rebuild values across per-call arena boundaries
         └── interpret.rs   parse → dispatch → schedule → execute
 ```

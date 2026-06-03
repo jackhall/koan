@@ -522,15 +522,19 @@ prior bind without sharing an index space with them.
 The execute side — [`run_dispatch`](../src/machine/execute/dispatch.rs) —
 opens with a pre-walk shape classifier. `classify_dispatch_shape` sweeps the
 expression's parts for any `Keyword` first and, if none, branches on the head
-token's shape, producing one of six `DispatchShape` variants. The five
-no-keyword variants (`BareIdentifier`, `BareTypeLeaf`,
-`ConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`) run their own
-fast-lane handlers and never enter `Scope::resolve_dispatch_with_chain`:
-there are no candidates in `bindings.functions` for these shapes, so the
-candidate machinery would do no useful work. The `Keyworded` variant
-(anywhere a keyword appears, or any head shape outside the fast-lane set)
-falls into the chain-walked resolution plus eager name-resolve plus
-dep-schedule pipeline below.
+token's shape, producing a `DispatchShape` variant. The no-keyword fast-lane
+variants run their own handlers and never enter
+`Scope::resolve_dispatch_with_chain`: there are no candidates in
+`bindings.functions` for these shapes, so the candidate machinery would do no
+useful work. The single-part lanes (`BareIdentifier`, `BareTypeLeaf`,
+`SigiledTypeExpr`, `LiteralPassThrough`) surface a name or value directly, while
+the multi-part head-position call lanes (`TypeCall`, `FunctionValueCall`,
+`HeadDeferred`, `TypeHeadDeferred`) each resolve their head to a callable and
+converge on the [shared apply-a-callable tail](#dispatch-time-name-placeholders). A
+non-callable multi-part head is `NonCallableHead`, a direct `DispatchFailed`
+from the dispatch entry. The `Keyworded` variant — produced only when a real
+keyword is present — falls into the chain-walked resolution plus eager
+name-resolve plus dep-schedule pipeline below.
 
 The keyworded pipeline runs in four steps. Step 1 builds the bare-name
 outcome cache: one
@@ -605,14 +609,18 @@ The rails the dispatch driver feeds:
 
 - **Fast lane** (pre-walk classifier, runs before any resolve walk).
   `classify_dispatch_shape` is one pass over `expr.parts`: keyword anywhere
-  ⇒ `Keyworded`; single-part `Identifier` ⇒ `BareIdentifier`; single-part
-  leaf `Type` ⇒ `BareTypeLeaf`; single-part `SigiledTypeExpr` ⇒
-  `SigiledTypeExpr`; multi-part with leaf-`Type` head ⇒
-  `ConstructorCall`; multi-part with `Identifier` head ⇒
-  `FunctionValueCall`; everything else ⇒ `Keyworded`. The "sweep first,
+  ⇒ `Keyworded` (refined to `OperatorChain` for the chain shape); single-part
+  `Identifier` ⇒ `BareIdentifier`; single-part leaf `Type` ⇒ `BareTypeLeaf`;
+  single-part `SigiledTypeExpr` ⇒ `SigiledTypeExpr`; single-part literal /
+  value ⇒ `LiteralPassThrough`. With the no-keyword precondition established,
+  a multi-part expression branches on its head: leaf-`Type` head ⇒ `TypeCall`;
+  `Identifier` head ⇒ `FunctionValueCall`; nested-`Expression` head ⇒
+  `HeadDeferred`; `:(...)` `SigiledTypeExpr` head ⇒ `TypeHeadDeferred`; a
+  literal / list / dict / record head ⇒ `NonCallableHead`. The "sweep first,
   branch on head second" ordering matters: a mixed shape like `(f IF x)`
   goes to `Keyworded` because only the candidate machinery knows how to
-  dispatch the `(_ IF _)` bucket.
+  dispatch the `(_ IF _)` bucket. `Keyworded` is never a catch-all for an
+  unclassified head — a non-callable head is its own `NonCallableHead` sink.
 
   Each fast-lane variant has its own handler:
 
@@ -629,18 +637,16 @@ The rails the dispatch driver feeds:
     bare leaf type. See
     [typing/elaboration.md § Layers](typing/elaboration.md#layers)
     § Layer 4 for the shared coercion seam.
-  - `ConstructorCall` (`(MyStruct 1 2)`, `(MyTagged Just 7)`) —
-    [`constructor_call`](../src/machine/execute/dispatch/single_poll.rs)
-    resolves the head Type token to its `bindings.types` identity and
-    branches on the `UserTypeKind`: `Struct { fields }` and
-    `Tagged { schema }` / `TypeConstructor { schema, .. }` read the schema
-    straight off the identity and dispatch into
-    `constructors::dispatch_construct_struct` / `dispatch_construct_tagged`,
-    while `Newtype` routes into `newtype_construct`. No value-side carrier is
-    fetched — the schema rides the identity. Opaque / Module / unbound heads
-    surface a `TypeMismatch`. A head token that isn't a registered `UserType`
-    (the shape a removed positional `:(List Number)` would take) finds no
-    `bindings.types` identity and surfaces an unbound-name error.
+  - `TypeCall` (`MyStruct {x = 1}`, `MyFunctor {T = IntOrd}`) —
+    [`type_call`](../src/machine/execute/dispatch/single_poll.rs)
+    resolves the head Type token to its `bindings.types` identity. A
+    `UserType` identity is a `ResolvedCallable::Constructor`; a
+    `KType::KFunctor { body: Some }` (a bound functor in the type table) is a
+    `ResolvedCallable::Function`. Both flow through the shared
+    apply-a-callable tail (below). No value-side carrier is fetched — the
+    schema rides the identity. Opaque / Module / unbound heads surface a
+    `TypeMismatch`. A head token bound to a still-finalizing producer (a
+    forward functor `LET`) parks on it and re-runs `type_call` on resume.
   - `SigiledTypeExpr` (single-part `:(...)` wrapper) — the `run_dispatch`
     arm tail-replaces the slot with a `Dispatch`
     of the wrapped `KExpression`, so the inner expression runs through the
@@ -648,34 +654,46 @@ The rails the dispatch driver feeds:
     site does. See
     [type-language-via-dispatch.md](typing/type-language-via-dispatch.md)
     for the full type-language dispatch contract.
-  - `FunctionValueCall` (`f {x = 7}`) — `stateful_fast_lane_function_value_call`
+  - `FunctionValueCall` (`f {x = 7}`) — [`FnValueState`](../src/machine/execute/dispatch/fn_value.rs)
     resolves the `Identifier` head and handles every admission outcome
     directly. The call shape admits iff `expr.parts[1..]` is exactly one
     nested-parens part (the *only* call shape — koan has no `f 1 2`
     positional call syntax for function values, so the named-arg shape
-    is the whole user-facing surface). Three head-carrier shapes admit:
-    `KFunction(f, _)` runs `KFunction::reconstruct_positional` to
-    interleave the signature's `Keyword` elements between the
-    picked-by-name values and routes through
-    `stateful_dispatch_callable_value`, which either binds and invokes
-    one-shot or installs the eager-subs track via
-    `stateful_install_fn_value_eager_subs_track` when the spliced call
-    carries unresolved eager parts; a `KTypeValue(KType::UserType { kind, .. })`
+    is the whole user-facing surface). A `KFunction(f, _)` head resolves to a
+    `ResolvedCallable::Function` and a `KTypeValue(KType::UserType { .. })`
     head — the carrier a value-classified alias of a constructible type
-    synthesizes (`LET outcome = Outcome` then `(outcome (err "x"))`) — branches
-    on `kind` and reads the schema off that identity, dispatching into
-    `constructors::dispatch_construct_struct` / `dispatch_construct_tagged`
-    (or `newtype_construct` for `Newtype`), the same identity-borne schema the
-    `ConstructorCall` lane reads. Any other carrier (number, string, instance
-    struct, module, …) surfaces `TypeMismatch { arg: "verb", expected:
-    "KFunction or Type", got }` directly. A `Placeholder` head installs
-    the head-placeholder park via `stateful_install_fn_value_head_park`;
-    an unbound head surfaces `UnboundName(name)` directly — this shape
-    never falls through to `Keyworded`. Reconstruction errors from
+    synthesizes (`LET outcome = Outcome` then `(outcome (err "x"))`) — to a
+    `ResolvedCallable::Constructor`, both flowing through the shared
+    apply-a-callable tail (below). Any other carrier (number, string, instance
+    struct, module, …) surfaces a `TypeMismatch` directly. A `Placeholder` head
+    installs the head-placeholder park; an unbound head surfaces
+    `UnboundName(name)` directly — this shape never falls through to
+    `Keyworded`. Reconstruction errors from
     `KFunction::reconstruct_positional` (missing / unknown /
     duplicate-named args, malformed pair shapes) surface as
     `NodeOutput::Err` with the same structured wording the keyworded
     path produces.
+  - `HeadDeferred` (`(pick) {x = 1}`) and `TypeHeadDeferred`
+    (`:(MyFunctor {base = IntOrd})`) — [`HeadDeferredState`](../src/machine/execute/dispatch/head_deferred.rs)
+    sub-dispatches the head first (an Owned edge; the park/resume pair mirrors
+    `CtorState`'s), then branches the resumed value's kind into a
+    `ResolvedCallable`. `HeadDeferred` admits a function, functor, bound functor,
+    or constructible type; `TypeHeadDeferred` (the `:(...)` sigil guarantees a
+    type) prunes the plain-function arm and surfaces a type-shaped `TypeMismatch`
+    on a non-type. Both then run the shared apply-a-callable tail.
+
+  **The shared apply-a-callable tail.** All four head-position call lanes —
+  `TypeCall`, `FunctionValueCall`, `HeadDeferred`, `TypeHeadDeferred` —
+  converge on [`apply_callable`](../src/machine/execute/dispatch/apply_callable.rs).
+  A `ResolvedCallable` has exactly two execution arms: `Constructor(&KType)`
+  builds from a struct / tagged / newtype / `TypeConstructor` schema, and
+  `Function(&KFunction)` calls a `KFunction` by name. A functor is a `KFunction`
+  whose result is a module, so functor application is the `Function` arm — the
+  functor/function distinction survives only at classification (for `KFunctor`
+  typing and the `TypeHeadDeferred` diagnostic gate), never at execution. The
+  tail body-shape-branches `expr.parts[1..]` (`extract_call_body` admits one
+  `{name = value}` record literal or one `(value)` paren group) and launches
+  construction or a `reconstruct_positional` + eager-subs function call.
 
   Forward references resolve through the fast lane and the eager
   name-resolve rail (below), both of which route name lookups through
@@ -866,11 +884,16 @@ state:
 DispatchState ::= Initialized(Initialized)
                 | BareIdentifier(BareIdState)
                 | BareTypeLeaf(BareTypeState)
-                | ConstructorCall(CtorState)
+                | TypeCall(Box<CtorState>)
                 | FunctionValueCall(Box<FnValueState>)
+                | HeadDeferred(Box<HeadDeferredState>)
+                | LiteralPassThrough(LitState)
                 | SigiledTypeExpr(SigilState)
                 | Keyworded(Box<KeywordedState>)
 ```
+
+`HeadDeferred` is shared by the `HeadDeferred` and `TypeHeadDeferred` shapes —
+the state's `type_only` flag selects the admitted-arm set on resume.
 
 Every per-variant struct embeds the `Initialized` birth state by value
 as its `init` field, so any state-carried data (today only `pre_subs`
@@ -885,13 +908,14 @@ lifetime with a `PhantomData<&'a _>` marker so additional fields can be
 added without churning every pattern site in `execute.rs` /
 `submit.rs` / `dispatch.rs`.
 
-The five fast-lane variants (`BareIdentifier`, `BareTypeLeaf`,
-`ConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`) terminalize
-or single-producer-park in one poll, so their state structs carry no
-post-classification tracks. The two variants that can park on a fan-in
-of producers — `Keyworded` and `FunctionValueCall` — carry an
-`Option<Track>` field per park shape; the `with_*` constructors install
-exactly one. The variants are boxed because their multi-track shapes
+The single-poll fast-lane variants (`BareIdentifier`, `BareTypeLeaf`,
+`SigiledTypeExpr`, `LiteralPassThrough`) terminalize or single-producer-park in
+one poll, so their state structs carry no post-classification tracks. The
+variants that re-enter from a parked track — `Keyworded`, `FunctionValueCall`,
+`TypeCall` (parked on eager-subs or a still-finalizing head), and `HeadDeferred`
+(parked on its head sub-dispatch) — carry the per-shape track they resume from.
+`Keyworded` and `FunctionValueCall` hold an `Option<Track>` field per park shape;
+the `with_*` constructors install exactly one. These variants are boxed because their multi-track shapes
 would otherwise push every `DispatchState`-carrying type
 (`NodeWork::Dispatch`, `NodeStep::Replace`, `Node`, `SlotState`) past
 clippy's `large_enum_variant` threshold; boxing costs one allocation

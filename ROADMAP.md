@@ -143,6 +143,18 @@ What's shipped that the open items below build on:
   [user-definable n-ary operators](roadmap/operator_chaining/n-ary-operators.md) and
   [user-defined operator modules](roadmap/operator_chaining/user-defined-operator-modules.md).
   See [design/expressions-and-parsing.md § Structural cache and dispatch shape](design/expressions-and-parsing.md#structural-cache-and-dispatch-shape).
+- *Head-position dispatch.* A no-keyword multi-part expression resolves its head
+  to a callable identity before dispatching: `TypeCall` (a leaf-`Type` head),
+  `HeadDeferred` (a nested-`Expression` head, evaluated then branched on its
+  value's kind), and `TypeHeadDeferred` (a `:(…)` sigil head, type-pruned with a
+  type-shaped diagnostic) join `FunctionValueCall` on one
+  [shared apply-a-callable tail](src/machine/execute/dispatch/apply_callable.rs)
+  (`Constructor` / `Function` arms). `Keyworded` is produced only for a real
+  keyword; a non-callable head is a direct `DispatchFailed`. Functor application
+  rides the function-call convention with no separate machinery, and a functor
+  name-binding lives in the type namespace (`bindings.types` as
+  `KType::KFunctor { body: Some }`), binding one to a value-class name being an
+  error. See [design/typing/functors.md § Application and binding](design/typing/functors.md#application-and-binding).
 
 ## Next items
 
@@ -157,6 +169,8 @@ without first landing something else:
   retire the `type_ops.rs` underscore keywords into the existing spaced / dotted / infix forms.
 - [User-definable n-ary operators](roadmap/operator_chaining/n-ary-operators.md) — the fold pre-pass
   that lets a recognized operator chain (`a + b + c`, `A | B | C`) actually evaluate.
+- [Named-argument calls consult signature satisfaction for signature-typed params](roadmap/named-arg-signature-satisfaction.md) —
+  admit a satisfying module passed by name (`:(MyFunctor {base = IntOrd})`), matching the keyword-led path.
 - [Modular implicits (predicate-typing stage 5)](roadmap/predicate_typing/modular-implicits.md) —
   implicit module resolution; its module-language substrate has already shipped.
 - [Continue-on-error for the REPL and batch mode](roadmap/editor_tooling/continue-on-error.md) —

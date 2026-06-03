@@ -367,6 +367,99 @@ fn cached_key_agrees_with_expression_signature_untyped_key() {
     assert_eq!(e.untyped_key(), sig.untyped_key());
 }
 
+fn num(n: f64) -> ExpressionPart<'static> {
+    ExpressionPart::Literal(KLiteral::Number(n))
+}
+fn record(fields: Vec<(&str, ExpressionPart<'static>)>) -> ExpressionPart<'static> {
+    ExpressionPart::RecordLiteral(
+        fields
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+    )
+}
+fn sigil(parts: Vec<ExpressionPart<'static>>) -> ExpressionPart<'static> {
+    ExpressionPart::SigiledTypeExpr(Box::new(KExpression::new(parts_of(parts))))
+}
+
+/// `(f x) 1` — nested-`Expression` head followed by a non-keyword part.
+/// Classifier routes to `HeadDeferred` so the head is evaluated first.
+#[test]
+fn head_deferred_for_nested_expression_head() {
+    let e = KExpression::new(parts_of(vec![expr(vec![ident("f"), ident("x")]), num(1.0)]));
+    assert_eq!(e.shape(), DispatchShape::HeadDeferred);
+}
+
+/// `:(MyFunctor {T = Number}) {x = 1}` — `:(...)` sigil head followed by a
+/// non-keyword part. Routes to `TypeHeadDeferred` (the type-shaped head lane).
+#[test]
+fn type_head_deferred_for_sigiled_head() {
+    let e = KExpression::new(parts_of(vec![
+        sigil(vec![ty("MyFunctor")]),
+        record(vec![("x", num(1.0))]),
+    ]));
+    assert_eq!(e.shape(), DispatchShape::TypeHeadDeferred);
+}
+
+/// `((inner))` — a single-part nested `Expression` is the literal-pass-through
+/// surface, not a head-deferred call (no body to apply the head to).
+#[test]
+fn single_part_nested_expression_stays_literal_pass_through() {
+    let e = KExpression::new(parts_of(vec![expr(vec![ident("inner")])]));
+    assert_eq!(e.shape(), DispatchShape::LiteralPassThrough);
+}
+
+/// `Point {x = 1}` — leaf-`Type` head + body. Routes to `TypeCall`.
+#[test]
+fn type_leaf_head_multipart_is_type_call() {
+    let e = KExpression::new(parts_of(vec![ty("Point"), record(vec![("x", num(1.0))])]));
+    assert_eq!(e.shape(), DispatchShape::TypeCall);
+}
+
+/// `f {x = 1}` — lowercase-`Identifier` head + body. Routes to
+/// `FunctionValueCall`.
+#[test]
+fn identifier_head_multipart_is_function_value_call() {
+    let e = KExpression::new(parts_of(vec![ident("f"), record(vec![("x", num(1.0))])]));
+    assert_eq!(e.shape(), DispatchShape::FunctionValueCall);
+}
+
+/// `99 1` — a literal head in a multi-part expression is a non-callable head.
+/// Heads must resolve to something callable; this is the error shape.
+#[test]
+fn non_callable_literal_head_is_error_shape() {
+    let e = KExpression::new(parts_of(vec![num(99.0), num(1.0)]));
+    assert_eq!(e.shape(), DispatchShape::NonCallableHead);
+
+    // `[1 2 3] x` — list head is equally non-callable.
+    let with_list = KExpression::new(parts_of(vec![
+        ExpressionPart::ListLiteral(vec![num(1.0), num(2.0), num(3.0)]),
+        ident("x"),
+    ]));
+    assert_eq!(with_list.shape(), DispatchShape::NonCallableHead);
+}
+
+/// A keyword-free multi-part expression never classifies as `Keyworded` — that
+/// shape is now produced only by the keyword sweep. Covers every callable-head
+/// and non-callable-head surface.
+#[test]
+fn keyworded_only_on_real_keyword() {
+    let cases: Vec<KExpression<'static>> = vec![
+        KExpression::new(parts_of(vec![ty("Point"), record(vec![("x", num(1.0))])])),
+        KExpression::new(parts_of(vec![ident("f"), record(vec![("x", num(1.0))])])),
+        KExpression::new(parts_of(vec![expr(vec![ident("g")]), num(1.0)])),
+        KExpression::new(parts_of(vec![sigil(vec![ty("F")]), num(1.0)])),
+        KExpression::new(parts_of(vec![num(99.0), num(1.0)])),
+    ];
+    for e in &cases {
+        assert_ne!(
+            e.shape(),
+            DispatchShape::Keyworded,
+            "keyword-free expression must never classify as Keyworded",
+        );
+    }
+}
+
 #[test]
 fn debug_for_expression_part_and_kexpression() {
     // Exact format isn't load-bearing; just assert non-empty / tagged output.

@@ -1,7 +1,7 @@
 //! Fast-lane dispatch shapes — bare identifier, bare leaf type,
-//! constructor call, sigiled type expression, literal pass-through.
+//! bare-`Type`-head call, sigiled type expression, literal pass-through.
 //! All terminate (or single-producer-park) in one poll except
-//! `ConstructorCall`, which can park on per-value-cell eager-subs and
+//! `TypeCall`, which can park on per-value-cell eager-subs and
 //! resume via [`CtorState::resume`].
 
 use std::collections::HashMap;
@@ -10,20 +10,16 @@ use std::rc::Rc;
 
 use super::coerce_type_token_value;
 use super::constructors;
-use crate::builtins::newtype_def::newtype_construct;
 use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
-use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::{KObject, KType, Record};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
-use super::{
-    body_shape_err, extract_call_body, keyworded::KeywordedState, CallBody, DispatchCtx,
-    Initialized, NAMED_ONLY, POSITIONAL_ONLY,
-};
+use super::apply_callable::{apply_callable, ResolvedCallable};
+use super::{DispatchCtx, DispatchState, Initialized};
 
 pub(in crate::machine::execute) struct BareIdState<'a> {
     pub(in crate::machine::execute) init: Initialized,
@@ -38,9 +34,23 @@ pub(in crate::machine::execute) struct BareTypeState<'a> {
 pub(in crate::machine::execute) struct CtorState<'a> {
     pub(in crate::machine::execute) init: Initialized,
     pub(in crate::machine::execute) track: Option<CtorTrack<'a>>,
+    /// Set when `type_call` parked on a still-finalizing head binding (a
+    /// `LET <Type-class> = …` placeholder, e.g. a forward functor). On resume
+    /// the whole `type_call` re-runs against the now-finalized binding — the
+    /// head may resolve type-side (a functor or type alias), so the keyworded
+    /// resolve path is the wrong continuation. Mutually exclusive with `track`.
+    pub(in crate::machine::execute) head_placeholder: Option<TypeCallHeadPlaceholder<'a>>,
 }
 
-/// Pending eager-subs for a parked `ConstructorCall`. `staged_values`
+/// Parked head-resolution state for a `TypeCall` whose head name was a
+/// still-finalizing placeholder. Carries the original call expression so the
+/// resume re-runs the fast lane once the producer is bound.
+pub(in crate::machine::execute) struct TypeCallHeadPlaceholder<'a> {
+    pub(in crate::machine::execute) expr: KExpression<'a>,
+    pub(in crate::machine::execute) producer: NodeId,
+}
+
+/// Pending eager-subs for a parked `TypeCall`. `staged_values`
 /// already holds the slots whose dispatch short-circuited at install
 /// time (an arena-resident `&KObject`); `subs` carries `(slot_index,
 /// sub_id)` for the remaining parked slots. The resume reads each
@@ -98,32 +108,62 @@ impl<'a> BareTypeState<'a> {
 
 impl<'a> CtorState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self { init, track: None }
+        Self {
+            init,
+            track: None,
+            head_placeholder: None,
+        }
     }
 
     pub(in crate::machine::execute) fn with_track(init: Initialized, track: CtorTrack<'a>) -> Self {
         Self {
             init,
             track: Some(track),
+            head_placeholder: None,
+        }
+    }
+
+    pub(in crate::machine::execute) fn with_head_placeholder(
+        init: Initialized,
+        head_placeholder: TypeCallHeadPlaceholder<'a>,
+    ) -> Self {
+        Self {
+            init,
+            track: None,
+            head_placeholder: Some(head_placeholder),
         }
     }
 
     /// Drain the parked subs into `staged_values` and tail-call
     /// `constructors::finish` once every slot is bound. Errors on a
-    /// dep terminate the resume with that error.
+    /// dep terminate the resume with that error. A `head_placeholder` resume
+    /// instead re-runs `type_call` against the now-finalized head binding.
     pub(in crate::machine::execute) fn resume(
         self,
         ctx: &mut DispatchCtx<'a, '_>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        let CtorState { init, track } = self;
+        let CtorState {
+            init,
+            track,
+            head_placeholder,
+        } = self;
         let _ = init;
+        if let Some(TypeCallHeadPlaceholder { expr, producer }) = head_placeholder {
+            debug_assert!(
+                track.is_none(),
+                "head_placeholder and eager-subs track are mutually exclusive",
+            );
+            let _ = producer;
+            ctx.clear_dep_edges(idx);
+            return Ok(type_call(ctx, expr, scope, idx));
+        }
         let CtorTrack {
             subs,
             mut staged_values,
             kind,
-        } = track.expect("ConstructorCall resume only entered after a track is installed");
+        } = track.expect("TypeCall resume only entered after a track is installed");
         for (slot_idx, sub_id) in &subs {
             match ctx.read_result(*sub_id) {
                 Ok(v) => staged_values[*slot_idx] = Some(v),
@@ -293,11 +333,26 @@ fn park_on_literal_producer<'a>(
     }
 }
 
-/// A forward-reference `Placeholder` on the head name parks via
-/// `install_overload_park` (single-producer is fine — the installer
-/// dedupes / cycle-filters internally) so the resume rebuilds via
-/// `KeywordedState::initial`.
-pub(super) fn constructor_call<'a>(
+/// Synchronous resolve-then-branch for a bare-`Type`-head call. One resolution,
+/// branched outcomes routed through the shared apply-a-callable tail:
+///
+/// 1. `resolve_with_chain` first, only to park: a `Placeholder` (a still-finalizing
+///    binding, including a recursive/forward functor) parks the whole dispatch via
+///    `install_overload_park` until the producer finalizes. Bound *values* are not
+///    branched here — every Type-class carrier (a type alias or a bound functor)
+///    lives in the type table, read in step 2.
+/// 2. `resolve_type_with_chain` (a pure `types[name]` read, no park) classifies the
+///    identity:
+///    - a constructible `UserType` identity → the `Constructor` arm;
+///    - a `KType::KFunctor { body: Some(f) }` (a bound functor) → the `Function`
+///      arm — its result is a module;
+///    - a `KType::KFunctor { body: None }` (a bare `:(FUNCTOR …)` annotation) is not
+///      invocable → `TypeMismatch`;
+///    - any other identity → `TypeMismatch`.
+///
+/// A name with no producer and no binding is `UnboundName` (genuine absence only —
+/// pending names are already parked in step 1).
+pub(super) fn type_call<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     expr: KExpression<'a>,
     scope: &'a Scope<'a>,
@@ -305,29 +360,33 @@ pub(super) fn constructor_call<'a>(
 ) -> NodeStep<'a> {
     let head_t = match &expr.parts[0].value {
         ExpressionPart::Type(t) => t.clone(),
-        _ => unreachable!("ConstructorCall shape implies leaf Type head"),
-    };
-    let body = match extract_call_body(&expr) {
-        Ok(b) => b,
-        Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+        _ => unreachable!("TypeCall shape implies leaf Type head"),
     };
     let chain = ctx.chain_deref();
-    match scope.resolve_with_chain(head_t.as_str(), chain) {
-        Resolution::Placeholder(producer) => {
-            return KeywordedState::install_overload_park(
-                ctx,
-                vec![producer],
-                expr,
-                Vec::new(),
-                idx,
-            );
+    // A still-finalizing head binding (a `LET <Type-class> = …` placeholder — e.g. a
+    // forward functor) whose producer is not yet terminal: park on the producer and
+    // re-run `type_call` on resume. Once the binding finalizes, the value-side
+    // placeholder is cleared and the head resolves through the type table (a functor
+    // or type alias), so a keyworded resume would wrongly fail. A producer that is
+    // already terminal falls through — its placeholder is on its way out, so the
+    // type-table read below is authoritative.
+    if let Resolution::Placeholder(producer) = scope.resolve_with_chain(head_t.as_str(), chain) {
+        if !ctx.is_result_ready(producer) {
+            ctx.add_park_edge(producer, NodeId(idx));
+            let init = Initialized {
+                pre_subs: Vec::new(),
+            };
+            let head_placeholder = TypeCallHeadPlaceholder { expr, producer };
+            return ctx.replace_with_parked_dispatch(DispatchState::TypeCall(Box::new(
+                CtorState::with_head_placeholder(init, head_placeholder),
+            )));
         }
-        Resolution::Value(_) | Resolution::UnboundName => {}
     }
     // Fresh `types[name]` lookup at construction time. The schema payload rides the
     // identity, so a recursive type whose cycle-close pre-installed a payload-empty
     // identity reads the schema-bearing one that finalize's upsert replaced it with —
-    // no value-side carrier involved.
+    // no value-side carrier involved. A bound functor lives here too, carrying its
+    // callable body on `KType::KFunctor { body: Some(f) }`.
     let identity = match scope.resolve_type_with_chain(head_t.as_str(), chain) {
         Some(kt) => kt,
         None => {
@@ -337,71 +396,25 @@ pub(super) fn constructor_call<'a>(
         }
     };
     match identity {
-        // Named construction: `Point {x = 1, y = 2}` (record-literal body).
-        KType::UserType {
-            kind: UserTypeKind::Struct { fields },
-            scope_id,
-            name,
-        } => match body {
-            CallBody::Named(record_fields) => constructors::dispatch_construct_struct(
-                ctx,
-                name.clone(),
-                *scope_id,
-                Rc::clone(fields),
-                record_fields,
-                scope,
-                idx,
-            ),
-            CallBody::Positional(_) => body_shape_err(&expr, NAMED_ONLY),
-        },
-        // Positional construction: `Outcome (err "x")` (paren-group body).
-        KType::UserType {
-            kind: UserTypeKind::Tagged { schema },
-            scope_id,
-            name,
-        } => match body {
-            CallBody::Positional(parts) => constructors::dispatch_construct_tagged(
-                ctx,
-                name.clone(),
-                *scope_id,
-                Rc::clone(schema),
-                parts,
-                scope,
-                idx,
-            ),
-            CallBody::Named(_) => body_shape_err(&expr, POSITIONAL_ONLY),
-        },
-        KType::UserType {
-            kind: UserTypeKind::Newtype { .. },
-            ..
-        } => match body {
-            CallBody::Positional(parts) => {
-                let body = newtype_construct(scope, ctx, identity, parts);
-                schedule_constructor_body(ctx, body, idx)
-            }
-            CallBody::Named(_) => body_shape_err(&expr, POSITIONAL_ONLY),
-        },
-        KType::UserType {
-            kind: UserTypeKind::TypeConstructor { schema, .. },
-            scope_id,
-            name,
-        } => match body {
-            CallBody::Positional(parts) => constructors::dispatch_construct_tagged(
-                ctx,
-                name.clone(),
-                *scope_id,
-                Rc::clone(schema),
-                parts,
-                scope,
-                idx,
-            ),
-            CallBody::Named(_) => body_shape_err(&expr, POSITIONAL_ONLY),
-        },
-        _ => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
-            arg: "verb".to_string(),
-            expected: "constructible Type".to_string(),
-            got: identity.name(),
-        }))),
+        // A bound functor's result is a module — the `Function` arm calls it.
+        KType::KFunctor { body: Some(f), .. } => {
+            apply_callable(ctx, ResolvedCallable::Function(f), &expr, scope, idx)
+        }
+        // A bare `:(FUNCTOR …)` type annotation has no callable to invoke.
+        KType::KFunctor { body: None, .. } => {
+            NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+                arg: "verb".to_string(),
+                expected: "constructible Type or bound functor".to_string(),
+                got: identity.name(),
+            })))
+        }
+        _ => apply_callable(
+            ctx,
+            ResolvedCallable::Constructor(identity),
+            &expr,
+            scope,
+            idx,
+        ),
     }
 }
 

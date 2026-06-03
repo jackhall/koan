@@ -392,13 +392,87 @@ mod tests {
         );
         let functor_obj = KObject::KFunction(arena.alloc_function(functor), None);
         match functor_obj.ktype() {
-            KType::KFunctor { params, ret } => {
+            KType::KFunctor { params, ret, body } => {
                 assert_eq!(params.get("x"), Some(&KType::Number));
                 assert_eq!(params.len(), 1);
                 assert_eq!(*ret, KType::Number);
+                // The projection carries the callable body so a type-bound functor
+                // name can be applied through it.
+                assert!(body.is_some(), "a functor value projects body: Some(f)");
             }
             other => panic!("expected KFunctor, got {:?}", other),
         }
+    }
+
+    /// `KType::KFunctor`'s `body` is identity-inert: two distinct functor values with
+    /// identical signatures project functor types that compare AND hash equal,
+    /// despite carrying different `body` pointers.
+    #[test]
+    fn functor_ktype_identity_ignores_body() {
+        use crate::machine::model::types::{ExpressionSignature, ReturnType};
+        use std::hash::{Hash, Hasher};
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        let make_sig = || ExpressionSignature {
+            return_type: ReturnType::Resolved(KType::Number),
+            elements: vec![
+                SignatureElement::Keyword("CALL".into()),
+                SignatureElement::Argument(crate::machine::model::types::Argument {
+                    name: "x".into(),
+                    ktype: KType::Number,
+                }),
+            ],
+        };
+        let mk_functor = || {
+            let f = KFunction::with_binder_and_functor(
+                make_sig(),
+                Body::Builtin(body_any),
+                scope,
+                None,
+                None,
+                true,
+                false,
+            );
+            KObject::KFunction(arena.alloc_function(f), None)
+        };
+        let a = mk_functor().ktype();
+        let b = mk_functor().ktype();
+        // Distinct `body` pointers (two independent allocations) but identical shape.
+        assert!(matches!(
+            (&a, &b),
+            (
+                KType::KFunctor { body: Some(_), .. },
+                KType::KFunctor { body: Some(_), .. }
+            )
+        ));
+        assert_eq!(
+            a, b,
+            "functor types with different bodies must compare equal"
+        );
+        let hash_of = |t: &KType<'_>| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            t.hash(&mut h);
+            h.finish()
+        };
+        assert_eq!(
+            hash_of(&a),
+            hash_of(&b),
+            "functor types with different bodies must hash equal",
+        );
+        // And both equal the body-less annotation form (the `:(FUNCTOR …)` surface).
+        let annotation = KType::KFunctor {
+            params: crate::machine::model::types::Record::from_pairs(vec![(
+                "x".into(),
+                KType::Number,
+            )]),
+            ret: Box::new(KType::Number),
+            body: None,
+        };
+        assert_eq!(
+            a, annotation,
+            "a body-bearing functor equals its annotation"
+        );
+        assert_eq!(hash_of(&a), hash_of(&annotation));
     }
 
     /// A bare leaf Type-token in an `Any` slot lands in `wrap_indices` — the auto-wrap

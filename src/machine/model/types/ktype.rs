@@ -12,6 +12,7 @@
 
 use super::record::Record;
 use super::signature::DeferredReturnSurface;
+use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, ScopeId};
 use crate::machine::model::values::{Module, Signature};
 use std::collections::HashMap;
@@ -153,9 +154,19 @@ pub enum KType<'a> {
     /// Structural functor type — mirrors `KFunction` storage and rendering, but
     /// carries no admissibility against `KFunction` (the cross-arms in
     /// `function_compat` refuse both directions).
+    ///
+    /// `body` distinguishes a *bound functor value* from a *type annotation*. A
+    /// `LET F = (FUNCTOR …)` name-binding registers the functor type-side carrying
+    /// `body: Some(f)` — the callable `&KFunction` so a later `:(F {…})` / `F {…}`
+    /// application can invoke it. The `:(FUNCTOR …)` type-position annotation
+    /// carries `body: None` (no callable, just a shape). `body` is identity-inert:
+    /// it is excluded from `PartialEq`, `Hash`, admissibility, join, and rendering,
+    /// so two structurally-identical functor types compare and hash equal
+    /// regardless of body.
     KFunctor {
         params: Record<KType<'a>>,
         ret: Box<KType<'a>>,
+        body: Option<&'a KFunction<'a>>,
     },
     /// Confined carrier for a synthesized FN/FUNCTOR `ret` slot whose source return is a
     /// `ReturnType::Deferred` — a per-call-elaborated return like `-> Er` or
@@ -263,7 +274,7 @@ impl<'a> KType<'a> {
             KType::KFunction { params, ret } => {
                 format!(":(FN ({}) -> {})", render_param_record(params), ret.name())
             }
-            KType::KFunctor { params, ret } => {
+            KType::KFunctor { params, ret, .. } => {
                 format!(
                     ":(FUNCTOR ({}) -> {})",
                     render_param_record(params),
@@ -362,14 +373,18 @@ impl<'a> PartialEq for KType<'a> {
                     ret: r2,
                 },
             ) => p1 == p2 && r1 == r2,
+            // `body` is identity-inert: two functor types with different (or no)
+            // bodies but the same `params`/`ret` compare equal.
             (
                 KFunctor {
                     params: p1,
                     ret: r1,
+                    ..
                 },
                 KFunctor {
                     params: p2,
                     ret: r2,
+                    ..
                 },
             ) => p1 == p2 && r1 == r2,
             (
@@ -459,7 +474,8 @@ impl<'a> std::hash::Hash for KType<'a> {
                 params.hash(state);
                 ret.hash(state);
             }
-            KFunctor { params, ret } => {
+            // `body` is excluded to stay consistent with `PartialEq`.
+            KFunctor { params, ret, .. } => {
                 params.hash(state);
                 ret.hash(state);
             }
@@ -545,6 +561,7 @@ mod tests {
         let t = KType::KFunctor {
             params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
             ret: Box::new(KType::Bool),
+            body: None,
         };
         assert_eq!(t.name(), ":(FUNCTOR (x :Number y :Str) -> Bool)");
     }
@@ -554,10 +571,12 @@ mod tests {
         let a = KType::KFunctor {
             params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
             ret: Box::new(KType::Bool),
+            body: None,
         };
         let b = KType::KFunctor {
             params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
             ret: Box::new(KType::Bool),
+            body: None,
         };
         assert_eq!(a, b);
     }
@@ -567,14 +586,17 @@ mod tests {
         let base = KType::KFunctor {
             params: Record::from_pairs(vec![("x".into(), KType::Number)]),
             ret: Box::new(KType::Bool),
+            body: None,
         };
         let diff_params = KType::KFunctor {
             params: Record::from_pairs(vec![("x".into(), KType::Str)]),
             ret: Box::new(KType::Bool),
+            body: None,
         };
         let diff_ret = KType::KFunctor {
             params: Record::from_pairs(vec![("x".into(), KType::Number)]),
             ret: Box::new(KType::Null),
+            body: None,
         };
         assert_ne!(base, diff_params);
         assert_ne!(base, diff_ret);
@@ -589,6 +611,7 @@ mod tests {
         let g = KType::KFunctor {
             params: Record::from_pairs(vec![("x".into(), KType::Number)]),
             ret: Box::new(KType::Bool),
+            body: None,
         };
         assert_ne!(f, g);
     }
@@ -802,10 +825,12 @@ mod tests {
                 KType::KFunctor {
                     params: Record::from_pairs(vec![("x".into(), KType::Number)]),
                     ret: Box::new(KType::Bool),
+                    body: None,
                 },
                 KType::KFunctor {
                     params: Record::from_pairs(vec![("x".into(), KType::Number)]),
                     ret: Box::new(KType::Bool),
+                    body: None,
                 },
             ),
             (
@@ -889,6 +914,7 @@ mod tests {
         let g = KType::KFunctor {
             params: Record::from_pairs(vec![("x".into(), KType::Number)]),
             ret: Box::new(KType::Bool),
+            body: None,
         };
         assert_ne!(f, g);
         assert_ne!(hash_of(&f), hash_of(&g));

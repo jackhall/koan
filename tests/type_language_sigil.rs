@@ -178,7 +178,7 @@ fn sigil_functor_lowers_to_kfunctor() {
     );
     let mk = lookup_sig_value_kt(scope, "Sig", "mk");
     match mk {
-        KType::KFunctor { params, ret } => {
+        KType::KFunctor { params, ret, .. } => {
             assert_eq!(params.len(), 1);
             assert_eq!(params.get("Ty"), Some(&KType::AnySignature));
             assert_eq!(*ret, KType::AnyModule);
@@ -274,7 +274,7 @@ fn sigil_functor_forward_reference_defers_via_combine() {
     );
     let mk = lookup_sig_value_kt(scope, "Outer", "mk");
     match mk {
-        KType::KFunctor { params, ret } => {
+        KType::KFunctor { params, ret, .. } => {
             assert_eq!(params.len(), 1);
             // OrderedSig resolves to its `Signature { .. }` identity post-Combine.
             // The carrier type's name (`OrderedSig`) is enough to confirm the

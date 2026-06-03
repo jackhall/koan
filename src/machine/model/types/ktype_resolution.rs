@@ -79,15 +79,19 @@ impl<'a> KType<'a> {
                 KType::KFunctor {
                     params: xa,
                     ret: xr,
+                    ..
                 },
                 KType::KFunctor {
                     params: ya,
                     ret: yr,
+                    ..
                 },
             ) => match join_param_record(xa, ya) {
+                // A join is an anonymous type result with no callable body.
                 Some(params) => KType::KFunctor {
                     params,
                     ret: Box::new(KType::join(xr, yr)),
+                    body: None,
                 },
                 None => KType::Any,
             },
@@ -217,6 +221,7 @@ mod tests {
         KType::KFunctor {
             params: Record::from_pairs(params.into_iter().map(|(n, t)| (n.into(), t))),
             ret: Box::new(ret),
+            body: None,
         }
     }
 

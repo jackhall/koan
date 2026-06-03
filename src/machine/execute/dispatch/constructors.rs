@@ -1,5 +1,5 @@
 //! Struct + tagged-union construction dispatch. Both the
-//! `ConstructorCall` fast lane (single_poll) and the `FunctionValueCall`
+//! `TypeCall` fast lane (single_poll) and the `FunctionValueCall`
 //! fast lane (fn_value) route a resolved verb-carrier here. Args resolve
 //! through per-value eager sub-Dispatches; when all are bound, `construct`
 //! validates types and emits the `KObject::Struct` / `KObject::Tagged`
@@ -132,9 +132,9 @@ fn launch<'a>(
     let init = Initialized {
         pre_subs: Vec::new(),
     };
-    ctx.replace_with_parked_dispatch(DispatchState::ConstructorCall(CtorState::with_track(
+    ctx.replace_with_parked_dispatch(DispatchState::TypeCall(Box::new(CtorState::with_track(
         init, track,
-    )))
+    ))))
 }
 
 /// All value subs have completed. Read each, materialize the kind-keyed

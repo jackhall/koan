@@ -138,7 +138,7 @@ and writes only `bindings.types`, the `repr` riding the identity as its payload 
 the same type-only shape STRUCT / UNION / MODULE / Result use.
 
 Construction (`Distance(3.0)`, `Bar(Foo(3.0))`) flows through
-[`constructor_call`](../../src/machine/execute/dispatch/single_poll.rs)'s
+[`type_call`](../../src/machine/execute/dispatch/single_poll.rs)'s
 `Newtype` arm — which branches on the resolved identity's `kind` — into
 [`newtype_def::newtype_construct`](../../src/builtins/newtype_def.rs),
 which schedules the value sub-expression via `add_dispatch` and waits on it
@@ -155,7 +155,7 @@ any `Wrapped` layer at construction time. `Bar(some_foo)` runs through
 one layer of wrapping at any point, and the invariant is a `cargo check`
 guarantee rather than a caller-discipline contract.
 
-The construction path is driven from the `constructor_call` fast lane (which
+The construction path is driven from the `type_call` fast lane (which
 resolves the verb through `scope.resolve_type_with_chain` first and branches on
 the resolved `kind`) rather than a registered builtin sharing the `[TypeExprRef,
 …]` signature bucket — a sibling primitive on that bucket would re-dispatch

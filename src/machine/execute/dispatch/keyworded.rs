@@ -291,7 +291,7 @@ impl<'a> KeywordedState<'a> {
 
     /// Realize an overload-park Track, filtering `producers` for cycles
     /// and already-errored terminals. Visibility is widened for
-    /// `single_poll::constructor_call`, which reuses this path for
+    /// `single_poll::type_call`, which reuses this path for
     /// forward-reference type-binder parks.
     pub(in crate::machine::execute::dispatch) fn install_overload_park(
         ctx: &mut DispatchCtx<'a, '_>,

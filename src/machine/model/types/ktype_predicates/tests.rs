@@ -694,12 +694,14 @@ fn two_functors_differ_only_in_deferred_return_are_distinct() {
         ret: Box::new(KType::DeferredReturn(DeferredReturnSurface::TypeExpr(
             TypeName::leaf("Er".into()),
         ))),
+        body: None,
     };
     let ar = KType::KFunctor {
         params: Record::new(),
         ret: Box::new(KType::DeferredReturn(DeferredReturnSurface::TypeExpr(
             TypeName::leaf("Ar".into()),
         ))),
+        body: None,
     };
     assert_ne!(er, ar);
     assert!(!er.is_more_specific_than(&ar));

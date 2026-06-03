@@ -64,10 +64,9 @@ pub fn body<'a>(
             // Struct / union / module / Result / signature aliases are type-only:
             // their schema (or `&Module` / `&Signature`) rides the `KType` identity,
             // so a plain `types` write preserves dispatch identity without a
-            // value-side copy.
-            if let KObject::KTypeValue(kt) = value {
-                type_for_types_map = Some(kt.clone());
-            }
+            // value-side copy. A bound functor lands type-side too — its
+            // `KType::KFunctor { body: Some(f) }` carries the callable.
+            type_for_types_map = type_side_identity(value);
             resolved_name
         }
         // `TypeExprRef` overload: only leaf-named variants are valid binder names.
@@ -94,10 +93,9 @@ pub fn body<'a>(
                 // Struct / union / module / Result / signature aliases are type-only:
                 // their schema (or `&Module` / `&Signature`) rides the `KType` identity,
                 // so a plain `types` write preserves dispatch identity without a
-                // value-side copy.
-                if let KObject::KTypeValue(kt) = value {
-                    type_for_types_map = Some(kt.clone());
-                }
+                // value-side copy. A bound functor lands type-side too — its
+                // `KType::KFunctor { body: Some(f) }` carries the callable.
+                type_for_types_map = type_side_identity(value);
                 resolved_name
             }
         },
@@ -157,6 +155,20 @@ pub fn body<'a>(
         };
         scope.register_type(name, kt, bind_index);
     } else {
+        // A functor lives in the type namespace only. The value route reaches here
+        // for a value-classified binder name (lowercase Identifier), which cannot
+        // host a functor: `register_type` is the sole legal home for the carried
+        // `KType::KFunctor { body: Some(f) }`. Reject so `bindings.data` stays
+        // unconditionally functor-free. The Type-class route never lands here — it
+        // sets `type_for_types_map` via `type_side_identity` and registers type-side.
+        if matches!(allocated, KObject::KFunction(f, _) if f.is_functor) {
+            return err(KError::new(KErrorKind::ShapeError(format!(
+                "a functor must be bound to a Type-class (capitalized) name; `{name}` \
+                 is value-class — rebind under a Type-classified identifier instead \
+                 (uppercase-leading plus at least one lowercase letter, e.g. `{suggestion}`)",
+                suggestion = capitalize_identifier(&name),
+            ))));
+        }
         // An untyped LET is a resolution boundary; an empty container with no
         // stamped element type would silently fix `List<Any>` / `Dict<Any, Any>`.
         // Force the user to annotate or use a non-empty literal.
@@ -189,6 +201,23 @@ fn is_admissible_type_class_rhs<'a>(value: &KObject<'a>) -> bool {
         return f.is_functor;
     }
     false
+}
+
+/// Type-side identity to register for an admissible Type-class RHS — the lockstep
+/// partner of [`is_admissible_type_class_rhs`]. A `KTypeValue(kt)` carrier registers
+/// its `KType` directly; a bound functor (`is_functor`-flagged `KFunction`) registers
+/// its `KType::KFunctor { body: Some(f) }` projection so the callable rides the
+/// type-table identity and a later `:(F {…})` / `F {…}` application can invoke it.
+/// Every value `is_admissible_type_class_rhs` admits yields `Some`; a non-admissible
+/// value yields `None` and routes value-side. The two functions must agree: anything
+/// the allowlist admits must produce a type-side identity here, or a functor would
+/// fall through to `bindings.data`.
+fn type_side_identity<'a>(value: &KObject<'a>) -> Option<KType<'a>> {
+    match value {
+        KObject::KTypeValue(kt) => Some(kt.clone()),
+        KObject::KFunction(f, _) if f.is_functor => Some(value.ktype()),
+        _ => None,
+    }
 }
 
 /// Suggest a Type-classified rewrite of a value-classified binder name for the

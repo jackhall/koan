@@ -90,7 +90,7 @@ fn body_map<'a>(
 /// `:(<arg> AS <Ctor>)` → `KTypeValue(KType::ConstructorApply { ctor, args })`.
 /// The constructor rides in as an ordinary `:Type` arg (the `AS` right-hand slot),
 /// so a user-declared `TEMPLATE` head dispatches through the keyworded path like any
-/// other parameterized type — no value-construction (`ConstructorCall`) lane involved.
+/// other parameterized type — no value-construction (`TypeCall`) lane involved.
 /// Binary form, so arity-1 only; multi-parameter application is the
 /// [modular implicits](../../roadmap/predicate_typing/modular-implicits.md) follow-up.
 fn body_apply_as<'a>(
@@ -234,9 +234,12 @@ fn finalize_carrier<'a>(
 ) -> &'a KObject<'a> {
     let record = Record::from_pairs(fields);
     let kt = match kind {
+        // A `:(FUNCTOR …)` type-position annotation is a shape, not a bound
+        // callable, so it carries no body.
         CarrierKind::Functor => KType::KFunctor {
             params: record,
             ret: Box::new(ret),
+            body: None,
         },
         CarrierKind::Function => KType::KFunction {
             params: record,
@@ -519,6 +522,7 @@ mod tests {
                     KType::KFunctor {
                         params: Record::from_pairs(vec![("Ty".into(), KType::AnySignature)]),
                         ret: Box::new(KType::AnyModule),
+                        body: None,
                     }
                 );
             }
@@ -620,6 +624,7 @@ mod tests {
         let expected = KType::KFunctor {
             params: Record::from_pairs(vec![("Ty".into(), KType::AnySignature)]),
             ret: Box::new(KType::AnyModule),
+            body: None,
         };
         // Param name `Ty` (capitalized, a `Type` token) must survive the round-trip.
         assert!(matches!(&expected, KType::KFunctor { params, .. } if params.get("Ty").is_some()),);

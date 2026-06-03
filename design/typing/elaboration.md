@@ -160,27 +160,38 @@ nominal binder — no binder dual-writes `(bindings.types, bindings.data)`.
 Type-class LHS and dispatches through `register_type` for `TypeExprRef`-LHS
 RHSes (type-valued aliases). A bind-time
 `KErrorKind::TypeClassBindingExpectsType` diagnostic gates the RHS via an
-**allowlist**: a Type-class LET admits a value only if it carries
-type-language identity — any `KObject::KTypeValue(_)` (struct / union / module /
-Result / signature identities all flow as `KTypeValue` now), or
-`KObject::KFunction(f, _)` with `f.is_functor` set (the `FUNCTOR` binder's
-output). Plain `KFunction` rejects, closing the
+**allowlist**, `is_admissible_type_class_rhs`: a Type-class LET admits a value
+only if it carries type-language identity — any `KObject::KTypeValue(_)`
+(struct / union / module / Result / signature identities all flow as
+`KTypeValue` now), or `KObject::KFunction(f, _)` with `f.is_functor` set (the
+`FUNCTOR` binder's output). Plain `KFunction` rejects, closing the
 `LET Plain = (FN …)`-binds-a-plain-function-under-a-Type-class-name hole
 that a pure value-shape gate cannot discriminate; the `is_functor` flag
-is the discrimination signal. Every type-language alias — struct / union /
-module / Result *and* signature — routes through `register_type` (type-only):
-the schema, `&Module`, or `&Signature` rides the `KType` identity, so a plain
+is the discrimination signal. The lockstep partner `type_side_identity` maps
+each admitted value to the `KType` identity that lands in `bindings.types`: a
+`KTypeValue(kt)` registers `kt` directly, while a bound functor registers its
+`KType::KFunctor { body: Some(f) }` projection so the callable rides the
+type-table identity and a later `:(F {…})` / `F {…}` application can invoke it
+(see [functors.md § Application and binding](functors.md#application-and-binding)).
+The two functions must agree: anything the allowlist admits must produce a
+type-side identity here, or a functor would fall through to `bindings.data`.
+Every type-language alias — struct / union / module / Result, signature *and*
+bound functor — routes through `register_type` (type-only): the schema,
+`&Module`, `&Signature`, or callable rides the `KType` identity, so a plain
 `types` write preserves dispatch identity without a value-side copy. A
 `LET S2 = OrderedSig` signature alias therefore dispatches identically to the
 original, with no separate nominal-install path.
 
-The partition is one-way: a value-classified LET (lowercase-leading binder
-name) rejects a `KType::Module` or `KType::Signature` RHS at the LET site
-with a `ShapeError` redirecting the user to a Type-classified name. Combined
-with the Type-class LET allowlist above, this makes `bindings.types` the
-single home for module and signature values — a module value never rides a
-value-classified alias, so the value-side lookup and type-class lookup
-paths never both find a module under the same name. The
+The partition is one-way and total against type-language carriers. A
+value-classified LET (lowercase-leading binder name) rejects a `KType::Module`
+or `KType::Signature` RHS at the LET site with a `ShapeError` redirecting the
+user to a Type-classified name, and its value route likewise rejects an
+`is_functor`-flagged `KFunction` RHS — a functor lives in the type namespace
+only, so `bindings.data` is unconditionally functor-free. Combined with the
+Type-class LET allowlist above, this makes `bindings.types` the single home for
+module, signature, and functor values — neither a module nor a functor ever
+rides a value-classified alias, so the value-side lookup and type-class lookup
+paths never both find one under the same name. The
 [token-class rule](tokens.md) defines the Type-class shape
 (uppercase-leading plus at least one lowercase letter); the partition guard
 lives in [`let_binding`'s `body`](../../src/builtins/let_binding.rs).
@@ -211,7 +222,7 @@ Three downstream consumers each carry a `TypeNameRef` arm beside the existing
 - the shared
   [`extract_bare_type_name`](../../src/machine/core/kfunction/argument_bundle.rs)
   helper (used by STRUCT/UNION declaration sites and the dispatcher's
-  `ConstructorCall` fast lane);
+  `TypeCall` fast lane);
 - [ATTR's `body_type_lhs` and `read_field_name`](../../src/builtins/attr.rs);
 - [`let_binding`'s name slot](../../src/builtins/let_binding.rs), which
   runs the same primitive/container blocklist as the `KTypeValue` arm and

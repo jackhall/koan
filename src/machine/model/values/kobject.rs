@@ -379,7 +379,7 @@ impl<'a> KObject<'a> {
     }
 }
 
-fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType<'a> {
+fn function_value_ktype<'a>(f: &'a KFunction<'a>) -> KType<'a> {
     use crate::machine::model::types::{DeferredReturnSurface, ReturnType};
     use crate::machine::model::Record;
     // The parameter record keys each `Argument` by its declared name — the names the
@@ -407,9 +407,16 @@ fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType<'a> {
     };
     // `is_functor` projects into the disjoint `KFunctor` family; cross-arm
     // admissibility is refused in `function_compat` — see
-    // [design/typing/functors.md](../../../../design/typing/functors.md).
+    // [design/typing/functors.md](../../../../design/typing/functors.md). The
+    // projected functor type carries `body: Some(f)` — the callable handle that a
+    // type-bound functor name (`LET F = (FUNCTOR …)`) is applied through — while
+    // staying identity-inert under equality/hashing.
     if f.is_functor {
-        KType::KFunctor { params, ret }
+        KType::KFunctor {
+            params,
+            ret,
+            body: Some(f),
+        }
     } else {
         KType::KFunction { params, ret }
     }

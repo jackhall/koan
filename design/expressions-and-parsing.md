@@ -92,15 +92,49 @@ It is invariant under the dispatch-time splice that swaps an eager slot part for
 `Future` (also a slot), so the parse-time fill stays valid through execution.
 
 `DispatchShape` partitions expressions into the bare-name and single-part
-fast lanes, the type-constructor and function-value call shapes, the catch-all
-`Keyworded` shape, and `OperatorChain`. The chain shape is a refinement of
-`Keyworded`: a slot-led `Slot (Keyword Slot)+` run with two or more keyword
-positions, which nothing else produces (no builtin reaches two keywords behind a
-leading argument). It carves the track for chainable user operators — the operator
-probe caches the sorted-joined unique operators that the per-scope operator
-registry is looked up by. Folding a recognized chain into nested binary dispatches
-is future work owned by
+fast lanes, the head-position call shapes, `Keyworded`, `OperatorChain`, and the
+non-callable-head sink. The classifier sweeps for any `Keyword` part first: a
+keyword anywhere produces `Keyworded` (refined to `OperatorChain` for the chain
+shape below). `Keyworded` is therefore produced **only** when a real keyword is
+present — it is not a catch-all for unclassified heads.
+
+With no keyword present, a single-part expression takes its bare-name or
+pass-through lane (`BareIdentifier`, `BareTypeLeaf`, `SigiledTypeExpr`,
+`LiteralPassThrough`), and a multi-part expression branches on its head shape into
+one of the **head-position call shapes**, each routing to its own calling
+convention:
+
+- `TypeCall` — a leaf `Type` head (`MyStruct {x = 1}`, `MyFunctor {T = IntOrd}`).
+  The name resolves synchronously to a type identity and branches into
+  construction or functor application.
+- `FunctionValueCall` — a lowercase `Identifier` head (`f {x = 7}`). The head
+  resolves to a function, functor, or constructible-type value.
+- `HeadDeferred` — a nested `Expression` head (`(pick) {x = 1}`). The head is
+  evaluated first, and the resulting value's kind — function, functor, or
+  constructible type — selects the convention.
+- `TypeHeadDeferred` — a `:(...)` `SigiledTypeExpr` head. The sigil guarantees a
+  type result, so it prunes the plain-function arm; a non-type result surfaces a
+  type-shaped diagnostic.
+- `NonCallableHead` — a literal, list, dict, or record head in a multi-part
+  expression. Heads are always eager and must resolve to something callable, so
+  this shape raises a `DispatchFailed` at the dispatch entry.
+
+The chain shape is a refinement of `Keyworded`: a slot-led `Slot (Keyword Slot)+`
+run with two or more keyword positions, which nothing else produces (no builtin
+reaches two keywords behind a leading argument). It carves the track for chainable
+user operators — the operator probe caches the sorted-joined unique operators that
+the per-scope operator registry is looked up by. Folding a recognized chain into
+nested binary dispatches is future work owned by
 [user-definable n-ary operators](../roadmap/operator_chaining/n-ary-operators.md).
+
+The four call-shape lanes that resolve a head to a callable —
+`TypeCall`, `FunctionValueCall`, `HeadDeferred`, `TypeHeadDeferred` — converge on
+one shared apply-a-callable tail in
+[`dispatch/apply_callable.rs`](../src/machine/execute/dispatch/apply_callable.rs)
+with two execution arms: *construct* from a type schema, or *call* a `KFunction`
+by name. A functor is a `KFunction` whose result is a module, so functor
+application is the call arm — see
+[typing/functors.md](typing/functors.md).
 
 ## Type-expression sigil
 

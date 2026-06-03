@@ -87,10 +87,12 @@ impl<'a> KType<'a> {
                 KFunctor {
                     params: pa,
                     ret: ra,
+                    ..
                 },
                 KFunctor {
                     params: pb,
                     ret: rb,
+                    ..
                 },
             ) => param_record_more_specific(pa, ra, pb, rb),
             // Constraint role: `:S` (a module satisfying `S`) is more specific than the
@@ -198,7 +200,7 @@ impl<'a> KType<'a> {
                 KObject::KFuture(_, _) => true,
                 _ => false,
             },
-            KType::KFunctor { params, ret } => match obj {
+            KType::KFunctor { params, ret, .. } => match obj {
                 KObject::KFunction(f, _) => {
                     if !f.is_functor {
                         return false;
@@ -338,7 +340,7 @@ impl<'a> KType<'a> {
                 ExpressionPart::Future(KObject::KFuture(_, _)) => true,
                 _ => false,
             },
-            KType::KFunctor { params, ret } => match part {
+            KType::KFunctor { params, ret, .. } => match part {
                 ExpressionPart::Future(KObject::KFunction(f, _)) => {
                     if !f.is_functor {
                         return false;

@@ -20,9 +20,12 @@ generic functions are built this way — see [generics.md](generics.md).
   ordinary `KFunctionValue` with an `is_functor` flag set at binder time.
   The flag drives two separable effects:
   definition-time validation of the return-type slot, and a distinct
-  `KType::KFunctor { params, ret }` surfaced by the value's `ktype()`. The
+  `KType::KFunctor { params, ret, body }` surfaced by the value's `ktype()`. The
   dispatch path, scheduler integration, per-call scope, and `KFunction::invoke`
   are unchanged — FUNCTOR is a thin definition-time façade over FN mechanics.
+  `is_functor` never touches the call path: head-position functor application
+  reuses the ordinary function-call convention (see
+  [Application and binding](#application-and-binding)).
   Type-position references to functor types use the `:(FUNCTOR (params) -> R)`
   sigil — a Type-class token paralleling `:(FN (args) -> R)` — kept
   surface-disjoint from the `FUNCTOR` binder keyword by the `:(...)` sigil
@@ -52,6 +55,36 @@ to a module value is **not** a functor: it has no `is_functor` flag, its
 or dispatch-time machinery (return-type validation, applicative-mode
 eligibility) applies. The programmer always knows whether they are writing
 a functor; the binder makes that knowledge legible to the engine.
+
+## Application and binding
+
+A functor name-binding lives in the **type namespace**. A
+`LET MakeSet = (FUNCTOR …)` against a Type-class (capitalized) name registers
+in `bindings.types` as a `KType::KFunctor { body: Some(f) }` — the carried
+callable `&KFunction` is what a later application invokes. This type-side home
+is what lets a `Type` head and the `:(…)` sigil resolve a functor at all.
+Binding a functor to a lowercase (value-class) name is an **error** at the LET
+site, so `bindings.data` is unconditionally functor-free (see
+[elaboration.md § Binding-map partition](elaboration.md#binding-map-partition)).
+
+Head-position application reuses the function-call convention with no separate
+machinery — `apply_callable`'s `Function` arm calls the carried `&KFunction` by
+name, the same arm a plain function call takes, and the result happens to be a
+module. Two application surfaces reach it:
+
+- `MyFunctor {T = IntOrd}` — a `Type`-head `TypeCall`. The leaf name resolves to
+  the `KType::KFunctor { body: Some }` type-table entry, which classifies as a
+  callable function.
+- `:(MyFunctor {T = IntOrd})` — a single-part `:(…)` sigil whose inner expression
+  tail-dispatches the same `Type`-head `TypeCall`. A `:(…)` head *followed by* a
+  call body is instead the `TypeHeadDeferred` lane, which evaluates the head to a
+  type-shaped value and admits only a constructible type or a functor.
+
+The classification machinery for these lanes is owned by
+[execution-model.md § Dispatch-time name placeholders](../execution-model.md#dispatch-time-name-placeholders);
+the functor/function distinction survives only at classification (for the
+`KFunctor` typing and the `TypeHeadDeferred` diagnostic gate), never at
+execution.
 
 ## Definition-time validation
 

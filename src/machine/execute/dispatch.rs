@@ -1,14 +1,19 @@
 //! Dispatch shape router, classifier, and shared spine.
 //!
 //! [`run_dispatch`] classifies the slot via [`classify_dispatch_shape`]
-//! and routes to one of the five shape handlers:
+//! and routes by shape:
 //!
-//! - **Keyworded** (any keyword present, or a head that isn't a
-//!   fast-lane shape) → [`keyworded::KeywordedState`]
-//! - **FunctionValueCall** (lowercase Identifier head + nested-parens
-//!   body) → [`fn_value::FnValueState`]
-//! - **BareIdentifier**, **BareTypeLeaf**, **ConstructorCall**,
-//!   **SigiledTypeExpr** → [`single_poll`] handlers
+//! - **Keyworded** (a keyword is present) → [`keyworded::KeywordedState`]
+//! - **FunctionValueCall** (lowercase Identifier head) →
+//!   [`fn_value::FnValueState`]
+//! - **HeadDeferred** / **TypeHeadDeferred** (an `Expression` or `:(…)`
+//!   head that evaluates before dispatching on its result) →
+//!   [`head_deferred`]
+//! - **OperatorChain** → [`operator_chain`]
+//! - **TypeCall**, **BareIdentifier**, **BareTypeLeaf**,
+//!   **SigiledTypeExpr**, **LiteralPassThrough** → [`single_poll`] handlers
+//! - **NonCallableHead** (a literal/empty/lazy head) → a direct
+//!   `DispatchFailed` raise carrying the offending head
 //!
 //! State and transitions live with their shape; this file keeps the
 //! cross-shape glue. Every per-shape handler takes a
@@ -24,9 +29,11 @@ use crate::machine::{Frame, KError, KErrorKind, NodeId, Resolution, Scope};
 use super::nodes::{NodeOutput, NodeStep};
 use super::scheduler::Scheduler;
 
+pub(in crate::machine::execute) mod apply_callable;
 mod constructors;
 mod ctx;
 pub(in crate::machine::execute) mod fn_value;
+pub(in crate::machine::execute) mod head_deferred;
 pub(in crate::machine::execute) mod keyworded;
 pub(in crate::machine::execute) mod operator_chain;
 pub(in crate::machine) mod resolve_dispatch;
@@ -38,6 +45,7 @@ mod tests;
 
 pub(in crate::machine::execute) use ctx::DispatchCtx;
 use fn_value::FnValueState;
+use head_deferred::HeadDeferredState;
 use keyworded::KeywordedState;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
@@ -301,8 +309,15 @@ pub(in crate::machine::execute) enum DispatchState<'a> {
     Initialized(Initialized),
     BareIdentifier(BareIdState<'a>),
     BareTypeLeaf(BareTypeState<'a>),
-    ConstructorCall(CtorState<'a>),
+    /// Boxed for the same reason as `Keyworded` / `FunctionValueCall`: the
+    /// `CtorState` carries an eager-subs `CtorTrack` (schemas, staged values) or a
+    /// head-placeholder `KExpression`, either of which would push the by-value
+    /// `DispatchState` past clippy's `large_enum_variant` threshold.
+    TypeCall(Box<CtorState<'a>>),
     FunctionValueCall(Box<FnValueState<'a>>),
+    /// Shared by the `HeadDeferred` and `TypeHeadDeferred` shapes; the state's
+    /// `type_only` flag selects the admitted-arm set on resume.
+    HeadDeferred(Box<HeadDeferredState<'a>>),
     LiteralPassThrough(LitState<'a>),
     SigiledTypeExpr(SigilState<'a>),
     Keyworded(Box<KeywordedState<'a>>),
@@ -357,11 +372,12 @@ pub(in crate::machine::execute) fn run_dispatch<'a>(
         DispatchState::Initialized(i) => i,
         DispatchState::Keyworded(ks) => return ks.resume(ctx, scope, idx),
         DispatchState::FunctionValueCall(fs) => return fs.resume(ctx, scope, idx),
-        DispatchState::ConstructorCall(cs) => return cs.resume(ctx, scope, idx),
+        DispatchState::TypeCall(cs) => return (*cs).resume(ctx, scope, idx),
+        DispatchState::HeadDeferred(hd) => return Ok(hd.resume(ctx, scope, idx)),
         _ => unreachable!(
             "remaining fast-lane stateful variants terminalize in one poll; \
-             only Keyworded, FunctionValueCall, and ConstructorCall re-enter \
-             from a parked track"
+             only Keyworded, FunctionValueCall, TypeCall, and HeadDeferred \
+             re-enter from a parked track"
         ),
     };
     match expr.shape() {
@@ -386,10 +402,28 @@ pub(in crate::machine::execute) fn run_dispatch<'a>(
             let _ = init;
             FnValueState::initial(ctx, expr, scope, idx)
         }
-        DispatchShape::ConstructorCall => {
+        DispatchShape::TypeCall => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(single_poll::constructor_call(ctx, expr, scope, idx))
+            Ok(single_poll::type_call(ctx, expr, scope, idx))
         }
+        DispatchShape::HeadDeferred => {
+            debug_assert!(init.pre_subs.is_empty());
+            Ok(HeadDeferredState::initial_expr(ctx, expr, scope, idx))
+        }
+        DispatchShape::TypeHeadDeferred => {
+            debug_assert!(init.pre_subs.is_empty());
+            Ok(HeadDeferredState::initial_type(ctx, expr, scope, idx))
+        }
+        DispatchShape::NonCallableHead => Err(KError::new(KErrorKind::DispatchFailed {
+            expr: expr.summarize(),
+            reason: format!(
+                "head is not callable: `{}`",
+                expr.parts
+                    .first()
+                    .map(|p| p.value.summarize())
+                    .unwrap_or_else(|| "<empty>".into())
+            ),
+        })),
         DispatchShape::OperatorChain => {
             debug_assert!(init.pre_subs.is_empty());
             Ok(operator_chain::run(ctx, &expr, scope))

@@ -2,7 +2,7 @@
 //! `is_functor: true`, and the carrier's `ktype()` projects to `KFunctor`.
 
 use crate::builtins::test_support::{lookup_fn, run, run_root_silent};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::KType;
 use crate::machine::RuntimeArena;
 
 #[test]
@@ -39,6 +39,8 @@ fn functor_carrier_ktype_projects_to_kfunctor() {
     }
 }
 
+/// A `LET <Type-class> = (FUNCTOR …)` name-binding registers the functor *type-side*
+/// (`bindings.types` as `KType::KFunctor { body: Some(f) }`), never in `bindings.data`.
 #[test]
 fn let_type_class_admits_functor_rhs() {
     let arena = RuntimeArena::new();
@@ -48,10 +50,16 @@ fn let_type_class_admits_functor_rhs() {
         "SIG OrderedSig = (VAL compare :Number)\n\
          LET MyF = (FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Result = (LET inner = 1)))",
     );
-    let obj = scope.lookup("MyF").expect("MyF should be value-bound");
     assert!(
-        matches!(obj, KObject::KFunction(f, _) if f.is_functor),
-        "MyF should resolve to a FUNCTOR-flagged KFunction, got {:?}",
-        obj.ktype(),
+        scope.lookup("MyF").is_none(),
+        "MyF must NOT be value-bound — a functor name registers type-side",
+    );
+    let kt = scope
+        .resolve_type("MyF")
+        .expect("MyF should be type-bound in bindings.types");
+    assert!(
+        matches!(kt, KType::KFunctor { body: Some(f), .. } if f.is_functor),
+        "MyF should resolve type-side to a KFunctor carrying the callable body, got {:?}",
+        kt,
     );
 }

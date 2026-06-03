@@ -277,8 +277,9 @@ fn let_type_class_with_plain_function_rejects() {
 }
 
 /// FUNCTOR-flagged KFunction admits as a Type-class LET RHS via the third
-/// allowlist arm. The binding lands in `bindings.data` (FUNCTOR isn't a
-/// nominal-identity carrier).
+/// allowlist arm and registers *type-side*: the binding lands in `bindings.types`
+/// as a `KType::KFunctor { body: Some(f) }`, never in `bindings.data`. The carried
+/// body is the callable a later `:(MyF {…})` / `MyF {…}` application invokes.
 #[test]
 fn let_type_class_with_functor_admits() {
     use crate::builtins::test_support::{run, run_root_silent};
@@ -290,13 +291,53 @@ fn let_type_class_with_functor_admits() {
         "SIG OrderedSig = (VAL compare :Number)\n\
          LET MyF = (FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Result = (LET inner = 1)))",
     );
-    let obj = scope
-        .lookup("MyF")
-        .expect("MyF must be value-bound — allowlist admits the functor");
     assert!(
-        matches!(obj, KObject::KFunction(f, _) if f.is_functor),
-        "MyF should resolve to a FUNCTOR-flagged KFunction, got {:?}",
-        obj.ktype(),
+        scope.lookup("MyF").is_none(),
+        "MyF must NOT be value-bound — a functor name registers type-side",
+    );
+    let kt = scope
+        .resolve_type("MyF")
+        .expect("MyF must be type-bound — the functor lands in bindings.types");
+    assert!(
+        matches!(kt, KType::KFunctor { body: Some(f), .. } if f.is_functor),
+        "MyF should resolve type-side to a KFunctor carrying the callable body, got {:?}",
+        kt,
+    );
+}
+
+/// `LET f = (FUNCTOR …)` (lowercase / value-class name) is an error: a functor
+/// lives in the type namespace only and must never land in `bindings.data`. The
+/// value-route guard fires before `bind_value`, and the diagnostic redirects to a
+/// Type-classified identifier. Companion to `let_type_class_with_functor_admits`,
+/// which pins the legal uppercase form.
+#[test]
+fn let_value_class_with_functor_rejects() {
+    use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+    use crate::machine::KErrorKind;
+    use crate::machine::RuntimeArena;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "SIG OrderedSig = (VAL compare :Number)");
+    let err = run_one_err(
+        scope,
+        parse_one("LET f = (FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Result = (LET inner = 1)))"),
+    );
+    match &err.kind {
+        KErrorKind::ShapeError(msg) => {
+            assert!(
+                msg.contains("functor") && msg.contains('f') && msg.contains("value-class"),
+                "expected diagnostic naming the binder and 'value-class', got: {msg}",
+            );
+            assert!(
+                msg.contains("Type-classified") && msg.contains('F'),
+                "expected diagnostic to suggest a Type-classified rewrite, got: {msg}",
+            );
+        }
+        _ => panic!("expected ShapeError, got {err}"),
+    }
+    assert!(
+        scope.lookup("f").is_none(),
+        "a rejected lowercase functor must not land in bindings.data",
     );
 }
 

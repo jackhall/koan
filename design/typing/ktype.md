@@ -8,9 +8,16 @@
   [Container type parameterization](#container-type-parameterization) below.
   `params` is a name-keyed [parameter `Record<KType>`](#record-fields-and-ktype-hashing),
   so a function-typed slot's identity is its parameters by name and type
-  (order-blind). The sibling `KFunctor { params: Record<KType>, ret }` shares the
+  (order-blind). The sibling
+  `KFunctor { params: Record<KType>, ret, body: Option<&KFunction> }` shares the
   storage and identity rules; the variant tag keeps the two families admissibly
-  disjoint (see [functors.md](functors.md)). When a function's source return is
+  disjoint (see [functors.md](functors.md)). The `body` is an **identity-inert**
+  carrier — `None` for the `:(FUNCTOR …)` type annotation (just a shape), `Some(f)`
+  for a bound functor value whose callable rides the type-table identity so a later
+  `:(F {…})` / `F {…}` application can invoke it. `body` is excluded from equality,
+  hashing, admissibility, join, and rendering, all of which compare `params` + `ret`
+  only, so two structurally-identical functor types compare and hash equal
+  regardless of body. When a function's source return is
   per-call-elaborated, its `ret` box holds a `DeferredReturn(DeferredReturnSurface)`
   carrier — see [Record fields and `KType` hashing](#record-fields-and-ktype-hashing).
 - Structural record: `Record(Box<Record<KType>>)` — an identifier-keyed field schema

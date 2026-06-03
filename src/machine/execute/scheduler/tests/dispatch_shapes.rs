@@ -589,63 +589,51 @@ fn keyworded_unchanged() {
 // =====================================================================
 
 /// `(MyStruct {x = 1, y = 2})` — leaf-Type head, single nested-`Expression`
-/// body. Classifier must route to `ConstructorCall`, not `Keyworded`.
+/// body. Classifier must route to `TypeCall`, not `Keyworded`.
 #[test]
-fn classifier_struct_construct_routes_to_type_constructor_call() {
+fn classifier_struct_construct_routes_to_type_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("MyStruct {x = 1, y = 2}");
     assert!(
-        matches!(
-            classify_dispatch_shape(&expr),
-            DispatchShape::ConstructorCall
-        ),
-        "expected ConstructorCall for `MyStruct {{x = 1, y = 2}}`",
+        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeCall),
+        "expected TypeCall for `MyStruct {{x = 1, y = 2}}`",
     );
 }
 
 /// `(Maybe (some 42))` — leaf-Type head, single nested-`Expression` body
-/// holding `(some 42)`. Must route to `ConstructorCall`.
+/// holding `(some 42)`. Must route to `TypeCall`.
 #[test]
-fn classifier_tagged_construct_routes_to_type_constructor_call() {
+fn classifier_tagged_construct_routes_to_type_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("Maybe (some 42)");
     assert!(
-        matches!(
-            classify_dispatch_shape(&expr),
-            DispatchShape::ConstructorCall
-        ),
-        "expected ConstructorCall for `Maybe (some 42)`",
+        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeCall),
+        "expected TypeCall for `Maybe (some 42)`",
     );
 }
 
 /// `(Bar (x))` — leaf-Type head, nested-`Expression` body wrapping a single
-/// identifier (the newtype-construction shape). Routes to `ConstructorCall`.
+/// identifier (the newtype-construction shape). Routes to `TypeCall`.
 #[test]
-fn classifier_newtype_construct_routes_to_type_constructor_call() {
+fn classifier_newtype_construct_routes_to_type_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("Bar (x)");
     assert!(
-        matches!(
-            classify_dispatch_shape(&expr),
-            DispatchShape::ConstructorCall
-        ),
-        "expected ConstructorCall for `Bar (x)`",
+        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeCall),
+        "expected TypeCall for `Bar (x)`",
     );
 }
 
 /// `(List Number)` — leaf-Type head, every arg a leaf Type. Every leaf-Type-
-/// headed multi-part call routes through `ConstructorCall`. The keyworded
+/// headed multi-part call routes through `TypeCall`. The keyworded
 /// `LIST OF` overload is the supported way to elaborate `List<Number>`.
 #[test]
-fn classifier_legacy_positional_collapses_to_type_constructor_call() {
+fn classifier_legacy_positional_collapses_to_type_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("(List Number)");
     assert!(
-        matches!(
-            classify_dispatch_shape(&expr),
-            DispatchShape::ConstructorCall
-        ),
-        "leaf-Type head + leaf-Type args must classify as ConstructorCall",
+        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeCall),
+        "leaf-Type head + leaf-Type args must classify as TypeCall",
     );
 }
 
@@ -927,5 +915,252 @@ fn operator_chain_registered_reaches_fold_seam() {
     assert!(
         msg.contains("not yet implemented"),
         "a registry hit must reach the explicit fold seam; got: {msg}",
+    );
+}
+
+// =====================================================================
+// HeadDeferred / TypeHeadDeferred / NonCallableHead routing + behavior.
+// =====================================================================
+
+/// `TypeCall` construct (regression). `Point {x = 1, y = 2}` — leaf-`Type` head
+/// constructs a struct value directly off the resolved identity.
+#[test]
+fn type_call_constructs_struct() {
+    use crate::builtins::test_support::{run, run_one, run_root_silent};
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "STRUCT Point = (x :Number, y :Number)");
+    let out = run_one(scope, parse_one("Point {x = 1, y = 2}"));
+    assert_eq!(out.ktype().name(), "Point", "got {}", out.summarize());
+}
+
+/// `HeadDeferred` → function. A head that evaluates to a function value
+/// (`(GET_F)` returning a `FN`) is applied with named args via the shared tail.
+#[test]
+fn head_deferred_calls_returned_function() {
+    use crate::builtins::test_support::{run, run_one, run_root_silent};
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "FN (GET_F) -> :(FN (n :Number) -> Number) = \
+         (FN (INNER n :Number) -> Number = (n))",
+    );
+    let out = run_one(scope, parse_one("(GET_F) {n = 7}"));
+    assert!(
+        matches!(out, KObject::Number(n) if (*n - 7.0).abs() < 1e-9),
+        "(GET_F) {{n = 7}} must call the returned FN and yield 7.0; got {}",
+        out.summarize(),
+    );
+}
+
+/// `HeadDeferred` → functor returns a module. A head that evaluates to a functor
+/// value, applied with named args, yields a module — locking the
+/// functor-application-as-function-call decision.
+#[test]
+fn head_deferred_applies_returned_functor_to_module() {
+    use crate::builtins::test_support::{run, run_one, run_root_silent};
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "FN (GET_FUNCTOR) -> Any = \
+         (FUNCTOR (APPLYIT x :Number) -> Module = (MODULE Inner = (LET inner = x)))",
+    );
+    let out = run_one(scope, parse_one("(GET_FUNCTOR) {x = 5}"));
+    assert!(
+        matches!(out, KObject::KTypeValue(KType::Module { .. })),
+        "applying a functor value must yield a module; got {} ({})",
+        out.summarize(),
+        out.ktype().name(),
+    );
+}
+
+/// `HeadDeferred` → constructor. A head that evaluates to a `KTypeValue(UserType)`
+/// (the `:(Point)` sigil-free value path via a `LET t = Point` alias dispatched
+/// inside a nested head expression) routes through the `Constructor` arm.
+#[test]
+fn head_deferred_constructs_from_returned_type_value() {
+    use crate::builtins::test_support::{run, run_one, run_root_silent};
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "STRUCT Point = (x :Number, y :Number)");
+    run(scope, "LET t = Point");
+    // `(t) {x = 1, y = 2}`: the nested-`Expression` head `(t)` resolves the value
+    // alias `t` to `KTypeValue(Point)`, then the body constructs.
+    let out = run_one(scope, parse_one("(t) {x = 1, y = 2}"));
+    assert_eq!(out.ktype().name(), "Point", "got {}", out.summarize());
+}
+
+/// `HeadDeferred` → non-callable error. A head that evaluates to a `Number`
+/// surfaces a `DispatchFailed` (heads must be callable).
+#[test]
+fn head_deferred_non_callable_value_errors() {
+    use crate::builtins::test_support::{run, run_one_err, run_root_silent};
+    use crate::machine::KErrorKind;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "FN (GET_NUM) -> Number = (42)");
+    let err = run_one_err(scope, parse_one("(GET_NUM) {x = 1}"));
+    match &err.kind {
+        KErrorKind::DispatchFailed { reason, .. } => assert!(
+            reason.contains("non-callable"),
+            "expected a non-callable-head DispatchFailed, got {reason}",
+        ),
+        _ => panic!("expected DispatchFailed, got {err}"),
+    }
+}
+
+/// `TypeHeadDeferred` → type error. A `:(...)` head whose value is not a
+/// constructible type or functor (here `Number`) surfaces a type-shaped
+/// `TypeMismatch` — distinct from the `HeadDeferred` non-callable message.
+#[test]
+fn type_head_deferred_non_type_value_type_mismatches() {
+    use crate::builtins::test_support::{run_one_err, run_root_silent};
+    use crate::machine::KErrorKind;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    let err = run_one_err(scope, parse_one(":(Number) {x = 1}"));
+    match &err.kind {
+        KErrorKind::TypeMismatch { expected, .. } => {
+            assert_eq!(
+                expected, "Type",
+                "expected a type-shaped diagnostic, got {err}"
+            )
+        }
+        _ => panic!("expected TypeMismatch, got {err}"),
+    }
+}
+
+/// `TypeHeadDeferred` → constructor. A `:(Point)` head resolves to the struct
+/// identity; the body constructs the struct value.
+#[test]
+fn type_head_deferred_constructs_from_sigil_type() {
+    use crate::builtins::test_support::{run, run_one, run_root_silent};
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "STRUCT Point = (x :Number, y :Number)");
+    let out = run_one(scope, parse_one(":(Point) {x = 1, y = 2}"));
+    assert_eq!(out.ktype().name(), "Point", "got {}", out.summarize());
+}
+
+/// `TypeCall` → bound functor. A `LET`-bound functor name resolves type-side to a
+/// `KType::KFunctor { body: Some(f) }`; calling it via the `Type`-head call applies
+/// the functor and yields a module. The name lands type-side only — `scope.lookup`
+/// (value-side) is empty.
+#[test]
+fn type_call_applies_let_bound_functor() {
+    use crate::builtins::test_support::{run, run_one, run_root_silent};
+    use crate::machine::model::KType;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "LET ApplyIt = (FUNCTOR (APPLYIT x :Number) -> Module = (MODULE Inner = ((LET tag = x))))",
+    );
+    assert!(
+        scope.lookup("ApplyIt").is_none(),
+        "a functor name binds type-side only, never in bindings.data",
+    );
+    assert!(
+        matches!(
+            scope.resolve_type("ApplyIt"),
+            Some(KType::KFunctor { body: Some(_), .. })
+        ),
+        "ApplyIt should resolve type-side to a body-bearing KFunctor",
+    );
+    let out = run_one(scope, parse_one("ApplyIt {x = 5}"));
+    assert!(
+        matches!(out, KObject::KTypeValue(KType::Module { .. })),
+        "applying a type-bound functor must yield a module; got {} ({})",
+        out.summarize(),
+        out.ktype().name(),
+    );
+}
+
+/// `TypeCall` → bare functor annotation. A `LET`-bound `:(FUNCTOR …)` *annotation*
+/// (`body: None`) is type-shaped but not invocable — applying it surfaces a
+/// `TypeMismatch`, distinct from a missing name (`UnboundName`).
+#[test]
+fn type_call_on_functor_annotation_type_mismatches() {
+    use crate::builtins::test_support::{run, run_one_err, run_root_silent};
+    use crate::machine::KErrorKind;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "LET FShape = :(FUNCTOR (x :Number) -> Module)");
+    let err = run_one_err(scope, parse_one("FShape {x = 5}"));
+    match &err.kind {
+        KErrorKind::TypeMismatch { expected, .. } => assert!(
+            expected.contains("bound functor"),
+            "expected the not-invocable-annotation diagnostic, got {err}",
+        ),
+        _ => panic!("expected TypeMismatch, got {err}"),
+    }
+}
+
+/// `FunctionValueCall` → type value. `LET t = Point` then `t {x = 1, y = 2}`:
+/// the value-classified alias carries the type identity and constructs.
+#[test]
+fn function_value_call_on_type_value_constructs() {
+    use crate::builtins::test_support::{run, run_one, run_root_silent};
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "STRUCT Point = (x :Number, y :Number)");
+    run(scope, "LET t = Point");
+    let out = run_one(scope, parse_one("t {x = 1, y = 2}"));
+    assert_eq!(out.ktype().name(), "Point", "got {}", out.summarize());
+}
+
+/// `NonCallableHead`. A literal / list head in a multi-part expression is not
+/// callable; the dispatch entry raises a `DispatchFailed` directly (not a node
+/// terminal), so it surfaces through `execute()`. The reason embeds the head
+/// summary.
+#[test]
+fn non_callable_list_head_errors() {
+    use crate::builtins::test_support::run_root_silent;
+    use crate::machine::KErrorKind;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    let mut sched = Scheduler::new();
+    sched.add_dispatch(parse_one("[1 2 3] x"), scope);
+    let err = sched
+        .execute()
+        .expect_err("a non-callable head must raise from the dispatch entry");
+    match &err.kind {
+        KErrorKind::DispatchFailed { reason, .. } => assert!(
+            reason.contains("head is not callable") && reason.contains("[1 2 3]"),
+            "expected a non-callable-head DispatchFailed with the head summary, got {reason}",
+        ),
+        _ => panic!("expected DispatchFailed, got {err}"),
+    }
+}
+
+/// Counter guard: the `TypeCall` and `HeadDeferred` evaluation branches resolve
+/// synchronously / through the shared tail and never advance the
+/// `resolve_dispatch` entry counter (mirrors the fast-lane routing claims).
+#[test]
+fn type_call_and_head_deferred_skip_resolve_dispatch() {
+    use crate::builtins::test_support::{run, run_root_silent};
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "STRUCT Point = (x :Number, y :Number)");
+    run(scope, "LET t = Point");
+
+    reset_resolve_dispatch_entry_count();
+    let _ = dispatch_one(scope, parse_one("Point {x = 1, y = 2}"));
+    assert_eq!(
+        resolve_dispatch_entry_count(),
+        0,
+        "TypeCall construct must not enter resolve_dispatch; counter was {}",
+        resolve_dispatch_entry_count(),
+    );
+
+    reset_resolve_dispatch_entry_count();
+    let _ = dispatch_one(scope, parse_one("(t) {x = 1, y = 2}"));
+    assert_eq!(
+        resolve_dispatch_entry_count(),
+        0,
+        "HeadDeferred construct must not enter resolve_dispatch; counter was {}",
+        resolve_dispatch_entry_count(),
     );
 }

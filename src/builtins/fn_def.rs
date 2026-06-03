@@ -22,7 +22,7 @@ pub(crate) use signature::binder_name;
 
 /// At least one `Keyword` is required in the signature: an all-Argument signature
 /// has no fast-lane shape to key on (every keyword-free expression routes through
-/// `BareIdentifier` / `BareTypeLeaf` / `LiteralPassThrough` / `ConstructorCall` /
+/// `BareIdentifier` / `BareTypeLeaf` / `LiteralPassThrough` / `TypeCall` /
 /// `FunctionValueCall` / `SigiledTypeExpr`), so the dispatcher needs a fixed token.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
