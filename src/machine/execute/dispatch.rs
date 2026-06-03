@@ -199,8 +199,18 @@ pub(super) fn bind_frame_err<'a>(e: &KError, working_expr: &KExpression<'a>) -> 
 /// Walk raw parts emitting an `Identifier("")` placeholder at every
 /// eager slot and a parallel staged-subs Vec; non-eager parts pass
 /// through unchanged.
+///
+/// `wrap_indices` names bare-name value slots (the `wrap_indices` set from
+/// [`KFunction::classify_for_pick`](crate::machine::core::kfunction::KFunction::classify_for_pick))
+/// to resolve before bind. The keyword path resolves these via `bare_outcomes`
+/// because it must know their carried type *during* overload selection; the
+/// post-pick named-argument / function-value tail has already committed to one
+/// callable, so it resolves them by sub-Dispatch through the same eager-subs
+/// parking/resume path as `Expression` parts. Callers with no committed pick
+/// (the keyworded `Deferred` arm, which re-resolves on finish) pass `&[]`.
 pub(super) fn stage_all_eager_parts<'a>(
     parts: Vec<Spanned<ExpressionPart<'a>>>,
+    wrap_indices: &[usize],
 ) -> (
     Vec<Spanned<ExpressionPart<'a>>>,
     Vec<(usize, PendingSub<'a>)>,
@@ -209,6 +219,18 @@ pub(super) fn stage_all_eager_parts<'a>(
     let mut staged: Vec<(usize, PendingSub<'a>)> = Vec::new();
     for (i, part) in parts.into_iter().enumerate() {
         let span = part.span;
+        if wrap_indices.contains(&i) {
+            // Bare-name value slot: resolve the name through a single-part
+            // sub-Dispatch (the `BareIdentifier` / `BareTypeLeaf` fast lane), so
+            // the resolved `Future` carrier reaches `accepts_part` at bind.
+            let wrapped = KExpression::new(vec![Spanned {
+                value: part.value,
+                span,
+            }]);
+            staged.push((i, PendingSub::Dispatch(wrapped)));
+            new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+            continue;
+        }
         match part.value {
             ExpressionPart::Expression(boxed) => {
                 staged.push((i, PendingSub::Dispatch(*boxed)));

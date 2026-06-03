@@ -177,7 +177,11 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'a>(
     scope: &'a Scope<'a>,
     idx: usize,
 ) -> Result<NodeStep<'a>, KError> {
-    let (new_parts, staged_subs) = stage_all_eager_parts(expr.parts);
+    // `picked` is already committed (the head uniquely resolved to it), so bare-name
+    // value slots resolve by sub-Dispatch rather than the keyword path's pre-pick
+    // `bare_outcomes` lookup — their resolved carrier then reaches `accepts_part` at bind.
+    let wrap_indices = picked.classify_for_pick(&expr).wrap_indices;
+    let (new_parts, staged_subs) = stage_all_eager_parts(expr.parts, &wrap_indices);
     let working_expr = KExpression::new(new_parts);
     match ctx.install_eager_subs(working_expr, staged_subs, Some(picked), scope, idx) {
         EagerSubsInstall::DepError(step) => Ok(step),

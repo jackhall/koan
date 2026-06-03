@@ -693,7 +693,17 @@ The rails the dispatch driver feeds:
   typing and the `TypeHeadDeferred` diagnostic gate), never at execution. The
   tail body-shape-branches `expr.parts[1..]` (`extract_call_body` admits one
   `{name = value}` record literal or one `(value)` paren group) and launches
-  construction or a `reconstruct_positional` + eager-subs function call.
+  construction or a `reconstruct_positional` + eager-subs function call. The
+  eager-subs stage resolves the reconstructed call's bare-name value slots — the
+  `wrap_indices` set from `classify_for_pick` — by sub-Dispatch, the same lane as
+  `Expression` / literal args, so each resolves to its `Future` carrier before
+  `KFunction::bind`. The committed callable's slot admission (`accepts_part`) then
+  runs the carried-type check at bind: a `:Signature` slot consults the witness
+  module's `compatible_sigs`, exactly as the keyword-led path does. Because the
+  head has already selected the one callable, the keyword path's pre-pick
+  `bare_outcomes` resolution (which exists to choose among co-bucket overloads) is
+  unneeded here; a genuinely non-satisfying arg is a terminal `TypeMismatch`, not a
+  fall-through, since there is no other overload to try.
 
   Forward references resolve through the fast lane and the eager
   name-resolve rail (below), both of which route name lookups through

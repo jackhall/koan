@@ -155,8 +155,8 @@ fn functor_binder_e2e_makeset_produces_module() {
 ///
 /// The named-arg surface keys on the functor's param name, which must be a bare
 /// lowercase identifier to fill a record-literal field — hence a `Number` param
-/// `x`. (Satisfying a `:OrderedSig`-typed param through this named-arg path is an
-/// orthogonal signature-admission concern, independent of functor application.)
+/// `x`. Satisfying a `:OrderedSig`-typed param through this named-arg path is
+/// pinned by `functor_signature_param_satisfied_via_named_sigil` below.
 #[test]
 fn let_bound_functor_applied_via_sigil_yields_module() {
     let arena = RuntimeArena::new();
@@ -189,6 +189,76 @@ fn let_bound_functor_applied_via_sigil_yields_module() {
         matches!(tag, Some(KObject::Number(n)) if *n == 5.0),
         "applied functor's body should set `tag = 5` from the named arg, got {:?}",
         tag.map(|o| o.ktype()),
+    );
+}
+
+/// Run `src` through the real interpreter entry point (which reads each top-level
+/// node's result, so a LET-RHS bind error surfaces), expecting an error.
+///
+/// The `run` helper above uses `add_dispatch` + `execute()` to inspect scope
+/// bindings; that path stores a node's error without returning it from `execute()`,
+/// so it can't witness a bind-time `TypeMismatch`. `interpret_with_writer` mirrors
+/// the CLI: `enter_block` the top level, then propagate the first node error.
+fn run_expect_err(src: &str) -> String {
+    let sink: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+    match koan::machine::interpret_with_writer(src, Box::new(SharedBuf(sink))) {
+        Ok(()) => panic!("expected an error, got success"),
+        Err(e) => e.to_string(),
+    }
+}
+
+/// Closes `roadmap/named-arg-signature-satisfaction.md`: a `:Signature`-typed
+/// functor param, filled by name with a *satisfying* module, applies through the
+/// named-argument sigil surface.
+///
+/// `IntOrd` is a module whose `compatible_sigs` carries `OrderedSig` (installed by
+/// the `:! OrderedSig` ascription). The named-arg call `:(MakeSet {base = IntOrd})`
+/// reconstructs the positional call `[MKSET, IntOrd]`; the post-pick tail resolves
+/// the bare-name `base` slot by sub-Dispatch to its module carrier, so `bind`'s
+/// `accepts_part` consults `compatible_sigs` — the same satisfaction check the
+/// keyword-led `(MAKESET IntOrd)` form uses — and admits it. The functor body's
+/// `(LET tag = 0)` then runs, producing the module bound as `Got`.
+#[test]
+fn functor_signature_param_satisfied_via_named_sigil() {
+    let arena = RuntimeArena::new();
+    let scope = run(
+        &arena,
+        "SIG OrderedSig = (VAL compare :Number)\n\
+         MODULE IntOrdBase = ((LET compare = 7))\n\
+         LET IntOrd = (IntOrdBase :! OrderedSig)\n\
+         LET MakeSet = (FUNCTOR (MKSET base :OrderedSig) -> Module = \
+            (MODULE Inner = ((LET tag = 0))))\n\
+         LET Got = :(MakeSet {base = IntOrd})",
+    );
+    let m = match scope.resolve_type("Got") {
+        Some(KType::Module { module, .. }) => *module,
+        other => panic!("Got should be a Module produced by applying MakeSet, got {other:?}"),
+    };
+    let tag = m.child_scope().lookup("tag");
+    assert!(
+        matches!(tag, Some(KObject::Number(n)) if *n == 0.0),
+        "applied functor's body should set `tag = 0`, got {:?}",
+        tag.map(|o| o.ktype()),
+    );
+}
+
+/// Dual of the test above: a module that does *not* satisfy the slot signature,
+/// passed by name, is a terminal `TypeMismatch`. The head uniquely picks `MakeSet`
+/// (no overload bucket to fall through to), so a non-satisfying arg is a hard error
+/// rather than a dispatch non-match. Pins that the named-arg path runs the real
+/// satisfaction check — it does not blanket-admit any module into a `:Signature` slot.
+#[test]
+fn functor_signature_param_unsatisfied_via_named_sigil_errors() {
+    let err = run_expect_err(
+        "SIG OrderedSig = (VAL compare :Number)\n\
+         MODULE Plain = ((LET other = 1))\n\
+         LET MakeSet = (FUNCTOR (MKSET base :OrderedSig) -> Module = \
+            (MODULE Inner = ((LET tag = 0))))\n\
+         LET Got = :(MakeSet {base = Plain})",
+    );
+    assert!(
+        err.contains("type mismatch") && err.contains("OrderedSig"),
+        "non-satisfying module by name should be a TypeMismatch against OrderedSig, got: {err}",
     );
 }
 

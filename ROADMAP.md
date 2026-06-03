@@ -111,7 +111,11 @@ What's shipped that the open items below build on:
   positional (paren group — tagged-union / newtype construction) via `extract_call_body`,
   and the resolved [`ArgumentBundle`](src/machine/core/kfunction/argument_bundle.rs) carries
   its arguments on the same [`Record<V>`](src/machine/model/types/record.rs) shape as the
-  surface literal and the struct value. See
+  surface literal and the struct value. A bare-name value arg in this surface — a witness
+  module passed by name to a `:Signature` slot, or any identifier-valued arg — resolves to
+  its carrier by sub-dispatch before bind (the head has already committed to one callable,
+  so there is no overload to pre-select for), so the slot's admission runs the same
+  `compatible_sigs` satisfaction check as the keyword-led `(MAKESET IntOrd)` form. See
   [design/typing/type-language-via-dispatch.md](design/typing/type-language-via-dispatch.md).
 - *In-walk dispatch precedence.* Overload resolution decides each scope's park / defer /
   pick contribution at the scope that raised it instead of in a scope-blind post-walk
@@ -169,8 +173,6 @@ without first landing something else:
   retire the `type_ops.rs` underscore keywords into the existing spaced / dotted / infix forms.
 - [User-definable n-ary operators](roadmap/operator_chaining/n-ary-operators.md) — the fold pre-pass
   that lets a recognized operator chain (`a + b + c`, `A | B | C`) actually evaluate.
-- [Named-argument calls consult signature satisfaction for signature-typed params](roadmap/named-arg-signature-satisfaction.md) —
-  admit a satisfying module passed by name (`:(MyFunctor {base = IntOrd})`), matching the keyword-led path.
 - [Modular implicits (predicate-typing stage 5)](roadmap/predicate_typing/modular-implicits.md) —
   implicit module resolution; its module-language substrate has already shipped.
 - [Continue-on-error for the REPL and batch mode](roadmap/editor_tooling/continue-on-error.md) —

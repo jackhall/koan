@@ -335,7 +335,9 @@ impl<'a> KeywordedState<'a> {
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        let (new_parts, staged_subs) = super::stage_all_eager_parts(expr.parts);
+        // Deferred arm: no committed pick yet (resume re-resolves on finish), so no
+        // bare-name slots to pre-resolve here.
+        let (new_parts, staged_subs) = super::stage_all_eager_parts(expr.parts, &[]);
         debug_assert!(
             !staged_subs.is_empty(),
             "install_eager_only invoked from Deferred arm; \
