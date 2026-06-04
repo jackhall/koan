@@ -84,7 +84,7 @@ impl<'a> Scheduler<'a> {
                                 // through `:(LIST OF Any)` -> `List<Any>`).
                                 lifted_obj = lifted_obj.stamp_type(declared);
                             }
-                            let lifted = dest.alloc(lifted_obj);
+                            let lifted = dest.alloc_object(lifted_obj);
                             self.finalize(idx, NodeOutput::Value(lifted));
                         }
                         (NodeOutput::Err(e), Some(_frame)) => {

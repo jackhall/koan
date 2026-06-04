@@ -17,7 +17,7 @@ fn type_identity_for_signature_bound_yields_module_carrier() {
         "Foo".into(),
     ));
     let module = arena.alloc_module(Module::new("Foo".into(), child));
-    let obj = arena.alloc(KObject::KTypeValue(KType::Module {
+    let obj = arena.alloc_object(KObject::KTypeValue(KType::Module {
         module,
         frame: None,
     }));
@@ -47,7 +47,7 @@ fn type_identity_for_any_module_yields_module_carrier() {
         "Bar".into(),
     ));
     let module = arena.alloc_module(Module::new("Bar".into(), child));
-    let obj = arena.alloc(KObject::KTypeValue(KType::Module {
+    let obj = arena.alloc_object(KObject::KTypeValue(KType::Module {
         module,
         frame: None,
     }));
@@ -69,7 +69,7 @@ fn type_identity_for_signature_yields_signature_carrier() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
-    let obj = arena.alloc(KObject::KTypeValue(KType::Signature {
+    let obj = arena.alloc_object(KObject::KTypeValue(KType::Signature {
         sig,
         pinned_slots: Vec::new(),
     }));
@@ -91,7 +91,7 @@ fn type_identity_for_type_yields_inner_ktype() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let inner = KType::List(Box::new(KType::Number));
-    let obj = arena.alloc(KObject::KTypeValue(inner.clone()));
+    let obj = arena.alloc_object(KObject::KTypeValue(inner.clone()));
     let declared = KType::Type;
     let identity = type_identity_for("p", obj, &declared, scope)
         .expect("Ok expected")
@@ -104,7 +104,7 @@ fn type_identity_for_type_expr_ref_kt_carrier_yields_inner_ktype() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let inner = KType::Number;
-    let obj = arena.alloc(KObject::KTypeValue(inner.clone()));
+    let obj = arena.alloc_object(KObject::KTypeValue(inner.clone()));
     let declared = KType::TypeExprRef;
     let identity = type_identity_for("p", obj, &declared, scope)
         .expect("Ok expected")
@@ -119,7 +119,7 @@ fn type_identity_for_type_expr_ref_kt_carrier_yields_inner_ktype() {
 fn type_identity_for_carrier_mismatch_returns_none() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let obj = arena.alloc(KObject::Number(1.0));
+    let obj = arena.alloc_object(KObject::Number(1.0));
     let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
     let declared = KType::Signature {
         sig,

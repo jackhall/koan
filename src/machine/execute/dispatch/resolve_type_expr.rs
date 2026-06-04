@@ -43,7 +43,7 @@ impl<'a> Scope<'a> {
             ElabResult::Done(kt) => {
                 let pending = FinalizeGate { scope: self }.pending_producers(&kt);
                 if pending.is_empty() {
-                    let kt_ref: &'a KType<'a> = self.arena.alloc(kt);
+                    let kt_ref: &'a KType<'a> = self.arena.alloc_ktype(kt);
                     self.type_expr_memo_insert(te.clone(), kt_ref);
                     ResolveTypeExprOutcome::Done(kt_ref)
                 } else {
@@ -82,7 +82,7 @@ pub fn coerce_type_token_value<'a>(
                 }
                 // Defensive fall-through when finalize skipped the paired-carrier install.
             }
-            Ok(scope.arena.alloc(KObject::KTypeValue(kt.clone())))
+            Ok(scope.arena.alloc_object(KObject::KTypeValue(kt.clone())))
         }
         None => Err(KError::new(KErrorKind::UnboundName(name.to_string()))),
     }
@@ -378,7 +378,7 @@ mod tests {
                 name: "Point".to_string(),
             };
             scope.register_type("Point".into(), kt.clone(), BindingIndex::BUILTIN);
-            let paired = arena.alloc(KObject::KTypeValue(kt));
+            let paired = arena.alloc_object(KObject::KTypeValue(kt));
             scope
                 .bind_value("Point".to_string(), paired, BindingIndex::BUILTIN)
                 .unwrap();

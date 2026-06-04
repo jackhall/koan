@@ -63,7 +63,7 @@ fn body_list_of<'a>(
     BodyResult::Value(
         scope
             .arena
-            .alloc(KObject::KTypeValue(KType::List(Box::new(elem)))),
+            .alloc_object(KObject::KTypeValue(KType::List(Box::new(elem)))),
     )
 }
 
@@ -83,7 +83,7 @@ fn body_map<'a>(
     BodyResult::Value(
         scope
             .arena
-            .alloc(KObject::KTypeValue(KType::Dict(Box::new(k), Box::new(v)))),
+            .alloc_object(KObject::KTypeValue(KType::Dict(Box::new(k), Box::new(v)))),
     )
 }
 
@@ -128,7 +128,7 @@ fn body_apply_as<'a>(
     BodyResult::Value(
         scope
             .arena
-            .alloc(KObject::KTypeValue(KType::ConstructorApply {
+            .alloc_object(KObject::KTypeValue(KType::ConstructorApply {
                 ctor: Box::new(ctor),
                 args: vec![applied],
             })),
@@ -247,7 +247,7 @@ fn finalize_carrier<'a>(
         },
         CarrierKind::Record => KType::Record(Box::new(record)),
     };
-    scope.arena.alloc(KObject::KTypeValue(kt))
+    scope.arena.alloc_object(KObject::KTypeValue(kt))
 }
 
 /// Schedule a `Combine` over `park_producers` plus owned sub-Dispatches for

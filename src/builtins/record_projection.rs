@@ -87,7 +87,7 @@ pub fn body<'a>(
 
     let narrowed = Record::from_pairs(narrowed_pairs);
     let result = KObject::record_with_type(Rc::clone(fields), narrowed);
-    BodyResult::Value(scope.arena.alloc(result))
+    BodyResult::Value(scope.arena.alloc_object(result))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

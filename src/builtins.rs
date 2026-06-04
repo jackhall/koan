@@ -129,7 +129,7 @@ pub(crate) fn register_builtin_full<'a>(
         is_functor,
         is_nominal_binder,
     ));
-    let obj: &'a KObject<'a> = arena.alloc(KObject::KFunction(f, None));
+    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
     let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
 }
 

@@ -10,7 +10,7 @@ use crate::machine::model::types::{KType, UserTypeKind};
 fn try_register_type_inserts_into_types_map() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc(KType::Number);
+    let kt: &KType = arena.alloc_ktype(KType::Number);
     let outcome = bindings
         .try_register_type("Foo", kt, BindingIndex::BUILTIN)
         .expect("try_register_type should succeed on fresh bindings");
@@ -27,8 +27,8 @@ fn try_register_type_inserts_into_types_map() {
 fn try_register_type_rejects_collision_with_rebind() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt1: &KType = arena.alloc(KType::Number);
-    let kt2: &KType = arena.alloc(KType::Str);
+    let kt1: &KType = arena.alloc_ktype(KType::Number);
+    let kt2: &KType = arena.alloc_ktype(KType::Str);
     bindings
         .try_register_type("Foo", kt1, BindingIndex::BUILTIN)
         .expect("first register should succeed");
@@ -48,7 +48,7 @@ fn try_register_type_rejects_collision_with_rebind() {
 fn try_register_type_yields_conflict_on_live_types_borrow() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc(KType::Number);
+    let kt: &KType = arena.alloc_ktype(KType::Number);
     let _r = bindings.types();
     let outcome = bindings
         .try_register_type("Foo", kt, BindingIndex::BUILTIN)
@@ -61,7 +61,7 @@ fn try_register_type_yields_conflict_on_live_types_borrow() {
 fn try_register_type_clears_matching_placeholder() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc(KType::Number);
+    let kt: &KType = arena.alloc_ktype(KType::Number);
     bindings
         .try_install_placeholder("Bar".to_string(), NodeId(7), BindingIndex::BUILTIN)
         .expect("placeholder install should succeed on fresh bindings");
@@ -76,7 +76,7 @@ fn try_register_type_clears_matching_placeholder() {
 fn try_register_type_does_not_touch_data_or_functions() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc(KType::Number);
+    let kt: &KType = arena.alloc_ktype(KType::Number);
     bindings
         .try_register_type("Foo", kt, BindingIndex::BUILTIN)
         .expect("register should succeed");

@@ -135,7 +135,7 @@ fn finalize_val<'a>(
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {
     let arena = scope.arena;
-    let allocated: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(declared_kt));
+    let allocated: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(declared_kt));
     if let Err(e) = scope.bind_value(name, allocated, bind_index) {
         return err(e);
     }

@@ -160,10 +160,12 @@ pub fn body<'a>(
     }
 
     if sub_dispatches.is_empty() {
-        return BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(KType::Signature {
-            sig: s,
-            pinned_slots: pinned,
-        })));
+        return BodyResult::Value(scope.arena.alloc_object(KObject::KTypeValue(
+            KType::Signature {
+                sig: s,
+                pinned_slots: pinned,
+            },
+        )));
     }
 
     // `submission_layout[k] = pinned_idx` maps `results[k]` to `pinned[pinned_idx]`.
@@ -191,10 +193,14 @@ pub fn body<'a>(
                 }
             }
         }
-        BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(KType::Signature {
-            sig: s,
-            pinned_slots: pinned,
-        })))
+        BodyResult::Value(
+            scope
+                .arena
+                .alloc_object(KObject::KTypeValue(KType::Signature {
+                    sig: s,
+                    pinned_slots: pinned,
+                })),
+        )
     });
     let combine_id = sched.add_combine(deps, vec![], scope, finish);
     BodyResult::DeferTo(combine_id)

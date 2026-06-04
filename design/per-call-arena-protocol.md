@@ -114,10 +114,15 @@ arena's life because `CallArena::new` heap-pins the outer arena via
 `Rc`, and the outer always outlives this inner per the lexical-scoping
 invariant.
 
-`KObject` and `KType` go through the single cycle-gated `alloc` entry
-via the `CycleGated` trait; `KFunction`, `Scope`, `Module`, and
-`Signature` use un-gated `alloc_*` methods because none of them can
-hold a self-targeting `Rc<CallArena>`.
+`alloc_object` is one of six named safe wrappers — alongside `alloc_ktype`,
+`alloc_function`, `alloc_scope`, `alloc_module`, and `alloc_signature` —
+that route a single private `alloc` engine where the gate lives. Every
+family implements the sealed `ArenaStored` trait, and the engine runs the
+gate once for all of them. `KObject` and `KType` answer `anchors_to` by
+walking their composite tree; the four that cannot hold a self-targeting
+`Rc<CallArena>` — `KFunction`, `Scope`, `Module`, and `Signature` —
+declare `anchors_to => false`, so the redirect is uniform across the whole
+allocation surface and unbypassable by construction.
 
 ## Active-frame propagation
 

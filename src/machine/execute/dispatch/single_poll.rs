@@ -281,7 +281,7 @@ pub(super) fn literal_pass_through<'a>(
         .expect("LiteralPassThrough shape implies one part");
     match only.value {
         ExpressionPart::Literal(_) => {
-            let allocated = scope.arena.alloc(only.value.resolve());
+            let allocated = scope.arena.alloc_object(only.value.resolve());
             NodeStep::Done(NodeOutput::Value(allocated))
         }
         ExpressionPart::Future(obj) => NodeStep::Done(NodeOutput::Value(obj)),

@@ -126,7 +126,7 @@ fn record_disjoint_fields_incomparable() {
 fn record_value_admission_and_matches() {
     use crate::machine::core::RuntimeArena;
     let arena = RuntimeArena::new();
-    let value: &KObject<'_> = arena.alloc(KObject::record(Record::from_pairs(vec![
+    let value: &KObject<'_> = arena.alloc_object(KObject::record(Record::from_pairs(vec![
         ("x".to_string(), KObject::Number(1.0)),
         ("y".to_string(), KObject::KString("a".into())),
     ])));
@@ -176,19 +176,19 @@ fn any_user_type_struct_accepts_struct_future_only() {
     let t = KType::AnyUserType {
         kind: UserTypeKind::struct_sentinel(),
     };
-    let s: &KObject<'_> = arena.alloc(KObject::Struct {
+    let s: &KObject<'_> = arena.alloc_object(KObject::Struct {
         name: "Point".into(),
         scope_id: ScopeId::SENTINEL,
         fields: Rc::new(IndexMap::new()),
     });
-    let tagged: &KObject<'_> = arena.alloc(KObject::Tagged {
+    let tagged: &KObject<'_> = arena.alloc_object(KObject::Tagged {
         tag: "some".into(),
         value: Rc::new(KObject::Number(1.0)),
         scope_id: ScopeId::SENTINEL,
         name: "Maybe".into(),
         type_args: Rc::new(vec![]),
     });
-    let n: &KObject<'_> = arena.alloc(KObject::Number(1.0));
+    let n: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
     assert!(t.accepts_part(&ExpressionPart::Future(s)));
     assert!(!t.accepts_part(&ExpressionPart::Future(tagged)));
     assert!(!t.accepts_part(&ExpressionPart::Future(n)));
@@ -208,24 +208,24 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let t = KType::Type;
-    let kt_number: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::Number));
-    let kt_str: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::Str));
-    let kt_bool: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::Bool));
-    let kt_null: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::Null));
+    let kt_number: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Number));
+    let kt_str: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Str));
+    let kt_bool: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Bool));
+    let kt_null: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Null));
     assert!(t.accepts_part(&ExpressionPart::Future(kt_number)));
     assert!(t.accepts_part(&ExpressionPart::Future(kt_str)));
     assert!(t.accepts_part(&ExpressionPart::Future(kt_bool)));
     assert!(t.accepts_part(&ExpressionPart::Future(kt_null)));
     // Struct / union type tokens flow as `KTypeValue(UserType { .. })` now — a `:Type`
     // slot admits them via the generic `Future(KTypeValue(_))` arm.
-    let tagged_token: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::UserType {
+    let tagged_token: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::UserType {
         kind: UserTypeKind::Tagged {
             schema: Rc::new(HashMap::new()),
         },
         name: "Maybe".into(),
         scope_id: ScopeId::SENTINEL,
     }));
-    let struct_token: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::UserType {
+    let struct_token: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::UserType {
         kind: UserTypeKind::struct_sentinel(),
         name: "Point".into(),
         scope_id: ScopeId::SENTINEL,
@@ -237,19 +237,19 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         "IntMod".into(),
     ));
     let module = arena.alloc_module(Module::new("IntMod".into(), child));
-    let kt_module: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::Module {
+    let kt_module: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Module {
         module,
         frame: None,
     }));
     assert!(!t.accepts_part(&ExpressionPart::Future(kt_module)));
     let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
-    let kt_sig: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::Signature {
+    let kt_sig: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Signature {
         sig,
         pinned_slots: Vec::new(),
     }));
     assert!(!t.accepts_part(&ExpressionPart::Future(kt_sig)));
-    let n: &KObject<'_> = arena.alloc(KObject::Number(7.0));
-    let s: &KObject<'_> = arena.alloc(KObject::KString("hi".into()));
+    let n: &KObject<'_> = arena.alloc_object(KObject::Number(7.0));
+    let s: &KObject<'_> = arena.alloc_object(KObject::KString("hi".into()));
     assert!(!t.accepts_part(&ExpressionPart::Future(n)));
     assert!(!t.accepts_part(&ExpressionPart::Future(s)));
 }
@@ -266,19 +266,19 @@ fn any_user_type_newtype_accepts_wrapped_only() {
             repr: Box::new(KType::Any),
         },
     };
-    let inner: &KObject<'_> = arena.alloc(KObject::Number(3.0));
-    let type_id: &KType = arena.alloc(KType::UserType {
+    let inner: &KObject<'_> = arena.alloc_object(KObject::Number(3.0));
+    let type_id: &KType = arena.alloc_ktype(KType::UserType {
         kind: UserTypeKind::Newtype {
             repr: Box::new(KType::Number),
         },
         scope_id: ScopeId::from_raw(0, 0xAA),
         name: "Distance".into(),
     });
-    let w: &KObject<'_> = arena.alloc(KObject::Wrapped {
+    let w: &KObject<'_> = arena.alloc_object(KObject::Wrapped {
         inner: crate::machine::model::values::NonWrappedRef::peel(inner),
         type_id,
     });
-    let s: &KObject<'_> = arena.alloc(KObject::Struct {
+    let s: &KObject<'_> = arena.alloc_object(KObject::Struct {
         name: "Point".into(),
         scope_id: ScopeId::SENTINEL,
         fields: std::rc::Rc::new(indexmap::IndexMap::new()),

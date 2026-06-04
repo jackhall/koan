@@ -14,7 +14,7 @@ fn free_reclaims_owned_subtree() {
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    let value: &KObject = arena.alloc(KObject::Number(42.0));
+    let value: &KObject = arena.alloc_object(KObject::Number(42.0));
     let mk_dispatch = || NodeWork::dispatch(KExpression::new(Vec::new()));
     let s0 = sched.add(mk_dispatch(), root);
     let s1 = sched.add(mk_dispatch(), root);
@@ -83,7 +83,7 @@ fn free_skips_live_slot_and_is_idempotent() {
     assert_eq!(sched.store.free_list_len(), 0);
 
     sched.store.clear_node(s);
-    let value: &KObject = arena.alloc(KObject::Number(1.0));
+    let value: &KObject = arena.alloc_object(KObject::Number(1.0));
     sched.store.set_result(s, NodeOutput::Value(value));
     sched.free(s.index());
     assert_eq!(sched.store.free_list_snapshot(), vec![s]);
@@ -102,7 +102,7 @@ fn free_does_not_recurse_through_notify_edges() {
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    let value: &KObject = arena.alloc(KObject::Number(7.0));
+    let value: &KObject = arena.alloc_object(KObject::Number(7.0));
     let mk_dispatch = || NodeWork::dispatch(KExpression::new(Vec::new()));
     let s_owner = sched.add(mk_dispatch(), root);
     let s_owned = sched.add(mk_dispatch(), root);

@@ -77,7 +77,7 @@ pub fn body<'a>(
         name: name.clone(),
     };
     let arena = scope.arena;
-    let kt_ref: &'a KType = arena.alloc(identity);
+    let kt_ref: &'a KType = arena.alloc_ktype(identity);
     let bind_index = sched
         .current_lexical_chain()
         .map(|chain| BindingIndex::value(chain.index))
@@ -87,7 +87,7 @@ pub fn body<'a>(
         .try_register_type(&name, kt_ref, bind_index)
     {
         Ok(ApplyOutcome::Applied) => {
-            let v: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(kt_ref.clone()));
+            let v: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(kt_ref.clone()));
             BodyResult::Value(v)
         }
         // Finalize sites run post-Combine outside the re-entrant hot path, so borrow
@@ -158,7 +158,7 @@ pub fn newtype_construct<'a>(
             inner: NonWrappedRef::peel(value),
             type_id: identity,
         };
-        BodyResult::Value(scope.arena.alloc(wrapped))
+        BodyResult::Value(scope.arena.alloc_object(wrapped))
     });
     let combine_id = sched.add_combine(vec![value_id], vec![], scope, finish);
     BodyResult::DeferTo(combine_id)

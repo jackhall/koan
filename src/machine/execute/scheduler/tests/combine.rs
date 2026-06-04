@@ -37,7 +37,9 @@ fn combine_waits_on_deps_then_runs_finish() {
                 ))
             }
         };
-        let allocated = scope.arena.alloc(KObject::KString(format!("{a}+{b}")));
+        let allocated = scope
+            .arena
+            .alloc_object(KObject::KString(format!("{a}+{b}")));
         BodyResult::Value(allocated)
     });
     let combine_id = sched.add_combine(vec![dep_a, dep_b], vec![], scope, finish);
@@ -65,7 +67,7 @@ fn combine_short_circuits_on_dep_error() {
     sched.store.clear_node(dep_err);
     let _ = sched.queues.pop_next();
     let _ = sched.queues.pop_next();
-    let value = arena.alloc(KObject::Number(99.0));
+    let value = arena.alloc_object(KObject::Number(99.0));
     sched.store.set_result(dep_ok, NodeOutput::Value(value));
     sched.store.set_result(
         dep_err,
@@ -110,7 +112,9 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
         _bundle: ArgumentBundle<'a>,
     ) -> BodyResult<'a> {
         let finish: CombineFinish<'a> = Box::new(|scope, _sched, _results| {
-            let v = scope.arena.alloc(KObject::KString("from-combine".into()));
+            let v = scope
+                .arena
+                .alloc_object(KObject::KString("from-combine".into()));
             BodyResult::Value(v)
         });
         let combine_id = sched.add_combine(Vec::new(), Vec::new(), scope, finish);

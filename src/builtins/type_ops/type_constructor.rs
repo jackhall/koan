@@ -19,16 +19,20 @@ pub fn body<'a>(
         Err(e) => return err(e),
     };
     let param = param_kt.name();
-    BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(KType::UserType {
-        // Abstract higher-kinded SIG slot — not a constructible union, so the
-        // schema payload is empty (equality ignores it anyway).
-        kind: UserTypeKind::TypeConstructor {
-            schema: std::rc::Rc::new(std::collections::HashMap::new()),
-            param_names: vec![param],
-        },
-        scope_id: ScopeId::SENTINEL,
-        name: "_typeconstructor".into(),
-    })))
+    BodyResult::Value(
+        scope
+            .arena
+            .alloc_object(KObject::KTypeValue(KType::UserType {
+                // Abstract higher-kinded SIG slot — not a constructible union, so the
+                // schema payload is empty (equality ignores it anyway).
+                kind: UserTypeKind::TypeConstructor {
+                    schema: std::rc::Rc::new(std::collections::HashMap::new()),
+                    param_names: vec![param],
+                },
+                scope_id: ScopeId::SENTINEL,
+                name: "_typeconstructor".into(),
+            })),
+    )
 }
 
 #[cfg(test)]

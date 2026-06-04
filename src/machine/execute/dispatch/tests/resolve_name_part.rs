@@ -11,7 +11,7 @@ use crate::machine::{BindingIndex, RuntimeArena};
 fn resolve_name_part_identifier_resolved() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let bound = arena.alloc(KObject::Number(7.0));
+    let bound = arena.alloc_object(KObject::Number(7.0));
     scope
         .bind_value("x".to_string(), bound, BindingIndex::BUILTIN)
         .unwrap();

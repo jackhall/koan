@@ -32,7 +32,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .borrow_mut()
         .insert("Type".into(), KType::Number);
     m_num.mark_satisfies(sig_id);
-    let m_num_obj = arena.alloc(KObject::KTypeValue(KType::Module {
+    let m_num_obj = arena.alloc_object(KObject::KTypeValue(KType::Module {
         module: m_num,
         frame: None,
     }));
@@ -47,7 +47,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .borrow_mut()
         .insert("Type".into(), KType::Str);
     m_str.mark_satisfies(sig_id);
-    let m_str_obj = arena.alloc(KObject::KTypeValue(KType::Module {
+    let m_str_obj = arena.alloc_object(KObject::KTypeValue(KType::Module {
         module: m_str,
         frame: None,
     }));
@@ -58,7 +58,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     ));
     let m_none: &Module<'_> = arena.alloc_module(Module::new("NoTypePin".into(), child_c));
     m_none.mark_satisfies(sig_id);
-    let m_none_obj = arena.alloc(KObject::KTypeValue(KType::Module {
+    let m_none_obj = arena.alloc_object(KObject::KTypeValue(KType::Module {
         module: m_none,
         frame: None,
     }));
@@ -86,7 +86,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .insert("Type".into(), KType::Number);
     // No mark_satisfies: compatible_sigs stays empty, so the sig-membership gate trips
     // before the pin comparison.
-    let m_unascribed_obj = arena.alloc(KObject::KTypeValue(KType::Module {
+    let m_unascribed_obj = arena.alloc_object(KObject::KTypeValue(KType::Module {
         module: m_unascribed,
         frame: None,
     }));

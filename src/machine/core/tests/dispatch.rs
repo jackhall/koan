@@ -433,7 +433,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         Body::Builtin(super::body_no_op),
         scope,
     ));
-    let sibling_obj = arena.alloc(KObject::KFunction(sibling, None));
+    let sibling_obj = arena.alloc_object(KObject::KFunction(sibling, None));
     scope
         .register_function(
             "pick_str".to_string(),

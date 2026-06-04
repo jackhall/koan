@@ -168,7 +168,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let bindings: Bindings<'_> = Bindings::new();
         let queue: PendingQueue<'_> = PendingQueue::new();
-        let kt = arena.alloc(KType::Number);
+        let kt = arena.alloc_ktype(KType::Number);
         queue.defer_type("Foo".to_string(), kt, BindingIndex::BUILTIN);
         assert!(bindings.types().get("Foo").is_none());
         queue.drain(&bindings);

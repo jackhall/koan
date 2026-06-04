@@ -39,7 +39,7 @@ fn body_identity<'a>(
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     match bundle.get("n") {
-        Some(obj) => BodyResult::Value(_scope.arena.alloc(obj.deep_clone())),
+        Some(obj) => BodyResult::Value(_scope.arena.alloc_object(obj.deep_clone())),
         None => BodyResult::Err(crate::machine::KError::new(
             crate::machine::KErrorKind::MissingArg("n".to_string()),
         )),
@@ -61,7 +61,7 @@ fn bind_identity_fn<'a>(scope: &'a Scope<'a>) {
         crate::machine::core::kfunction::Body::Builtin(body_identity),
         scope,
     ));
-    let obj = scope.arena.alloc(KObject::KFunction(f, None));
+    let obj = scope.arena.alloc_object(KObject::KFunction(f, None));
     scope
         .bind_value("f".to_string(), obj, BindingIndex::BUILTIN)
         .expect("bind_value should succeed");
@@ -534,7 +534,7 @@ fn function_value_call_forward_ref_parks() {
     // Bind `producer_target` to a value so the producer's own dispatch fast-lanes
     // via the BareIdentifier `Resolution::Value` hit — otherwise the unbound
     // fall-through would advance the counter and defeat the routing assertion.
-    let producer_target = scope.arena.alloc(KObject::Number(42.0));
+    let producer_target = scope.arena.alloc_object(KObject::Number(42.0));
     scope
         .bind_value(
             "producer_target".to_string(),

@@ -68,7 +68,9 @@ pub fn body<'a>(
             pinned_slots: Vec::new(),
         };
         match parent_scope.register_type_upsert(name_for_finish.clone(), identity, bind_index) {
-            Ok(kt_ref) => BodyResult::Value(arena.alloc(KObject::KTypeValue(kt_ref.clone()))),
+            Ok(kt_ref) => {
+                BodyResult::Value(arena.alloc_object(KObject::KTypeValue(kt_ref.clone())))
+            }
             Err(e) => BodyResult::Err(e.with_frame(Frame::bare(
                 "<signature>",
                 format!("SIG {} body", name_for_finish),

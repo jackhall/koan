@@ -114,7 +114,7 @@ fn finalize_struct<'a>(
     }) = bindings.lookup_type(&name, None)
     {
         if !fields.is_empty() {
-            return BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(
+            return BodyResult::Value(scope.arena.alloc_object(KObject::KTypeValue(
                 bindings.lookup_type(&name, None).unwrap().clone(),
             )));
         }
@@ -135,7 +135,11 @@ fn finalize_struct<'a>(
         name: name.clone(),
     };
     match scope.register_type_upsert(name, identity, bind_index) {
-        Ok(kt_ref) => BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(kt_ref.clone()))),
+        Ok(kt_ref) => BodyResult::Value(
+            scope
+                .arena
+                .alloc_object(KObject::KTypeValue(kt_ref.clone())),
+        ),
         Err(e) => err(e),
     }
 }

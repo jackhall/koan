@@ -142,7 +142,7 @@ mod tests {
         assert!(ptr::eq(recovered, scope));
         // Re-borrow after a sibling alloc — tree borrows is sensitive to interleaved
         // mutation under live shared borrows.
-        let _other = arena.alloc(crate::machine::model::values::KObject::Number(1.0));
+        let _other = arena.alloc_object(crate::machine::model::values::KObject::Number(1.0));
         let recovered2 = module.child_scope();
         assert!(ptr::eq(recovered2, scope));
     }
@@ -157,7 +157,7 @@ mod tests {
         let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
         let recovered = sig.decl_scope();
         assert!(ptr::eq(recovered, scope));
-        let _other = arena.alloc(crate::machine::model::values::KObject::Number(1.0));
+        let _other = arena.alloc_object(crate::machine::model::values::KObject::Number(1.0));
         let recovered2 = sig.decl_scope();
         assert!(ptr::eq(recovered2, scope));
     }
@@ -248,7 +248,9 @@ mod tests {
                 elements: vec![SignatureElement::Keyword("__SLOW__".into())],
             },
             Body::Builtin(|s, _, _| {
-                crate::machine::core::kfunction::BodyResult::Value(s.arena.alloc(KObject::Null))
+                crate::machine::core::kfunction::BodyResult::Value(
+                    s.arena.alloc_object(KObject::Null),
+                )
             }),
             frame.scope(),
         );

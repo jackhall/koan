@@ -107,7 +107,7 @@ pub fn body_opaque<'a>(
 
     new_module.mark_satisfies(s.sig_id());
 
-    let module_obj: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(KType::Module {
+    let module_obj: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(KType::Module {
         module: new_module,
         frame: None,
     }));
@@ -134,7 +134,7 @@ pub fn body_transparent<'a>(
         m.child_scope(),
     ));
     new_module.mark_satisfies(s.sig_id());
-    let module_obj: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(KType::Module {
+    let module_obj: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(KType::Module {
         module: new_module,
         frame: None,
     }));

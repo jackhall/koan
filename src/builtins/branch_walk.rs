@@ -40,7 +40,7 @@ pub(crate) fn resolve_arm_return_contract<'a>(
         }
     };
     Ok(ReturnContract::Arm {
-        ret: scope.arena.alloc(kt),
+        ret: scope.arena.alloc_ktype(kt),
         kind,
     })
 }

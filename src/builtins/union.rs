@@ -109,7 +109,7 @@ fn finalize_union<'a>(
     }) = bindings.lookup_type(&name, None)
     {
         if !schema.is_empty() {
-            return BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(
+            return BodyResult::Value(scope.arena.alloc_object(KObject::KTypeValue(
                 bindings.lookup_type(&name, None).unwrap().clone(),
             )));
         }
@@ -131,7 +131,11 @@ fn finalize_union<'a>(
         name: name.clone(),
     };
     match scope.register_type_upsert(name, identity, bind_index) {
-        Ok(kt_ref) => BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(kt_ref.clone()))),
+        Ok(kt_ref) => BodyResult::Value(
+            scope
+                .arena
+                .alloc_object(KObject::KTypeValue(kt_ref.clone())),
+        ),
         Err(e) => err(e),
     }
 }

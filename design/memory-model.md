@@ -82,10 +82,13 @@ protocol sits on top of.
 
 Every sub-arena inside [`RuntimeArena`](../src/machine/core/arena.rs) stores
 `T<'static>` rather than `T<'a>` — the `'static` is phantom so `RuntimeArena`
-itself carries no lifetime parameter. Each `alloc*` method takes input at the
-caller's `'a`, `mem::transmute`s into `'static` for storage, then re-transmutes
-the returned `&mut` back to `&'a T<'a>` on the way out. The transmutes are
-sound because:
+itself carries no lifetime parameter. Each named `alloc*` wrapper takes input at
+the caller's `'a` and routes one private generic `alloc<K: ArenaStored>` engine:
+the engine union-moves the value into its `'static` lifetime family (`At<'static>`)
+for storage and re-anchors the returned `&'a` to the input borrow on the way out.
+The union move — `Erase<At<'a>, At<'static>>` written then read back through the
+other field, with a `const` size assert — is the single erasure all six families
+share, so there is one store-side erasure to reason about. It is sound because:
 
 - Lifetimes are zero-sized, so `T<'a>` and `T<'static>` have identical layout.
 - `alloc*` returns an `&'a` tied to the input borrow; no `'static` reference
@@ -101,10 +104,14 @@ each holding a pointer to a captured or defining `Scope` — is centralized in
 `unsafe fn reattach` out, so the re-attach soundness argument lives in a single
 audited place rather than restated at each carrier.
 
-`KObject` and `KType` go through the single cycle-gated [`alloc`](../src/machine/core/arena.rs)
-entry via the `CycleGated` trait; `KFunction`, `Scope`, `Module`, and `Signature`
-use un-gated `alloc_*` methods because none of them can hold a self-targeting
-`Rc<CallArena>`.
+All six families implement the sealed `ArenaStored` trait and route the one gated
+[`alloc`](../src/machine/core/arena.rs) engine. `anchors_to` is a required trait
+method, so each family declares its cycle behavior at its impl site: `KObject` and
+`KType` walk their composite tree for a self-targeting `Rc<CallArena>`, while the
+four that cannot hold one — `KFunction`, `Scope`, `Module`, and `Signature` —
+declare `anchors_to => false`. The gate is therefore uniform and unbypassable by
+construction: a self-anchoring value redirects to the escape arena no matter which
+wrapper stored it.
 
 A [`CallArena`](../src/machine/core/arena.rs) bundles a `RuntimeArena`, an
 `Option<ScopePtr>` into it (the child scope; `None` only transiently during

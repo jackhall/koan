@@ -18,7 +18,7 @@ pub fn body<'a>(
         Ok(t) => t.clone(),
         Err(e) => return err(e),
     };
-    BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(KType::Dict(
+    BodyResult::Value(scope.arena.alloc_object(KObject::KTypeValue(KType::Dict(
         Box::new(key),
         Box::new(value),
     ))))

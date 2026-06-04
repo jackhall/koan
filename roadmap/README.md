@@ -40,11 +40,12 @@ What's shipped that the open items below build on:
 - *Arena unsafe consolidation.* The scattered per-call frame re-anchor is funnelled
   behind one [`CallArena::anchored_parts`](../src/machine/core/arena.rs), and every
   captured/defining-scope re-attach behind one
-  [`ScopePtr`](../src/machine/core/scope_ptr.rs); `RuntimeArena::escape` is `NonNull`
-  and `CycleGated` is sealed, dropping the production `unsafe` surface from 33 sites to
-  30. The remaining hardening is open work under
-  [type-enforced scope re-attach](refactor/type-enforced-scope-reattach.md) and
-  [consolidate the arena store-side erasure](refactor/arena-store-erasure-consolidation.md).
+  [`ScopePtr`](../src/machine/core/scope_ptr.rs); `RuntimeArena::escape` is `NonNull`.
+  The store-side erasure now lives behind one sealed `ArenaStored` trait: all six
+  arena-stored families route a single audited union-move `erase_store` and one gated
+  `alloc` engine, replacing the six per-type `T<'a> → T<'static>` transmute pairs with
+  one. The remaining hardening is open work under
+  [type-enforced scope re-attach](refactor/type-enforced-scope-reattach.md).
   See [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
 
 ## Next items
@@ -144,5 +145,4 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Type-enforced scope re-attach](refactor/type-enforced-scope-reattach.md)
-- [Consolidate the arena store-side erasure](refactor/arena-store-erasure-consolidation.md)
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)

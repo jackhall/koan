@@ -16,7 +16,7 @@ pub fn body<'a>(
     BodyResult::Value(
         scope
             .arena
-            .alloc(KObject::KTypeValue(KType::List(Box::new(elem)))),
+            .alloc_object(KObject::KTypeValue(KType::List(Box::new(elem)))),
     )
 }
 

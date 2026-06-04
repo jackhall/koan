@@ -106,7 +106,7 @@ fn dispatch_branch<'a>(
     // Chain the call-site frame per per-call-arena-protocol.md § Outer-frame chain.
     let frame: Rc<CallArena> = CallArena::new(scope, outer_frame);
     let (inner_arena, child): (&'a RuntimeArena, &'a Scope<'a>) = frame.anchored_parts();
-    let it_obj: &'a KObject<'a> = inner_arena.alloc(it_value);
+    let it_obj: &'a KObject<'a> = inner_arena.alloc_object(it_value);
     // `nominal_binder: true` carves `it` out of the sibling-index cutoff so the
     // arm body can see it — same path MATCH's `it` uses.
     let _ = child.bind_value(

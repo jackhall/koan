@@ -81,7 +81,7 @@ impl<'a> KFunction<'a> {
                             cloned = cloned.stamp_type(&arg.ktype);
                         }
                     }
-                    let allocated = inner_arena.alloc(cloned);
+                    let allocated = inner_arena.alloc_object(cloned);
                     // Type-denoting parameters write ONLY into `bindings.types`;
                     // ATTR-on-type projects through that carrier for `Er.pure(x)`-style
                     // references. Value-typed parameters write `bindings.data`.
@@ -269,7 +269,7 @@ impl<'a> KFunction<'a> {
                                     // at the return boundary, symmetric with the param-bind
                                     // stamp above.
                                     let stamped = body_value.deep_clone().stamp_type(&per_call_ret);
-                                    BodyResult::Value(_scope.arena.alloc(stamped))
+                                    BodyResult::Value(_scope.arena.alloc_object(stamped))
                                 }),
                             );
                         // Rc clones inside `with_active_frame` above keep the per-call

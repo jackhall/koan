@@ -119,7 +119,7 @@ pub fn body<'a>(
     }
     let cloned = value.deep_clone();
     let arena = scope.arena;
-    let allocated: &'a KObject<'a> = arena.alloc(cloned);
+    let allocated: &'a KObject<'a> = arena.alloc_object(cloned);
     if let Some(kt) = type_for_types_map {
         // Identity-preserving alias: `LET P2 = OrderedSig` writes `bindings.types[P2]`
         // carrying the aliased type's original identity so `(PICK x: P2)` and

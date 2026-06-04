@@ -161,7 +161,7 @@ pub(in crate::machine::execute::dispatch) fn finish<'a>(
         }
     };
     match result {
-        Ok(obj) => NodeStep::Done(NodeOutput::Value(scope.arena.alloc(obj))),
+        Ok(obj) => NodeStep::Done(NodeOutput::Value(scope.arena.alloc_object(obj))),
         Err(e) => NodeStep::Done(NodeOutput::Err(e)),
     }
 }

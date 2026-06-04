@@ -73,7 +73,7 @@ pub fn body<'a>(
     // Chain the call-site frame per per-call-arena-protocol.md § Outer-frame chain.
     let frame: Rc<CallArena> = CallArena::new(scope, sched.current_frame());
     let (inner_arena, child): (&'a RuntimeArena, &'a Scope<'a>) = frame.anchored_parts();
-    let it_obj: &'a KObject<'a> = inner_arena.alloc(value.deep_clone());
+    let it_obj: &'a KObject<'a> = inner_arena.alloc_object(value.deep_clone());
     // `nominal_binder: true` carves `it` out of the sibling-index cutoff so the arm
     // body (also at chain index 0) can see it — same path the FN parameter uses.
     let _ = child.bind_value(

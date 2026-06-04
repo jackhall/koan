@@ -57,7 +57,7 @@ pub fn body<'a>(
     // Root the frame `Rc` in the call-site arena so the borrowed window outlives
     // the eager `m` arg and any escaping closure. No-op for top-level modules.
     if module_frame.is_some() {
-        scope.arena.alloc(KObject::KTypeValue(KType::Module {
+        scope.arena.alloc_object(KObject::KTypeValue(KType::Module {
             module,
             frame: module_frame,
         }));

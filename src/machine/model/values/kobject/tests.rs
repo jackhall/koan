@@ -165,8 +165,8 @@ fn ktype_value_round_trips_through_summarize() {
 fn wrapped_ktype_reports_clone_of_type_id() {
     use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
-    let inner = arena.alloc(KObject::Number(3.0));
-    let type_id: &KType = arena.alloc(KType::UserType {
+    let inner = arena.alloc_object(KObject::Number(3.0));
+    let type_id: &KType = arena.alloc_ktype(KType::UserType {
         kind: UserTypeKind::Newtype {
             repr: Box::new(KType::Number),
         },
@@ -195,8 +195,8 @@ fn wrapped_summarize_renders_surface_form() {
     use crate::machine::model::types::Parseable;
     use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
-    let inner = arena.alloc(KObject::Number(3.0));
-    let type_id = arena.alloc(KType::UserType {
+    let inner = arena.alloc_object(KObject::Number(3.0));
+    let type_id = arena.alloc_ktype(KType::UserType {
         kind: UserTypeKind::Newtype {
             repr: Box::new(KType::Number),
         },
@@ -216,8 +216,8 @@ fn wrapped_summarize_renders_surface_form() {
 fn wrapped_deep_clone_preserves_arena_references() {
     use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
-    let inner = arena.alloc(KObject::Number(3.0));
-    let type_id = arena.alloc(KType::UserType {
+    let inner = arena.alloc_object(KObject::Number(3.0));
+    let type_id = arena.alloc_ktype(KType::UserType {
         kind: UserTypeKind::Newtype {
             repr: Box::new(KType::Number),
         },

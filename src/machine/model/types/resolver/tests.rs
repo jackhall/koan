@@ -19,7 +19,7 @@ fn value_language_leaf_names_layering() {
     scope
         .bind_value(
             "Gee".into(),
-            arena.alloc(KObject::Number(7.0)),
+            arena.alloc_object(KObject::Number(7.0)),
             BindingIndex::BUILTIN,
         )
         .expect("bind_value");

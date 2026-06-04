@@ -17,7 +17,7 @@ use super::{body_no_op, unit_signature};
 fn lookup_value_chain_cutoff_none_admits_every_index() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let value = arena.alloc(KObject::Number(7.0));
+    let value = arena.alloc_object(KObject::Number(7.0));
     scope
         .bind_value("late".to_string(), value, BindingIndex::value(99))
         .unwrap();
@@ -31,7 +31,7 @@ fn lookup_value_chain_cutoff_none_admits_every_index() {
 fn lookup_value_strict_less_than_hides_later_sibling() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let value = arena.alloc(KObject::Number(7.0));
+    let value = arena.alloc_object(KObject::Number(7.0));
     scope
         .bind_value("later".to_string(), value, BindingIndex::value(5))
         .unwrap();
@@ -42,7 +42,7 @@ fn lookup_value_strict_less_than_hides_later_sibling() {
 fn lookup_value_strict_less_than_admits_earlier_sibling() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let value = arena.alloc(KObject::Number(7.0));
+    let value = arena.alloc_object(KObject::Number(7.0));
     scope
         .bind_value("earlier".to_string(), value, BindingIndex::value(2))
         .unwrap();
@@ -56,7 +56,7 @@ fn lookup_value_strict_less_than_admits_earlier_sibling() {
 fn lookup_value_nominal_binder_bypasses_cutoff() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let value = arena.alloc(KObject::Number(7.0));
+    let value = arena.alloc_object(KObject::Number(7.0));
     // Nominal carve-out: STRUCT / named UNION / SIG / FUNCTOR / MODULE binders
     // are admitted regardless of cutoff.
     scope
@@ -122,7 +122,7 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = arena.alloc(KObject::KFunction(f, None));
+    let obj = arena.alloc_object(KObject::KFunction(f, None));
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(99))
         .unwrap();
@@ -163,8 +163,8 @@ fn lookup_function_filters_per_overload_visibility() {
     debug_assert_eq!(key, sig_str.untyped_key(), "untyped keys must collide");
     let f_early = arena.alloc_function(KFunction::new(sig_num, Body::Builtin(body_no_op), scope));
     let f_late = arena.alloc_function(KFunction::new(sig_str, Body::Builtin(body_no_op), scope));
-    let obj_early = arena.alloc(KObject::KFunction(f_early, None));
-    let obj_late = arena.alloc(KObject::KFunction(f_late, None));
+    let obj_early = arena.alloc_object(KObject::KFunction(f_early, None));
+    let obj_late = arena.alloc_object(KObject::KFunction(f_late, None));
     scope
         .register_function(
             "BAR".to_string(),
@@ -216,7 +216,7 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = arena.alloc(KObject::KFunction(f, None));
+    let obj = arena.alloc_object(KObject::KFunction(f, None));
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(2))
         .unwrap();
@@ -240,7 +240,7 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = arena.alloc(KObject::KFunction(f, None));
+    let obj = arena.alloc_object(KObject::KFunction(f, None));
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(9))
         .unwrap();
