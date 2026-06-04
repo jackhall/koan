@@ -20,6 +20,14 @@ The fourth, `SIG_WITH sig (bindings)`, has no value-led equivalent. The
 underscores read against koan's plain-English goal, and the leading keyword is
 redundant wherever a spaced, sigil, or infix form already names the operation.
 
+Spelling these as value-led expressions also costs a parallel dispatch surface.
+A parens-form return type — `-> (MODULE_TYPE_OF Er Type)`, `-> (SIG_WITH …)` — is
+an `Expression` part, so FN and FUNCTOR each register a *second* return-type
+overload whose signature slot is `KType::KExpression` purely to admit it
+([`src/builtins/fn_def.rs`](../../src/builtins/fn_def.rs),
+[`src/builtins/functor_def.rs`](../../src/builtins/functor_def.rs)); the
+`TypeExprRef`-return overload alone admits the `:(…)` and dotted forms.
+
 **Impact.**
 
 - *Type operations read as plain English.* `LIST_OF` / `DICT_OF` /
@@ -31,6 +39,10 @@ redundant wherever a spaced, sigil, or infix form already names the operation.
 - *`SIG_WITH` joins the value-led operators.* It dispatches through the same
   `OperatorChain` substrate as `AS` / `FROM` / `:|` / `:!`, so it reads
   left-to-right from the signature it specializes.
+- *FN and FUNCTOR carry one return-type carrier.* Every computed return type is a
+  `:(…)` / dotted type-language form, so the `KType::KExpression` return-slot
+  overload on each binder has nothing left to admit — return-type dispatch
+  collapses to the single `TypeExprRef` carrier shape.
 
 **Directions.**
 
@@ -48,6 +60,17 @@ redundant wherever a spaced, sigil, or infix form already names the operation.
   `(LIST_OF (MODULE_TYPE_OF M T))`) accepts the `Type`-producing forms, or bridge
   the two, before deleting. Recommended: prove the slot types unify so no
   assembly path regresses.
+- *Delete the FN / FUNCTOR `KExpression`-return overload — open.* Once no value-led
+  type op survives, the parens-form `-> (expr)` return surface is unused; the
+  second overload on each binder folds away, along with the `ExprCarrier` /
+  `ExprToSubDispatch` return-type path
+  ([`src/builtins/fn_def/return_type.rs`](../../src/builtins/fn_def/return_type.rs)).
+  Gated on the deferral half of the reconciliation above: a param-referencing
+  computed return (`-> Er.Type`, `-> Set WITH ((Elt Er.Type))`) must keep
+  deferring per-call. Bare `-> Er` already defers through the `TypeExprRef`
+  carrier (`TypeExprCarrier → Deferred`); confirm the dotted and `WITH` forms
+  carry as deferrable `TypeExpr` carriers, not eager sub-dispatches, before
+  removing the overload.
 - *Declarators, named constructs, and `TEMPLATE` — decided (out of scope).*
   Binding-introduction declarators (`LET` / `FN` / `STRUCT` / `UNION` / `SIG` /
   `MODULE` / `NEWTYPE` / `VAL`) keep their lead keyword — it marks a not-yet-bound

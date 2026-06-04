@@ -584,6 +584,7 @@ One line per surface form. Sources under
 | `LET <name> = <value>`                   | Bind `<name>` to `<value>` in the current scope. Returns the bound value.                       | [let_binding.rs](src/builtins/let_binding.rs)        |
 | `PRINT <msg:Str>`                        | Write `<msg>` and a newline to the scope's output sink. Returns null.                           | [print.rs](src/builtins/print.rs)                    |
 | `FN <sig> -> <Type> = <body>`            | Register a user function. Parameter slots in `<sig>` are typed (`name: Type`); the return type is runtime-enforced. Returns the function. | [fn_def.rs](src/builtins/fn_def.rs)          |
+| `FN :{<schema>} -> <Type> = <body>`      | Anonymous function: a keyword-less record-schema binder. Registers no dispatch keyword — the returned value is the only handle (bind with `LET`, call by record `f {x = 1}`). | [fn_def.rs](src/builtins/fn_def.rs)          |
 | `UNION <Name> = (<schema>)`              | Declare a tagged-union type. Binds `<Name>` in scope.                                            | [union.rs](src/builtins/union.rs)                    |
 | `STRUCT <Name> = (<schema>)`             | Declare a record type with ordered, typed fields. Binds `<Name>` in scope.                       | [struct_def.rs](src/builtins/struct_def.rs)          |
 | `NEWTYPE <Name> = <Repr>`                | Declare a fresh nominal identity over a transparent representation. `Name(value)` constructs.    | [newtype_def.rs](src/builtins/newtype_def.rs)        |

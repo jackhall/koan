@@ -29,6 +29,38 @@ FN (ECHO x :Number) -> Number = (x)
 LET y = (ECHO 21)
 ```
 
+## Anonymous functions
+
+A keyword-less function literal uses a record-schema binder in place of the
+parenthesized signature:
+
+```
+FN :{<field schema>} -> ReturnType = (<body>)
+```
+
+The `:{…}` is the record-type-schema sigil; each `name :Type` field becomes a
+parameter. With no `Keyword` in the signature there is nothing to dispatch on, so
+the function registers no form — its only handle is the value it evaluates to,
+bound by `LET` or passed straight into a function-typed slot. It is invoked
+through the function-value call path with a record argument, never positionally:
+
+```
+LET inc = (FN :{x :Number} -> Number = (x))
+LET n = (inc {x = 41})
+```
+
+Dispatch tells the two forms apart by the signature operand's part kind: a
+parenthesized `(…)` signature is a `KExpression`, while a `:{…}` schema is a
+`SigiledTypeExpr` that sub-dispatches to a resolved
+[`KType::Record`](../src/machine/model/types/ktype.rs) before the binder runs.
+Three `FN` overloads share one bucket ([fn_def.rs](../src/builtins/fn_def.rs)) —
+two keyworded ones split on the return-type carrier, and one whose signature slot
+is a `TypeExprRef` that admits only the resolved record schema. The record's
+fields become keyword-less `Argument`s, and everything downstream —
+`reconstruct_positional`, lexical closure capture, and contravariant function
+subtyping — is shared with the keyworded form, so an anonymous function projects
+the same `KType::KFunction` and fills the same function-typed parameter slots.
+
 ## Body representation
 
 ```rust

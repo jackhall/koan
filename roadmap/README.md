@@ -30,6 +30,13 @@ What's shipped that the open items below build on:
   [user-definable n-ary operators](operator_chaining/n-ary-operators.md) and
   [user-defined operator modules](operator_chaining/user-defined-operator-modules.md).
   See [design/expressions-and-parsing.md § Structural cache and dispatch shape](../design/expressions-and-parsing.md#structural-cache-and-dispatch-shape).
+- *Anonymous functions.* A keyword-less `FN :{<field schema>} -> T = (body)`
+  literal evaluates to a plain function value with no dispatch keyword, bound by
+  `LET` or dropped into a function-typed slot — the record-schema sigil resolves
+  to a `KType::Record` that a third `FN` overload's `TypeExprRef` signature slot
+  admits. It makes the [standard library](libraries/standard-library.md)'s
+  higher-order combinators ergonomic to call with an inline function. See
+  [design/functional-programming.md § Anonymous functions](../design/functional-programming.md#anonymous-functions).
 
 ## Next items
 
@@ -40,8 +47,6 @@ without first landing something else:
   a codebase can span more than one source file and files become modules.
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md) —
   promote each `UNION` variant to its own `KType` so `MATCH` collapses into type-dispatch.
-- [Anonymous functions](anonymous-functions.md) — a keyword-less
-  `FN {…}` literal that evaluates to a plain function value with no dispatch keyword.
 - [Plain-English type-operation surfaces](type_language/type-operation-surfaces.md) —
   retire the `type_ops.rs` underscore keywords into the existing spaced / dotted / infix forms.
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md) — the reduction pre-pass

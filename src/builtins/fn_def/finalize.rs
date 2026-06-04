@@ -6,9 +6,11 @@
 //! decision tree to an [`FnPlan`] with two terminal shapes, so the caller in
 //! `super::fn_def` reduces to a two-arm match.
 //!
-//! The FUNCTOR binder rides the same path with `is_functor: true` threaded
-//! through. The flag flips the `KFunction::is_functor` carrier bit and gates
-//! the FUNCTOR-only return-type admissibility check; no closure plumbing.
+//! The FUNCTOR and anonymous-FN binders ride the same path, selected by the
+//! [`FnKind`] threaded through `finalize_fn_with_kind` / `defer_via_combine`:
+//! `Functor` flips the `KFunction::is_functor` carrier bit and gates the
+//! FUNCTOR-only return-type admissibility check; `Anonymous` (the `FN :{…}`
+//! record-schema binder) skips registration. No closure plumbing.
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -23,6 +25,20 @@ use super::return_type::{
     make_capture, resolve_capture_at_finish, ReturnTypeCapture, ReturnTypeState,
 };
 use super::signature::{parse_fn_param_list, ParamListOutcome};
+
+/// How a finalized FN-def is wired into the scope:
+///
+/// - `Function` — a keyworded FN registers under its lead keyword.
+/// - `Functor` — same registration; additionally flips the `is_functor` carrier
+///   bit and gates the FUNCTOR return-type admissibility check.
+/// - `Anonymous` — a record-schema binder (`FN :{…}`) has no keyword, so it
+///   registers nothing; the value it evaluates to is its only handle.
+#[derive(Clone, Copy)]
+pub(crate) enum FnKind {
+    Function,
+    Functor,
+    Anonymous,
+}
 
 /// Local mirror of [`ParamListOutcome`] minus the structural-error variant
 /// (short-circuited before [`classify`] runs) and with `Pending`'s payload
@@ -58,6 +74,12 @@ pub(crate) struct CombineInputs<'a> {
     /// `(slot_idx, sub_expr)` — `slot_idx` tells the finish closure which
     /// `signature_expr.parts` slot to splice the result into.
     pub sub_dispatches: Vec<(usize, KExpression<'a>)>,
+    /// `Some` for the anonymous (`FN :{…}`) path: the parameter list is already
+    /// built from the resolved record schema, so the finish closure uses it
+    /// verbatim instead of re-parsing `signature_expr` (which the anonymous path
+    /// has no keyword/arg form of). `None` for the keyworded FN / FUNCTOR paths,
+    /// which re-elaborate the spliced signature.
+    pub prebuilt_elements: Option<Vec<SignatureElement<'a>>>,
 }
 
 /// Decide between the synchronous build path and the Combine-deferred path.
@@ -82,6 +104,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
                 park_producers: Vec::new(),
                 return_type_sub: Some(e),
                 sub_dispatches: Vec::new(),
+                prebuilt_elements: None,
             })
         }
         (
@@ -95,6 +118,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
             park_producers,
             return_type_sub: None,
             sub_dispatches,
+            prebuilt_elements: None,
         }),
         (
             ReturnTypeState::Deferred(d),
@@ -109,6 +133,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
             park_producers,
             return_type_sub: None,
             sub_dispatches,
+            prebuilt_elements: None,
         }),
         (
             ReturnTypeState::ExprToSubDispatch(e),
@@ -125,6 +150,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
                 park_producers,
                 return_type_sub: Some(e),
                 sub_dispatches,
+                prebuilt_elements: None,
             })
         }
         (ReturnTypeState::Pending { te, producers }, ParamListResult::Done(_)) => {
@@ -135,6 +161,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
                 park_producers: producers,
                 return_type_sub: None,
                 sub_dispatches: Vec::new(),
+                prebuilt_elements: None,
             })
         }
         (
@@ -153,6 +180,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
                 park_producers,
                 return_type_sub: None,
                 sub_dispatches,
+                prebuilt_elements: None,
             })
         }
     }
@@ -167,25 +195,35 @@ pub(crate) fn finalize_fn<'a>(
     body_expr: KExpression<'a>,
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {
-    finalize_fn_with_flag(scope, elements, return_type, body_expr, false, bind_index)
+    finalize_fn_with_kind(
+        scope,
+        elements,
+        return_type,
+        body_expr,
+        FnKind::Function,
+        bind_index,
+    )
 }
 
-/// Variant used by both `finalize_fn` (FN: `is_functor=false`) and the FUNCTOR
-/// builtin (`is_functor=true`).
+/// Variant used by the keyworded FN (`FnKind::Function`), the FUNCTOR builtin
+/// (`FnKind::Functor`), and the anonymous record-schema binder
+/// (`FnKind::Anonymous`).
 ///
-/// When `is_functor` is true and `return_type` is `Resolved`, the carrier is
-/// validated against [`KType::is_admissible_functor_return`] before the
-/// `KFunction` is registered. `Deferred` carriers ride the surface-form check
-/// at the FUNCTOR-binder site; the per-call dispatch boundary's `matches_value`
-/// path catches any deferred carrier that resolves non-admissibly later.
-pub(crate) fn finalize_fn_with_flag<'a>(
+/// `Functor` additionally validates a `Resolved` return type against
+/// [`KType::is_admissible_functor_return`] before the `KFunction` is registered;
+/// `Deferred` carriers ride the surface-form check at the FUNCTOR-binder site,
+/// and the per-call dispatch boundary's `matches_value` path catches any
+/// deferred carrier that resolves non-admissibly later. `Anonymous` skips
+/// registration entirely — the value it returns is the function's only handle.
+pub(crate) fn finalize_fn_with_kind<'a>(
     scope: &'a Scope<'a>,
     elements: Vec<SignatureElement<'a>>,
     return_type: ReturnType<'a>,
     body_expr: KExpression<'a>,
-    is_functor: bool,
+    kind: FnKind,
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {
+    let is_functor = matches!(kind, FnKind::Functor);
     // FUNCTOR-only post-resolution return-type validation: fires here when the
     // return slot resolved at Combine-finish time rather than synchronously.
     if is_functor {
@@ -202,20 +240,12 @@ pub(crate) fn finalize_fn_with_flag<'a>(
     // First Keyword keys the data table. Dispatch is by full signature via
     // `Bindings::functions`; `Bindings::data` is for discoverability /
     // shadow-by-name, neither of which has a single right answer for a
-    // multi-token signature like `(a ADD b)`.
+    // multi-token signature like `(a ADD b)`. An anonymous FN has no keyword,
+    // so `name` is `None` and registration is skipped below.
     let name = elements.iter().find_map(|e| match e {
         SignatureElement::Keyword(s) => Some(s.clone()),
         _ => None,
     });
-    let name = match name {
-        Some(n) => n,
-        None => {
-            return BodyResult::Err(KError::new(KErrorKind::ShapeError(
-                "FN signature must contain at least one Keyword (a fixed token to dispatch on)"
-                    .to_string(),
-            )));
-        }
-    };
 
     let user_sig = ExpressionSignature {
         return_type,
@@ -238,8 +268,22 @@ pub(crate) fn finalize_fn_with_flag<'a>(
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame.
     let obj: &'a KObject<'a> = arena.alloc(KObject::KFunction(f, None));
-    if let Err(e) = scope.register_function(name, f, obj, bind_index) {
-        return BodyResult::Err(e);
+    // An anonymous FN registers nothing — its only handle is the returned value
+    // (LET-bound or dropped into a function-typed slot). A keyworded FN / FUNCTOR
+    // registers under its lead keyword.
+    if !matches!(kind, FnKind::Anonymous) {
+        let name = match name {
+            Some(n) => n,
+            None => {
+                return BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                    "FN signature must contain at least one Keyword (a fixed token to dispatch on)"
+                        .to_string(),
+                )));
+            }
+        };
+        if let Err(e) = scope.register_function(name, f, obj, bind_index) {
+            return BodyResult::Err(e);
+        }
     }
     // Return the function reference so `LET f = (FN ...)` captures a callable
     // handle for the identifier-bound dispatch fallback.
@@ -261,7 +305,7 @@ pub(crate) fn defer_via_combine<'a>(
     signature_expr: KExpression<'a>,
     inputs: CombineInputs<'a>,
     body_expr: KExpression<'a>,
-    is_functor: bool,
+    kind: FnKind,
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {
     let CombineInputs {
@@ -269,6 +313,7 @@ pub(crate) fn defer_via_combine<'a>(
         park_producers,
         return_type_sub,
         sub_dispatches,
+        prebuilt_elements,
     } = inputs;
     // Result layout: `[park_producers ++ return_type_sub? ++ sub_dispatches...]`.
     // Park producers are read-only (no cascade-free); the rest are owned subs.
@@ -306,32 +351,39 @@ pub(crate) fn defer_via_combine<'a>(
         }
         let spliced_signature = KExpression::new(spliced_parts);
 
-        // Park producers have finalized — re-elaborate against the stable scope.
-        // The elaborator's `Park` arm cannot fire again (every parked producer
-        // is terminal by Combine-finish invariant); [`resolve_capture_at_finish`]
-        // surfaces it as a structured error if it does.
-        let mut elaborator = Elaborator::new(scope);
+        // Park producers have finalized — resolve against the stable scope.
+        // [`resolve_capture_at_finish`] surfaces a re-park as a structured error
+        // (every parked producer is terminal by the Combine-finish invariant).
         let return_type: ReturnType<'a> = match resolve_capture_at_finish(capture, scope, results) {
             Ok(rt) => rt,
             Err(e) => return BodyResult::Err(e),
         };
-        let elements = match parse_fn_param_list(&spliced_signature, &mut elaborator) {
-            ParamListOutcome::Done(es) => es,
-            ParamListOutcome::Err(msg) => {
-                return BodyResult::Err(KError::new(KErrorKind::ShapeError(msg)));
-            }
-            ParamListOutcome::Pending { .. } => {
-                return BodyResult::Err(KError::new(KErrorKind::ShapeError(
-                    "FN signature elaboration still pending after Combine wake".to_string(),
-                )));
+        // The anonymous (`FN :{…}`) path supplies its parameter list pre-built
+        // from the resolved record schema; the keyworded FN / FUNCTOR path
+        // re-elaborates the spliced signature.
+        let elements = match prebuilt_elements {
+            Some(es) => es,
+            None => {
+                let mut elaborator = Elaborator::new(scope);
+                match parse_fn_param_list(&spliced_signature, &mut elaborator) {
+                    ParamListOutcome::Done(es) => es,
+                    ParamListOutcome::Err(msg) => {
+                        return BodyResult::Err(KError::new(KErrorKind::ShapeError(msg)));
+                    }
+                    ParamListOutcome::Pending { .. } => {
+                        return BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                            "FN signature elaboration still pending after Combine wake".to_string(),
+                        )));
+                    }
+                }
             }
         };
-        finalize_fn_with_flag(
+        finalize_fn_with_kind(
             scope,
             elements,
             return_type,
             body_expr.clone(),
-            is_functor,
+            kind,
             bind_index,
         )
     });

@@ -13,8 +13,8 @@
 //! Validation is fused into [`classify_return_type`]: passing
 //! `Some(&param_type_map)` emits a `Rejected`/`Admissible`/`DeferredToCombine`
 //! verdict alongside classification so the carrier is walked once. The deferred
-//! arm rides Combine-finish gated by the same `is_functor: true` flag — no
-//! separate predicate closure threaded through `defer_via_combine`.
+//! arm rides Combine-finish gated by the same `FnKind::Functor` — no separate
+//! predicate closure threaded through `defer_via_combine`.
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -25,7 +25,7 @@ use crate::machine::{
 };
 
 use super::fn_def::finalize::{
-    classify, defer_via_combine, finalize_fn_with_flag, FnPlan, ParamListResult,
+    classify, defer_via_combine, finalize_fn_with_kind, FnKind, FnPlan, ParamListResult,
 };
 use super::fn_def::return_type::{
     classify_return_type, extract_return_type_raw, AdmissibleVerdict,
@@ -104,9 +104,16 @@ pub fn body<'a>(
         FnPlan::Synchronous {
             elements,
             return_type,
-        } => finalize_fn_with_flag(scope, elements, return_type, body_expr, true, bind_index),
+        } => finalize_fn_with_kind(
+            scope,
+            elements,
+            return_type,
+            body_expr,
+            FnKind::Functor,
+            bind_index,
+        ),
         FnPlan::Combine(inputs) => {
-            // `is_functor: true` gates the resolved-return admissibility check
+            // `FnKind::Functor` gates the resolved-return admissibility check
             // at Combine-finish — no separate predicate closure threaded here.
             defer_via_combine(
                 scope,
@@ -114,7 +121,7 @@ pub fn body<'a>(
                 signature_expr,
                 inputs,
                 body_expr,
-                true,
+                FnKind::Functor,
                 bind_index,
             )
         }

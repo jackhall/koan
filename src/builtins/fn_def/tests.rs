@@ -1,5 +1,6 @@
 //! Tests for the `FN` builtin, split by theme:
 //!
+//! - [`anonymous`] — keyword-less `FN :{…}` record-schema binder.
 //! - [`basic`] — registration, dispatch routing, param binding, infix shapes.
 //! - [`arena`] — run-root and scheduler-slot reclamation invariants.
 //! - [`body_block`] — multi-statement body split, sibling visibility, TCO on last.
@@ -9,6 +10,7 @@
 //! - [`container_types`] — `List<T>`, `Dict<K,V>`, `Function<…>`, specificity.
 //! - [`functor`] — FN as a functor over module-typed parameters.
 
+mod anonymous;
 mod arena;
 mod basic;
 mod body_block;
