@@ -38,7 +38,7 @@ Per-module breakdown plus a single bottom-line **score** — the total structura
 
 Each row prints `cross N   fb N   fan N   nest N.N` and `index N.N` (the rolled-up structural cost). `fan` is the provider-side facade signal: for each dst_group at this partition, count distinct dst_modules referenced from outside, subtract one (a single entry — the facade ideal — pays nothing). Tune size with `--gamma` / `--size-pivot`; tune coupling/nesting with `--alpha` / `--beta` / `--beta-children-pivot` / `--lambda-facade`.
 
-For tracked baselines (used by the `verify` skill), pass `--baseline <file>` — modgraph prunes unreachable-SHA entries (branch checkout / hard reset / rebase drop), prepends today's measurement, trims to 5, and prints a delta line. Dirty-snapshot `+` entries are retained so a pre-commit hook (which always sees a staged-but-not-yet-committed tree) doesn't erase the trend log. For ad-hoc what-if scoring (refactor exploration via `modgraph_rewrite.py`), leave the flag off so the baseline file isn't touched.
+For tracked baselines (used by the `verify-koan` skill), pass `--baseline <file>` — modgraph prunes unreachable-SHA entries (branch checkout / hard reset / rebase drop), prepends today's measurement, trims to 5, and prints a delta line. Dirty-snapshot `+` entries are retained so a pre-commit hook (which always sees a staged-but-not-yet-committed tree) doesn't erase the trend log. For ad-hoc what-if scoring (refactor exploration via `modgraph_rewrite.py`), leave the flag off so the baseline file isn't touched.
 
 ### 3. Score a *refactor* (module renames)
 

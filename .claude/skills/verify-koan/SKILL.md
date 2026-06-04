@@ -1,9 +1,9 @@
 ---
-name: verify
+name: verify-koan
 description: Use this skill to run the standard koan build-verification slate. Invoke before pushing, before opening a PR, or whenever the user says "verify the build", "run checks", or "is this green?". Does *not* run the Miri audit slate — that has its own dedicated skill.
 ---
 
-# verify
+# verify-koan
 
 ```sh
 tools/verify.sh
