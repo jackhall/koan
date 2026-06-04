@@ -2,7 +2,6 @@
 //! a `Body` (builtin `fn` pointer or captured user-defined `KExpression`), and the
 //! lexical scope captured at definition time.
 
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::machine::core::source::Spanned;
@@ -30,13 +29,12 @@ pub use scheduler_handle::{CatchFinish, CombineFinish, NodeId, SchedulerHandle};
 pub struct KFunction<'a> {
     pub signature: ExpressionSignature<'a>,
     pub body: Body<'a>,
-    /// **Variance-load-bearing.** `captured` is a non-generic [`ScopePtr`] carrying no
-    /// `'a`, so the paired `PhantomData<&'a Scope<'a>>` is what keeps `KFunction<'a>`
-    /// invariant in `'a` (`Scope<'a>` is invariant — it contains `RefCell`s). Do **not**
-    /// simplify `_p` to `PhantomData<&'a ()>` — that would make `KFunction` covariant in
-    /// `'a` and silently reintroduce a soundness bug.
-    captured: ScopePtr,
-    _p: PhantomData<&'a Scope<'a>>,
+    /// **Variance-load-bearing.** The branded [`ScopePtr<'a>`] carries `'a` structurally
+    /// (`Scope<'a>` is invariant — it contains `RefCell`s), so `captured` is what keeps
+    /// `KFunction<'a>` invariant in `'a`. Do **not** simplify by dropping the brand to a
+    /// covariant carrier — that would make `KFunction` covariant in `'a` and silently
+    /// reintroduce a soundness bug.
+    captured: ScopePtr<'a>,
     /// `Some(_)` for binder builtins (LET, FN, STRUCT, UNION, SIG, MODULE).
     pub binder_name: Option<BinderNameFn>,
     /// `Some(_)` for binder builtins whose body registers a callable function (`FN`,
@@ -90,7 +88,6 @@ impl<'a> KFunction<'a> {
             signature,
             body,
             captured: ScopePtr::erase(captured),
-            _p: PhantomData,
             binder_name,
             binder_bucket,
             is_functor,
@@ -98,12 +95,12 @@ impl<'a> KFunction<'a> {
         }
     }
 
-    /// SAFETY: `captured` was erased from a `&'a Scope<'a>` in
-    /// [`Self::with_binder_and_functor`], and points at a scope that outlives this
-    /// `KFunction<'a>` by the broader runtime-arena argument; the re-attach goes through
-    /// [`ScopePtr::reattach`].
+    /// Re-attach `'a` to the captured scope. The branded `captured` makes this a safe
+    /// re-attach: it was erased from a `&'a Scope<'a>` in [`Self::with_binder_and_functor`],
+    /// and points at a scope that outlives this `KFunction<'a>` by the broader runtime-arena
+    /// argument.
     pub fn captured_scope(&self) -> &'a Scope<'a> {
-        unsafe { self.captured.reattach() }
+        self.captured.reattach()
     }
 
     pub fn summarize(&self) -> String {

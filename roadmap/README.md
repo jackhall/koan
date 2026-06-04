@@ -44,8 +44,11 @@ What's shipped that the open items below build on:
   The store-side erasure now lives behind one sealed `ArenaStored` trait: all six
   arena-stored families route a single audited union-move `erase_store` and one gated
   `alloc` engine, replacing the six per-type `T<'a> → T<'static>` transmute pairs with
-  one. The remaining hardening is open work under
-  [type-enforced scope re-attach](refactor/type-enforced-scope-reattach.md).
+  one. The branded `ScopePtr<'a>` makes `Module::child_scope`, `Signature::decl_scope`,
+  and `KFunction::captured_scope` safe re-attaches, concentrating the irreducible
+  `'static → 'a` fabrication at the non-generic `CallArena` boundary. The remaining
+  hardening — extending that brand to the `anchored_parts` frame re-anchor — is open
+  work under [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md).
   See [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
 
 ## Next items
@@ -144,7 +147,6 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Type-enforced scope re-attach](refactor/type-enforced-scope-reattach.md)
 - [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md) —
   extends the re-attach brand to `anchored_parts` so the dispatch/scheduler integration
   tests in the Miri slate retire into compile-time guarantees.

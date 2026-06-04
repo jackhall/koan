@@ -100,9 +100,17 @@ share, so there is one store-side erasure to reason about. It is sound because:
 
 The scope-pointer case — `CallArena`, `Module`, `Signature`, and `KFunction`
 each holding a pointer to a captured or defining `Scope` — is centralized in
-[`ScopePtr`](../src/machine/core/scope_ptr.rs): one `erase` cast in, one
-`unsafe fn reattach` out, so the re-attach soundness argument lives in a single
-audited place rather than restated at each carrier.
+the branded [`ScopePtr<'a>`](../src/machine/core/scope_ptr.rs). `erase(&'a Scope<'a>)`
+records the input's `'a` in the brand, so the three carriers that own a real `'a` —
+`Module::child_scope`, `Signature::decl_scope`, `KFunction::captured_scope` — re-attach
+through a **safe** `reattach(&self) -> &'a Scope<'a>`, the brand carrying both the
+lifetime bound and (because `Scope<'a>` is invariant) the carrier's invariance in `'a`
+structurally. `CallArena` is non-generic — it backs `Rc<CallArena>` and carries no
+lifetime — so it stores a `ScopePtr<'static>` and is the single `unsafe` re-attach
+boundary: its `scope` / `scope_for_bind` accessors fabricate an `&self`-bounded lifetime
+through `reattach_unbounded`, the one transmute the brand cannot supply by safe coercion.
+The single irreducible `'static → 'a` cast lives in `scope_ptr.rs`; the carriers no
+longer restate it.
 
 All six families implement the sealed `ArenaStored` trait and route the one gated
 [`alloc`](../src/machine/core/arena.rs) engine. `anchors_to` is a required trait
@@ -114,7 +122,7 @@ construction: a self-anchoring value redirects to the escape arena no matter whi
 wrapper stored it.
 
 A [`CallArena`](../src/machine/core/arena.rs) bundles a `RuntimeArena`, an
-`Option<ScopePtr>` into it (the child scope; `None` only transiently during
+`Option<ScopePtr<'static>>` into it (the child scope; `None` only transiently during
 construction and tail-reset), and an `Option<Rc<CallArena>>` for the
 parent-frame chain. Two invariants make the ownership unit coherent:
 

@@ -2,9 +2,8 @@
 
 <!-- slate-fingerprint
 src/machine/core/arena.rs: 15
-src/machine/core/kfunction.rs: 1
-src/machine/core/scope_ptr.rs: 2
-src/machine/model/values/module.rs: 3
+src/machine/core/scope_ptr.rs: 3
+src/machine/model/values/module.rs: 1
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -28,6 +27,10 @@ unsafe and fingerprint-drift checks still fire.
 - `src/machine/core/scope.rs` — `Scope::add` re-entry pins the queue-and-drain
   discipline that keeps `Scope`'s `RefCell<…>` invariant intact when a binding
   is added while a `data` borrow is live.
+- `src/machine/core/kfunction.rs` — `KFunction::captured_scope` re-attaches the
+  captured scope through the branded `ScopePtr::reattach`, a safe call; the one
+  transmute it routes lives in `scope_ptr.rs`, so kfunction.rs carries no `unsafe`
+  of its own. The group pins that safe accessor under the closure-escape shape.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -41,10 +44,11 @@ re-annotation on the `NULL_HOLDER` / `TRUE_HOLDER` / `FALSE_HOLDER` shared singl
 - `singleton_ref_independent_of_arena_lifetime`
 
 **`CallArena` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
-child-scope `Option<ScopePtr>` (re-attached via `ScopePtr::reattach`) plus the `Rc<CallArena>`
-chain that keeps per-call arenas pinned across re-borrow. One test pins the re-attach
-surviving a sibling alloc; the other pins the `Rc<CallArena>` chain keeping an outer arena
-alive after its local handle drops.
+child-scope `Option<ScopePtr<'static>>` (shortened to an `&self`-bounded lifetime via the
+`unsafe` `ScopePtr::reattach_unbounded`) plus the `Rc<CallArena>` chain that keeps per-call
+arenas pinned across re-borrow. One test pins the re-attach surviving a sibling alloc; the
+other pins the `Rc<CallArena>` chain keeping an outer arena alive after its local handle
+drops.
 
 - `call_arena_scope_survives_subsequent_alloc`
 - `call_arena_chained_outer_frame_walkable`
@@ -70,10 +74,10 @@ drop-and-alloc by refusing when any other `Rc` to the frame still exists.
 - `call_arena_try_reset_for_tail_refuses_when_aliased`
 
 **`KFunction` captured-scope re-borrow** ([src/machine/core/kfunction.rs](../src/machine/core/kfunction.rs)) — every
-closure invocation reads `KFunction::captured_scope`, which is `ScopePtr::reattach`
-on the captured definition-scope pointer. The escaped-closure test pins that
-the pointee outlives the `KFunction` even when the closure is invoked after its
-defining frame has returned.
+closure invocation reads `KFunction::captured_scope`, a safe call that routes the
+branded `ScopePtr::reattach` on the captured definition-scope pointer (the one transmute
+lives in `scope_ptr.rs`). The escaped-closure test pins that the pointee outlives the
+`KFunction` even when the closure is invoked after its defining frame has returned.
 
 - `closure_escapes_outer_call_and_remains_invocable`
 
@@ -130,12 +134,15 @@ dispatch through a functor-call's per-call scope, and `MODULE_TYPE_OF` lift-out.
 - `type_op_dispatch_does_not_dangle`
 
 **`ScopePtr` re-attach** ([src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs)) — the single
-`transmute::<&Scope<'static>, &'a Scope<'a>>` (and the `erase` cast) that every carrier scope
-accessor routes through: `CallArena::scope` / `scope_for_bind`, `Module::child_scope`,
-`Signature::decl_scope`, `KFunction::captured_scope`. This test pins the re-attach
-directly through the `Module` carrier; the `CallArena` and `KFunction` groups exercise
-the same `reattach` through their own accessors. `Signature::decl_scope` calls the
-identical `reattach` (its line-for-line equivalent runs under plain `cargo test`).
+`transmute::<&Scope<'static>, &'b Scope<'b>>` (and the `erase` cast) that every carrier scope
+accessor routes through. The three carriers that own a real `'a` — `Module::child_scope`,
+`Signature::decl_scope`, `KFunction::captured_scope` — route the safe `reattach` (the brand
+makes the call sound); `CallArena::scope` / `scope_for_bind`, storing a `ScopePtr<'static>`,
+route the `unsafe` `reattach_unbounded` to shorten the brand to an `&self`-bounded lifetime.
+Both paths share the one transmute. This test pins it directly through the `Module` carrier;
+the `CallArena` and `KFunction` groups exercise the same transmute through their own
+accessors. `Signature::decl_scope` calls the identical `reattach` (its line-for-line
+equivalent runs under plain `cargo test`).
 
 - `module_child_scope_transmute_does_not_dangle`
 

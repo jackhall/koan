@@ -10,8 +10,9 @@
 //! Lifetime erasure on the scope pointer routes through
 //! [`ScopePtr`](crate::machine::core::scope_ptr::ScopePtr), shared with
 //! [`KFunction`](crate::machine::core::kfunction::KFunction) and
-//! [`CallArena`](crate::machine::core::arena::CallArena); the re-attach SAFETY argument
-//! lives on `ScopePtr::reattach`.
+//! [`CallArena`](crate::machine::core::arena::CallArena). The branded `ScopePtr<'a>` makes
+//! `child_scope` / `decl_scope` safe re-attaches; the irreducible `unsafe` re-attach lives at
+//! `CallArena`.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -28,7 +29,7 @@ use super::super::types::KType;
 /// not by a shared `UserType` `kind` tag).
 pub struct Module<'a> {
     pub path: String,
-    child_scope_ptr: ScopePtr,
+    child_scope_ptr: ScopePtr<'a>,
     /// `RefCell` because opaque-ascription installs entries after the surrounding `KObject`
     /// is alloc'd. `Module` is arena-pinned and never moved, so a `&'a Module<'a>` borrow
     /// stays valid alongside interior mutation.
@@ -44,7 +45,6 @@ pub struct Module<'a> {
     /// against this set. `RefCell` for the same reason as `type_members` — ascription
     /// writes after the surrounding `KObject::KModule` is already alloc'd.
     pub compatible_sigs: RefCell<Vec<ScopeId>>,
-    _marker: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> Module<'a> {
@@ -55,7 +55,6 @@ impl<'a> Module<'a> {
             type_members: RefCell::new(HashMap::new()),
             slot_type_tags: RefCell::new(HashMap::new()),
             compatible_sigs: RefCell::new(Vec::new()),
-            _marker: std::marker::PhantomData,
         }
     }
 
@@ -68,11 +67,11 @@ impl<'a> Module<'a> {
         }
     }
 
-    /// Re-attach `'a` to the stored scope. SAFETY: the underlying scope is arena-allocated
-    /// and the arena outlives every `&Module<'a>` by construction; the re-attach itself
-    /// goes through [`ScopePtr::reattach`].
+    /// Re-attach `'a` to the stored scope. The branded `child_scope_ptr` makes this a safe
+    /// re-attach: it consumed a real `&'a Scope<'a>` at construction, and the arena outlives
+    /// every `&Module<'a>` by construction.
     pub fn child_scope(&self) -> &'a Scope<'a> {
-        unsafe { self.child_scope_ptr.reattach() }
+        self.child_scope_ptr.reattach()
     }
 
     /// Stable identity used to seed `KType::UserType { kind: Module, scope_id, .. }`.
@@ -89,11 +88,10 @@ impl<'a> Module<'a> {
 /// ascription time.
 pub struct Signature<'a> {
     pub path: String,
-    decl_scope_ptr: ScopePtr,
-    /// `Scope<'a>` is invariant in `'a`; the `decl_scope_ptr` is a non-generic [`ScopePtr`]
-    /// that carries no `'a`, so this marker is what pins `Signature<'a>` invariant in `'a`.
-    /// Do **not** weaken to `PhantomData<&'a ()>` (covariant).
-    _marker: std::marker::PhantomData<&'a Scope<'a>>,
+    /// Branded [`ScopePtr<'a>`]: `Scope<'a>` is invariant in `'a`, and the brand's
+    /// `PhantomData<&'a Scope<'a>>` carries that invariance structurally, so it is what pins
+    /// `Signature<'a>` invariant in `'a` — no separate marker field is needed.
+    decl_scope_ptr: ScopePtr<'a>,
 }
 
 impl<'a> Signature<'a> {
@@ -101,15 +99,14 @@ impl<'a> Signature<'a> {
         Self {
             path,
             decl_scope_ptr: ScopePtr::erase(decl_scope),
-            _marker: std::marker::PhantomData,
         }
     }
 
-    /// Re-attach `'a` to the stored scope. SAFETY: the decl scope is arena-allocated and
-    /// outlives every `&Signature<'a>` by construction; the re-attach goes through
-    /// [`ScopePtr::reattach`].
+    /// Re-attach `'a` to the stored scope. The branded `decl_scope_ptr` makes this a safe
+    /// re-attach: the decl scope is arena-allocated and outlives every `&Signature<'a>` by
+    /// construction.
     pub fn decl_scope(&self) -> &'a Scope<'a> {
-        unsafe { self.decl_scope_ptr.reattach() }
+        self.decl_scope_ptr.reattach()
     }
 
     /// Stable identity for `KType::Signature { sig, .. }` (its dispatch identity is

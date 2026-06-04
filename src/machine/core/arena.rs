@@ -408,7 +408,7 @@ pub fn false_singleton<'a>() -> &'a KObject<'a> {
 /// for the heap-pinning / drop-order invariants.
 pub struct CallArena {
     arena: RuntimeArena,
-    scope_ptr: Option<ScopePtr>,
+    scope_ptr: Option<ScopePtr<'static>>,
     outer_frame: Option<Rc<CallArena>>,
 }
 
@@ -435,7 +435,10 @@ impl CallArena {
         let mut child = Scope::child_under(outer_static);
         // `child_under` defaults `arena` to `outer.arena`; override to the per-call arena.
         child.arena = arena_ref;
-        let allocated: &Scope<'_> = arena_ref.alloc_scope(child);
+        // `arena_ref` is `&'static` (the `unsafe { &*arena_ptr }` above is where the `'static`
+        // claim originates), so `alloc_scope` returns `&'static Scope<'static>` and the safe
+        // `erase` yields a `ScopePtr<'static>` — no fabrication here.
+        let allocated: &'static Scope<'static> = arena_ref.alloc_scope(child);
         Rc::get_mut(&mut rc)
             .expect("freshly-constructed Rc has unique ownership")
             .scope_ptr = Some(ScopePtr::erase(allocated));
@@ -443,9 +446,14 @@ impl CallArena {
     }
 
     pub fn scope<'a>(&'a self) -> &'a Scope<'a> {
-        // SAFETY: `scope_ptr` is `Some` after construction and stable for the `Rc`'s
-        // lifetime (heap-pinned); the returned `'a` is bounded by `&self`.
-        unsafe { self.scope_ptr_set().reattach() }
+        // SAFETY: `scope_ptr` stores a `ScopePtr<'static>`; the free-`'a` fabrication is
+        // concentrated here at the non-generic `CallArena` boundary. `scope_ptr` is `Some`
+        // after construction and stable for the `Rc`'s lifetime (heap-pinned), and the
+        // returned `'a` is bounded by `&self`, so the fabricated lifetime cannot outlive the
+        // pointee. `'a` is driven by the return-type annotation — `reattach_unbounded`'s
+        // lifetime is late-bound, so it cannot be a turbofish argument.
+        let scope: &'a Scope<'a> = unsafe { self.scope_ptr_set().reattach_unbounded() };
+        scope
     }
 
     /// Scope handle bounded by `&'p Rc<Self>` — strictly shorter than the `&'a Scope<'a>`
@@ -453,16 +461,20 @@ impl CallArena {
     /// [`Scope::bind_value`]) that does not need to escape the `Rc`'s borrow, so the caller
     /// avoids an `unsafe` `'a`-anchoring transmute on the receiving end.
     ///
-    /// SAFETY: `scope_ptr` is stable for the `Rc`'s lifetime (heap-pinned by `Rc`); the
-    /// returned `'p` is bounded by the receiver so the borrow cannot outlive it.
+    /// SAFETY: `scope_ptr` stores a `ScopePtr<'static>`; the free-`'p` fabrication is
+    /// concentrated here at the non-generic `CallArena` boundary. The pointer is stable for
+    /// the `Rc`'s lifetime (heap-pinned by `Rc`), and the returned `'p` is bounded by the
+    /// receiver so the borrow cannot outlive it. `'p` is driven by the return-type annotation
+    /// — `reattach_unbounded`'s lifetime is late-bound, so it cannot be a turbofish argument.
     pub fn scope_for_bind<'p>(self: &'p Rc<Self>) -> &'p Scope<'p> {
-        unsafe { self.scope_ptr_set().reattach() }
+        let scope: &'p Scope<'p> = unsafe { self.scope_ptr_set().reattach_unbounded() };
+        scope
     }
 
-    /// The child scope's `ScopePtr`, which is `Some` for the whole life of a constructed
-    /// frame (`None` only transiently inside `new` / `try_reset_for_tail` before the child
-    /// scope is allocated).
-    fn scope_ptr_set(&self) -> &ScopePtr {
+    /// The child scope's `ScopePtr<'static>`, which is `Some` for the whole life of a
+    /// constructed frame (`None` only transiently inside `new` / `try_reset_for_tail` before
+    /// the child scope is allocated).
+    fn scope_ptr_set(&self) -> &ScopePtr<'static> {
         self.scope_ptr
             .as_ref()
             .expect("scope_ptr is set after construction")
@@ -515,7 +527,10 @@ impl CallArena {
         let arena_ref: &'static RuntimeArena = unsafe { &*arena_ptr };
         let mut child = Scope::child_under(outer_static);
         child.arena = arena_ref;
-        let allocated: &Scope<'_> = arena_ref.alloc_scope(child);
+        // `arena_ref` is `&'static` (the `unsafe { &*arena_ptr }` above is where the `'static`
+        // claim originates), so `alloc_scope` returns `&'static Scope<'static>` and the safe
+        // `erase` yields a `ScopePtr<'static>` — no fabrication here.
+        let allocated: &'static Scope<'static> = arena_ref.alloc_scope(child);
         this.scope_ptr = Some(ScopePtr::erase(allocated));
         true
     }
