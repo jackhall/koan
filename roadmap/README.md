@@ -37,6 +37,15 @@ What's shipped that the open items below build on:
   admits. It makes the [standard library](libraries/standard-library.md)'s
   higher-order combinators ergonomic to call with an inline function. See
   [design/functional-programming.md § Anonymous functions](../design/functional-programming.md#anonymous-functions).
+- *Arena unsafe consolidation.* The scattered per-call frame re-anchor is funnelled
+  behind one [`CallArena::anchored_parts`](../src/machine/core/arena.rs), and every
+  captured/defining-scope re-attach behind one
+  [`ScopePtr`](../src/machine/core/scope_ptr.rs); `RuntimeArena::escape` is `NonNull`
+  and `CycleGated` is sealed, dropping the production `unsafe` surface from 33 sites to
+  30. The remaining hardening is open work under
+  [type-enforced scope re-attach](refactor/type-enforced-scope-reattach.md) and
+  [consolidate the arena store-side erasure](refactor/arena-store-erasure-consolidation.md).
+  See [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
 
 ## Next items
 
@@ -57,8 +66,6 @@ without first landing something else:
   a top-level failure returns to the prompt and runs the next expression instead of ending the session.
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md) —
   reconcile names with behavior across `src/**` (best sequenced after the in-flight type-language items).
-- [Consolidate unsafe sites and prune the Miri slate](refactor/unsafe-consolidation.md) —
-  funnel the scattered `unsafe` behind the arena boundary and drop slate tests that guard no distinct surface.
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md) —
   make builtins reachable at every scope so the hottest lookups stop walking the chain to root.
 
@@ -136,5 +143,6 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Consolidate unsafe sites and prune the Miri slate](refactor/unsafe-consolidation.md)
+- [Type-enforced scope re-attach](refactor/type-enforced-scope-reattach.md)
+- [Consolidate the arena store-side erasure](refactor/arena-store-erasure-consolidation.md)
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
