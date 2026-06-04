@@ -58,6 +58,32 @@ are the one thing nested strictly inside it, and the only thing that needs a sho
   sound — not a coercion of a live reference — so invariance never enters and both accessor
   arms share one frame lifetime. This clears the invariance wall on its own; the run-`'a` weld
   on dispatch and output (the Mechanism bullet) stays the separate, larger half.
+- *Phasing — decided.* The split lands incrementally, not big-bang, because `'s` is
+  *step-local*: the yoke erases the frame scope into its cart, so stored types (`Node<'a>`,
+  `Scheduler<'a>`, the dep graph) never carry `'s` — it materializes only transiently at each
+  `.get()` inside a running step, confining the blast radius to the per-step call chain rather
+  than the whole crate. **Movement 1 (widen):** thread a `'s` parameter (`where 'a: 's`) through
+  the chain `execute → run_dispatch → DispatchCtx → BuiltinFn → BodyResult` while keeping `'s`
+  instantiable as `'a` at every seam — a no-op generalization landed one layer at a time, each
+  step green and Miri-clean with no behavior change. **Movement 2 (flip seeds):** once the chain
+  is `'s`-polymorphic it accepts any `'s ≤ 'a`, so shorten the three genuine frame-scope
+  sources one at a time — the FN-body per-call frame
+  ([`invoke.rs`](../../src/machine/core/kfunction/invoke.rs)), the MATCH/TRY arm frames
+  ([`match_case.rs`](../../src/builtins/match_case.rs) +
+  [`try_with.rs`](../../src/builtins/try_with.rs), one shape), and the MODULE continuation
+  capture ([`module_def.rs`](../../src/builtins/module_def.rs)) — each flip localized and green,
+  since the polymorphic surface tolerates a short `'s` from one seed while the others still pass
+  `'s = 'a`. **Flip the highest-risk / most-uncertain seeds first** to
+  surface integration problems early rather than after the easy seeds lull: the MODULE `Combine`
+  continuation (captures a scope *across* a park, so it must store the *yoke* and `.get()`
+  inside — where "store the yoke, not the borrow" actually bites) and any `DispatchState` resume
+  arm holding a frame scope across a poll lead; the straight-line per-call dispatch seed (lowest
+  uncertainty) goes last. The shared sink is the scheduler tail-replace re-anchor,
+  [`reinstall_with_frame`](../../src/machine/execute/scheduler/node_store.rs), which every
+  `BodyResult::Tail` funnels through (FN tails, arm tails, EVAL, CONS tails) — it is not a
+  separate seed, just the one `anchored_parts → yoke` conversion that flips alongside the first
+  tail path to need it. Ordering constraints: the root-yoke above lands before widening, and
+  each seed needs the widening to reach its `lift_kobject` boundary before it can flip.
 
 ## Dependencies
 
