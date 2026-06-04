@@ -32,24 +32,22 @@ unsafe and fingerprint-drift checks still fire.
 
 ## The slate
 
-29 tests, grouped by the unsafe site each pins down. Names below are the exact
+21 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **Singleton transmutes** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the `'static`→`'a`
 re-annotation on the `NULL_HOLDER` / `TRUE_HOLDER` / `FALSE_HOLDER` shared singletons.
 
 - `singleton_ref_independent_of_arena_lifetime`
-- `singletons_aliasable`
 
 **`CallArena` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
 child-scope `Option<ScopePtr>` (re-attached via `ScopePtr::reattach`) plus the `Rc<CallArena>`
-chain that keeps per-call arenas pinned across re-borrow.
+chain that keeps per-call arenas pinned across re-borrow. One test pins the re-attach
+surviving a sibling alloc; the other pins the `Rc<CallArena>` chain keeping an outer arena
+alive after its local handle drops.
 
 - `call_arena_scope_survives_subsequent_alloc`
-- `call_arena_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip`
-- `call_arena_scope_repeated_calls_alias`
 - `call_arena_chained_outer_frame_walkable`
-- `call_arena_scope_re_anchored_into_struct_alongside_rc`
 
 **`RuntimeArena` interior mutation under live borrows** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)).
 
@@ -73,12 +71,11 @@ drop-and-alloc by refusing when any other `Rc` to the frame still exists.
 
 **`KFunction` captured-scope re-borrow** ([src/machine/core/kfunction.rs](../src/machine/core/kfunction.rs)) — every
 closure invocation reads `KFunction::captured_scope`, which is `ScopePtr::reattach`
-on the captured definition-scope pointer. The escaped-closure tests pin that
+on the captured definition-scope pointer. The escaped-closure test pins that
 the pointee outlives the `KFunction` even when the closure is invoked after its
 defining frame has returned.
 
 - `closure_escapes_outer_call_and_remains_invocable`
-- `escaped_closure_with_param_returns_body_value`
 
 **`Scope::add` re-entry** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — adding a binding while
 a `data` borrow is live queues onto a pending list and drains on borrow drop,
@@ -92,13 +89,11 @@ violation if the queue/drain discipline regresses.)
 `ScopeBindings::Borrowed` window reads another scope's `RefCell` maps through a
 borrowed reference, and the block (run in a transparent scope allocated in the
 call-site arena) can define a closure that escapes carrying that window. Pins
-that an escaping closure reading a surfaced member of a functor-result module —
-bound or temporary, the latter relying on the call-site-arena `Rc` rooting —
-does not dangle into the freed module/USING arena. (Safe code by construction;
-pinned because tree borrows catches a regression in the aliasing or rooting
-discipline.)
+that an escaping closure reading a surfaced member of a *temporary* functor-result
+module — the harder case, relying on the call-site-arena `Rc` rooting — does not
+dangle into the freed module/USING arena. (Safe code by construction; pinned
+because tree borrows catches a regression in the aliasing or rooting discipline.)
 
-- `using_functor_result_closure_escapes_soundly`
 - `using_temporary_functor_result_is_sound`
 
 **MATCH on `Tagged` recursion** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — MATCH
@@ -115,14 +110,13 @@ tail-calls back through the enclosing user-fn.
 
 - `try_inside_tco_position_preserves_frame_chain`
 
-**KFuture anchor decision** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the targeted anchor: a KFuture
-whose descendants don't borrow into the dying arena lifts with `frame: None`;
-one with a `Future(&KObject)` allocated in the dying arena anchors with
-`frame: Some(rc)`. Test source lives in [src/machine/execute/lift.rs](../src/machine/execute/lift.rs);
+**KFuture anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — a KFuture with a
+`Future(&KObject)` allocated in the dying arena anchors with `frame: Some(rc)`.
+Test source lives in [src/machine/execute/lift.rs](../src/machine/execute/lift.rs);
 the unsafe site it pins is the `Rc<CallArena>` heap-pinning that backs the
-anchored case.
+anchored case (the `frame: None` non-anchor branch is a logic case with no
+unsafe site, covered under plain `cargo test`).
 
-- `unanchored_kfuture_no_arena_borrow_does_not_anchor`
 - `unanchored_kfuture_with_arena_borrow_does_anchor`
 
 **`KFunction::invoke` per-call frame re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -138,12 +132,12 @@ dispatch through a functor-call's per-call scope, and `MODULE_TYPE_OF` lift-out.
 **`ScopePtr` re-attach** ([src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs)) — the single
 `transmute::<&Scope<'static>, &'a Scope<'a>>` (and the `erase` cast) that every carrier scope
 accessor routes through: `CallArena::scope` / `scope_for_bind`, `Module::child_scope`,
-`Signature::decl_scope`, `KFunction::captured_scope`. These two tests pin the re-attach
-directly through the `Module` / `Signature` carriers; the `CallArena` and `KFunction` groups
-exercise the same `reattach` through their own accessors.
+`Signature::decl_scope`, `KFunction::captured_scope`. This test pins the re-attach
+directly through the `Module` carrier; the `CallArena` and `KFunction` groups exercise
+the same `reattach` through their own accessors. `Signature::decl_scope` calls the
+identical `reattach` (its line-for-line equivalent runs under plain `cargo test`).
 
 - `module_child_scope_transmute_does_not_dangle`
-- `signature_decl_scope_transmute_does_not_dangle`
 
 **`Module` interior mutation under a live `&'a Module`** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — `Module`
 mutates a `RefCell<HashMap>` (`type_members` / `slot_type_tags`) while a `&'a Module<'a>` is
@@ -193,9 +187,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-04: 553.29s — 21 tests, 0 leaks, 0 UB
 - 2026-06-04: 730.21s — 29 tests, 0 leaks, 0 UB
 - 2026-06-04: 729.77s — 29 tests, 0 leaks, 0 UB
 - 2026-05-28: 702.20s — 30 tests, 0 leaks, 0 UB
 - 2026-05-28: 703.43s — 30 tests, 0 leaks, 0 UB
-- 2026-05-25: 625.29s — 30 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
