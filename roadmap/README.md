@@ -24,8 +24,8 @@ What's shipped that the open items below build on:
   operator registry (`Bindings::operators`, walked by
   `Scope::resolve_operator_group_with_chain` like every other name) resolves a chain's
   probe to a shared `OperatorGroup`, and the `OperatorChain` dispatch arm hits that
-  registry — missing cleanly on an undeclared or cross-group mix, or reaching the fold
-  seam on a hit. The fold itself and the `OP` declaration surface are the remaining
+  registry — missing cleanly on an undeclared or cross-group mix, or reaching the reduction
+  seam on a hit. The reducer itself and the `GROUP`/`OP` declaration surface are the remaining
   open work under
   [user-definable n-ary operators](operator_chaining/n-ary-operators.md) and
   [user-defined operator modules](operator_chaining/user-defined-operator-modules.md).
@@ -40,10 +40,12 @@ without first landing something else:
   a codebase can span more than one source file and files become modules.
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md) —
   promote each `UNION` variant to its own `KType` so `MATCH` collapses into type-dispatch.
+- [Anonymous functions](anonymous-functions.md) — a keyword-less
+  `FN {…}` literal that evaluates to a plain function value with no dispatch keyword.
 - [Plain-English type-operation surfaces](type_language/type-operation-surfaces.md) —
   retire the `type_ops.rs` underscore keywords into the existing spaced / dotted / infix forms.
-- [User-definable n-ary operators](operator_chaining/n-ary-operators.md) — the fold pre-pass
-  that lets a recognized operator chain (`a + b + c`, `A | B | C`) actually evaluate.
+- [User-definable n-ary operators](operator_chaining/n-ary-operators.md) — the reduction pre-pass
+  that lets a recognized operator run (`a + b + c`, `A | B | C`) evaluate by its group's mode.
 - [Modular implicits (predicate-typing stage 5)](predicate_typing/modular-implicits.md) —
   implicit module resolution; its module-language substrate has already shipped.
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md) —
@@ -93,8 +95,9 @@ Rust builtins:
 ### Operator chaining — [operator_chaining/](operator_chaining/)
 
 User-declarable operators and the n-ary chaining mechanism that evaluates them: a
-recognized run of operators folds into binary sub-dispatches by precedence, and a
-module-scoped `OP` surface populates the per-scope operator registry the fold walks.
+recognized run of operators reduces by its group's declared mode — unary, fold, or
+pairwise — and a module-scoped `GROUP`/`OP` surface populates the per-scope operator
+registry the reducer walks.
 
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [User-defined operator modules](operator_chaining/user-defined-operator-modules.md)
