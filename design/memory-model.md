@@ -18,16 +18,17 @@ than ownership trees. The structural edges:
 - [`Bindings.data`](../src/machine/core/bindings.rs) maps each bound name
   to a `&'a KObject<'a>`. The pointee may live in this scope's arena or in
   an outer one.
-- [`KFunction.captured`](../src/machine/core/kfunction.rs) holds
-  `NonNull<Scope<'a>>` — the closure's definition scope. Multiple
-  `KFunction`s share one captured scope when they were defined in the same
-  body.
+- [`KFunction.captured`](../src/machine/core/kfunction.rs) holds a
+  [`ScopePtr`](../src/machine/core/scope_ptr.rs) — the closure's definition
+  scope, lifetime-erased. Multiple `KFunction`s share one captured scope when
+  they were defined in the same body.
 - `KObject::KFunction(&'a KFunction<'a>, Option<Rc<CallArena>>)` and
   `KObject::KFuture(KFuture, Option<Rc<CallArena>>)` carry both a value-side
   reference to a function-arena slot and an optional `Rc<CallArena>` anchor
   to the per-call arena that owns the function's captured scope.
-- `Module` and `Signature` cache `*const Scope<'static>` pointers to their
-  declaration scopes (heap-pinned by the surrounding arena chain).
+- `Module` and `Signature` cache their declaration scopes as a
+  [`ScopePtr`](../src/machine/core/scope_ptr.rs) (heap-pinned by the surrounding
+  arena chain).
 
 **Directionality rule.** References go inward freely — a per-call arena's
 slots may point at run-root slots, because the run-root arena outlives every
@@ -94,13 +95,20 @@ sound because:
   drop together at `RuntimeArena` drop, so any cross-sub-arena `&` is dead
   by the time anyone could observe it.
 
+The scope-pointer case — `CallArena`, `Module`, `Signature`, and `KFunction`
+each holding a pointer to a captured or defining `Scope` — is centralized in
+[`ScopePtr`](../src/machine/core/scope_ptr.rs): one `erase` cast in, one
+`unsafe fn reattach` out, so the re-attach soundness argument lives in a single
+audited place rather than restated at each carrier.
+
 `KObject` and `KType` go through the single cycle-gated [`alloc`](../src/machine/core/arena.rs)
 entry via the `CycleGated` trait; `KFunction`, `Scope`, `Module`, and `Signature`
 use un-gated `alloc_*` methods because none of them can hold a self-targeting
 `Rc<CallArena>`.
 
-A [`CallArena`](../src/machine/core/arena.rs) bundles a `RuntimeArena`, a
-`*const Scope<'static>` into it, and an `Option<Rc<CallArena>>` for the
+A [`CallArena`](../src/machine/core/arena.rs) bundles a `RuntimeArena`, an
+`Option<ScopePtr>` into it (the child scope; `None` only transiently during
+construction and tail-reset), and an `Option<Rc<CallArena>>` for the
 parent-frame chain. Two invariants make the ownership unit coherent:
 
 - **Heap-pinning via `Rc`.** `CallArena::new` only ever exposes the frame

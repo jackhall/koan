@@ -304,11 +304,13 @@ Storing the slot's per-call frame in the scheduler's slot table
 requires one re-anchor at install time: the slot-table type uses `'a`
 (the run lifetime), but `Rc<CallArena>::scope()` returns `&'p
 Scope<'p>` bounded by the local receiver.
-`NodeStore::reinstall_with_frame` performs that re-anchor under the
-witness "the `Rc<CallArena>` stays in the same `Node` payload as the
-`&'a Scope<'a>` it produced": as long as the slot owns the Rc, the
-arena heap-pinning that backs `scope_ptr` outlives every read through
-the `'a` reference. Any previous frame in the slot must have been
+`NodeStore::reinstall_with_frame` performs that re-anchor through
+[`CallArena::anchored_parts`](../src/machine/core/arena.rs) — the single
+re-anchor method also used by the MATCH / TRY-WITH builtins and
+`KFunction::invoke` — under the witness "the `Rc<CallArena>` stays in the same
+`Node` payload as the `&'a Scope<'a>` it produced": as long as the slot owns the
+Rc, the arena heap-pinning that backs the child scope pointer outlives every read
+through the `'a` reference. Any previous frame in the slot must have been
 removed by a prior `take_for_run`, so there is no shadow alias being
 silently overwritten.
 
