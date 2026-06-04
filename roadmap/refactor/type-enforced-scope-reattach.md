@@ -50,4 +50,6 @@ comment. The `'a`-invariance pins (`KFunction` / `Signature`
 **Requires:** none — builds on the shipped `ScopePtr` / `anchored_parts` arena
 consolidation, but adds no new prerequisite.
 
-**Unblocks:** none tracked yet.
+**Unblocks:** [Type-enforced frame re-anchor](type-enforced-frame-reanchor.md) —
+concentrating the irreducible fabrication at `CallArena` is the boundary that follow-up
+extends from the scope re-attach to the `anchored_parts` frame re-anchor.

@@ -145,4 +145,7 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Type-enforced scope re-attach](refactor/type-enforced-scope-reattach.md)
+- [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md) —
+  extends the re-attach brand to `anchored_parts` so the dispatch/scheduler integration
+  tests in the Miri slate retire into compile-time guarantees.
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
