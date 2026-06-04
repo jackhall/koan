@@ -52,19 +52,8 @@ impl<'a> KFunction<'a> {
                     .try_take_reusable_frame_for_tail()
                     .and_then(|mut prev| prev.try_reset_for_tail(outer).then_some(prev))
                     .unwrap_or_else(|| CallArena::new(outer, None));
-                // SAFETY (consolidated): both re-anchors below share one witness — `frame`
-                // is moved into `BodyResult::Tail` below, whose slot-storage lifetime is
-                // `'a`. The `Rc<CallArena>` heap-pins the per-call arena (and therefore
-                // its scope) for as long as the slot lives, so claiming `'a` here is
-                // exactly the receiver-bound-borrow → slot-storage-lifetime re-anchor that
-                // `NodeStore::reinstall_with_frame` performs on the scheduler side after
-                // a Replace.
-                let (inner_arena, child): (&'a RuntimeArena, &'a Scope<'a>) = unsafe {
-                    (
-                        std::mem::transmute::<&RuntimeArena, &'a RuntimeArena>(frame.arena()),
-                        std::mem::transmute::<&Scope<'_>, &'a Scope<'a>>(frame.scope()),
-                    )
-                };
+                let (inner_arena, child): (&'a RuntimeArena, &'a Scope<'a>) =
+                    frame.anchored_parts();
                 for (name, rc) in bundle.args.iter() {
                     let mut cloned = rc.deep_clone();
                     // Splice-time element check + stamp for parameterized carriers

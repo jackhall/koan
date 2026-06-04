@@ -140,11 +140,10 @@ impl<'a> NodeStore<'a> {
         function: Option<ReturnContract<'a>>,
         chain: Rc<LexicalFrame>,
     ) {
-        // SAFETY: `frame` is about to land in `self.slots[id]`, whose span equals `'a`.
-        // The `Rc<CallArena>` co-located in the same node payload outlives every read
+        // `frame` (stored in the same node payload below) is the witness
+        // `anchored_parts` relies on: the co-located `Rc<CallArena>` outlives every read
         // through this `'a` reference, and any prior frame was removed by `take_for_run`.
-        let scope: &'a Scope<'a> =
-            unsafe { std::mem::transmute::<&Scope<'_>, &'a Scope<'a>>(frame.scope()) };
+        let scope: &'a Scope<'a> = frame.anchored_parts().1;
         self.slots[id] = SlotState::PreRun(Node {
             work,
             scope,

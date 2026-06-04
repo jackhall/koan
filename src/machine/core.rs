@@ -10,6 +10,7 @@ mod lexical_frame;
 mod pending;
 mod scope;
 mod scope_id;
+mod scope_ptr;
 pub mod source;
 
 #[cfg(test)]
@@ -24,3 +25,4 @@ pub use kerror::{Frame, KError, KErrorKind};
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};
 pub use scope::{KFuture, Scope, ScopeKind};
 pub use scope_id::ScopeId;
+pub use scope_ptr::ScopePtr;

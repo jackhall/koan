@@ -3,13 +3,12 @@
 //! lexical scope captured at definition time.
 
 use std::marker::PhantomData;
-use std::ptr::NonNull;
 use std::rc::Rc;
 
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use crate::machine::core::{KError, KErrorKind, KFuture, Scope};
+use crate::machine::core::{KError, KErrorKind, KFuture, Scope, ScopePtr};
 use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
 use crate::machine::model::values::{KObject, NamedPairs};
 
@@ -31,12 +30,12 @@ pub use scheduler_handle::{CatchFinish, CombineFinish, NodeId, SchedulerHandle};
 pub struct KFunction<'a> {
     pub signature: ExpressionSignature<'a>,
     pub body: Body<'a>,
-    /// **Variance-load-bearing.** `Scope<'a>` is invariant in `'a` (it contains
-    /// `RefCell`s), so the paired `PhantomData<&'a Scope<'a>>` is required to keep
-    /// `KFunction<'a>` invariant in `'a`. Do **not** simplify `_p` to
-    /// `PhantomData<&'a ()>` — that would make `KFunction` covariant in `'a` and
-    /// silently reintroduce a soundness bug.
-    captured: NonNull<Scope<'a>>,
+    /// **Variance-load-bearing.** `captured` is a non-generic [`ScopePtr`] carrying no
+    /// `'a`, so the paired `PhantomData<&'a Scope<'a>>` is what keeps `KFunction<'a>`
+    /// invariant in `'a` (`Scope<'a>` is invariant — it contains `RefCell`s). Do **not**
+    /// simplify `_p` to `PhantomData<&'a ()>` — that would make `KFunction` covariant in
+    /// `'a` and silently reintroduce a soundness bug.
+    captured: ScopePtr,
     _p: PhantomData<&'a Scope<'a>>,
     /// `Some(_)` for binder builtins (LET, FN, STRUCT, UNION, SIG, MODULE).
     pub binder_name: Option<BinderNameFn>,
@@ -90,7 +89,7 @@ impl<'a> KFunction<'a> {
         Self {
             signature,
             body,
-            captured: NonNull::from(captured),
+            captured: ScopePtr::erase(captured),
             _p: PhantomData,
             binder_name,
             binder_bucket,
@@ -99,12 +98,12 @@ impl<'a> KFunction<'a> {
         }
     }
 
-    /// SAFETY: `captured` was built from `NonNull::from(&'a Scope<'a>)` in
-    /// [`Self::with_binder_and_functor`], so the pointer is non-null and points at a
-    /// `Scope<'a>` that outlives this `KFunction<'a>` by the broader runtime-arena
-    /// SAFETY argument (see `core/arena.rs::RuntimeArena`).
+    /// SAFETY: `captured` was erased from a `&'a Scope<'a>` in
+    /// [`Self::with_binder_and_functor`], and points at a scope that outlives this
+    /// `KFunction<'a>` by the broader runtime-arena argument; the re-attach goes through
+    /// [`ScopePtr::reattach`].
     pub fn captured_scope(&self) -> &'a Scope<'a> {
-        unsafe { self.captured.as_ref() }
+        unsafe { self.captured.reattach() }
     }
 
     pub fn summarize(&self) -> String {

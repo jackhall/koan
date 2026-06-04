@@ -72,12 +72,7 @@ pub fn body<'a>(
     };
     // Chain the call-site frame per per-call-arena-protocol.md § Outer-frame chain.
     let frame: Rc<CallArena> = CallArena::new(scope, sched.current_frame());
-    let arena_ptr: *const RuntimeArena = frame.arena();
-    let scope_ptr: *const Scope<'_> = frame.scope();
-    // SAFETY: heap-pinning makes both pointers valid for the Rc's lifetime. The
-    // re-borrow ends before the `frame` move into `BodyResult::Tail`.
-    let inner_arena: &'a RuntimeArena = unsafe { &*(arena_ptr as *const _) };
-    let child: &'a Scope<'a> = unsafe { &*(scope_ptr as *const _) };
+    let (inner_arena, child): (&'a RuntimeArena, &'a Scope<'a>) = frame.anchored_parts();
     let it_obj: &'a KObject<'a> = inner_arena.alloc(value.deep_clone());
     // `nominal_binder: true` carves `it` out of the sibling-index cutoff so the arm
     // body (also at chain index 0) can see it — same path the FN parameter uses.

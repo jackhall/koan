@@ -7,15 +7,16 @@
 //! `Argument`, `SignatureElement`) lives in [`crate::machine::model::types::signature`]. The two
 //! are distinct concepts; do not conflate.
 //!
-//! Lifetime erasure on the scope pointer follows the same pattern as
+//! Lifetime erasure on the scope pointer routes through
+//! [`ScopePtr`](crate::machine::core::scope_ptr::ScopePtr), shared with
 //! [`KFunction`](crate::machine::core::kfunction::KFunction) and
-//! [`RuntimeArena`](crate::machine::core::arena::RuntimeArena); per-site SAFETY blocks
-//! sit at the `unsafe` `as_ref()` calls below.
+//! [`CallArena`](crate::machine::core::arena::CallArena); the re-attach SAFETY argument
+//! lives on `ScopePtr::reattach`.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::machine::core::{Scope, ScopeId};
+use crate::machine::core::{Scope, ScopeId, ScopePtr};
 
 use super::super::types::KType;
 
@@ -27,7 +28,7 @@ use super::super::types::KType;
 /// not by a shared `UserType` `kind` tag).
 pub struct Module<'a> {
     pub path: String,
-    child_scope_ptr: *const Scope<'static>,
+    child_scope_ptr: ScopePtr,
     /// `RefCell` because opaque-ascription installs entries after the surrounding `KObject`
     /// is alloc'd. `Module` is arena-pinned and never moved, so a `&'a Module<'a>` borrow
     /// stays valid alongside interior mutation.
@@ -48,13 +49,9 @@ pub struct Module<'a> {
 
 impl<'a> Module<'a> {
     pub fn new(path: String, child_scope: &'a Scope<'a>) -> Self {
-        // `Scope` is invariant in `'a`; the through-`'static` cast is required to match
-        // the field type. Clippy reports it as redundant — false positive.
-        #[allow(clippy::unnecessary_cast)]
-        let child_scope_ptr = child_scope as *const Scope<'_> as *const Scope<'static>;
         Self {
             path,
-            child_scope_ptr,
+            child_scope_ptr: ScopePtr::erase(child_scope),
             type_members: RefCell::new(HashMap::new()),
             slot_type_tags: RefCell::new(HashMap::new()),
             compatible_sigs: RefCell::new(Vec::new()),
@@ -71,10 +68,11 @@ impl<'a> Module<'a> {
         }
     }
 
-    /// Re-attach `'a` to the stored scope pointer. SAFETY: the underlying scope is
-    /// arena-allocated; the arena outlives every `&Module<'a>` by construction.
+    /// Re-attach `'a` to the stored scope. SAFETY: the underlying scope is arena-allocated
+    /// and the arena outlives every `&Module<'a>` by construction; the re-attach itself
+    /// goes through [`ScopePtr::reattach`].
     pub fn child_scope(&self) -> &'a Scope<'a> {
-        unsafe { std::mem::transmute::<&Scope<'static>, &'a Scope<'a>>(&*self.child_scope_ptr) }
+        unsafe { self.child_scope_ptr.reattach() }
     }
 
     /// Stable identity used to seed `KType::UserType { kind: Module, scope_id, .. }`.
@@ -91,24 +89,27 @@ impl<'a> Module<'a> {
 /// ascription time.
 pub struct Signature<'a> {
     pub path: String,
-    decl_scope_ptr: *const Scope<'static>,
-    _marker: std::marker::PhantomData<&'a ()>,
+    decl_scope_ptr: ScopePtr,
+    /// `Scope<'a>` is invariant in `'a`; the `decl_scope_ptr` is a non-generic [`ScopePtr`]
+    /// that carries no `'a`, so this marker is what pins `Signature<'a>` invariant in `'a`.
+    /// Do **not** weaken to `PhantomData<&'a ()>` (covariant).
+    _marker: std::marker::PhantomData<&'a Scope<'a>>,
 }
 
 impl<'a> Signature<'a> {
     pub fn new(path: String, decl_scope: &'a Scope<'a>) -> Self {
-        // See `Module::new`.
-        #[allow(clippy::unnecessary_cast)]
-        let decl_scope_ptr = decl_scope as *const Scope<'_> as *const Scope<'static>;
         Self {
             path,
-            decl_scope_ptr,
+            decl_scope_ptr: ScopePtr::erase(decl_scope),
             _marker: std::marker::PhantomData,
         }
     }
 
+    /// Re-attach `'a` to the stored scope. SAFETY: the decl scope is arena-allocated and
+    /// outlives every `&Signature<'a>` by construction; the re-attach goes through
+    /// [`ScopePtr::reattach`].
     pub fn decl_scope(&self) -> &'a Scope<'a> {
-        unsafe { std::mem::transmute::<&Scope<'static>, &'a Scope<'a>>(&*self.decl_scope_ptr) }
+        unsafe { self.decl_scope_ptr.reattach() }
     }
 
     /// Stable identity for `KType::Signature { sig, .. }` (its dispatch identity is

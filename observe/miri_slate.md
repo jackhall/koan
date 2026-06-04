@@ -1,12 +1,9 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/builtins/match_case.rs: 2
-src/builtins/try_with.rs: 2
-src/machine/core/arena.rs: 23
+src/machine/core/arena.rs: 24
 src/machine/core/kfunction.rs: 1
-src/machine/core/kfunction/invoke.rs: 1
-src/machine/execute/scheduler/node_store.rs: 1
+src/machine/core/scope_ptr.rs: 2
 src/machine/model/values/module.rs: 3
 -->
 
@@ -45,8 +42,8 @@ re-annotation on the `NULL_HOLDER` / `TRUE_HOLDER` / `FALSE_HOLDER` shared singl
 - `singletons_aliasable`
 
 **`CallArena` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
-`*const Scope<'static>` round-trip plus the `Rc<CallArena>` chain that keeps
-per-call arenas pinned across re-borrow.
+child-scope `Option<ScopePtr>` (re-attached via `ScopePtr::reattach`) plus the `Rc<CallArena>`
+chain that keeps per-call arenas pinned across re-borrow.
 
 - `call_arena_scope_survives_subsequent_alloc`
 - `call_arena_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip`
@@ -75,7 +72,7 @@ drop-and-alloc by refusing when any other `Rc` to the frame still exists.
 - `call_arena_try_reset_for_tail_refuses_when_aliased`
 
 **`KFunction` captured-scope re-borrow** ([src/machine/core/kfunction.rs](../src/machine/core/kfunction.rs)) — every
-closure invocation reads `KFunction::captured_scope`, which is `NonNull::as_ref`
+closure invocation reads `KFunction::captured_scope`, which is `ScopePtr::reattach`
 on the captured definition-scope pointer. The escaped-closure tests pin that
 the pointee outlives the `KFunction` even when the closure is invoked after its
 defining frame has returned.
@@ -104,14 +101,15 @@ discipline.)
 - `using_functor_result_closure_escapes_soundly`
 - `using_temporary_functor_result_is_sound`
 
-**MATCH on `Tagged` recursion** ([src/builtins/match_case.rs](../src/builtins/match_case.rs)) — the
-`outer_frame` chain keeps the call-site arena alive across TCO replace when a
-user-fn recurses through a `Tagged` parameter via MATCH.
+**MATCH on `Tagged` recursion** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — MATCH
+builds its per-call frame and re-anchors `(inner_arena, child)` through
+`CallArena::anchored_parts`; the `outer_frame` chain keeps the call-site arena alive across
+TCO replace when a user-fn recurses through a `Tagged` parameter via MATCH.
 
 - `recursive_tagged_match_no_uaf`
 
-**TRY-WITH inside TCO position** ([src/builtins/try_with.rs](../src/builtins/try_with.rs)) — same
-`(inner_arena, child)` re-anchor as MATCH for the per-branch frame; the
+**TRY-WITH inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — same
+`CallArena::anchored_parts` re-anchor as MATCH for the per-branch frame; the
 `outer_frame` chain keeps the call-site arena alive when the branch body
 tail-calls back through the enclosing user-fn.
 
@@ -127,40 +125,47 @@ anchored case.
 - `unanchored_kfuture_no_arena_borrow_does_not_anchor`
 - `unanchored_kfuture_with_arena_borrow_does_anchor`
 
-**`KFunction::invoke` per-call frame transmute** ([src/machine/core/kfunction/invoke.rs](../src/machine/core/kfunction/invoke.rs)) — the
-consolidated `(inner_arena, child): (&'a RuntimeArena, &'a Scope<'a>)` re-anchor
-that lifts the per-call frame's receiver-bound borrows to the outer slot-storage
-lifetime. Witnessed by the `Rc<CallArena>` moved into `BodyResult::Tail`.
+**`KFunction::invoke` per-call frame re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
+`(inner_arena, child): (&'a RuntimeArena, &'a Scope<'a>)` re-anchor, now routed through
+`CallArena::anchored_parts`, that lifts the per-call frame's receiver-bound borrows to the
+outer slot-storage lifetime. Witnessed by the `Rc<CallArena>` moved into `BodyResult::Tail`.
 Exercised by every user-fn invocation: repeated-call reclamation, type-op
 dispatch through a functor-call's per-call scope, and `MODULE_TYPE_OF` lift-out.
 
 - `repeated_user_fn_calls_do_not_grow_run_root_per_call`
 - `type_op_dispatch_does_not_dangle`
 
-**Module / Signature lifetime erasure** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — `Module`
-and `Signature` carry their captured scope as `*const Scope<'static>` and
-re-attach `'a` via transmute on access; `Module::type_members` mutates a
-`RefCell<HashMap>` while a `&'a Module<'a>` is live (the opaque-ascription
-shape).
+**`ScopePtr` re-attach** ([src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs)) — the single
+`transmute::<&Scope<'static>, &'a Scope<'a>>` (and the `erase` cast) that every carrier scope
+accessor routes through: `CallArena::scope` / `scope_for_bind`, `Module::child_scope`,
+`Signature::decl_scope`, `KFunction::captured_scope`. These two tests pin the re-attach
+directly through the `Module` / `Signature` carriers; the `CallArena` and `KFunction` groups
+exercise the same `reattach` through their own accessors.
 
 - `module_child_scope_transmute_does_not_dangle`
 - `signature_decl_scope_transmute_does_not_dangle`
+
+**`Module` interior mutation under a live `&'a Module`** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — `Module`
+mutates a `RefCell<HashMap>` (`type_members` / `slot_type_tags`) while a `&'a Module<'a>` is
+live — the opaque-ascription shape. (The scope re-attach itself is the `ScopePtr` group above;
+the carriers now store a `ScopePtr`.)
+
 - `module_type_members_refcell_mutation_with_held_module_ref`
 - `opaque_ascription_re_binds_do_not_alias_unsoundly`
 
 **MODULE body Combine continuation** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — the
 MODULE body schedules a `Combine` whose `finish` closure captures the child
 scope and runs on the outer scheduler's main loop after every body statement
-terminalizes. Pins the same `*const Scope<'static>` re-attach site as
+terminalizes. Pins the same `ScopePtr` re-attach site as
 `module_child_scope_transmute_does_not_dangle`, exercised end-to-end through
 the scheduler path the binder follows.
 
 - `module_body_dispatch_does_not_dangle`
 
-**`NodeStore::reinstall_with_frame` slot re-anchor** ([src/machine/execute/scheduler/node_store.rs](../src/machine/execute/scheduler/node_store.rs)) —
-the Replace arm transmutes `frame.scope()` from its receiver-bound borrow to
-`'a` (the slot-storage lifetime) before installing it in `self.nodes[id]`,
-which co-locates the `Rc<CallArena>` witness with the re-anchored scope.
+**`NodeStore::reinstall_with_frame` slot re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
+the Replace arm re-anchors `frame.scope()` from its receiver-bound borrow to
+`'a` (the slot-storage lifetime) via `CallArena::anchored_parts` before installing it in
+`self.nodes[id]`, which co-locates the `Rc<CallArena>` witness with the re-anchored scope.
 Exercised by the dispatch-time parking shapes that reinstall through this entry
 point (and transitively by user-fn TCO; that path is covered by the MATCH-on-
 `Tagged` recursion test above).
@@ -188,9 +193,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-04: 729.77s — 29 tests, 0 leaks, 0 UB
 - 2026-05-28: 702.20s — 30 tests, 0 leaks, 0 UB
 - 2026-05-28: 703.43s — 30 tests, 0 leaks, 0 UB
 - 2026-05-25: 625.29s — 30 tests, 0 leaks, 0 UB
 - 2026-05-20: 597.64s — 29 tests, 0 leaks, 0 UB
-- 2026-05-18: 507.72s — 27 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
