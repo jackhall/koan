@@ -38,21 +38,19 @@ not yet make.
 
 **Directions.**
 
-- *Brand mechanism for `anchored_parts` — open.* `anchored_parts` returns
-  `(&'a RuntimeArena, &'a Scope<'a>)` from a non-generic `CallArena` (it backs
-  `Rc<CallArena>`, which carries no lifetime), so it hits the same no-`'a`-to-brand
-  obstacle the shipped `ScopePtr` re-attach solved for the captured scope: the brand
-  must tie the returned `'a` to the `Rc<CallArena>` witness. Options: (a) a branded
-  handle minted from the `Rc` whose lifetime cannot outlive it; (b) keep `anchored_parts`
-  as the single documented unsafe boundary and brand only the downstream threading.
-  Recommended: extend the shipped `ScopePtr` brand from the captured scope to the frame's
-  borrowed parts.
-- *Scheduler continuation storage — open.* The `Combine` continuation stores the
-  captured child scope through the lifetime-erased scheduler node path; for
-  `module_body_dispatch_does_not_dangle` to retire, that stored handle must carry a
-  brand that survives the park/wake boundary, or the path stays runtime-checked.
-  Determine whether scheduler node storage can hold a branded scope without
-  reintroducing a fabrication.
+- *Brand mechanism for `anchored_parts` — decided.* A home-rolled yoke spike established
+  that no branded handle makes this re-anchor a compile error while the scheduler welds the
+  scope lifetime to the run `'a`: `Scope<'a>` invariance blocks unifying a frame-bounded
+  scope with a run-`'a` one, and `run_dispatch` / `BuiltinFn` / `SchedulerHandle` all demand
+  `scope: &'a` shared with the work payload and the produced output. So the branded frame
+  handle rides on [Scheduler run/frame lifetime split](scheduler-lifetime-split.md); once a
+  distinct frame lifetime exists, the brand is a yoke over the frame's `Rc<CallArena>` cart
+  whose `get` hands back that frame lifetime — co-locating owner and borrow so a re-anchor
+  outliving its frame fails to compile.
+- *Scheduler continuation storage — decided.* The MODULE `Combine` continuation captures a
+  per-call child scope at `'a` for the same root cause; it threads the same branded frame
+  handle once the lifetime split lands, and stays runtime-checked
+  (`module_body_dispatch_does_not_dangle`) until then.
 - *Out-of-scope tests — decided.* `opaque_ascription_re_binds_do_not_alias_unsoundly`
   pins a `RefCell`-under-`&Module` borrow discipline, not a lifetime fabrication, so it
   stays an irreducibly-dynamic slate pin and is not retired by this item.
@@ -66,9 +64,12 @@ not yet make.
 
 ## Dependencies
 
-**Requires:** none — the `CallArena` brand boundary this builds on has shipped (the branded
-[`ScopePtr`](../../src/machine/core/scope_ptr.rs) concentrating scope-re-attach fabrication
-at the non-generic `CallArena`); `anchored_parts` is precisely the unsafe surface that
-boundary leaves for this follow-up.
+**Requires:** [Scheduler run/frame lifetime split](scheduler-lifetime-split.md) — a branded
+frame handle can make the re-anchor a compile error only once per-call scopes carry a
+lifetime distinct from the run `'a` for the brand to bind to; a spike established the brand
+is unreachable while the two are welded. The `CallArena` brand boundary this builds on has
+already shipped (the branded [`ScopePtr`](../../src/machine/core/scope_ptr.rs) concentrating
+scope-re-attach fabrication at the non-generic `CallArena`); `anchored_parts` is precisely
+the unsafe surface that boundary leaves for this follow-up.
 
 **Unblocks:** none tracked yet.

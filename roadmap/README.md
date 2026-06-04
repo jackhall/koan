@@ -47,8 +47,10 @@ What's shipped that the open items below build on:
   one. The branded `ScopePtr<'a>` makes `Module::child_scope`, `Signature::decl_scope`,
   and `KFunction::captured_scope` safe re-attaches, concentrating the irreducible
   `'static → 'a` fabrication at the non-generic `CallArena` boundary. The remaining
-  hardening — extending that brand to the `anchored_parts` frame re-anchor — is open
-  work under [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md).
+  hardening — making the `anchored_parts` frame re-anchor a compile-time guarantee — is
+  open work under [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md),
+  gated on the [scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md)
+  that gives per-call scopes a lifetime distinct from the run `'a` for a brand to bind to.
   See [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
 
 ## Next items
@@ -72,6 +74,8 @@ without first landing something else:
   reconcile names with behavior across `src/**` (best sequenced after the in-flight type-language items).
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md) —
   make builtins reachable at every scope so the hottest lookups stop walking the chain to root.
+- [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md) — give per-call
+  scopes a lifetime distinct from the run `'a` so their stored borrows carry their honest extent.
 
 ## Open items
 
@@ -147,7 +151,10 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
+- [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md) —
+  separate the per-frame scope lifetime from the run `'a`; the prerequisite that makes a
+  compile-time frame re-anchor brand expressible.
 - [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md) —
-  extends the re-attach brand to `anchored_parts` so the dispatch/scheduler integration
-  tests in the Miri slate retire into compile-time guarantees.
+  yokes `anchored_parts` to its frame `Rc` so a re-anchor outliving its frame fails to
+  compile and the dispatch/scheduler Miri pins retire; rides on the lifetime split above.
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
