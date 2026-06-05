@@ -4,10 +4,10 @@ use std::rc::Rc;
 use indexmap::IndexMap;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::{CallArena, KFuture, ScopeId};
+use crate::machine::core::{CallArena, KFuture};
 use crate::machine::model::ast::{KExpression, TypeName};
 use crate::machine::model::types::{
-    KType, Parseable, Record, Serializable, SignatureElement, UserTypeKind,
+    KType, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
 };
 
 #[cfg(test)]
@@ -62,9 +62,9 @@ pub enum KObject<'a> {
     KExpression(KExpression<'a>),
     KFuture(KFuture<'a>, Option<Rc<CallArena>>),
     KFunction(&'a KFunction<'a>, Option<Rc<CallArena>>),
-    /// Tagged-union value. `(name, scope_id)` carries the schema's identity through to
-    /// the value; `ktype()` synthesizes `KType::UserType { kind: Tagged, .. }` so
-    /// dispatch on type identity sees the declared union.
+    /// Tagged-union value. `(set, index)` references the union's sealed `RecursiveSet`
+    /// member; `ktype()` synthesizes `KType::SetRef { set, index }` so dispatch on type
+    /// identity sees the declared union, and lift shares the set by `Rc::clone`.
     ///
     /// `type_args` carries the value's runtime type arguments for a parameterized union
     /// (`Result<T, E>`): empty means erased; populated, `ktype()` synthesizes
@@ -73,15 +73,16 @@ pub enum KObject<'a> {
     Tagged {
         tag: String,
         value: Rc<KObject<'a>>,
-        scope_id: ScopeId,
-        name: String,
+        set: Rc<RecursiveSet<'a>>,
+        index: usize,
         type_args: Rc<Vec<KType<'a>>>,
     },
-    /// Struct value. `(name, scope_id)` carries the schema's identity through to the
-    /// value; `ktype()` synthesizes `KType::UserType { kind: Struct, .. }`.
+    /// Struct value. `(set, index)` references the struct's sealed `RecursiveSet` member;
+    /// `ktype()` synthesizes `KType::SetRef { set, index }`, and lift shares the set by
+    /// `Rc::clone`.
     Struct {
-        name: String,
-        scope_id: ScopeId,
+        set: Rc<RecursiveSet<'a>>,
+        index: usize,
         fields: Rc<IndexMap<String, KObject<'a>>>,
     },
     /// Anonymous structural record value (`{x = 1, y = "a"}`). The first field is the
@@ -108,15 +109,17 @@ pub enum KObject<'a> {
     /// surface name; scope-aware resolution + memoization lives on
     /// [`crate::machine::core::Scope::resolve_type_expr`].
     TypeNameRef(TypeName),
-    /// NEWTYPE carrier: tags a representation value with a NEWTYPE type identity.
-    /// `inner` is invariantly *not* a `Wrapped` — the [`NonWrappedRef`] field type
-    /// enforces newtype-over-newtype collapse at the construction path. `type_id` is
-    /// the `&'a KType::UserType { kind: Newtype, .. }` minted at NEWTYPE declaration
-    /// time (the same arena reference `bindings.types[name]` holds).
+    /// NEWTYPE carrier (and the ATTR abstract-type re-tag carrier): tags a representation
+    /// value with a type identity. `inner` is invariantly *not* a `Wrapped` — the
+    /// [`NonWrappedRef`] field type enforces newtype-over-newtype collapse at the
+    /// construction path. `type_id` is a declaration-stable `&'a KType` — for a NEWTYPE it
+    /// is a `KType::SetRef` into the sealed singleton set `bindings.types[name]` holds
+    /// (so the shared `Rc<RecursiveSet>` travels with it); for an opaque-ascription
+    /// abstract-type re-tag it is the per-call `AbstractType` identity.
     ///
-    /// `ktype()` reports `(*type_id).clone()` — the per-declaration nominal identity.
-    /// ATTR over a `Wrapped` falls through to `inner`, so wrapping a struct in a
-    /// NEWTYPE doesn't force every field accessor to redo.
+    /// `ktype()` reports `(*type_id).clone()` — the per-declaration identity. ATTR over a
+    /// `Wrapped` falls through to `inner`, so wrapping a struct in a NEWTYPE doesn't force
+    /// every field accessor to redo.
     Wrapped {
         inner: NonWrappedRef<'a>,
         type_id: &'a KType<'a>,
@@ -195,16 +198,16 @@ impl<'a> KObject<'a> {
                 KObject::Tagged {
                     tag,
                     value,
-                    scope_id,
-                    name,
+                    set,
+                    index,
                     ..
                 },
                 KType::ConstructorApply { args, .. },
             ) => KObject::Tagged {
                 tag,
                 value,
-                scope_id,
-                name,
+                set,
+                index,
                 type_args: Rc::new(args.clone()),
             },
             (KObject::Record(fields, _), KType::Record(types)) => {
@@ -248,19 +251,18 @@ impl<'a> KObject<'a> {
             KObject::KFunction(f, _) => function_value_ktype(f),
             KObject::KFuture(t, _) => function_value_ktype(t.function),
             KObject::KExpression(_) => KType::KExpression,
-            // Erased `type_args` reports the bare `UserType` identity; a populated
-            // carrier synthesizes the applied form so dispatch sees the full
-            // instantiation (`Result<Number, MyErr>`).
+            // Erased `type_args` reports the bare `SetRef` identity; a populated carrier
+            // synthesizes the applied form so dispatch sees the full instantiation
+            // (`Result<Number, MyErr>`).
             KObject::Tagged {
-                name,
-                scope_id,
+                set,
+                index,
                 type_args,
                 ..
             } => {
-                let bare = KType::UserType {
-                    kind: UserTypeKind::tagged_sentinel(),
-                    scope_id: *scope_id,
-                    name: name.clone(),
+                let bare = KType::SetRef {
+                    set: Rc::clone(set),
+                    index: *index,
                 };
                 if type_args.is_empty() {
                     bare
@@ -271,10 +273,9 @@ impl<'a> KObject<'a> {
                     }
                 }
             }
-            KObject::Struct { name, scope_id, .. } => KType::UserType {
-                kind: UserTypeKind::struct_sentinel(),
-                scope_id: *scope_id,
-                name: name.clone(),
+            KObject::Struct { set, index, .. } => KType::SetRef {
+                set: Rc::clone(set),
+                index: *index,
             },
             // O(1): read the memoized per-field type record rather than re-walking the
             // fields, mirroring `List` / `Dict`.
@@ -310,23 +311,19 @@ impl<'a> KObject<'a> {
             KObject::Tagged {
                 tag,
                 value,
-                scope_id,
-                name,
+                set,
+                index,
                 type_args,
             } => KObject::Tagged {
                 tag: tag.clone(),
                 value: Rc::clone(value),
-                scope_id: *scope_id,
-                name: name.clone(),
+                set: Rc::clone(set),
+                index: *index,
                 type_args: Rc::clone(type_args),
             },
-            KObject::Struct {
-                name,
-                scope_id,
-                fields,
-            } => KObject::Struct {
-                name: name.clone(),
-                scope_id: *scope_id,
+            KObject::Struct { set, index, fields } => KObject::Struct {
+                set: Rc::clone(set),
+                index: *index,
                 fields: Rc::clone(fields),
             },
             KObject::Record(fields, field_types) => {
@@ -449,7 +446,10 @@ impl<'a> Parseable<'a> for KObject<'a> {
             KObject::KFuture(t, _) => t.parsed.summarize(),
             KObject::KFunction(f, _) => f.summarize(),
             KObject::Tagged { tag, value, .. } => format!("{}({})", tag, value.summarize()),
-            KObject::Struct { name, fields, .. } => {
+            KObject::Struct {
+                set, index, fields, ..
+            } => {
+                let name = &set.member(*index).name;
                 let parts: Vec<String> = fields
                     .iter()
                     .map(|(field, value)| format!("{}: {}", field, value.summarize()))
@@ -474,7 +474,7 @@ impl<'a> Parseable<'a> for KObject<'a> {
             // normalize, which the "surface form survives bind" invariant forbids.
             KObject::TypeNameRef(t) => t.render(),
             // Render as `Distance(<inner summary>)`; `type_id.name()` returns the bare
-            // declared name (per `user_type_name_renders_bare_name`).
+            // declared name (the SetRef member's name for a NEWTYPE).
             KObject::Wrapped { inner, type_id } => {
                 format!("{}({})", type_id.name(), Parseable::summarize(inner.get()),)
             }

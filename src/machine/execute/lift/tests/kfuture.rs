@@ -144,11 +144,16 @@ fn kfuture_bundle_arg_with_struct_field_anchors() {
     let dying = CallArena::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
+    use crate::machine::model::types::{NominalSchema, RecursiveSet};
     let mut fields: IndexMap<String, KObject> = IndexMap::new();
     fields.insert("f".into(), KObject::KFunction(kf_ref, None));
     let s = KObject::Struct {
-        name: "S".into(),
-        scope_id: ScopeId::next(),
+        set: RecursiveSet::singleton(
+            "S".into(),
+            ScopeId::next(),
+            NominalSchema::Struct(Record::new()),
+        ),
+        index: 0,
         fields: Rc::new(fields),
     };
 

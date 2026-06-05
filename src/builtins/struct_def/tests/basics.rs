@@ -1,7 +1,7 @@
 //! binder_name extraction, type registration, field ordering, schema-rejection errors.
 
 use crate::builtins::test_support::{parse_one, run_one, run_one_err, run_root_silent};
-use crate::machine::model::types::UserTypeKind;
+use crate::machine::model::types::{NominalKind, ProjectedSchema, RecursiveSet};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, RuntimeArena};
 
@@ -16,26 +16,27 @@ fn binder_name_extracts_struct_name() {
 fn struct_named_registers_type_in_scope() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    // STRUCT is type-only now: the declaration yields a `KTypeValue(UserType)` whose
-    // `Struct { fields }` payload carries the schema, and registers it into `types`.
+    // STRUCT is type-only now: the declaration yields a `KTypeValue(SetRef)` whose Struct
+    // member carries the schema, and registers it into `types`.
     let result = run_one(scope, parse_one("STRUCT Point = (x :Number, y :Number)"));
     match result {
-        KObject::KTypeValue(KType::UserType {
-            kind: UserTypeKind::Struct { fields },
-            name,
-            ..
-        }) => {
-            assert_eq!(name, "Point");
-            assert_eq!(fields.len(), 2);
-            assert_eq!(
-                fields.keys().map(String::as_str).collect::<Vec<_>>(),
-                ["x", "y"]
-            );
-            assert_eq!(fields.get("x"), Some(&KType::Number));
-            assert_eq!(fields.get("y"), Some(&KType::Number));
+        KObject::KTypeValue(KType::SetRef { set, index }) => {
+            assert_eq!(set.member(*index).name, "Point");
+            match RecursiveSet::projected_schema(set, *index) {
+                ProjectedSchema::Struct(fields) => {
+                    assert_eq!(fields.len(), 2);
+                    assert_eq!(
+                        fields.keys().map(String::as_str).collect::<Vec<_>>(),
+                        ["x", "y"]
+                    );
+                    assert_eq!(fields.get("x"), Some(&KType::Number));
+                    assert_eq!(fields.get("y"), Some(&KType::Number));
+                }
+                _ => panic!("expected a Struct schema"),
+            }
         }
         other => panic!(
-            "expected KTypeValue(UserType Struct), got {:?}",
+            "expected KTypeValue(SetRef Struct), got {:?}",
             other.ktype()
         ),
     }
@@ -44,10 +45,7 @@ fn struct_named_registers_type_in_scope() {
         .expect("Point should be in types");
     assert!(matches!(
         kt,
-        KType::UserType {
-            kind: UserTypeKind::Struct { .. },
-            ..
-        }
+        KType::SetRef { set, index } if set.member(*index).kind == NominalKind::Struct
     ));
     assert!(
         scope.bindings().data().get("Point").is_none(),
@@ -75,18 +73,18 @@ fn struct_preserves_field_order() {
     );
     let kt = scope.resolve_type("Backwards").expect("Backwards in types");
     match kt {
-        KType::UserType {
-            kind: UserTypeKind::Struct { fields },
-            ..
-        } => {
-            let names: Vec<&str> = fields.keys().map(String::as_str).collect();
-            assert_eq!(
-                names[0], "b",
-                "first field should be `b` (declaration order)"
-            );
-            assert_eq!(names[1], "a");
-        }
-        _ => panic!("expected UserType Struct identity for Backwards"),
+        KType::SetRef { set, index } => match RecursiveSet::projected_schema(set, *index) {
+            ProjectedSchema::Struct(fields) => {
+                let names: Vec<String> = fields.keys().cloned().collect();
+                assert_eq!(
+                    names[0], "b",
+                    "first field should be `b` (declaration order)"
+                );
+                assert_eq!(names[1], "a");
+            }
+            _ => panic!("expected a Struct schema for Backwards"),
+        },
+        _ => panic!("expected SetRef Struct identity for Backwards"),
     }
 }
 

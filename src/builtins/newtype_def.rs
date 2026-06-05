@@ -4,13 +4,17 @@
 //! value with the NEWTYPE identity; the `Wrapped.inner` is invariantly non-`Wrapped`
 //! (newtype-over-newtype collapses to a single layer).
 
+use std::rc::Rc;
+
 use crate::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_ktype, extract_type_name_ref,
 };
 use crate::machine::core::source::Spanned;
 use crate::machine::core::ApplyOutcome;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::UserTypeKind;
+use crate::machine::model::types::{
+    NominalKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet,
+};
 use crate::machine::model::values::{KObject, NonWrappedRef};
 use crate::machine::model::KType;
 use crate::machine::{
@@ -20,10 +24,10 @@ use crate::machine::{
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
 
-/// Body of `NEWTYPE <name> = <repr>`. Mints a [`KType::UserType`] with
-/// `kind: UserTypeKind::Newtype { repr }`, writes the identity into `bindings.types`,
-/// and returns the minted identity as a `KObject::KTypeValue` so the surface form
-/// evaluates to a Type value.
+/// Body of `NEWTYPE <name> = <repr>`. Seals a singleton [`RecursiveSet`] over one
+/// [`NominalKind::Newtype`] member (`repr` as its [`NominalSchema::Newtype`]), writes the
+/// `SetRef` identity into `bindings.types`, and returns it as a `KObject::KTypeValue` so the
+/// surface form evaluates to a Type value.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
@@ -65,17 +69,14 @@ pub fn body<'a>(
             )));
         }
     };
-    // Identity equality (per the manual `UserTypeKind::PartialEq`) ignores `repr`, so
-    // the wildcard `AnyUserType { kind: Newtype { repr: <sentinel> } }` admits any
-    // concrete identity.
+    // A NEWTYPE is non-recursive (its `repr` is already resolved), so it seals into a
+    // singleton set of one member. The wildcard `AnyUserType { kind: Newtype }` admits any
+    // such member, since identity never descends `repr`.
     let scope_id = scope.id;
-    let identity = KType::UserType {
-        kind: UserTypeKind::Newtype {
-            repr: Box::new(repr),
-        },
-        scope_id,
-        name: name.clone(),
-    };
+    let member = NominalMember::pending(name.clone(), scope_id, NominalKind::Newtype);
+    member.fill(NominalSchema::Newtype(Box::new(repr)));
+    let set = Rc::new(RecursiveSet::new(vec![member]));
+    let identity = KType::SetRef { set, index: 0 };
     let arena = scope.arena;
     let kt_ref: &'a KType = arena.alloc_ktype(identity);
     let bind_index = sched
@@ -136,14 +137,16 @@ pub fn newtype_construct<'a>(
         );
         let value: &'a KObject<'a> = results[0];
         // `unreachable!` is structurally guarded by the `TypeCall` fast lane.
-        let repr: &KType = match identity {
-            KType::UserType {
-                kind: UserTypeKind::Newtype { repr },
-                ..
-            } => repr.as_ref(),
+        let (set, index) = match identity {
+            KType::SetRef { set, index } => (set, *index),
             _ => unreachable!(
-                "TypeCall fast lane routed non-Newtype identity into newtype_construct"
+                "TypeCall fast lane routed a non-SetRef identity into newtype_construct"
             ),
+        };
+        // Project the member's `repr` (sibling `SetLocal`s resolved) for the type-check.
+        let repr = match RecursiveSet::projected_schema(set, index) {
+            ProjectedSchema::Newtype(repr) => repr,
+            _ => unreachable!("newtype_construct ran on a non-Newtype member"),
         };
         if !repr.matches_value(value) {
             return BodyResult::Err(KError::new(KErrorKind::TypeMismatch {
@@ -153,7 +156,7 @@ pub fn newtype_construct<'a>(
             }));
         }
         // `peel` enforces the single-layer invariant: `Bar(some_foo)` takes
-        // `some_foo.inner` directly.
+        // `some_foo.inner` directly. `identity` is the declaration-stable `&'a SetRef`.
         let wrapped = KObject::Wrapped {
             inner: NonWrappedRef::peel(value),
             type_id: identity,
@@ -188,11 +191,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
     use crate::machine::execute::Scheduler;
-    use crate::machine::model::types::UserTypeKind;
+    use crate::machine::model::types::{NominalKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
     use crate::machine::{KErrorKind, RuntimeArena};
 
-    /// NEWTYPE writes the identity into `bindings.types` and nothing into
+    /// NEWTYPE writes the `SetRef` identity into `bindings.types` and nothing into
     /// `bindings.data` — the declaration has no payload value to bind.
     #[test]
     fn declare_mints_newtype_identity() {
@@ -204,15 +207,15 @@ mod tests {
             .get("Distance")
             .expect("Distance should be in bindings.types");
         match **kt {
-            KType::UserType {
-                kind: UserTypeKind::Newtype { ref repr },
-                ref name,
-                ..
-            } => {
-                assert_eq!(name, "Distance");
-                assert_eq!(**repr, KType::Number);
+            KType::SetRef { ref set, index } => {
+                assert_eq!(set.member(index).name, "Distance");
+                assert_eq!(set.member(index).kind, NominalKind::Newtype);
+                match RecursiveSet::projected_schema(set, index) {
+                    ProjectedSchema::Newtype(repr) => assert_eq!(repr, KType::Number),
+                    _ => panic!("expected a Newtype schema"),
+                }
             }
-            ref other => panic!("expected Newtype identity, got {other:?}"),
+            ref other => panic!("expected Newtype SetRef identity, got {other:?}"),
         }
         drop(types);
         let data = scope.bindings().data();
@@ -233,12 +236,11 @@ mod tests {
         match result {
             KObject::Wrapped { inner, type_id } => {
                 match **type_id {
-                    KType::UserType {
-                        kind: UserTypeKind::Newtype { .. },
-                        ref name,
-                        ..
-                    } => assert_eq!(name, "Distance"),
-                    ref other => panic!("expected Newtype type_id, got {other:?}"),
+                    KType::SetRef { ref set, index } => {
+                        assert_eq!(set.member(index).name, "Distance");
+                        assert_eq!(set.member(index).kind, NominalKind::Newtype);
+                    }
+                    ref other => panic!("expected Newtype SetRef type_id, got {other:?}"),
                 }
                 assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
             }
@@ -271,7 +273,7 @@ mod tests {
         match result {
             KObject::Wrapped { inner, type_id } => {
                 match **type_id {
-                    KType::UserType { ref name, .. } => assert_eq!(name, "Bar"),
+                    KType::SetRef { ref set, index } => assert_eq!(set.member(index).name, "Bar"),
                     ref other => panic!("expected Bar identity, got {other:?}"),
                 }
                 // Critical: `inner` must be the bare Number, NOT another Wrapped.
@@ -342,7 +344,9 @@ mod tests {
         match result {
             KObject::Wrapped { inner, type_id } => {
                 match **type_id {
-                    KType::UserType { ref name, .. } => assert_eq!(name, "Distance"),
+                    KType::SetRef { ref set, index } => {
+                        assert_eq!(set.member(index).name, "Distance")
+                    }
                     ref other => panic!("expected Distance identity, got {other:?}"),
                 }
                 assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
@@ -386,7 +390,9 @@ mod tests {
         match result {
             KObject::Wrapped { inner, type_id } => {
                 match **type_id {
-                    KType::UserType { ref name, .. } => assert_eq!(name, "Distance"),
+                    KType::SetRef { ref set, index } => {
+                        assert_eq!(set.member(index).name, "Distance")
+                    }
                     ref other => panic!("expected Distance identity, got {other:?}"),
                 }
                 assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));

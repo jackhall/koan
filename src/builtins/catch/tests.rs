@@ -81,8 +81,8 @@ fn catch_inside_tco_position_preserves_frame_chain() {
     assert_eq!(bytes, b"done\n");
 }
 
-/// Nominal identity: a CATCH-produced `Result` and a `Result (...)`-constructed
-/// one must share `(name, scope_id)` so MATCH dispatches them identically.
+/// Nominal identity: a CATCH-produced `Result` and a `Result (...)`-constructed one must
+/// reference the *same* sealed `RecursiveSet` member so MATCH dispatches them identically.
 #[test]
 fn catch_result_shares_identity_with_constructed_result() {
     let arena = RuntimeArena::new();
@@ -92,19 +92,17 @@ fn catch_result_shares_identity_with_constructed_result() {
     match (caught, constructed) {
         (
             KObject::Tagged {
-                name: n1,
-                scope_id: s1,
-                ..
+                set: s1, index: i1, ..
             },
             KObject::Tagged {
-                name: n2,
-                scope_id: s2,
-                ..
+                set: s2, index: i2, ..
             },
         ) => {
-            assert_eq!(n1, "Result");
-            assert_eq!(n1, n2);
-            assert_eq!(s1, s2, "CATCH and constructed Result must share scope_id");
+            assert_eq!(s1.member(*i1).name, "Result");
+            assert!(
+                std::rc::Rc::ptr_eq(s1, s2) && i1 == i2,
+                "CATCH and constructed Result must share the same set member",
+            );
         }
         _ => panic!("expected both to be Tagged"),
     }

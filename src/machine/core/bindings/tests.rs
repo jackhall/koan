@@ -4,7 +4,7 @@
 use super::*;
 use crate::machine::core::arena::RuntimeArena;
 use crate::machine::core::scope_id::ScopeId;
-use crate::machine::model::types::{KType, UserTypeKind};
+use crate::machine::model::types::{KType, NominalKind};
 
 #[test]
 fn try_register_type_inserts_into_types_map() {
@@ -98,7 +98,7 @@ fn pending_binder_guard_drop_removes_entry() {
     let bindings: Box<Bindings<'static>> = Box::default();
     let bindings: &'static Bindings<'static> = Box::leak(bindings);
     let entry = PendingTypeEntry {
-        kind: UserTypeKind::struct_sentinel(),
+        kind: NominalKind::Struct,
         scope_id: ScopeId::from_raw(0, 0xBEEF),
         schema_expr: KExpression::new(Vec::new()),
         edges: Vec::new(),
@@ -120,7 +120,7 @@ fn pending_binder_guard_drop_tolerates_absent_entry() {
     let bindings: Box<Bindings<'static>> = Box::default();
     let bindings: &'static Bindings<'static> = Box::leak(bindings);
     let entry = PendingTypeEntry {
-        kind: UserTypeKind::struct_sentinel(),
+        kind: NominalKind::Struct,
         scope_id: ScopeId::from_raw(0, 0xBEEF),
         schema_expr: KExpression::new(Vec::new()),
         edges: Vec::new(),

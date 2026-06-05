@@ -444,13 +444,12 @@ impl<'a> Bindings<'a> {
     }
 
     /// Upsert `name` → `kt` in `types` for nominal finalize. Insert-if-absent;
-    /// on a `PartialEq`-equal existing entry **overwrite** the stored `&KType`
-    /// (and `index`) so the payload-empty identity an SCC cycle-close pre-installed
-    /// is replaced by the schema-bearing one finalize built. A non-equal existing
-    /// entry is a genuine collision — `Err(Rebind)`.
+    /// on a `PartialEq`-equal existing entry **overwrite** the stored `&KType` (and
+    /// `index`) so the `SetRef` an SCC seal pre-installed (same set + index) is rewritten
+    /// in place. A non-equal existing entry is a genuine collision — `Err(Rebind)`.
     ///
     /// Distinct from [`Self::try_register_type`], whose strict insert-if-absent arm
-    /// would `Rebind` on the cycle-close pre-install rather than overwrite it.
+    /// would `Rebind` on the seal pre-install rather than overwrite it.
     /// `Ok(Conflict)` on borrow contention. Best-effort placeholder clear on success.
     pub fn try_register_type_upsert(
         &self,
@@ -468,8 +467,8 @@ impl<'a> Bindings<'a> {
                     name: name.to_string(),
                 }));
             }
-            // Absent, or identity-equal (cycle-close pre-install): write the
-            // schema-bearing identity, replacing any payload-empty pre-install.
+            // Absent, or identity-equal (the seal's pre-installed `SetRef`): write the
+            // identity, rewriting any pre-install in place.
             _ => {
                 types.insert(name.to_string(), (kt, index));
             }

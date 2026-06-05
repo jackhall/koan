@@ -14,7 +14,7 @@
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
-    UserTypeKind,
+    NominalKind, ProjectedSchema, RecursiveSet,
 };
 use crate::machine::model::{KObject, KType, Record};
 use crate::machine::{
@@ -107,10 +107,12 @@ fn body_apply_as<'a>(
         Err(e) => return err(e),
     };
     let param_count = match &ctor {
-        KType::UserType {
-            kind: UserTypeKind::TypeConstructor { param_names, .. },
-            ..
-        } => param_names.len(),
+        KType::SetRef { set, index } if set.member(*index).kind == NominalKind::TypeConstructor => {
+            match RecursiveSet::projected_schema(set, *index) {
+                ProjectedSchema::TypeConstructor { param_names, .. } => param_names.len(),
+                _ => unreachable!("TypeConstructor-kind member projects a TypeConstructor schema"),
+            }
+        }
         other => {
             return err(KError::new(KErrorKind::ShapeError(format!(
                 "right-hand side of `AS` must be a type constructor, got `{}`",
@@ -417,32 +419,35 @@ mod tests {
     // lowers to `ConstructorApply(Wrap, [Number])`.
     #[test]
     fn apply_as_lowers_to_constructor_apply() {
-        use crate::machine::model::types::UserTypeKind;
+        use crate::machine::model::types::{NominalKind, NominalSchema, RecursiveSet};
         use crate::machine::{BindingIndex, ScopeId};
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
+        let wrap_set = RecursiveSet::singleton(
+            "Wrap".into(),
+            ScopeId::from_raw(0, 0xC0DE),
+            NominalSchema::TypeConstructor {
+                schema: std::collections::HashMap::new(),
+                param_names: vec!["Type".into()],
+            },
+        );
         scope.register_type(
             "Wrap".into(),
-            KType::UserType {
-                kind: UserTypeKind::TypeConstructor {
-                    schema: std::rc::Rc::new(std::collections::HashMap::new()),
-                    param_names: vec!["Type".into()],
-                },
-                scope_id: ScopeId::from_raw(0, 0xC0DE),
-                name: "Wrap".into(),
+            KType::SetRef {
+                set: wrap_set,
+                index: 0,
             },
             BindingIndex::BUILTIN,
         );
         let result = run_one(scope, parse_one(":(Number AS Wrap)"));
         match result {
             KObject::KTypeValue(KType::ConstructorApply { ctor, args }) => {
-                assert!(matches!(
-                    ctor.as_ref(),
-                    KType::UserType {
-                        kind: UserTypeKind::TypeConstructor { .. },
-                        ..
+                match ctor.as_ref() {
+                    KType::SetRef { set, index } => {
+                        assert_eq!(set.member(*index).kind, NominalKind::TypeConstructor);
                     }
-                ));
+                    other => panic!("expected SetRef ctor, got {other:?}"),
+                }
                 assert_eq!(*args, vec![KType::Number]);
             }
             other => panic!(

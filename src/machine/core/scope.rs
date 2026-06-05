@@ -67,9 +67,9 @@ pub struct Scope<'a> {
     bindings: ScopeBindings<'a>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
     pub arena: &'a RuntimeArena,
-    /// Position-independent identity captured into `KType::UserType { scope_id, .. }` /
-    /// `KType::Signature { sig, .. }` (via `sig.sig_id()`) so dispatch on user-declared
-    /// types compares ids rather than scope pointers.
+    /// Position-independent origin id recorded on a sealed `NominalMember` (diagnostics)
+    /// and on `KType::Signature { sig, .. }` (via `sig.sig_id()`) so dispatch on
+    /// user-declared types compares ids rather than scope pointers.
     pub id: ScopeId,
     pending: PendingQueue<'a>,
     pub kind: ScopeKind,
@@ -345,8 +345,8 @@ impl<'a> Scope<'a> {
     }
 
     /// Upsert install for a type-only nominal finalize (STRUCT / named UNION / Result /
-    /// MODULE). Writes the schema-bearing identity into [`Bindings::types`], overwriting
-    /// a `PartialEq`-equal payload-empty identity the SCC cycle-close pre-installed.
+    /// MODULE). Writes the sealed `SetRef` identity into [`Bindings::types`], overwriting
+    /// a `PartialEq`-equal `SetRef` the SCC seal pre-installed (same set + index).
     /// Returns the arena-allocated `&KType` so the caller can yield it as a
     /// `KObject::KTypeValue`. Same conditional-defer shape as [`Self::register_type`];
     /// `Err(Rebind)` on a genuine non-equal collision.
@@ -377,16 +377,15 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Synchronous identity install for the SCC cycle-close sweep. Writes `name` →
-    /// `ktype` to [`Bindings::types`], but panics on borrow conflict instead of
-    /// deferring, and panics on `Rebind` — a cycle member's identity must not already
-    /// be in `types` when cycle-close fires.
+    /// Synchronous identity install for the SCC seal sweep. Writes `name` → `ktype` (a
+    /// `KType::SetRef` into the freshly-sealed `RecursiveSet`) to [`Bindings::types`], but
+    /// panics on borrow conflict instead of deferring, and panics on `Rebind` — a cycle
+    /// member's identity must not already be in `types` when the seal fires.
     ///
-    /// Cycle-close runs from the elaborator's `Resolution::Placeholder` arm with no
-    /// outer `bindings` borrow held; a conflict here is a programming error. The
-    /// identity installed here is payload-empty (schema not yet elaborated); the
-    /// downstream finalize overwrites it with the schema-bearing one via
-    /// [`Self::register_type_upsert`].
+    /// The seal runs from the elaborator's `Resolution::Placeholder` arm with no outer
+    /// `bindings` borrow held; a conflict here is a programming error. The member's schema
+    /// is filled later, at its own finalize, against the same shared set recovered from
+    /// this `SetRef`.
     pub fn cycle_close_install_identity(
         &self,
         name: String,

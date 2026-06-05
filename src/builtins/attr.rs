@@ -5,12 +5,12 @@
 //! NEWTYPE fall-through, [`body_module`] for chained module access.
 //!
 //! The slot types are disjoint (`KType::Identifier` only matches `ExpressionPart::Identifier`;
-//! the three `AnyUserType { kind: Struct | Module | Newtype { .. } }` slots each admit a
-//! distinct `KObject` family via the manual `UserTypeKind::PartialEq`), so dispatch picks
-//! unambiguously without a specificity tiebreaker.
+//! the three `AnyUserType { kind: Struct | Newtype }` slots each admit a distinct `KObject`
+//! family by `NominalKind`, and `AnyModule` admits modules), so dispatch picks unambiguously
+//! without a specificity tiebreaker.
 
 use crate::machine::execute::coerce_type_token_value;
-use crate::machine::model::types::{AbstractSource, UserTypeKind};
+use crate::machine::model::types::{AbstractSource, NominalKind};
 use crate::machine::model::values::{Module, NonWrappedRef};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
@@ -96,9 +96,9 @@ pub fn body_type_lhs<'a>(
     };
     // The Type-classed lhs is a nominal type-side binding. Modules / signatures keep
     // a value-side carrier (`KTypeValue(Module/Signature)`), which `coerce_type_token_value`
-    // recovers; struct / union names are type-only now, so it synthesizes a
-    // `KTypeValue(UserType)` that `access_field` rejects with the same TypeMismatch a
-    // static struct field access has always produced.
+    // recovers; struct / union names are type-only, so it synthesizes a
+    // `KTypeValue(SetRef)` that `access_field` rejects with the same TypeMismatch a
+    // static struct field access produces.
     let leaf = crate::machine::model::ast::TypeName::leaf(s_name);
     let target = match coerce_type_token_value(scope, &leaf, None) {
         Ok(obj) => obj,
@@ -166,14 +166,13 @@ fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
 fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> BodyResult<'a> {
     match target {
         KObject::Struct {
-            name: type_name,
-            fields,
-            ..
+            set, index, fields, ..
         } => match fields.get(field) {
             Some(value) => BodyResult::Value(scope.arena.alloc_object(value.deep_clone())),
             None => err(KError::new(KErrorKind::ShapeError(format!(
                 "struct `{}` has no field `{}`",
-                type_name, field
+                set.member(*index).name,
+                field
             )))),
         },
         KObject::KTypeValue(KType::Module { module: m, .. }) => access_module_member(m, field),
@@ -263,13 +262,11 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let struct_ty = KType::AnyUserType {
-        kind: UserTypeKind::struct_sentinel(),
+        kind: NominalKind::Struct,
     };
     let module_ty = KType::AnyModule;
     let newtype_ty = KType::AnyUserType {
-        kind: UserTypeKind::Newtype {
-            repr: Box::new(KType::Any),
-        },
+        kind: NominalKind::Newtype,
     };
 
     register_builtin(
@@ -311,8 +308,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ),
         body_module,
     );
-    // NEWTYPE fall-through. The wildcard `Newtype { repr: Any }` slot admits any
-    // `KObject::Wrapped` (the manual `UserTypeKind::PartialEq` ignores `repr`). Reuses
+    // NEWTYPE fall-through. The `AnyUserType { kind: Newtype }` slot admits any
+    // `KObject::Wrapped` (the wildcard keys on `NominalKind`, never the repr). Reuses
     // `body_struct` because `access_field` dispatches on the lhs shape — its `Wrapped`
     // arm recurses one level into `inner`.
     register_builtin(

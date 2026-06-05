@@ -9,15 +9,16 @@ use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::UserTypeKind;
+use crate::machine::model::types::NominalKind;
 
 use super::super::scope_id::ScopeId;
 
 /// `schema_expr` is the unelaborated body the cycle-close sweep re-runs against
 /// the post-pre-registration scope; `edges` is the adjacency list to other
-/// in-flight binders this one has parked on.
+/// in-flight binders this one has parked on. `kind` seeds the sealed
+/// `NominalMember`'s surface family.
 pub struct PendingTypeEntry<'a> {
-    pub kind: UserTypeKind<'a>,
+    pub kind: NominalKind,
     pub scope_id: ScopeId,
     pub schema_expr: KExpression<'a>,
     pub edges: Vec<String>,

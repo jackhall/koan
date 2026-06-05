@@ -1,20 +1,27 @@
 //! Scheduler-aware type-name elaboration. Walks a [`TypeName`] against a [`Scope`],
 //! threads a "currently elaborating" set so recursive type definitions short-circuit to
-//! [`KType::RecursiveRef`] instead of deadlocking on their own placeholder, and returns
-//! [`ElabResult::Park`] when a referenced type-binding placeholder hasn't finalized so
-//! the caller can install dep edges and re-run the elaboration on wake.
+//! the transient [`KType::RecursiveRef`] instead of deadlocking on their own placeholder,
+//! and returns [`ElabResult::Park`] when a referenced type-binding placeholder hasn't
+//! finalized so the caller can install dep edges and re-run the elaboration on wake.
+//!
+//! When a placeholder reference closes a strongly-connected component (detected via
+//! [`detect_pending_cycle`]), [`seal_type_cycle`] packages the members into one shared
+//! [`RecursiveSet`] and installs a [`KType::SetRef`] into each member's `bindings.types`
+//! entry; the members fill their schemas as they finalize.
 //!
 //! Type-name bindings live in [`Scope::bindings`]'s `types` map; consumers go through
 //! [`elaborate_type_expr`] when scope-aware lookup is needed or [`KType::from_type_expr`]
 //! when only the builtin table matters.
 
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use crate::machine::core::{Resolution, Scope, ScopeId};
 use crate::machine::model::ast::TypeName;
 use crate::machine::NodeId;
 
-use super::ktype::{KType, UserTypeKind};
+use super::ktype::KType;
+use super::recursive_set::{NominalKind, NominalMember, RecursiveSet};
 
 #[cfg(test)]
 mod tests;
@@ -22,8 +29,8 @@ mod tests;
 /// Outcome of one elaboration walk over a `TypeName`.
 #[derive(Debug)]
 pub enum ElabResult<'a> {
-    /// Fully elaborated. Whether to `Mu`-wrap rides on the elaborator's
-    /// `fired_self_ref_for` set, not on this variant.
+    /// Fully elaborated. Self / forward-sibling references appear as transient
+    /// `RecursiveRef(name)` leaves, sealed into `SetLocal` indices at the member's finalize.
     Done(KType<'a>),
     /// Referenced type-binding placeholders haven't finalized. Caller installs park
     /// edges on every producer and re-runs the elaboration when they terminalize.
@@ -66,8 +73,6 @@ impl<'a> ElabResult<'a> {
 ///
 /// - `threaded`: binder names currently being elaborated, so a self-reference becomes
 ///   `RecursiveRef` instead of parking on its own placeholder.
-/// - `fired_self_ref_for`: which threaded names actually fired a back-reference;
-///   drives the caller's `KType::Mu` wrap decision.
 /// - `current_decl_*`: SCC context. When set, the `Resolution::Placeholder` arm records
 ///   dependency edges into `pending_types` and runs DFS cycle detection from
 ///   `current_decl_name`. `None` for non-binder elaboration (FN signatures, LET RHS,
@@ -75,9 +80,8 @@ impl<'a> ElabResult<'a> {
 pub struct Elaborator<'s, 'a> {
     pub scope: &'s Scope<'a>,
     pub threaded: HashSet<String>,
-    pub fired_self_ref_for: HashSet<String>,
     pub current_decl_name: Option<String>,
-    pub current_decl_kind: Option<UserTypeKind<'a>>,
+    pub current_decl_kind: Option<NominalKind>,
     pub current_decl_scope_id: Option<ScopeId>,
 }
 
@@ -86,7 +90,6 @@ impl<'s, 'a> Elaborator<'s, 'a> {
         Self {
             scope,
             threaded: HashSet::new(),
-            fired_self_ref_for: HashSet::new(),
             current_decl_name: None,
             current_decl_kind: None,
             current_decl_scope_id: None,
@@ -101,12 +104,7 @@ impl<'s, 'a> Elaborator<'s, 'a> {
     /// Seed SCC context: the `Resolution::Placeholder` arm will record dependency
     /// edges into `pending_types` and run cycle detection from `name`. The matching
     /// `PendingTypeEntry` must already be installed before the walk starts.
-    pub fn with_current_decl(
-        mut self,
-        name: String,
-        kind: UserTypeKind<'a>,
-        scope_id: ScopeId,
-    ) -> Self {
+    pub fn with_current_decl(mut self, name: String, kind: NominalKind, scope_id: ScopeId) -> Self {
         self.current_decl_name = Some(name);
         self.current_decl_kind = Some(kind);
         self.current_decl_scope_id = Some(scope_id);
@@ -123,7 +121,8 @@ impl<'s, 'a> Elaborator<'s, 'a> {
 pub fn elaborate_type_expr<'a>(el: &mut Elaborator<'_, 'a>, t: &TypeName) -> ElabResult<'a> {
     let name = t.as_str();
     if el.threaded.contains(name) {
-        el.fired_self_ref_for.insert(name.to_string());
+        // Self / forward-sibling reference inside a type-definition body: a transient
+        // `RecursiveRef`, sealed into a `SetLocal` index when the member finalizes.
         return ElabResult::Done(KType::RecursiveRef(name.to_string()));
     }
     if let Some(kt) = el.scope.resolve_type(name) {
@@ -133,7 +132,7 @@ pub fn elaborate_type_expr<'a>(el: &mut Elaborator<'_, 'a>, t: &TypeName) -> Ela
         Resolution::Placeholder(id) => {
             // Record the edge unconditionally: the parked-on name may not be in
             // `pending_types` yet, but DFS sees the persistent edge list later
-            // and closes the cycle when the second binder records its reciprocal
+            // and seals the cycle when the second binder records its reciprocal
             // edge. Trivial self-cycles (`LET T = T`) are caught earlier by the
             // dispatch driver's eager-resolve pass.
             if let Some(decl) = el.current_decl_name.clone() {
@@ -141,7 +140,8 @@ pub fn elaborate_type_expr<'a>(el: &mut Elaborator<'_, 'a>, t: &TypeName) -> Ela
                     .bindings()
                     .record_pending_edge(&decl, name.to_string());
                 if let Some(members) = detect_pending_cycle(el.scope, &decl) {
-                    close_type_cycle(el.scope, &members);
+                    seal_type_cycle(el.scope, &members);
+                    // Resolving the parked-on name now hits the just-installed `SetRef`.
                     if let Some(kt) = el.scope.resolve_type(name) {
                         return ElabResult::Done(kt.clone());
                     }
@@ -211,41 +211,47 @@ pub(crate) fn detect_pending_cycle(scope: &Scope<'_>, start: &str) -> Option<Vec
     None
 }
 
-/// Synchronous SCC cycle-close. Installs each member's payload-empty identity
-/// (`KType::UserType { kind, scope_id, name }`, schema not yet elaborated) into
-/// `bindings.types` so cross-member `resolve_type` lookups succeed on the very next
-/// call. Each member's own finalize replaces this sentinel with the schema-bearing
-/// identity via `Scope::register_type_upsert`.
+/// Seal an SCC into one shared [`RecursiveSet`] and pre-install a `SetRef` into each
+/// member's `bindings.types` entry, so cross-member `resolve_type` lookups succeed on the
+/// very next call. Members are `pending` (schema unfilled); each member's own finalize
+/// fills its schema (converting transient `RecursiveRef(name)` leaves to `SetLocal(index)`)
+/// against this same set, recovered from its installed `SetRef`.
 ///
 /// `pending_types` entries are left in place on purpose: each member's finalize is the
 /// sole remover of its own entry. The elaborator rebuilt inside each finalize sees
 /// `bindings.types` populated and so never re-enters this function.
-fn close_type_cycle(scope: &Scope<'_>, members: &[String]) {
+fn seal_type_cycle(scope: &Scope<'_>, members: &[String]) {
     // Snapshot under a single `pending_types` read borrow; release before calling into
     // Scope methods that take their own borrows.
-    let identities: Vec<(String, UserTypeKind, ScopeId)> = {
+    let infos: Vec<(String, NominalKind, ScopeId)> = {
         let pending = scope.bindings().pending_types();
         members
             .iter()
             .map(|n| {
                 let entry = pending
                     .get(n)
-                    .expect("cycle member must be in pending_types when cycle-close fires");
-                (n.clone(), entry.kind.clone(), entry.scope_id)
+                    .expect("cycle member must be in pending_types when seal fires");
+                (n.clone(), entry.kind, entry.scope_id)
             })
             .collect()
     };
-    for (name, kind, scope_id) in identities {
-        let identity = KType::UserType {
-            kind,
-            scope_id,
-            name: name.clone(),
+    // One `Rc` shared by every member; intra-set references resolve against it by index.
+    let set = Rc::new(RecursiveSet::new(
+        infos
+            .iter()
+            .map(|(n, kind, sid)| NominalMember::pending(n.clone(), *sid, *kind))
+            .collect(),
+    ));
+    for (index, (name, _, _)) in infos.into_iter().enumerate() {
+        let identity = KType::SetRef {
+            set: Rc::clone(&set),
+            index,
         };
         // Recover the cycle member's installed `BindingIndex` from its placeholder so
         // the identity installs at the lexical position the eventual finalize will use.
-        // Lookup is visibility-unfiltered (cycle-close runs outside any consumer's
-        // chain). The `unwrap_or` fallback is defensive: missing placeholder here is
-        // an upstream programming error, not a soft-recovery point.
+        // Lookup is visibility-unfiltered (seal runs outside any consumer's chain). The
+        // `unwrap_or` fallback is defensive: a missing placeholder here is an upstream
+        // programming error, not a soft-recovery point.
         let bind_index = scope
             .ancestors()
             .find_map(|s| {
@@ -263,4 +269,97 @@ fn close_type_cycle(scope: &Scope<'_>, members: &[String]) {
             });
         scope.cycle_close_install_identity(name, identity, bind_index);
     }
+}
+
+/// Outcome of [`finalize_nominal_member`].
+pub enum SealOutcome<'a> {
+    /// The member sealed (or was already sealed); the arena reference is its `SetRef`
+    /// identity, ready to wrap in a `KObject::KTypeValue`.
+    Sealed(&'a KType<'a>),
+    /// A transient `RecursiveRef(name)` named no set member — a sealing bug surfaced as a
+    /// shape error rather than a dangling reference.
+    DanglingRef(String),
+    /// The name already binds a different type (a redeclaration); the install raised
+    /// `Rebind`, propagated to the binder.
+    Rebind(crate::machine::core::KError),
+}
+
+/// Seal a nominal type's elaborated schema into its [`RecursiveSet`] member and install the
+/// `SetRef` identity into `bindings.types[name]`. Three cases collapse here:
+///
+/// 1. **Recursive member** — `bindings.types[name]` already holds a `SetRef` (pre-installed
+///    by [`seal_type_cycle`]); reuse that set + index.
+/// 2. **Non-recursive type** — no pre-install; mint a *singleton* set of one `pending`
+///    member at index 0 (a pure self-recursive type with no sibling still has a self-edge,
+///    handled identically since its own name is in the singleton's `index_of`).
+/// 3. **Already sealed** — the member's schema is filled (a parallel finalize ran first);
+///    short-circuit and return the existing identity.
+///
+/// In every case the schema's transient `RecursiveRef(name)` leaves are sealed to
+/// `SetLocal(index)` against the (singleton or SCC) set before the member is filled.
+#[allow(clippy::result_large_err)]
+pub fn finalize_nominal_member<'a>(
+    scope: &'a Scope<'a>,
+    name: &str,
+    scope_id: ScopeId,
+    kind: NominalKind,
+    build_schema: impl FnOnce(&Rc<RecursiveSet<'a>>) -> SchemaSealResult<'a>,
+    bind_index: crate::machine::core::BindingIndex,
+) -> SealOutcome<'a> {
+    // Recover the seal's pre-install (if any), distinguishing it from a genuine prior type:
+    // - An existing `SetRef` whose member is still *pending* (unfilled) is the seal's
+    //   contribution for *this* declaration — reuse its set + index.
+    // - An existing `SetRef` whose member is filled, with the same `(scope_id, kind)`, is a
+    //   parallel finalize of *this* declaration — short-circuit on it (idempotent).
+    // - Any other existing `SetRef` is a genuine prior type of this name; mint a fresh
+    //   singleton so the install path below raises the `Rebind` a redeclaration deserves.
+    let pre_installed = match scope.bindings().lookup_type(name, None) {
+        Some(KType::SetRef { set, index }) if !set.member(*index).is_filled() => {
+            Some((Rc::clone(set), *index))
+        }
+        Some(kt @ KType::SetRef { set, index }) => {
+            let member = set.member(*index);
+            if member.scope_id == scope_id && member.kind == kind {
+                return SealOutcome::Sealed(kt);
+            }
+            None
+        }
+        _ => None,
+    };
+    let (set, index) = match pre_installed {
+        Some(pair) => pair,
+        None => {
+            // Non-recursive (or a redeclaration): a singleton over this one member.
+            let set = Rc::new(RecursiveSet::new(vec![NominalMember::pending(
+                name.to_string(),
+                scope_id,
+                kind,
+            )]));
+            (set, 0)
+        }
+    };
+    // Build + seal the schema (intra-set `RecursiveRef` / `SetRef` → `SetLocal`).
+    let schema = match build_schema(&set) {
+        SchemaSealResult::Ok(schema) => schema,
+        SchemaSealResult::Dangling(missing) => return SealOutcome::DanglingRef(missing),
+    };
+    set.member(index).fill(schema);
+    // Install the `SetRef` identity. A non-equal existing entry (a redeclaration) surfaces
+    // as `Rebind`, propagated to the binder.
+    let identity = KType::SetRef {
+        set: Rc::clone(&set),
+        index,
+    };
+    match scope.register_type_upsert(name.to_string(), identity, bind_index) {
+        Ok(kt_ref) => SealOutcome::Sealed(kt_ref),
+        Err(e) => SealOutcome::Rebind(e),
+    }
+}
+
+/// Outcome of [`finalize_nominal_member`].
+pub enum SchemaSealResult<'a> {
+    /// The schema sealed cleanly.
+    Ok(super::recursive_set::NominalSchema<'a>),
+    /// A transient `RecursiveRef` named no set member — a sealing bug.
+    Dangling(String),
 }

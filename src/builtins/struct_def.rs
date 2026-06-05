@@ -1,11 +1,10 @@
-use std::rc::Rc;
-
 use crate::machine::core::{PendingBinderGuard, PendingTypeEntry};
-use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::types::{
-    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
+    finalize_nominal_member, parse_typed_field_list_via_elaborator, seal_recursive_refs,
+    Elaborator, FieldListOutcome, FieldNameKind, NominalKind, NominalSchema, Record,
+    SchemaSealResult, SealOutcome,
 };
-use crate::machine::model::{KObject, KType, Record};
+use crate::machine::model::{KObject, KType};
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
     SchedulerHandle, Scope,
@@ -49,18 +48,18 @@ pub fn body<'a>(
     let pending_guard = scope.bindings().insert_pending_type(
         name.clone(),
         PendingTypeEntry {
-            kind: UserTypeKind::struct_sentinel(),
+            kind: NominalKind::Struct,
             scope_id,
             schema_expr: schema_expr.clone(),
             edges: Vec::new(),
         },
     );
-    // Thread this binder's name so a self-reference resolves to `RecursiveRef`
-    // rather than parking on our own placeholder. `with_current_decl` arms the
-    // SCC edge-recording / cycle-detection arm.
+    // Thread this binder's name so a self-reference resolves to the transient
+    // `RecursiveRef` rather than parking on our own placeholder. `with_current_decl` arms
+    // the SCC edge-recording / cycle-detection arm.
     let mut elaborator = Elaborator::new(scope)
         .with_threaded([name.clone()])
-        .with_current_decl(name.clone(), UserTypeKind::struct_sentinel(), scope_id);
+        .with_current_decl(name.clone(), NominalKind::Struct, scope_id);
     let outcome = parse_typed_field_list_via_elaborator(
         &schema_expr,
         "STRUCT schema",
@@ -93,54 +92,54 @@ pub fn body<'a>(
     }
 }
 
-/// Fold the elaborated fields into the `UserType { Struct { fields } }` identity and
-/// upsert it into `bindings.types` — type-only, no value-side carrier. The schema rides
-/// the identity, so construction reads it via a fresh `types[name]` lookup. Shared by the
-/// synchronous and Combine-finish paths.
+/// Seal the elaborated fields into the STRUCT's [`RecursiveSet`] member and install the
+/// `SetRef` identity into `bindings.types` — type-only, no value-side carrier. Transient
+/// `RecursiveRef(name)` field leaves seal to `SetLocal(index)` against the member's set
+/// (the SCC set if recursive, a fresh singleton otherwise). Shared by the synchronous and
+/// Combine-finish paths.
 fn finalize_struct<'a>(
     scope: &'a Scope<'a>,
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {
-    // Idempotent-finalize guard: a parallel finalize (cycle-close + Combine-finish, or
-    // two Combine-finishes) may already have upserted the schema-bearing identity. The
-    // cycle-close pre-install carries a payload-empty identity, so the guard must
-    // distinguish them: only short-circuit on a populated `Struct { fields }` payload.
-    let bindings = scope.bindings();
-    if let Some(KType::UserType {
-        kind: UserTypeKind::Struct { fields },
-        ..
-    }) = bindings.lookup_type(&name, None)
-    {
-        if !fields.is_empty() {
-            return BodyResult::Value(scope.arena.alloc_object(KObject::KTypeValue(
-                bindings.lookup_type(&name, None).unwrap().clone(),
-            )));
-        }
-    }
     if fields.is_empty() {
         return err(KError::new(KErrorKind::ShapeError(
             "STRUCT schema must have at least one field".to_string(),
         )));
     }
     let scope_id = scope.id;
-    let identity = KType::UserType {
-        kind: UserTypeKind::Struct {
-            // The `Vec`→`Record` boundary: the parser hands back declaration-ordered
-            // pairs (duplicate-free, `parse_pair_list` rejects dups), wrapped once here.
-            fields: Rc::new(Record::from_pairs(fields)),
-        },
+    let outcome = finalize_nominal_member(
+        scope,
+        &name,
         scope_id,
-        name: name.clone(),
-    };
-    match scope.register_type_upsert(name, identity, bind_index) {
-        Ok(kt_ref) => BodyResult::Value(
+        NominalKind::Struct,
+        |set| {
+            let missing = std::cell::RefCell::new(Vec::new());
+            // The `Vec`→`Record` boundary: the parser hands back declaration-ordered pairs
+            // (duplicate-free, `parse_pair_list` rejects dups), wrapped once here.
+            let sealed_pairs: Vec<(String, KType<'a>)> = fields
+                .into_iter()
+                .map(|(field, kt)| (field, seal_recursive_refs(set, &kt, &missing)))
+                .collect();
+            let sealed = Record::from_pairs(sealed_pairs);
+            match missing.into_inner().into_iter().next() {
+                Some(m) => SchemaSealResult::Dangling(m),
+                None => SchemaSealResult::Ok(NominalSchema::Struct(sealed)),
+            }
+        },
+        bind_index,
+    );
+    match outcome {
+        SealOutcome::Sealed(kt_ref) => BodyResult::Value(
             scope
                 .arena
                 .alloc_object(KObject::KTypeValue(kt_ref.clone())),
         ),
-        Err(e) => err(e),
+        SealOutcome::DanglingRef(missing) => err(KError::new(KErrorKind::ShapeError(format!(
+            "STRUCT `{name}` schema references unsealed type `{missing}`",
+        )))),
+        SealOutcome::Rebind(e) => err(e),
     }
 }
 

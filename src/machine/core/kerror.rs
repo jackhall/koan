@@ -7,7 +7,9 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::scope_id::ScopeId;
 use crate::machine::core::source::{self, FileId, SourceLoc, Span};
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::Parseable;
+use crate::machine::model::types::{
+    NominalKind, NominalMember, NominalSchema, Parseable, RecursiveSet,
+};
 use crate::machine::model::values::KObject;
 
 /// Structured runtime error propagated as a value via `BodyResult::Err`. `frames` accumulate
@@ -169,9 +171,10 @@ impl KError {
     /// Lower this error into a `KObject::Tagged` for `TRY-WITH` to dispatch
     /// on. The `tag` names the `KErrorKind` variant (e.g. `"type_mismatch"`);
     /// the payload is a `KObject::Struct` mirroring the variant's fields plus
-    /// `frames :List<Str>`. The wrapping `Tagged` uses [`ScopeId::SENTINEL`] /
-    /// `"KError"` because TRY's branch walker reads `tag` and `value` directly
-    /// without going through `MATCH`.
+    /// `frames :List<Str>`. Both the payload `Struct` and the wrapping `Tagged` carry a
+    /// synthetic singleton [`RecursiveSet`] (named `struct_name` / `"KError"`, scope
+    /// [`ScopeId::SENTINEL`]) because TRY's branch walker reads `tag` and `value` directly
+    /// without going through dispatch — these carriers never need real nominal identity.
     pub fn to_tagged<'a>(&self) -> KObject<'a> {
         let (tag, struct_name, fields) = self.kind.to_struct_fields();
         let frames_list = KObject::list(
@@ -195,18 +198,30 @@ impl KError {
         }
         map.insert("frames".to_string(), frames_list);
         let payload = KObject::Struct {
-            name: struct_name,
-            scope_id: ScopeId::SENTINEL,
+            set: synthetic_singleton(struct_name, NominalKind::Struct),
+            index: 0,
             fields: Rc::new(map),
         };
         KObject::Tagged {
             tag,
             value: Rc::new(payload),
-            scope_id: ScopeId::SENTINEL,
-            name: "KError".to_string(),
+            set: synthetic_singleton("KError".to_string(), NominalKind::Tagged),
+            index: 0,
             type_args: Rc::new(vec![]),
         }
     }
+}
+
+/// A throwaway singleton `RecursiveSet` for an unregistered carrier (the `KError`
+/// to-tagged payload). Its one member carries an empty schema — these carriers are read
+/// directly by the TRY branch walker, never dispatched on, so the schema is never consulted.
+fn synthetic_singleton<'a>(name: String, kind: NominalKind) -> Rc<RecursiveSet<'a>> {
+    let member = NominalMember::pending(name, ScopeId::SENTINEL, kind);
+    member.fill(match kind {
+        NominalKind::Struct => NominalSchema::Struct(crate::machine::model::Record::new()),
+        _ => NominalSchema::Tagged(std::collections::HashMap::new()),
+    });
+    Rc::new(RecursiveSet::new(vec![member]))
 }
 
 impl KErrorKind {

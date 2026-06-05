@@ -1,28 +1,31 @@
 //! Per-declaration dispatch separation, wildcard slot admission, finalize idempotency.
 
 use crate::builtins::test_support::{parse_one, run_one, run_root_silent};
-use crate::machine::model::types::UserTypeKind;
+use crate::machine::model::types::{NominalKind, NominalMember, ProjectedSchema, RecursiveSet};
 use crate::machine::model::{KObject, KType};
 use crate::machine::BindingIndex;
 use crate::machine::RuntimeArena;
 
-/// `finalize_struct` is idempotent against a cycle-close payload-empty pre-install:
-/// finalize upserts the schema-bearing identity over it, and a second finalize against
-/// the now-populated identity short-circuits. Pins the cycle-close-then-Combine-finish
-/// double-fire safety net under the type-only (no value-side carrier) protocol.
+/// `finalize_struct` fills the member of a pre-installed `SetRef` (the seal pre-install),
+/// and a second finalize against the now-filled member short-circuits. Pins the
+/// seal-then-Combine-finish double-fire safety net under the type-only protocol.
 #[test]
-fn finalize_struct_idempotent_after_cycle_close_pre_install() {
+fn finalize_struct_idempotent_after_seal_pre_install() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let scope_id = scope.id;
-    // Mimic cycle-close: install the payload-empty identity into `types` only.
-    let pre_identity = KType::UserType {
-        kind: UserTypeKind::struct_sentinel(),
+    // Mimic the seal pre-install: a `SetRef` to a pending (unfilled) member.
+    let pre_set = std::rc::Rc::new(RecursiveSet::new(vec![NominalMember::pending(
+        "Foo".into(),
         scope_id,
-        name: "Foo".into(),
+        NominalKind::Struct,
+    )]));
+    let pre_identity = KType::SetRef {
+        set: std::rc::Rc::clone(&pre_set),
+        index: 0,
     };
     scope.cycle_close_install_identity("Foo".into(), pre_identity, BindingIndex::nominal(0));
-    // First finalize: upserts the schema-bearing identity, replacing the empty payload.
+    // First finalize: fills the pre-installed member in place.
     let first = super::super::finalize_struct(
         scope,
         "Foo".into(),
@@ -30,18 +33,19 @@ fn finalize_struct_idempotent_after_cycle_close_pre_install() {
         BindingIndex::nominal(0),
     );
     assert!(matches!(first, crate::machine::BodyResult::Value(_)));
+    assert!(pre_set.member(0).is_filled());
     let stored = scope.resolve_type("Foo").expect("Foo identity in types");
     match stored {
-        KType::UserType {
-            kind: UserTypeKind::Struct { fields },
-            ..
-        } => {
-            assert_eq!(fields.len(), 1);
-            assert_eq!(fields.get("x"), Some(&KType::Number));
-        }
-        other => panic!("expected populated Struct identity, got {other:?}"),
+        KType::SetRef { set, index } => match RecursiveSet::projected_schema(set, *index) {
+            ProjectedSchema::Struct(fields) => {
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields.get("x"), Some(&KType::Number));
+            }
+            _ => panic!("expected a Struct schema"),
+        },
+        other => panic!("expected populated Struct SetRef, got {other:?}"),
     }
-    // Second finalize observes the populated payload and short-circuits without re-upsert.
+    // Second finalize observes the filled member and short-circuits without re-upsert.
     let second = super::super::finalize_struct(
         scope,
         "Foo".into(),
@@ -49,12 +53,14 @@ fn finalize_struct_idempotent_after_cycle_close_pre_install() {
         BindingIndex::nominal(0),
     );
     match second {
-        crate::machine::BodyResult::Value(KObject::KTypeValue(KType::UserType {
-            name, ..
+        crate::machine::BodyResult::Value(KObject::KTypeValue(KType::SetRef {
+            set,
+            index,
+            ..
         })) => {
-            assert_eq!(name, "Foo");
+            assert_eq!(set.member(*index).name, "Foo");
         }
-        _ => panic!("expected short-circuit Value(KTypeValue(UserType)) from finalize_struct"),
+        _ => panic!("expected short-circuit Value(KTypeValue(SetRef)) from finalize_struct"),
     }
     assert!(
         scope.bindings().data().get("Foo").is_none(),
@@ -62,8 +68,8 @@ fn finalize_struct_idempotent_after_cycle_close_pre_install() {
     );
 }
 
-/// Two STRUCTs declared in the same scope share `scope_id` but carry distinct
-/// `name`s — `name` separates per-declaration identity within a scope.
+/// Two STRUCTs declared in the same scope share `scope_id` on their members but seal into
+/// distinct sets — set-pointer identity separates per-declaration identity within a scope.
 #[test]
 fn struct_pair_same_scope_distinct_names_share_scope_id() {
     let arena = RuntimeArena::new();
@@ -71,18 +77,18 @@ fn struct_pair_same_scope_distinct_names_share_scope_id() {
     run_one(scope, parse_one("STRUCT Foo = (x :Number)"));
     run_one(scope, parse_one("STRUCT Bar = (x :Number)"));
     let foo_id = match scope.resolve_type("Foo") {
-        Some(KType::UserType { scope_id, name, .. }) => {
-            assert_eq!(name, "Foo");
-            *scope_id
+        Some(KType::SetRef { set, index }) => {
+            assert_eq!(set.member(*index).name, "Foo");
+            set.member(*index).scope_id
         }
-        other => panic!("expected UserType Foo identity, got {other:?}"),
+        other => panic!("expected SetRef Foo identity, got {other:?}"),
     };
     let bar_id = match scope.resolve_type("Bar") {
-        Some(KType::UserType { scope_id, name, .. }) => {
-            assert_eq!(name, "Bar");
-            *scope_id
+        Some(KType::SetRef { set, index }) => {
+            assert_eq!(set.member(*index).name, "Bar");
+            set.member(*index).scope_id
         }
-        other => panic!("expected UserType Bar identity, got {other:?}"),
+        other => panic!("expected SetRef Bar identity, got {other:?}"),
     };
     assert_eq!(foo_id, bar_id, "same-scope STRUCTs must share scope_id");
 }

@@ -12,9 +12,8 @@ use super::coerce_type_token_value;
 use super::constructors;
 use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
-use crate::machine::core::ScopeId;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
-use crate::machine::model::{KObject, KType, Record};
+use crate::machine::model::{KObject, KType, Record, RecursiveSet};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
@@ -62,18 +61,20 @@ pub(in crate::machine::execute) struct CtorTrack<'a> {
     pub(in crate::machine::execute) kind: CtorKind<'a>,
 }
 
-/// Schema-keyed payload the resume needs to materialize the
-/// constructed value once every slot is resolved.
+/// Schema-keyed payload the resume needs to materialize the constructed value once every
+/// slot is resolved. `(set, index)` is the sealed-member identity stamped onto the produced
+/// `KObject`; `fields` / `schema` is the projected (sibling-`SetLocal`-resolved) schema used
+/// for arg reordering and per-value type-checking.
 pub(in crate::machine::execute) enum CtorKind<'a> {
     Struct {
-        name: String,
-        scope_id: ScopeId,
+        set: Rc<RecursiveSet<'a>>,
+        index: usize,
         fields: Rc<Record<KType<'a>>>,
     },
     Tagged {
         schema: Rc<HashMap<String, KType<'a>>>,
-        name: String,
-        scope_id: ScopeId,
+        set: Rc<RecursiveSet<'a>>,
+        index: usize,
         tag: String,
     },
 }

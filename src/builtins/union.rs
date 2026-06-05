@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use crate::machine::core::{PendingBinderGuard, PendingTypeEntry};
-use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::types::{
-    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
+    finalize_nominal_member, parse_typed_field_list_via_elaborator, seal_recursive_refs,
+    Elaborator, FieldListOutcome, FieldNameKind, NominalKind, NominalSchema, SchemaSealResult,
+    SealOutcome,
 };
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
@@ -24,8 +24,8 @@ use crate::machine::core::kfunction::argument_bundle::{
 /// The schema slot is a parens-wrapped expression of `<tag:Identifier> :<type:Type>`
 /// pairs. Parens keep the parts from dispatching as their own expression so the
 /// elaborator sees identifier/type pairs directly. Type-only: the variant schema rides
-/// the `UserType { Tagged { schema } }` identity in `bindings.types`, and the declaration
-/// yields a `KTypeValue(UserType)` first-class type value — no value-side carrier.
+/// the sealed `RecursiveSet` member in `bindings.types`, and the declaration yields a
+/// `KTypeValue(SetRef)` first-class type value — no value-side carrier.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
@@ -50,18 +50,18 @@ pub fn body<'a>(
     let pending_guard = scope.bindings().insert_pending_type(
         name.clone(),
         PendingTypeEntry {
-            kind: UserTypeKind::tagged_sentinel(),
+            kind: NominalKind::Tagged,
             scope_id,
             schema_expr: schema_expr.clone(),
             edges: Vec::new(),
         },
     );
     // Seed the threaded set with this UNION's name so a self-recursive
-    // `UNION List = (cons :List nil :Null)` resolves to `RecursiveRef` rather than
-    // parking on its own placeholder.
+    // `UNION List = (cons :List nil :Null)` resolves to the transient `RecursiveRef`
+    // rather than parking on its own placeholder.
     let mut elaborator = Elaborator::new(scope)
         .with_threaded([name.clone()])
-        .with_current_decl(name.clone(), UserTypeKind::tagged_sentinel(), scope_id);
+        .with_current_decl(name.clone(), NominalKind::Tagged, scope_id);
     let outcome = parse_typed_field_list_via_elaborator(
         &schema_expr,
         "UNION schema",
@@ -91,8 +91,9 @@ pub fn body<'a>(
     }
 }
 
-/// Fold the elaborated variant schema into the `UserType { Tagged { schema } }` identity
-/// and upsert it into `bindings.types` — type-only, no value-side carrier. Mirror of
+/// Seal the elaborated variant schema into the UNION's [`RecursiveSet`] member and install
+/// the `SetRef` identity into `bindings.types` — type-only, no value-side carrier.
+/// Transient `RecursiveRef(name)` variant leaves seal to `SetLocal(index)`. Mirror of
 /// [`super::struct_def::finalize_struct`].
 fn finalize_union<'a>(
     scope: &'a Scope<'a>,
@@ -100,43 +101,42 @@ fn finalize_union<'a>(
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {
-    // Idempotent-finalize guard: short-circuit only on a populated `Tagged { schema }`
-    // payload, distinguishing it from the cycle-close payload-empty pre-install.
-    let bindings = scope.bindings();
-    if let Some(KType::UserType {
-        kind: UserTypeKind::Tagged { schema },
-        ..
-    }) = bindings.lookup_type(&name, None)
-    {
-        if !schema.is_empty() {
-            return BodyResult::Value(scope.arena.alloc_object(KObject::KTypeValue(
-                bindings.lookup_type(&name, None).unwrap().clone(),
-            )));
-        }
-    }
     if fields.is_empty() {
         return err(KError::new(KErrorKind::ShapeError(
             "UNION schema must have at least one tag".to_string(),
         )));
     }
-    // UNION addresses by tag, not by declaration order — flatten the ordered list
-    // (shared shape with `STRUCT`) into a HashMap. Duplicates already rejected upstream.
-    let schema: HashMap<String, KType<'a>> = fields.into_iter().collect();
     let scope_id = scope.id;
-    let identity = KType::UserType {
-        kind: UserTypeKind::Tagged {
-            schema: Rc::new(schema),
-        },
+    let outcome = finalize_nominal_member(
+        scope,
+        &name,
         scope_id,
-        name: name.clone(),
-    };
-    match scope.register_type_upsert(name, identity, bind_index) {
-        Ok(kt_ref) => BodyResult::Value(
+        NominalKind::Tagged,
+        |set| {
+            let missing = std::cell::RefCell::new(Vec::new());
+            // UNION addresses by tag, not declaration order — flatten the ordered list
+            // (shared shape with STRUCT) into a HashMap. Duplicates already rejected upstream.
+            let schema: HashMap<String, KType<'a>> = fields
+                .into_iter()
+                .map(|(tag, kt)| (tag, seal_recursive_refs(set, &kt, &missing)))
+                .collect();
+            match missing.into_inner().into_iter().next() {
+                Some(m) => SchemaSealResult::Dangling(m),
+                None => SchemaSealResult::Ok(NominalSchema::Tagged(schema)),
+            }
+        },
+        bind_index,
+    );
+    match outcome {
+        SealOutcome::Sealed(kt_ref) => BodyResult::Value(
             scope
                 .arena
                 .alloc_object(KObject::KTypeValue(kt_ref.clone())),
         ),
-        Err(e) => err(e),
+        SealOutcome::DanglingRef(missing) => err(KError::new(KErrorKind::ShapeError(format!(
+            "UNION `{name}` schema references unsealed type `{missing}`",
+        )))),
+        SealOutcome::Rebind(e) => err(e),
     }
 }
 
@@ -230,8 +230,24 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run_one, run_one_err, run_root_silent};
+    use crate::machine::model::types::{NominalKind, NominalSchema, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{BindingIndex, KErrorKind, RuntimeArena};
+    use crate::machine::{BindingIndex, KErrorKind, RuntimeArena, Scope};
+
+    /// The projected (`SetLocal`s resolved) variant schema of a UNION member, by name.
+    fn tagged_schema<'a>(
+        scope: &'a Scope<'a>,
+        name: &str,
+    ) -> std::collections::HashMap<String, KType<'a>> {
+        match scope.resolve_type(name) {
+            Some(KType::SetRef { set, index }) => match RecursiveSet::projected_schema(set, *index)
+            {
+                ProjectedSchema::Tagged(schema) => schema,
+                _ => panic!("expected {name} to project a Tagged schema, got a different kind"),
+            },
+            other => panic!("expected {name} to be a Tagged SetRef in types, got {other:?}"),
+        }
+    }
 
     #[test]
     fn binder_name_extracts_named_union_name() {
@@ -242,29 +258,23 @@ mod tests {
 
     #[test]
     fn union_named_registers_type_in_scope() {
-        use crate::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        // UNION is type-only: the declaration yields a `KTypeValue(UserType)` whose
-        // `Tagged { schema }` payload carries the variant schema, registered into `types`.
+        // UNION is type-only: the declaration yields a `KTypeValue(SetRef)` whose Tagged
+        // member carries the variant schema, registered into `types`.
         let result = run_one(scope, parse_one("UNION Maybe = (some :Number none :Null)"));
-        assert!(matches!(
-            result,
-            KObject::KTypeValue(KType::UserType {
-                kind: UserTypeKind::Tagged { .. },
-                ..
-            })
-        ));
-        match scope.resolve_type("Maybe") {
-            Some(KType::UserType {
-                kind: UserTypeKind::Tagged { schema },
-                ..
-            }) => {
-                assert_eq!(schema.get("some"), Some(&KType::Number));
-                assert_eq!(schema.get("none"), Some(&KType::Null));
+        match result {
+            KObject::KTypeValue(KType::SetRef { set, index }) => {
+                assert_eq!(set.member(*index).kind, NominalKind::Tagged);
             }
-            other => panic!("expected Tagged identity for Maybe in types, got {other:?}"),
+            other => panic!(
+                "expected KTypeValue(SetRef) for Maybe, got {:?}",
+                other.ktype()
+            ),
         }
+        let schema = tagged_schema(scope, "Maybe");
+        assert_eq!(schema.get("some"), Some(&KType::Number));
+        assert_eq!(schema.get("none"), Some(&KType::Null));
         assert!(
             scope.bindings().data().get("Maybe").is_none(),
             "UNION must not write a value-side carrier into data",
@@ -327,19 +337,24 @@ mod tests {
         );
     }
 
-    /// `finalize_union` upserts the schema-bearing identity over a cycle-close
-    /// payload-empty pre-install, then short-circuits on a second finalize once the
-    /// payload is populated — the type-only (no value-side carrier) idempotency net.
+    /// `finalize_union` fills the member of a pre-installed `SetRef` (the seal pre-install),
+    /// then short-circuits on a second finalize once the member is filled — the type-only
+    /// (no value-side carrier) idempotency net.
     #[test]
-    fn finalize_union_idempotent_after_cycle_close_pre_install() {
-        use crate::machine::model::types::UserTypeKind;
+    fn finalize_union_idempotent_after_seal_pre_install() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let scope_id = scope.id;
-        let pre_identity = KType::UserType {
-            kind: UserTypeKind::tagged_sentinel(),
+        // Pre-install a `SetRef` to a pending (unfilled) member, as `seal_type_cycle` does.
+        let pending_member = crate::machine::model::types::NominalMember::pending(
+            "Maybe".into(),
             scope_id,
-            name: "Maybe".into(),
+            NominalKind::Tagged,
+        );
+        let pre_set = std::rc::Rc::new(RecursiveSet::new(vec![pending_member]));
+        let pre_identity = KType::SetRef {
+            set: std::rc::Rc::clone(&pre_set),
+            index: 0,
         };
         scope.cycle_close_install_identity("Maybe".into(), pre_identity, BindingIndex::nominal(0));
         let first = super::finalize_union(
@@ -349,15 +364,10 @@ mod tests {
             BindingIndex::nominal(0),
         );
         assert!(matches!(first, crate::machine::BodyResult::Value(_)));
-        match scope.resolve_type("Maybe") {
-            Some(KType::UserType {
-                kind: UserTypeKind::Tagged { schema },
-                ..
-            }) => {
-                assert_eq!(schema.get("some"), Some(&KType::Number));
-            }
-            other => panic!("expected populated Tagged identity, got {other:?}"),
-        }
+        // The member of the *pre-installed* set is now filled in place.
+        assert!(pre_set.member(0).is_filled());
+        let schema = tagged_schema(scope, "Maybe");
+        assert_eq!(schema.get("some"), Some(&KType::Number));
         let second = super::finalize_union(
             scope,
             "Maybe".into(),
@@ -365,13 +375,13 @@ mod tests {
             BindingIndex::nominal(0),
         );
         match second {
-            crate::machine::BodyResult::Value(KObject::KTypeValue(KType::UserType {
-                name,
-                ..
+            crate::machine::BodyResult::Value(KObject::KTypeValue(KType::SetRef {
+                set,
+                index,
             })) => {
-                assert_eq!(name, "Maybe");
+                assert_eq!(set.member(*index).name, "Maybe");
             }
-            _ => panic!("expected short-circuit Value(KTypeValue(UserType)) from finalize_union"),
+            _ => panic!("expected short-circuit Value(KTypeValue(SetRef)) from finalize_union"),
         }
         assert!(
             scope.bindings().data().get("Maybe").is_none(),
@@ -379,12 +389,10 @@ mod tests {
         );
     }
 
-    /// Mutually recursive STRUCT ↔ UNION pair: each binder parks on the other,
-    /// cycle-close pre-installs identities for both kinds, and field types end up
-    /// carrying `UserType` references to the partner.
+    /// Mutually recursive STRUCT ↔ UNION pair: each binder parks on the other; the SCC seals
+    /// into one shared set, and each cross-reference is a `SetLocal` into that set.
     #[test]
     fn struct_union_mutual_recursion() {
-        use crate::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         use crate::machine::execute::Scheduler;
@@ -395,31 +403,37 @@ mod tests {
             sched.add_dispatch(e, scope);
         }
         sched.execute().unwrap();
-        // Both are type-only — read schemas off the type-side identities.
-        let wrap_fields = match scope.resolve_type("Wrap") {
-            Some(KType::UserType {
-                kind: UserTypeKind::Struct { fields },
-                ..
-            }) => fields.clone(),
-            other => panic!("expected Wrap Struct identity, got {other:?}"),
+        // Both members share one set.
+        let (wrap_set, wrap_index) = match scope.resolve_type("Wrap") {
+            Some(KType::SetRef { set, index }) => (std::rc::Rc::clone(set), *index),
+            other => panic!("expected Wrap SetRef, got {other:?}"),
         };
-        let wrap_m = wrap_fields.get("m").expect("Wrap.m field");
-        assert!(
-            matches!(wrap_m, KType::UserType { kind: UserTypeKind::Tagged { .. }, name, .. } if name == "Maybe"),
-            "Wrap.m expected UserType{{Tagged Maybe}}, got {wrap_m:?}",
-        );
-        let maybe_schema = match scope.resolve_type("Maybe") {
-            Some(KType::UserType {
-                kind: UserTypeKind::Tagged { schema },
-                ..
-            }) => schema.clone(),
-            other => panic!("expected Maybe Tagged identity, got {other:?}"),
+        let maybe_index = match scope.resolve_type("Maybe") {
+            Some(KType::SetRef { set, index }) => {
+                assert!(
+                    std::rc::Rc::ptr_eq(set, &wrap_set),
+                    "Wrap and Maybe share a set"
+                );
+                *index
+            }
+            other => panic!("expected Maybe SetRef, got {other:?}"),
         };
-        let just_kt = maybe_schema.get("just").expect("just tag");
-        assert!(
-            matches!(just_kt, KType::UserType { kind: UserTypeKind::Struct { .. }, name, .. } if name == "Wrap"),
-            "Maybe.just expected UserType{{Struct Wrap}}, got {just_kt:?}",
-        );
+        // Wrap.m seals to SetLocal(Maybe's index).
+        let wrap_borrow = wrap_set.member(wrap_index).schema();
+        match wrap_borrow.as_ref() {
+            Some(NominalSchema::Struct(fields)) => {
+                assert_eq!(fields.get("m"), Some(&KType::SetLocal(maybe_index)));
+            }
+            other => panic!("expected Wrap Struct schema, got {other:?}"),
+        }
+        // Maybe.just seals to SetLocal(Wrap's index).
+        let maybe_borrow = wrap_set.member(maybe_index).schema();
+        match maybe_borrow.as_ref() {
+            Some(NominalSchema::Tagged(schema)) => {
+                assert_eq!(schema.get("just"), Some(&KType::SetLocal(wrap_index)));
+            }
+            other => panic!("expected Maybe Tagged schema, got {other:?}"),
+        }
     }
 
     #[test]

@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::model::types::UserTypeKind;
+use crate::machine::model::types::NominalKind;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
     ArgumentBundle, BodyResult, CatchFinish, KError, KErrorKind, SchedulerHandle, Scope,
@@ -28,11 +28,11 @@ pub fn body<'a>(
             )));
         }
     };
-    // Read the prelude `Result` identity's scope_id at body time (not in the finish
-    // closure) so the CATCH-produced value matches the nominal identity of a
+    // Capture the prelude `Result` member identity at body time (not in the finish
+    // closure) so the CATCH-produced value shares the nominal identity of a
     // `Result (...)`-constructed one. Requires `result::register` to run first.
-    let result_scope_id = match scope.resolve_type("Result") {
-        Some(KType::UserType { scope_id, .. }) => *scope_id,
+    let (result_set, result_index) = match scope.resolve_type("Result") {
+        Some(KType::SetRef { set, index }) => (Rc::clone(set), *index),
         _ => panic!("Result must be registered before CATCH"),
     };
     let sub_id = sched.add_dispatch(expr_inner, scope);
@@ -44,8 +44,8 @@ pub fn body<'a>(
         let tagged = KObject::Tagged {
             tag: tag.to_string(),
             value: Rc::new(payload),
-            scope_id: result_scope_id,
-            name: "Result".to_string(),
+            set: Rc::clone(&result_set),
+            index: result_index,
             // Erased: only the inhabited side's payload type is known here.
             // `matches_value(ConstructorApply, Tagged)` inspects that payload
             // directly, so leaving `type_args` empty still types correctly.
@@ -63,7 +63,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "CATCH",
         sig(
             KType::AnyUserType {
-                kind: UserTypeKind::tagged_sentinel(),
+                kind: NominalKind::Tagged,
             },
             vec![kw("CATCH"), arg("expr", KType::KExpression)],
         ),

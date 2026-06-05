@@ -74,10 +74,10 @@ impl<'a> Module<'a> {
         self.child_scope_ptr.reattach()
     }
 
-    /// Stable identity used to seed `KType::UserType { kind: Module, scope_id, .. }`.
-    /// Two distinct opaque ascriptions of the same source module mint distinct
-    /// `UserType`s because each ascription allocates a fresh child scope (and thus a
-    /// fresh `ScopeId`).
+    /// Stable identity keyed by `KType::Module` equality (and recorded on per-call abstract
+    /// members minted from this module). Two distinct opaque ascriptions of the same source
+    /// module compare distinct because each allocates a fresh child scope (and thus a fresh
+    /// `ScopeId`).
     pub fn scope_id(&self) -> ScopeId {
         self.child_scope().id
     }

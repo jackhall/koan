@@ -9,9 +9,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::source::Spanned;
-use crate::machine::core::{KError, KErrorKind, ScopeId};
+use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::ast::ExpressionPart;
-use crate::machine::model::types::KType;
+use crate::machine::model::types::{KType, RecursiveSet};
 use crate::machine::model::values::KObject;
 
 /// Validate the args shape: exactly two parts, the first an `Identifier`
@@ -45,8 +45,8 @@ pub(in crate::machine::execute) fn prepare_args<'a>(
 /// expected type for that tag, then emit the `KObject::Tagged`.
 pub(in crate::machine::execute) fn construct<'a>(
     schema: &HashMap<String, KType<'a>>,
-    schema_name: &str,
-    schema_scope_id: ScopeId,
+    set: &Rc<RecursiveSet<'a>>,
+    index: usize,
     tag: String,
     value: &KObject<'a>,
 ) -> Result<KObject<'a>, KError> {
@@ -70,8 +70,8 @@ pub(in crate::machine::execute) fn construct<'a>(
     Ok(KObject::Tagged {
         tag,
         value: Rc::new(value.deep_clone()),
-        scope_id: schema_scope_id,
-        name: schema_name.to_string(),
+        set: Rc::clone(set),
+        index,
         type_args: Rc::new(vec![]),
     })
 }

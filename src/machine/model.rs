@@ -6,7 +6,7 @@ pub(crate) mod values;
 pub use operators::{Associativity, OperatorEntry, OperatorGroup};
 pub use types::{
     is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, ExpressionSignature, KType,
-    Parseable, Record, ReturnType, Serializable, SignatureElement, UntypedElement, UntypedKey,
-    UserTypeKind,
+    NominalKind, NominalMember, NominalSchema, Parseable, ProjectedSchema, Record, RecursiveSet,
+    ReturnType, Serializable, SignatureElement, UntypedElement, UntypedKey,
 };
 pub use values::{KKey, KObject};

@@ -10,9 +10,8 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::SchedulerHandle;
 use crate::machine::core::source::Spanned;
-use crate::machine::core::ScopeId;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::KType;
+use crate::machine::model::types::{KType, RecursiveSet};
 use crate::machine::model::{KObject, Record};
 use crate::machine::{NodeId, Scope};
 
@@ -23,15 +22,15 @@ use super::{DispatchCtx, DispatchState, Initialized};
 pub(in crate::machine::execute) mod struct_value;
 pub(in crate::machine::execute) mod tagged_union;
 
-/// Direct-construct a struct from the schema read off its `KType::UserType`
-/// identity — `fields` came straight from `bindings.types[name]`, no value-side
-/// schema carrier. Reorders the call-site args into declaration order, then
-/// `launch`es the per-value eager subs.
+/// Direct-construct a struct from the projected schema of its sealed `RecursiveSet`
+/// member — `fields` has had sibling `SetLocal`s resolved to external `SetRef`s, so each
+/// field type matches directly. Reorders the call-site args into declaration order, then
+/// `launch`es the per-value eager subs. `(set, index)` is stamped onto the produced value.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::machine::execute) fn dispatch_construct_struct<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
-    name: String,
-    scope_id: ScopeId,
+    set: Rc<RecursiveSet<'a>>,
+    index: usize,
     fields: Rc<Record<KType<'a>>>,
     record_fields: Vec<(String, ExpressionPart<'a>)>,
     scope: &'a Scope<'a>,
@@ -44,24 +43,20 @@ pub(in crate::machine::execute) fn dispatch_construct_struct<'a>(
     launch(
         ctx,
         value_parts,
-        CtorKind::Struct {
-            name,
-            scope_id,
-            fields,
-        },
+        CtorKind::Struct { set, index, fields },
         scope,
         idx,
     )
 }
 
-/// Direct-construct a tagged-union value from the schema read off its
-/// `KType::UserType` identity. Shared by named UNIONs (`Tagged` kind) and the
-/// builtin `Result` constructor (`TypeConstructor` kind) — both carry the schema
-/// payload on the identity.
+/// Direct-construct a tagged-union value from the projected schema of its sealed
+/// `RecursiveSet` member. Shared by named UNIONs (`Tagged` kind) and the builtin `Result`
+/// constructor (`TypeConstructor` kind) — both reference a sealed member.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::machine::execute) fn dispatch_construct_tagged<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
-    name: String,
-    scope_id: ScopeId,
+    set: Rc<RecursiveSet<'a>>,
+    index: usize,
     schema: Rc<HashMap<String, KType<'a>>>,
     args_parts: Vec<Spanned<ExpressionPart<'a>>>,
     scope: &'a Scope<'a>,
@@ -76,8 +71,8 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'a>(
         vec![value_part],
         CtorKind::Tagged {
             schema,
-            name,
-            scope_id,
+            set,
+            index,
             tag,
         },
         scope,
@@ -145,19 +140,17 @@ pub(in crate::machine::execute::dispatch) fn finish<'a>(
     values: &[&'a KObject<'a>],
 ) -> NodeStep<'a> {
     let result = match kind {
-        CtorKind::Struct {
-            name,
-            scope_id,
-            fields,
-        } => struct_value::construct(name, *scope_id, fields, values),
+        CtorKind::Struct { set, index, fields } => {
+            struct_value::construct(set, *index, fields, values)
+        }
         CtorKind::Tagged {
             schema,
-            name,
-            scope_id,
+            set,
+            index,
             tag,
         } => {
             debug_assert_eq!(values.len(), 1);
-            tagged_union::construct(schema, name, *scope_id, tag.clone(), values[0])
+            tagged_union::construct(schema, set, *index, tag.clone(), values[0])
         }
     };
     match result {

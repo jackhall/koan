@@ -284,7 +284,7 @@ fn functor_argument_bare_type_token_auto_wraps() {
 /// the higher-kinded analogue of `functor_application_is_generative`.
 #[test]
 fn opaque_ascription_mints_fresh_type_constructor_per_call() {
-    use crate::machine::model::types::UserTypeKind;
+    use crate::machine::model::types::NominalKind;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let src = "SIG MonadSig = ((LET Wrap = (TEMPLATE Type)))\n\
@@ -319,29 +319,30 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     };
     let a_wrap = a.type_members.borrow().get("Wrap").cloned();
     let b_wrap = b.type_members.borrow().get("Wrap").cloned();
-    assert!(matches!(
-        &a_wrap,
-        Some(KType::UserType {
-            kind: UserTypeKind::TypeConstructor { .. },
-            ..
-        })
-    ));
-    assert!(matches!(
-        &b_wrap,
-        Some(KType::UserType {
-            kind: UserTypeKind::TypeConstructor { .. },
-            ..
-        })
-    ));
-    // Equality on the minted slot is gated on `(scope_id, name)` — distinct
-    // scope_ids encode the abstraction barrier between two ascriptions.
+    let is_type_constructor = |kt: &Option<KType<'_>>| {
+        matches!(
+            kt,
+            Some(KType::SetRef { set, index }) if set.member(*index).kind == NominalKind::TypeConstructor
+        )
+    };
+    assert!(is_type_constructor(&a_wrap));
+    assert!(is_type_constructor(&b_wrap));
+    // Identity is the `(set ptr, index)` pair — two ascriptions mint distinct sets, so the
+    // members' origin scope_ids differ and the slots compare unequal.
     match (&a_wrap, &b_wrap) {
         (
-            Some(KType::UserType { scope_id: aid, .. }),
-            Some(KType::UserType { scope_id: bid, .. }),
+            Some(KType::SetRef {
+                set: aset,
+                index: ai,
+            }),
+            Some(KType::SetRef {
+                set: bset,
+                index: bi,
+            }),
         ) => {
             assert_ne!(
-                aid, bid,
+                aset.member(*ai).scope_id,
+                bset.member(*bi).scope_id,
                 "two opaque ascriptions must mint TypeConstructor slots with distinct scope_id",
             );
         }

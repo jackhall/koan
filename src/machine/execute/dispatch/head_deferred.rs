@@ -170,7 +170,7 @@ fn classify_head<'a>(
         // `TypeHeadDeferred` it is the pruned arm and falls through to the
         // type-shaped `TypeMismatch`.
         KObject::KFunction(f, _) if !type_only => Ok(ResolvedCallable::Function(f)),
-        KObject::KTypeValue(kt @ KType::UserType { .. }) => Ok(ResolvedCallable::Constructor(kt)),
+        KObject::KTypeValue(kt @ KType::SetRef { .. }) => Ok(ResolvedCallable::Constructor(kt)),
         other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
             expected: "Type".to_string(),

@@ -76,7 +76,7 @@ pub fn coerce_type_token_value<'a>(
     let name = t.as_str();
     match scope.resolve_type_with_chain(name, chain) {
         Some(kt) => {
-            if matches!(kt, KType::UserType { .. } | KType::Module { .. }) {
+            if matches!(kt, KType::SetRef { .. } | KType::Module { .. }) {
                 if let Some(obj) = scope.lookup_with_chain(name, chain) {
                     return Ok(obj);
                 }
@@ -128,10 +128,10 @@ impl<'a> FinalizeGate<'a> {
 /// Iterator yielding every top-level user-type reference `(scope_id, name)` in a
 /// `KType`.
 ///
-/// **SCC discipline** (load-bearing): does NOT recurse into a `UserType`'s
-/// `kind` payload. SCC closure is atomic across members, so a finalized `Foo`
-/// guarantees every user-type embedded in `Foo`'s payload is also finalized;
-/// payload recursion would only re-prove that.
+/// **SCC discipline** (load-bearing): a `SetRef` is a leaf — does NOT descend the
+/// referenced member's schema. SCC closure is atomic across members, so a finalized
+/// `Foo` guarantees every user-type embedded in `Foo`'s schema is also finalized;
+/// schema recursion would only re-prove that (and would loop on a cyclic set).
 struct KTypeUserRefs<'k, 'a> {
     stack: Vec<&'k KType<'a>>,
 }
@@ -148,8 +148,9 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(kt) = self.stack.pop() {
             match kt {
-                KType::UserType { scope_id, name, .. } => {
-                    return Some((*scope_id, name.as_str()));
+                KType::SetRef { set, index } => {
+                    let member = set.member(*index);
+                    return Some((member.scope_id, member.name.as_str()));
                 }
                 KType::Signature { sig, .. } => {
                     return Some((sig.sig_id(), sig.path.as_str()));
@@ -185,7 +186,6 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
                         self.stack.push(p);
                     }
                 }
-                KType::Mu { body, .. } => self.stack.push(body),
                 KType::ConstructorApply { ctor, args } => {
                     for a in args.iter().rev() {
                         self.stack.push(a);
@@ -208,6 +208,7 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
                 | KType::Any
                 | KType::AnyUserType { .. }
                 | KType::DeferredReturn(_)
+                | KType::SetLocal(_)
                 | KType::RecursiveRef(_) => {}
             }
         }
@@ -266,8 +267,8 @@ mod tests {
             _ => panic!("expected Done after STRUCT declaration"),
         };
         match kt {
-            KType::UserType { name, .. } => assert_eq!(name, "Point"),
-            _ => panic!("expected UserType for Point"),
+            KType::SetRef { set, index } => assert_eq!(set.member(*index).name, "Point"),
+            _ => panic!("expected SetRef for Point"),
         }
         let kt2 = match scope.resolve_type_expr(&te) {
             ResolveTypeExprOutcome::Done(kt) => kt,
@@ -276,22 +277,22 @@ mod tests {
         assert!(std::ptr::eq(kt, kt2));
     }
 
+    /// A singleton struct `SetRef` named `name` at `scope_id`.
+    fn struct_setref<'a>(name: &str, scope_id: ScopeId) -> KType<'a> {
+        use crate::machine::model::types::{NominalSchema, RecursiveSet};
+        use crate::machine::model::Record;
+        let set =
+            RecursiveSet::singleton(name.into(), scope_id, NominalSchema::Struct(Record::new()));
+        KType::SetRef { set, index: 0 }
+    }
+
     /// Pins recursion shape against a regression that skips nested structurals.
     #[test]
     fn ktype_user_refs_yields_nested_structural_refs_in_order() {
-        use crate::machine::model::types::UserTypeKind;
         let a_id = ScopeId::next();
         let b_id = ScopeId::next();
-        let user_a = KType::UserType {
-            kind: UserTypeKind::struct_sentinel(),
-            scope_id: a_id,
-            name: "A".into(),
-        };
-        let user_b = KType::UserType {
-            kind: UserTypeKind::struct_sentinel(),
-            scope_id: b_id,
-            name: "B".into(),
-        };
+        let user_a = struct_setref("A", a_id);
+        let user_b = struct_setref("B", b_id);
         // Dict<A, List<B>>
         let kt = KType::Dict(Box::new(user_a), Box::new(KType::List(Box::new(user_b))));
         let refs: Vec<(ScopeId, String)> = KTypeUserRefs::of(&kt)
@@ -300,24 +301,21 @@ mod tests {
         assert_eq!(refs, vec![(a_id, "A".into()), (b_id, "B".into())]);
     }
 
-    /// SCC discipline: the iterator must not descend into a `UserType`'s `kind`
-    /// payload — the outer `UserType` is yielded, the inner stays invisible.
+    /// SCC discipline: the iterator must not descend into a `SetRef` member's schema —
+    /// the outer `SetRef` is yielded, the inner stays invisible.
     #[test]
     fn ktype_user_refs_does_not_recurse_into_user_type_payload() {
-        use crate::machine::model::types::UserTypeKind;
+        use crate::machine::model::types::{NominalSchema, RecursiveSet};
         let outer_id = ScopeId::next();
         let inner_id = ScopeId::next();
-        let inner = KType::UserType {
-            kind: UserTypeKind::struct_sentinel(),
-            scope_id: inner_id,
-            name: "Inner".into(),
-        };
-        let outer = KType::UserType {
-            kind: UserTypeKind::Newtype {
-                repr: Box::new(inner),
-            },
-            scope_id: outer_id,
-            name: "Outer".into(),
+        let inner = struct_setref("Inner", inner_id);
+        let outer = {
+            let set = RecursiveSet::singleton(
+                "Outer".into(),
+                outer_id,
+                NominalSchema::Newtype(Box::new(inner)),
+            );
+            KType::SetRef { set, index: 0 }
         };
         let refs: Vec<(ScopeId, String)> = KTypeUserRefs::of(&outer)
             .map(|(id, n)| (id, n.to_string()))
@@ -335,7 +333,7 @@ mod tests {
     mod coerce_type_token_value {
         use super::super::coerce_type_token_value;
         use crate::builtins::test_support::run_root_bare;
-        use crate::machine::core::BindingIndex;
+        use crate::machine::core::{BindingIndex, ScopeId};
         use crate::machine::model::ast::TypeName;
         use crate::machine::model::{KObject, KType};
         use crate::machine::{KError, KErrorKind, RuntimeArena};
@@ -366,17 +364,23 @@ mod tests {
             }
         }
 
+        /// A singleton struct `SetRef` named `name` at `scope_id`.
+        fn struct_setref<'a>(name: &str, scope_id: ScopeId) -> KType<'a> {
+            use crate::machine::model::types::{NominalSchema, RecursiveSet};
+            use crate::machine::model::Record;
+            let set = RecursiveSet::singleton(
+                name.into(),
+                scope_id,
+                NominalSchema::Struct(Record::new()),
+            );
+            KType::SetRef { set, index: 0 }
+        }
+
         #[test]
         fn recovers_paired_value() {
-            use crate::machine::model::types::UserTypeKind;
             let arena = RuntimeArena::new();
             let scope = run_root_bare(&arena);
-            let kind = UserTypeKind::struct_sentinel();
-            let kt = KType::UserType {
-                kind,
-                scope_id: scope.id,
-                name: "Point".to_string(),
-            };
+            let kt = struct_setref("Point", scope.id);
             scope.register_type("Point".into(), kt.clone(), BindingIndex::BUILTIN);
             let paired = arena.alloc_object(KObject::KTypeValue(kt));
             scope
@@ -394,25 +398,20 @@ mod tests {
         /// stays valid. Unreachable in normal flow (nominal binders install both atomically).
         #[test]
         fn falls_through_when_paired_value_absent() {
-            use crate::machine::model::types::UserTypeKind;
             let arena = RuntimeArena::new();
             let scope = run_root_bare(&arena);
-            let kt = KType::UserType {
-                kind: UserTypeKind::struct_sentinel(),
-                scope_id: scope.id,
-                name: "Orphan".to_string(),
-            };
+            let kt = struct_setref("Orphan", scope.id);
             // types-side only — no paired `bind_value`.
             scope.register_type("Orphan".into(), kt.clone(), BindingIndex::BUILTIN);
 
             let leaf = TypeName::leaf("Orphan".to_string());
             let obj = coerce_type_token_value(scope, &leaf, None).expect("fall-through must Ok");
             match obj {
-                KObject::KTypeValue(KType::UserType { name, .. }) => {
-                    assert_eq!(name, "Orphan");
+                KObject::KTypeValue(KType::SetRef { set, index }) => {
+                    assert_eq!(set.member(*index).name, "Orphan");
                 }
                 other => panic!(
-                    "expected synthesized KTypeValue(UserType(Orphan)), got {:?}",
+                    "expected synthesized KTypeValue(SetRef(Orphan)), got {:?}",
                     other.ktype()
                 ),
             }

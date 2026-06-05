@@ -49,14 +49,18 @@ fn unbound_leaf_names_unknown_type() {
 
 #[test]
 fn constructor_apply_name_renders_surface_form() {
-    let ctor = KType::UserType {
-        kind: UserTypeKind::TypeConstructor {
-            schema: std::rc::Rc::new(std::collections::HashMap::new()),
-            param_names: vec!["Type".into()],
-        },
-        scope_id: ScopeId::from_raw(0, 0xC0DE),
-        name: "Wrap".into(),
-    };
+    use crate::machine::model::types::NominalSchema;
+    let member = NominalMember::pending(
+        "Wrap".into(),
+        ScopeId::from_raw(0, 0xC0DE),
+        NominalKind::TypeConstructor,
+    );
+    member.fill(NominalSchema::TypeConstructor {
+        schema: std::collections::HashMap::new(),
+        param_names: vec!["Type".into()],
+    });
+    let set = std::rc::Rc::new(RecursiveSet::new(vec![member]));
+    let ctor = KType::SetRef { set, index: 0 };
     let app = KType::ConstructorApply {
         ctor: Box::new(ctor),
         args: vec![KType::Number],

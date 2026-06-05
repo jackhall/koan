@@ -1,7 +1,7 @@
 use crate::machine::core::kfunction::{BinderNameFn, Body, BodyResult, BuiltinFn, KFunction};
 use crate::machine::core::{BindingIndex, KError, Scope};
 use crate::machine::model::types::{
-    Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,
+    Argument, ExpressionSignature, KType, NominalKind, ReturnType, SignatureElement,
 };
 use crate::machine::model::values::KObject;
 
@@ -167,14 +167,14 @@ pub fn default_scope<'a>(
     scope.register_type(
         "Tagged".into(),
         KType::AnyUserType {
-            kind: UserTypeKind::tagged_sentinel(),
+            kind: NominalKind::Tagged,
         },
         BindingIndex::BUILTIN,
     );
     scope.register_type(
         "Struct".into(),
         KType::AnyUserType {
-            kind: UserTypeKind::struct_sentinel(),
+            kind: NominalKind::Struct,
         },
         BindingIndex::BUILTIN,
     );

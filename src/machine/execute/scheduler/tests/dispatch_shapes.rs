@@ -378,12 +378,8 @@ fn fast_lane_on_struct_type_constructs() {
         resolve_dispatch_entry_count(),
     );
     match result {
-        KObject::Struct {
-            name: type_name,
-            fields,
-            ..
-        } => {
-            assert_eq!(type_name, "Pt");
+        KObject::Struct { set, index, fields } => {
+            assert_eq!(set.member(*index).name, "Pt");
             assert!(matches!(fields.get("x"), Some(KObject::Number(n)) if *n == 3.0));
             assert!(matches!(fields.get("y"), Some(KObject::Number(n)) if *n == 4.0));
         }

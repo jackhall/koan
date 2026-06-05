@@ -135,7 +135,7 @@ impl<'a> FnValueState<'a> {
     ) -> Result<NodeStep<'a>, KError> {
         let callable = match head_obj {
             KObject::KFunction(f, _) => ResolvedCallable::Function(f),
-            KObject::KTypeValue(kt @ KType::UserType { .. }) => ResolvedCallable::Constructor(kt),
+            KObject::KTypeValue(kt @ KType::SetRef { .. }) => ResolvedCallable::Constructor(kt),
             other => {
                 return Ok(NodeStep::Done(NodeOutput::Err(KError::new(
                     KErrorKind::TypeMismatch {

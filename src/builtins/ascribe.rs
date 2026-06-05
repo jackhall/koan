@@ -4,7 +4,9 @@
 //! Shape-checking is name-presence only; full type-shape checks are deferred to
 //! the inference scheduler.
 
-use crate::machine::model::types::{AbstractSource, UserTypeKind};
+use crate::machine::model::types::{
+    AbstractSource, NominalKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet,
+};
 use crate::machine::model::values::Module;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
@@ -41,22 +43,38 @@ pub fn body_opaque<'a>(
     {
         let sig_bindings = s.decl_scope().bindings();
         for name in abstract_type_names_of(s.decl_scope()) {
+            // A SIG-declared higher-kinded `LET Wrap = (TEMPLATE T)` is a singleton
+            // `TypeConstructor` set. Re-mint a fresh per-call singleton (new scope_id, same
+            // schema + param_names) so the higher-kinded shape survives the ascription
+            // barrier; every other slot collapses to the `AbstractType` arm.
             let kt = match sig_bindings.lookup_type(&name, None) {
-                Some(KType::UserType {
-                    kind:
-                        UserTypeKind::TypeConstructor {
-                            schema,
-                            param_names,
-                        },
-                    ..
-                }) => KType::UserType {
-                    kind: UserTypeKind::TypeConstructor {
-                        schema: std::rc::Rc::clone(schema),
-                        param_names: param_names.clone(),
-                    },
-                    scope_id: new_module.scope_id(),
-                    name: name.clone(),
-                },
+                Some(KType::SetRef { set, index })
+                    if set.member(*index).kind == NominalKind::TypeConstructor =>
+                {
+                    let ProjectedSchema::TypeConstructor {
+                        schema,
+                        param_names,
+                    } = RecursiveSet::projected_schema(set, *index)
+                    else {
+                        unreachable!(
+                            "TypeConstructor-kind member projects a TypeConstructor schema"
+                        )
+                    };
+                    let member = NominalMember::pending(
+                        name.clone(),
+                        new_module.scope_id(),
+                        NominalKind::TypeConstructor,
+                    );
+                    member.fill(NominalSchema::TypeConstructor {
+                        schema,
+                        param_names,
+                    });
+                    let fresh = std::rc::Rc::new(RecursiveSet::new(vec![member]));
+                    KType::SetRef {
+                        set: fresh,
+                        index: 0,
+                    }
+                }
                 _ => KType::AbstractType {
                     source: AbstractSource::Module(new_module),
                     name: name.clone(),

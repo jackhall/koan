@@ -75,7 +75,7 @@ pub fn body<'a>(
             | KType::Dict(_, _)
             | KType::KFunction { .. }
             | KType::KFunctor { .. }
-            | KType::Mu { .. }
+            | KType::SetLocal(_)
             | KType::RecursiveRef(_) => {
                 return err(KError::new(KErrorKind::ShapeError(format!(
                     "LET name must be a bare type name, got `{}`",
@@ -139,11 +139,10 @@ pub fn body<'a>(
         // higher-kinded shape), so collapsing it to an abstract scalar would lose the
         // parameterization.
         let is_type_constructor = matches!(
-            kt,
-            KType::UserType {
-                kind: crate::machine::model::types::UserTypeKind::TypeConstructor { .. },
-                ..
-            }
+            &kt,
+            KType::SetRef { set, index }
+                if set.member(*index).kind
+                    == crate::machine::model::types::NominalKind::TypeConstructor
         );
         let kt = if scope.is_in_sig_body() && !is_type_constructor {
             KType::AbstractType {
