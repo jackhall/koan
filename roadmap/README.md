@@ -74,8 +74,9 @@ without first landing something else:
   reconcile names with behavior across `src/**` (best sequenced after the in-flight type-language items).
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md) —
   make builtins reachable at every scope so the hottest lookups stop walking the chain to root.
-- [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md) — give per-call
-  scopes a lifetime distinct from the run `'a` so their stored borrows carry their honest extent.
+- [Retire the lexical-visibility carve-outs](refactor/position-dependent-type-resolution.md) —
+  make type-name resolution obey source order like the value language, leaving one visibility
+  rule and no per-binding or per-callsite bypass.
 
 ## Open items
 
@@ -158,3 +159,5 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   yokes `anchored_parts` to its frame `Rc` so a re-anchor outliving its frame fails to
   compile and the dispatch/scheduler Miri pins retire; rides on the lifetime split above.
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
+- [Collapse the bare-leaf type resolvers](refactor/collapse-bare-leaf-type-resolvers.md)
+- [Retire the lexical-visibility carve-outs](refactor/position-dependent-type-resolution.md)

@@ -64,12 +64,14 @@ not yet make.
 
 ## Dependencies
 
-**Requires:** [Scheduler run/frame lifetime split](scheduler-lifetime-split.md) — a branded
-frame handle can make the re-anchor a compile error only once per-call scopes carry a
-lifetime distinct from the run `'a` for the brand to bind to; a spike established the brand
-is unreachable while the two are welded. The `CallArena` brand boundary this builds on has
-already shipped (the branded [`ScopePtr`](../../src/machine/core/scope_ptr.rs) concentrating
-scope-re-attach fabrication at the non-generic `CallArena`); `anchored_parts` is precisely
-the unsafe surface that boundary leaves for this follow-up.
+**Requires:**
+
+- [Scheduler run/frame lifetime split](scheduler-lifetime-split.md) — a branded frame handle
+  can make the re-anchor a compile error only once per-call scopes carry a lifetime distinct
+  from the run `'a` for the brand to bind to; a spike established the brand is unreachable
+  while the two are welded. The `CallArena` brand boundary this builds on has already shipped
+  (the branded [`ScopePtr`](../../src/machine/core/scope_ptr.rs) concentrating scope-re-attach
+  fabrication at the non-generic `CallArena`); `anchored_parts` is precisely the unsafe
+  surface that boundary leaves for this follow-up.
 
 **Unblocks:** none tracked yet.

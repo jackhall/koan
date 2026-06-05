@@ -87,7 +87,15 @@ are the one thing nested strictly inside it, and the only thing that needs a sho
 
 ## Dependencies
 
-**Requires:** none — foundational engine-internal rework of the scheduler's lifetime model.
+**Requires:**
 
-**Unblocks:** [Type-enforced frame re-anchor](type-enforced-frame-reanchor.md) — supplies the
-distinct frame lifetime that a compile-time re-anchor brand binds to.
+- [Plain-English type-operation surfaces](../type_language/type-operation-surfaces.md) — its
+  Phase 4 deletes FN's `KExpression`-return overload, whose per-call deferral spawns a
+  sub-Dispatch bound to the per-call `child` scope (`invoke.rs:180-186`); removing that
+  capture clears a per-call-scope-into-stored-scheduler-state entanglement the split would
+  otherwise have to carry.
+
+**Unblocks:**
+
+- [Type-enforced frame re-anchor](type-enforced-frame-reanchor.md) — supplies the distinct
+  frame lifetime that a compile-time re-anchor brand binds to.

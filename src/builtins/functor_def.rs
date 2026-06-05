@@ -94,7 +94,8 @@ pub fn body<'a>(
         },
     };
 
-    // D7 nominal-binder carve-out: mutual recursion across FUNCTOR siblings.
+    // D7 nominal-binder carve-out: forward references to this FUNCTOR resolve at
+    // chain-gated reads regardless of source order.
     let bind_index = sched
         .current_lexical_chain()
         .map(|chain| BindingIndex::nominal(chain.index))

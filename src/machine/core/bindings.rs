@@ -9,8 +9,8 @@
 //!
 //! Every entry is tagged with a [`BindingIndex`]. `idx == 0` is reserved for
 //! builtins. `nominal_binder: true` (STRUCT / UNION / SIG / FUNCTOR / MODULE)
-//! lets siblings on the same block see one another's nominal identities
-//! regardless of source order (mutual recursion).
+//! exempts an entry from the strict-lexical cutoff, so a chain-gated read finds it
+//! regardless of source order (a forward reference resolves rather than missing).
 //!
 //! Production reads use the visibility-aware [`Bindings::lookup_value`] /
 //! [`Bindings::lookup_type`] / [`Bindings::lookup_function`], passing a
@@ -63,11 +63,14 @@ pub struct FunctionLookup<'a> {
 
 /// Lexical position of a binding's installing statement.
 ///
-/// `nominal_binder: true` exempts the entry from the strict-lexical cutoff so
-/// STRUCT / UNION / SIG / FUNCTOR / MODULE siblings see one another regardless
-/// of source order (mutual recursion). `idx == 0` is reserved for builtins;
-/// per-block indices restart inside nested blocks (see
-/// [`crate::machine::core::scope::Scope::resolve`] for the predicate).
+/// `nominal_binder: true` exempts the entry from the strict-lexical cutoff, so a
+/// chain-gated read finds it regardless of source order. STRUCT / UNION / SIG /
+/// FUNCTOR / MODULE install it; so do FN parameters and MATCH / TRY `it`, which sit at
+/// `idx 0` and must stay visible before the body's first statement. The cutoff is only
+/// consulted on chain-gated reads — the type elaborator resolves unfiltered (`Scope::
+/// resolve_type` passes `None`), so type-definition mutual recursion does not go through
+/// this flag. `idx == 0` is reserved for builtins; per-block indices restart inside
+/// nested blocks (see [`crate::machine::core::scope::Scope::resolve`] for the predicate).
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct BindingIndex {
     pub idx: usize,
@@ -80,8 +83,9 @@ impl BindingIndex {
         nominal_binder: false,
     };
 
-    /// LET, FN body capture, MATCH / TRY `it`, FN parameters: strictly
-    /// lexically gated, sees only earlier-positioned siblings.
+    /// LET / FN / NEWTYPE / VAL binders: strictly lexically gated, sees only
+    /// earlier-positioned siblings. (FN *parameters* and MATCH / TRY `it` are not
+    /// value-gated — they install nominal at `idx 0`.)
     pub const fn value(idx: usize) -> Self {
         BindingIndex {
             idx,

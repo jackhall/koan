@@ -49,7 +49,8 @@ pub fn body<'a>(
     // Capture the active per-call frame for the produced KModule's anchor; see
     // per-call-arena-protocol.md § Carriers and § Outer-frame chain.
     let active_frame = sched.current_frame();
-    // D7 nominal-binder carve-out: siblings see one another regardless of source order.
+    // D7 nominal-binder carve-out: forward references to this MODULE resolve at
+    // chain-gated reads regardless of source order.
     let bind_index = sched
         .current_lexical_chain()
         .map(|chain| BindingIndex::nominal(chain.index))

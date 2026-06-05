@@ -50,9 +50,9 @@ pub struct KFunction<'a> {
     pub is_functor: bool,
     /// Flipped on by binder builtins whose binding installs a *nominal* identity —
     /// `STRUCT`, named `UNION`, `SIG`, `FUNCTOR`, `MODULE`. Carves the entry out of
-    /// the strict-lexical-cutoff visibility test so siblings on the same block can
-    /// refer to one another regardless of source order (mutual recursion across
-    /// nominal binders).
+    /// the strict-lexical-cutoff visibility test so a chain-gated read finds it
+    /// regardless of source order (a forward reference to the name resolves rather
+    /// than missing).
     pub is_nominal_binder: bool,
 }
 

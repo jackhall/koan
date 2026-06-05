@@ -92,8 +92,8 @@ pub(crate) fn register_builtin_with_binder<'a>(
 }
 
 /// Like [`register_builtin_with_binder`] but stamps the overload as a *nominal* binder
-/// (D7 carve-out) so its placeholder is visible to siblings on the same block regardless
-/// of source order, enabling mutual recursion across sibling nominal binders.
+/// (D7 carve-out) so its placeholder is visible at chain-gated reads regardless of source
+/// order — a forward reference to the binder's name resolves rather than missing.
 pub(crate) fn register_nominal_binder<'a>(
     scope: &'a Scope<'a>,
     name: &str,
