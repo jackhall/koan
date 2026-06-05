@@ -6,11 +6,11 @@
 //!
 //! ## Invariant pinned here
 //!
-//! **The `type_expr_memo` is monotonic and never observes pre-close opaque identity.**
+//! **The `type_expr_memo` is monotonic and never caches a not-yet-sealed type.**
 //! An entry is written only on the `Done` arm AND only when every user-type the
 //! elaborated result references is finalized (absent from its owning scope's
-//! `pending_types`). The `Park` arm never writes the cache, so a mid-SCC pre-close
-//! `UserType` identity cannot leak into a later memo hit.
+//! `pending_types`). The `Park` arm — a referenced type still in flight — never writes the
+//! cache, so a half-built identity cannot leak into a later memo hit.
 
 use crate::machine::core::kfunction::NodeId;
 use crate::machine::core::{KError, KErrorKind, LexicalFrame, Scope, ScopeId};
@@ -33,18 +33,25 @@ impl<'a> Scope<'a> {
     /// [`FinalizeGate`] whether the result is safe to share, and writes the cache
     /// only when the gate admits. The Park arm — elaborator-parked or gate-rejected —
     /// never writes the cache: caching mid-SCC would observe pre-close opaque identity.
-    pub fn resolve_type_expr(&'a self, te: &TypeName) -> ResolveTypeExprOutcome<'a> {
+    pub fn resolve_type_expr(
+        &'a self,
+        te: &TypeName,
+        chain: Option<std::rc::Rc<LexicalFrame>>,
+    ) -> ResolveTypeExprOutcome<'a> {
         use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
-        if let Some(kt) = self.type_expr_memo_get(te) {
+        // The cutoff this scope's bindings are gated against — also the memo key, so a
+        // forward and a backward consumer never share a cached verdict.
+        let cutoff = chain.as_ref().and_then(|c| c.index_for(self.id));
+        if let Some(kt) = self.type_expr_memo_get(te, cutoff) {
             return ResolveTypeExprOutcome::Done(kt);
         }
-        let mut elaborator = Elaborator::new(self);
+        let mut elaborator = Elaborator::new(self).with_chain(chain);
         match elaborate_type_expr(&mut elaborator, te) {
             ElabResult::Done(kt) => {
                 let pending = FinalizeGate { scope: self }.pending_producers(&kt);
                 if pending.is_empty() {
                     let kt_ref: &'a KType<'a> = self.arena.alloc_ktype(kt);
-                    self.type_expr_memo_insert(te.clone(), kt_ref);
+                    self.type_expr_memo_insert(te.clone(), cutoff, kt_ref);
                     ResolveTypeExprOutcome::Done(kt_ref)
                 } else {
                     ResolveTypeExprOutcome::Park(pending)
@@ -89,7 +96,7 @@ pub fn coerce_type_token_value<'a>(
 }
 
 /// Precondition value for the `type_expr_memo` cache, naming the load-bearing
-/// invariant *"no pre-close user-type identity may enter the memo"* as a type.
+/// invariant *"no not-yet-sealed type may enter the memo"* as a type.
 ///
 /// Admits a `KType` iff every top-level user-type it references is finalized in
 /// its owning scope (absent from that scope's `pending_types`); otherwise returns
@@ -109,7 +116,7 @@ impl<'a> FinalizeGate<'a> {
             if !owner.bindings().pending_types().contains_key(name) {
                 continue;
             }
-            // `chain_cutoff = None` because this is SCC dependency tracking, not
+            // `chain_cutoff = None` because this is producer-dependency tracking, not
             // consumer-visibility enforcement. A `Value`-arm hit would mean the
             // named type already finalized, which the `pending_types` check above
             // rules out for any name reaching this branch.
@@ -128,10 +135,10 @@ impl<'a> FinalizeGate<'a> {
 /// Iterator yielding every top-level user-type reference `(scope_id, name)` in a
 /// `KType`.
 ///
-/// **SCC discipline** (load-bearing): a `SetRef` is a leaf — does NOT descend the
-/// referenced member's schema. SCC closure is atomic across members, so a finalized
-/// `Foo` guarantees every user-type embedded in `Foo`'s schema is also finalized;
-/// schema recursion would only re-prove that (and would loop on a cyclic set).
+/// **Set discipline** (load-bearing): a `SetRef` is a leaf — does NOT descend the
+/// referenced member's schema, whose identity is `(set ptr, index)` and which may be
+/// cyclic. The dependency a consumer parks on is the named binder itself; its schema's own
+/// references are that binder's concern, resolved when it finalizes.
 struct KTypeUserRefs<'k, 'a> {
     stack: Vec<&'k KType<'a>>,
 }
@@ -228,12 +235,12 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let te = TypeName::leaf("Number".into());
-        let first = match scope.resolve_type_expr(&te) {
+        let first = match scope.resolve_type_expr(&te, None) {
             ResolveTypeExprOutcome::Done(kt) => kt,
             _ => panic!("expected Done"),
         };
         assert_eq!(*first, KType::Number);
-        let second = match scope.resolve_type_expr(&te) {
+        let second = match scope.resolve_type_expr(&te, None) {
             ResolveTypeExprOutcome::Done(kt) => kt,
             _ => panic!("expected Done on second call"),
         };
@@ -248,7 +255,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let te = TypeName::leaf("NotABuiltin".into());
-        match scope.resolve_type_expr(&te) {
+        match scope.resolve_type_expr(&te, None) {
             ResolveTypeExprOutcome::Unbound(_) => {}
             _ => panic!("expected Unbound for unknown leaf"),
         }
@@ -263,7 +270,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run_one(scope, parse_one("STRUCT Point = (x :Number, y :Number)"));
         let te = TypeName::leaf("Point".into());
-        let kt = match scope.resolve_type_expr(&te) {
+        let kt = match scope.resolve_type_expr(&te, None) {
             ResolveTypeExprOutcome::Done(kt) => kt,
             _ => panic!("expected Done after STRUCT declaration"),
         };
@@ -271,7 +278,7 @@ mod tests {
             KType::SetRef { set, index } => assert_eq!(set.member(*index).name, "Point"),
             _ => panic!("expected SetRef for Point"),
         }
-        let kt2 = match scope.resolve_type_expr(&te) {
+        let kt2 = match scope.resolve_type_expr(&te, None) {
             ResolveTypeExprOutcome::Done(kt) => kt,
             _ => panic!("expected Done on memo hit"),
         };

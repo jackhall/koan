@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::{KObject, KType, Parseable};
+use koan::machine::model::{KObject, KType};
 use koan::machine::{RuntimeArena, Scheduler, SchedulerHandle, Scope};
 use koan::parse::parse;
 
@@ -357,42 +357,6 @@ fn producer_error_propagates_to_parked_consumer() {
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed for UNDEFINED_FN, got {err}",
-    );
-}
-
-/// Bucket-keyed FN park: a bare-arg call to a still-finalizing FN whose signature
-/// parameter is a STRUCT (nominal-binder carve-out, visible across siblings). The FN
-/// itself is value-style gated, so the call must come *after* the FN's submission to
-/// satisfy the visibility predicate; the bucket-keyed park then carries it through
-/// the FN's elaboration on the STRUCT placeholder.
-///
-/// Submission order:
-///   1. `FN (LIFT_BARE arg :Wrap) -> Number = (7)` — installs a
-///      `pending_overloads[{Keyword("LIFT_BARE"), Slot}] = NodeId(this binder)`
-///      entry via the bucket-keyed `binder_bucket` hook. `Wrap` (the param type)
-///      is a forward reference to the STRUCT below — visible because STRUCT is a
-///      nominal-binder carve-out.
-///   2. `STRUCT Wrap = (n :Number)`.
-///   3. `LET w = (Wrap {n = 9})`.
-///   4. `LET out = (LIFT_BARE w)`.
-#[test]
-fn fn_bare_arg_call_parks_on_pending_overload_bucket() {
-    let arena = RuntimeArena::new();
-    let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(
-        &arena,
-        captured,
-        "FN (LIFT_BARE arg :Wrap) -> Number = (7)\n\
-         STRUCT Wrap = (n :Number)\n\
-         LET w = (Wrap {n = 9})\n\
-         LET out = (LIFT_BARE w)",
-    );
-    assert!(
-        matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0),
-        "expected `out` to be 7.0 via bucket-keyed FN park; got {}",
-        scope
-            .lookup("out")
-            .map_or("None".to_string(), |o| o.summarize()),
     );
 }
 

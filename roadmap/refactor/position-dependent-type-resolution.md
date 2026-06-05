@@ -70,16 +70,20 @@ Phase 2 is a mechanical re-home, not a fresh judgment.
   binder scan a distinct method (e.g. `lookup_member` / `lookup_own`), so
   `resolve_type(None)` stops meaning two things and the genuine carve-outs are the only
   `None` callers left.
-- *Phase 3 — chain-gate the elaborator + `RecursiveRef`-deferral — open.* Thread a
-  `LexicalFrame` into `Elaborator`; on a name unresolved-at-position inside a
-  type-definition context, emit `RecursiveRef(name)` and tie the knot in a resolution
-  pass, replacing the forward-visible-placeholder SCC
-  (`detect_pending_cycle` / `close_type_cycle`). Then retire `nominal_binder` from
-  STRUCT / UNION / SIG / MODULE / FUNCTOR. The tie-the-knot pass must absorb
-  opaque-identity pre-close and the `FinalizeGate` / `type_expr_memo` monotonicity
-  invariant (`resolve_type_expr.rs:9-13`). Recommended: prototype against the
-  `struct_def/tests/recursion.rs` and `functor_def/tests/recursive_carrier.rs`
-  mutual-recursion fixtures first.
+- *Phase 3 — chain-gate the elaborator — mostly shipped.* `Elaborator` carries a
+  `LexicalFrame` and resolves bare leaves via `resolve_type_with_chain` /
+  `resolve_with_chain`; `Scope::resolve_type_expr` takes a chain and the `type_expr_memo`
+  re-keys by `(TypeName, cutoff)`. The five binders (STRUCT / UNION / SIG / MODULE /
+  FUNCTOR) install non-nominal, so a forward type reference is a position error and the
+  reactive SCC seal (`detect_pending_cycle` / `seal_type_cycle` / pending-edge bookkeeping)
+  is retired; mutual recursion is expressed with a `RECURSIVE TYPES` block. The binder
+  field sites (STRUCT/UNION/NEWTYPE), FN parameters, and FUNCTOR parameters are gated.
+  *Remaining:* the return-type-position resolvers (`fn_def/return_type.rs`,
+  `branch_walk.rs`) and the sigil sub-dispatch finish closures (`type_constructors.rs`)
+  still pass `chain = None`, so a forward type reference *in a return type or a
+  `:(LIST OF Later)` sigil* is not yet a position error — thread the captured chain through
+  those sites. The `nominal_binder` field / `is_nominal_binder` / `register_nominal_binder`
+  are now dead and collapse to `idx < c` in Phase 4.
 - *`BindingIndex::BUILTIN` stays — decided (out of scope).* `idx 0` / non-nominal is the
   base "declared before statement 1," correctly visible via `0 < c`; it is not a
   carve-out.

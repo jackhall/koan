@@ -101,7 +101,6 @@ fn pending_binder_guard_drop_removes_entry() {
         kind: NominalKind::Struct,
         scope_id: ScopeId::from_raw(0, 0xBEEF),
         schema_expr: KExpression::new(Vec::new()),
-        edges: Vec::new(),
     };
     {
         let _guard = bindings.insert_pending_type("Foo".into(), entry);
@@ -123,7 +122,6 @@ fn pending_binder_guard_drop_tolerates_absent_entry() {
         kind: NominalKind::Struct,
         scope_id: ScopeId::from_raw(0, 0xBEEF),
         schema_expr: KExpression::new(Vec::new()),
-        edges: Vec::new(),
     };
     let guard = bindings.insert_pending_type("Foo".into(), entry);
     bindings.pending_remove("Foo");

@@ -53,7 +53,10 @@ pub fn body<'a>(
                 Some(te) => te,
                 None => unreachable!("get(TypeNameRef) then extract_type_name_ref must succeed"),
             };
-            match scope.resolve_type(te.as_str()) {
+            // Gated to the NEWTYPE's lexical position: a repr naming a later type is a
+            // position error, like any other forward type reference.
+            let chain = sched.current_lexical_chain();
+            match scope.resolve_type_with_chain(te.as_str(), chain.as_deref()) {
                 Some(kt) => kt.clone(),
                 None => {
                     return err(KError::new(KErrorKind::ShapeError(format!(

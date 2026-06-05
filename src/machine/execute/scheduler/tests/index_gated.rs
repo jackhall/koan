@@ -199,59 +199,33 @@ fn overload_pre_filter_hides_later_sibling_overload() {
     );
 }
 
-/// STRUCT is a nominal-binder carve-out, so a forward reference to a later STRUCT
-/// resolves.
+/// A FN parameter type that forward-references a STRUCT declared later is a position error:
+/// type names obey source order, with no nominal-binder carve-out.
 #[test]
-fn type_side_gate_struct_forward_resolves() {
-    let arena = RuntimeArena::new();
-    let scope = run_scope(
-        &arena,
+fn struct_forward_reference_in_fn_param_is_position_error() {
+    let err = run_collect_err(
         "FN (TAKES p :Pt) -> Number = (p.x)\n\
-         STRUCT Pt = (x :Number, y :Number)\n\
-         LET p = (Pt {x = 5, y = 6})\n\
-         LET result = (TAKES p)",
-    );
+         STRUCT Pt = (x :Number, y :Number)",
+    )
+    .expect("a forward STRUCT reference in a FN signature should error");
     assert!(
-        matches!(scope.lookup("result"), Some(KObject::Number(n)) if *n == 5.0),
-        "STRUCT nominal-binder carve-out should allow the forward type-ref; got {:?}",
-        scope.lookup("result").map(|o| o.summarize()),
+        format!("{err}").contains("Pt"),
+        "expected the error to name the forward type `Pt`, got {err}",
     );
 }
 
-/// Two sibling structs referencing each other elaborate as a 2-member SCC; both
-/// nominal identities are visible regardless of source order.
+/// A forward `MODULE` reference is a position error too — a MODULE name obeys source order
+/// like any other type name.
 #[test]
-fn mutual_recursion_across_nominal_struct_binders() {
-    let arena = RuntimeArena::new();
-    let scope = run_scope(
-        &arena,
-        "STRUCT Alpha = (b :Beta)\n\
-         STRUCT Beta = (a :Alpha)",
-    );
-    assert!(
-        scope.resolve_type("Alpha").is_some(),
-        "STRUCT Alpha should be registered"
-    );
-    assert!(
-        scope.resolve_type("Beta").is_some(),
-        "STRUCT Beta should be registered"
-    );
-}
-
-/// A forward `MODULE A` referenced by an earlier sibling resolves via the same
-/// nominal-binder carve-out.
-#[test]
-fn nominal_module_forward_reference_resolves() {
-    let arena = RuntimeArena::new();
-    let scope = run_scope(
-        &arena,
+fn forward_module_reference_is_position_error() {
+    let err = run_collect_err(
         "LET inner = MyMod.x\n\
          MODULE MyMod = ((LET x = 11))",
-    );
+    )
+    .expect("a forward MODULE reference should error");
     assert!(
-        matches!(scope.lookup("inner"), Some(KObject::Number(n)) if *n == 11.0),
-        "MODULE nominal-binder carve-out should allow the forward ref; got {:?}",
-        scope.lookup("inner").map(|o| o.summarize()),
+        format!("{err}").contains("MyMod"),
+        "expected the error to name the forward module `MyMod`, got {err}",
     );
 }
 

@@ -69,7 +69,8 @@ pub fn body<'a>(
     // Only includes slots whose type elaborates eagerly through `Elaborator`.
     let param_type_map = collect_param_types(&signature_expr, scope);
 
-    let mut elaborator = Elaborator::new(scope);
+    // Gate param type names to the FUNCTOR's lexical position.
+    let mut elaborator = Elaborator::new(scope).with_chain(sched.current_lexical_chain());
 
     // `Some(&map)` activates the FUNCTOR-return verdict. `Rejected` short-circuits;
     // `DeferredToCombine` rides Combine-finish via the `is_functor` flag below.
@@ -94,11 +95,10 @@ pub fn body<'a>(
         },
     };
 
-    // D7 nominal-binder carve-out: forward references to this FUNCTOR resolve at
-    // chain-gated reads regardless of source order.
+    // Non-nominal: the FUNCTOR name obeys source order like any other type name.
     let bind_index = sched
         .current_lexical_chain()
-        .map(|chain| BindingIndex::nominal(chain.index))
+        .map(|chain| BindingIndex::value(chain.index))
         .unwrap_or(BindingIndex::BUILTIN);
 
     match classify(return_type_state, params) {
@@ -188,8 +188,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         None,
         Some(super::fn_def::binder_bucket),
         false,
-        // D7 nominal-binder carve-out via `BindingIndex.nominal_binder`.
-        true,
+        // Non-nominal: the FUNCTOR name obeys source order like any other type name.
+        false,
     );
     register_builtin_full(
         scope,
@@ -209,8 +209,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         None,
         Some(super::fn_def::binder_bucket),
         false,
-        // See above.
-        true,
+        // Non-nominal: see above.
+        false,
     );
 }
 

@@ -1,6 +1,7 @@
-//! SCC pre-registration / cycle-detection bookkeeping for in-flight named-type
-//! binders. [`super::Bindings`] embeds a [`PendingTypes`] by value and delegates
-//! the surface methods.
+//! In-flight named-type binder tracking. [`super::Bindings`] embeds a [`PendingTypes`] by
+//! value and delegates the surface methods. A binder records itself here for its body's
+//! duration so a consumer referencing an *earlier* still-finalizing type can find the
+//! producer node to park on (the finalize gate in `resolve_type_expr`).
 //!
 //! MODULE does not participate — module bodies park on the outer scheduler,
 //! not on type-name resolution inside elaboration.
@@ -13,15 +14,13 @@ use crate::machine::model::types::NominalKind;
 
 use super::super::scope_id::ScopeId;
 
-/// `schema_expr` is the unelaborated body the cycle-close sweep re-runs against
-/// the post-pre-registration scope; `edges` is the adjacency list to other
-/// in-flight binders this one has parked on. `kind` seeds the sealed
-/// `NominalMember`'s surface family.
+/// `schema_expr` is the unelaborated body; `kind` seeds the sealed `NominalMember`'s
+/// surface family. The entry's presence marks the binder as in-flight so a consumer can
+/// park on it.
 pub struct PendingTypeEntry<'a> {
     pub kind: NominalKind,
     pub scope_id: ScopeId,
     pub schema_expr: KExpression<'a>,
-    pub edges: Vec<String>,
 }
 
 pub struct PendingTypes<'a> {
@@ -57,17 +56,6 @@ impl<'a> PendingTypes<'a> {
         PendingBinderGuard {
             pending: self,
             name,
-        }
-    }
-
-    /// Append `to` to `from`'s adjacency list (no-op if `from` isn't a pending
-    /// binder). Deduplicates so re-elaboration doesn't grow the list.
-    pub fn record_edge(&self, from: &str, to: String) {
-        let mut map = self.map.borrow_mut();
-        if let Some(entry) = map.get_mut(from) {
-            if !entry.edges.iter().any(|e| e == &to) {
-                entry.edges.push(to);
-            }
         }
     }
 

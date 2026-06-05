@@ -86,68 +86,19 @@ fn mutual_non_recursive_pair_does_not_self_ref() {
     assert!(matches!(b_fields[0].1, KType::SetRef { .. }));
 }
 
-/// Mutually recursive `TreeA` ↔ `TreeB`: one shared set of 2 members. Each cross-reference
-/// (`TreeA.b`, `TreeB.a`) is a `SetLocal` index into the *same* set pointing at the sibling.
+/// Bare mutual recursion (no `RECURSIVE TYPES` block) is a position error: the first STRUCT
+/// forward-references the second, which is declared lexically later and so invisible. The
+/// block is the only way to co-declare a cycle of two or more types. (Mutual recursion *via*
+/// the block is covered by `builtins::recursive_types::tests`.)
 #[test]
-fn mutually_recursive_struct_pair() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
-    use crate::machine::execute::Scheduler;
-    use crate::parse::parse;
-    let mut sched = Scheduler::new();
-    for e in parse("STRUCT TreeA = (b :TreeB)\nSTRUCT TreeB = (a :TreeA)").unwrap() {
-        sched.add_dispatch(e, scope);
-    }
-    sched.execute().unwrap();
-    let (a_set, a_fields) = struct_set_and_fields(scope, "TreeA");
-    let (b_set, b_fields) = struct_set_and_fields(scope, "TreeB");
-    // Both members live in one shared set of 2.
+fn bare_mutual_recursion_is_a_position_error() {
+    let err = crate::machine::execute::interpret_with_writer(
+        "STRUCT TreeA = (b :TreeB)\nSTRUCT TreeB = (a :TreeA)",
+        Box::new(std::io::sink()),
+    )
+    .expect_err("bare mutual recursion must be rejected, not silently sealed");
     assert!(
-        std::rc::Rc::ptr_eq(&a_set, &b_set),
-        "TreeA and TreeB must share one RecursiveSet",
+        format!("{err}").contains("TreeB"),
+        "expected the error to name the forward type `TreeB`, got {err}",
     );
-    assert_eq!(a_set.len(), 2, "the SCC seals into a set of 2 members");
-    let a_idx = a_set.index_of("TreeA").unwrap();
-    let b_idx = a_set.index_of("TreeB").unwrap();
-    // TreeA.b is a SetLocal to TreeB's index; TreeB.a is a SetLocal to TreeA's index.
-    assert_eq!(a_fields[0].0, "b");
-    assert_eq!(a_fields[0].1, KType::SetLocal(b_idx));
-    assert_eq!(b_fields[0].0, "a");
-    assert_eq!(b_fields[0].1, KType::SetLocal(a_idx));
-    assert!(scope.bindings().pending_types().is_empty());
-}
-
-/// Three-way mutual recursion: A → B → C → A. One shared set of 3; each field is a
-/// `SetLocal` to the next member.
-#[test]
-fn three_way_mutual_recursion_struct_chain() {
-    use crate::machine::execute::Scheduler;
-    use crate::parse::parse;
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
-    let mut sched = Scheduler::new();
-    for e in parse("STRUCT Aaa = (b :Bbb)\nSTRUCT Bbb = (c :Ccc)\nSTRUCT Ccc = (a :Aaa)").unwrap() {
-        sched.add_dispatch(e, scope);
-    }
-    sched.execute().unwrap();
-    let (set, _) = struct_set_and_fields(scope, "Aaa");
-    assert_eq!(set.len(), 3, "the 3-way SCC seals into a set of 3");
-    for (from, expected_field, expected_target) in [
-        ("Aaa", "b", "Bbb"),
-        ("Bbb", "c", "Ccc"),
-        ("Ccc", "a", "Aaa"),
-    ] {
-        let (from_set, fields) = struct_set_and_fields(scope, from);
-        assert!(
-            std::rc::Rc::ptr_eq(&from_set, &set),
-            "{from} must share the one SCC set",
-        );
-        let target_idx = set.index_of(expected_target).unwrap();
-        assert_eq!(fields[0].0, expected_field);
-        assert_eq!(
-            fields[0].1,
-            KType::SetLocal(target_idx),
-            "{from}.{expected_field} must seal to SetLocal({expected_target})",
-        );
-    }
 }

@@ -24,7 +24,7 @@ pub(crate) fn resolve_arm_return_contract<'a>(
 ) -> Result<ReturnContract<'a>, KError> {
     let kt = match extract_return_type_raw(bundle)? {
         ReturnTypeRaw::Resolved(kt) => kt,
-        ReturnTypeRaw::TypeExprCarrier(te) => match scope.resolve_type_expr(&te) {
+        ReturnTypeRaw::TypeExprCarrier(te) => match scope.resolve_type_expr(&te, None) {
             ResolveTypeExprOutcome::Done(kt) => kt.clone(),
             _ => KType::from_name(&te.render()).ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(

@@ -16,9 +16,10 @@
 //! Identity is `(Rc::as_ptr(set), index)` — lift-stable because `Rc::clone` shares the same
 //! allocation. A member's `name` / `scope_id` are diagnostics only, never identity.
 //!
-//! Members are sealed at SCC cycle-close: the set is created with the membership known (from
-//! `detect_pending_cycle`), `kind` recorded eagerly, and each member's `schema` filled at its
-//! own finalize — hence the [`RefCell`] two-phase cell.
+//! A set is created with its membership known — a singleton for a non-recursive or
+//! self-recursive type, or the whole group for a `RECURSIVE TYPES` block — with each
+//! member's `kind` recorded eagerly and its `schema` filled at its own finalize, hence the
+//! [`RefCell`] two-phase cell.
 
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;

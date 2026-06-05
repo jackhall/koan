@@ -25,9 +25,8 @@ use crate::machine::model::values::KObject;
 /// - `chain = None` (test fixtures, builtin registration) — gate disabled.
 /// - `chain.index_for(scope_id) = None` — scope is off the consumer's chain
 ///   (a completed sibling block); everything visible.
-/// - `chain.index_for(scope_id) = Some(c)` — visible iff `b.idx < c` OR
-///   `b.nominal_binder` (D7 carve-out for STRUCT / named UNION / SIG /
-///   FUNCTOR / MODULE).
+/// - `chain.index_for(scope_id) = Some(c)` — visible iff `b.idx < c` (the
+///   `b.nominal_binder` exemption is no longer set by any production binder).
 #[allow(dead_code)]
 pub(crate) fn visible(scope_id: ScopeId, b: BindingIndex, chain: Option<&LexicalFrame>) -> bool {
     let Some(chain) = chain else {
@@ -244,11 +243,12 @@ impl<'a> Scope<'a> {
     pub(crate) fn type_expr_memo_get(
         &self,
         te: &crate::machine::model::ast::TypeName,
+        cutoff: Option<usize>,
     ) -> Option<&'a crate::machine::model::types::KType<'a>> {
         if self.bindings.is_borrowed() {
             return None;
         }
-        self.bindings.get().type_expr_memo_get(te)
+        self.bindings.get().type_expr_memo_get(te, cutoff)
     }
 
     /// Memo write — no-op on a transparent `USING` window (see
@@ -256,12 +256,13 @@ impl<'a> Scope<'a> {
     pub(crate) fn type_expr_memo_insert(
         &self,
         te: crate::machine::model::ast::TypeName,
+        cutoff: Option<usize>,
         kt: &'a crate::machine::model::types::KType<'a>,
     ) {
         if self.bindings.is_borrowed() {
             return;
         }
-        self.bindings.get().type_expr_memo_insert(te, kt);
+        self.bindings.get().type_expr_memo_insert(te, cutoff, kt);
     }
 
     /// Call-site scope a `Borrowed` window forwards writes to. Panics if `Borrowed`
@@ -556,8 +557,8 @@ impl<'a> Scope<'a> {
 
     /// Chain-gated companion to [`Self::resolve_type`]. Per-scope `types` hits are
     /// filtered through [`visible`], so a type binding declared lexically later in
-    /// the same block is invisible to an earlier sibling (unless the binder is a
-    /// nominal-binder carve-out).
+    /// the same block is invisible to an earlier sibling — a forward type reference is a
+    /// position error.
     pub fn resolve_type_with_chain(
         &self,
         name: &str,

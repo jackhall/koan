@@ -120,7 +120,7 @@ pub(crate) fn classify_return_type<'a>(
                 ));
             }
             let name = te.render();
-            let state = match scope.resolve_type_expr(&te) {
+            let state = match scope.resolve_type_expr(&te, None) {
                 ResolveTypeExprOutcome::Done(kt) => ReturnTypeState::Done(kt.clone()),
                 ResolveTypeExprOutcome::Park(producers) => {
                     ReturnTypeState::Pending { te, producers }
@@ -243,7 +243,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),
         ReturnTypeCapture::Unresolved(name) => {
             let te = TypeName::leaf(name.clone());
-            match scope.resolve_type_expr(&te) {
+            match scope.resolve_type_expr(&te, None) {
                 ResolveTypeExprOutcome::Done(kt) => Ok(ReturnType::Resolved(kt.clone())),
                 ResolveTypeExprOutcome::Park(_) => Err(KError::new(KErrorKind::ShapeError(
                     "FN return type parked after Combine wake".to_string(),
@@ -256,7 +256,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
                 },
             }
         }
-        ReturnTypeCapture::TypeExpr(t) => match scope.resolve_type_expr(&t) {
+        ReturnTypeCapture::TypeExpr(t) => match scope.resolve_type_expr(&t, None) {
             ResolveTypeExprOutcome::Done(kt) => Ok(ReturnType::Resolved(kt.clone())),
             ResolveTypeExprOutcome::Park(_) => Err(KError::new(KErrorKind::ShapeError(
                 "FN return type parked after Combine wake".to_string(),

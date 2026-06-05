@@ -14,7 +14,7 @@ use crate::machine::{
 
 use crate::machine::model::ast::KExpression;
 
-use super::{arg, err, kw, register_nominal_binder, sig};
+use super::{arg, err, kw, register_builtin_with_binder, sig};
 use crate::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_kexpression,
 };
@@ -43,9 +43,9 @@ pub fn body<'a>(
             )));
         }
     };
-    // Install the pending-type entry before launching the elaborator so a fellow
-    // in-flight binder parking on this name can close the cycle via DFS. The guard's
-    // Drop removes the entry; the Park path moves it into the Combine-finish closure.
+    // Mark this binder in-flight so a consumer referencing it (an earlier sibling still
+    // finalizing) can park on our producer node. The guard's Drop removes the entry; the
+    // Park path moves it into the Combine-finish closure.
     let scope_id = scope.id;
     let pending_guard = scope.bindings().insert_pending_type(
         name.clone(),
@@ -53,24 +53,26 @@ pub fn body<'a>(
             kind: NominalKind::Tagged,
             scope_id,
             schema_expr: schema_expr.clone(),
-            edges: Vec::new(),
         },
     );
     // Seed the threaded set with this UNION's name so a self-recursive
     // `UNION List = (cons :List nil :Null)` resolves to the transient `RecursiveRef`
-    // rather than parking on its own placeholder.
+    // rather than parking on its own placeholder. The chain gates variant type names to
+    // this binder's lexical position.
+    let chain = sched.current_lexical_chain();
     let mut elaborator = Elaborator::new(scope)
         .with_threaded([name.clone()])
-        .with_current_decl(name.clone(), NominalKind::Tagged, scope_id);
+        .with_chain(chain.clone());
     let outcome = parse_typed_field_list_via_elaborator(
         &schema_expr,
         "UNION schema",
         FieldNameKind::Identifier,
         &mut elaborator,
     );
-    let bind_index = sched
-        .current_lexical_chain()
-        .map(|chain| BindingIndex::nominal(chain.index))
+    // Non-nominal: the UNION name obeys source order like any other type name.
+    let bind_index = chain
+        .as_ref()
+        .map(|c| BindingIndex::value(c.index))
         .unwrap_or(BindingIndex::BUILTIN);
     match outcome {
         FieldListOutcome::Done(fields) => finalize_union(scope, name, fields, bind_index),
@@ -87,6 +89,7 @@ pub fn body<'a>(
             sub_dispatches,
             pending_guard,
             bind_index,
+            chain,
         ),
     }
 }
@@ -150,6 +153,7 @@ fn defer_union_via_combine<'a>(
     sub_dispatches: Vec<(usize, KExpression<'a>)>,
     pending_guard: PendingBinderGuard<'a>,
     bind_index: BindingIndex,
+    chain: Option<std::rc::Rc<crate::machine::core::LexicalFrame>>,
 ) -> BodyResult<'a> {
     use crate::machine::model::ast::ExpressionPart;
     let name_for_finish = name.clone();
@@ -176,7 +180,9 @@ fn defer_union_via_combine<'a>(
             spliced_parts[slot_idx].value = ExpressionPart::Future(obj);
         }
         let spliced_schema = KExpression::new(spliced_parts);
-        let mut elaborator = Elaborator::new(scope).with_threaded([name_for_finish.clone()]);
+        let mut elaborator = Elaborator::new(scope)
+            .with_threaded([name_for_finish.clone()])
+            .with_chain(chain.clone());
         match parse_typed_field_list_via_elaborator(
             &spliced_schema,
             "UNION schema",
@@ -210,7 +216,7 @@ pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_nominal_binder(
+    register_builtin_with_binder(
         scope,
         "UNION",
         sig(
@@ -230,7 +236,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run_one, run_one_err, run_root_silent};
-    use crate::machine::model::types::{NominalKind, NominalSchema, ProjectedSchema, RecursiveSet};
+    use crate::machine::model::types::{NominalKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
     use crate::machine::{BindingIndex, KErrorKind, RuntimeArena, Scope};
 
@@ -345,7 +351,8 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let scope_id = scope.id;
-        // Pre-install a `SetRef` to a pending (unfilled) member, as `seal_type_cycle` does.
+        // Pre-install a `SetRef` to a pending (unfilled) member, as the RECURSIVE TYPES
+        // block does for its co-declared members.
         let pending_member = crate::machine::model::types::NominalMember::pending(
             "Maybe".into(),
             scope_id,
@@ -387,53 +394,6 @@ mod tests {
             scope.bindings().data().get("Maybe").is_none(),
             "type-only finalize must not write a value-side carrier",
         );
-    }
-
-    /// Mutually recursive STRUCT ↔ UNION pair: each binder parks on the other; the SCC seals
-    /// into one shared set, and each cross-reference is a `SetLocal` into that set.
-    #[test]
-    fn struct_union_mutual_recursion() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
-        use crate::machine::execute::Scheduler;
-        use crate::parse::parse;
-        let mut sched = Scheduler::new();
-        for e in parse("STRUCT Wrap = (m :Maybe)\nUNION Maybe = (just :Wrap, none :Null)").unwrap()
-        {
-            sched.add_dispatch(e, scope);
-        }
-        sched.execute().unwrap();
-        // Both members share one set.
-        let (wrap_set, wrap_index) = match scope.resolve_type("Wrap") {
-            Some(KType::SetRef { set, index }) => (std::rc::Rc::clone(set), *index),
-            other => panic!("expected Wrap SetRef, got {other:?}"),
-        };
-        let maybe_index = match scope.resolve_type("Maybe") {
-            Some(KType::SetRef { set, index }) => {
-                assert!(
-                    std::rc::Rc::ptr_eq(set, &wrap_set),
-                    "Wrap and Maybe share a set"
-                );
-                *index
-            }
-            other => panic!("expected Maybe SetRef, got {other:?}"),
-        };
-        // Wrap.m seals to SetLocal(Maybe's index).
-        let wrap_borrow = wrap_set.member(wrap_index).schema();
-        match wrap_borrow.as_ref() {
-            Some(NominalSchema::Struct(fields)) => {
-                assert_eq!(fields.get("m"), Some(&KType::SetLocal(maybe_index)));
-            }
-            other => panic!("expected Wrap Struct schema, got {other:?}"),
-        }
-        // Maybe.just seals to SetLocal(Wrap's index).
-        let maybe_borrow = wrap_set.member(maybe_index).schema();
-        match maybe_borrow.as_ref() {
-            Some(NominalSchema::Tagged(schema)) => {
-                assert_eq!(schema.get("just"), Some(&KType::SetLocal(wrap_index)));
-            }
-            other => panic!("expected Maybe Tagged schema, got {other:?}"),
-        }
     }
 
     #[test]

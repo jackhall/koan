@@ -255,8 +255,8 @@ fn finalize_carrier<'a>(
 /// Schedule a `Combine` over `park_producers` plus owned sub-Dispatches for
 /// sigiled-type-expression params (`xs :(LIST OF Number)`), then re-walk the parameter
 /// list in the finish closure. Mirrors [`super::struct_def::defer_struct_via_combine`]
-/// minus the nominal-binder bookkeeping — an anonymous function type has no self-reference
-/// binder, so there is no `pending_guard` / `insert_pending_type` / `with_current_decl`.
+/// minus the named-binder bookkeeping — an anonymous function type has no self-reference
+/// binder, so there is no `pending_guard` / `insert_pending_type` / threaded name.
 #[allow(clippy::too_many_arguments)]
 fn defer_via_combine<'a>(
     scope: &'a Scope<'a>,

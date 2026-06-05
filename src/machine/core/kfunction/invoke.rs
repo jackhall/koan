@@ -347,7 +347,9 @@ pub(crate) fn type_identity_for<'a>(
         }),
         KType::TypeExprRef => match obj {
             KObject::KTypeValue(kt) => Ok(Some(kt.clone())),
-            KObject::TypeNameRef(t) => match definition_scope.resolve_type_expr(t) {
+            // Resolved against the definition scope at call time, where every type the
+            // signature names is already finalized — no lexical-order gating applies.
+            KObject::TypeNameRef(t) => match definition_scope.resolve_type_expr(t, None) {
                 ResolveTypeExprOutcome::Done(kt) => Ok(Some(kt.clone())),
                 ResolveTypeExprOutcome::Park(pending_on) => {
                     Err(KError::new(KErrorKind::TypeIdentityPendingAtDispatch {

@@ -60,7 +60,9 @@ pub fn body<'a>(
     // reference (deferring elaboration to per-call scope at invoke time).
     let param_names = signature::collect_param_names_from_signature(&signature_expr);
 
-    let mut elaborator = Elaborator::new(scope);
+    // Gate param type names to the FN's lexical position — a parameter naming a later type
+    // is a position error, like any other forward type reference.
+    let mut elaborator = Elaborator::new(scope).with_chain(sched.current_lexical_chain());
 
     // `None` verdict context: FUNCTOR's arm consumes a verdict computed against
     // `Some(&param_type_map)`; FN computes a no-op `Admissible` and drops it.

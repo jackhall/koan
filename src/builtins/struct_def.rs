@@ -12,7 +12,7 @@ use crate::machine::{
 
 use crate::machine::model::ast::KExpression;
 
-use super::{arg, err, kw, register_nominal_binder, sig};
+use super::{arg, err, kw, register_builtin_with_binder, sig};
 use crate::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_kexpression,
 };
@@ -40,10 +40,9 @@ pub fn body<'a>(
             )));
         }
     };
-    // Register in `pending_types` so a fellow in-flight binder parking on our
-    // placeholder can detect a closing cycle and install our identity without
-    // re-entering dispatch. The guard's Drop removes the entry; the Park path
-    // moves the guard into the Combine-finish closure.
+    // Mark this binder in-flight so a consumer referencing it (an earlier sibling still
+    // finalizing) can park on our producer node. The guard's Drop removes the entry; the
+    // Park path moves the guard into the Combine-finish closure.
     let scope_id = scope.id;
     let pending_guard = scope.bindings().insert_pending_type(
         name.clone(),
@@ -51,27 +50,27 @@ pub fn body<'a>(
             kind: NominalKind::Struct,
             scope_id,
             schema_expr: schema_expr.clone(),
-            edges: Vec::new(),
         },
     );
     // Thread this binder's name so a self-reference resolves to the transient
-    // `RecursiveRef` rather than parking on our own placeholder. `with_current_decl` arms
-    // the SCC edge-recording / cycle-detection arm.
+    // `RecursiveRef` rather than parking on our own placeholder. The chain gates field type
+    // names to this binder's lexical position — a field naming a later type is a position
+    // error, and mutual recursion is expressed with a `RECURSIVE TYPES` block.
+    let chain = sched.current_lexical_chain();
     let mut elaborator = Elaborator::new(scope)
         .with_threaded([name.clone()])
-        .with_current_decl(name.clone(), NominalKind::Struct, scope_id);
+        .with_chain(chain.clone());
     let outcome = parse_typed_field_list_via_elaborator(
         &schema_expr,
         "STRUCT schema",
         FieldNameKind::Identifier,
         &mut elaborator,
     );
-    // Nominal binder: the placeholder install stamped `nominal_binder: true`;
-    // the type-only `register_type_upsert` must carry the same flag for visibility
-    // consistency.
-    let bind_index = sched
-        .current_lexical_chain()
-        .map(|chain| BindingIndex::nominal(chain.index))
+    // The STRUCT name binds at its own lexical position (non-nominal), so a forward
+    // reference to it obeys source order like any other type name.
+    let bind_index = chain
+        .as_ref()
+        .map(|c| BindingIndex::value(c.index))
         .unwrap_or(BindingIndex::BUILTIN);
     match outcome {
         FieldListOutcome::Done(fields) => finalize_struct(scope, name, fields, bind_index),
@@ -88,6 +87,7 @@ pub fn body<'a>(
             sub_dispatches,
             pending_guard,
             bind_index,
+            chain,
         ),
     }
 }
@@ -161,6 +161,7 @@ fn defer_struct_via_combine<'a>(
     sub_dispatches: Vec<(usize, KExpression<'a>)>,
     pending_guard: PendingBinderGuard<'a>,
     bind_index: BindingIndex,
+    chain: Option<std::rc::Rc<crate::machine::core::LexicalFrame>>,
 ) -> BodyResult<'a> {
     use crate::machine::model::ast::ExpressionPart;
     let name_for_finish = name.clone();
@@ -192,9 +193,11 @@ fn defer_struct_via_combine<'a>(
             spliced_parts[slot_idx].value = ExpressionPart::Future(obj);
         }
         let spliced_schema = KExpression::new(spliced_parts);
-        // All producers have terminalized; no `current_decl` seeding needed since
-        // cycle detection only matters for in-flight binders that might park.
-        let mut elaborator = Elaborator::new(scope).with_threaded([name_for_finish.clone()]);
+        // Re-elaborate at the binder's captured lexical position so the gate is identical
+        // to the synchronous path.
+        let mut elaborator = Elaborator::new(scope)
+            .with_threaded([name_for_finish.clone()])
+            .with_chain(chain.clone());
         match parse_typed_field_list_via_elaborator(
             &spliced_schema,
             "STRUCT schema",
@@ -229,7 +232,7 @@ pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_nominal_binder(
+    register_builtin_with_binder(
         scope,
         "STRUCT",
         sig(

@@ -17,7 +17,7 @@ use crate::machine::{
 
 use crate::machine::model::ast::KExpression;
 
-use super::{arg, err, kw, register_nominal_binder, sig};
+use super::{arg, err, kw, register_builtin_with_binder, sig};
 use crate::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_kexpression,
 };
@@ -49,11 +49,10 @@ pub fn body<'a>(
     // Capture the active per-call frame for the produced KModule's anchor; see
     // per-call-arena-protocol.md § Carriers and § Outer-frame chain.
     let active_frame = sched.current_frame();
-    // D7 nominal-binder carve-out: forward references to this MODULE resolve at
-    // chain-gated reads regardless of source order.
+    // Non-nominal: the MODULE name obeys source order like any other type name.
     let bind_index = sched
         .current_lexical_chain()
-        .map(|chain| BindingIndex::nominal(chain.index))
+        .map(|chain| BindingIndex::value(chain.index))
         .unwrap_or(BindingIndex::BUILTIN);
     let name_for_finish = name.clone();
     let finish: CombineFinish<'a> = Box::new(move |parent_scope, _sched, _results| {
@@ -126,7 +125,7 @@ pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_nominal_binder(
+    register_builtin_with_binder(
         scope,
         "MODULE",
         sig(
