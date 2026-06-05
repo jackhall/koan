@@ -1,6 +1,6 @@
 # Koan
 
-A multiparadigm, graph-based language. Koan is in early prototype: it parses indentation-and-paren-structured source, dispatches each top-level expression against a registry of typed function signatures, and executes the resulting DAG of deferred calls.
+A multiparadigm, graph-based language with a metaprogrammable expression syntax and an ML-like module system.
 
 ## Build
 
