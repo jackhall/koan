@@ -91,6 +91,9 @@ Phase 2 is a mechanical re-home, not a fresh judgment.
 - [Lookup protocol](../../design/typing/lookup-protocol.md) — the per-scope
   `visible(idx, cutoff)` walk and `LexicalFrame` chain this work re-points the type
   language onto.
+- [`RECURSIVE TYPES` block](../type_language/recursive-types-block.md) — the explicit
+  co-declaration expressing mutual recursion once forward type references are position
+  errors; without it, chain-gating the elaborator would break mutually-recursive types.
 
 **Unblocks:**
 

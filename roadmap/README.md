@@ -135,6 +135,7 @@ build on:
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
 - [Plain-English type-operation surfaces](type_language/type-operation-surfaces.md)
 - [Collapse `UserTypeKind` into a nominal-identity wrapper](type_language/nominal-identity-wrapper.md)
+- [`RECURSIVE TYPES` block for mutually-recursive nominals](type_language/recursive-types-block.md)
 
 ### Editor tooling — [editor_tooling/](editor_tooling/)
 
