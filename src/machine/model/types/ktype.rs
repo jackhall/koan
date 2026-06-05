@@ -114,6 +114,11 @@ pub enum KType<'a> {
     /// frees once its last external handle drops. Never reaches the predicates (matching is
     /// shallow `SetRef` identity that does not descend a member's schema).
     SetLocal(usize),
+    /// First-class handle to a whole [`RecursiveSet`], bound by a `RECURSIVE TYPES` group
+    /// name. Identity is the set pointer (`Rc::ptr_eq`); lift shares the set by `Rc::clone`
+    /// through the derived `Clone`. Inert in value dispatch — it names a group of types, not
+    /// a value type — and reserved for value-language cycle construction.
+    RecursiveGroup(Rc<RecursiveSet<'a>>),
     /// Wildcard tag matching any user-declared carrier of the given `kind`. Strictly more
     /// specific than `Any`; specificity to a concrete `SetRef` member of the same kind is
     /// one-direction only — `SetRef` is more specific than `AnyUserType` of the same kind,
@@ -204,6 +209,10 @@ impl<'a> KType<'a> {
             // Diagnostic-only: a sibling reference renders against no ambient set here, so
             // report the slot index. Deep traversal resolves it against the set.
             KType::SetLocal(i) => format!("SetLocal({i})"),
+            KType::RecursiveGroup(set) => {
+                let names: Vec<&str> = set.members().iter().map(|m| m.name.as_str()).collect();
+                format!("RECURSIVE TYPES ({})", names.join(" "))
+            }
             KType::AnyUserType { kind } => kind.surface_keyword().into(),
             KType::Signature { sig, pinned_slots } => {
                 if pinned_slots.is_empty() {
@@ -338,6 +347,8 @@ impl<'a> PartialEq for KType<'a> {
                 c1 == c2 && a1 == a2
             }
             (RecursiveRef(n1), RecursiveRef(n2)) => n1 == n2,
+            // Whole-set handle: identity is the set pointer, never the (cyclic) schema.
+            (RecursiveGroup(a), RecursiveGroup(b)) => Rc::ptr_eq(a, b),
             (DeferredReturn(a), DeferredReturn(b)) => a == b,
             _ => false,
         }
@@ -398,6 +409,8 @@ impl<'a> std::hash::Hash for KType<'a> {
                 args.hash(state);
             }
             RecursiveRef(n) => n.hash(state),
+            // Set-pointer identity ONLY — never the cyclic schema, matching `PartialEq`.
+            RecursiveGroup(set) => (Rc::as_ptr(set) as *const ()).hash(state),
             DeferredReturn(s) => s.hash(state),
         }
     }

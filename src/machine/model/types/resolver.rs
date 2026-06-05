@@ -125,6 +125,17 @@ pub fn elaborate_type_expr<'a>(el: &mut Elaborator<'_, 'a>, t: &TypeName) -> Ela
         // `RecursiveRef`, sealed into a `SetLocal` index when the member finalizes.
         return ElabResult::Done(KType::RecursiveRef(name.to_string()));
     }
+    if let Some(set) = el.scope.nearest_recursive_set() {
+        // A bare leaf naming a member of the enclosing `RECURSIVE TYPES` block is a
+        // co-declared sibling (or self): lower to the same transient `RecursiveRef`
+        // back-edge, sealed to a `SetLocal` index at the member's finalize. This is the
+        // block's threading — it makes cross-references resolve independent of source
+        // order, with no forward placeholder. Checked before `resolve_type` so a member
+        // lowers to the back-edge rather than the set's pre-installed external `SetRef`.
+        if set.index_of(name).is_some() {
+            return ElabResult::Done(KType::RecursiveRef(name.to_string()));
+        }
+    }
     if let Some(kt) = el.scope.resolve_type(name) {
         return ElabResult::Done(kt.clone());
     }

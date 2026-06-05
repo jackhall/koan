@@ -19,6 +19,7 @@ pub(crate) mod newtype_def;
 mod print;
 mod quote;
 mod record_projection;
+mod recursive_types;
 mod result;
 mod sig_def;
 mod struct_def;
@@ -194,6 +195,7 @@ pub fn default_scope<'a>(
     result::register(scope);
     struct_def::register(scope);
     newtype_def::register(scope);
+    recursive_types::register(scope);
     match_case::register(scope);
     try_with::register(scope);
     using_scope::register(scope);

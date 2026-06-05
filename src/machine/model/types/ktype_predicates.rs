@@ -431,6 +431,9 @@ impl<'a> KType<'a> {
             // schema (reached by navigation, which carries the ambient set).
             KType::RecursiveRef(_) => true,
             KType::SetLocal(_) => false,
+            // A whole-set handle names a group of types, not a value type — it admits no
+            // argument; the `RECURSIVE TYPES` group name is a reserved value-language seam.
+            KType::RecursiveGroup(_) => false,
             // Confined to a synthesized FN/FUNCTOR `ret` slot — never a free-standing
             // argument slot, so it admits nothing on its own.
             KType::DeferredReturn(_) => false,

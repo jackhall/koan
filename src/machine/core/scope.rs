@@ -1,5 +1,8 @@
 use std::cell::RefCell;
 use std::io::Write;
+use std::rc::Rc;
+
+use crate::machine::model::types::RecursiveSet;
 
 use crate::machine::model::ast::KExpression;
 
@@ -73,6 +76,12 @@ pub struct Scope<'a> {
     pub id: ScopeId,
     pending: PendingQueue<'a>,
     pub kind: ScopeKind,
+    /// Set iff this is a `RECURSIVE TYPES` block's child scope: the shared [`RecursiveSet`]
+    /// whose members are co-declared and threaded together. The elaborator lowers a bare
+    /// leaf naming one of its members to a transient `RecursiveRef` back-edge, so
+    /// cross-references inside the block resolve regardless of lexical order — the block is
+    /// the one cross-order resolution that survives strict source-order type-name lookup.
+    recursive_set: Option<Rc<RecursiveSet<'a>>>,
 }
 
 /// A scope's binding storage. `Owned` is the default. `Borrowed` is the
@@ -129,6 +138,7 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
+            recursive_set: None,
         }
     }
 
@@ -147,6 +157,7 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
+            recursive_set: None,
         }
     }
 
@@ -160,6 +171,7 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Sig { name },
+            recursive_set: None,
         }
     }
 
@@ -174,7 +186,34 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Module { name },
+            recursive_set: None,
         }
+    }
+
+    /// Child scope for a `RECURSIVE TYPES` block body: carries the shared [`RecursiveSet`]
+    /// whose members are co-declared. Members dispatch against this scope, so the elaborator
+    /// threads the group (a member name lowers to `RecursiveRef`). `outer` is the lexical
+    /// parent; the sealed members are mirrored up into it at the block's Combine-finish.
+    pub fn child_recursive_group(outer: &'a Scope<'a>, set: Rc<RecursiveSet<'a>>) -> Scope<'a> {
+        Scope {
+            outer: Some(outer),
+            bindings: ScopeBindings::Owned(Bindings::new()),
+            out: RefCell::new(None),
+            arena: outer.arena,
+            id: ScopeId::next(),
+            pending: PendingQueue::new(),
+            kind: ScopeKind::Anonymous,
+            recursive_set: Some(set),
+        }
+    }
+
+    /// The shared [`RecursiveSet`] of the nearest enclosing `RECURSIVE TYPES` block, if any.
+    /// The elaborator consults this to decide whether a bare leaf is a co-declared member:
+    /// only the *nearest* group is considered, so a reference to an outer block's member
+    /// falls through to ordinary resolution (an external `SetRef`), not a back-edge into the
+    /// inner set.
+    pub fn nearest_recursive_set(&self) -> Option<Rc<RecursiveSet<'a>>> {
+        self.ancestors().find_map(|s| s.recursive_set.clone())
     }
 
     /// Transparent `USING … SCOPE` child scope. `outer` is the call site (the lexical
@@ -191,6 +230,7 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
+            recursive_set: None,
         }
     }
 

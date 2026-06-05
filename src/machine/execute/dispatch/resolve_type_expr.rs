@@ -209,7 +209,8 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
                 | KType::AnyUserType { .. }
                 | KType::DeferredReturn(_)
                 | KType::SetLocal(_)
-                | KType::RecursiveRef(_) => {}
+                | KType::RecursiveRef(_)
+                | KType::RecursiveGroup(_) => {}
             }
         }
         None

@@ -84,6 +84,14 @@ are the one thing nested strictly inside it, and the only thing that needs a sho
   separate seed, just the one `anchored_parts → yoke` conversion that flips alongside the first
   tail path to need it. Ordering constraints: the root-yoke above lands before widening, and
   each seed needs the widening to reach its `lift_kobject` boundary before it can flip.
+- *Tree-borrows UB witness — open.* The `recursive_eval_no_uaf` test (EVAL re-dispatched
+  under TCO) trips a tree-borrows Undefined Behavior under
+  `MIRIFLAGS=-Zmiri-tree-borrows` — a forbidden read through a per-call frame-scope borrow,
+  the fabricated run-length `'a` over-stating the frame's true extent. Stacked borrows
+  misses it, so the test is absent from [`observe/miri_slate.md`](../../observe/miri_slate.md).
+  Treat clearing this UB — and admitting the test to the slate once green — as an acceptance
+  check for the split: with per-call scopes carrying their honest frame lifetime, the
+  over-wide borrow tree-borrows rejects should no longer be expressible.
 
 ## Dependencies
 
