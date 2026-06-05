@@ -48,12 +48,6 @@ pub struct KFunction<'a> {
     /// projects `is_functor → KType::KFunctor`, else `KType::KFunction`. See
     /// [design/typing/functors.md](../../../design/typing/functors.md).
     pub is_functor: bool,
-    /// Flipped on by binder builtins whose binding installs a *nominal* identity —
-    /// `STRUCT`, named `UNION`, `SIG`, `FUNCTOR`, `MODULE`. Carves the entry out of
-    /// the strict-lexical-cutoff visibility test so a chain-gated read finds it
-    /// regardless of source order (a forward reference to the name resolves rather
-    /// than missing).
-    pub is_nominal_binder: bool,
 }
 
 impl<'a> KFunction<'a> {
@@ -71,7 +65,7 @@ impl<'a> KFunction<'a> {
         captured: &'a Scope<'a>,
         binder_name: Option<BinderNameFn>,
     ) -> Self {
-        Self::with_binder_and_functor(signature, body, captured, binder_name, None, false, false)
+        Self::with_binder_and_functor(signature, body, captured, binder_name, None, false)
     }
 
     pub fn with_binder_and_functor(
@@ -81,7 +75,6 @@ impl<'a> KFunction<'a> {
         binder_name: Option<BinderNameFn>,
         binder_bucket: Option<BinderBucketFn>,
         is_functor: bool,
-        is_nominal_binder: bool,
     ) -> Self {
         signature.normalize();
         Self {
@@ -91,7 +84,6 @@ impl<'a> KFunction<'a> {
             binder_name,
             binder_bucket,
             is_functor,
-            is_nominal_binder,
         }
     }
 
@@ -384,7 +376,6 @@ mod tests {
             None,
             None,
             true,
-            false,
         );
         let functor_obj = KObject::KFunction(arena.alloc_function(functor), None);
         match functor_obj.ktype() {
@@ -427,7 +418,6 @@ mod tests {
                 None,
                 None,
                 true,
-                false,
             );
             KObject::KFunction(arena.alloc_function(f), None)
         };

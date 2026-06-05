@@ -84,8 +84,7 @@ pub fn body<'a>(
         },
     };
 
-    // Value-style bind_index: FN produces a callable but registers no
-    // sibling-visible nominal identity, so no D7 carve-out applies.
+    // The FN name binds at its own lexical position, like every other binder.
     let bind_index = sched
         .current_lexical_chain()
         .map(|chain| BindingIndex::value(chain.index))
@@ -243,7 +242,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         None,
         Some(binder_bucket),
         false,
-        false,
     );
     register_builtin_full(
         scope,
@@ -262,7 +260,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         None,
         Some(binder_bucket),
-        false,
         false,
     );
     // Anonymous overload: a `:{…}` record-schema operand is a `SigiledTypeExpr`,
@@ -287,7 +284,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body_record_schema,
         None,
         None,
-        false,
         false,
     );
 }

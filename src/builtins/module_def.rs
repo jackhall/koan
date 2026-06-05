@@ -276,7 +276,7 @@ mod tests {
         // Pre-seed the type-only identity, then re-run `MODULE Foo = ...`. The finalize
         // guard reads `types`, finds the pre-seeded identity, and short-circuits without
         // re-binding — the original `&Module` pointer survives.
-        scope.register_type("Foo".into(), identity, BindingIndex::nominal(0));
+        scope.register_type("Foo".into(), identity, BindingIndex::value(0));
         run(scope, "MODULE Foo = (LET y = 2)");
         let foo = resolve_module(scope, "Foo");
         assert!(std::ptr::eq(foo, module));

@@ -123,9 +123,8 @@ pub fn body<'a>(
     if let Some(kt) = type_for_types_map {
         // Identity-preserving alias: `LET P2 = OrderedSig` writes `bindings.types[P2]`
         // carrying the aliased type's original identity so `(PICK x: P2)` and
-        // `(PICK x: OrderedSig)` dispatch to the same overload. LET aliasing is
-        // value-style gated — no `nominal_binder` carve-out; that's reserved for
-        // STRUCT / SIG / FUNCTOR / MODULE / named UNION at their own install sites.
+        // `(PICK x: OrderedSig)` dispatch to the same overload. The alias binds at its
+        // own lexical position, like every other binder.
         //
         // A SIG-local type binding (`LET Type = Number` inside a SIG body) binds the
         // name-bearing `AbstractType { source: Sig(decl_scope) }` rather than the collapsed

@@ -53,22 +53,6 @@ fn lookup_value_strict_less_than_admits_earlier_sibling() {
 }
 
 #[test]
-fn lookup_value_nominal_binder_bypasses_cutoff() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_bare(&arena);
-    let value = arena.alloc_object(KObject::Number(7.0));
-    // Nominal carve-out: STRUCT / named UNION / SIG / FUNCTOR / MODULE binders
-    // are admitted regardless of cutoff.
-    scope
-        .bind_value("Nominal".to_string(), value, BindingIndex::nominal(99))
-        .unwrap();
-    match scope.bindings().lookup_value("Nominal", Some(1)) {
-        Some(Resolution::Value(KObject::Number(n))) => assert_eq!(*n, 7.0),
-        _ => panic!("nominal carve-out must admit the binding regardless of cutoff"),
-    }
-}
-
-#[test]
 fn lookup_value_placeholder_filtered_same_as_value() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
@@ -103,14 +87,6 @@ fn lookup_type_strict_less_than_hides_later_sibling() {
     scope.register_type("TyLate".into(), KType::Number, BindingIndex::value(5));
     assert!(scope.bindings().lookup_type("TyLate", Some(3)).is_none());
     assert!(scope.bindings().lookup_type("TyLate", Some(9)).is_some());
-}
-
-#[test]
-fn lookup_type_nominal_binder_bypasses_cutoff() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_bare(&arena);
-    scope.register_type("Struct".into(), KType::Number, BindingIndex::nominal(99));
-    assert!(scope.bindings().lookup_type("Struct", Some(1)).is_some());
 }
 
 #[test]

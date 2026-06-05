@@ -25,8 +25,7 @@ use crate::machine::model::values::KObject;
 /// - `chain = None` (test fixtures, builtin registration) — gate disabled.
 /// - `chain.index_for(scope_id) = None` — scope is off the consumer's chain
 ///   (a completed sibling block); everything visible.
-/// - `chain.index_for(scope_id) = Some(c)` — visible iff `b.idx < c` (the
-///   `b.nominal_binder` exemption is no longer set by any production binder).
+/// - `chain.index_for(scope_id) = Some(c)` — visible iff `b.idx < c`.
 #[allow(dead_code)]
 pub(crate) fn visible(scope_id: ScopeId, b: BindingIndex, chain: Option<&LexicalFrame>) -> bool {
     let Some(chain) = chain else {
@@ -34,7 +33,7 @@ pub(crate) fn visible(scope_id: ScopeId, b: BindingIndex, chain: Option<&Lexical
     };
     match chain.index_for(scope_id) {
         None => true,
-        Some(c) => b.nominal_binder || b.idx < c,
+        Some(c) => b.idx < c,
     }
 }
 

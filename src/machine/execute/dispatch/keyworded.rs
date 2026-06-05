@@ -181,10 +181,7 @@ impl<'a> KeywordedState<'a> {
             .active_chain()
             .expect("dispatching slot must have an active chain")
             .index;
-        let bind_index = BindingIndex {
-            idx: lex_index,
-            nominal_binder: resolved.function.is_nominal_binder,
-        };
+        let bind_index = BindingIndex::value(lex_index);
         if let Some(name) = resolved.placeholder_name.as_ref() {
             if let Err(e) = scope.install_placeholder(name.clone(), NodeId(idx), bind_index) {
                 return Ok(NodeStep::Done(NodeOutput::Err(e)));

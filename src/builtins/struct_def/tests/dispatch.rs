@@ -24,13 +24,13 @@ fn finalize_struct_idempotent_after_seal_pre_install() {
         set: std::rc::Rc::clone(&pre_set),
         index: 0,
     };
-    scope.cycle_close_install_identity("Foo".into(), pre_identity, BindingIndex::nominal(0));
+    scope.cycle_close_install_identity("Foo".into(), pre_identity, BindingIndex::value(0));
     // First finalize: fills the pre-installed member in place.
     let first = super::super::finalize_struct(
         scope,
         "Foo".into(),
         vec![("x".into(), KType::Number)],
-        BindingIndex::nominal(0),
+        BindingIndex::value(0),
     );
     assert!(matches!(first, crate::machine::BodyResult::Value(_)));
     assert!(pre_set.member(0).is_filled());
@@ -50,7 +50,7 @@ fn finalize_struct_idempotent_after_seal_pre_install() {
         scope,
         "Foo".into(),
         vec![("x".into(), KType::Number)],
-        BindingIndex::nominal(0),
+        BindingIndex::value(0),
     );
     match second {
         crate::machine::BodyResult::Value(KObject::KTypeValue(KType::SetRef {

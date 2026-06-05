@@ -80,35 +80,11 @@ pub(crate) fn register_builtin_with_binder<'a>(
     body: BuiltinFn,
     binder_name: Option<BinderNameFn>,
 ) {
-    register_builtin_full(
-        scope,
-        name,
-        signature,
-        body,
-        binder_name,
-        None,
-        false,
-        false,
-    );
-}
-
-/// Like [`register_builtin_with_binder`] but stamps the overload as a *nominal* binder
-/// (D7 carve-out) so its placeholder is visible at chain-gated reads regardless of source
-/// order — a forward reference to the binder's name resolves rather than missing.
-pub(crate) fn register_nominal_binder<'a>(
-    scope: &'a Scope<'a>,
-    name: &str,
-    signature: ExpressionSignature<'a>,
-    body: BuiltinFn,
-    binder_name: Option<BinderNameFn>,
-) {
-    register_builtin_full(scope, name, signature, body, binder_name, None, false, true);
+    register_builtin_full(scope, name, signature, body, binder_name, None, false);
 }
 
 /// Full-form builtin registration with both binder hooks and the `is_functor` flag.
 /// `binder_bucket` lets FN / FUNCTOR key pending-overload entries by inner-call bucket.
-/// `is_nominal_binder` flips the D7 carve-out so the placeholder is stamped with
-/// `nominal_binder: true`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn register_builtin_full<'a>(
     scope: &'a Scope<'a>,
@@ -118,7 +94,6 @@ pub(crate) fn register_builtin_full<'a>(
     binder_name: Option<BinderNameFn>,
     binder_bucket: Option<crate::machine::core::kfunction::BinderBucketFn>,
     is_functor: bool,
-    is_nominal_binder: bool,
 ) {
     let arena = scope.arena;
     let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
@@ -128,7 +103,6 @@ pub(crate) fn register_builtin_full<'a>(
         binder_name,
         binder_bucket,
         is_functor,
-        is_nominal_binder,
     ));
     let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
     let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);

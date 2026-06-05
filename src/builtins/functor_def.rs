@@ -188,8 +188,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         None,
         Some(super::fn_def::binder_bucket),
         false,
-        // Non-nominal: the FUNCTOR name obeys source order like any other type name.
-        false,
     );
     register_builtin_full(
         scope,
@@ -208,8 +206,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         None,
         Some(super::fn_def::binder_bucket),
-        false,
-        // Non-nominal: see above.
         false,
     );
 }

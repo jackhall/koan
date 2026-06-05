@@ -82,7 +82,7 @@ pub fn body<'a>(
                 set: Rc::clone(&set),
                 index,
             },
-            BindingIndex::nominal(0),
+            BindingIndex::value(0),
         );
     }
 
@@ -93,7 +93,7 @@ pub fn body<'a>(
     // source order like any other type name.
     let bind_index = sched
         .current_lexical_chain()
-        .map(|chain| BindingIndex::nominal(chain.index))
+        .map(|chain| BindingIndex::value(chain.index))
         .unwrap_or(BindingIndex::BUILTIN);
     let finish: CombineFinish<'a> = Box::new(move |parent_scope, _sched, _results| {
         let frame = || Frame::bare("<recursive-types>", format!("RECURSIVE TYPES {group_name}"));

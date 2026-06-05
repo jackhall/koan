@@ -363,12 +363,12 @@ mod tests {
             set: std::rc::Rc::clone(&pre_set),
             index: 0,
         };
-        scope.cycle_close_install_identity("Maybe".into(), pre_identity, BindingIndex::nominal(0));
+        scope.cycle_close_install_identity("Maybe".into(), pre_identity, BindingIndex::value(0));
         let first = super::finalize_union(
             scope,
             "Maybe".into(),
             vec![("some".into(), KType::Number)],
-            BindingIndex::nominal(0),
+            BindingIndex::value(0),
         );
         assert!(matches!(first, crate::machine::BodyResult::Value(_)));
         // The member of the *pre-installed* set is now filled in place.
@@ -379,7 +379,7 @@ mod tests {
             scope,
             "Maybe".into(),
             vec![("some".into(), KType::Number)],
-            BindingIndex::nominal(0),
+            BindingIndex::value(0),
         );
         match second {
             crate::machine::BodyResult::Value(KObject::KTypeValue(KType::SetRef {

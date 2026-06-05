@@ -9,9 +9,7 @@
 //!
 //! Every entry is tagged with a [`BindingIndex`]. `idx == 0` is reserved for builtins;
 //! otherwise the entry is gated by the strict-lexical cutoff `idx < c`, so a forward
-//! reference (a later-positioned binding) is invisible. The `nominal_binder` exemption flag
-//! is no longer set by any production binder — every type binder gates its references
-//! against its own lexical position.
+//! reference (a later-positioned binding) is invisible — type binders included.
 //!
 //! Production reads use the visibility-aware [`Bindings::lookup_value`] /
 //! [`Bindings::lookup_type`] / [`Bindings::lookup_function`], passing a
@@ -62,44 +60,25 @@ pub struct FunctionLookup<'a> {
     pub pending: Option<NodeId>,
 }
 
-/// Lexical position of a binding's installing statement.
-///
-/// `nominal_binder: true` would exempt the entry from the strict-lexical cutoff, but no
-/// production binder sets it any more — the type elaborator gates every binder's references
-/// against its lexical position, so a forward type reference is a position error and mutual
-/// recursion is expressed with a `RECURSIVE TYPES` block. `idx == 0` is reserved for
+/// Lexical position of a binding's installing statement: a binding at `idx` is visible to a
+/// consumer at cutoff `c` iff `idx < c`. Every binder — value and type alike — gates its
+/// references against its own position, so a forward reference is a position error and
+/// mutual recursion is expressed with a `RECURSIVE TYPES` block. `idx == 0` is reserved for
 /// builtins; per-block indices restart inside nested blocks (see
 /// [`crate::machine::core::scope::Scope::resolve`] for the predicate).
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct BindingIndex {
     pub idx: usize,
-    pub nominal_binder: bool,
 }
 
 impl BindingIndex {
-    pub const BUILTIN: BindingIndex = BindingIndex {
-        idx: 0,
-        nominal_binder: false,
-    };
+    pub const BUILTIN: BindingIndex = BindingIndex { idx: 0 };
 
-    /// LET / FN / NEWTYPE / VAL binders: strictly lexically gated, sees only
-    /// earlier-positioned siblings. FN *parameters* and MATCH / TRY `it` are also
-    /// value-gated, at `idx 0`; the body's statements sit at `idx >= 1`, so the strict
-    /// cutoff admits them.
+    /// A binding at lexical position `idx`. FN / STRUCT / etc. all install here; FN
+    /// *parameters* and MATCH / TRY `it` sit at `idx 0`, with the body's statements at
+    /// `idx >= 1`, so the strict `idx < cutoff` predicate admits them.
     pub const fn value(idx: usize) -> Self {
-        BindingIndex {
-            idx,
-            nominal_binder: false,
-        }
-    }
-
-    /// Sets the (now-unused) source-order-exemption flag. Retained only for the
-    /// visibility-predicate tests until the flag is removed.
-    pub const fn nominal(idx: usize) -> Self {
-        BindingIndex {
-            idx,
-            nominal_binder: true,
-        }
+        BindingIndex { idx }
     }
 }
 
@@ -310,13 +289,12 @@ impl<'a> Bindings<'a> {
             .collect()
     }
 
-    /// Visibility predicate: `None` ⇒ everything visible; `Some(c)` ⇒
-    /// `b.nominal_binder || b.idx < c`. Mirrors
-    /// [`crate::machine::core::scope::visible`].
+    /// Visibility predicate: `None` ⇒ everything visible; `Some(c)` ⇒ `b.idx < c`.
+    /// Mirrors [`crate::machine::core::scope::visible`].
     fn visible(b: BindingIndex, chain_cutoff: Option<usize>) -> bool {
         match chain_cutoff {
             None => true,
-            Some(c) => b.nominal_binder || b.idx < c,
+            Some(c) => b.idx < c,
         }
     }
 
@@ -483,8 +461,8 @@ impl<'a> Bindings<'a> {
     /// idempotent on same-`NodeId` re-entry.
     ///
     /// The eventual `try_bind_value` / `try_register_*` call must carry the
-    /// same `index` (and `nominal_binder` flag) so the consumer's visibility
-    /// test stays consistent across the placeholder → finalized transition.
+    /// same `index` so the consumer's visibility test stays consistent across
+    /// the placeholder → finalized transition.
     pub fn try_install_placeholder(
         &self,
         name: String,
