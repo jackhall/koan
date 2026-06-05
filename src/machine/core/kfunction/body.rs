@@ -63,14 +63,16 @@ pub enum BodyResult<'a> {
         /// FN body resolved-return); `None` continues the slot's current block (CONS
         /// tail, builtin tail continuations). The reinstall site
         /// (`compute_replace_chain` in `execute/scheduler/execute.rs`) prepends
-        /// `(id, 0)` for a non-`Function` contract (`Arm` or `None`); a `Function`
-        /// contract assembles the chain via `kfunction/invoke.rs::assemble_body_chain`.
+        /// `(id, body_index)` for a non-`Function` contract (`Arm` or `None`); a
+        /// `Function` contract assembles the chain via
+        /// `kfunction/invoke.rs::assemble_body_chain`.
         block_entry: Option<ScopeId>,
-        /// Body-scope chain index for a block-entry tail-replace. `0` for
-        /// single-statement bodies. For multi-statement bodies tail-replacing into
-        /// the *last* statement, this is `N` so the strict `b.idx < c` predicate
-        /// admits the `1..N-1` siblings already submitted against the body / arm
-        /// scope. Ignored when `block_entry: None`.
+        /// Body-scope chain index for a block-entry tail-replace. `1` for
+        /// single-statement bodies — the lone statement sits above the `idx 0`
+        /// parameters / `it`, so the strict `b.idx < c` predicate admits them. For
+        /// multi-statement bodies tail-replacing into the *last* statement, this is
+        /// `N`, admitting both the params and the `1..N-1` siblings already submitted
+        /// against the body / arm scope. Ignored when `block_entry: None`.
         body_index: usize,
     },
     DeferTo(NodeId),
@@ -93,7 +95,7 @@ impl<'a> BodyResult<'a> {
         frame: Rc<CallArena>,
         function: &'a KFunction<'a>,
     ) -> Self {
-        Self::tail_with_frame_at_index(expr, frame, function, 0)
+        Self::tail_with_frame_at_index(expr, frame, function, 1)
     }
 
     /// FN-body tail-replace with an explicit `body_index` (see [`BodyResult::Tail`]).
@@ -123,7 +125,7 @@ impl<'a> BodyResult<'a> {
         scope_id: ScopeId,
         contract: Option<ReturnContract<'a>>,
     ) -> Self {
-        Self::tail_with_block_at_index(expr, frame, scope_id, 0, contract)
+        Self::tail_with_block_at_index(expr, frame, scope_id, 1, contract)
     }
 
     /// Block-entry tail-replace with an explicit `body_index` (see [`BodyResult::Tail`]).

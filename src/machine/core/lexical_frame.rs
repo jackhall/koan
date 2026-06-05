@@ -107,8 +107,9 @@ pub fn assemble_body_chain<'a>(
     for (sid, idx) in hits {
         chain = Some(LexicalFrame::push(chain, sid, idx));
     }
-    // `body_index = 0` is single-statement: the lone body statement sees only its
-    // own parameters. Multi-statement bodies pass `N` for the last statement so
-    // siblings at `idx < N` are visible.
+    // `body_index = 1` is single-statement: the lone body statement sits above the
+    // `idx 0` parameters / `it`, so the strict `idx < cutoff` predicate admits them.
+    // Multi-statement bodies pass `N` for the last statement so siblings at
+    // `idx < N` (params and earlier statements) are visible.
     LexicalFrame::push(chain, body_scope.id, body_index)
 }

@@ -88,13 +88,10 @@ impl<'a> KFunction<'a> {
                     let is_type_denoting = signature_argument_by_name(self, name)
                         .map(|a| a.ktype.is_type_denoting())
                         .unwrap_or(false);
-                    // FN parameters bind *before* the body block's first statement.
-                    // The nominal-binder carve-out is what makes "before the block's
-                    // first statement" satisfy the chain-cutoff rule (same as MATCH `it`).
-                    let param_index = BindingIndex {
-                        idx: 0,
-                        nominal_binder: true,
-                    };
+                    // FN parameters bind at idx 0; the body's statements sit at idx >= 1,
+                    // so the strict `idx < cutoff` rule makes the parameters visible to the
+                    // body (same as MATCH / TRY `it`).
+                    let param_index = BindingIndex::value(0);
                     if !is_type_denoting {
                         // Signature parser enforces parameter-name uniqueness.
                         let _ = child.bind_value(name.clone(), allocated, param_index);
@@ -200,7 +197,8 @@ impl<'a> KFunction<'a> {
                         let mut body_ids: Vec<crate::machine::core::kfunction::NodeId> =
                             Vec::with_capacity(n);
                         for (i, stmt) in body_statements.into_iter().enumerate() {
-                            let idx = if n == 1 { 0 } else { i + 1 };
+                            // Body statements sit at idx 1..N; idx 0 is reserved for params.
+                            let idx = i + 1;
                             let chain =
                                 LexicalFrame::push(body_chain_parent.clone(), child.id, idx);
                             let mut bid = None;

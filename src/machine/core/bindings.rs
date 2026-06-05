@@ -64,9 +64,8 @@ pub struct FunctionLookup<'a> {
 /// Lexical position of a binding's installing statement.
 ///
 /// `nominal_binder: true` exempts the entry from the strict-lexical cutoff, so a
-/// chain-gated read finds it regardless of source order. STRUCT / UNION / SIG /
-/// FUNCTOR / MODULE install it; so do FN parameters and MATCH / TRY `it`, which sit at
-/// `idx 0` and must stay visible before the body's first statement. The cutoff is only
+/// chain-gated read finds it regardless of source order — STRUCT / UNION / SIG /
+/// FUNCTOR / MODULE install it. The cutoff is only
 /// consulted on chain-gated reads — the type elaborator resolves unfiltered (`Scope::
 /// resolve_type` passes `None`), so type-definition mutual recursion does not go through
 /// this flag. `idx == 0` is reserved for builtins; per-block indices restart inside
@@ -84,8 +83,9 @@ impl BindingIndex {
     };
 
     /// LET / FN / NEWTYPE / VAL binders: strictly lexically gated, sees only
-    /// earlier-positioned siblings. (FN *parameters* and MATCH / TRY `it` are not
-    /// value-gated — they install nominal at `idx 0`.)
+    /// earlier-positioned siblings. FN *parameters* and MATCH / TRY `it` are also
+    /// value-gated, at `idx 0`; the body's statements sit at `idx >= 1`, so the strict
+    /// cutoff admits them.
     pub const fn value(idx: usize) -> Self {
         BindingIndex {
             idx,
