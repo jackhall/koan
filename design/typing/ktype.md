@@ -153,13 +153,11 @@ sigil-and-dispatch contract.
 constructors — `LIST OF`, `MAP _ -> _`, `FN <sig> -> _`, and
 `FUNCTOR <sig> -> _` — register in
 [`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs)
-alongside the older `LIST_OF` / `DICT_OF` builtins in
-[`type_ops/`](../../src/builtins/type_ops.rs) (a module type-member is named by
-the dotted `M.T` access, not a builtin). Both surfaces produce
-`KObject::KTypeValue(KType::...)` carriers; the keyworded forms are the
-canonical syntax served by the type-language dispatch path, and the
-`type_ops/` forms are the value-side construction primitives that
-dispatched type-expression sub-expressions assemble through.
+and produce `KObject::KTypeValue(KType::...)` carriers; they are the canonical
+type-language surface, dispatched and assembled as ordinary sub-expressions
+through the type-language path. (A module type-member is named by the dotted
+`M.T` access and signature specialization by the infix `WITH {…}` — neither is
+an underscore builtin.)
 
 ### Variance
 

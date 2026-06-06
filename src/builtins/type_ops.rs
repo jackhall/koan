@@ -1,14 +1,9 @@
-//! Type-constructor builtins — `LIST_OF`, `DICT_OF`, `TEMPLATE`, `WITH`. Each
-//! ships as a scheduled `KFunction` over `TypeExprRef`-typed slots, so a
-//! parameterized type assembles via sub-expression evaluation:
-//! `(LIST_OF (DICT_OF Str Number))` wakes the outer slot only after
-//! the inner sub-dispatch resolves to a concrete `KType` value. See
-//! [design/typing/scheduler.md](../../design/typing/scheduler.md). A module
-//! type-member is named by the dotted `M.T` access (see [`super::attr`]), not a
-//! dedicated builtin.
+//! Residual type-operation builtins — `TEMPLATE` (a higher-kinded type-constructor
+//! parameter) and the infix `WITH` signature specialization. The container and module
+//! type operations read as their plain-English surfaces instead: `:(LIST OF T)` /
+//! `:(MAP K -> V)` (see [`super::type_constructors`]) and the dotted `M.T` access (see
+//! [`super::attr`]). See [design/typing/scheduler.md](../../design/typing/scheduler.md).
 
-mod dict_of;
-mod list_of;
 mod type_constructor;
 mod with;
 
@@ -19,28 +14,6 @@ use crate::machine::Scope;
 use super::{arg, kw, register_builtin, sig};
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin(
-        scope,
-        "LIST_OF",
-        sig(
-            KType::TypeExprRef,
-            vec![kw("LIST_OF"), arg("elem", KType::TypeExprRef)],
-        ),
-        list_of::body,
-    );
-    register_builtin(
-        scope,
-        "DICT_OF",
-        sig(
-            KType::TypeExprRef,
-            vec![
-                kw("DICT_OF"),
-                arg("key", KType::TypeExprRef),
-                arg("value", KType::TypeExprRef),
-            ],
-        ),
-        dict_of::body,
-    );
     register_builtin(
         scope,
         "TEMPLATE",

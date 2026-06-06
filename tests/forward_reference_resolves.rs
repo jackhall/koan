@@ -283,7 +283,7 @@ fn let_alias_via_module_qualified_type_resolves() {
     );
 }
 
-/// Module-qualified type name in a `LIST_OF`-style type frame. `LIST_OF Mo.Ty` rides
+/// Module-qualified type name in a `:(LIST OF)`-style type frame. `:(LIST OF Mo.Ty)` rides
 /// the existing `Deferred` path in `resolve_dispatch`. MODULE Mo is a nominal-binder
 /// carve-out so it's visible to the sibling `LET MyList`.
 #[test]
@@ -294,11 +294,11 @@ fn type_frame_with_module_qualified_element_resolves() {
         &arena,
         captured,
         "MODULE Mo = ((LET Ty = Number))\n\
-         LET MyList = (LIST_OF Mo.Ty)",
+         LET MyList = :(LIST OF Mo.Ty)",
     );
     assert!(
         scope.resolve_type("MyList").is_some(),
-        "expected MyList to bind via LIST_OF Mo.Ty",
+        "expected MyList to bind via :(LIST OF Mo.Ty)",
     );
 }
 

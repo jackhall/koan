@@ -5,7 +5,7 @@
 //!   `coerce_type_token_value`; the picked function binds without a sub-Dispatch detour.
 //! - Forward Identifier reference in a wrap-slot — the eager pass parks on the
 //!   producer's placeholder and re-dispatches on wake.
-//! - Chained Type access (`LIST_OF Mo.Ty`) — `Deferred` arm, not `wrap_indices`. Pinned
+//! - Chained Type access (`:(LIST OF Mo.Ty)`) — `Deferred` arm, not `wrap_indices`. Pinned
 //!   here so the eager-path collapse doesn't accidentally route Deferred through the
 //!   wrap-resolve loop.
 //! - Parens-Expression wrap-slot (`MAKESET IntOrd :| OrderedSig`) — the wrap-slot part
@@ -74,7 +74,7 @@ fn wrap_slot_backward_identifier_parks_and_resumes() {
     assert_eq!(out.trim(), "42", "expected printed `42`, got `{out}`");
 }
 
-/// Chained-Type wrap-slot — `LIST_OF Mo.Ty`-shape uses a parens-Expression, not a bare
+/// Chained-Type wrap-slot — `:(LIST OF Mo.Ty)`-shape uses a parens-Expression, not a bare
 /// token, so it hits the `Deferred` resolve path (no overload picks the bare shape; the
 /// `Mo.Ty` sub-Expression resolves first and the typed result re-dispatches via
 /// `run_bind`). Pinned here to confirm the eager wrap-resolve collapse doesn't route

@@ -857,7 +857,7 @@ schedules a `Combine` over those producers that re-runs the signature
 elaboration against the now-final scope at finish time. (See
 [typing/elaboration.md § Layers](typing/elaboration.md#layers) § Layer 3
 for the elaborator's role in the pipeline.) A parens-wrapped
-parameter type (`xs: (LIST_OF Number)`) rides the same Combine:
+parameter type (`xs :(LIST OF Number)`) rides the same Combine:
 `parse_fn_param_list` records the `(slot_idx, sub_expr)` pair, FN-def
 schedules each sub-expression as its own `Dispatch`, and the Combine's
 finish closure splices each result into

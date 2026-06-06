@@ -4,29 +4,17 @@ Retire the `type_ops.rs` underscore-keyword family into the spaced, dotted, and
 infix forms that already express the same operations, leaving no underscore
 keyword and no redundant leading-keyword type operation.
 
-**Problem.** The remaining underscore-keyword type-operation builtins in
-[`src/builtins/type_ops.rs`](../../src/builtins/type_ops.rs) — `LIST_OF` and
-`DICT_OF` — each use an underscore-compound keyword and lead the expression with it,
-outputting `KType::TypeExprRef`. These are the only underscore keyword tokens left in
-the language, and both duplicate a more elegant surface that already exists:
-
-- `LIST_OF T` against `:(LIST OF T)` (`src/builtins/type_constructors.rs:319`);
-- `DICT_OF K V` against `:(MAP K -> V)` (`src/builtins/type_constructors.rs:326`).
-
-The underscores read against koan's plain-English goal, and the leading keyword is
-redundant wherever a spaced or sigil form already names the operation.
-
-A separate cost is the parens-form computed return type. `-> (… WITH {…})` (and any
-`-> (expr)`) is an `Expression` part, so FN and FUNCTOR each register a return-type
-overload whose slot is `KType::KExpression` purely to admit it
-([`src/builtins/fn_def.rs`](../../src/builtins/fn_def.rs),
-[`src/builtins/functor_def.rs`](../../src/builtins/functor_def.rs)); the `TypeExprRef`
-and `SigiledTypeExpr` return overloads already admit the bare and `:(…)` / dotted
-forms. The `SIG_WITH` → infix `WITH` migration (Phase 3) retired the underscore builtin
-but kept its computed return parenthesized (`-> (Set WITH {…})`), so the
-`KExpression`-return overload still has clients; re-homing those to the `:(…)` sigil
-carrier (so every computed return is a bare token, `:(…)`, or dotted form) is what lets
-Phase 4 delete the overload.
+**Problem.** Every type operation now reads as its plain-English surface — `:(LIST OF T)`,
+`:(MAP K -> V)`, the dotted `M.T`, the infix `sig WITH {…}` — and no underscore
+type-operation keyword remains. One redundant dispatch surface is left: the parens-form
+computed return type. `-> (… WITH {…})` (and any `-> (expr)`) is an `Expression` part, so FN
+and FUNCTOR each register a return-type overload whose slot is `KType::KExpression` purely to
+admit it ([`src/builtins/fn_def.rs`](../../src/builtins/fn_def.rs),
+[`src/builtins/functor_def.rs`](../../src/builtins/functor_def.rs)) — a second carrier
+alongside the `TypeExprRef` (bare) and `SigiledTypeExpr` (`:(…)` / dotted) return overloads
+that already admit every other return form. Its remaining clients are the still-parenthesized
+computed `WITH` returns (`-> (Set WITH {Elt = Er.Type})`) and the bare-parens cases in
+`fn_def/tests/body_routing.rs`.
 
 **Impact.**
 
@@ -43,17 +31,6 @@ Phase 4 delete the overload.
 
 **Directions.**
 
-- *Retire the redundant underscore ops — decided.* `LIST_OF` → `:(LIST OF T)`,
-  `DICT_OF` → `:(MAP K -> V)`. Delete the two remaining `type_ops.rs` registrations,
-  following the `FUNCTION_OF` → `:(FN …)` and `MODULE_TYPE_OF` → `M.T` retirement
-  precedents recorded in the shipped notes.
-- *`TypeExprRef` / `Type` reconciliation — open.* The retired ops output
-  `KType::TypeExprRef`; their replacements output `KType::Type` / `KTypeValue`,
-  and `DICT_OF`'s `KType::Dict` must be confirmed equivalent to `MAP`'s output.
-  Verify every type-assembly context that consumes `TypeExprRef` (e.g. nested
-  `(LIST_OF (DICT_OF Str Number))`) accepts the `Type`-producing forms, or bridge
-  the two, before deleting. Recommended: prove the slot types unify so no
-  assembly path regresses.
 - *Delete the FN / FUNCTOR `KExpression`-return overload — open.* The
   `KExpression`-return overload on each binder admits a parens-form `-> (expr)`
   computed return, along with the `ExprCarrier` / `ExprToSubDispatch` return-type path
@@ -66,11 +43,11 @@ Phase 4 delete the overload.
   in `fn_def/tests/body_routing.rs` — onto the `:(…)` sigil carrier (`-> :(Set WITH {…})`),
   then removing the overload. Recommended: confirm the sigil form defers identically,
   migrate the clients, delete.
-- *Phasing — decided.* Four green increments: (1) **shipped** — the ATTR RHS-desugar,
-  chained-access admission, the `:SigiledTypeExpr` lazy return carrier, and `M.T`
-  retiring `MODULE_TYPE_OF`; (2) `LIST_OF` / `DICT_OF` → `:(LIST OF)` / `:(MAP ->)`;
-  (3) **shipped** — `SIG_WITH` → infix `WITH` with record-literal bindings; (4) re-home
-  the remaining parens-form computed returns onto the `:(…)` sigil carrier and delete the
+- *Phasing — decided.* Four green increments, (1)–(3) **shipped**: (1) the ATTR
+  RHS-desugar, chained-access admission, the `:SigiledTypeExpr` lazy return carrier, and
+  `M.T` retiring `MODULE_TYPE_OF`; (2) `LIST_OF` / `DICT_OF` → `:(LIST OF)` / `:(MAP ->)`;
+  (3) `SIG_WITH` → infix `WITH` with record-literal bindings; (4) re-home the remaining
+  parens-form computed returns onto the `:(…)` sigil carrier and delete the
   `KExpression`-return overload.
 - *Declarators, named constructs, and `TEMPLATE` — decided (out of scope).*
   Binding-introduction declarators (`LET` / `FN` / `STRUCT` / `UNION` / `SIG` /
@@ -85,8 +62,8 @@ Phase 4 delete the overload.
 **Requires:**
 
 - [Type language via dispatch](../../design/typing/type-language-via-dispatch.md)
-  — the `:(...)` constructors (`LIST OF`, `MAP -> `) the `LIST_OF` / `DICT_OF`
-  replacements lower to.
+  — the `:(...)` type constructors (`LIST OF`, `MAP -> `) and the `SigiledTypeExpr`
+  return carrier that the plain-English surfaces ride.
 
 **Unblocks:**
 

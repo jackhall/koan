@@ -79,7 +79,7 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "FN (USE xs :MyT) -> (LIST_OF Number) = ([1])\n\
+        "FN (USE xs :MyT) -> :(LIST OF Number) = ([1])\n\
          LET MyT = Number",
     );
     let f = lookup_fn(scope, "USE");
