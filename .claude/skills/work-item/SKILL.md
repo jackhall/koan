@@ -1,100 +1,115 @@
 ---
 name: work-item
-description: Trigger as soon as a plan is ready for a change tracked in `roadmap/` (e.g. user says the plan is approved, or hands over a plan file with a roadmap path). Drives the item from plan to shipped docs — implement, doc-shepherd, audit, dispose. Skips planning.
+description: Trigger for a change tracked in `roadmap/` — when the user hands over a roadmap path (with or without a plan file). Drives the item from plan to shipped docs — plan if needed, branch, implement inline yourself, then an adversarial shepherd audit-and-doc pass, then commit on approval.
 ---
 
 # work-item
 
-You are orchestrating a koan roadmap item from an already-approved plan to docs. The skill takes two paths as input:
+You are driving a koan roadmap item from plan to shipped docs. Unless told otherwise, do the implementation yourself, inline. If you encounter a large-scale but mechanical change, ask the user conversationally if you may fan out agents for it. 
 
-- `<roadmap-path>` — a `roadmap/*.md` file describing the item.
-- `<plan-path>` — a file containing the implementation plan the user has already prepared (e.g. via `/design`, prior conversation, or by hand).
+Delegate final design/ and roadmap/ documentation and the final audit to the adversarial **shepherd** subagent. You may only edit markdown while you are in plan mode.
 
-Both paths come from the skill's args. If either is missing or the file doesn't exist, stop and ask the user for the right paths.
+The skill takes one required path and one optional path, both in scratch and named after the roadmap item:
 
-Your job is procedural plumbing: read inputs, delegate to sub-agents, gate on user approval, run final audits. **Do not implement or write docs yourself.** Each phase belongs to a sub-agent.
+- `<roadmap-path>` — a `roadmap/*.md` file describing the item. **Required.**
+- `<plan-path>` — a `scratch/*-plan.md` file containing an implementation plan the user prepared (e.g. via `/design`, prior conversation, or plan mode). **Optional.** If absent, you start in plan mode and produce one before touching code.
 
-Steps 2 and 3 use the shared **approval-gate** skill — invoke it with the per-step inputs given below.
+Throughout, `slug` = basename of `<roadmap-path>` with the `.md` suffix stripped (e.g. `roadmap/type_language/types-in-value-channel.md` → `types-in-value-channel`).
 
 ## Workflow
 
-### Preflight: clean working tree (docs allowed) + read inputs
+### Read inputs
 
-Verify the git working tree has no dirty *non-doc* paths:
+Read `<roadmap-path>`. If a `<plan-path>` was given, read it too and sanity-check it matches the roadmap item's actual ask (bail per **When to bail** if it doesn't). 
+
+### 1. Plan — only if no plan file was given
+
+If a `<plan-path>` was provided, skip this step.
+
+Otherwise, **start in plan mode** (`EnterPlanMode`). Research the item against the codebase and the relevant `design/*.md`, then present an implementation plan with `ExitPlanMode`. On approval, persist the approved plan to `scratch/<slug>-plan.md` (gitignored) so the shepherd and any re-invocation can read it, and bring the roadmap item up-to-date. Then proceed to the preflight check.
+
+Planning runs first because it only edits markdown (in plan mode), so it needs no clean working tree — the clean-tree gate guards the *implementation* diff, so it sits right before you branch and write code.
+
+### Preflight: clean working tree (docs allowed)
+
+Sanity-check the scope, and flag large-but-decomposable scope to the user, who may opt to split up the roadmap item.
+
+With a plan in hand and implementation about to start, verify the git working tree has no dirty *non-doc* paths:
 
 ```bash
 git status --porcelain \
-  | grep -vE ' (README\.md|TUTORIAL\.md|ROADMAP\.md|design/[^ ]+\.md|roadmap/[^ ]+\.md)$'
+  | grep -vE ' (README\.md|TUTORIAL\.md|design/[^ ]+\.md|roadmap/[^ ]+\.md)$'
 ```
 
-If output is non-empty, stop. Tell the user to commit or stash their non-doc changes, then re-invoke. Pre-existing source changes would be mixed with the implementer's output, breaking the stash-on-abort flow in step 2 and confusing the audit in step 4. Pre-existing doc changes are fine — the implementer doesn't touch docs, and the doc-shepherd's edits will simply commingle with them (the user's intent when they left docs dirty).
+`scratch/` is .gitignored.
 
-Then read both `<roadmap-path>` and `<plan-path>`. If either is missing, stop and ask.
+If output is non-empty, stop. Tell the user to commit or stash their non-doc changes, then re-invoke. A pre-existing source change would pollute the `git diff master...HEAD` the shepherd audits against and the verify slate it re-runs (step 3). Pre-existing doc changes are fine: the shepherd's edits simply commingle with them (the user's intent when they left docs dirty).
 
-### 1. Spawn the implementer agent
+### 2. Branch, then implement — you do this, inline
 
-```
-Agent(subagent_type=implementer, prompt=<plan contents + roadmap path>)
-```
-
-The agent returns a structured summary (Files changed, Design decisions, Caveats, Roadmap delta, Doc impact hint, Verification run).
-
-### 2. Implementer approval gate
-
-Apply the **approval-gate** skill with:
-
-- `agent_output` = the implementer's structured summary.
-- `accept_label` = "proceed to doc-shepherd."
-- `iterate_action` = "re-spawn implementer with the user's feedback appended."
-- `abort_consequence` = "stash the code changes and stop. See **Stash on implementer abort** below."
-
-**Stash on implementer abort.** When the user aborts at the implementer gate:
-
-1. Derive `slug` = basename of `<roadmap-path>` with the `.md` suffix stripped (e.g. `roadmap/module-system-1-module-language.md` → `module-system-1-module-language`).
-2. Compute the next attempt index: `n = $(git stash list | grep -c "work-item:<slug>:") + 1`.
-3. Run `git stash push -u -m "work-item:<slug>:<n>"` (the `-u` includes untracked files). Note: this also stashes any pre-existing doc changes the preflight allowed through. The stash is the user's restore point either way.
-4. Report the resulting stash ref (`stash@{0}`) and the message tag back to the user so they can `git stash apply` later. If `git stash push` reports "No local changes to save," skip the stash and just report that the tree was already clean.
-
-### 3. Spawn the doc-shepherd agent
-
-On Accept from step 2:
-
-```
-Agent(subagent_type=doc-shepherd, prompt=<implementer summary + git diff main...HEAD + roadmap-path>)
-```
-
-`git diff main...HEAD` is ground truth — pass it verbatim. The agent returns a list of doc edits applied + the `doclinks check` state.
-
-Then apply the **approval-gate** skill with:
-
-- `agent_output` = the doc-shepherd's returned text.
-- `accept_label` = "proceed to the orchestrator audit (step 4)."
-- `iterate_action` = "re-spawn doc-shepherd with the user's feedback appended."
-- `abort_consequence` = "skip step 5 (Final disposition) and behave as if the user picked **Hold for review** — leave all changes uncommitted for the user to inspect. Do not stash."
-
-### 4. Audit (you do this, not the sub-agents)
-
-Don't trust either sub-agent's "tests pass" / "links resolve" claim. Re-run:
+**Cut the work branch first.** Now that a plan is ready and implementation is about to start, branch before the first code edit:
 
 ```bash
-cargo test --quiet
-python3 tools/doclinks.py check
+git checkout -b <slug>        # or: git checkout <slug>, if it already exists from a prior attempt
 ```
 
-If anything fails (cargo tests, or any of the three gating sections of `doclinks check`), report the failure and stop. Don't try to fix it yourself — either re-spawn the relevant agent with the failure as input, or hand back to the user. The source-tree-changes section of `check` is informational and never fails the gate; it's there as decision input for the doc-shepherd.
+The branch is named after the roadmap item (`slug`), and all implementation lands here — not on the branch you started from. It forks from your current `HEAD`, so the `master...HEAD` diff the shepherd audits and verifies (step 3) covers everything since `master`; if you started somewhere other than `master`, that upstream work rides along in the diff — branch from `master` instead when you want the audit scoped to this item alone.
 
-### 5. Final disposition
+Then implement the plan directly against the codebase:
 
-Use AskUserQuestion:
+- Respect the plan. Use `ToDoWrite` to keep yourself on track. Run `cargo test --quiet` after each step to keep the suite green, and fix regressions before moving on.
+- If you discover the plan is wrong mid-implementation, **surface it and stop** — don't silently re-design. The user may ask to return to planning.
+- Use the `rust-refactor` skill for structural work (renames, file moves, batch rewrites). Don't reinvent its tooling.
+- Use the `miri` skill whenever the work touches memory safety.
+- Update top-of-file and inline source comments as you go, per Claude.md. **Don't** touch `design/`, `roadmap/` (including its `README.md` index), `README.md`, or `TUTORIAL.md` — those are for planning in step 1 or the shepherd in step 3.
+- When code-complete, run the `verify-koan` skill so tests + clippy are green and a modgraph baseline is recorded before you hand off to the shepherd (which runs the authoritative final slate after its doc edits).
 
-- **Commit** — make a commit with a message summarizing the work. (Per Claude.md, only with explicit user request, which selecting this option counts as.)
-- **Hold for review** — leave changes uncommitted for the user to inspect.
+Your implementation is visible inline as you work, so there is no formal **approval gate** here. If you hit a fork that's genuinely the user's call, raise it conversationally in the moment — don't batch it into a gate.
 
-Never open a PR from this skill, even if the user asks mid-flow. PRs are out of scope.
+If you hit something you genuinely can't do — surface it verbatim, don't paper over.
 
-## When to bail
+### 3. shepherd — adversarial audit, doc updates, and the final verify slate
 
-- Plan file describes something that doesn't match the roadmap item's actual ask. Show the user and let them steer.
-- Implementer's "Verification run" shows test failures. Don't proceed to docs; show the user.
-- doc-shepherd's final `doclinks check` returns non-zero. Show the user the output and stop.
-- Any sub-agent reports "I couldn't do this" — surface verbatim, don't paper over.
+Compose the structured summary below, then hand it plus the diff to the shepherd. The shepherd is **antagonistic to your implementation**: it independently verifies your claims against the diff before writing any docs, and it **owns the final audit** — after its doc edits it runs the full verify slate (`tools/verify.sh`: tests, clippy, `doclinks check`) as the authoritative green-light, so you do not re-run it yourself.
+
+```
+Agent(subagent_type=shepherd, prompt=<structured summary + git diff master...HEAD + roadmap-path>)
+```
+
+`git diff master...HEAD` is ground truth — pass it verbatim. The shepherd writes its report — audit findings, doc edits, and the final verify-slate result — to `scratch/<slug>-result.md` and returns that path plus a one-line status.
+
+Structured summary you compose (this is the shepherd's input contract — match the shape):
+
+```
+## Files changed
+- path/to/file.rs: <one-line summary of what changed and why>
+
+## Design decisions
+- <decision>: chose X over Y because <reason>. Trade-off: <what we give up>.
+
+## Caveats
+- <open follow-up>: <why it's punted, what would close it>   (or "none")
+
+## Roadmap delta
+- Completes: <roadmap/item.md path, or "none">.
+- Should be deleted from roadmap/: <yes/no, with one-line reason>.
+- New items surfaced: <list, or "none">.
+
+## Doc impact hint
+- design/<file>.md: <which sections plausibly need updating>   (or "none")
+
+## Verification run
+cargo test: <N passed, M failed>
+clippy: <clean/issues>
+```
+
+Then apply the **approval-gate** skill — this is the work item's disposition gate, so **Accept commits and Abort holds**:
+
+- `agent_output` = the shepherd's report. It already wrote the report to `scratch/<slug>-result.md` — **point the user at that file rather than re-writing it** (this satisfies the approval-gate "write to scratch and point the user there" step without a redundant write).
+- `accept_label` = "commit the work item — selecting Accept authorizes the commit, so make one with a message summarizing the work."
+- `iterate_action` = "either re-spawn the shepherd (for doc changes), return to implementation (for code changes), or return to planning (for design or scope changes)"
+- `abort_consequence` = "leave all changes uncommitted for the user to inspect (the hold-for-review path). Do not stash."
+
+On **Accept**, make the commit (message summarizing the work); selecting Accept is the explicit per-commit authorization Claude.md requires. Never open a PR from this skill, even if the user asks mid-flow — PRs are out of scope.
+
+**Only offer Accept when the shepherd returns green or if the user has approved a yellow in conversation.** If the shepherd returns red for any reason (failed verify, scope mismatch, etc.), don't present the approval gate. Instead, explain the situation to the user and ask for guidance. The slate must be green before the commit.

@@ -45,7 +45,7 @@ Iteration proceeds until the user says they are ready to write a roadmap item or
 
 If the user is ready to write a roadmap item, write one with the locked direction of the conversation so far. If part(s) of the plan are still unclear, flag that to the user and give them a chance to resume iterating on the concept file.
 
-If the users says the refactor is a bad idea, delete the concept file and exit clean. Do not invoke the `Plan` agent, `/work-item`, or any implementer.
+If the users says the refactor is a bad idea, delete the concept file and exit clean. Do not invoke the `Plan` agent or `/work-item`, and do not start implementing.
 
 ## Constraints
 

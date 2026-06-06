@@ -12,9 +12,9 @@ Reusable approval-gate template for orchestration skills (e.g. `work-item`) that
 After a sub-agent returns and before advancing to the next step. The caller supplies three inputs per use. When combined with the sub-agent output, the parameters for an approval gate are:
 
 - `agent_output` — the verbatim returned text from the sub-agent.
-- `accept_label` — what "Accept" advances to (one phrase, e.g. "proceed to doc-shepherd").
+- `accept_label` — what "Accept" advances to (one phrase, e.g. "proceed to shepherd").
 - `abort_consequence` — what state remains if the user aborts (one phrase or short paragraph if cleanup is needed).
-- `iterate_action` — which agent gets re-spawned and with what additional context (e.g. "re-spawn implementer with the user's feedback appended").
+- `iterate_action` — which agent gets re-spawned and with what additional context (e.g. "re-spawn shepherd with the user's feedback appended").
 
 ## Procedure
 
@@ -27,7 +27,7 @@ After a sub-agent returns and before advancing to the next step. The caller supp
    The question text itself must point users at Other, e.g. "How do you want to proceed? (Pick Other to give feedback for another iteration.)"
 
 3. **When the response comes back:**
-   - "Accept" → advance to the next step. If the sub-agent's work touched Rust source (an implementer pass, an in-place refactor), run the `verify-koan` skill first so the advance lands on a build that has tests + clippy green and a recorded modgraph baseline.
+   - "Accept" → advance to the next step. If the sub-agent's work touched Rust source (an in-place refactor or other code-writing pass), run the `verify-koan` skill first so the advance lands on a build that has tests + clippy green and a recorded modgraph baseline.
    - "Abort" → run the abort consequence.
    - Otherwise (the user picked "Other" with custom text — or any other variant) → treat the response text as iterate feedback and re-spawn `iterate_action` with that feedback appended.
 

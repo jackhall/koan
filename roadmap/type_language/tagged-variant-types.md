@@ -35,6 +35,11 @@ other typed value. A tag classifies as `BareIdentifier`, never `BareTypeLeaf`
   citizen — usable inside `:(...)`, as an agreed return type, and as a dispatch
   key — closing the value/type split that today routes tags through
   `BareIdentifier`.
+- *Sum-side completion of the `NominalKind` collapse.* Each variant — a nominal identity
+  over its payload — is a `Newtype`, and the union is their anonymous-union join, so
+  `NominalKind::Tagged` dissolves into `Newtype`. With the product-side [struct →
+  record-repr `NEWTYPE` collapse](struct-newtype-collapse.md), `NominalKind` shrinks from
+  four kinds toward `{Newtype, TypeConstructor}`.
 
 **Directions.**
 
@@ -79,6 +84,11 @@ other typed value. A tag classifies as `BareIdentifier`, never `BareTypeLeaf`
   every other typed value.
 - [Branch-arm return contract](../../design/execution-model.md#arms-as-own-blocks)
   — the `MATCH` arm machinery this work lowers into type-dispatch.
+- [Collapse `STRUCT` into a record-repr `NEWTYPE`](struct-newtype-collapse.md) — the
+  product-side phase one of the `NominalKind` → `Newtype` collapse. Landing it first makes
+  `Newtype` the sole nominal-over-shape primitive, so each variant is built directly as a
+  `Newtype` over its payload rather than a parallel nominal mechanism this work would
+  otherwise introduce and then rework.
 
 **Unblocks:** none tracked yet.
 

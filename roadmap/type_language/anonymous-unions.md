@@ -25,6 +25,12 @@ construct a tagged value in every arm, or coarsen the slot to `Any`.
   type, so consuming a union needs no new MATCH mode.
 - *A dedicated union-value constructor.* Construction is its own builtin,
   decoupled from MATCH.
+- *Sum-side substrate for shrinking `NominalKind`.* The join-of-members union is the
+  structural dual of `KType::Record`. Combined with [tagged-union variants as
+  dispatchable types](tagged-variant-types.md), it lets a tagged union become the
+  anonymous-union join of per-variant `Newtype`s — dissolving `NominalKind::Tagged` into
+  `Newtype`, the sum-side counterpart of the [struct → record-repr `NEWTYPE`
+  collapse](struct-newtype-collapse.md).
 
 **Directions.**
 
