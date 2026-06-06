@@ -15,9 +15,8 @@ mod scheduler;
 pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path};
 pub use scheduler::Scheduler;
 
-pub use dispatch::{
-    coerce_type_token_value, NameOutcome, ResolveOutcome, ResolveTypeExprOutcome, Resolved,
-};
+pub use dispatch::{NameOutcome, ResolveOutcome, ResolveTypeExprOutcome, Resolved};
+pub(crate) use dispatch::{resolve_type_leaf_carrier, TypeLeafCarrier};
 
 #[cfg(test)]
 pub use lift::lift_kobject_for_test;

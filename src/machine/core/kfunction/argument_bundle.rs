@@ -125,12 +125,13 @@ pub(crate) fn extract_bare_type_name<'a>(
             | KType::Null
             | KType::Identifier
             | KType::KExpression
+            | KType::SigiledTypeExpr
             | KType::TypeExprRef
             | KType::Type
             | KType::AnyModule
             | KType::AnySignature
             | KType::Any
-            | KType::UserType { .. }
+            | KType::SetRef { .. }
             | KType::AnyUserType { .. }
             | KType::Signature { .. }
             | KType::Module { .. }
@@ -141,8 +142,9 @@ pub(crate) fn extract_bare_type_name<'a>(
             | KType::KFunction { .. }
             | KType::KFunctor { .. }
             | KType::DeferredReturn(_)
-            | KType::Mu { .. }
+            | KType::SetLocal(_)
             | KType::RecursiveRef(_)
+            | KType::RecursiveGroup(_)
             | KType::ConstructorApply { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
                 "{surface} {name} must be a bare type name, got `{}`",
                 t.render(),

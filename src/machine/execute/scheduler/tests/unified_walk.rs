@@ -55,8 +55,8 @@ fn self_referential_let_surfaces_unbound_name() {
         Ok(_) => panic!("self-referential LET should surface UnboundName"),
     };
     assert!(
-        matches!(&err.kind, KErrorKind::UnboundName(n) if n == "Ty"),
-        "expected UnboundName('Ty') from the wrap-slot terminal, got {err}",
+        matches!(&err.kind, KErrorKind::UnboundName(n) if n.contains("Ty")),
+        "expected UnboundName naming Ty from the wrap-slot terminal, got {err}",
     );
 }
 
@@ -72,8 +72,8 @@ fn forward_reference_parks_then_resolves_on_wake() {
     // to the forward reference and parks rather than reading as Unbound.
     let exprs = parse(
         "STRUCT Foo = (x :Number)\n\
-         LET fwd = Foo\n\
-         PRINT fwd",
+         LET Fwd = Foo\n\
+         PRINT Fwd",
     )
     .expect("parse should succeed");
     let mut sched = Scheduler::new();
@@ -82,10 +82,10 @@ fn forward_reference_parks_then_resolves_on_wake() {
         .execute()
         .expect("dispatch with bare-name park should complete");
     let captured = buf.borrow().clone();
-    // `fwd` binds the struct's `KTypeValue(UserType)` identity; exact rendering of
-    // that type value isn't load-bearing here.
+    // `Fwd` aliases the struct's type identity (Type-classified name); exact
+    // rendering of that type value isn't load-bearing here.
     assert!(
         !captured.is_empty(),
-        "PRINT fwd should produce output after the forward reference resolves",
+        "PRINT Fwd should produce output after the forward reference resolves",
     );
 }

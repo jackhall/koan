@@ -249,27 +249,32 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     );
 }
 
-/// `LET ty = Number` must bind `ty` to a `KTypeValue` carrying the `Number`
-/// leaf — the wrap → `BareTypeLeaf` fast lane has to match the literal
-/// `KTypeValue` carve-out observably. (Lowercase LHS because single-letter
-/// uppercase tokens don't classify as Type names.)
+/// Language invariant: a type value never binds to a value-classified
+/// (lowercase-leading) identifier. `LET ty = Number` is rejected; the
+/// Type-classified `LET Ty = Number` is the legal way to alias a type.
+/// (`Ty` rather than `T` because single-letter uppercase tokens don't classify
+/// as Type names.)
 #[test]
-fn let_t_equals_number_still_binds_ktype_value() {
-    use crate::machine::model::KType;
+fn let_type_to_value_name_rejected() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    for e in parse_all("LET ty = Number") {
+    let id = sched.add_dispatch(parse_one("LET ty = Number"), scope);
+    sched.execute().unwrap();
+    match sched.read_result(id) {
+        Err(e) => assert!(
+            matches!(&e.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("ty") && msg.contains("Type-classified")),
+            "expected a value-classified-type rejection, got {e}",
+        ),
+        Ok(v) => panic!("LET ty = Number must be rejected, got {:?}", v.ktype()),
+    }
+
+    // The Type-classified alias is the legal form: it lands type-side.
+    let mut sched = Scheduler::new();
+    for e in parse_all("LET Ty = Number") {
         sched.add_dispatch(e, scope);
     }
     sched.execute().unwrap();
-    match scope.lookup("ty") {
-        Some(KObject::KTypeValue(t)) => {
-            assert_eq!(*t, KType::Number);
-        }
-        other => panic!(
-            "ty should bind to KTypeValue(Number), got {:?}",
-            other.map(|o| o.ktype())
-        ),
-    }
+    assert_eq!(scope.resolve_type("Ty"), Some(&KType::Number));
 }

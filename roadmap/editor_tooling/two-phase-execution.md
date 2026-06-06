@@ -32,17 +32,14 @@ Two consequences follow:
 Both fall out of the same mechanism — there is no separate "checker phase"
 to build first and "JIT phase" to build second.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *Tooling substrate.* Build-time errors, jump-to-dispatch-target, and
-  pre-run type information for the editor all become outputs of the
-  build-time scheduler run, not artifacts of a separate analysis pass.
-- *Performance ceiling lifts.* Hot paths get whatever specialization the
-  build-time run produced — a chain of fully-typed dispatches collapses
-  into the already-resolved DAG nodes instead of paying the tree-walker's
-  per-node overhead a second time at run start. Not load-bearing today
-  (no production users, no benchmark target) but the option opens for
-  when it matters.
+- The build-time scheduler run emits build-time errors,
+  jump-to-dispatch-target data, and pre-run type information for the editor
+  as direct outputs, without a separate analysis pass.
+- A chain of fully-typed dispatches resolved during the build-time run
+  resumes from the already-resolved DAG nodes at run-time, without re-paying
+  the tree-walker's per-node overhead a second time at run start.
 
 **Directions.**
 
@@ -72,21 +69,20 @@ to build first and "JIT phase" to build second.
   closure model is the load-bearing memory shape. Snapshot format and
   resume path both have to honor it. Work through a closure-heavy test
   program before committing to a snapshot format.
+- *Whether to commit at all — open.* Koan may stay single-phase indefinitely
+  and surface build-time errors as a tooling-only mode, or commit to the
+  snapshot-and-resume path. Keep upstream design choices from closing off
+  either path.
 
 ## Dependencies
+
+Container type parameterization has shipped, so the build-time phase has
+parameterized containers to target.
 
 **Requires:**
 
 - [Module system stage 5 — Modular implicits](../predicate_typing/modular-implicits.md) —
-  the type system has to be structurally complete before build-time scheduling
-  is designed against it. Stage 5 is the latest stage that introduces new
-  shapes the build-time phase has to handle (modules, functors, first-class
-  modules, implicit resolution); stages 6 and 7 are additive.
+  the type system must be structurally complete first; stage 5 is the last stage that
+  adds new shapes the build-time phase has to handle.
 
-Container type parameterization is shipped, so the build-time phase has
-parameterized containers to target.
-
-The "if/when" is genuinely open — Koan may stay single-phase forever and
-ship build-time errors as a tooling-only mode, or commit to the snapshot
-and resume path eventually. Recording the option here so design choices
-upstream don't accidentally close off either path.
+**Unblocks:** none.

@@ -310,24 +310,6 @@ fn visibility_strict_less_than_admits_earlier_sibling() {
 }
 
 #[test]
-fn visibility_nominal_binder_bypasses_cutoff() {
-    use crate::machine::core::LexicalFrame;
-    use std::rc::Rc;
-    let arena = RuntimeArena::new();
-    let scope = run_root_bare(&arena);
-    let v = arena.alloc_object(KObject::Number(7.0));
-    // `nominal_binder: true` bypasses the cutoff regardless of index.
-    scope
-        .bind_value("nominal_late".to_string(), v, BindingIndex::nominal(99))
-        .unwrap();
-    let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 1);
-    assert!(matches!(
-        scope.resolve_with_chain("nominal_late", Some(&consumer)),
-        Resolution::Value(KObject::Number(n)) if *n == 7.0,
-    ));
-}
-
-#[test]
 fn visibility_self_index_hidden_under_strict_less_than() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;

@@ -155,6 +155,13 @@ impl<'a> ExpressionPart<'a> {
                 Err(_) => KObject::TypeNameRef(t.clone()),
             };
         }
+        // Lazy `:(...)` slot: capture the type expression raw as its inner `KExpression`, so the
+        // builtin defers a param-referencing return (`-> Er.Type`) or sub-dispatches it itself.
+        // The global `resolve()` stays `unreachable!` for a SigiledTypeExpr — only this
+        // slot-typed capture unwraps it.
+        if let (ExpressionPart::SigiledTypeExpr(inner), KType::SigiledTypeExpr) = (self, slot) {
+            return KObject::KExpression((**inner).clone());
+        }
         self.resolve()
     }
 

@@ -1,5 +1,8 @@
 use std::cell::RefCell;
 use std::io::Write;
+use std::rc::Rc;
+
+use crate::machine::model::types::RecursiveSet;
 
 use crate::machine::model::ast::KExpression;
 
@@ -22,9 +25,7 @@ use crate::machine::model::values::KObject;
 /// - `chain = None` (test fixtures, builtin registration) — gate disabled.
 /// - `chain.index_for(scope_id) = None` — scope is off the consumer's chain
 ///   (a completed sibling block); everything visible.
-/// - `chain.index_for(scope_id) = Some(c)` — visible iff `b.idx < c` OR
-///   `b.nominal_binder` (D7 carve-out for STRUCT / named UNION / SIG /
-///   FUNCTOR / MODULE).
+/// - `chain.index_for(scope_id) = Some(c)` — visible iff `b.idx < c`.
 #[allow(dead_code)]
 pub(crate) fn visible(scope_id: ScopeId, b: BindingIndex, chain: Option<&LexicalFrame>) -> bool {
     let Some(chain) = chain else {
@@ -32,7 +33,7 @@ pub(crate) fn visible(scope_id: ScopeId, b: BindingIndex, chain: Option<&Lexical
     };
     match chain.index_for(scope_id) {
         None => true,
-        Some(c) => b.nominal_binder || b.idx < c,
+        Some(c) => b.idx < c,
     }
 }
 
@@ -67,12 +68,18 @@ pub struct Scope<'a> {
     bindings: ScopeBindings<'a>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
     pub arena: &'a RuntimeArena,
-    /// Position-independent identity captured into `KType::UserType { scope_id, .. }` /
-    /// `KType::Signature { sig, .. }` (via `sig.sig_id()`) so dispatch on user-declared
-    /// types compares ids rather than scope pointers.
+    /// Position-independent origin id recorded on a sealed `NominalMember` (diagnostics)
+    /// and on `KType::Signature { sig, .. }` (via `sig.sig_id()`) so dispatch on
+    /// user-declared types compares ids rather than scope pointers.
     pub id: ScopeId,
     pending: PendingQueue<'a>,
     pub kind: ScopeKind,
+    /// Set iff this is a `RECURSIVE TYPES` block's child scope: the shared [`RecursiveSet`]
+    /// whose members are co-declared and threaded together. The elaborator lowers a bare
+    /// leaf naming one of its members to a transient `RecursiveRef` back-edge, so
+    /// cross-references inside the block resolve regardless of lexical order — the block is
+    /// the one cross-order resolution that survives strict source-order type-name lookup.
+    recursive_set: Option<Rc<RecursiveSet<'a>>>,
 }
 
 /// A scope's binding storage. `Owned` is the default. `Borrowed` is the
@@ -129,6 +136,7 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
+            recursive_set: None,
         }
     }
 
@@ -147,6 +155,7 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
+            recursive_set: None,
         }
     }
 
@@ -160,6 +169,7 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Sig { name },
+            recursive_set: None,
         }
     }
 
@@ -174,7 +184,34 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Module { name },
+            recursive_set: None,
         }
+    }
+
+    /// Child scope for a `RECURSIVE TYPES` block body: carries the shared [`RecursiveSet`]
+    /// whose members are co-declared. Members dispatch against this scope, so the elaborator
+    /// threads the group (a member name lowers to `RecursiveRef`). `outer` is the lexical
+    /// parent; the sealed members are mirrored up into it at the block's Combine-finish.
+    pub fn child_recursive_group(outer: &'a Scope<'a>, set: Rc<RecursiveSet<'a>>) -> Scope<'a> {
+        Scope {
+            outer: Some(outer),
+            bindings: ScopeBindings::Owned(Bindings::new()),
+            out: RefCell::new(None),
+            arena: outer.arena,
+            id: ScopeId::next(),
+            pending: PendingQueue::new(),
+            kind: ScopeKind::Anonymous,
+            recursive_set: Some(set),
+        }
+    }
+
+    /// The shared [`RecursiveSet`] of the nearest enclosing `RECURSIVE TYPES` block, if any.
+    /// The elaborator consults this to decide whether a bare leaf is a co-declared member:
+    /// only the *nearest* group is considered, so a reference to an outer block's member
+    /// falls through to ordinary resolution (an external `SetRef`), not a back-edge into the
+    /// inner set.
+    pub fn nearest_recursive_set(&self) -> Option<Rc<RecursiveSet<'a>>> {
+        self.ancestors().find_map(|s| s.recursive_set.clone())
     }
 
     /// Transparent `USING … SCOPE` child scope. `outer` is the call site (the lexical
@@ -191,6 +228,7 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
+            recursive_set: None,
         }
     }
 
@@ -204,11 +242,12 @@ impl<'a> Scope<'a> {
     pub(crate) fn type_expr_memo_get(
         &self,
         te: &crate::machine::model::ast::TypeName,
+        cutoff: Option<usize>,
     ) -> Option<&'a crate::machine::model::types::KType<'a>> {
         if self.bindings.is_borrowed() {
             return None;
         }
-        self.bindings.get().type_expr_memo_get(te)
+        self.bindings.get().type_expr_memo_get(te, cutoff)
     }
 
     /// Memo write — no-op on a transparent `USING` window (see
@@ -216,12 +255,13 @@ impl<'a> Scope<'a> {
     pub(crate) fn type_expr_memo_insert(
         &self,
         te: crate::machine::model::ast::TypeName,
+        cutoff: Option<usize>,
         kt: &'a crate::machine::model::types::KType<'a>,
     ) {
         if self.bindings.is_borrowed() {
             return;
         }
-        self.bindings.get().type_expr_memo_insert(te, kt);
+        self.bindings.get().type_expr_memo_insert(te, cutoff, kt);
     }
 
     /// Call-site scope a `Borrowed` window forwards writes to. Panics if `Borrowed`
@@ -345,8 +385,8 @@ impl<'a> Scope<'a> {
     }
 
     /// Upsert install for a type-only nominal finalize (STRUCT / named UNION / Result /
-    /// MODULE). Writes the schema-bearing identity into [`Bindings::types`], overwriting
-    /// a `PartialEq`-equal payload-empty identity the SCC cycle-close pre-installed.
+    /// MODULE). Writes the sealed `SetRef` identity into [`Bindings::types`], overwriting
+    /// a `PartialEq`-equal `SetRef` a `RECURSIVE TYPES` block pre-installed (same set + index).
     /// Returns the arena-allocated `&KType` so the caller can yield it as a
     /// `KObject::KTypeValue`. Same conditional-defer shape as [`Self::register_type`];
     /// `Err(Rebind)` on a genuine non-equal collision.
@@ -377,37 +417,36 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Synchronous identity install for the SCC cycle-close sweep. Writes `name` →
-    /// `ktype` to [`Bindings::types`], but panics on borrow conflict instead of
-    /// deferring, and panics on `Rebind` — a cycle member's identity must not already
-    /// be in `types` when cycle-close fires.
+    /// Synchronous pre-install of a nominal type's identity — `name` → `ktype` (a
+    /// `KType::SetRef` into the declaring set's shared `RecursiveSet`) — into
+    /// [`Bindings::types`] *before* the declaration's schema finalizes, so the body can
+    /// reference the name (self-recursion, or sibling members in a `RECURSIVE TYPES` block).
+    /// Unlike the finalize-time upsert it panics on borrow conflict instead of deferring,
+    /// and panics on `Rebind` — the identity must not already be in `types`.
     ///
-    /// Cycle-close runs from the elaborator's `Resolution::Placeholder` arm with no
-    /// outer `bindings` borrow held; a conflict here is a programming error. The
-    /// identity installed here is payload-empty (schema not yet elaborated); the
-    /// downstream finalize overwrites it with the schema-bearing one via
-    /// [`Self::register_type_upsert`].
-    pub fn cycle_close_install_identity(
+    /// Callers run this with no outer `bindings` borrow held; a conflict here is a
+    /// programming error. The schema is filled later, at the declaration's own finalize,
+    /// against the same shared set recovered from this `SetRef`.
+    pub fn preinstall_identity(
         &self,
         name: String,
         ktype: crate::machine::model::types::KType<'a>,
         index: BindingIndex,
     ) {
         if self.bindings.is_borrowed() {
-            self.write_target()
-                .cycle_close_install_identity(name, ktype, index);
+            self.write_target().preinstall_identity(name, ktype, index);
             return;
         }
         let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc_ktype(ktype);
         match self.bindings.get().try_register_type(&name, kt_ref, index) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => panic!(
-                "cycle_close_install_identity borrow conflict on `{name}` — cycle-close \
-                 runs from the elaborator with no outer types borrow held",
+                "preinstall_identity borrow conflict on `{name}` — runs with no outer \
+                 types borrow held",
             ),
             Err(e) => panic!(
-                "cycle_close_install_identity Rebind for `{name}`: {e} — cycle member \
-                 identity should not already be in bindings.types",
+                "preinstall_identity Rebind for `{name}`: {e} — the identity should not \
+                 already be in bindings.types",
             ),
         }
     }
@@ -517,8 +556,8 @@ impl<'a> Scope<'a> {
 
     /// Chain-gated companion to [`Self::resolve_type`]. Per-scope `types` hits are
     /// filtered through [`visible`], so a type binding declared lexically later in
-    /// the same block is invisible to an earlier sibling (unless the binder is a
-    /// nominal-binder carve-out).
+    /// the same block is invisible to an earlier sibling — a forward type reference is a
+    /// position error.
     pub fn resolve_type_with_chain(
         &self,
         name: &str,

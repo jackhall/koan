@@ -9,24 +9,24 @@ use crate::machine::{KErrorKind, RuntimeArena};
 /// Parens-form return type carrying a bare lowercase identifier matching a parameter
 /// name must defer.
 #[test]
-fn fn_def_parens_return_type_with_identifier_param_ref_defers() {
+fn fn_def_sigil_return_type_with_identifier_param_ref_defers() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (USE xs :Number) -> (somefn xs) = (xs)");
+    run(scope, "FN (USE xs :Number) -> :(somefn xs) = (xs)");
     let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
-        "USE return type should be Deferred (parens-form Identifier referencing param)",
+        "USE return type should be Deferred (sigil-form Identifier referencing param)",
     );
 }
 
-/// List literal inside a parens-form return type carrying a parameter-name reference
+/// List literal inside a sigil-form return type carrying a parameter-name reference
 /// must defer.
 #[test]
-fn fn_def_parens_return_type_with_list_literal_param_ref_defers() {
+fn fn_def_sigil_return_type_with_list_literal_param_ref_defers() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (USE xs :Number) -> ([xs]) = (xs)");
+    run(scope, "FN (USE xs :Number) -> :([xs]) = (xs)");
     let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -34,13 +34,13 @@ fn fn_def_parens_return_type_with_list_literal_param_ref_defers() {
     );
 }
 
-/// Dict literal inside a parens-form return type carrying a parameter-name reference
+/// Dict literal inside a sigil-form return type carrying a parameter-name reference
 /// in a value position must defer.
 #[test]
-fn fn_def_parens_return_type_with_dict_literal_param_ref_defers() {
+fn fn_def_sigil_return_type_with_dict_literal_param_ref_defers() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (USE xs :Number) -> ({\"k\": xs}) = (xs)");
+    run(scope, "FN (USE xs :Number) -> :({\"k\": xs}) = (xs)");
     let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -69,7 +69,7 @@ fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
     );
 }
 
-/// A parens-form return type that sub-dispatches at FN-def (no parameter reference)
+/// A sigil-form return type that sub-dispatches at FN-def (no parameter reference)
 /// and a parameter slot that parks on a forward-LET binding both join the same
 /// Combine; the return-type sub-dispatch's `results_pos` says where the closure picks
 /// the lifted `KTypeValue` out of `&[&KObject]`.
@@ -79,7 +79,7 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "FN (USE xs :MyT) -> (LIST_OF Number) = ([1])\n\
+        "FN (USE xs :MyT) -> :(LIST OF Number) = ([1])\n\
          LET MyT = Number",
     );
     let f = lookup_fn(scope, "USE");
@@ -132,15 +132,15 @@ fn fn_def_parens_param_type_non_type_value_errors() {
     assert!(!fn_is_registered(scope, "USE"), "USE should not register");
 }
 
-/// A parens-form return type that sub-dispatches to a non-`KTypeValue` must surface
+/// A sigil-form return type that sub-dispatches to a non-`KTypeValue` must surface
 /// a `ShapeError` naming the return-type slot (the
 /// `ReturnTypeCapture::ReturnTypeExpr` arm of the Combine finish).
 #[test]
-fn fn_def_parens_return_type_non_type_value_errors() {
+fn fn_def_sigil_return_type_non_type_value_errors() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("FN (NOP) -> (1) = (1)"), scope);
+    let id = sched.add_dispatch(parse_one("FN (NOP) -> :(1) = (1)"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");

@@ -69,15 +69,21 @@ pub fn body<'a>(
     // Only includes slots whose type elaborates eagerly through `Elaborator`.
     let param_type_map = collect_param_types(&signature_expr, scope);
 
-    let mut elaborator = Elaborator::new(scope);
+    // Gate param type names to the FUNCTOR's lexical position.
+    let mut elaborator = Elaborator::new(scope).with_chain(sched.current_lexical_chain());
 
     // `Some(&map)` activates the FUNCTOR-return verdict. `Rejected` short-circuits;
     // `DeferredToCombine` rides Combine-finish via the `is_functor` flag below.
-    let (return_type_state, verdict) =
-        match classify_return_type(return_type_raw, &param_names, scope, Some(&param_type_map)) {
-            Ok(p) => p,
-            Err(e) => return err(e),
-        };
+    let (return_type_state, verdict) = match classify_return_type(
+        return_type_raw,
+        &param_names,
+        scope,
+        sched.current_lexical_chain(),
+        Some(&param_type_map),
+    ) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
     if let AdmissibleVerdict::Rejected(e) = verdict {
         return err(e);
     }
@@ -94,10 +100,10 @@ pub fn body<'a>(
         },
     };
 
-    // D7 nominal-binder carve-out: mutual recursion across FUNCTOR siblings.
+    // Non-nominal: the FUNCTOR name obeys source order like any other type name.
     let bind_index = sched
         .current_lexical_chain()
-        .map(|chain| BindingIndex::nominal(chain.index))
+        .map(|chain| BindingIndex::value(chain.index))
         .unwrap_or(BindingIndex::BUILTIN);
 
     match classify(return_type_state, params) {
@@ -163,9 +169,9 @@ fn collect_param_types<'a>(
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    // Two overloads mirror FN: `TypeExprRef` for `-> Number` / `-> Er` /
-    // `-> :(Functor ...)` and `KExpression` for parens-form carriers like
-    // `-> (SIG_WITH …)`. `binder_bucket` lets a sibling bare-arg call park on
+    // Two overloads mirror FN: `TypeExprRef` for a bare `-> Number` / `-> Er`, and
+    // `SigiledTypeExpr` for a `:(…)` / dotted carrier like `-> Er.Type` /
+    // `-> :(Set WITH {…})`. `binder_bucket` lets a sibling bare-arg call park on
     // a still-finalizing overload; sibling overloads sharing a bucket key all
     // install for it and only the first finalize wins. No `binder_name` —
     // FUNCTOR registers under `functions[bucket]`, not a value-side carrier.
@@ -187,9 +193,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         None,
         Some(super::fn_def::binder_bucket),
         false,
-        // D7 nominal-binder carve-out via `BindingIndex.nominal_binder`.
-        true,
     );
+    // Lazy `:(...)` return carrier — the FN counterpart's rationale applies: a dotted
+    // `-> Er.Type` defers per-call rather than eager-sub-dispatching to an unbound parameter.
     register_builtin_full(
         scope,
         "FUNCTOR",
@@ -199,7 +205,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("FUNCTOR"),
                 arg("signature", KType::KExpression),
                 kw("->"),
-                arg("return_type", KType::KExpression),
+                arg("return_type", KType::SigiledTypeExpr),
                 kw("="),
                 arg("body", KType::KExpression),
             ],
@@ -208,8 +214,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         None,
         Some(super::fn_def::binder_bucket),
         false,
-        // See above.
-        true,
     );
 }
 

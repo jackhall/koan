@@ -1,7 +1,7 @@
 use crate::machine::core::kfunction::{BinderNameFn, Body, BodyResult, BuiltinFn, KFunction};
 use crate::machine::core::{BindingIndex, KError, Scope};
 use crate::machine::model::types::{
-    Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,
+    Argument, ExpressionSignature, KType, NominalKind, ReturnType, SignatureElement,
 };
 use crate::machine::model::values::KObject;
 
@@ -19,6 +19,7 @@ pub(crate) mod newtype_def;
 mod print;
 mod quote;
 mod record_projection;
+mod recursive_types;
 mod result;
 mod sig_def;
 mod struct_def;
@@ -79,35 +80,11 @@ pub(crate) fn register_builtin_with_binder<'a>(
     body: BuiltinFn,
     binder_name: Option<BinderNameFn>,
 ) {
-    register_builtin_full(
-        scope,
-        name,
-        signature,
-        body,
-        binder_name,
-        None,
-        false,
-        false,
-    );
-}
-
-/// Like [`register_builtin_with_binder`] but stamps the overload as a *nominal* binder
-/// (D7 carve-out) so its placeholder is visible to siblings on the same block regardless
-/// of source order, enabling mutual recursion across sibling nominal binders.
-pub(crate) fn register_nominal_binder<'a>(
-    scope: &'a Scope<'a>,
-    name: &str,
-    signature: ExpressionSignature<'a>,
-    body: BuiltinFn,
-    binder_name: Option<BinderNameFn>,
-) {
-    register_builtin_full(scope, name, signature, body, binder_name, None, false, true);
+    register_builtin_full(scope, name, signature, body, binder_name, None, false);
 }
 
 /// Full-form builtin registration with both binder hooks and the `is_functor` flag.
 /// `binder_bucket` lets FN / FUNCTOR key pending-overload entries by inner-call bucket.
-/// `is_nominal_binder` flips the D7 carve-out so the placeholder is stamped with
-/// `nominal_binder: true`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn register_builtin_full<'a>(
     scope: &'a Scope<'a>,
@@ -117,7 +94,6 @@ pub(crate) fn register_builtin_full<'a>(
     binder_name: Option<BinderNameFn>,
     binder_bucket: Option<crate::machine::core::kfunction::BinderBucketFn>,
     is_functor: bool,
-    is_nominal_binder: bool,
 ) {
     let arena = scope.arena;
     let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
@@ -127,7 +103,6 @@ pub(crate) fn register_builtin_full<'a>(
         binder_name,
         binder_bucket,
         is_functor,
-        is_nominal_binder,
     ));
     let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
     let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
@@ -167,14 +142,14 @@ pub fn default_scope<'a>(
     scope.register_type(
         "Tagged".into(),
         KType::AnyUserType {
-            kind: UserTypeKind::tagged_sentinel(),
+            kind: NominalKind::Tagged,
         },
         BindingIndex::BUILTIN,
     );
     scope.register_type(
         "Struct".into(),
         KType::AnyUserType {
-            kind: UserTypeKind::struct_sentinel(),
+            kind: NominalKind::Struct,
         },
         BindingIndex::BUILTIN,
     );
@@ -194,6 +169,7 @@ pub fn default_scope<'a>(
     result::register(scope);
     struct_def::register(scope);
     newtype_def::register(scope);
+    recursive_types::register(scope);
     match_case::register(scope);
     try_with::register(scope);
     using_scope::register(scope);

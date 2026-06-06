@@ -86,31 +86,32 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
                 KObject::dict_with_type(Rc::clone(entries), (**k).clone(), (**v).clone())
             }
         }
+        // The union's `RecursiveSet` is `Rc`-owned (not arena-owned), so it travels by
+        // `Rc::clone` — no copy, no anchor. Only the carried `value` may borrow the dying
+        // arena and need lifting.
         KObject::Tagged {
             tag,
             value,
-            scope_id,
-            name,
+            set,
+            index,
             type_args,
         } => {
-            if needs_lift(value, dying_frame) {
-                KObject::Tagged {
-                    tag: tag.clone(),
-                    value: Rc::new(lift_kobject(value, dying_frame)),
-                    scope_id: *scope_id,
-                    name: name.clone(),
-                    type_args: Rc::clone(type_args),
-                }
+            let lifted_value = if needs_lift(value, dying_frame) {
+                Rc::new(lift_kobject(value, dying_frame))
             } else {
-                KObject::Tagged {
-                    tag: tag.clone(),
-                    value: Rc::clone(value),
-                    scope_id: *scope_id,
-                    name: name.clone(),
-                    type_args: Rc::clone(type_args),
-                }
+                Rc::clone(value)
+            };
+            KObject::Tagged {
+                tag: tag.clone(),
+                value: lifted_value,
+                set: Rc::clone(set),
+                index: *index,
+                type_args: Rc::clone(type_args),
             }
         }
+        // A `Struct` / `Wrapped` carrying a `SetRef` shares its set by `Rc::clone` (via
+        // `deep_clone`); the recursive group travels as one unit with no anchor. A schema's
+        // `&'a Module` / `Signature` refs ride their own existing anchors.
         other => other.deep_clone(),
     }
 }

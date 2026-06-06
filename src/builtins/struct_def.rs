@@ -1,11 +1,10 @@
-use std::rc::Rc;
-
 use crate::machine::core::{PendingBinderGuard, PendingTypeEntry};
-use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::types::{
-    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
+    finalize_nominal_member, parse_typed_field_list_via_elaborator, seal_recursive_refs,
+    Elaborator, FieldListOutcome, FieldNameKind, NominalKind, NominalSchema, Record,
+    SchemaSealResult, SealOutcome,
 };
-use crate::machine::model::{KObject, KType, Record};
+use crate::machine::model::{KObject, KType};
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
     SchedulerHandle, Scope,
@@ -13,7 +12,7 @@ use crate::machine::{
 
 use crate::machine::model::ast::KExpression;
 
-use super::{arg, err, kw, register_nominal_binder, sig};
+use super::{arg, err, kw, register_builtin_with_binder, sig};
 use crate::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_kexpression,
 };
@@ -41,38 +40,37 @@ pub fn body<'a>(
             )));
         }
     };
-    // Register in `pending_types` so a fellow in-flight binder parking on our
-    // placeholder can detect a closing cycle and install our identity without
-    // re-entering dispatch. The guard's Drop removes the entry; the Park path
-    // moves the guard into the Combine-finish closure.
+    // Mark this binder in-flight so a consumer referencing it (an earlier sibling still
+    // finalizing) can park on our producer node. The guard's Drop removes the entry; the
+    // Park path moves the guard into the Combine-finish closure.
     let scope_id = scope.id;
     let pending_guard = scope.bindings().insert_pending_type(
         name.clone(),
         PendingTypeEntry {
-            kind: UserTypeKind::struct_sentinel(),
+            kind: NominalKind::Struct,
             scope_id,
             schema_expr: schema_expr.clone(),
-            edges: Vec::new(),
         },
     );
-    // Thread this binder's name so a self-reference resolves to `RecursiveRef`
-    // rather than parking on our own placeholder. `with_current_decl` arms the
-    // SCC edge-recording / cycle-detection arm.
+    // Thread this binder's name so a self-reference resolves to the transient
+    // `RecursiveRef` rather than parking on our own placeholder. The chain gates field type
+    // names to this binder's lexical position — a field naming a later type is a position
+    // error, and mutual recursion is expressed with a `RECURSIVE TYPES` block.
+    let chain = sched.current_lexical_chain();
     let mut elaborator = Elaborator::new(scope)
         .with_threaded([name.clone()])
-        .with_current_decl(name.clone(), UserTypeKind::struct_sentinel(), scope_id);
+        .with_chain(chain.clone());
     let outcome = parse_typed_field_list_via_elaborator(
         &schema_expr,
         "STRUCT schema",
         FieldNameKind::Identifier,
         &mut elaborator,
     );
-    // Nominal binder: the placeholder install stamped `nominal_binder: true`;
-    // the type-only `register_type_upsert` must carry the same flag for visibility
-    // consistency.
-    let bind_index = sched
-        .current_lexical_chain()
-        .map(|chain| BindingIndex::nominal(chain.index))
+    // The STRUCT name binds at its own lexical position (non-nominal), so a forward
+    // reference to it obeys source order like any other type name.
+    let bind_index = chain
+        .as_ref()
+        .map(|c| BindingIndex::value(c.index))
         .unwrap_or(BindingIndex::BUILTIN);
     match outcome {
         FieldListOutcome::Done(fields) => finalize_struct(scope, name, fields, bind_index),
@@ -89,58 +87,59 @@ pub fn body<'a>(
             sub_dispatches,
             pending_guard,
             bind_index,
+            chain,
         ),
     }
 }
 
-/// Fold the elaborated fields into the `UserType { Struct { fields } }` identity and
-/// upsert it into `bindings.types` — type-only, no value-side carrier. The schema rides
-/// the identity, so construction reads it via a fresh `types[name]` lookup. Shared by the
-/// synchronous and Combine-finish paths.
+/// Seal the elaborated fields into the STRUCT's [`RecursiveSet`] member and install the
+/// `SetRef` identity into `bindings.types` — type-only, no value-side carrier. Transient
+/// `RecursiveRef(name)` field leaves seal to `SetLocal(index)` against the member's set
+/// (the SCC set if recursive, a fresh singleton otherwise). Shared by the synchronous and
+/// Combine-finish paths.
 fn finalize_struct<'a>(
     scope: &'a Scope<'a>,
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {
-    // Idempotent-finalize guard: a parallel finalize (cycle-close + Combine-finish, or
-    // two Combine-finishes) may already have upserted the schema-bearing identity. The
-    // cycle-close pre-install carries a payload-empty identity, so the guard must
-    // distinguish them: only short-circuit on a populated `Struct { fields }` payload.
-    let bindings = scope.bindings();
-    if let Some(KType::UserType {
-        kind: UserTypeKind::Struct { fields },
-        ..
-    }) = bindings.lookup_type(&name, None)
-    {
-        if !fields.is_empty() {
-            return BodyResult::Value(scope.arena.alloc_object(KObject::KTypeValue(
-                bindings.lookup_type(&name, None).unwrap().clone(),
-            )));
-        }
-    }
     if fields.is_empty() {
         return err(KError::new(KErrorKind::ShapeError(
             "STRUCT schema must have at least one field".to_string(),
         )));
     }
     let scope_id = scope.id;
-    let identity = KType::UserType {
-        kind: UserTypeKind::Struct {
-            // The `Vec`→`Record` boundary: the parser hands back declaration-ordered
-            // pairs (duplicate-free, `parse_pair_list` rejects dups), wrapped once here.
-            fields: Rc::new(Record::from_pairs(fields)),
-        },
+    let outcome = finalize_nominal_member(
+        scope,
+        &name,
         scope_id,
-        name: name.clone(),
-    };
-    match scope.register_type_upsert(name, identity, bind_index) {
-        Ok(kt_ref) => BodyResult::Value(
+        NominalKind::Struct,
+        |set| {
+            let missing = std::cell::RefCell::new(Vec::new());
+            // The `Vec`→`Record` boundary: the parser hands back declaration-ordered pairs
+            // (duplicate-free, `parse_pair_list` rejects dups), wrapped once here.
+            let sealed_pairs: Vec<(String, KType<'a>)> = fields
+                .into_iter()
+                .map(|(field, kt)| (field, seal_recursive_refs(set, &kt, &missing)))
+                .collect();
+            let sealed = Record::from_pairs(sealed_pairs);
+            match missing.into_inner().into_iter().next() {
+                Some(m) => SchemaSealResult::Dangling(m),
+                None => SchemaSealResult::Ok(NominalSchema::Struct(sealed)),
+            }
+        },
+        bind_index,
+    );
+    match outcome {
+        SealOutcome::Sealed(kt_ref) => BodyResult::Value(
             scope
                 .arena
                 .alloc_object(KObject::KTypeValue(kt_ref.clone())),
         ),
-        Err(e) => err(e),
+        SealOutcome::DanglingRef(missing) => err(KError::new(KErrorKind::ShapeError(format!(
+            "STRUCT `{name}` schema references unsealed type `{missing}`",
+        )))),
+        SealOutcome::Rebind(e) => err(e),
     }
 }
 
@@ -162,6 +161,7 @@ fn defer_struct_via_combine<'a>(
     sub_dispatches: Vec<(usize, KExpression<'a>)>,
     pending_guard: PendingBinderGuard<'a>,
     bind_index: BindingIndex,
+    chain: Option<std::rc::Rc<crate::machine::core::LexicalFrame>>,
 ) -> BodyResult<'a> {
     use crate::machine::model::ast::ExpressionPart;
     let name_for_finish = name.clone();
@@ -193,9 +193,11 @@ fn defer_struct_via_combine<'a>(
             spliced_parts[slot_idx].value = ExpressionPart::Future(obj);
         }
         let spliced_schema = KExpression::new(spliced_parts);
-        // All producers have terminalized; no `current_decl` seeding needed since
-        // cycle detection only matters for in-flight binders that might park.
-        let mut elaborator = Elaborator::new(scope).with_threaded([name_for_finish.clone()]);
+        // Re-elaborate at the binder's captured lexical position so the gate is identical
+        // to the synchronous path.
+        let mut elaborator = Elaborator::new(scope)
+            .with_threaded([name_for_finish.clone()])
+            .with_chain(chain.clone());
         match parse_typed_field_list_via_elaborator(
             &spliced_schema,
             "STRUCT schema",
@@ -230,7 +232,7 @@ pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_nominal_binder(
+    register_builtin_with_binder(
         scope,
         "STRUCT",
         sig(

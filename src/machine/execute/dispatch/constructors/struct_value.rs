@@ -8,9 +8,9 @@ use std::rc::Rc;
 
 use indexmap::IndexMap;
 
-use crate::machine::core::{KError, KErrorKind, ScopeId};
+use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::ast::ExpressionPart;
-use crate::machine::model::types::{KType, Record};
+use crate::machine::model::types::{KType, Record, RecursiveSet};
 use crate::machine::model::values::{KObject, NamedPairs};
 
 /// Reorder call-site args into schema declaration order. Error
@@ -37,12 +37,13 @@ pub(in crate::machine::execute) fn prepare_value_parts<'a>(
     Ok(ordered)
 }
 
-/// Validate length and per-position types, then emit the
-/// `KObject::Struct`. `values` is in schema declaration order — match
-/// the output of [`prepare_value_parts`].
+/// Validate length and per-position types, then emit the `KObject::Struct` stamped with
+/// the `(set, index)` sealed-member identity. `values` is in schema declaration order —
+/// match the output of [`prepare_value_parts`]. `fields` is the projected schema (sibling
+/// `SetLocal`s already resolved), so per-field `matches_value` navigates directly.
 pub(in crate::machine::execute) fn construct<'a>(
-    type_name: &str,
-    scope_id: ScopeId,
+    set: &Rc<RecursiveSet<'a>>,
+    index: usize,
     fields: &Record<KType<'a>>,
     values: &[&'a KObject<'a>],
 ) -> Result<KObject<'a>, KError> {
@@ -64,8 +65,8 @@ pub(in crate::machine::execute) fn construct<'a>(
         map.insert(field_name.clone(), value.deep_clone());
     }
     Ok(KObject::Struct {
-        name: type_name.to_string(),
-        scope_id,
+        set: Rc::clone(set),
+        index,
         fields: Rc::new(map),
     })
 }

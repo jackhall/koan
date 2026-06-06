@@ -253,9 +253,6 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     };
 
     let arena = scope.arena;
-    // `is_nominal_binder = false` regardless of `is_functor`: the FUNCTOR
-    // carve-out is on the *binder builtin* (the FUNCTOR keyword), not on the
-    // function it produces.
     let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
         user_sig,
         Body::UserDefined(body_expr),
@@ -263,7 +260,6 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         None,
         None,
         is_functor,
-        false,
     ));
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame.

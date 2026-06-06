@@ -14,19 +14,17 @@ Koan's deferred-task and error-handling combinators will share once they're fles
 Today it is implemented only for `Option` and threaded through nothing in the runtime. It
 is scaffolding without a building.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *Uniform effect interface in-language.* Koan code expresses every effect through one
-  `Monad` signature ([design/effects.md](../../design/effects.md)) rather than each effect
-  having its own bespoke surface.
-- *Mocking and replay become a module swap.* A test feeds an alternate `Random` or `IO`
-  module; deterministic replay (recorded trace, identical re-run) drops out
-  mechanically.
-- *Pure/effectful boundary is visible.* A function whose parameter list contains no
-  `Monad`-kind module is referentially transparent — unlocking memoization, reordering,
-  and parallelism for the scheduler in cases where no effect is in play.
-- *Substrate for stage 4.* Module-system stage 4's generators thread randomness via the
-  `Random` effect module; this work is what makes that possible.
+- Koan code expresses every effect through one `Monad` signature
+  ([design/effects.md](../../design/effects.md)), with each effect sharing
+  that surface rather than a bespoke one.
+- A test swapping the `Random`/`IO` module observes mocked output; a recorded
+  trace replays identically.
+- A function whose parameter list contains no `Monad`-kind module is
+  referentially transparent, and the scheduler treats it as such.
+- Module-system stage 4's generators thread randomness through the `Random`
+  effect module.
 
 **Directions.**
 
@@ -53,6 +51,10 @@ is scaffolding without a building.
 
 ## Dependencies
 
+Soft ordering: this is the third `BodyResult` revision sweeping every builtin in
+[builtins/](../../src/builtins) (after TCO's `Value | Tail` and the error item's `Err`
+arm), so fold it into the eventual static-typing/JIT pass if their schedules align.
+
 **Requires:**
 
 - [Standard library](standard-library.md) — the standard effect modules
@@ -62,9 +64,3 @@ is scaffolding without a building.
 
 - [Module system stage 4 — Property testing and axioms](../predicate_typing/axioms-and-generators.md)
   — generators thread randomness via the `Random` effect module.
-
-`BodyResult` already absorbed one revision (`Value | Tail` for TCO); the error item added
-a second (`Err` arm) and this one adds a third (`Effectful<...>`). Three churning passes
-over every builtin in [builtins/](../../src/builtins) is meaningfully worse than
-one — but with reclamation already landed, the only remaining lever is folding effects
-into the eventual static-typing/JIT pass if their schedules align.

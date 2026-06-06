@@ -10,22 +10,17 @@ Failures are ascription errors with reported counterexamples.
 The engine doubles as a general testing tool for ordinary Koan code, useful
 independent of signatures.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *Invalid implementations are caught at the ascription site.* A
-  non-transitive `compare`, a hash that disagrees with its own equality, a
-  monoid whose identity isn't — common bug shapes that no other mechanism
-  catches surface as ascription errors with reported counterexamples instead
-  of silent runtime wrongness.
-- *Mechanical contract checking.* Signature documentation that says "this
-  must be transitive" stops being convention-only; the compiler verifies
-  the property at the ascription site.
-- *Substrate for stage 6.* Cross-implicit equivalence checking reuses the
-  same engine with a different axiom shape; stage 6 has something to call
-  into.
-- *General testing tool, beyond signatures.* The same engine doubles as a
-  property-testing tool for ordinary Koan code, useful even where no
-  signature is involved.
+- A module ascribing a signature whose `compare` is non-transitive (or whose
+  hash disagrees with its own equality, or whose monoid identity isn't) is
+  rejected at the ascription site with a reported counterexample.
+- An `(AXIOM ...)` declared in a `SIG` body runs against generated samples
+  when a structure ascribes that signature, and a violating sample fails the
+  ascription.
+- The property-testing engine runs against ordinary Koan code outside any
+  signature, reporting a counterexample when a predicate fails on a generated
+  sample.
 
 **Directions.**
 
@@ -67,6 +62,10 @@ independent of signatures.
 
 ## Dependencies
 
+The engine is independent of implicit dispatch and could be developed in
+parallel with stage 5 — its integration point is the module language's
+ascription site, which is already in place.
+
 **Requires:**
 
 - [Generalize `Scope::out` into monadic side-effect capture](../libraries/monadic-side-effects.md)
@@ -76,7 +75,3 @@ independent of signatures.
 **Unblocks:**
 
 - [Stage 6 — Equivalence-checked coherence](equivalence-checking.md)
-
-The engine is independent of implicit dispatch and could be developed in
-parallel with stage 5 — its integration point is the module language's
-ascription site, which is already in place.

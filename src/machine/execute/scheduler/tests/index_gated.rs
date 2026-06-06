@@ -1,9 +1,8 @@
 //! End-to-end tests for the index-gated resolution rule.
 //!
-//! Shared expectation: a binding at index `i` is visible to a consumer at index
-//! `c` iff `i < c` **or** the binding's `BindingIndex.nominal_binder` flag is set
-//! (STRUCT / named UNION / SIG / FUNCTOR / MODULE). `chain.index_for(scope) = None`
-//! (a "complete" scope) makes every entry visible.
+//! Shared expectation: a binding at index `i` is visible to a consumer at index `c` iff
+//! `i < c` — type binders included, with no source-order exemption. `chain.index_for(scope)
+//! = None` (a "complete" scope) makes every entry visible.
 
 use std::cell::RefCell;
 use std::io::Write;
@@ -199,59 +198,33 @@ fn overload_pre_filter_hides_later_sibling_overload() {
     );
 }
 
-/// STRUCT is a nominal-binder carve-out, so a forward reference to a later STRUCT
-/// resolves.
+/// A FN parameter type that forward-references a STRUCT declared later is a position error:
+/// type names obey source order, with no nominal-binder carve-out.
 #[test]
-fn type_side_gate_struct_forward_resolves() {
-    let arena = RuntimeArena::new();
-    let scope = run_scope(
-        &arena,
+fn struct_forward_reference_in_fn_param_is_position_error() {
+    let err = run_collect_err(
         "FN (TAKES p :Pt) -> Number = (p.x)\n\
-         STRUCT Pt = (x :Number, y :Number)\n\
-         LET p = (Pt {x = 5, y = 6})\n\
-         LET result = (TAKES p)",
-    );
+         STRUCT Pt = (x :Number, y :Number)",
+    )
+    .expect("a forward STRUCT reference in a FN signature should error");
     assert!(
-        matches!(scope.lookup("result"), Some(KObject::Number(n)) if *n == 5.0),
-        "STRUCT nominal-binder carve-out should allow the forward type-ref; got {:?}",
-        scope.lookup("result").map(|o| o.summarize()),
+        format!("{err}").contains("Pt"),
+        "expected the error to name the forward type `Pt`, got {err}",
     );
 }
 
-/// Two sibling structs referencing each other elaborate as a 2-member SCC; both
-/// nominal identities are visible regardless of source order.
+/// A forward `MODULE` reference is a position error too — a MODULE name obeys source order
+/// like any other type name.
 #[test]
-fn mutual_recursion_across_nominal_struct_binders() {
-    let arena = RuntimeArena::new();
-    let scope = run_scope(
-        &arena,
-        "STRUCT Alpha = (b :Beta)\n\
-         STRUCT Beta = (a :Alpha)",
-    );
-    assert!(
-        scope.resolve_type("Alpha").is_some(),
-        "STRUCT Alpha should be registered"
-    );
-    assert!(
-        scope.resolve_type("Beta").is_some(),
-        "STRUCT Beta should be registered"
-    );
-}
-
-/// A forward `MODULE A` referenced by an earlier sibling resolves via the same
-/// nominal-binder carve-out.
-#[test]
-fn nominal_module_forward_reference_resolves() {
-    let arena = RuntimeArena::new();
-    let scope = run_scope(
-        &arena,
+fn forward_module_reference_is_position_error() {
+    let err = run_collect_err(
         "LET inner = MyMod.x\n\
          MODULE MyMod = ((LET x = 11))",
-    );
+    )
+    .expect("a forward MODULE reference should error");
     assert!(
-        matches!(scope.lookup("inner"), Some(KObject::Number(n)) if *n == 11.0),
-        "MODULE nominal-binder carve-out should allow the forward ref; got {:?}",
-        scope.lookup("inner").map(|o| o.summarize()),
+        format!("{err}").contains("MyMod"),
+        "expected the error to name the forward module `MyMod`, got {err}",
     );
 }
 
@@ -264,5 +237,37 @@ fn value_let_after_reference_is_unbound_not_carved_out() {
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(n) if n == "later_name"),
         "expected UnboundName('later_name'), got {err}",
+    );
+}
+
+/// A FN return type that forward-references a STRUCT declared later is a position error,
+/// just like a forward reference in a parameter type or a struct field.
+#[test]
+fn fn_return_type_forward_reference_is_position_error() {
+    let err = run_collect_err(
+        "FN (FOO x :Number) -> Later = (x)\n\
+         STRUCT Later = (n :Number)",
+    )
+    .expect("a forward STRUCT reference in a FN return type should error");
+    assert!(
+        format!("{err}").contains("Later"),
+        "expected the error to name the forward type `Later`, got {err}",
+    );
+}
+
+/// A backward return-type reference (the type is declared earlier) still resolves.
+#[test]
+fn fn_return_type_backward_reference_resolves() {
+    let arena = RuntimeArena::new();
+    let scope = run_scope(
+        &arena,
+        "STRUCT Early = (n :Number)\n\
+         FN (FOO x :Number) -> Early = (Early {n = x})\n\
+         LET out = (FOO 5)",
+    );
+    assert!(
+        scope.lookup("out").is_some(),
+        "a backward return-type reference must resolve; got {:?}",
+        scope.lookup("out").map(|o| o.summarize()),
     );
 }

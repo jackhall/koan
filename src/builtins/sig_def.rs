@@ -19,7 +19,7 @@ use crate::machine::{
 
 use crate::machine::model::ast::KExpression;
 
-use super::{arg, err, kw, register_nominal_binder, sig};
+use super::{arg, err, kw, register_builtin_with_binder, sig};
 use crate::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_kexpression,
 };
@@ -49,7 +49,7 @@ pub fn body<'a>(
 
     let bind_index = sched
         .current_lexical_chain()
-        .map(|chain| BindingIndex::nominal(chain.index))
+        .map(|chain| BindingIndex::value(chain.index))
         .unwrap_or(BindingIndex::BUILTIN);
     let name_for_finish = name.clone();
     let finish: CombineFinish<'a> = Box::new(move |parent_scope, _sched, _results| {
@@ -59,7 +59,7 @@ pub fn body<'a>(
         // One unified identity in `bindings.types`: `KType::Signature { sig, pinned_slots }`
         // is both the introspectable value (`decl_scope` via `sig`) and the dispatch
         // constraint. A slot annotation `:OrderedSig` means "any module satisfying
-        // OrderedSig"; the signature value is recovered via `coerce_type_token_value`,
+        // OrderedSig"; the signature value is recovered via `resolve_type_leaf_carrier`,
         // which synthesizes `KTypeValue(KType::Signature { .. })`. SIG doesn't join an SCC
         // type cycle, so the upsert's overwrite arm never fires — its insert-if-absent /
         // non-equal-Rebind behaviour (two `SIG Foo` in one scope error) carries here.
@@ -88,7 +88,7 @@ pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_nominal_binder(
+    register_builtin_with_binder(
         scope,
         "SIG",
         sig(

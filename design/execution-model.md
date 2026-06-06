@@ -346,22 +346,20 @@ dispatched but not yet executed parks on the producer instead of failing with
 reference's source position.** Visibility is the index gate (see
 [Lexical provenance chain](#lexical-provenance-chain) below): every binding
 carries the lexical statement index it was registered at, and a consumer at
-chain cutoff `c` sees only bindings with index `i < c` plus any binding
-flagged `nominal_binder` (the D7 carve-out for `STRUCT` / named `UNION` /
-`SIG` / `FUNCTOR` / `MODULE`, whose declared names cross the cutoff so
-mutual-recursive nominal references work). The D7 carve-out rides through
-submission via the picked overload's `is_nominal_binder` flag — the
-[`BinderKey`](../src/machine/execute/scheduler/submit.rs) install stamps
-the corresponding `BindingIndex { idx, nominal_binder }` so the eventual
-finalize and any submission-time placeholder install share the same
-visibility identity.
+chain cutoff `c` sees only bindings with index `i < c`. This is one rule
+across the value and type languages — there is no per-binding exemption.
+Mutual recursion of two or more nominal types, which has no valid source
+order, is co-declared in a `RECURSIVE TYPES` block that scopes its threaded
+group within strict lexical order (see
+[typing/user-types.md](typing/user-types.md)); a self-recursive type threads
+its own name and needs no block.
 
-`LET` is value-style gated (strict `b.idx < c`), so a forward reference to
-a later-sibling `LET` is invisible and surfaces `UnboundName` rather than
-parking. `FN` is also value-style gated — not a nominal binder — so a
-forward call to a later-sibling `FN` overload is invisible under the gate
-and surfaces `DispatchFailed` rather than parking on the not-yet-finalized
-overload. A *keyword-headed* function call (`ID 7`) resolves through the
+Every binder is value-style gated (strict `b.idx < c`), so a forward
+reference to a later-sibling `LET`, `STRUCT`, `FN`, or any other binder is
+invisible. A later-sibling `LET` surfaces `UnboundName`; a forward call to a
+later-sibling `FN` overload surfaces `DispatchFailed` rather than parking on
+the not-yet-finalized overload; a forward type reference is a position error.
+A *keyword-headed* function call (`ID 7`) resolves through the
 `functions` bucket, which applies the same per-overload visibility filter:
 a later-sibling overload registered after this consumer's statement is
 hidden, and dispatch falls through to outer scopes. Forward calls from a
@@ -375,16 +373,15 @@ A `placeholders` table — a `RefCell<HashMap<String, (NodeId, BindingIndex)>>`
 — lives inside the [`Bindings`](../src/machine/core/bindings.rs) façade
 on `Scope` alongside `data`, `types`, `functions`, and
 `pending_overloads`. *Name-keyed binders* (`LET`, `STRUCT`, `UNION`,
-`SIG`, `MODULE`) install through their
+`SIG`, `MODULE`, `RECURSIVE TYPES`) install through their
 [`binder_name`](../src/machine/core/kfunction/body.rs) hook (a per-
 `KFunction` extractor of type
 [`BinderNameFn`](../src/machine/core/kfunction/body.rs) that pulls the
 to-be-bound name structurally out of the expression's parts), stamping
 `name → producer NodeId` paired with the binder's
-[`BindingIndex`](../src/machine/core/bindings.rs) (the lexical statement
-index, plus the `nominal_binder` flag for `STRUCT` / named `UNION` /
-`SIG` / `MODULE` whose declared names cross the cutoff for
-mutual-recursive references).
+[`BindingIndex { idx }`](../src/machine/core/bindings.rs) — the lexical
+statement index, gated by the strict `idx < cutoff` rule like every other
+binder.
 
 *Bucket-keyed binders* (`FN`, `FUNCTOR`) install through a
 [`binder_bucket`](../src/machine/core/kfunction/body.rs) extractor
@@ -630,17 +627,19 @@ The rails the dispatch driver feeds:
     `Lift(LiftState::Pending(producer_id))` (the same shim `BodyResult::Tail`
     uses for sub-Bind waits), `UnboundName` falls through to the keyworded
     path so `value_lookup`'s body produces the structured error.
-  - `BareTypeLeaf` (`(Number)`, `(IntOrd)`) — `fast_lane_bare_type_leaf`
-    routes through `coerce_type_token_value` so the dispatch-phase carrier
-    matches what `value_lookup::body_type_expr` would synthesize. Failures
-    surface directly; there is no candidate-machinery alternative for a
-    bare leaf type. See
+  - `BareTypeLeaf` (`(Number)`, `(IntOrd)`) — `bare_type_leaf`
+    routes through `resolve_type_leaf_carrier` over the memoized,
+    park-capable `Scope::resolve_type_expr` bridge: a leaf naming an
+    earlier still-finalizing binder parks on its producer and re-resolves
+    on wake, like every compound type form, and other failures surface
+    directly. There is no candidate-machinery alternative for a bare leaf
+    type. See
     [typing/elaboration.md § Layers](typing/elaboration.md#layers)
-    § Layer 4 for the shared coercion seam.
+    § Layer 4 for the shared resolver seam.
   - `TypeCall` (`MyStruct {x = 1}`, `MyFunctor {T = IntOrd}`) —
     [`type_call`](../src/machine/execute/dispatch/single_poll.rs)
     resolves the head Type token to its `bindings.types` identity. A
-    `UserType` identity is a `ResolvedCallable::Constructor`; a
+    `SetRef` identity is a `ResolvedCallable::Constructor`; a
     `KType::KFunctor { body: Some }` (a bound functor in the type table) is a
     `ResolvedCallable::Function`. Both flow through the shared
     apply-a-callable tail (below). No value-side carrier is fetched — the
@@ -660,7 +659,7 @@ The rails the dispatch driver feeds:
     nested-parens part (the *only* call shape — koan has no `f 1 2`
     positional call syntax for function values, so the named-arg shape
     is the whole user-facing surface). A `KFunction(f, _)` head resolves to a
-    `ResolvedCallable::Function` and a `KTypeValue(KType::UserType { .. })`
+    `ResolvedCallable::Function` and a `KTypeValue(KType::SetRef { .. })`
     head — the carrier a value-classified alias of a constructible type
     synthesizes (`LET outcome = Outcome` then `(outcome (err "x"))`) — to a
     `ResolvedCallable::Constructor`, both flowing through the shared
@@ -860,7 +859,7 @@ schedules a `Combine` over those producers that re-runs the signature
 elaboration against the now-final scope at finish time. (See
 [typing/elaboration.md § Layers](typing/elaboration.md#layers) § Layer 3
 for the elaborator's role in the pipeline.) A parens-wrapped
-parameter type (`xs: (LIST_OF Number)`) rides the same Combine:
+parameter type (`xs :(LIST OF Number)`) rides the same Combine:
 `parse_fn_param_list` records the `(slot_idx, sub_expr)` pair, FN-def
 schedules each sub-expression as its own `Dispatch`, and the Combine's
 finish closure splices each result into
@@ -1283,8 +1282,8 @@ the lookup primitive that returns the consumer's statement index in a
 given scope (or `None` when that scope is not on the chain — "already
 returned", visibility unconstrained). The
 [`visible`](../src/machine/core/scope.rs) predicate consumes it as
-`b.nominal_binder || b.idx < cutoff`; the value-side
-`Scope::resolve_with_chain`, the type-side `resolve_type_with_chain`, the
+`b.idx < cutoff` — one rule across the value and type languages; the
+value-side `Scope::resolve_with_chain`, the type-side `resolve_type_with_chain`, the
 bare-identifier `lookup_with_chain`, and the per-scope
 [`Bindings::lookup_value`](../src/machine/core/bindings.rs) /
 `lookup_type` / `lookup_function` lookups (the last covering both the

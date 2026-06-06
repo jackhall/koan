@@ -30,6 +30,11 @@ fn part_references_any(part: &ExpressionPart<'_>, param_names: &[String]) -> boo
         ExpressionPart::DictLiteral(pairs) => pairs.iter().any(|(k, v)| {
             part_references_any(k, param_names) || part_references_any(v, param_names)
         }),
+        // Field names are literal strings, never references; scan the values
+        // (e.g. `Er` inside `Set WITH {Elt = Er.Type}`).
+        ExpressionPart::RecordLiteral(fields) => fields
+            .iter()
+            .any(|(_, v)| part_references_any(v, param_names)),
         _ => false,
     }
 }

@@ -1,14 +1,16 @@
-use crate::machine::model::types::UserTypeKind;
+use std::rc::Rc;
+
+use crate::machine::model::types::{NominalKind, NominalMember, NominalSchema, RecursiveSet};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, Scope, ScopeId};
 
 use crate::builtins::err;
 
-/// `TEMPLATE <param:TypeExprRef>` → `TypeExprRef` carrying a template
-/// `KType::UserType { kind: UserTypeKind::TypeConstructor { param_names, .. }, .. }`
-/// with `ScopeId::SENTINEL` and a placeholder `name` (`"_typeconstructor"`). The
-/// surrounding opaque ascription (`ascribe.rs:body_opaque`) re-mints both with the
-/// binding's slot name and a per-call `scope_id`. Arity-1 only.
+/// `TEMPLATE <param:TypeExprRef>` → `TypeExprRef` carrying a template singleton
+/// [`RecursiveSet`] of one [`NominalKind::TypeConstructor`] member with `ScopeId::SENTINEL`
+/// and a placeholder `name` (`"_typeconstructor"`). The surrounding opaque ascription
+/// (`ascribe.rs:body_opaque`) re-mints a fresh per-call singleton with the binding's slot
+/// name and a per-call `scope_id`. Arity-1 only.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
@@ -19,19 +21,22 @@ pub fn body<'a>(
         Err(e) => return err(e),
     };
     let param = param_kt.name();
+    // Abstract higher-kinded SIG slot — not a constructible union, so the variant schema
+    // is empty (identity ignores it anyway).
+    let member = NominalMember::pending(
+        "_typeconstructor".into(),
+        ScopeId::SENTINEL,
+        NominalKind::TypeConstructor,
+    );
+    member.fill(NominalSchema::TypeConstructor {
+        schema: std::collections::HashMap::new(),
+        param_names: vec![param],
+    });
+    let set = Rc::new(RecursiveSet::new(vec![member]));
     BodyResult::Value(
         scope
             .arena
-            .alloc_object(KObject::KTypeValue(KType::UserType {
-                // Abstract higher-kinded SIG slot — not a constructible union, so the
-                // schema payload is empty (equality ignores it anyway).
-                kind: UserTypeKind::TypeConstructor {
-                    schema: std::rc::Rc::new(std::collections::HashMap::new()),
-                    param_names: vec![param],
-                },
-                scope_id: ScopeId::SENTINEL,
-                name: "_typeconstructor".into(),
-            })),
+            .alloc_object(KObject::KTypeValue(KType::SetRef { set, index: 0 })),
     )
 }
 
@@ -39,9 +44,31 @@ pub fn body<'a>(
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
     use crate::machine::execute::Scheduler;
-    use crate::machine::model::types::UserTypeKind;
+    use crate::machine::model::types::{NominalKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
     use crate::machine::{BindingIndex, RuntimeArena, ScopeId};
+
+    /// Assert `kt` is a `TypeConstructor`-kind `SetRef` whose projected `param_names` equal
+    /// `expected`; returns the member's name.
+    fn assert_type_constructor(kt: &KType<'_>, expected: &[&str]) -> String {
+        match kt {
+            KType::SetRef { set, index }
+                if set.member(*index).kind == NominalKind::TypeConstructor =>
+            {
+                match RecursiveSet::projected_schema(set, *index) {
+                    ProjectedSchema::TypeConstructor { param_names, .. } => {
+                        let want: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
+                        assert_eq!(param_names, want);
+                    }
+                    _ => {
+                        panic!("TypeConstructor-kind member must project a TypeConstructor schema")
+                    }
+                }
+                set.member(*index).name.clone()
+            }
+            other => panic!("expected a TypeConstructor SetRef, got {other:?}"),
+        }
+    }
 
     /// Pins the template shape the builtin returns before opaque ascription re-mints it.
     #[test]
@@ -50,19 +77,12 @@ mod tests {
         let scope = run_root_silent(&arena);
         let result = run_one(scope, parse_one("TEMPLATE Type"));
         match result {
-            KObject::KTypeValue(kt) => match kt {
-                KType::UserType {
-                    kind: UserTypeKind::TypeConstructor { param_names, .. },
-                    scope_id,
-                    name,
-                } => {
-                    assert_eq!(*param_names, vec!["Type".to_string()]);
-                    assert_eq!(*scope_id, ScopeId::SENTINEL);
-                    assert_eq!(name, "_typeconstructor");
-                }
-                other => panic!("expected UserType(TypeConstructor), got {:?}", other),
-            },
-            other => panic!("expected KTypeValue, got {:?}", other.ktype()),
+            KObject::KTypeValue(kt @ KType::SetRef { set, index }) => {
+                let name = assert_type_constructor(kt, &["Type"]);
+                assert_eq!(set.member(*index).scope_id, ScopeId::SENTINEL);
+                assert_eq!(name, "_typeconstructor");
+            }
+            other => panic!("expected KTypeValue(SetRef), got {:?}", other.ktype()),
         }
     }
 
@@ -77,18 +97,7 @@ mod tests {
             _ => panic!("Monad must bind a Signature KType"),
         };
         let wrap_kt: &KType = s.decl_scope().bindings().expect_type("Wrap");
-        match wrap_kt {
-            KType::UserType {
-                kind: UserTypeKind::TypeConstructor { param_names, .. },
-                ..
-            } => {
-                assert_eq!(*param_names, vec!["Type".to_string()]);
-            }
-            other => panic!(
-                "expected UserType(TypeConstructor) under Wrap, got {:?}",
-                other
-            ),
-        }
+        assert_type_constructor(wrap_kt, &["Type"]);
     }
 
     /// Pins the dispatch path for an FN return type `:(Number AS Wrap)` against a
@@ -100,14 +109,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         scope.register_type(
             "Wrap".into(),
-            KType::UserType {
-                kind: UserTypeKind::TypeConstructor {
-                    schema: std::rc::Rc::new(std::collections::HashMap::new()),
-                    param_names: vec!["Type".into()],
-                },
-                scope_id: ScopeId::from_raw(0, 0xC0DE),
-                name: "Wrap".into(),
-            },
+            wrap_type_constructor(ScopeId::from_raw(0, 0xC0DE)),
             BindingIndex::BUILTIN,
         );
         let mut sched = Scheduler::new();
@@ -164,13 +166,7 @@ mod tests {
             other => panic!("Monad must bind a Signature KType, got {:?}", other),
         };
         let wrap_kt: &KType = s.decl_scope().bindings().expect_type("Wrap");
-        assert!(matches!(
-            wrap_kt,
-            KType::UserType {
-                kind: UserTypeKind::TypeConstructor { .. },
-                ..
-            }
-        ));
+        assert_type_constructor(wrap_kt, &["Type"]);
         let pure = s.decl_scope().bindings().expect_value("pure");
         let kt = match pure {
             KObject::KTypeValue(kt) => kt,
@@ -182,17 +178,7 @@ mod tests {
                 assert_eq!(params.len(), 1);
                 match ret.as_ref() {
                     KType::ConstructorApply { ctor, args } => {
-                        assert!(
-                            matches!(
-                                ctor.as_ref(),
-                                KType::UserType {
-                                    kind: UserTypeKind::TypeConstructor { .. },
-                                    ..
-                                }
-                            ),
-                            "ConstructorApply.ctor must be a TypeConstructor, got {:?}",
-                            ctor
-                        );
+                        assert_type_constructor(ctor.as_ref(), &["Type"]);
                         assert_eq!(*args, vec![KType::Number]);
                     }
                     other => panic!(
@@ -223,18 +209,27 @@ mod tests {
         };
         let wrap_t = mo.type_members.borrow().get("Wrap").cloned();
         match wrap_t {
-            Some(KType::UserType {
-                kind: UserTypeKind::TypeConstructor { param_names, .. },
-                name,
-                ..
-            }) => {
+            Some(kt) => {
+                let name = assert_type_constructor(&kt, &["Type"]);
                 assert_eq!(name, "Wrap");
-                assert_eq!(param_names, vec!["Type".to_string()]);
             }
             other => panic!(
                 "expected TypeConstructor in type_members[Wrap], got {:?}",
                 other,
             ),
         }
+    }
+
+    /// A root-scope-bound `Wrap` TypeConstructor `SetRef` with the given origin scope id.
+    fn wrap_type_constructor<'a>(scope_id: ScopeId) -> KType<'a> {
+        let set = RecursiveSet::singleton(
+            "Wrap".into(),
+            scope_id,
+            crate::machine::model::types::NominalSchema::TypeConstructor {
+                schema: std::collections::HashMap::new(),
+                param_names: vec!["Type".into()],
+            },
+        );
+        KType::SetRef { set, index: 0 }
     }
 }

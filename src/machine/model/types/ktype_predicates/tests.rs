@@ -1,6 +1,25 @@
 use super::*;
 use crate::machine::core::ScopeId;
+use crate::machine::model::types::{NominalSchema, RecursiveSet};
 use crate::machine::model::Record;
+use std::rc::Rc;
+
+/// A singleton-set `KType::SetRef` for a struct named `name` (empty schema is fine — the
+/// predicates key on `(set ptr, index)` + `kind`, never the schema).
+fn struct_setref<'a>(name: &str, scope_id: ScopeId) -> KType<'a> {
+    let set = RecursiveSet::singleton(name.into(), scope_id, NominalSchema::Struct(Record::new()));
+    KType::SetRef { set, index: 0 }
+}
+
+/// A singleton-set `KType::SetRef` for a newtype named `name` over `repr`.
+fn newtype_setref<'a>(name: &str, scope_id: ScopeId, repr: KType<'a>) -> KType<'a> {
+    let set = RecursiveSet::singleton(
+        name.into(),
+        scope_id,
+        NominalSchema::Newtype(Box::new(repr)),
+    );
+    KType::SetRef { set, index: 0 }
+}
 
 #[test]
 fn is_more_specific_concrete_beats_any() {
@@ -148,24 +167,6 @@ fn record_value_admission_and_matches() {
 }
 
 #[test]
-fn mu_matches_value_via_one_unfold() {
-    let t = KType::Mu {
-        binder: "Tree".into(),
-        body: Box::new(KType::List(Box::new(KType::RecursiveRef("Tree".into())))),
-    };
-    let v = KObject::list(vec![]);
-    assert!(t.matches_value(&v));
-    assert!(!t.matches_value(&KObject::Number(1.0)));
-}
-
-#[test]
-fn recursive_ref_accepts_anything() {
-    let t = KType::RecursiveRef("Tree".into());
-    assert!(t.matches_value(&KObject::Number(1.0)));
-    assert!(t.matches_value(&KObject::list(vec![])));
-}
-
-#[test]
 fn any_user_type_struct_accepts_struct_future_only() {
     use crate::machine::core::RuntimeArena;
     use indexmap::IndexMap;
@@ -174,18 +175,28 @@ fn any_user_type_struct_accepts_struct_future_only() {
     // allocation hands out `&'a KObject<'a>` tied to the arena's lifetime.
     let arena = RuntimeArena::new();
     let t = KType::AnyUserType {
-        kind: UserTypeKind::struct_sentinel(),
+        kind: NominalKind::Struct,
     };
+    let struct_set = RecursiveSet::singleton(
+        "Point".into(),
+        ScopeId::SENTINEL,
+        NominalSchema::Struct(Record::new()),
+    );
     let s: &KObject<'_> = arena.alloc_object(KObject::Struct {
-        name: "Point".into(),
-        scope_id: ScopeId::SENTINEL,
+        set: struct_set,
+        index: 0,
         fields: Rc::new(IndexMap::new()),
     });
+    let tagged_set = RecursiveSet::singleton(
+        "Maybe".into(),
+        ScopeId::SENTINEL,
+        NominalSchema::Tagged(std::collections::HashMap::new()),
+    );
     let tagged: &KObject<'_> = arena.alloc_object(KObject::Tagged {
         tag: "some".into(),
         value: Rc::new(KObject::Number(1.0)),
-        scope_id: ScopeId::SENTINEL,
-        name: "Maybe".into(),
+        set: tagged_set,
+        index: 0,
         type_args: Rc::new(vec![]),
     });
     let n: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
@@ -204,7 +215,6 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     use crate::machine::core::RuntimeArena;
     use crate::machine::model::values::{Module, Signature};
     use std::collections::HashMap;
-    use std::rc::Rc;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let t = KType::Type;
@@ -216,20 +226,21 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     assert!(t.accepts_part(&ExpressionPart::Future(kt_str)));
     assert!(t.accepts_part(&ExpressionPart::Future(kt_bool)));
     assert!(t.accepts_part(&ExpressionPart::Future(kt_null)));
-    // Struct / union type tokens flow as `KTypeValue(UserType { .. })` now — a `:Type`
+    // Struct / union type tokens flow as `KTypeValue(SetRef { .. })` now — a `:Type`
     // slot admits them via the generic `Future(KTypeValue(_))` arm.
-    let tagged_token: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::UserType {
-        kind: UserTypeKind::Tagged {
-            schema: Rc::new(HashMap::new()),
-        },
-        name: "Maybe".into(),
-        scope_id: ScopeId::SENTINEL,
+    let tagged_set = RecursiveSet::singleton(
+        "Maybe".into(),
+        ScopeId::SENTINEL,
+        NominalSchema::Tagged(HashMap::new()),
+    );
+    let tagged_token: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::SetRef {
+        set: tagged_set,
+        index: 0,
     }));
-    let struct_token: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::UserType {
-        kind: UserTypeKind::struct_sentinel(),
-        name: "Point".into(),
-        scope_id: ScopeId::SENTINEL,
-    }));
+    let struct_token: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(struct_setref(
+        "Point",
+        ScopeId::SENTINEL,
+    )));
     assert!(t.accepts_part(&ExpressionPart::Future(tagged_token)));
     assert!(t.accepts_part(&ExpressionPart::Future(struct_token)));
     let child = arena.alloc_scope(crate::machine::Scope::child_under_module(
@@ -262,25 +273,26 @@ fn any_user_type_newtype_accepts_wrapped_only() {
     use crate::machine::core::RuntimeArena;
     let arena = RuntimeArena::new();
     let t = KType::AnyUserType {
-        kind: UserTypeKind::Newtype {
-            repr: Box::new(KType::Any),
-        },
+        kind: NominalKind::Newtype,
     };
     let inner: &KObject<'_> = arena.alloc_object(KObject::Number(3.0));
-    let type_id: &KType = arena.alloc_ktype(KType::UserType {
-        kind: UserTypeKind::Newtype {
-            repr: Box::new(KType::Number),
-        },
-        scope_id: ScopeId::from_raw(0, 0xAA),
-        name: "Distance".into(),
-    });
+    let type_id: &KType = arena.alloc_ktype(newtype_setref(
+        "Distance",
+        ScopeId::from_raw(0, 0xAA),
+        KType::Number,
+    ));
     let w: &KObject<'_> = arena.alloc_object(KObject::Wrapped {
         inner: crate::machine::model::values::NonWrappedRef::peel(inner),
         type_id,
     });
+    let struct_set = RecursiveSet::singleton(
+        "Point".into(),
+        ScopeId::SENTINEL,
+        NominalSchema::Struct(Record::new()),
+    );
     let s: &KObject<'_> = arena.alloc_object(KObject::Struct {
-        name: "Point".into(),
-        scope_id: ScopeId::SENTINEL,
+        set: struct_set,
+        index: 0,
         fields: std::rc::Rc::new(indexmap::IndexMap::new()),
     });
     assert!(t.accepts_part(&ExpressionPart::Future(w)));
@@ -289,54 +301,41 @@ fn any_user_type_newtype_accepts_wrapped_only() {
     assert!(!t.matches_value(s));
 }
 
-/// Pins the wildcard refinement: `UserType { kind: Newtype { repr: <real> }, .. }`
-/// is strictly more specific than `AnyUserType { kind: Newtype { repr: <sentinel> } }`,
-/// and incomparable with `AnyUserType { kind: Struct }`.
+/// Pins the wildcard refinement: a `Newtype`-kind `SetRef` is strictly more specific than
+/// `AnyUserType { kind: Newtype }`, and incomparable with `AnyUserType { kind: Struct }`.
 #[test]
 fn user_type_newtype_specificity_lattice() {
     let any_newtype = KType::AnyUserType {
-        kind: UserTypeKind::Newtype {
-            repr: Box::new(KType::Any),
-        },
+        kind: NominalKind::Newtype,
     };
     let any_struct = KType::AnyUserType {
-        kind: UserTypeKind::struct_sentinel(),
+        kind: NominalKind::Struct,
     };
-    let dist = KType::UserType {
-        kind: UserTypeKind::Newtype {
-            repr: Box::new(KType::Number),
-        },
-        scope_id: ScopeId::from_raw(0, 0xAA),
-        name: "Distance".into(),
-    };
+    let dist = newtype_setref("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
     assert!(dist.is_more_specific_than(&any_newtype));
     assert!(!any_newtype.is_more_specific_than(&dist));
     assert!(!dist.is_more_specific_than(&any_struct));
     assert!(!any_struct.is_more_specific_than(&dist));
 }
 
-/// Specificity ordering for the new `UserType` / `AnyUserType` variants:
+/// Specificity ordering for the `SetRef` / `AnyUserType` variants:
 /// - `AnyUserType` is strictly under `Any` (handled by the top-level `Any` short-circuit).
-/// - `UserType { kind: K, .. }` is strictly under `AnyUserType { kind: K }` (same kind).
-/// - `UserType` of one kind and `AnyUserType` of a different kind are incomparable
+/// - A `SetRef` member of kind `K` is strictly under `AnyUserType { kind: K }`.
+/// - A `SetRef` of one kind and `AnyUserType` of a different kind are incomparable
 ///   (sibling families).
 #[test]
 fn user_type_specificity_lattice() {
     let any_struct = KType::AnyUserType {
-        kind: UserTypeKind::struct_sentinel(),
+        kind: NominalKind::Struct,
     };
     let any_tagged = KType::AnyUserType {
-        kind: UserTypeKind::tagged_sentinel(),
+        kind: NominalKind::Tagged,
     };
-    let point = KType::UserType {
-        kind: UserTypeKind::struct_sentinel(),
-        scope_id: ScopeId::from_raw(0, 0xAA),
-        name: "Point".into(),
-    };
+    let point = struct_setref("Point", ScopeId::from_raw(0, 0xAA));
     // `AnyUserType` strictly under `Any`.
     assert!(any_struct.is_more_specific_than(&KType::Any));
     assert!(!KType::Any.is_more_specific_than(&any_struct));
-    // `UserType { kind: Struct, .. }` strictly under `AnyUserType { kind: Struct }`.
+    // A `Struct`-kind `SetRef` strictly under `AnyUserType { kind: Struct }`.
     assert!(point.is_more_specific_than(&any_struct));
     assert!(!any_struct.is_more_specific_than(&point));
     // Different-kind pairs incomparable.
@@ -371,20 +370,16 @@ fn is_type_denoting_table() {
     // Wildcard struct/tagged slots don't make their parameter a type binder —
     // the value carries no nominal identity the caller hasn't already named.
     assert!(!KType::AnyUserType {
-        kind: UserTypeKind::struct_sentinel()
+        kind: NominalKind::Struct
     }
     .is_type_denoting());
     assert!(!KType::AnyUserType {
-        kind: UserTypeKind::tagged_sentinel()
+        kind: NominalKind::Tagged
     }
     .is_type_denoting());
-    // Per-declaration UserType: nominal identity already lives in the declaring
+    // Per-declaration `SetRef`: nominal identity already lives in the declaring
     // scope's `bindings.types`; rebinding per-call would be a no-op or shadow.
-    let ut = KType::UserType {
-        kind: UserTypeKind::struct_sentinel(),
-        scope_id: ScopeId::from_raw(0, 1),
-        name: "Foo".into(),
-    };
+    let ut = struct_setref("Foo", ScopeId::from_raw(0, 1));
     assert!(!ut.is_type_denoting());
     assert!(!KType::Number.is_type_denoting());
     assert!(!KType::Str.is_type_denoting());
@@ -469,65 +464,85 @@ fn is_more_specific_for_pinned_signature_bound() {
     assert!(pinned_two.is_more_specific_than(&any_module));
 }
 
-/// Build a `Result`-named `Tagged` value occupying `tag` with `payload`. `result_sid` is
-/// the declaring scope id; the inner `payload` is itself a `Tagged` carrier whose name is
-/// the error type's nominal identity.
-fn result_value<'a>(result_sid: ScopeId, tag: &str, payload: KObject<'a>) -> KObject<'a> {
+/// A shared `Result` `TypeConstructor` set. Identity is now `(set ptr, index)`, so a
+/// `ConstructorApply` ctor and a `Tagged` carrier only match when they reference the *same*
+/// `Rc` — every test below threads this one set through both the slot ctor and the value.
+fn result_set<'a>(result_sid: ScopeId) -> Rc<RecursiveSet<'a>> {
+    RecursiveSet::singleton(
+        "Result".into(),
+        result_sid,
+        NominalSchema::TypeConstructor {
+            schema: std::collections::HashMap::new(),
+            param_names: vec!["T".into(), "E".into()],
+        },
+    )
+}
+
+/// Build a `Result`-carrier `Tagged` value occupying `tag` with `payload`, referencing
+/// `set` (the shared `Result` allocation). The inner `payload` is itself a `Tagged` carrier
+/// whose set is the error type's nominal identity.
+fn result_value<'a>(set: &Rc<RecursiveSet<'a>>, tag: &str, payload: KObject<'a>) -> KObject<'a> {
     KObject::Tagged {
         tag: tag.into(),
         value: std::rc::Rc::new(payload),
-        scope_id: result_sid,
-        name: "Result".into(),
+        set: Rc::clone(set),
+        index: 0,
         type_args: std::rc::Rc::new(vec![]),
     }
 }
 
-/// A bare error carrier (`Tagged` named `error_name`) standing in for a caught error
-/// value. `ktype()` reports `UserType { kind: Tagged, scope_id, name }`.
-fn error_carrier<'a>(error_sid: ScopeId, error_name: &str) -> KObject<'a> {
+/// A bare error carrier (`Tagged` over `set`) standing in for a caught error value.
+fn error_carrier<'a>(set: &Rc<RecursiveSet<'a>>) -> KObject<'a> {
     KObject::Tagged {
         tag: "_".into(),
         value: std::rc::Rc::new(KObject::Number(0.0)),
-        scope_id: error_sid,
-        name: error_name.into(),
+        set: Rc::clone(set),
+        index: 0,
         type_args: std::rc::Rc::new(vec![]),
     }
+}
+
+/// A singleton tagged set named `name`, for an error-type identity.
+fn tagged_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
+    RecursiveSet::singleton(
+        name.into(),
+        scope_id,
+        NominalSchema::Tagged(std::collections::HashMap::new()),
+    )
 }
 
 /// `:(Result T E)` slot admission: a `ConstructorApply` slot whose ctor identity matches
 /// the `Result` carrier admits an `error(...)` value iff the inhabited `error` payload
 /// (param index 1) satisfies the slot's `E`. A caught `error(KError)` is rejected where
-/// `E = MyErr` and accepted where `E = KError` / `Any`.
+/// `E = MyErr` and accepted where `E = KError` / `Any`. Identity is now allocation-based, so
+/// the slot's `E` and the value's payload carrier share one set per error type.
 #[test]
 fn constructor_apply_result_checks_inhabited_error_param() {
     let result_sid = ScopeId::from_raw(0, 0x9001);
     let kerror_sid = ScopeId::from_raw(0, 0x9002);
     let myerr_sid = ScopeId::from_raw(0, 0x9003);
 
-    let ctor = Box::new(KType::UserType {
-        kind: UserTypeKind::TypeConstructor {
-            schema: std::rc::Rc::new(std::collections::HashMap::new()),
-            param_names: vec!["T".into(), "E".into()],
-        },
-        scope_id: result_sid,
-        name: "Result".into(),
+    let r_set = result_set(result_sid);
+    let ctor = Box::new(KType::SetRef {
+        set: Rc::clone(&r_set),
+        index: 0,
     });
-    let myerr_ty = KType::UserType {
-        kind: UserTypeKind::tagged_sentinel(),
-        scope_id: myerr_sid,
-        name: "MyErr".into(),
+    let kerror_set = tagged_set("KError", kerror_sid);
+    let myerr_set = tagged_set("MyErr", myerr_sid);
+    let myerr_ty = KType::SetRef {
+        set: Rc::clone(&myerr_set),
+        index: 0,
     };
-    let kerror_ty = KType::UserType {
-        kind: UserTypeKind::tagged_sentinel(),
-        scope_id: kerror_sid,
-        name: "KError".into(),
+    let kerror_ty = KType::SetRef {
+        set: Rc::clone(&kerror_set),
+        index: 0,
     };
 
     let slot_myerr = KType::ConstructorApply {
         ctor: ctor.clone(),
         args: vec![KType::Any, myerr_ty.clone()],
     };
-    let caught = result_value(result_sid, "error", error_carrier(kerror_sid, "KError"));
+    let caught = result_value(&r_set, "error", error_carrier(&kerror_set));
     assert!(!slot_myerr.matches_value(&caught));
 
     let slot_kerror = KType::ConstructorApply {
@@ -536,7 +551,7 @@ fn constructor_apply_result_checks_inhabited_error_param() {
     };
     assert!(slot_kerror.matches_value(&caught));
 
-    let my_error = result_value(result_sid, "error", error_carrier(myerr_sid, "MyErr"));
+    let my_error = result_value(&r_set, "error", error_carrier(&myerr_set));
     assert!(slot_myerr.matches_value(&my_error));
 }
 
@@ -547,20 +562,16 @@ fn constructor_apply_result_checks_inhabited_error_param() {
 fn constructor_apply_result_ok_admits_any_error_param() {
     let result_sid = ScopeId::from_raw(0, 0x9001);
     let myerr_sid = ScopeId::from_raw(0, 0x9003);
-    let ctor = Box::new(KType::UserType {
-        kind: UserTypeKind::TypeConstructor {
-            schema: std::rc::Rc::new(std::collections::HashMap::new()),
-            param_names: vec!["T".into(), "E".into()],
-        },
-        scope_id: result_sid,
-        name: "Result".into(),
+    let r_set = result_set(result_sid);
+    let ctor = Box::new(KType::SetRef {
+        set: Rc::clone(&r_set),
+        index: 0,
     });
-    let myerr_ty = KType::UserType {
-        kind: UserTypeKind::tagged_sentinel(),
-        scope_id: myerr_sid,
-        name: "MyErr".into(),
+    let myerr_ty = KType::SetRef {
+        set: tagged_set("MyErr", myerr_sid),
+        index: 0,
     };
-    let ok_value = result_value(result_sid, "ok", KObject::Number(42.0));
+    let ok_value = result_value(&r_set, "ok", KObject::Number(42.0));
     let slot = KType::ConstructorApply {
         ctor: ctor.clone(),
         args: vec![KType::Number, myerr_ty],
@@ -591,24 +602,20 @@ fn result_field_param_index_table() {
 fn constructor_apply_covariant_admission_and_specificity() {
     let result_sid = ScopeId::from_raw(0, 0x9001);
     let myerr_sid = ScopeId::from_raw(0, 0x9003);
-    let ctor = Box::new(KType::UserType {
-        kind: UserTypeKind::TypeConstructor {
-            schema: std::rc::Rc::new(std::collections::HashMap::new()),
-            param_names: vec!["T".into(), "E".into()],
-        },
-        scope_id: result_sid,
-        name: "Result".into(),
+    let r_set = result_set(result_sid);
+    let ctor = Box::new(KType::SetRef {
+        set: Rc::clone(&r_set),
+        index: 0,
     });
-    let myerr = KType::UserType {
-        kind: UserTypeKind::tagged_sentinel(),
-        scope_id: myerr_sid,
-        name: "MyErr".into(),
+    let myerr = KType::SetRef {
+        set: tagged_set("MyErr", myerr_sid),
+        index: 0,
     };
     let stamped = KObject::Tagged {
         tag: "ok".into(),
         value: std::rc::Rc::new(KObject::Number(1.0)),
-        scope_id: result_sid,
-        name: "Result".into(),
+        set: Rc::clone(&r_set),
+        index: 0,
         type_args: std::rc::Rc::new(vec![KType::Number, myerr.clone()]),
     };
     let coarse = KType::ConstructorApply {
@@ -630,19 +637,16 @@ fn constructor_apply_covariant_admission_and_specificity() {
 #[test]
 fn constructor_apply_stamped_type_args_checked_structurally() {
     let result_sid = ScopeId::from_raw(0, 0x9001);
-    let ctor = Box::new(KType::UserType {
-        kind: UserTypeKind::TypeConstructor {
-            schema: std::rc::Rc::new(std::collections::HashMap::new()),
-            param_names: vec!["T".into(), "E".into()],
-        },
-        scope_id: result_sid,
-        name: "Result".into(),
+    let r_set = result_set(result_sid);
+    let ctor = Box::new(KType::SetRef {
+        set: Rc::clone(&r_set),
+        index: 0,
     });
     let stamped = KObject::Tagged {
         tag: "ok".into(),
         value: std::rc::Rc::new(KObject::Number(1.0)),
-        scope_id: result_sid,
-        name: "Result".into(),
+        set: Rc::clone(&r_set),
+        index: 0,
         type_args: std::rc::Rc::new(vec![KType::Number, KType::Str]),
     };
     let slot_ok = KType::ConstructorApply {
@@ -762,9 +766,9 @@ fn deferred_return_surface_eq_and_hash() {
         s.hash(&mut hasher);
         hasher.finish()
     }
-    let a = DeferredReturnSurface::Expression("MODULE_TYPE_OF Er Type".into());
-    let b = DeferredReturnSurface::Expression("MODULE_TYPE_OF Er Type".into());
-    let c = DeferredReturnSurface::Expression("MODULE_TYPE_OF Ar Type".into());
+    let a = DeferredReturnSurface::Expression("ATTR Er Type".into());
+    let b = DeferredReturnSurface::Expression("ATTR Er Type".into());
+    let c = DeferredReturnSurface::Expression("ATTR Ar Type".into());
     assert_eq!(a, b);
     assert_eq!(h(&a), h(&b));
     assert_ne!(a, c);

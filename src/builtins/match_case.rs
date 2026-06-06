@@ -48,7 +48,12 @@ pub fn body<'a>(
         }
         None => return err(KError::new(KErrorKind::MissingArg("value".to_string()))),
     };
-    let contract = match resolve_arm_return_contract(scope, &mut bundle, "MATCH") {
+    let contract = match resolve_arm_return_contract(
+        scope,
+        &mut bundle,
+        "MATCH",
+        sched.current_lexical_chain(),
+    ) {
         Ok(c) => c,
         Err(e) => return err(e),
     };
@@ -74,16 +79,9 @@ pub fn body<'a>(
     let frame: Rc<CallArena> = CallArena::new(scope, sched.current_frame());
     let (inner_arena, child): (&'a RuntimeArena, &'a Scope<'a>) = frame.anchored_parts();
     let it_obj: &'a KObject<'a> = inner_arena.alloc_object(value.deep_clone());
-    // `nominal_binder: true` carves `it` out of the sibling-index cutoff so the arm
-    // body (also at chain index 0) can see it — same path the FN parameter uses.
-    let _ = child.bind_value(
-        "it".to_string(),
-        it_obj,
-        BindingIndex {
-            idx: 0,
-            nominal_binder: true,
-        },
-    );
+    // `it` binds at idx 0; the arm body's statements sit at idx >= 1, so the strict
+    // `idx < cutoff` rule lets the body see it — same path the FN parameter uses.
+    let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
     // Multi-statement arms (`tag -> ((s_0) ... (s_{N-1}))`) submit the first N-1 as
     // siblings at chain indices `1..N-1` and tail-replace into the last at `N`.
     let arm_scope_id = child.id;

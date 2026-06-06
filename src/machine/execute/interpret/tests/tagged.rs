@@ -22,13 +22,12 @@ fn tagged_union_full_program_via_type_token() {
 }
 
 #[test]
-fn tagged_union_full_program_via_let_bound_type() {
+fn tagged_union_full_program_constructs_and_matches() {
     let arena = RuntimeArena::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
         "UNION Outcome = (ok :Str err :Str)\n\
-         LET outcome = Outcome\n\
-         LET r = (outcome (err \"oops\"))\n\
+         LET r = (Outcome (err \"oops\"))\n\
          MATCH (r) -> :Str WITH (ok -> (PRINT \"good\") err -> (PRINT it))",
         &arena,
         captured.clone(),

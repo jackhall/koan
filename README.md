@@ -115,6 +115,8 @@ Files without the prefix are infrastructure that don't introduce a single namesa
 `ResolveOutcome` types),
 [signature.rs](src/machine/model/types/signature.rs) (dispatch shapes and specificity,
 including `ExpressionSignature::most_specific` for the per-bucket tournament),
+[recursive_set.rs](src/machine/model/types/recursive_set.rs) (`RecursiveSet`, the
+`Rc`-owned unit of nominal identity, allocation, and lift),
 [builtins.rs](src/builtins.rs) (registry),
 [tagged_union.rs](src/machine/execute/dispatch/constructors/tagged_union.rs) (shared structure),
 [struct_value.rs](src/machine/execute/dispatch/constructors/struct_value.rs) (shared structure),
@@ -149,7 +151,7 @@ src/
 │   ├── branch_walk.rs        shared <tag> -> <body> walker for MATCH and TRY
 │   ├── result.rs             Result tagged-union builtin
 │   ├── type_constructors.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
-│   ├── type_ops.rs           LIST_OF / DICT_OF / MODULE_TYPE_OF / TEMPLATE / SIG_WITH
+│   ├── type_ops.rs           TEMPLATE / WITH
 │   ├── union.rs
 │   ├── struct_def.rs
 │   ├── struct_value.rs       shared struct-construction representation
@@ -240,5 +242,6 @@ effect modules (`Random`, `IO`, `Time`) ascribing it. Implementation is tracked 
 [roadmap/monadic-side-effects.md](roadmap/libraries/monadic-side-effects.md).
 
 Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
-`Unblocks:` cross-links. Its [README](roadmap/README.md) keeps the curated ordering and the
-"Next items" grouping for picking up work.
+`Unblocks:` cross-links. Its [README](roadmap/README.md) curates the open items by project
+and derives a "Next items" list — everything with no still-open prerequisite — from those
+cross-links (`tools/doclinks.py sync-next`).

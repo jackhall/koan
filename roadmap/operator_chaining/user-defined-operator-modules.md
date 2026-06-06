@@ -13,17 +13,16 @@ run and provides a per-scope operator registry, but nothing populates that
 registry from user code: it has no declaration surface and no binder to write
 into it.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *Users declare operators in their own modules*, scoped alongside the types the
-  operator acts on.
-- *A `GROUP` bundles a mode-tagged operator family* (`+ - * /`), so a whole
-  family registers and reduces together under one declaration.
-- *Operator meaning is module-scoped and lexically resolved* — the same `+` can
-  mean different things in different modules, picked by the scope walk.
-- *Generic operator groups come from functors.* A `FUNCTOR` producing a `GROUP`
-  module gives `+ - …` over any concrete type (or witness module), instantiated
-  explicitly with no implicit-search machinery.
+- A module declares an operator with `OP`, scoped alongside the types it acts
+  on, and a run of that operator evaluates within the module's scope.
+- A `GROUP` declaration registers its mode-tagged operator family (`+ - * /`),
+  and a run mixing distinct members of the family reduces under one mode.
+- The same `+` declared in two modules resolves to different bodies, picked by
+  the scope walk at each use site.
+- A `FUNCTOR` producing a `GROUP` module, instantiated explicitly with a
+  concrete type or witness module, yields `+ - …` operating over that type.
 
 **Directions.**
 
@@ -74,18 +73,13 @@ into it.
 
 ## Dependencies
 
+Soft prerequisites: the shipped module system and
+[functors](../../design/typing/functors.md) — `GROUP` skins `MODULE`, and generic
+groups ride `FUNCTOR`.
+
 **Requires:**
 
 - [User-definable n-ary operators](n-ary-operators.md) — the recognition,
   registry, and reduction mechanism this surface populates.
 
 **Unblocks:** none yet.
-
-The shipped module system and [functors](../../design/typing/functors.md) are
-soft prerequisites — `GROUP` skins `MODULE`, and generic groups ride `FUNCTOR`.
-Supplying a pairwise combiner needs a function *value*, today obtained with a
-`LET and = (FN …)` before the group; a registration-free anonymous-value form
-(anonymous functions and modules) would let it inline, but that is a separate
-concern, not a prerequisite. Group laws and generic-over-groups *implicit*
-dispatch ride the modular-implicits stage on top of this surface; that payoff
-lives with stage 5, not here.

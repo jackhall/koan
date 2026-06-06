@@ -16,15 +16,15 @@ kind; there is no `KType::TypeVar`.
 
 The mechanism:
 
-- **Type-returning builtins are ordinary builtins.** `LIST_OF`,
-  `DICT_OF`, `MODULE_TYPE_OF` and the like dispatch and
+- **Type-returning builtins are ordinary builtins.** The keyworded type
+  constructors (`LIST OF`, `MAP _ -> _`) and the like dispatch and
   execute on the value path; their result is the elaborated type carried
-  in `KObject::KTypeValue(KType)`. A `LET MyList = (LIST_OF Number)`
+  in `KObject::KTypeValue(KType)`. A `LET MyList = :(LIST OF Number)`
   binding finalizes once and makes `MyList` available as a type name in
   subsequent FN signatures with no per-lookup re-elaboration.
 - **Type expressions in source position re-elaborate to a synthesized
-  call.** A parameter or return type written as `(LIST_OF Number)` (or
-  `:(LIST OF Number)`) is dispatched directly as a sub-expression whose value
+  call.** A parameter or return type written as `:(LIST OF Number)`
+  is dispatched directly as a sub-expression whose value
   is a `KType`. Bare type identifiers in FN signatures park on the
   binding's scheduler placeholder via the same `notify_list` /
   `pending_deps` machinery value-name forward references use; recursive

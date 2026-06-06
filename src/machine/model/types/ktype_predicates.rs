@@ -2,8 +2,11 @@
 //! ordering for dispatch tie-breaking on `KType`. See
 //! [design/typing/ktype.md](../../../../design/typing/ktype.md).
 
-use super::ktype::{KType, UserTypeKind};
+use std::rc::Rc;
+
+use super::ktype::KType;
 use super::record::Record;
+use super::recursive_set::NominalKind;
 use super::signature::{ExpressionSignature, SignatureElement};
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
 use crate::machine::model::values::KObject;
@@ -126,17 +129,11 @@ impl<'a> KType<'a> {
                 }
                 true
             }
-            (UserType { kind: a, .. }, AnyUserType { kind: b }) if a == b => true,
-            (
-                Mu {
-                    binder: ba,
-                    body: a,
-                },
-                Mu {
-                    binder: bb,
-                    body: b,
-                },
-            ) if ba == bb => a.is_more_specific_than(b),
+            // A sealed nominal member is more specific than the `AnyUserType` wildcard of
+            // the same surface family — read the member's `kind` off its set, by index.
+            (SetRef { set, index }, AnyUserType { kind: b }) if set.member(*index).kind == *b => {
+                true
+            }
             (ConstructorApply { ctor: ca, args: aa }, ConstructorApply { ctor: cb, args: ab })
                 if ca == cb && aa.len() == ab.len() =>
             {
@@ -234,14 +231,10 @@ impl<'a> KType<'a> {
             KType::AnySignature => matches!(obj, KObject::KTypeValue(KType::Signature { .. })),
             KType::AnyUserType { kind } => matches!(
                 (kind, obj),
-                (UserTypeKind::Struct { .. }, KObject::Struct { .. })
-                    | (UserTypeKind::Tagged { .. }, KObject::Tagged { .. })
-                    | (UserTypeKind::Newtype { .. }, KObject::Wrapped { .. })
+                (NominalKind::Struct, KObject::Struct { .. })
+                    | (NominalKind::Tagged, KObject::Tagged { .. })
+                    | (NominalKind::Newtype, KObject::Wrapped { .. })
             ),
-            // One-unfold. No runtime value carries a `RecursiveRef`, so this can't
-            // recurse onto one; cycle-gating waits on a real carrier.
-            KType::Mu { body, .. } => body.matches_value(obj),
-            KType::RecursiveRef(_) => true,
             // A stamped `type_args` carrier (from ascription) takes precedence and is
             // checked structurally per-arg; an erased carrier falls back to checking the
             // inhabited tag's payload against the arg that field maps to (see
@@ -250,18 +243,21 @@ impl<'a> KType<'a> {
                 KObject::Tagged {
                     tag,
                     value,
-                    name,
-                    scope_id,
+                    set,
+                    index,
                     type_args,
                 } => {
+                    // Ctor identity is `(set ptr, index)` — the same shallow key dispatch
+                    // uses everywhere, never a schema descent.
                     let ctor_matches = matches!(
                         ctor.as_ref(),
-                        KType::UserType { name: cn, scope_id: cs, .. }
-                            if cn == name && cs == scope_id
+                        KType::SetRef { set: cset, index: ci }
+                            if Rc::ptr_eq(cset, set) && ci == index
                     );
                     if !ctor_matches {
                         return false;
                     }
+                    let name = set.member(*index).name.as_str();
                     if !type_args.is_empty() {
                         return type_args.len() == args.len()
                             && type_args
@@ -352,6 +348,7 @@ impl<'a> KType<'a> {
             },
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
             KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
+            KType::SigiledTypeExpr => matches!(part, ExpressionPart::SigiledTypeExpr(_)),
             // A `KTypeValue` carrier of a first-class module or signature is NOT a
             // `TypeExprRef` admission — those route through the dedicated `AnyModule` /
             // `AnySignature` / `Module` / `Signature` slot shapes. Otherwise an
@@ -371,22 +368,23 @@ impl<'a> KType<'a> {
                 ExpressionPart::Type(_) => true,
                 ExpressionPart::Future(KObject::KTypeValue(KType::Module { .. }))
                 | ExpressionPart::Future(KObject::KTypeValue(KType::Signature { .. })) => false,
-                // Struct / union / Result type tokens flow as `KTypeValue(UserType)` now —
+                // Struct / union / Result type tokens flow as `KTypeValue(SetRef)` —
                 // admitted by this arm (no separate schema-carrier variant).
                 ExpressionPart::Future(KObject::KTypeValue(_)) => true,
                 _ => false,
             },
-            // Strict equality is the abstraction-barrier check for opaquely-ascribed
-            // module abstract types (`Foo.Type`).
-            KType::UserType { .. } => {
+            // Strict `(set ptr, index)` equality is the per-declaration identity check for a
+            // sealed nominal type — `obj.ktype()` yields a `SetRef` whose `PartialEq` keys on
+            // the shared allocation and index.
+            KType::SetRef { .. } => {
                 matches!(part, ExpressionPart::Future(obj) if &obj.ktype() == self)
             }
             KType::AnyUserType { kind } => match part {
                 ExpressionPart::Future(obj) => matches!(
                     (kind, obj),
-                    (UserTypeKind::Struct { .. }, KObject::Struct { .. })
-                        | (UserTypeKind::Tagged { .. }, KObject::Tagged { .. })
-                        | (UserTypeKind::Newtype { .. }, KObject::Wrapped { .. })
+                    (NominalKind::Struct, KObject::Struct { .. })
+                        | (NominalKind::Tagged, KObject::Tagged { .. })
+                        | (NominalKind::Newtype, KObject::Wrapped { .. })
                 ),
                 _ => false,
             },
@@ -429,8 +427,14 @@ impl<'a> KType<'a> {
                 }
                 _ => false,
             },
-            KType::Mu { body, .. } => body.accepts_part(part),
+            // Transient / intra-set leaves never reach a real argument slot: `RecursiveRef`
+            // is sealed away before dispatch, and `SetLocal` only appears inside a member's
+            // schema (reached by navigation, which carries the ambient set).
             KType::RecursiveRef(_) => true,
+            KType::SetLocal(_) => false,
+            // A whole-set handle names a group of types, not a value type — it admits no
+            // argument; the `RECURSIVE TYPES` group name is a reserved value-language seam.
+            KType::RecursiveGroup(_) => false,
             // Confined to a synthesized FN/FUNCTOR `ret` slot — never a free-standing
             // argument slot, so it admits nothing on its own.
             KType::DeferredReturn(_) => false,

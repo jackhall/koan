@@ -66,12 +66,8 @@ fn struct_construction_via_type_token() {
     run(scope, "STRUCT Point = (x :Number, y :Number)");
     let result = run_one(scope, parse_one("Point {x = 3, y = 4}"));
     match result {
-        KObject::Struct {
-            name: type_name,
-            fields,
-            ..
-        } => {
-            assert_eq!(type_name, "Point");
+        KObject::Struct { set, index, fields } => {
+            assert_eq!(set.member(*index).name, "Point");
             assert_eq!(fields.len(), 2);
             assert!(matches!(fields.get("x"), Some(KObject::Number(n)) if *n == 3.0));
             assert!(matches!(fields.get("y"), Some(KObject::Number(n)) if *n == 4.0));

@@ -16,20 +16,31 @@ child scope lives only as long as its [`CallArena`](../../src/machine/core/arena
 held — its arena drops per-frame, the TCO/Done reclamation that keeps loops O(1) memory. The
 scheduler papers over the gap by fabricating `'a` for that shorter-lived scope: the unsafe
 `anchored_parts` re-anchor and the `Node.scope: &'a` store both stand in for a lifetime the
-borrow checker is never shown. The single `'a` is itself load-bearing — nodes store work
+borrow checker is never shown. One such `Node.scope` capture is unavoidable and surface-independent:
+a deferred computed return type (`-> Er.Type`, `-> :(Set WITH {…})`) that references a parameter
+spawns a per-call sub-Dispatch bound to the per-call `child`
+([`invoke.rs`](../../src/machine/core/kfunction/invoke.rs)) — inherent to the deferral mechanism
+(every `:(…)`/dotted computed return rides it; made memory-safe by the Combine's per-call-frame Rc),
+so the split carries it like every other per-call scope rather than retiring it. The single `'a` is
+itself load-bearing — nodes store work
 built in an earlier step and read each other's outputs across steps
 (`read_result -> &'a KObject<'a>`), so it genuinely must span the whole run; per-call scopes
 are the one thing nested strictly inside it, and the only thing that needs a shorter one.
 
-**Impact.**
+**Acceptance criteria.**
 
-- Per-call scopes carry their real frame lifetime, so the scheduler stores a borrow whose
-  extent the borrow checker tracks rather than a fabricated run-length one.
-- A branded/yoked frame handle becomes expressible: with a distinct frame lifetime to bind
-  to, [Type-enforced frame re-anchor](type-enforced-frame-reanchor.md) can make a re-anchor
-  that outlives its frame a compile error and retire its Miri integration pins.
-- The dispatch/builtin surface states the scope↦output lifetime relationship in types,
-  replacing the arena-drop-order convention that today carries it implicitly.
+- Per-call frame scopes carry a frame lifetime `'s` distinct from the run `'a`, so the
+  borrow the scheduler stores for a frame scope has its true (shorter) extent tracked by the
+  borrow checker.
+- The dispatch chain (`run_dispatch` → `DispatchCtx` → `BuiltinFn` → `BodyResult` →
+  `SchedulerHandle`) is `'s`-polymorphic with `'a: 's`, so a frame-bounded scope feeds into
+  dispatch and lifts to `'a` only at the `lift_kobject` Done boundary — supplying the distinct
+  frame lifetime that [Type-enforced frame re-anchor](type-enforced-frame-reanchor.md) binds
+  its brand to.
+- The dispatch/builtin surface states the scope↦output lifetime relationship in its types
+  rather than carrying it through the arena-drop-order convention.
+- The `recursive_eval_no_uaf` test runs green under `MIRIFLAGS=-Zmiri-tree-borrows` and is
+  admitted to [`observe/miri_slate.md`](../../observe/miri_slate.md).
 
 **Directions.**
 
@@ -84,10 +95,21 @@ are the one thing nested strictly inside it, and the only thing that needs a sho
   separate seed, just the one `anchored_parts → yoke` conversion that flips alongside the first
   tail path to need it. Ordering constraints: the root-yoke above lands before widening, and
   each seed needs the widening to reach its `lift_kobject` boundary before it can flip.
+- *Tree-borrows UB witness — open.* The `recursive_eval_no_uaf` test (EVAL re-dispatched
+  under TCO) trips a tree-borrows Undefined Behavior under
+  `MIRIFLAGS=-Zmiri-tree-borrows` — a forbidden read through a per-call frame-scope borrow,
+  the fabricated run-length `'a` over-stating the frame's true extent. Stacked borrows
+  misses it, so the test is absent from [`observe/miri_slate.md`](../../observe/miri_slate.md).
+  Treat clearing this UB — and admitting the test to the slate once green — as an acceptance
+  check for the split: with per-call scopes carrying their honest frame lifetime, the
+  over-wide borrow tree-borrows rejects should no longer be expressible.
 
 ## Dependencies
 
-**Requires:** none — foundational engine-internal rework of the scheduler's lifetime model.
+**Requires:** none — the per-call deferred-return scope capture this would otherwise wait on is
+inherent to the deferral mechanism (see Problem), not a surface that another item can retire.
 
-**Unblocks:** [Type-enforced frame re-anchor](type-enforced-frame-reanchor.md) — supplies the
-distinct frame lifetime that a compile-time re-anchor brand binds to.
+**Unblocks:**
+
+- [Type-enforced frame re-anchor](type-enforced-frame-reanchor.md) — supplies the distinct
+  frame lifetime that a compile-time re-anchor brand binds to.

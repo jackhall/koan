@@ -2,11 +2,25 @@
 
 use super::*;
 use crate::builtins::default_scope;
-use crate::machine::model::types::{KType, Record};
+use crate::machine::model::types::{KType, NominalSchema, Record, RecursiveSet};
 use crate::machine::model::KObject;
-use crate::machine::CallArena;
+use crate::machine::{CallArena, ScopeId};
 
 use super::{alloc_local_kf, defeat_fast_path};
+
+/// A singleton tagged set named `name`, for a lift-test carrier identity.
+fn tagged_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
+    RecursiveSet::singleton(
+        name.into(),
+        scope_id,
+        NominalSchema::Tagged(std::collections::HashMap::new()),
+    )
+}
+
+/// A singleton struct set named `name`, for a lift-test carrier identity.
+fn struct_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
+    RecursiveSet::singleton(name.into(), scope_id, NominalSchema::Struct(Record::new()))
+}
 
 /// `List<Dict<KFunction>>` drives `any_descendant` recursion through both the
 /// Dict arm and the nested-List arm down to the KFunction leaf.
@@ -55,8 +69,8 @@ fn list_of_tagged_with_kfunction_anchors_via_recursion() {
     let tagged = KObject::Tagged {
         tag: "T".into(),
         value: Rc::new(KObject::KFunction(kf_ref, None)),
-        scope_id: ScopeId::next(),
-        name: "Carrier".into(),
+        set: tagged_set("Carrier", ScopeId::next()),
+        index: 0,
         type_args: std::rc::Rc::new(vec![]),
     };
     let outer = KObject::list(vec![tagged]);
@@ -197,8 +211,8 @@ fn list_with_struct_and_kexpression_descendants_clones_rc() {
 
     let fields: IndexMap<String, KObject> = IndexMap::new();
     let s = KObject::Struct {
-        name: "S".into(),
-        scope_id: ScopeId::next(),
+        set: struct_set("S", ScopeId::next()),
+        index: 0,
         fields: Rc::new(fields),
     };
     let e = KObject::KExpression(KExpression::new(vec![]));
@@ -338,11 +352,12 @@ fn tagged_no_borrow_clones_inner_rc() {
 
     let inner = Rc::new(KObject::Number(42.0));
     let sid = ScopeId::next();
+    let set = tagged_set("Maybe", sid);
     let tagged = KObject::Tagged {
         tag: "Just".into(),
         value: Rc::clone(&inner),
-        scope_id: sid,
-        name: "Maybe".into(),
+        set: Rc::clone(&set),
+        index: 0,
         type_args: std::rc::Rc::new(vec![]),
     };
     let before = Rc::strong_count(&inner);
@@ -353,8 +368,7 @@ fn tagged_no_borrow_clones_inner_rc() {
         KObject::Tagged {
             tag,
             value,
-            scope_id,
-            name,
+            set: lifted_set,
             ..
         } => {
             assert!(
@@ -362,16 +376,18 @@ fn tagged_no_borrow_clones_inner_rc() {
                 "no-borrow Tagged must reuse inner Rc"
             );
             assert_eq!(tag, "Just");
-            assert_eq!(name, "Maybe");
-            assert_eq!(scope_id, sid);
+            assert!(
+                Rc::ptr_eq(&lifted_set, &set),
+                "lift shares the RecursiveSet by Rc::clone"
+            );
         }
         other => panic!("expected Tagged, got {:?}", other.ktype()),
     }
     assert_eq!(count_after, before + 1);
 }
 
-/// Tagged wrapping a borrowing KFunction must rebuild and propagate
-/// `(scope_id, name)` unchanged through the rebuild branch.
+/// Tagged wrapping a borrowing KFunction must rebuild and share the same `RecursiveSet`
+/// (`Rc::clone`) through the rebuild branch.
 #[test]
 fn tagged_with_local_kfunction_rebuilds_and_anchors() {
     use crate::machine::ScopeId;
@@ -381,11 +397,12 @@ fn tagged_with_local_kfunction_rebuilds_and_anchors() {
     let kf_ref = alloc_local_kf(&dying);
 
     let sid = ScopeId::next();
+    let set = tagged_set("Carrier", sid);
     let tagged = KObject::Tagged {
         tag: "Wrap".into(),
         value: Rc::new(KObject::KFunction(kf_ref, None)),
-        scope_id: sid,
-        name: "Carrier".into(),
+        set: Rc::clone(&set),
+        index: 0,
         type_args: std::rc::Rc::new(vec![]),
     };
     let before = Rc::strong_count(&dying);
@@ -396,13 +413,13 @@ fn tagged_with_local_kfunction_rebuilds_and_anchors() {
         KObject::Tagged {
             tag,
             value,
-            scope_id,
-            name,
+            set: lifted_set,
             ..
         } => {
+            assert!(Rc::ptr_eq(&lifted_set, &set), "lift shares the set");
             assert_eq!(tag, "Wrap");
-            assert_eq!(name, "Carrier");
-            assert_eq!(scope_id, sid);
+            assert_eq!(lifted_set.member(0).name, "Carrier");
+            assert_eq!(lifted_set.member(0).scope_id, sid);
             match &*value {
                 KObject::KFunction(_, frame) => assert!(frame.is_some()),
                 other => panic!("expected nested KFunction, got {:?}", other.ktype()),
@@ -411,4 +428,124 @@ fn tagged_with_local_kfunction_rebuilds_and_anchors() {
         other => panic!("expected Tagged, got {:?}", other.ktype()),
     }
     assert_eq!(count_after, before + 1);
+}
+
+/// A `KTypeValue` carrying a *recursive* `SetRef` (a self-recursive STRUCT type value)
+/// lifts across the dying arena by `Rc::clone` of the whole set — no copy, no anchor. After
+/// lift the set is still navigable (its self-edge `SetLocal` resolves back to the lifted
+/// member). Mirrors `recursive_tagged_match_no_uaf`: the type value escapes the call arena
+/// that built it without UAF.
+#[test]
+fn recursive_setref_type_value_lifts_by_rc_clone() {
+    use crate::machine::model::types::{NominalKind, NominalMember, NominalSchema};
+    let arena = RuntimeArena::new();
+    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let dying = CallArena::new(scope, None);
+    defeat_fast_path(&dying);
+
+    // A self-recursive `Tree` whose `children` field is `List(SetLocal(0))` — the shape a
+    // `STRUCT Tree = (children :(LIST OF Tree))` seals into.
+    let member = NominalMember::pending("Tree".into(), ScopeId::next(), NominalKind::Struct);
+    member.fill(NominalSchema::Struct(Record::from_pairs(vec![(
+        "children".into(),
+        KType::List(Box::new(KType::SetLocal(0))),
+    )])));
+    let set = Rc::new(RecursiveSet::new(vec![member]));
+    let type_value = KObject::KTypeValue(KType::SetRef {
+        set: Rc::clone(&set),
+        index: 0,
+    });
+    let before = Rc::strong_count(&set);
+
+    let lifted = lift_kobject(&type_value, &dying);
+
+    // Lift `Rc::clone`d the set — the strong count rose, and the lifted value's set is the
+    // same allocation, so the recursive group travels as one unit.
+    assert_eq!(Rc::strong_count(&set), before + 1);
+    match &lifted {
+        KObject::KTypeValue(KType::SetRef {
+            set: lifted_set,
+            index,
+        }) => {
+            assert!(
+                Rc::ptr_eq(lifted_set, &set),
+                "lift must share the same RecursiveSet allocation",
+            );
+            // Navigable: the member's self-edge `SetLocal(0)` survives the lift.
+            let borrow = lifted_set.member(*index).schema();
+            match borrow.as_ref() {
+                Some(NominalSchema::Struct(fields)) => {
+                    assert_eq!(
+                        fields.get("children"),
+                        Some(&KType::List(Box::new(KType::SetLocal(0))))
+                    );
+                }
+                other => panic!("expected a navigable Struct schema after lift, got {other:?}"),
+            }
+        }
+        other => panic!(
+            "expected a KTypeValue(SetRef) after lift, got {:?}",
+            other.ktype()
+        ),
+    }
+}
+
+/// A recursive STRUCT *value* (`KObject::Struct` carrying a `SetRef` into a self-recursive
+/// set) lifts across the dying arena by sharing the set's `Rc` — the recursive group travels
+/// as one unit and stays navigable (the `children` field type is the self-edge
+/// `SetLocal(0)`). Builds the value directly so the assertion targets the lift path without
+/// FN-dispatch incidentals.
+#[test]
+fn recursive_struct_value_lifts_and_navigates() {
+    use crate::machine::model::types::{NominalKind, NominalMember, NominalSchema};
+    use indexmap::IndexMap;
+    let arena = RuntimeArena::new();
+    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let dying = CallArena::new(scope, None);
+    defeat_fast_path(&dying);
+
+    let member = NominalMember::pending("Tree".into(), ScopeId::next(), NominalKind::Struct);
+    member.fill(NominalSchema::Struct(Record::from_pairs(vec![(
+        "children".into(),
+        KType::List(Box::new(KType::SetLocal(0))),
+    )])));
+    let set = Rc::new(RecursiveSet::new(vec![member]));
+    let mut fields: IndexMap<String, KObject> = IndexMap::new();
+    fields.insert("children".into(), KObject::list(vec![]));
+    let tree_value = KObject::Struct {
+        set: Rc::clone(&set),
+        index: 0,
+        fields: Rc::new(fields),
+    };
+    let before = Rc::strong_count(&set);
+
+    let lifted = lift_kobject(&tree_value, &dying);
+
+    assert_eq!(
+        Rc::strong_count(&set),
+        before + 1,
+        "lift Rc::clones the set"
+    );
+    match &lifted {
+        KObject::Struct {
+            set: lifted_set,
+            index,
+            ..
+        } => {
+            assert!(
+                Rc::ptr_eq(lifted_set, &set),
+                "lift shares the set allocation"
+            );
+            let borrow = lifted_set.member(*index).schema();
+            match borrow.as_ref() {
+                Some(NominalSchema::Struct(fields)) => assert_eq!(
+                    fields.get("children"),
+                    Some(&KType::List(Box::new(KType::SetLocal(0)))),
+                    "the lifted Tree's self-reference must still be SetLocal(0)",
+                ),
+                other => panic!("expected a navigable Struct schema, got {other:?}"),
+            }
+        }
+        other => panic!("expected a lifted Struct value, got {:?}", other.ktype()),
+    }
 }

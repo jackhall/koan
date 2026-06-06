@@ -18,23 +18,17 @@ This is the differentiating coherence story. Strict trait systems (Rust,
 Haskell) prevent it via global orphan rules; lax ones (Scala) silently pick.
 Property-tested coherence is a third option.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *Silent ambiguity when it's safe.* Two `Ord` instances that agree on every
-  input no longer force the user to disambiguate manually — agreement under
-  property testing means the choice doesn't matter and the resolver picks
-  silently.
-- *Mechanical safety net for scoped implicits.* Without global orphan rules,
-  two scopes could each pick a different-but-valid implicit and produce
-  silent wrong answers when values built under one ordering get queried
-  under another. Property-tested equivalence catches this — disagreement
-  becomes a counterexample-bearing error instead of a silent corruption.
-- *Hash-style operations get the right error.* Two `Hash` implementations
-  always disagree on most inputs (different hash functions are different
-  functions). Property testing flags this immediately; the design treats it
-  as a feature — disagreement is the signal that mixing the two breaks
-  `HashMap` correctness, regardless of whether each implementation is
-  individually valid.
+- When two `Ord` candidates agree under property testing on every sampled
+  input, the resolver picks one silently rather than raising stage 5's
+  ambiguity error.
+- When two candidate implicits for the same signature disagree on a sampled
+  input, the resolver raises a counterexample-bearing error naming the
+  disagreeing inputs and outputs.
+- Two distinct `Hash` implementations resolved for the same signature
+  disagree under property testing and produce that counterexample-bearing
+  error.
 
 **Directions.**
 

@@ -21,18 +21,20 @@ any lexical-frame cutoff (`visible()`, `bindings.rs`). There is also no dedicate
 (`bindings.rs` `try_apply`) only fires on a collision in the *local* map, which
 for builtins is the root alone.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *Builtin lookups resolve without walking to root.* The hottest names reach a
-  binding at the current scope, so resolution cost stops scaling with call and
-  recursion depth.
-- *Builtins become ordinary bindings, not a visibility special case.* Present in
-  every scope, they no longer need the `idx == 0`-always-visible carve-out, and the
-  no-shadow invariant for Name-keyed builtins is enforced by the same `Rebind`
-  machinery everywhere rather than only at the root scope.
-- *Function and operator builtins stay overloadable.* A user FN or operator over a
-  builtin keyword keeps accumulating as a dispatch overload, now resolved against a
-  locally-present bucket.
+- The hottest names (operators, `PRINT`, dispatch primitives) resolve to a
+  binding at the current scope, so resolution cost is constant in call and
+  recursion depth rather than O(scope depth).
+- Builtins are present in every scope as ordinary bindings, and the
+  `idx == 0`-always-visible carve-out in
+  [`bindings.rs`](../../src/machine/core/bindings.rs) is gone.
+- A user binding that collides with a Name-keyed builtin (a type) raises the
+  same `Rebind` error at any scope depth, enforced by the ordinary `try_apply`
+  machinery rather than a root-only collision.
+- A user FN or operator over a builtin keyword accumulates as a dispatch
+  overload resolved against the locally-present seeded bucket, and dispatch
+  still picks the builtin overload by specificity when no user overload matches.
 
 **Directions.**
 
@@ -61,16 +63,15 @@ for builtins is the root alone.
   seeding a bucket must preserve the builtin overloads, never replace them.
 - *Drop the builtin visibility carve-out — open.* With builtins present in every
   scope, the `idx == 0`-always-visible rule is redundant; confirm nothing else
-  relies on it (notably its interaction with the `nominal_binder` cutoff carve-out)
-  before removing.
+  relies on it before removing.
 
 ## Dependencies
+
+A sibling of the other refactor-hygiene items, independent of them; reshapes the
+scope-lookup layer
+([design/typing/lookup-protocol.md](../../design/typing/lookup-protocol.md)), so
+update that doc when it lands.
 
 **Requires:** none — engine-internal.
 
 **Unblocks:** none tracked yet.
-
-This reshapes the scope-lookup layer described in
-[design/typing/lookup-protocol.md](../../design/typing/lookup-protocol.md); update
-that doc when it lands. A sibling of the other refactor-hygiene items, independent
-of them.

@@ -7,10 +7,9 @@
 //!
 //! Borrow discipline across the maps: `types → functions → data`.
 //!
-//! Every entry is tagged with a [`BindingIndex`]. `idx == 0` is reserved for
-//! builtins. `nominal_binder: true` (STRUCT / UNION / SIG / FUNCTOR / MODULE)
-//! lets siblings on the same block see one another's nominal identities
-//! regardless of source order (mutual recursion).
+//! Every entry is tagged with a [`BindingIndex`]. `idx == 0` is reserved for builtins;
+//! otherwise the entry is gated by the strict-lexical cutoff `idx < c`, so a forward
+//! reference (a later-positioned binding) is invisible — type binders included.
 //!
 //! Production reads use the visibility-aware [`Bindings::lookup_value`] /
 //! [`Bindings::lookup_type`] / [`Bindings::lookup_function`], passing a
@@ -61,41 +60,25 @@ pub struct FunctionLookup<'a> {
     pub pending: Option<NodeId>,
 }
 
-/// Lexical position of a binding's installing statement.
-///
-/// `nominal_binder: true` exempts the entry from the strict-lexical cutoff so
-/// STRUCT / UNION / SIG / FUNCTOR / MODULE siblings see one another regardless
-/// of source order (mutual recursion). `idx == 0` is reserved for builtins;
-/// per-block indices restart inside nested blocks (see
+/// Lexical position of a binding's installing statement: a binding at `idx` is visible to a
+/// consumer at cutoff `c` iff `idx < c`. Every binder — value and type alike — gates its
+/// references against its own position, so a forward reference is a position error and
+/// mutual recursion is expressed with a `RECURSIVE TYPES` block. `idx == 0` is reserved for
+/// builtins; per-block indices restart inside nested blocks (see
 /// [`crate::machine::core::scope::Scope::resolve`] for the predicate).
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct BindingIndex {
     pub idx: usize,
-    pub nominal_binder: bool,
 }
 
 impl BindingIndex {
-    pub const BUILTIN: BindingIndex = BindingIndex {
-        idx: 0,
-        nominal_binder: false,
-    };
+    pub const BUILTIN: BindingIndex = BindingIndex { idx: 0 };
 
-    /// LET, FN body capture, MATCH / TRY `it`, FN parameters: strictly
-    /// lexically gated, sees only earlier-positioned siblings.
+    /// A binding at lexical position `idx`. FN / STRUCT / etc. all install here; FN
+    /// *parameters* and MATCH / TRY `it` sit at `idx 0`, with the body's statements at
+    /// `idx >= 1`, so the strict `idx < cutoff` predicate admits them.
     pub const fn value(idx: usize) -> Self {
-        BindingIndex {
-            idx,
-            nominal_binder: false,
-        }
-    }
-
-    /// STRUCT, named UNION, SIG, FUNCTOR, MODULE: visible to siblings on the
-    /// same block regardless of source order.
-    pub const fn nominal(idx: usize) -> Self {
-        BindingIndex {
-            idx,
-            nominal_binder: true,
-        }
+        BindingIndex { idx }
     }
 }
 
@@ -126,15 +109,17 @@ pub struct Bindings<'a> {
     /// expression resolves in a single hit and a cross-group mix simply misses.
     /// Walked through the scope chain like every other name (innermost visible wins).
     operators: RefCell<HashMap<String, (&'a OperatorGroup, BindingIndex)>>,
-    /// In-flight named-type binders (STRUCT / named-UNION). Consulted by the
-    /// elaborator's `Resolution::Placeholder` arm to record dependency edges
-    /// and run DFS cycle detection. See [`pending`] for the surface methods.
+    /// In-flight named-type binders (STRUCT / named-UNION). A consumer referencing an
+    /// earlier still-finalizing type parks on its producer node; this map marks which names
+    /// are in flight. See [`pending`] for the surface methods.
     pending: PendingTypes<'a>,
-    /// Scope-bound `TypeName` → `&KType` resolution cache. Monotonic — entries
-    /// are written only when the elaborated `KType` and every user-type it
-    /// references are fully finalized; the finalize gate prevents caching
-    /// mid-SCC pre-close identities.
-    type_expr_memo: RefCell<HashMap<TypeName, &'a KType<'a>>>,
+    /// Scope-bound `TypeName` → `&KType` resolution cache. Monotonic — entries are written
+    /// only when the elaborated `KType` and every user-type it references are fully
+    /// finalized; the finalize gate prevents caching a not-yet-sealed type.
+    /// Keyed by `(TypeName, chain cutoff)`: a forward consumer (smaller cutoff) and a
+    /// backward consumer (larger cutoff) at the same scope resolve the same name to
+    /// different verdicts under lexical gating, so they must not share a cache entry.
+    type_expr_memo: RefCell<HashMap<(TypeName, Option<usize>), &'a KType<'a>>>,
 }
 
 impl<'a> Bindings<'a> {
@@ -151,8 +136,15 @@ impl<'a> Bindings<'a> {
         }
     }
 
-    pub fn type_expr_memo_get(&self, te: &TypeName) -> Option<&'a KType<'a>> {
-        self.type_expr_memo.borrow().get(te).copied()
+    pub fn type_expr_memo_get(
+        &self,
+        te: &TypeName,
+        cutoff: Option<usize>,
+    ) -> Option<&'a KType<'a>> {
+        self.type_expr_memo
+            .borrow()
+            .get(&(te.clone(), cutoff))
+            .copied()
     }
 
     /// Per-scope value-side lookup. Consults `data` then `placeholders`,
@@ -297,31 +289,21 @@ impl<'a> Bindings<'a> {
             .collect()
     }
 
-    /// `BindingIndex` of an installed placeholder, ignoring visibility.
-    /// Cycle-close in `model/types/resolver.rs` re-stamps the placeholder's
-    /// lexical position so the downstream finalize (`register_type_upsert`)
-    /// installs at the matching index. Other reads should go through
-    /// [`Self::lookup_value`].
-    pub fn placeholder_index(&self, name: &str) -> Option<BindingIndex> {
-        self.placeholders.borrow().get(name).map(|(_, idx)| *idx)
-    }
-
-    /// Visibility predicate: `None` ⇒ everything visible; `Some(c)` ⇒
-    /// `b.nominal_binder || b.idx < c`. Mirrors
-    /// [`crate::machine::core::scope::visible`].
+    /// Visibility predicate: `None` ⇒ everything visible; `Some(c)` ⇒ `b.idx < c`.
+    /// Mirrors [`crate::machine::core::scope::visible`].
     fn visible(b: BindingIndex, chain_cutoff: Option<usize>) -> bool {
         match chain_cutoff {
             None => true,
-            Some(c) => b.nominal_binder || b.idx < c,
+            Some(c) => b.idx < c,
         }
     }
 
     /// Insert `(te → kt)` into the resolution cache. Caller arena-allocates
     /// `kt` and gates on finalize. Monotonic: a collision means equal values,
     /// so we keep the existing entry rather than panic.
-    pub fn type_expr_memo_insert(&self, te: TypeName, kt: &'a KType<'a>) {
+    pub fn type_expr_memo_insert(&self, te: TypeName, cutoff: Option<usize>, kt: &'a KType<'a>) {
         let mut memo = self.type_expr_memo.borrow_mut();
-        memo.entry(te).or_insert(kt);
+        memo.entry((te, cutoff)).or_insert(kt);
     }
 
     #[cfg(test)]
@@ -369,9 +351,9 @@ impl<'a> Bindings<'a> {
             .unwrap_or_else(|| panic!("expected bindings.types[{name:?}] to be present"))
     }
 
-    /// SCC pre-registration map. Writers: [`Bindings::insert_pending_type`]
-    /// (Drop on the guard removes the entry) and
-    /// [`Bindings::record_pending_edge`].
+    /// In-flight named-type binder map. The sole non-test writer is
+    /// [`Bindings::insert_pending_type`] (the guard's Drop removes the entry); a consumer
+    /// reads it to decide whether to park on an earlier still-finalizing type.
     pub fn pending_types(&self) -> Ref<'_, HashMap<String, PendingTypeEntry<'a>>> {
         self.pending.get()
     }
@@ -382,10 +364,6 @@ impl<'a> Bindings<'a> {
         entry: PendingTypeEntry<'a>,
     ) -> PendingBinderGuard<'a> {
         self.pending.insert(name, entry)
-    }
-
-    pub fn record_pending_edge(&self, from: &str, to: String) {
-        self.pending.record_edge(from, to);
     }
 
     /// Exercises the guard Drop's "tolerates absent entry" path.
@@ -440,13 +418,12 @@ impl<'a> Bindings<'a> {
     }
 
     /// Upsert `name` → `kt` in `types` for nominal finalize. Insert-if-absent;
-    /// on a `PartialEq`-equal existing entry **overwrite** the stored `&KType`
-    /// (and `index`) so the payload-empty identity an SCC cycle-close pre-installed
-    /// is replaced by the schema-bearing one finalize built. A non-equal existing
-    /// entry is a genuine collision — `Err(Rebind)`.
+    /// on a `PartialEq`-equal existing entry **overwrite** the stored `&KType` (and
+    /// `index`) so the `SetRef` an SCC seal pre-installed (same set + index) is rewritten
+    /// in place. A non-equal existing entry is a genuine collision — `Err(Rebind)`.
     ///
     /// Distinct from [`Self::try_register_type`], whose strict insert-if-absent arm
-    /// would `Rebind` on the cycle-close pre-install rather than overwrite it.
+    /// would `Rebind` on the seal pre-install rather than overwrite it.
     /// `Ok(Conflict)` on borrow contention. Best-effort placeholder clear on success.
     pub fn try_register_type_upsert(
         &self,
@@ -464,8 +441,8 @@ impl<'a> Bindings<'a> {
                     name: name.to_string(),
                 }));
             }
-            // Absent, or identity-equal (cycle-close pre-install): write the
-            // schema-bearing identity, replacing any payload-empty pre-install.
+            // Absent, or identity-equal (the seal's pre-installed `SetRef`): write the
+            // identity, rewriting any pre-install in place.
             _ => {
                 types.insert(name.to_string(), (kt, index));
             }
@@ -484,8 +461,8 @@ impl<'a> Bindings<'a> {
     /// idempotent on same-`NodeId` re-entry.
     ///
     /// The eventual `try_bind_value` / `try_register_*` call must carry the
-    /// same `index` (and `nominal_binder` flag) so the consumer's visibility
-    /// test stays consistent across the placeholder → finalized transition.
+    /// same `index` so the consumer's visibility test stays consistent across
+    /// the placeholder → finalized transition.
     pub fn try_install_placeholder(
         &self,
         name: String,

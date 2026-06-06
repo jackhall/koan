@@ -390,7 +390,7 @@ fn dispatch_list_any_overload_catches_heterogeneous_literal() {
 #[test]
 fn fn_with_parens_wrapped_list_of_param_accepts_matching_list() {
     let bytes = capture_program_output(
-        "FN (HEAD xs (LIST_OF Number)) -> Number = (1)\n\
+        "FN (HEAD xs :(LIST OF Number)) -> Number = (1)\n\
          PRINT (HEAD [1 2 3])",
     );
     assert_eq!(bytes, b"1\n");
@@ -399,7 +399,7 @@ fn fn_with_parens_wrapped_list_of_param_accepts_matching_list() {
 #[test]
 fn fn_with_nested_parens_wrapped_type_param_dispatches() {
     let bytes = capture_program_output(
-        "FN (HEAD xs (LIST_OF (LIST_OF Number))) -> Number = (1)\n\
+        "FN (HEAD xs :(LIST OF :(LIST OF Number))) -> Number = (1)\n\
          PRINT (HEAD [[1 2] [3]])",
     );
     assert_eq!(bytes, b"1\n");
@@ -409,7 +409,7 @@ fn fn_with_nested_parens_wrapped_type_param_dispatches() {
 #[test]
 fn fn_with_parens_wrapped_dict_of_param_accepts_matching_dict() {
     let bytes = capture_program_output(
-        "FN (SIZE d (DICT_OF Str Number)) -> Number = (1)\n\
+        "FN (SIZE d :(MAP Str -> Number)) -> Number = (1)\n\
          PRINT (SIZE {\"a\": 1, \"b\": 2})",
     );
     assert_eq!(bytes, b"1\n");

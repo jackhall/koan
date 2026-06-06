@@ -121,7 +121,7 @@ impl<'a> FnValueState<'a> {
 
     /// Resolve the already-bound head value to a [`ResolvedCallable`] and hand
     /// off to the shared apply-a-callable tail. A `KFunction` (functor or not)
-    /// is the `Function` arm; a `KTypeValue(UserType)` alias of a constructible
+    /// is the `Function` arm; a `KTypeValue(SetRef)` alias of a constructible
     /// type — `LET outcome = Outcome` then `(outcome (err "x"))` — is the
     /// `Constructor` arm, reading the schema off the identity
     /// `bindings.types[name]` holds. Anything else is a non-callable
@@ -135,7 +135,7 @@ impl<'a> FnValueState<'a> {
     ) -> Result<NodeStep<'a>, KError> {
         let callable = match head_obj {
             KObject::KFunction(f, _) => ResolvedCallable::Function(f),
-            KObject::KTypeValue(kt @ KType::UserType { .. }) => ResolvedCallable::Constructor(kt),
+            KObject::KTypeValue(kt @ KType::SetRef { .. }) => ResolvedCallable::Constructor(kt),
             other => {
                 return Ok(NodeStep::Done(NodeOutput::Err(KError::new(
                     KErrorKind::TypeMismatch {

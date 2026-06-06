@@ -167,6 +167,16 @@ impl<'a> Scheduler<'a> {
                 deps.push(sub_id);
                 Slot::Owned(pos)
             }
+            ExpressionPart::SigiledTypeExpr(_) => {
+                // A `:(...)` / dotted type value (`Er.Type`) is a type-context sub-Dispatch
+                // to a `KTypeValue`, like the keyworded eager-subs path — it cannot `resolve()`.
+                let wrapped =
+                    crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part)]);
+                let sub_id = self.add(NodeWork::dispatch(wrapped), scope);
+                let pos = deps.len();
+                deps.push(sub_id);
+                Slot::Owned(pos)
+            }
             ref p @ ExpressionPart::Identifier(_) if wrap_identifiers => {
                 self.resolve_aggregate_bare_name(p, scope, deps, park_producers)
             }

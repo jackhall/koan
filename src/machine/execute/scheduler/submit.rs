@@ -14,10 +14,9 @@ use super::Scheduler;
 
 /// Submission-time binder-install info — see [design/execution-model.md
 /// § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders)
-/// for the D7 carve-out and the per-bucket eager-slot mask rules.
+/// for the per-bucket eager-slot mask rules.
 struct BinderInstall {
     key: BinderKey,
-    is_nominal_binder: bool,
     eager_slot_mask: Vec<bool>,
 }
 
@@ -81,7 +80,6 @@ fn extract_binder_install<'a>(
         }
         return Some(BinderInstall {
             key: install_key,
-            is_nominal_binder: picked_fn.is_nominal_binder,
             eager_slot_mask: mask,
         });
     }
@@ -223,13 +221,11 @@ impl<'a> Scheduler<'a> {
         let owned_edges = work_owned_edges(&work);
         let no_owned = owned_edges.is_empty();
         let frame = self.active_frame.clone();
-        // Stamp the placeholder with the SAME `BindingIndex` the eventual
-        // `register_*` call at finalize will install: `idx` is the slot's
-        // lexical position; `nominal_binder` is the D7 carve-out flag.
-        let bind_index_for_placeholder = placeholder_install.as_ref().map(|p| BindingIndex {
-            idx: chain.index,
-            nominal_binder: p.is_nominal_binder,
-        });
+        // Stamp the placeholder at the binder's lexical position — the SAME `BindingIndex`
+        // the eventual `register_*` call at finalize installs.
+        let bind_index_for_placeholder = placeholder_install
+            .as_ref()
+            .map(|_| BindingIndex::value(chain.index));
         let pending_owned: Vec<NodeId> = owned_edges
             .iter()
             .map(|e| e.node_id())

@@ -33,12 +33,14 @@ pub fn body<'a>(
     let mut type_for_types_map: Option<KType<'a>> = None;
     let name = match bundle.get("name") {
         Some(KObject::KString(s)) => {
-            // Partition guard: value-classified binder names cannot carry a module
-            // or signature value. See design/typing/elaboration.md § Binding-map
-            // partition.
+            // Partition guard enforcing the language invariant: a value-classified
+            // (lowercase-leading) binder name cannot carry any type-language value.
+            // A type aliases only under a Type-classified name. See
+            // design/typing/elaboration.md § Binding-map partition.
             let kind = match value {
                 KObject::KTypeValue(KType::Module { .. }) => Some("module"),
                 KObject::KTypeValue(KType::Signature { .. }) => Some("signature"),
+                KObject::KTypeValue(_) | KObject::TypeNameRef(_) => Some("type"),
                 _ => None,
             };
             if let Some(kind) = kind {
@@ -75,7 +77,7 @@ pub fn body<'a>(
             | KType::Dict(_, _)
             | KType::KFunction { .. }
             | KType::KFunctor { .. }
-            | KType::Mu { .. }
+            | KType::SetLocal(_)
             | KType::RecursiveRef(_) => {
                 return err(KError::new(KErrorKind::ShapeError(format!(
                     "LET name must be a bare type name, got `{}`",
@@ -123,9 +125,8 @@ pub fn body<'a>(
     if let Some(kt) = type_for_types_map {
         // Identity-preserving alias: `LET P2 = OrderedSig` writes `bindings.types[P2]`
         // carrying the aliased type's original identity so `(PICK x: P2)` and
-        // `(PICK x: OrderedSig)` dispatch to the same overload. LET aliasing is
-        // value-style gated — no `nominal_binder` carve-out; that's reserved for
-        // STRUCT / SIG / FUNCTOR / MODULE / named UNION at their own install sites.
+        // `(PICK x: OrderedSig)` dispatch to the same overload. The alias binds at its
+        // own lexical position, like every other binder.
         //
         // A SIG-local type binding (`LET Type = Number` inside a SIG body) binds the
         // name-bearing `AbstractType { source: Sig(decl_scope) }` rather than the collapsed
@@ -139,11 +140,10 @@ pub fn body<'a>(
         // higher-kinded shape), so collapsing it to an abstract scalar would lose the
         // parameterization.
         let is_type_constructor = matches!(
-            kt,
-            KType::UserType {
-                kind: crate::machine::model::types::UserTypeKind::TypeConstructor { .. },
-                ..
-            }
+            &kt,
+            KType::SetRef { set, index }
+                if set.member(*index).kind
+                    == crate::machine::model::types::NominalKind::TypeConstructor
         );
         let kt = if scope.is_in_sig_body() && !is_type_constructor {
             KType::AbstractType {

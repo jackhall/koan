@@ -1,8 +1,9 @@
 //! Surface-name and `TypeName` → `KType` elaboration, plus join (LUB) for inferring
 //! container element types from heterogeneous values.
 
-use super::ktype::{KType, UserTypeKind};
+use super::ktype::KType;
 use super::record::Record;
+use super::recursive_set::NominalKind;
 use crate::machine::model::ast::TypeName;
 
 impl<'a> KType<'a> {
@@ -23,10 +24,10 @@ impl<'a> KType<'a> {
             "KExpression" => Some(KType::KExpression),
             "Type" => Some(KType::Type),
             "Tagged" => Some(KType::AnyUserType {
-                kind: UserTypeKind::tagged_sentinel(),
+                kind: NominalKind::Tagged,
             }),
             "Struct" => Some(KType::AnyUserType {
-                kind: UserTypeKind::struct_sentinel(),
+                kind: NominalKind::Struct,
             }),
             "Module" => Some(KType::AnyModule),
             "Signature" => Some(KType::AnySignature),

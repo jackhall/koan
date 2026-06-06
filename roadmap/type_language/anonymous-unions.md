@@ -4,32 +4,39 @@ Untagged disjunction types — `:(Number | Str | Bool)` — as a first-class
 type and value, distinct from today's nominal tagged `UNION`.
 
 **Problem.** koan has only nominal tagged unions: `UNION Name = (tag :Type…)`
-declares a `UserType { kind: Tagged { schema } }` whose values carry a tag
+declares a tagged-union nominal (a `RecursiveSet` member of `NominalKind::Tagged`) whose values carry a tag
 discriminant (`src/builtins/union.rs`). There is no untagged disjunction
 `KType` variant (`src/machine/model/types/ktype.rs`), and the `:(...)` type
 language has no union form. A function or MATCH / TRY that legitimately
 produces "a Number or a Str" must either declare a nominal tagged union and
 construct a tagged value in every arm, or coarsen the slot to `Any`.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *An anonymous structural union type `:(A | B | C)`.* An order-blind,
-  idempotent member set; a slot typed `:(A | B)` admits any value whose
-  type is one of the members. The union is the join of its members — each
+- An untagged disjunction type is spelled `:(A | B | C)` and resolves to a
+  dedicated union `KType` variant, distinct from a `NominalKind::Tagged`
+  nominal.
+- The member set is order-blind and idempotent: `:(A | B)` and `:(B | A)` are
+  the same type, and `:(A | A)` is `:A`.
+- A slot typed `:(A | B)` admits any value whose type is `A` or `B`, and each
   member is a subtype of the union.
-- *Ergonomic agreed return types.* The agreed `T` of an FN or a
+- The agreed `T` of an FN or a
   [MATCH / TRY arm](../../design/execution-model.md#arms-as-own-blocks) can be
-  `:(A | B)` without a nominal declaration.
-- *A union value is eliminated by ordinary type-dispatch.* Passing one to a
-  type-dispatched function selects the matching arm by the value's runtime
-  type, so consuming a union needs no new MATCH mode.
-- *A dedicated union-value constructor.* Construction is its own builtin,
-  decoupled from MATCH.
+  `:(A | B)` with no nominal declaration.
+- A union value passed to a type-dispatched function selects the arm matching
+  the value's runtime type.
+- A dedicated union-value constructor builtin constructs union values,
+  separate from MATCH.
+- A tagged union is expressible as the anonymous-union join of per-variant
+  `Newtype`s (with [tagged-union variants as dispatchable
+  types](tagged-variant-types.md)), so `NominalKind::Tagged` dissolves into
+  `Newtype` — the sum-side counterpart of the [struct → record-repr `NEWTYPE`
+  collapse](struct-newtype-collapse.md).
 
 **Directions.**
 
 - *New KType variant — decided.* An untagged disjunction `KType` variant,
-  distinct from `UserTypeKind::Tagged`. Member set order-blind and
+  distinct from a `NominalKind::Tagged` nominal. Member set order-blind and
   idempotent (`A | A = A`); admissibility is set-based (a `:(A | B)` slot
   admits A-typed and B-typed values).
 - *Construction — decided.* A dedicated union-value constructor builtin.
@@ -49,18 +56,13 @@ construct a tagged value in every arm, or coarsen the slot to `Any`.
 
 ## Dependencies
 
+Soft ordering: the underlying type and constructor builtin can be prototyped against
+a variadic type-constructor overload (the `RECORD` / nominal-`UNION` path) before the
+`|` surface lands.
+
 **Requires:**
 
 - [User-definable n-ary operators](../operator_chaining/n-ary-operators.md) — the `|`
   chaining surface rides its dispatched-operator machinery.
 
-**Unblocks:**
-
-- [Collapse `UserTypeKind` into a nominal-identity wrapper](nominal-identity-wrapper.md)
-  — the structural union `KType` this item adds is the repr a nominal tagged type
-  folds into.
-
-The underlying type and constructor builtin could be prototyped against a
-variadic type-constructor overload (the `RECORD` / nominal-`UNION` path)
-before the `|` surface lands. This item lets the shipped MATCH / TRY / FN
-declared return type be spelled as a structural union `:(A | B)`.
+**Unblocks:** none tracked yet.

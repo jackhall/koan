@@ -47,16 +47,47 @@ fn unbound_leaf_names_unknown_type() {
     }
 }
 
+/// A bare leaf naming a member of the enclosing `RECURSIVE TYPES` group lowers to a
+/// transient `RecursiveRef` back-edge — the block's threading, independent of source order.
+/// A non-member falls through to ordinary resolution.
+#[test]
+fn recursive_group_member_lowers_to_recursive_ref() {
+    let arena = RuntimeArena::new();
+    let parent = run_root_silent(&arena);
+    let set = std::rc::Rc::new(RecursiveSet::new(vec![
+        NominalMember::pending("A".into(), parent.id, NominalKind::Struct),
+        NominalMember::pending("B".into(), parent.id, NominalKind::Struct),
+    ]));
+    let child = arena.alloc_scope(Scope::child_recursive_group(parent, set));
+    let mut el = Elaborator::new(child);
+    match elaborate_type_expr(&mut el, &leaf("B")) {
+        ElabResult::Done(KType::RecursiveRef(name)) => assert_eq!(name, "B"),
+        other => panic!("expected a RecursiveRef back-edge for a group member, got {other:?}"),
+    }
+    let mut el2 = Elaborator::new(child);
+    assert!(
+        matches!(
+            elaborate_type_expr(&mut el2, &leaf("Nope")),
+            ElabResult::Unbound(_)
+        ),
+        "a non-member must fall through to ordinary resolution",
+    );
+}
+
 #[test]
 fn constructor_apply_name_renders_surface_form() {
-    let ctor = KType::UserType {
-        kind: UserTypeKind::TypeConstructor {
-            schema: std::rc::Rc::new(std::collections::HashMap::new()),
-            param_names: vec!["Type".into()],
-        },
-        scope_id: ScopeId::from_raw(0, 0xC0DE),
-        name: "Wrap".into(),
-    };
+    use crate::machine::model::types::NominalSchema;
+    let member = NominalMember::pending(
+        "Wrap".into(),
+        ScopeId::from_raw(0, 0xC0DE),
+        NominalKind::TypeConstructor,
+    );
+    member.fill(NominalSchema::TypeConstructor {
+        schema: std::collections::HashMap::new(),
+        param_names: vec!["Type".into()],
+    });
+    let set = std::rc::Rc::new(RecursiveSet::new(vec![member]));
+    let ctor = KType::SetRef { set, index: 0 };
     let app = KType::ConstructorApply {
         ctor: Box::new(ctor),
         args: vec![KType::Number],

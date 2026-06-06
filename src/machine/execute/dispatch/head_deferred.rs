@@ -8,7 +8,7 @@
 //! - `HeadDeferred` (head is a nested `Expression`, `type_only = false`): the
 //!   resumed value may be a `KFunction` (functor or not — the `Function` arm), a
 //!   bound functor reached through the type table (`KTypeValue(KFunctor { body:
-//!   Some })` — also the `Function` arm), or a `KTypeValue(UserType)` (the
+//!   Some })` — also the `Function` arm), or a `KTypeValue(SetRef)` (the
 //!   `Constructor` arm); any other value is a non-callable `DispatchFailed`.
 //! - `TypeHeadDeferred` (head is a `:(...)` sigil, `type_only = true`): the
 //!   resumed value is admitted only when it is type-shaped — a constructible type
@@ -170,7 +170,7 @@ fn classify_head<'a>(
         // `TypeHeadDeferred` it is the pruned arm and falls through to the
         // type-shaped `TypeMismatch`.
         KObject::KFunction(f, _) if !type_only => Ok(ResolvedCallable::Function(f)),
-        KObject::KTypeValue(kt @ KType::UserType { .. }) => Ok(ResolvedCallable::Constructor(kt)),
+        KObject::KTypeValue(kt @ KType::SetRef { .. }) => Ok(ResolvedCallable::Constructor(kt)),
         other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
             expected: "Type".to_string(),

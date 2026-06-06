@@ -1,6 +1,26 @@
 use super::*;
+use crate::machine::core::ScopeId;
+use crate::machine::model::types::{NominalSchema, RecursiveSet};
 use crate::machine::model::values::KKey;
 use std::collections::HashMap;
+
+/// A singleton tagged-set `Rc` named `name` at `scope_id`.
+fn tagged_singleton<'a>(name: &str, scope_id: ScopeId) -> std::rc::Rc<RecursiveSet<'a>> {
+    RecursiveSet::singleton(name.into(), scope_id, NominalSchema::Tagged(HashMap::new()))
+}
+
+/// A singleton newtype-set `Rc` named `name` over `repr`.
+fn newtype_singleton<'a>(
+    name: &str,
+    scope_id: ScopeId,
+    repr: KType<'a>,
+) -> std::rc::Rc<RecursiveSet<'a>> {
+    RecursiveSet::singleton(
+        name.into(),
+        scope_id,
+        NominalSchema::Newtype(Box::new(repr)),
+    )
+}
 
 #[test]
 fn ktype_of_homogeneous_number_list() {
@@ -89,19 +109,23 @@ fn list_with_type_carrier_is_authoritative_for_ktype() {
 fn tagged_ktype_erased_vs_applied() {
     use std::rc::Rc;
     let sid = ScopeId::from_raw(0, 0x55);
+    let set = tagged_singleton("Result", sid);
     let erased = KObject::Tagged {
         tag: "ok".into(),
         value: Rc::new(KObject::Number(1.0)),
-        scope_id: sid,
-        name: "Result".into(),
+        set: Rc::clone(&set),
+        index: 0,
         type_args: Rc::new(vec![]),
     };
-    assert!(matches!(erased.ktype(), KType::UserType { name, .. } if name == "Result"));
+    match erased.ktype() {
+        KType::SetRef { set: s, index } => assert_eq!(s.member(index).name, "Result"),
+        other => panic!("expected SetRef, got {other:?}"),
+    }
     let applied = KObject::Tagged {
         tag: "ok".into(),
         value: Rc::new(KObject::Number(1.0)),
-        scope_id: sid,
-        name: "Result".into(),
+        set: Rc::clone(&set),
+        index: 0,
         type_args: Rc::new(vec![KType::Number, KType::Str]),
     };
     match applied.ktype() {
@@ -159,34 +183,25 @@ fn ktype_value_round_trips_through_summarize() {
     assert_eq!(v.summarize(), ":(LIST OF Number)");
 }
 
-/// Preserves the full `(kind, scope_id, name)` triple the dispatcher reads for
+/// `Wrapped.ktype()` reports a clone of the `SetRef` identity the dispatcher reads for
 /// per-declaration identity comparisons.
 #[test]
 fn wrapped_ktype_reports_clone_of_type_id() {
     use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
     let inner = arena.alloc_object(KObject::Number(3.0));
-    let type_id: &KType = arena.alloc_ktype(KType::UserType {
-        kind: UserTypeKind::Newtype {
-            repr: Box::new(KType::Number),
-        },
-        scope_id: ScopeId::from_raw(0, 0xAA),
-        name: "Distance".into(),
-    });
+    let set = newtype_singleton("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
+    let type_id: &KType = arena.alloc_ktype(KType::SetRef { set, index: 0 });
     let w = KObject::Wrapped {
         inner: NonWrappedRef::peel(inner),
         type_id,
     };
     match w.ktype() {
-        KType::UserType {
-            kind: UserTypeKind::Newtype { .. },
-            name,
-            scope_id,
-        } => {
-            assert_eq!(name, "Distance");
-            assert_eq!(scope_id, ScopeId::from_raw(0, 0xAA));
+        KType::SetRef { set, index } => {
+            assert_eq!(set.member(index).name, "Distance");
+            assert_eq!(set.member(index).scope_id, ScopeId::from_raw(0, 0xAA));
         }
-        other => panic!("expected Newtype identity, got {other:?}"),
+        other => panic!("expected Newtype SetRef identity, got {other:?}"),
     }
 }
 
@@ -196,13 +211,8 @@ fn wrapped_summarize_renders_surface_form() {
     use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
     let inner = arena.alloc_object(KObject::Number(3.0));
-    let type_id = arena.alloc_ktype(KType::UserType {
-        kind: UserTypeKind::Newtype {
-            repr: Box::new(KType::Number),
-        },
-        scope_id: ScopeId::from_raw(0, 0xAA),
-        name: "Distance".into(),
-    });
+    let set = newtype_singleton("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
+    let type_id = arena.alloc_ktype(KType::SetRef { set, index: 0 });
     let w = KObject::Wrapped {
         inner: NonWrappedRef::peel(inner),
         type_id,
@@ -217,13 +227,8 @@ fn wrapped_deep_clone_preserves_arena_references() {
     use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
     let inner = arena.alloc_object(KObject::Number(3.0));
-    let type_id = arena.alloc_ktype(KType::UserType {
-        kind: UserTypeKind::Newtype {
-            repr: Box::new(KType::Number),
-        },
-        scope_id: ScopeId::from_raw(0, 0xAA),
-        name: "Distance".into(),
-    });
+    let set = newtype_singleton("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
+    let type_id = arena.alloc_ktype(KType::SetRef { set, index: 0 });
     let original = KObject::Wrapped {
         inner: NonWrappedRef::peel(inner),
         type_id,

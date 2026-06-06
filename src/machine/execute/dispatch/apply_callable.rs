@@ -21,7 +21,7 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::{KType, UserTypeKind};
+use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::super::nodes::{NodeOutput, NodeStep};
@@ -34,7 +34,8 @@ use super::{
 /// A head resolved to something callable. The lane decides which arm; the tail
 /// branches on the body surface and launches.
 pub(in crate::machine::execute) enum ResolvedCallable<'a> {
-    /// Build from a type schema (struct / tagged / newtype / `TypeConstructor`).
+    /// Build from a sealed nominal member (`KType::SetRef` — struct / tagged / newtype /
+    /// `TypeConstructor`).
     Constructor(&'a KType<'a>),
     /// Call a `KFunction` by name — functor or not; a functor's result is a module.
     Function(&'a KFunction<'a>),
@@ -62,9 +63,12 @@ pub(in crate::machine::execute) fn apply_callable<'a>(
     }
 }
 
-/// Construct from a `KType::UserType` identity. Struct takes named args; Tagged /
+/// Construct from a `KType::SetRef` member identity. Struct takes named args; Tagged /
 /// `TypeConstructor` / Newtype take a positional arg; cross-shape is a loud
-/// `DispatchFailed`. A non-constructible identity is a `TypeMismatch`.
+/// `DispatchFailed`. A non-constructible identity is a `TypeMismatch`. The schema is
+/// projected off the member (sibling `SetLocal`s resolved to external `SetRef`s) so each
+/// field/variant type matches and navigates directly; `(set, index)` is stamped onto the
+/// produced value.
 fn apply_constructor<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     identity: &'a KType<'a>,
@@ -73,61 +77,54 @@ fn apply_constructor<'a>(
     scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
-    match identity {
+    let KType::SetRef { set, index } = identity else {
+        return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+            arg: "verb".to_string(),
+            expected: "constructible Type".to_string(),
+            got: identity.name(),
+        })));
+    };
+    match RecursiveSet::projected_schema(set, *index) {
         // Named construction: `Point {x = 1, y = 2}` (record-literal body).
-        KType::UserType {
-            kind: UserTypeKind::Struct { fields },
-            scope_id,
-            name,
-        } => match body {
+        ProjectedSchema::Struct(fields) => match body {
             CallBody::Named(record_fields) => constructors::dispatch_construct_struct(
                 ctx,
-                name.clone(),
-                *scope_id,
-                Rc::clone(fields),
+                Rc::clone(set),
+                *index,
+                Rc::new(fields),
                 record_fields,
                 scope,
                 idx,
             ),
             CallBody::Positional(_) => body_shape_err(expr, NAMED_ONLY),
         },
-        // Positional construction: `Outcome (err "x")` (paren-group body).
-        KType::UserType {
-            kind: UserTypeKind::Tagged { schema },
-            scope_id,
-            name,
-        } => match body {
+        // Positional construction: `Outcome (err "x")` (paren-group body). Tagged unions
+        // and higher-kinded `TypeConstructor`s both construct positionally.
+        ProjectedSchema::Tagged(schema) => match body {
             CallBody::Positional(parts) => constructors::dispatch_construct_tagged(
                 ctx,
-                name.clone(),
-                *scope_id,
-                Rc::clone(schema),
+                Rc::clone(set),
+                *index,
+                Rc::new(schema),
                 parts,
                 scope,
                 idx,
             ),
             CallBody::Named(_) => body_shape_err(expr, POSITIONAL_ONLY),
         },
-        KType::UserType {
-            kind: UserTypeKind::TypeConstructor { schema, .. },
-            scope_id,
-            name,
-        } => match body {
+        ProjectedSchema::TypeConstructor { schema, .. } => match body {
             CallBody::Positional(parts) => constructors::dispatch_construct_tagged(
                 ctx,
-                name.clone(),
-                *scope_id,
-                Rc::clone(schema),
+                Rc::clone(set),
+                *index,
+                Rc::new(schema),
                 parts,
                 scope,
                 idx,
             ),
             CallBody::Named(_) => body_shape_err(expr, POSITIONAL_ONLY),
         },
-        KType::UserType {
-            kind: UserTypeKind::Newtype { .. },
-            ..
-        } => match body {
+        ProjectedSchema::Newtype(_) => match body {
             CallBody::Positional(parts) => {
                 let constructed =
                     crate::builtins::newtype_def::newtype_construct(scope, ctx, identity, parts);
@@ -135,11 +132,6 @@ fn apply_constructor<'a>(
             }
             CallBody::Named(_) => body_shape_err(expr, POSITIONAL_ONLY),
         },
-        _ => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
-            arg: "verb".to_string(),
-            expected: "constructible Type".to_string(),
-            got: identity.name(),
-        }))),
     }
 }
 

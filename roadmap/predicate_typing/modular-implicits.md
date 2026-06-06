@@ -15,38 +15,29 @@ also accepts any module value regardless of which signature it satisfies,
 so the explicit-module path lacks the signature-bound slot a generic call
 site needs.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *Concise generic code.* `sort(xs)` and `MakeSet()` replace
-  `sort(IntOrd, xs)` and `MakeSet(IntOrd)`. The compiler resolves which
-  module to thread in by searching scope, so call sites stop carrying the
-  dictionary by hand.
-- *Natural standard-library shape.* `sort`, `min`, `intersect`, `==` take
-  their dictionary of operations implicitly and ship as ordinary generic
-  Koan code rather than as verbose explicit-module functions or builtins.
-- *Multi-abstract-type implicit resolution.* A signature with multiple abstract
-  types (`Type`, `Elt`, `Key`, ...) resolves implicit candidates by aligning all
-  of them against the call site's argument types simultaneously, so binary
-  operators (`+`, `==`, `intersect`) and other multi-type predicates pick the
-  right implicit without ranking single-type candidates against each other.
-  Multi-parameter dispatch on declared types is already native to FN; what's
-  new is the implicit-search side picking witnesses whose signatures span
-  multiple abstract types.
-- *Generic functions resolve through one mechanism.* A generic function is a
-  functor over its type parameters
-  ([design/typing/generics.md](../../design/typing/generics.md)); implicit
-  resolution selects and applies it. `head(xs)` and `sort(xs)` become the same
-  surface and the same engine — purely parametric generics (no operations on the
-  type parameter) and operation-bearing ones (consulting a witness) alike, with
-  the parametric case reducing to a direct read of the argument's carried
-  element type.
-- *Algebraic structures are ordinary signatures.* A `GROUP` signature — a binary
-  operator with an identity and inverse over an abstract `t`, its paired operators
-  declared via [user-defined operator
-  modules](../operator_chaining/user-defined-operator-modules.md) — resolves implicitly, so
-  a function over "anything that forms a group" is just one with a `{Gp : GROUP}`
-  implicit parameter, its laws checked as [stage-4
-  axioms](axioms-and-generators.md). No operator-specific machinery is needed.
+- `sort(xs)` and `MakeSet()` type-check and run, with the compiler resolving
+  the witness module by searching scope; the call site carries no explicit
+  module argument.
+- `sort`, `min`, `intersect`, and `==` are defined as ordinary generic Koan
+  code that takes its dictionary of operations through an implicit parameter,
+  not as explicit-module functions or builtins.
+- A call resolving an implicit whose signature declares multiple abstract
+  types (`Type`, `Elt`, `Key`, ...) — a binary operator such as `+`, `==`, or
+  `intersect` — picks the witness by aligning all of those types against the
+  call site's argument types at once.
+- `head(xs)` and `sort(xs)` resolve through the same implicit-resolution
+  engine: the purely parametric case
+  ([design/typing/generics.md](../../design/typing/generics.md)) reads the
+  argument's carried element type directly, and the operation-bearing case
+  consults a searched witness.
+- A function over "anything that forms a group" is written with a
+  `{Gp : GROUP}` implicit parameter — `GROUP` being a binary operator with
+  identity and inverse over an abstract `t`, its paired operators declared via
+  [user-defined operator
+  modules](../operator_chaining/user-defined-operator-modules.md) — and its
+  laws are checked as [stage-4 axioms](axioms-and-generators.md).
 
 **Directions.**
 
@@ -110,6 +101,10 @@ site needs.
 
 ## Dependencies
 
+Stage 4 (axioms) is not a hard prerequisite — modular implicits can ship
+without axiom checking — but the cross-implicit equivalence story (stage 6)
+combines them.
+
 **Requires:** none — its substrate (the module language and VAL-slot abstract-type
 tagging) has shipped.
 
@@ -118,7 +113,3 @@ tagging) has shipped.
 - [Stage 6 — Equivalence-checked coherence](equivalence-checking.md)
 - [Stage 7 — Syntax tuning and witness types](syntax-tuning.md)
 - [Two-phase execution](../editor_tooling/two-phase-execution.md)
-
-Stage 4 (axioms) is not a hard prerequisite — modular implicits can ship
-without axiom checking — but the cross-implicit equivalence story (stage 6)
-combines them.

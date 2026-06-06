@@ -1,20 +1,20 @@
 //! Fast-lane dispatch shapes — bare identifier, bare leaf type,
 //! bare-`Type`-head call, sigiled type expression, literal pass-through.
-//! All terminate (or single-producer-park) in one poll except
-//! `TypeCall`, which can park on per-value-cell eager-subs and
-//! resume via [`CtorState::resume`].
+//! Most terminate (or single-producer-park) in one poll. Two carry a resume:
+//! `TypeCall` parks on per-value-cell eager-subs (or a still-finalizing head
+//! binding) and resumes via [`CtorState::resume`]; `BareTypeLeaf` parks on a
+//! still-finalizing referent and re-resolves via [`BareTypeState::resume`].
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use super::coerce_type_token_value;
 use super::constructors;
+use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
-use crate::machine::core::ScopeId;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
-use crate::machine::model::{KObject, KType, Record};
+use crate::machine::model::{KObject, KType, Record, RecursiveSet};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
@@ -28,7 +28,20 @@ pub(in crate::machine::execute) struct BareIdState<'a> {
 
 pub(in crate::machine::execute) struct BareTypeState<'a> {
     pub(in crate::machine::execute) init: Initialized,
+    /// Set when `bare_type_leaf` parked on a still-finalizing referent (a
+    /// `RECURSIVE TYPES` member caught mid-seal). On resume the leaf re-resolves
+    /// against the now-sealed binding through the same memoized bridge.
+    pub(in crate::machine::execute) park: Option<BareTypeParkTrack>,
     _ph: PhantomData<&'a ()>,
+}
+
+/// Parked resolution state for a `BareTypeLeaf` whose referent was still finalizing.
+/// Carries the leaf `TypeName` so the resume re-runs the resolve once the single producer
+/// is sealed; the producer's terminal is not the type carrier, so the resume re-resolves
+/// (hitting the sealed memo) rather than lifting the producer's value.
+pub(in crate::machine::execute) struct BareTypeParkTrack {
+    pub(in crate::machine::execute) leaf: TypeName,
+    pub(in crate::machine::execute) producer: NodeId,
 }
 
 pub(in crate::machine::execute) struct CtorState<'a> {
@@ -62,18 +75,20 @@ pub(in crate::machine::execute) struct CtorTrack<'a> {
     pub(in crate::machine::execute) kind: CtorKind<'a>,
 }
 
-/// Schema-keyed payload the resume needs to materialize the
-/// constructed value once every slot is resolved.
+/// Schema-keyed payload the resume needs to materialize the constructed value once every
+/// slot is resolved. `(set, index)` is the sealed-member identity stamped onto the produced
+/// `KObject`; `fields` / `schema` is the projected (sibling-`SetLocal`-resolved) schema used
+/// for arg reordering and per-value type-checking.
 pub(in crate::machine::execute) enum CtorKind<'a> {
     Struct {
-        name: String,
-        scope_id: ScopeId,
+        set: Rc<RecursiveSet<'a>>,
+        index: usize,
         fields: Rc<Record<KType<'a>>>,
     },
     Tagged {
         schema: Rc<HashMap<String, KType<'a>>>,
-        name: String,
-        scope_id: ScopeId,
+        set: Rc<RecursiveSet<'a>>,
+        index: usize,
         tag: String,
     },
 }
@@ -101,8 +116,37 @@ impl<'a> BareTypeState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
         Self {
             init,
+            park: None,
             _ph: PhantomData,
         }
+    }
+
+    pub(in crate::machine::execute) fn with_park(init: Initialized, park: BareTypeParkTrack) -> Self {
+        Self {
+            init,
+            park: Some(park),
+            _ph: PhantomData,
+        }
+    }
+
+    /// Re-run `bare_type_leaf` against the now-sealed referent. The producer's terminal is
+    /// not the type carrier (a finalize-combine returns its own value), so this re-resolves
+    /// through the memoized bridge — a hit on the sealed `type_expr_memo` — rather than
+    /// lifting the producer's value.
+    pub(in crate::machine::execute) fn resume(
+        self,
+        ctx: &mut DispatchCtx<'a, '_>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> Result<NodeStep<'a>, KError> {
+        let BareTypeState { park, .. } = self;
+        let BareTypeParkTrack { leaf, producer } =
+            park.expect("BareTypeLeaf resume only entered after a park track is installed");
+        // The producer's terminal is not the type carrier; the resume re-resolves through
+        // the now-sealed memo rather than reading the producer's value.
+        let _ = producer;
+        ctx.clear_dep_edges(idx);
+        Ok(bare_type_leaf(ctx, &leaf, scope, idx))
     }
 }
 
@@ -236,15 +280,45 @@ pub(super) fn bare_type_leaf<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     t: &TypeName,
     scope: &'a Scope<'a>,
+    idx: usize,
 ) -> NodeStep<'a> {
-    let chain = ctx.chain_deref();
-    match coerce_type_token_value(scope, t, chain) {
-        Ok(obj) => NodeStep::Done(NodeOutput::Value(obj)),
-        Err(KError {
-            kind: KErrorKind::UnboundName(n),
-            ..
-        }) => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n)))),
-        Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+    match resolve_type_leaf_carrier(scope, t, ctx.active_chain()) {
+        TypeLeafCarrier::Resolved(obj) => NodeStep::Done(NodeOutput::Value(obj)),
+        TypeLeafCarrier::Unbound(n) => {
+            NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))))
+        }
+        // A still-finalizing referent. A visible type alias has already resolved its RHS
+        // through the bridge, so a bare leaf parks on exactly one producer; park on it and
+        // re-resolve once it seals. A producer already terminal-with-error short-circuits.
+        TypeLeafCarrier::Park(producers) => {
+            let producer = match producers.first() {
+                Some(p) => *p,
+                None => {
+                    return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(
+                        t.render(),
+                    ))));
+                }
+            };
+            if ctx.is_result_ready(producer) {
+                if let Err(e) = ctx.read_result(producer) {
+                    return NodeStep::Done(NodeOutput::Err(e.clone_for_propagation()));
+                }
+                // Ready-and-bound: the referent finalized between resolve and this check, so
+                // re-resolve directly — the memoized bridge now admits.
+                return bare_type_leaf(ctx, t, scope, idx);
+            }
+            ctx.add_park_edge(producer, NodeId(idx));
+            let init = Initialized {
+                pre_subs: Vec::new(),
+            };
+            let track = BareTypeParkTrack {
+                leaf: t.clone(),
+                producer,
+            };
+            ctx.replace_with_parked_dispatch(DispatchState::BareTypeLeaf(BareTypeState::with_park(
+                init, track,
+            )))
+        }
     }
 }
 
@@ -343,7 +417,7 @@ fn park_on_literal_producer<'a>(
 ///    lives in the type table, read in step 2.
 /// 2. `resolve_type_with_chain` (a pure `types[name]` read, no park) classifies the
 ///    identity:
-///    - a constructible `UserType` identity → the `Constructor` arm;
+///    - a constructible `SetRef` identity (a sealed nominal type) → the `Constructor` arm;
 ///    - a `KType::KFunctor { body: Some(f) }` (a bound functor) → the `Function`
 ///      arm — its result is a module;
 ///    - a `KType::KFunctor { body: None }` (a bare `:(FUNCTOR …)` annotation) is not
@@ -382,11 +456,10 @@ pub(super) fn type_call<'a>(
             )));
         }
     }
-    // Fresh `types[name]` lookup at construction time. The schema payload rides the
-    // identity, so a recursive type whose cycle-close pre-installed a payload-empty
-    // identity reads the schema-bearing one that finalize's upsert replaced it with —
-    // no value-side carrier involved. A bound functor lives here too, carrying its
-    // callable body on `KType::KFunctor { body: Some(f) }`.
+    // Fresh `types[name]` lookup at construction time. A sealed nominal type's identity is
+    // a `SetRef` whose member carries the schema (filled at the member's finalize) — no
+    // value-side carrier involved. A bound functor lives here too, carrying its callable
+    // body on `KType::KFunctor { body: Some(f) }`.
     let identity = match scope.resolve_type_with_chain(head_t.as_str(), chain) {
         Some(kt) => kt,
         None => {

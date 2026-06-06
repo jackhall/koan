@@ -59,16 +59,17 @@ Type and module system ([typing/](typing/README.md)):
   parameterization, variance, type-position slot kinds, function
   signatures, and dispatch / slot-specificity.
 - [typing/elaboration.md](typing/elaboration.md) — how a type name
-  resolves to a `KType` through the scheduler-driven elaborator: the
-  binding-map partition, the `KObject::TypeNameRef` bare-leaf carrier,
-  the two-layer resolution memo, and recursion via threaded-set
-  recognition.
-- [typing/user-types.md](typing/user-types.md) — `KType::UserType` as
-  per-declaration identity for STRUCT, named UNION, MODULE, opaque
-  ascription, and NEWTYPE; the schema riding the identity payload; the
-  `AnyUserType` wildcard; the type-only finalize install through
-  `Scope::register_type_upsert`; cycle close for mutually recursive
-  nominals.
+  resolves to a `KType` through the scheduler-driven elaborator: strict
+  source-order resolution (a forward type reference is a position error),
+  the binding-map partition, the `KObject::TypeNameRef` bare-leaf carrier,
+  the resolution memo, and the `RECURSIVE TYPES` block for mutual
+  recursion.
+- [typing/user-types.md](typing/user-types.md) — the `RecursiveSet`
+  nominal model: a `KType::SetRef` member is the per-declaration identity
+  for STRUCT, named UNION, MODULE, opaque ascription, and NEWTYPE; the
+  schema filled in the set member; the `AnyUserType` wildcard; the
+  type-only finalize install through `Scope::register_type_upsert`; the
+  `RECURSIVE TYPES` block for mutually recursive nominals.
 - [typing/lookup-protocol.md](typing/lookup-protocol.md) — the
   three-layer foundation (`Scope` chain-walk → `Bindings` per-scope
   lookup → `KType` predicate admit) every dispatch and name-resolution
@@ -81,7 +82,7 @@ Type and module system ([typing/](typing/README.md)):
 - [typing/functors.md](typing/functors.md) — modules parameterized by
   modules: surface vs machine semantics, per-call generativity,
   deferred return types, higher-kinded type-constructor slots, and
-  the `SIG_WITH` parens-form builtin family.
+  the `WITH` infix builtin family.
 - [typing/implicits.md](typing/implicits.md) — implicit module
   parameters, lexical resolution, axioms with property-tested
   checking, cross-implicit equivalence checking, and the

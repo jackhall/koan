@@ -43,11 +43,11 @@ fn functor_return_slot_function_type_rejects() {
     }
 }
 
-/// `MODULE_TYPE_OF` references a parameter, so the return carrier routes
+/// the dotted `Er.Type` access references a parameter, so the return carrier routes
 /// through `ReturnTypeState::Deferred`; the head inspector surfaces the
 /// diagnostic without waiting for per-call elaboration.
 #[test]
-fn functor_return_slot_module_type_of_rejects() {
+fn functor_return_slot_dotted_type_member_rejects() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -56,13 +56,12 @@ fn functor_return_slot_module_type_of_rejects() {
     );
     let err = run_one_err(
         scope,
-        parse_one("FUNCTOR (USE_TYPE Er :OrderedSig) -> (MODULE_TYPE_OF Er Type) = (1)"),
+        parse_one("FUNCTOR (USE_TYPE Er :OrderedSig) -> Er.Type = (1)"),
     );
     match &err.kind {
         KErrorKind::ShapeError(msg) => assert!(
-            msg.contains("FUNCTOR return-type slot")
-                && (msg.contains("MODULE_TYPE_OF") || msg.contains("abstract type")),
-            "expected MODULE_TYPE_OF rejection, got {msg}",
+            msg.contains("FUNCTOR return-type slot") && msg.contains("abstract type"),
+            "expected dotted-type-member rejection, got {msg}",
         ),
         _ => panic!("expected ShapeError, got {err}"),
     }

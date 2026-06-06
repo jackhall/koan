@@ -7,14 +7,21 @@ mod ktype;
 mod ktype_predicates;
 mod ktype_resolution;
 mod record;
+mod recursive_set;
 mod resolver;
 mod signature;
 mod typed_field_list;
 
 pub use ktraits::{Parseable, Serializable};
-pub use ktype::{AbstractSource, KType, UserTypeKind};
+pub use ktype::{AbstractSource, KType};
 pub use record::Record;
-pub use resolver::{elaborate_type_expr, ElabResult, Elaborator};
+pub use recursive_set::{
+    seal_recursive_refs, NominalKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet,
+};
+pub use resolver::{
+    elaborate_type_expr, finalize_nominal_member, ElabResult, Elaborator, SchemaSealResult,
+    SealOutcome,
+};
 #[allow(unused_imports)]
 pub use signature::Specificity;
 pub use signature::{

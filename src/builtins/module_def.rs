@@ -17,7 +17,7 @@ use crate::machine::{
 
 use crate::machine::model::ast::KExpression;
 
-use super::{arg, err, kw, register_nominal_binder, sig};
+use super::{arg, err, kw, register_builtin_with_binder, sig};
 use crate::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_kexpression,
 };
@@ -49,10 +49,10 @@ pub fn body<'a>(
     // Capture the active per-call frame for the produced KModule's anchor; see
     // per-call-arena-protocol.md § Carriers and § Outer-frame chain.
     let active_frame = sched.current_frame();
-    // D7 nominal-binder carve-out: siblings see one another regardless of source order.
+    // Non-nominal: the MODULE name obeys source order like any other type name.
     let bind_index = sched
         .current_lexical_chain()
-        .map(|chain| BindingIndex::nominal(chain.index))
+        .map(|chain| BindingIndex::value(chain.index))
         .unwrap_or(BindingIndex::BUILTIN);
     let name_for_finish = name.clone();
     let finish: CombineFinish<'a> = Box::new(move |parent_scope, _sched, _results| {
@@ -94,7 +94,7 @@ pub fn body<'a>(
         };
         // Type-only install: the module's identity (carrying its `&Module` and per-call
         // frame anchor) lives in `bindings.types`; ATTR access recovers the value-side
-        // `KTypeValue(Module)` via `coerce_type_token_value`. MODULE doesn't join an SCC
+        // `KTypeValue(Module)` via `resolve_type_leaf_carrier`. MODULE doesn't join an SCC
         // type cycle (bodies park on the outer scheduler), so the upsert's overwrite arm
         // never fires for a module — its insert-if-absent / non-equal-Rebind behaviour is
         // what carries here, sharing the one nominal-finalize primitive.
@@ -125,7 +125,7 @@ pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_nominal_binder(
+    register_builtin_with_binder(
         scope,
         "MODULE",
         sig(
@@ -276,7 +276,7 @@ mod tests {
         // Pre-seed the type-only identity, then re-run `MODULE Foo = ...`. The finalize
         // guard reads `types`, finds the pre-seeded identity, and short-circuits without
         // re-binding — the original `&Module` pointer survives.
-        scope.register_type("Foo".into(), identity, BindingIndex::nominal(0));
+        scope.register_type("Foo".into(), identity, BindingIndex::value(0));
         run(scope, "MODULE Foo = (LET y = 2)");
         let foo = resolve_module(scope, "Foo");
         assert!(std::ptr::eq(foo, module));

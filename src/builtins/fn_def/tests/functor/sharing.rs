@@ -1,4 +1,4 @@
-//! `SIG_WITH` sharing constraints on functor parameters and return types.
+//! `WITH` sharing constraints on functor parameters and return types.
 
 use crate::builtins::test_support::{lookup_fn, parse_one, run, run_root_silent};
 use crate::machine::model::KObject;
@@ -111,7 +111,7 @@ fn functor_with_two_pinned_slots_round_trips() {
     );
     run(
         scope,
-        "FN (TWOPIN p :OrderedSig) -> (SIG_WITH Set ((Elt :Number) (Ord :Number))) = \
+        "FN (TWOPIN p :OrderedSig) -> :(Set WITH {Elt = Number, Ord = Number}) = \
          (MODULE Result = ((LET Elt = Number) (LET Ord = Number) (LET tag = 0)))",
     );
     let f = lookup_fn(scope, "TWOPIN");
@@ -132,7 +132,7 @@ fn functor_with_two_pinned_slots_round_trips() {
     }
 }
 
-/// FN-construction-time capture: a declared `(SIG_WITH SetSig ((Elt :Number)))`
+/// FN-construction-time capture: a declared `(SetSig WITH {Elt = Number})`
 /// return type lands on the FN's stored signature with `Elt` pinned to `Number`.
 #[test]
 fn functor_return_with_sharing_constraint_pins_output_type() {
@@ -148,7 +148,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
     );
     run(
         scope,
-        "FN (MAKESETN p :OrderedSig) -> (SIG_WITH SetSig ((Elt :Number))) = \
+        "FN (MAKESETN p :OrderedSig) -> :(SetSig WITH {Elt = Number}) = \
          (MODULE Result = ((LET Elt = Number) (LET insert = 0)))",
     );
     let f = lookup_fn(scope, "MAKESETN");
@@ -183,7 +183,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
     );
     run(
         scope,
-        "FN (MAKEBAD p :OrderedSig) -> (SIG_WITH SetSig ((Elt :Number))) = \
+        "FN (MAKEBAD p :OrderedSig) -> :(SetSig WITH {Elt = Number}) = \
          (MODULE Result = ((LET Elt = Str) (LET insert = 0)))",
     );
     let mut sched = Scheduler::new();

@@ -24,13 +24,14 @@ Type-system mechanics:
   separates type-name lookups from value-name lookups, the
   `KObject::TypeNameRef` bare-leaf carrier, and the two-layer
   resolution memo that amortizes elaboration cost.
-- [user-types.md](user-types.md) — `KType::UserType` as the
-  per-declaration identity for STRUCT, named UNION, MODULE, opaque
-  ascription, and NEWTYPE. Covers specificity stratification with the
+- [user-types.md](user-types.md) — the `RecursiveSet` nominal model: a
+  member's `KType::SetRef` is the per-declaration identity for STRUCT, named
+  UNION, MODULE, opaque ascription, and NEWTYPE, with `SetLocal` siblings and
+  the `RecursiveGroup` handle. Covers specificity stratification with the
   `AnyUserType` wildcard, finalize-time type-only install through
-  `Scope::register_type_upsert`, cycle close for mutually recursive nominals,
-  and the `NEWTYPE` keyword's `Wrapped` carrier with its newtype-over-newtype
-  collapse invariant encoded in the field type.
+  `Scope::register_type_upsert`, the `RECURSIVE TYPES` block for mutually
+  recursive nominals, and the `NEWTYPE` keyword's `Wrapped` carrier with its
+  newtype-over-newtype collapse invariant encoded in the field type.
 - [lookup-protocol.md](lookup-protocol.md) — the three-layer foundation
   every dispatch and name-resolution site threads: `Scope` chain-walks
   ancestors, `Bindings` finds entries gated by the visibility predicate,
@@ -46,7 +47,7 @@ Module-system mechanics:
   calls.
 - [functors.md](functors.md) — modules parameterized by modules: surface
   vs machine semantics, per-call generativity, deferred return types,
-  higher-kinded type-constructor slots, and the `SIG_WITH` parens-form
+  higher-kinded type-constructor slots, and the `WITH` infix
   builtin family for sharing constraints and witness-typed
   instantiations.
 - [implicits.md](implicits.md) — implicit module parameters, lexical

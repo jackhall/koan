@@ -1,4 +1,4 @@
-//! Return-type expressions that reference earlier parameters (`MODULE_TYPE_OF p`, bare param name, `SIG_WITH p.T`), resolved per-call.
+//! Return-type expressions that reference earlier parameters (`p.T`, bare param name, `sig WITH {S = p.T}`), resolved per-call.
 
 use crate::builtins::test_support::{lookup_fn, parse_one, run, run_one, run_root_silent};
 use crate::machine::model::{KObject, KType};
@@ -35,12 +35,12 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
     }
 }
 
-/// `(MODULE_TYPE_OF Er Type)` parens-form return type registers as
+/// `Er.Type` dotted return type registers as
 /// `ReturnType::Deferred(Expression(...))` rather than erroring "unbound name
 /// `Er`" at FN-construction. Pins the FN-def side; the end-to-end invocation is
 /// covered by [`functor_get_zero_on_opaque_view_re_tags_slot_read`].
 #[test]
-fn functor_return_module_type_of_parameter_resolves_per_call() {
+fn functor_return_dotted_type_member_parameter_resolves_per_call() {
     use crate::machine::model::ReturnType;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
@@ -61,10 +61,7 @@ fn functor_return_module_type_of_parameter_resolves_per_call() {
         "IntOrdView should be an opaquely-ascribed module (type-only) satisfying WithZero's \
          VAL zero slot",
     );
-    run(
-        scope,
-        "FN (GET_ZERO Er :WithZero) -> (MODULE_TYPE_OF Er Type) = (Er.zero)",
-    );
+    run(scope, "FN (GET_ZERO Er :WithZero) -> Er.Type = (Er.zero)");
     let f = lookup_fn(scope, "GET_ZERO");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -77,7 +74,7 @@ fn functor_return_module_type_of_parameter_resolves_per_call() {
 /// `IntOrdView` is an opaque (`:|`) view. The body `(Er.zero)` reads the VAL slot,
 /// which ATTR re-tags with the per-call abstract identity `:|` minted for
 /// `IntOrdView.Type`, so the body value satisfies the per-call return type
-/// `(MODULE_TYPE_OF Er Type)`. The result carries the abstract `Type` identity
+/// `Er.Type`. The result carries the abstract `Type` identity
 /// (`ktype().name()` is "Type", a `KType::AbstractType`); unwrapping the `Wrapped`
 /// carrier yields the underlying `Number(0)`.
 #[test]
@@ -90,10 +87,7 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
          MODULE IntOrd = ((LET Type = Number) (LET zero = 0))\n\
          LET IntOrdView = (IntOrd :| WithZero)",
     );
-    run(
-        scope,
-        "FN (GET_ZERO Er :WithZero) -> (MODULE_TYPE_OF Er Type) = (Er.zero)",
-    );
+    run(scope, "FN (GET_ZERO Er :WithZero) -> Er.Type = (Er.zero)");
     let result = run_one(scope, parse_one("GET_ZERO IntOrdView"));
     match result {
         KObject::Wrapped { inner, type_id } => {
@@ -120,7 +114,7 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
     }
 }
 
-/// `(SIG_WITH Set ((Elt: (MODULE_TYPE_OF Er Type))))` — the sharing-constraint
+/// `(Set WITH {Elt = Er.Type})` — the sharing-constraint
 /// surface canonical for `module Make (E : ORDERED) : SET with type elt = E.t`.
 /// Pins that FN-def registers `Deferred(_)` without erroring `Unbound` on `Er`;
 /// the body's `MODULE Result` isn't sig-ascribed to `Set`, so end-to-end
@@ -140,7 +134,7 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     );
     run(
         scope,
-        "FN (MK Er :OrderedSig) -> (SIG_WITH Set ((Elt (MODULE_TYPE_OF Er Type)))) = \
+        "FN (MK Er :OrderedSig) -> :(Set WITH {Elt = Er.Type}) = \
          (MODULE Result = ((LET Elt = Number) (LET insert = 0)))",
     );
     let f = lookup_fn(scope, "MK");
@@ -167,10 +161,7 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
          LET IntOrdView = (IntOrd :| OrderedSig)",
     );
-    run(
-        scope,
-        "FN (BAD Er :OrderedSig) -> (MODULE_TYPE_OF Er Type) = (1)",
-    );
+    run(scope, "FN (BAD Er :OrderedSig) -> Er.Type = (1)");
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("BAD IntOrdView"), scope);
     sched

@@ -88,13 +88,10 @@ impl<'a> KFunction<'a> {
                     let is_type_denoting = signature_argument_by_name(self, name)
                         .map(|a| a.ktype.is_type_denoting())
                         .unwrap_or(false);
-                    // FN parameters bind *before* the body block's first statement.
-                    // The nominal-binder carve-out is what makes "before the block's
-                    // first statement" satisfy the chain-cutoff rule (same as MATCH `it`).
-                    let param_index = BindingIndex {
-                        idx: 0,
-                        nominal_binder: true,
-                    };
+                    // FN parameters bind at idx 0; the body's statements sit at idx >= 1,
+                    // so the strict `idx < cutoff` rule makes the parameters visible to the
+                    // body (same as MATCH / TRY `it`).
+                    let param_index = BindingIndex::value(0);
                     if !is_type_denoting {
                         // Signature parser enforces parameter-name uniqueness.
                         let _ = child.bind_value(name.clone(), allocated, param_index);
@@ -152,6 +149,11 @@ impl<'a> KFunction<'a> {
                     ReturnType::Deferred(d) => {
                         let per_call_ret: PerCallReturnType<'a> = match d {
                             DeferredReturn::TypeExpr(te) => {
+                                // Resolved at call time against the per-call `child`: the
+                                // params bind at index 0 (visible) and every outer type the
+                                // signature named is already finalized. A deferred return
+                                // type references a parameter (that is why it deferred), so
+                                // there is no lexical-forward-reference case to gate here.
                                 let mut el = Elaborator::new(child);
                                 let kt = match elaborate_type_expr(&mut el, te) {
                                     ElabResult::Done(kt) => kt,
@@ -200,7 +202,8 @@ impl<'a> KFunction<'a> {
                         let mut body_ids: Vec<crate::machine::core::kfunction::NodeId> =
                             Vec::with_capacity(n);
                         for (i, stmt) in body_statements.into_iter().enumerate() {
-                            let idx = if n == 1 { 0 } else { i + 1 };
+                            // Body statements sit at idx 1..N; idx 0 is reserved for params.
+                            let idx = i + 1;
                             let chain =
                                 LexicalFrame::push(body_chain_parent.clone(), child.id, idx);
                             let mut bid = None;
@@ -224,8 +227,18 @@ impl<'a> KFunction<'a> {
                             deps.push(t);
                         }
                         let function_summary = self.summarize();
-                        let combine_id =
-                            sched.add_combine(
+                        // The Combine reads `child` (in the per-call arena) when it runs, but its
+                        // deps — the body and return-type sub-Dispatches — drop their arena Rc
+                        // clones on Done, so without its own clone the arena would free before the
+                        // Combine runs. `with_active_frame` stamps the Combine node's `frame` with a
+                        // per-call-arena Rc, keeping `child` live until the Combine completes.
+                        let mut combine_slot: Option<crate::machine::core::kfunction::NodeId> =
+                            None;
+                        let mut pending = Some((deps, per_call_ret, function_summary));
+                        sched.with_active_frame(frame.clone(), &mut |s| {
+                            let (deps, per_call_ret, function_summary) =
+                                pending.take().expect("with_active_frame body runs once");
+                            combine_slot = Some(s.add_combine(
                                 deps,
                                 vec![],
                                 child,
@@ -271,11 +284,11 @@ impl<'a> KFunction<'a> {
                                     let stamped = body_value.deep_clone().stamp_type(&per_call_ret);
                                     BodyResult::Value(_scope.arena.alloc_object(stamped))
                                 }),
-                            );
-                        // Rc clones inside `with_active_frame` above keep the per-call
-                        // arena alive across sub-slot lifetimes; the FN's slot retains
-                        // its own `frame` via `defer_to_lift`'s frame-stay-attached
-                        // contract.
+                            ));
+                        });
+                        let combine_id = combine_slot.expect("combine must spawn");
+                        // The Combine node now carries its own per-call-arena Rc (stamped above),
+                        // so this local clone is no longer load-bearing.
                         drop(frame);
                         BodyResult::DeferTo(combine_id)
                     }
@@ -349,7 +362,9 @@ pub(crate) fn type_identity_for<'a>(
         }),
         KType::TypeExprRef => match obj {
             KObject::KTypeValue(kt) => Ok(Some(kt.clone())),
-            KObject::TypeNameRef(t) => match definition_scope.resolve_type_expr(t) {
+            // Resolved against the definition scope at call time, where every type the
+            // signature names is already finalized — no lexical-order gating applies.
+            KObject::TypeNameRef(t) => match definition_scope.resolve_type_expr(t, None) {
                 ResolveTypeExprOutcome::Done(kt) => Ok(Some(kt.clone())),
                 ResolveTypeExprOutcome::Park(pending_on) => {
                     Err(KError::new(KErrorKind::TypeIdentityPendingAtDispatch {

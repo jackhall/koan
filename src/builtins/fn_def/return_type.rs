@@ -6,16 +6,20 @@ use std::collections::HashMap;
 use crate::machine::core::kfunction::argument_bundle::{
     extract_kexpression, extract_ktype, extract_type_name_ref,
 };
+use crate::machine::core::LexicalFrame;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::types::{DeferredReturn, ReturnType};
 use crate::machine::model::{KObject, KType};
 use crate::machine::ResolveTypeExprOutcome;
 use crate::machine::{ArgumentBundle, KError, KErrorKind, NodeId, Scope};
+use std::rc::Rc;
 
 use super::param_refs::{kexpression_references_any, type_expr_references_any};
 
-/// `ExprCarrier` is captured raw rather than sub-dispatched in the outer scope because
-/// overload 2's expression may reference a parameter that is unbound there.
+/// `ExprCarrier` is captured raw rather than sub-dispatched in the outer scope because a
+/// `:(…)` / dotted return's inner expression may reference a parameter unbound there. It
+/// arrives via the `:SigiledTypeExpr` return overload, whose `resolve_for` unwraps the
+/// sigil to its inner `KObject::KExpression`.
 pub(crate) enum ReturnTypeRaw<'a> {
     Resolved(KType<'a>),
     TypeExprCarrier(TypeName),
@@ -32,7 +36,7 @@ pub(crate) enum ReturnTypeState<'a> {
         producers: Vec<NodeId>,
     },
     Deferred(DeferredReturn<'a>),
-    /// `Expression(_)` carrier (e.g. `-> (Mo.Ty)`) that doesn't reference any FN
+    /// `Expression(_)` carrier (e.g. `-> :(Mo.Ty)`) that doesn't reference any FN
     /// parameter; safe to resolve once at FN-def time. Scheduling happens via
     /// `super::finalize::defer_via_combine` so all owned-sub registration lives
     /// at one site.
@@ -101,6 +105,7 @@ pub(crate) fn classify_return_type<'a>(
     raw: ReturnTypeRaw<'a>,
     param_names: &[String],
     scope: &'a Scope<'a>,
+    chain: Option<Rc<LexicalFrame>>,
     functor_param_types: Option<&HashMap<String, KType<'a>>>,
 ) -> Result<(ReturnTypeState<'a>, AdmissibleVerdict), KError> {
     match raw {
@@ -120,7 +125,9 @@ pub(crate) fn classify_return_type<'a>(
                 ));
             }
             let name = te.render();
-            let state = match scope.resolve_type_expr(&te) {
+            // Gated to the FN's lexical position — a return type naming a later type is a
+            // position error, like any other forward reference.
+            let state = match scope.resolve_type_expr(&te, chain) {
                 ResolveTypeExprOutcome::Done(kt) => ReturnTypeState::Done(kt.clone()),
                 ResolveTypeExprOutcome::Park(producers) => {
                     ReturnTypeState::Pending { te, producers }
@@ -200,19 +207,21 @@ fn verdict_for_deferred_type_expr<'a>(
     }
 }
 
-/// Head-keyword classification for parens-form return-type carriers: `SIG_WITH`
-/// admits (yields `Signature { .. }`); `MODULE_TYPE_OF` rejects (yields
-/// `AbstractType`); other heads fall through to a generic rejection.
+/// Head-keyword classification for deferred return-type carriers: `WITH` (a `sig WITH
+/// {…}` specialization) admits (yields `Signature { .. }`); a dotted `ATTR` head
+/// (`Er.Type`, a module type-member access) rejects (yields `AbstractType`); other heads
+/// fall through to a generic rejection.
 fn verdict_for_deferred_expression(e: &KExpression<'_>) -> AdmissibleVerdict {
     let head_keyword = e.parts.iter().find_map(|p| match &p.value {
         ExpressionPart::Keyword(s) => Some(s.as_str()),
         _ => None,
     });
     match head_keyword {
-        Some("SIG_WITH") => AdmissibleVerdict::Admissible,
-        Some("MODULE_TYPE_OF") => AdmissibleVerdict::Rejected(KError::new(KErrorKind::ShapeError(
+        Some("WITH") => AdmissibleVerdict::Admissible,
+        Some("ATTR") => AdmissibleVerdict::Rejected(KError::new(KErrorKind::ShapeError(
             "FUNCTOR return-type slot must denote a module, signature, or functor; \
-             `MODULE_TYPE_OF` produces an abstract type, not a module or signature"
+             a module type-member access (`Er.Type`) produces an abstract type, \
+             not a module or signature"
                 .to_string(),
         ))),
         Some(other) => AdmissibleVerdict::Rejected(KError::new(KErrorKind::ShapeError(format!(
@@ -243,7 +252,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),
         ReturnTypeCapture::Unresolved(name) => {
             let te = TypeName::leaf(name.clone());
-            match scope.resolve_type_expr(&te) {
+            match scope.resolve_type_expr(&te, None) {
                 ResolveTypeExprOutcome::Done(kt) => Ok(ReturnType::Resolved(kt.clone())),
                 ResolveTypeExprOutcome::Park(_) => Err(KError::new(KErrorKind::ShapeError(
                     "FN return type parked after Combine wake".to_string(),
@@ -256,7 +265,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
                 },
             }
         }
-        ReturnTypeCapture::TypeExpr(t) => match scope.resolve_type_expr(&t) {
+        ReturnTypeCapture::TypeExpr(t) => match scope.resolve_type_expr(&t, None) {
             ResolveTypeExprOutcome::Done(kt) => Ok(ReturnType::Resolved(kt.clone())),
             ResolveTypeExprOutcome::Park(_) => Err(KError::new(KErrorKind::ShapeError(
                 "FN return type parked after Combine wake".to_string(),

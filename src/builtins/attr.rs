@@ -5,12 +5,12 @@
 //! NEWTYPE fall-through, [`body_module`] for chained module access.
 //!
 //! The slot types are disjoint (`KType::Identifier` only matches `ExpressionPart::Identifier`;
-//! the three `AnyUserType { kind: Struct | Module | Newtype { .. } }` slots each admit a
-//! distinct `KObject` family via the manual `UserTypeKind::PartialEq`), so dispatch picks
-//! unambiguously without a specificity tiebreaker.
+//! the three `AnyUserType { kind: Struct | Newtype }` slots each admit a distinct `KObject`
+//! family by `NominalKind`, and `AnyModule` admits modules), so dispatch picks unambiguously
+//! without a specificity tiebreaker.
 
-use crate::machine::execute::coerce_type_token_value;
-use crate::machine::model::types::{AbstractSource, UserTypeKind};
+use crate::machine::execute::{resolve_type_leaf_carrier, TypeLeafCarrier};
+use crate::machine::model::types::{AbstractSource, NominalKind};
 use crate::machine::model::values::{Module, NonWrappedRef};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
@@ -94,15 +94,25 @@ pub fn body_type_lhs<'a>(
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    // The Type-classed lhs is a nominal type-side binding. Modules / signatures keep
-    // a value-side carrier (`KTypeValue(Module/Signature)`), which `coerce_type_token_value`
-    // recovers; struct / union names are type-only now, so it synthesizes a
-    // `KTypeValue(UserType)` that `access_field` rejects with the same TypeMismatch a
-    // static struct field access has always produced.
+    // The Type-classed lhs is a nominal type-side binding. A module / signature identity
+    // resolves to a `KTypeValue(Module/Signature)` carrier `access_field` projects a member
+    // off; a struct / union name resolves to a `KTypeValue(SetRef)` that `access_field`
+    // rejects with the same TypeMismatch a static struct field access produces. Dispatch
+    // resolves this ATTR type argument before the body runs, so a `Park` outcome is
+    // unreachable here and surfaces as a loud structured error rather than a silent stall.
     let leaf = crate::machine::model::ast::TypeName::leaf(s_name);
-    let target = match coerce_type_token_value(scope, &leaf, None) {
-        Ok(obj) => obj,
-        Err(e) => return err(e),
+    let target = match resolve_type_leaf_carrier(scope, &leaf, None) {
+        TypeLeafCarrier::Resolved(obj) => obj,
+        TypeLeafCarrier::Unbound(name) => return err(KError::new(KErrorKind::UnboundName(name))),
+        TypeLeafCarrier::Park(producers) => {
+            return err(KError::new(KErrorKind::ShapeError(format!(
+                "ATTR lhs type `{}` resolved to a still-finalizing type \
+                 (parked on {} producer(s)); the type argument should already be sealed \
+                 at body entry",
+                leaf.render(),
+                producers.len(),
+            ))))
+        }
     };
     access_field(scope, target, &field_name)
 }
@@ -166,14 +176,13 @@ fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
 fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> BodyResult<'a> {
     match target {
         KObject::Struct {
-            name: type_name,
-            fields,
-            ..
+            set, index, fields, ..
         } => match fields.get(field) {
             Some(value) => BodyResult::Value(scope.arena.alloc_object(value.deep_clone())),
             None => err(KError::new(KErrorKind::ShapeError(format!(
                 "struct `{}` has no field `{}`",
-                type_name, field
+                set.member(*index).name,
+                field
             )))),
         },
         KObject::KTypeValue(KType::Module { module: m, .. }) => access_module_member(m, field),
@@ -263,13 +272,11 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let struct_ty = KType::AnyUserType {
-        kind: UserTypeKind::struct_sentinel(),
+        kind: NominalKind::Struct,
     };
     let module_ty = KType::AnyModule;
     let newtype_ty = KType::AnyUserType {
-        kind: UserTypeKind::Newtype {
-            repr: Box::new(KType::Any),
-        },
+        kind: NominalKind::Newtype,
     };
 
     register_builtin(
@@ -311,8 +318,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ),
         body_module,
     );
-    // NEWTYPE fall-through. The wildcard `Newtype { repr: Any }` slot admits any
-    // `KObject::Wrapped` (the manual `UserTypeKind::PartialEq` ignores `repr`). Reuses
+    // NEWTYPE fall-through. The `AnyUserType { kind: Newtype }` slot admits any
+    // `KObject::Wrapped` (the wildcard keys on `NominalKind`, never the repr). Reuses
     // `body_struct` because `access_field` dispatches on the lhs shape — its `Wrapped`
     // arm recurses one level into `inner`.
     register_builtin(
@@ -518,7 +525,7 @@ mod tests {
 
     /// An opaque (`:|`) view re-tags a VAL-slot read with the per-call abstract identity:
     /// `IntOrdView.zero` reads as the abstract `Type` (`ktype().name() == "Type"`), not the
-    /// underlying `Number`, so a deferred return `(MODULE_TYPE_OF Er Type)` accepts the body.
+    /// underlying `Number`, so a deferred return `Er.Type` accepts the body.
     #[test]
     fn opaque_view_slot_read_re_tags_with_abstract_type() {
         let arena = RuntimeArena::new();

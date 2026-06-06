@@ -28,7 +28,7 @@ or any positional collapse. Dispatch sees the raw multi-part expression
 through the AST wrapper described below, runs the normal candidate walk
 against a registered overload, and the picked overload's body returns a
 `KObject::KTypeValue(...)` (for structural types) or the paired carrier
-(for nominal `UserType` / `Module` / `Signature` identities).
+(for nominal `SetRef` / `Module` / `Signature` identities).
 
 ## AST representation
 
@@ -148,9 +148,9 @@ inner expression's parts decide its shape:
   [`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs).
 - `BareTypeLeaf` / `BareIdentifier` for single-name sigils
   (`:(Number)`, `:(MyType)`). The `BareTypeLeaf` fast lane is the
-  primary caller of `coerce_type_token_value` — see
+  primary caller of `resolve_type_leaf_carrier` — see
   [elaboration.md § Layers](elaboration.md#layers) § Layer 4 for the
-  shared coercion seam.
+  shared resolver seam.
 - `TypeCall` for a leaf-Type head with non-empty rest — routes a
   Struct / Tagged / Newtype head through its construction primitive
   (`:(MyStruct {x = 1})`) and a `KType::KFunctor { body: Some }` head
@@ -165,7 +165,7 @@ which evaluates the head to a type-shaped value and admits only a
 constructible type or a functor.
 
 The sigil boundary — "the returned carrier must be type-side
-(`KTypeValue`, `Module`, `Signature`, `UserType`, `KFunctor`)" — is
+(`KTypeValue`, `Module`, `Signature`, `SetRef`, `KFunctor`)" — is
 enforced implicitly by the consuming slot's KType machinery rather
 than by a dedicated tail at the sigil. A value-side carrier (number,
 instance struct, plain function value) flowing out of `:(...)`
@@ -178,13 +178,14 @@ Every parameterized type rides one surface: the keyworded sigil
 type-constructor overloads. The field-walker inside `typed_field_list`
 handles the sigil embedded in `STRUCT` / `UNION` field schemas through a
 single path. Keyworded shapes (`:(LIST OF Tree)`, `:(MAP Tree -> _)`)
-sub-Dispatch through the standalone dispatcher, which carries no SCC
-context, so `rewrite_threaded_self_refs` first rewrites every threaded
-self-reference to a `Future(KTypeValue(RecursiveRef(name)))` carrier —
-the same type-side transport `:(LIST OF Number)` rides — before the
+sub-Dispatch through the standalone dispatcher, which carries no threaded
+binder set, so `rewrite_threaded_self_refs` first rewrites every threaded
+self / group-sibling reference to a `Future(KTypeValue(RecursiveRef(name)))`
+carrier — the same type-side transport `:(LIST OF Number)` rides — before the
 sub-Dispatch. This lowers `STRUCT Tree = (children :(LIST OF Tree))`'s
-field to `List(RecursiveRef("Tree"))` rather than parking on `Tree`'s own
-placeholder and closing a scheduler-deadlock cycle.
+field to `List(RecursiveRef("Tree"))`, which seals to `List(SetLocal(_))` at
+the member's finalize, rather than parking on `Tree`'s own placeholder and
+deadlocking the scheduler.
 
 ## Binder install: name-keyed vs bucket-keyed
 

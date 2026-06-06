@@ -54,6 +54,12 @@ impl<'a> KFunction<'a> {
                         has_lazy_slot = true;
                     }
                     (KType::KExpression, _) => return None,
+                    // `:SigiledTypeExpr` is the lazy sibling of `:KExpression` for a `:(...)`
+                    // part — captured raw (`resolve_for`), never sub-dispatched here.
+                    (KType::SigiledTypeExpr, ExpressionPart::SigiledTypeExpr(_)) => {
+                        has_lazy_slot = true;
+                    }
+                    (KType::SigiledTypeExpr, _) => return None,
                     (_, ExpressionPart::Expression(_))
                     | (_, ExpressionPart::SigiledTypeExpr(_)) => {
                         // Speculative: assume the eager-evaluated result will type-match
@@ -63,9 +69,9 @@ impl<'a> KFunction<'a> {
                     }
                     (_, other) => {
                         // Admit bare names in non-literal-name slots so a sibling
-                        // `KExpression+Expression` slot can still drive lazy candidacy
-                        // (else `SIG_WITH OrderedSig (...)` loses laziness on the
-                        // `sig: Signature` / `Type(OrderedSig)` pairing).
+                        // `KExpression+Expression` slot can still drive lazy candidacy —
+                        // e.g. a builtin pairing a bare-name-typed slot (`:AnySignature` /
+                        // `Type(...)`) with a lazy `:KExpression` slot would otherwise lose it.
                         if is_bare_name(other)
                             && !matches!(arg.ktype, KType::Identifier | KType::TypeExprRef)
                         {

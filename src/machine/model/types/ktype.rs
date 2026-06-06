@@ -11,99 +11,12 @@
 //! arena pointers; every other variant is owned data and ignores the parameter.
 
 use super::record::Record;
+use super::recursive_set::{NominalKind, RecursiveSet};
 use super::signature::DeferredReturnSurface;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, ScopeId};
 use crate::machine::model::values::{Module, Signature};
-use std::collections::HashMap;
 use std::rc::Rc;
-
-/// Surface-keyword classifier shared by `KType::UserType` and `KType::AnyUserType`.
-/// See [per-declaration type identity](../../../../design/typing/user-types.md).
-///
-/// Each arm carries the declared type's schema as its payload (fields for `Struct`,
-/// tag→type for `Tagged`/`TypeConstructor`, transparent repr for `Newtype`).
-/// Construction reads that payload straight from the identity stored in
-/// `bindings.types`, so there is no separate value-side schema carrier.
-///
-/// The manual `PartialEq` / `Eq` impl below *ignores* the inner payload — identity
-/// equality is by variant tag only. Load-bearing two ways: wildcard admissibility
-/// (`AnyUserType { kind: Newtype { repr: <sentinel> } }` admits any concrete
-/// `UserType { kind: Newtype { repr: <real> }, .. }`, same for the others), and the
-/// SCC cycle-close upsert — a payload-empty pre-installed identity compares equal to
-/// the schema-bearing final identity, so finalize can overwrite the payload in place.
-#[derive(Clone, Debug)]
-pub enum UserTypeKind<'a> {
-    /// Record schema in declaration order. The empty-`Record` sentinel is the payload
-    /// an instance's `.ktype()` synthesizes and the cycle-close pre-install holds;
-    /// construction reads the real record from the `bindings.types` identity.
-    Struct { fields: Rc<Record<KType<'a>>> },
-    /// Tagged-union schema keyed by tag. Same empty-`Rc` sentinel convention as `Struct`.
-    Tagged {
-        schema: Rc<HashMap<String, KType<'a>>>,
-    },
-    /// Fresh nominal identity over a transparent representation. `repr` is NOT part of
-    /// identity equality.
-    Newtype { repr: Box<KType<'a>> },
-    /// Higher-kinded type-constructor slot. `schema` carries the erased-parameter
-    /// variant schema (e.g. `Result`'s `{ok: Any, error: Any}`); neither `schema` nor
-    /// `param_names` is part of identity equality.
-    TypeConstructor {
-        schema: Rc<HashMap<String, KType<'a>>>,
-        param_names: Vec<String>,
-    },
-}
-
-impl<'a> PartialEq for UserTypeKind<'a> {
-    fn eq(&self, other: &Self) -> bool {
-        use UserTypeKind::*;
-        matches!(
-            (self, other),
-            (Struct { .. }, Struct { .. })
-                | (Tagged { .. }, Tagged { .. })
-                | (Newtype { .. }, Newtype { .. })
-                | (TypeConstructor { .. }, TypeConstructor { .. }),
-        )
-    }
-}
-impl<'a> Eq for UserTypeKind<'a> {}
-
-/// Mirror the tag-only `PartialEq`: identity is the variant tag, the payload is
-/// ignored. Two `Struct`s with different `fields` compare equal, so they must hash
-/// equal — hashing the discriminant alone keeps `Hash` consistent with `Eq`.
-impl<'a> std::hash::Hash for UserTypeKind<'a> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::mem::discriminant(self).hash(state);
-    }
-}
-
-impl<'a> UserTypeKind<'a> {
-    /// Surface keyword rendered in diagnostics and `AnyUserType::name()`.
-    pub fn surface_keyword(&self) -> &'static str {
-        match self {
-            UserTypeKind::Struct { .. } => "Struct",
-            UserTypeKind::Tagged { .. } => "Tagged",
-            UserTypeKind::Newtype { .. } => "Newtype",
-            UserTypeKind::TypeConstructor { .. } => "TypeConstructor",
-        }
-    }
-
-    /// Payload-empty `Struct` sentinel — the shape an instance's `.ktype()` reports and
-    /// the cycle-close pre-install holds. Equality ignores the payload, so this stands in
-    /// for any `Struct { fields }` in dispatch.
-    pub fn struct_sentinel() -> Self {
-        UserTypeKind::Struct {
-            fields: Rc::new(Record::new()),
-        }
-    }
-
-    /// Payload-empty `Tagged` sentinel — companion to [`Self::struct_sentinel`].
-    pub fn tagged_sentinel() -> Self {
-        UserTypeKind::Tagged {
-            schema: Rc::new(HashMap::new()),
-        }
-    }
-}
 
 /// Root of a [`KType::AbstractType`] identity. `Sig` carries the SIG decl_scope's id for a
 /// member named at SIG-declaration time (no `&Module` to project members off); `Module`
@@ -135,8 +48,8 @@ pub enum KType<'a> {
     /// Bare `Dict` lowers to `Dict<Any, Any>`.
     Dict(Box<KType<'a>>, Box<KType<'a>>),
     /// Structural record type (`:{x :Number, y :Str}`) — an identifier-keyed field
-    /// schema with width/depth subtyping, distinct from the nominal
-    /// `UserType { kind: Struct }`. The inner `Record<KType>` is declaration-ordered for
+    /// schema with width/depth subtyping, distinct from a nominal `Struct`-kind `SetRef`.
+    /// The inner `Record<KType>` is declaration-ordered for
     /// rendering and order-blind by `(name, type)` for identity. A record *value*
     /// (`KObject::Record`) memoizes this as its carried type. Subtyping is the dual of
     /// the function-parameter relation — width-*superset* is more specific, covariant
@@ -170,7 +83,7 @@ pub enum KType<'a> {
     },
     /// Confined carrier for a synthesized FN/FUNCTOR `ret` slot whose source return is a
     /// `ReturnType::Deferred` — a per-call-elaborated return like `-> Er` or
-    /// `-> (MODULE_TYPE_OF Er Type)`. Holds only the hashable surface shadow
+    /// `-> Er.Type`. Holds only the hashable surface shadow
     /// ([`DeferredReturnSurface`]) so equality/hashing/specificity read the deferred
     /// shape directly instead of coarsening it to `Any`. Valid *only* inside a
     /// `KFunction`/`KFunctor` `ret` box that `function_value_ktype` builds; no runtime
@@ -183,32 +96,48 @@ pub enum KType<'a> {
     /// Lazy slot: accepts an unevaluated `ExpressionPart::Expression` so the builtin chooses
     /// when (or whether) to run it.
     KExpression,
+    /// Lazy slot for a `:(...)` type expression — the sibling of [`KType::KExpression`] for a
+    /// `SigiledTypeExpr` part. Captures it raw (via `resolve_for`, as the inner
+    /// `KObject::KExpression`) instead of eager-sub-dispatching, so a builtin can defer a
+    /// param-referencing dotted/sigil return (`-> Er.Type`) to per-call elaboration. More
+    /// specific than [`KType::TypeExprRef`], so it wins the overload when both admit.
+    SigiledTypeExpr,
     /// Meta-type for slots capturing a parsed type-name token. Carries the full structured
     /// `TypeName` rather than flattening to a name string.
     TypeExprRef,
     /// Meta-type for first-class type-values; both tagged-union and struct schemas report this.
     Type,
-    /// Per-declaration identity tag for a user-declared type. The `(scope_id, name)` pair
-    /// is the dispatch identity; `kind` carries the surface keyword so the wildcard
-    /// `AnyUserType { kind }` can admit only the matching family.
-    UserType {
-        kind: UserTypeKind<'a>,
-        scope_id: ScopeId,
-        name: String,
+    /// External reference to a member of a [`RecursiveSet`]. The `(set ptr, index)` pair
+    /// is the dispatch identity; the member's `kind` (read via `set.member(index).kind`)
+    /// drives the `AnyUserType { kind }` wildcard. The whole set rides every `SetRef`, so
+    /// lift shares it by `Rc::clone` — see [`crate::machine::execute::lift`].
+    SetRef {
+        set: Rc<RecursiveSet<'a>>,
+        index: usize,
     },
+    /// Intra-set sibling reference — a bare index resolved against the ambient set during
+    /// deep traversal only. Carries no `Rc`, so a set holds no internal refcount cycle and
+    /// frees once its last external handle drops. Never reaches the predicates (matching is
+    /// shallow `SetRef` identity that does not descend a member's schema).
+    SetLocal(usize),
+    /// First-class handle to a whole [`RecursiveSet`], bound by a `RECURSIVE TYPES` group
+    /// name. Identity is the set pointer (`Rc::ptr_eq`); lift shares the set by `Rc::clone`
+    /// through the derived `Clone`. Inert in value dispatch — it names a group of types, not
+    /// a value type — and reserved for value-language cycle construction.
+    RecursiveGroup(Rc<RecursiveSet<'a>>),
     /// Wildcard tag matching any user-declared carrier of the given `kind`. Strictly more
-    /// specific than `Any`; specificity to a concrete `UserType { kind: K, .. }` is
-    /// one-direction only — `UserType` is more specific than `AnyUserType` of the same
-    /// kind, not the reverse.
+    /// specific than `Any`; specificity to a concrete `SetRef` member of the same kind is
+    /// one-direction only — `SetRef` is more specific than `AnyUserType` of the same kind,
+    /// not the reverse.
     AnyUserType {
-        kind: UserTypeKind<'a>,
+        kind: NominalKind,
     },
     /// A module signature: both the introspectable value (`decl_scope` via `sig`) and the
     /// dispatch constraint ("any module satisfying `sig`"). Disambiguated by position — as a
     /// parameter slot it matches a module whose `compatible_sigs` contains `sig.sig_id()`; as
     /// a value (`KTypeValue(Signature { .. })`) it is matched by the `AnySignature` wildcard.
     ///
-    /// `pinned_slots` carries `SIG_WITH` abstract-type specializations (empty for a bare
+    /// `pinned_slots` carries `WITH` abstract-type specializations (empty for a bare
     /// signature), each an abstract-type slot pinned to a concrete `KType`. The vec is
     /// order-preserving (rather than a `HashMap`) so structural equality is deterministic.
     /// Identity is `sig.sig_id()` + `pinned_slots`; `sig.path` is diagnostic-only.
@@ -237,21 +166,17 @@ pub enum KType<'a> {
     AnyModule,
     /// `:Signature` slot wildcard — admits first-class signature values.
     AnySignature,
-    /// Recursive type binder. `body` describes the unfolded shape with `binder` in scope as a
-    /// `RecursiveRef` for self-references. `name()` renders as the binder name so diagnostics
-    /// stay readable (e.g. `Tree` rather than `Mu Tree. List<Tree>`).
-    Mu {
-        binder: String,
-        body: Box<KType<'a>>,
-    },
-    /// Application of a higher-kinded type constructor to arg types. `ctor` is a
-    /// `UserType` with `TypeConstructor` kind; `args` are the elaborated arg types.
-    /// Structural equality by `(ctor, args)`.
+    /// Application of a higher-kinded type constructor to arg types. `ctor` is a `SetRef`
+    /// to a `TypeConstructor`-kind member; `args` are the elaborated arg types. Structural
+    /// equality by `(ctor, args)`.
     ConstructorApply {
         ctor: Box<KType<'a>>,
         args: Vec<KType<'a>>,
     },
-    /// Back-reference to an enclosing `Mu`'s binder. Equality is by binder name only.
+    /// Definition-time transient: a reference to a not-yet-sealed nominal (self or forward
+    /// sibling) while elaborating a type-definition body. Sealed into a [`KType::SetLocal`]
+    /// index at the member's finalize, so it never survives into a sealed type and never
+    /// reaches the predicates. Equality is by name only.
     RecursiveRef(String),
     Any,
 }
@@ -284,9 +209,17 @@ impl<'a> KType<'a> {
             KType::DeferredReturn(s) => s.render(),
             KType::Identifier => "Identifier".into(),
             KType::KExpression => "KExpression".into(),
+            KType::SigiledTypeExpr => "SigiledTypeExpr".into(),
             KType::TypeExprRef => "TypeExprRef".into(),
             KType::Type => "Type".into(),
-            KType::UserType { name, .. } => name.clone(),
+            KType::SetRef { set, index } => set.member(*index).name.clone(),
+            // Diagnostic-only: a sibling reference renders against no ambient set here, so
+            // report the slot index. Deep traversal resolves it against the set.
+            KType::SetLocal(i) => format!("SetLocal({i})"),
+            KType::RecursiveGroup(set) => {
+                let names: Vec<&str> = set.members().iter().map(|m| m.name.as_str()).collect();
+                format!("RECURSIVE TYPES ({})", names.join(" "))
+            }
             KType::AnyUserType { kind } => kind.surface_keyword().into(),
             KType::Signature { sig, pinned_slots } => {
                 if pinned_slots.is_empty() {
@@ -295,16 +228,15 @@ impl<'a> KType<'a> {
                     // Display-only; does not round-trip through the parser.
                     let inner: Vec<String> = pinned_slots
                         .iter()
-                        .map(|(name, kt)| format!("({}: {})", name, kt.name()))
+                        .map(|(name, kt)| format!("{} = {}", name, kt.name()))
                         .collect();
-                    format!("(SIG_WITH {} ({}))", sig.path, inner.join(" "))
+                    format!("({} WITH {{{}}})", sig.path, inner.join(", "))
                 }
             }
             KType::Module { module, .. } => module.path.clone(),
             KType::AbstractType { name, .. } => name.clone(),
             KType::AnyModule => "Module".into(),
             KType::AnySignature => "Signature".into(),
-            KType::Mu { binder, .. } => binder.clone(),
             KType::RecursiveRef(name) => name.clone(),
             KType::ConstructorApply { ctor, args } => {
                 let arg_names: Vec<String> = args.iter().map(|a| a.name()).collect();
@@ -355,6 +287,7 @@ impl<'a> PartialEq for KType<'a> {
             | (Null, Null)
             | (Identifier, Identifier)
             | (KExpression, KExpression)
+            | (SigiledTypeExpr, SigiledTypeExpr)
             | (TypeExprRef, TypeExprRef)
             | (Type, Type)
             | (Any, Any)
@@ -387,18 +320,12 @@ impl<'a> PartialEq for KType<'a> {
                     ..
                 },
             ) => p1 == p2 && r1 == r2,
-            (
-                UserType {
-                    kind: k1,
-                    scope_id: s1,
-                    name: n1,
-                },
-                UserType {
-                    kind: k2,
-                    scope_id: s2,
-                    name: n2,
-                },
-            ) => k1 == k2 && s1 == s2 && n1 == n2,
+            // Identity is `(set ptr, index)` ONLY — never descend the schema, which is
+            // cyclic. `Rc::ptr_eq` keys the shared allocation; lift preserves it.
+            (SetRef { set: s1, index: i1 }, SetRef { set: s2, index: i2 }) => {
+                Rc::ptr_eq(s1, s2) && i1 == i2
+            }
+            (SetLocal(a), SetLocal(b)) => a == b,
             (AnyUserType { kind: k1 }, AnyUserType { kind: k2 }) => k1 == k2,
             (
                 Signature {
@@ -424,20 +351,12 @@ impl<'a> PartialEq for KType<'a> {
                     name: n2,
                 },
             ) => s1.scope_id() == s2.scope_id() && n1 == n2,
-            (
-                Mu {
-                    binder: b1,
-                    body: bd1,
-                },
-                Mu {
-                    binder: b2,
-                    body: bd2,
-                },
-            ) => b1 == b2 && bd1 == bd2,
             (ConstructorApply { ctor: c1, args: a1 }, ConstructorApply { ctor: c2, args: a2 }) => {
                 c1 == c2 && a1 == a2
             }
             (RecursiveRef(n1), RecursiveRef(n2)) => n1 == n2,
+            // Whole-set handle: identity is the set pointer, never the (cyclic) schema.
+            (RecursiveGroup(a), RecursiveGroup(b)) => Rc::ptr_eq(a, b),
             (DeferredReturn(a), DeferredReturn(b)) => a == b,
             _ => false,
         }
@@ -453,17 +372,16 @@ impl<'a> Eq for KType<'a> {}
 /// The arena-pointer variants hash their stable identity key — `Module` hashes
 /// `scope_id()`, `AbstractType` hashes its `source.scope_id()`, `Signature` hashes
 /// `sig_id()` — never the raw pointer, matching how `PartialEq` resolves them. `Module`'s
-/// `frame` lifecycle
-/// anchor and the payload-only `UserTypeKind` fields stay excluded (the latter via
-/// `UserTypeKind`'s discriminant-only `Hash`). Recursion bottoms out at the leaf
-/// `RecursiveRef`, so `Mu` / `ConstructorApply` hashing is bounded.
+/// `frame` lifecycle anchor stays excluded. A `SetRef` hashes `(Rc::as_ptr(set), index)`
+/// ONLY — never the schema, which is cyclic. Recursion bottoms out at the leaf
+/// `RecursiveRef` / `SetLocal`, so `ConstructorApply` hashing is bounded.
 impl<'a> std::hash::Hash for KType<'a> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         use KType::*;
         std::mem::discriminant(self).hash(state);
         match self {
-            Number | Str | Bool | Null | Identifier | KExpression | TypeExprRef | Type | Any
-            | AnyModule | AnySignature => {}
+            Number | Str | Bool | Null | Identifier | KExpression | SigiledTypeExpr
+            | TypeExprRef | Type | Any | AnyModule | AnySignature => {}
             List(t) => t.hash(state),
             Dict(k, v) => {
                 k.hash(state);
@@ -479,15 +397,11 @@ impl<'a> std::hash::Hash for KType<'a> {
                 params.hash(state);
                 ret.hash(state);
             }
-            UserType {
-                kind,
-                scope_id,
-                name,
-            } => {
-                kind.hash(state);
-                scope_id.hash(state);
-                name.hash(state);
+            SetRef { set, index } => {
+                (Rc::as_ptr(set) as *const ()).hash(state);
+                index.hash(state);
             }
+            SetLocal(i) => i.hash(state),
             AnyUserType { kind } => kind.hash(state),
             Signature { sig, pinned_slots } => {
                 sig.sig_id().hash(state);
@@ -498,15 +412,13 @@ impl<'a> std::hash::Hash for KType<'a> {
                 source.scope_id().hash(state);
                 name.hash(state);
             }
-            Mu { binder, body } => {
-                binder.hash(state);
-                body.hash(state);
-            }
             ConstructorApply { ctor, args } => {
                 ctor.hash(state);
                 args.hash(state);
             }
             RecursiveRef(n) => n.hash(state),
+            // Set-pointer identity ONLY — never the cyclic schema, matching `PartialEq`.
+            RecursiveGroup(set) => (Rc::as_ptr(set) as *const ()).hash(state),
             DeferredReturn(s) => s.hash(state),
         }
     }
@@ -522,7 +434,15 @@ impl<'a> std::fmt::Debug for KType<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::recursive_set::{NominalMember, NominalSchema};
     use super::*;
+
+    /// A singleton `Rc<RecursiveSet>` over a struct member named `name`, schema filled.
+    fn struct_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
+        let member = NominalMember::pending(name.into(), scope_id, NominalKind::Struct);
+        member.fill(NominalSchema::Struct(Record::new()));
+        Rc::new(RecursiveSet::new(vec![member]))
+    }
 
     #[test]
     fn name_renders_parameterized_list() {
@@ -658,98 +578,19 @@ mod tests {
     }
 
     #[test]
-    fn name_renders_mu_as_binder() {
-        let t = KType::Mu {
-            binder: "Tree".into(),
-            body: Box::new(KType::List(Box::new(KType::RecursiveRef("Tree".into())))),
-        };
-        assert_eq!(t.name(), "Tree");
-    }
-
-    #[test]
     fn name_renders_recursive_ref_as_name() {
         let t = KType::RecursiveRef("Tree".into());
         assert_eq!(t.name(), "Tree");
     }
 
     #[test]
-    fn user_type_kind_surface_keywords() {
-        assert_eq!(UserTypeKind::struct_sentinel().surface_keyword(), "Struct");
-        assert_eq!(UserTypeKind::tagged_sentinel().surface_keyword(), "Tagged");
+    fn nominal_kind_surface_keywords() {
+        assert_eq!(NominalKind::Struct.surface_keyword(), "Struct");
+        assert_eq!(NominalKind::Tagged.surface_keyword(), "Tagged");
+        assert_eq!(NominalKind::Newtype.surface_keyword(), "Newtype");
         assert_eq!(
-            UserTypeKind::Newtype {
-                repr: Box::new(KType::Number)
-            }
-            .surface_keyword(),
-            "Newtype",
-        );
-        assert_eq!(
-            UserTypeKind::TypeConstructor {
-                schema: Rc::new(HashMap::new()),
-                param_names: vec!["T".into()],
-            }
-            .surface_keyword(),
+            NominalKind::TypeConstructor.surface_keyword(),
             "TypeConstructor",
-        );
-    }
-
-    #[test]
-    fn newtype_kind_partial_eq_ignores_repr() {
-        let a: UserTypeKind<'_> = UserTypeKind::Newtype {
-            repr: Box::new(KType::Number),
-        };
-        let b: UserTypeKind<'_> = UserTypeKind::Newtype {
-            repr: Box::new(KType::Str),
-        };
-        assert_eq!(a, b);
-        assert_ne!(a, UserTypeKind::struct_sentinel());
-        assert_ne!(UserTypeKind::struct_sentinel(), a);
-    }
-
-    /// `Struct`/`Tagged` equality ignores the fields/schema payload, so a
-    /// payload-empty sentinel compares equal to a schema-bearing identity — the
-    /// property the SCC cycle-close upsert relies on.
-    #[test]
-    fn struct_and_tagged_partial_eq_ignore_payload() {
-        let empty = UserTypeKind::struct_sentinel();
-        let full = UserTypeKind::Struct {
-            fields: Rc::new(Record::from_pairs(vec![("x".into(), KType::Number)])),
-        };
-        assert_eq!(empty, full);
-
-        let empty_t = UserTypeKind::tagged_sentinel();
-        let mut schema = HashMap::new();
-        schema.insert("some".into(), KType::Number);
-        let full_t = UserTypeKind::Tagged {
-            schema: Rc::new(schema),
-        };
-        assert_eq!(empty_t, full_t);
-
-        assert_ne!(empty, empty_t);
-    }
-
-    #[test]
-    fn user_type_kind_type_constructor_partial_eq_ignores_param_names() {
-        let a: UserTypeKind<'_> = UserTypeKind::TypeConstructor {
-            schema: Rc::new(HashMap::new()),
-            param_names: vec!["T".into()],
-        };
-        let b: UserTypeKind<'_> = UserTypeKind::TypeConstructor {
-            schema: Rc::new(HashMap::new()),
-            param_names: vec!["U".into()],
-        };
-        let empty: UserTypeKind<'_> = UserTypeKind::TypeConstructor {
-            schema: Rc::new(HashMap::new()),
-            param_names: Vec::new(),
-        };
-        assert_eq!(a, b);
-        assert_eq!(a, empty);
-        assert_ne!(a, UserTypeKind::struct_sentinel());
-        assert_ne!(
-            a,
-            UserTypeKind::Newtype {
-                repr: Box::new(KType::Number)
-            }
         );
     }
 
@@ -757,14 +598,14 @@ mod tests {
     fn any_user_type_name_renders_kind_keyword() {
         assert_eq!(
             KType::AnyUserType {
-                kind: UserTypeKind::struct_sentinel()
+                kind: NominalKind::Struct
             }
             .name(),
             "Struct"
         );
         assert_eq!(
             KType::AnyUserType {
-                kind: UserTypeKind::tagged_sentinel()
+                kind: NominalKind::Tagged
             }
             .name(),
             "Tagged"
@@ -834,40 +675,34 @@ mod tests {
                 },
             ),
             (
-                KType::UserType {
-                    kind: UserTypeKind::struct_sentinel(),
-                    scope_id: sid,
-                    name: "Point".into(),
-                },
-                KType::UserType {
-                    kind: UserTypeKind::struct_sentinel(),
-                    scope_id: sid,
-                    name: "Point".into(),
-                },
-            ),
-            (
                 KType::AnyUserType {
-                    kind: UserTypeKind::tagged_sentinel(),
+                    kind: NominalKind::Tagged,
                 },
                 KType::AnyUserType {
-                    kind: UserTypeKind::tagged_sentinel(),
-                },
-            ),
-            (
-                KType::Mu {
-                    binder: "Tree".into(),
-                    body: Box::new(KType::List(Box::new(KType::RecursiveRef("Tree".into())))),
-                },
-                KType::Mu {
-                    binder: "Tree".into(),
-                    body: Box::new(KType::List(Box::new(KType::RecursiveRef("Tree".into())))),
+                    kind: NominalKind::Tagged,
                 },
             ),
             (
                 KType::RecursiveRef("Tree".into()),
                 KType::RecursiveRef("Tree".into()),
             ),
+            (KType::SetLocal(2), KType::SetLocal(2)),
         ];
+        // A `SetRef` pair sharing one `Rc` — identity is `(set ptr, index)`, so the same
+        // allocation must hash and compare equal.
+        let shared = struct_set("Point", sid);
+        let set_ref_a = KType::SetRef {
+            set: Rc::clone(&shared),
+            index: 0,
+        };
+        let set_ref_b = KType::SetRef {
+            set: Rc::clone(&shared),
+            index: 0,
+        };
+        let pairs: Vec<(KType<'_>, KType<'_>)> = pairs
+            .into_iter()
+            .chain(std::iter::once((set_ref_a, set_ref_b)))
+            .collect();
         for (a, b) in &pairs {
             assert_eq!(a, b, "values must be equal: {:?}", a);
             assert_eq!(
@@ -879,27 +714,31 @@ mod tests {
         }
     }
 
-    /// `UserType` identity is `(kind-tag, scope_id, name)` and `Struct`'s `fields`
-    /// payload is *not* part of it. Two `UserType`s with different field payloads but
-    /// the same identity compare equal — so `Hash` must agree (the property the SCC
-    /// cycle-close upsert and `.ktype()` sentinel synthesis depend on).
+    /// `SetRef` identity is `(set ptr, index)` and never descends the (cyclic) schema. Two
+    /// `SetRef`s over the same `Rc` allocation and index compare equal — so `Hash` must
+    /// agree. Two over *distinct* allocations of the same name compare unequal.
     #[test]
-    fn hash_ignores_struct_payload_like_eq() {
+    fn hash_keys_set_ref_on_pointer_and_index() {
         let sid = ScopeId::from_raw(0, 0x1234);
-        let empty = KType::UserType {
-            kind: UserTypeKind::struct_sentinel(),
-            scope_id: sid,
-            name: "Point".into(),
+        let set = struct_set("Point", sid);
+        let a = KType::SetRef {
+            set: Rc::clone(&set),
+            index: 0,
         };
-        let full = KType::UserType {
-            kind: UserTypeKind::Struct {
-                fields: Rc::new(Record::from_pairs(vec![("x".into(), KType::Number)])),
-            },
-            scope_id: sid,
-            name: "Point".into(),
+        let b = KType::SetRef {
+            set: Rc::clone(&set),
+            index: 0,
         };
-        assert_eq!(empty, full);
-        assert_eq!(hash_of(&empty), hash_of(&full));
+        assert_eq!(a, b);
+        assert_eq!(hash_of(&a), hash_of(&b));
+
+        // A separate allocation with the same name is a distinct identity.
+        let other = struct_set("Point", sid);
+        let c = KType::SetRef {
+            set: other,
+            index: 0,
+        };
+        assert_ne!(a, c);
     }
 
     /// Distinct variants must not collide structurally — the leading discriminant
@@ -921,14 +760,11 @@ mod tests {
     }
 
     #[test]
-    fn user_type_name_renders_bare_name() {
-        // Renders the declared `name`, not the kind keyword: a `Point` struct slot shows
-        // `Point`, not `Struct`.
-        let t = KType::UserType {
-            kind: UserTypeKind::struct_sentinel(),
-            scope_id: ScopeId::from_raw(0, 0x1234),
-            name: "Point".into(),
-        };
+    fn set_ref_name_renders_member_name() {
+        // Renders the member's declared `name`, not the kind keyword: a `Point` struct
+        // slot shows `Point`, not `Struct`.
+        let set = struct_set("Point", ScopeId::from_raw(0, 0x1234));
+        let t = KType::SetRef { set, index: 0 };
         assert_eq!(t.name(), "Point");
     }
 }

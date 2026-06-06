@@ -7,7 +7,8 @@ same three layers:
    the consumer's `LexicalFrame`.
 2. **`Bindings` finds the entry** in that ancestor's per-kind map and
    gates it against the consumer's `chain_cutoff` via the
-   `visible(b.nominal_binder || b.idx < c)` predicate.
+   `visible(b.idx < c)` predicate — one rule across the value and type
+   languages, with no per-binding exemption.
 3. **`KType` predicates accept or reject** the candidate against the
    slot's declared shape.
 
@@ -104,10 +105,13 @@ producer — so the lookup is a single map read gated by `visible`.
 
 The visibility predicate is one line —
 [`visible(b: BindingIndex, chain_cutoff: Option<usize>)`](../../src/machine/core/bindings.rs)
-— shared across all of them. `b.idx < c` is the strict
-value-style gate; the `nominal_binder` carve-out lets `STRUCT` /
-named `UNION` / `SIG` / `MODULE` / `FUNCTOR` declared names cross
-the cutoff so mutual-recursive nominal references work.
+— shared across all of them. `b.idx < c` is the strict gate, and it is the *only*
+rule: every binder — value and type alike — gates its references against its own
+lexical position, so a forward reference is a position error in both languages.
+Mutual recursion of two or more nominal types is expressed with a `RECURSIVE TYPES`
+block, which scopes its threaded group within strict lexical order rather than
+bypassing the cutoff (see
+[user-types.md § `RECURSIVE TYPES`](user-types.md#recursive-types--the-mutual-recursion-construct)).
 
 ## Layer 3 — `KType` predicates
 
@@ -180,10 +184,11 @@ What each topic doc adds beyond this protocol:
 - [ktype.md](ktype.md) — `KType` variants, variance under the three
   predicates, container parameterization, and the overload-bucket
   visibility filter as it interacts with slot-specificity.
-- [user-types.md](user-types.md) — nominal-identity install through
-  `Scope::register_type_upsert`, the specificity stratification for
-  `UserType` vs `AnyUserType` vs `Any`, and the
-  `placeholders`-driven cycle close for mutually recursive nominals.
+- [user-types.md](user-types.md) — the `RecursiveSet` nominal model
+  (`SetRef` / `SetLocal` / `RecursiveGroup`), nominal-identity install
+  through `Scope::register_type_upsert`, the specificity stratification
+  for a concrete `SetRef` vs `AnyUserType` vs `Any`, and the
+  `RECURSIVE TYPES` block for mutually recursive nominals.
 - [execution-model.md § Dispatch-time name placeholders](../execution-model.md#dispatch-time-name-placeholders)
   — how forward references park through the `placeholders` /
   `pending_overloads` tables and resume on producer finalize, plus

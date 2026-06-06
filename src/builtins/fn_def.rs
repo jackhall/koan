@@ -60,15 +60,22 @@ pub fn body<'a>(
     // reference (deferring elaboration to per-call scope at invoke time).
     let param_names = signature::collect_param_names_from_signature(&signature_expr);
 
-    let mut elaborator = Elaborator::new(scope);
+    // Gate param type names to the FN's lexical position — a parameter naming a later type
+    // is a position error, like any other forward type reference.
+    let mut elaborator = Elaborator::new(scope).with_chain(sched.current_lexical_chain());
 
     // `None` verdict context: FUNCTOR's arm consumes a verdict computed against
     // `Some(&param_type_map)`; FN computes a no-op `Admissible` and drops it.
-    let (return_type_state, _verdict) =
-        match classify_return_type(return_type_raw, &param_names, scope, None) {
-            Ok(p) => p,
-            Err(e) => return err(e),
-        };
+    let (return_type_state, _verdict) = match classify_return_type(
+        return_type_raw,
+        &param_names,
+        scope,
+        sched.current_lexical_chain(),
+        None,
+    ) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
 
     let params = match signature::parse_fn_param_list(&signature_expr, &mut elaborator) {
         ParamListOutcome::Done(es) => ParamListResult::Done(es),
@@ -82,8 +89,7 @@ pub fn body<'a>(
         },
     };
 
-    // Value-style bind_index: FN produces a callable but registers no
-    // sibling-visible nominal identity, so no D7 carve-out applies.
+    // The FN name binds at its own lexical position, like every other binder.
     let bind_index = sched
         .current_lexical_chain()
         .map(|chain| BindingIndex::value(chain.index))
@@ -159,11 +165,16 @@ pub fn body_record_schema<'a>(
 
     // `None` verdict context: the FUNCTOR-only return admissibility check is
     // skipped (an anonymous function is never a functor).
-    let (return_type_state, _verdict) =
-        match classify_return_type(return_type_raw, &param_names, scope, None) {
-            Ok(p) => p,
-            Err(e) => return err(e),
-        };
+    let (return_type_state, _verdict) = match classify_return_type(
+        return_type_raw,
+        &param_names,
+        scope,
+        sched.current_lexical_chain(),
+        None,
+    ) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
 
     let bind_index = sched
         .current_lexical_chain()
@@ -206,9 +217,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // once its signature is known. The constructed `KObject::KFunction` projects
     // its full signature through `ktype()` at the call site.
     //
-    // Two keyworded overloads cover the return-type carrier — `TypeExprRef` for
-    // `Type(_)` (`-> Number`), `KExpression` for parens-form
-    // (`-> (MODULE_TYPE_OF Er Type)`). `Future(KTypeValue(_))` post-Combine wakes
+    // Two keyworded overloads cover the return-type carrier — `TypeExprRef` for a bare
+    // `Type(_)` (`-> Number`) and `SigiledTypeExpr` for a `:(…)` / dotted form
+    // (`-> Er.Type`, `-> :(Set WITH {…})`). `Future(KTypeValue(_))` post-Combine wakes
     // admit only against `TypeExprRef`. A third overload (below) carries the
     // anonymous `:{…}` record-schema signature.
     //
@@ -241,8 +252,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         None,
         Some(binder_bucket),
         false,
-        false,
     );
+    // Lazy `:(...)` return carrier — a dotted/sigil return (`-> Er.Type`, `-> :(LIST OF T)`)
+    // is a `SigiledTypeExpr`; the `:SigiledTypeExpr` slot captures it raw (more specific than
+    // `:TypeExprRef`, so it wins) and `extract_return_type_raw` defers a param-referencing one
+    // per-call instead of eager-sub-dispatching it to an unbound parameter.
     register_builtin_full(
         scope,
         "FN",
@@ -252,7 +266,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("FN"),
                 arg("signature", KType::KExpression),
                 kw("->"),
-                arg("return_type", KType::KExpression),
+                arg("return_type", KType::SigiledTypeExpr),
                 kw("="),
                 arg("body", KType::KExpression),
             ],
@@ -260,7 +274,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         None,
         Some(binder_bucket),
-        false,
         false,
     );
     // Anonymous overload: a `:{…}` record-schema operand is a `SigiledTypeExpr`,
@@ -285,7 +298,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body_record_schema,
         None,
         None,
-        false,
         false,
     );
 }

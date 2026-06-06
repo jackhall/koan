@@ -22,19 +22,24 @@ at runtime under tree borrows. The Miri slate pins those paths with integration 
 `module_body_dispatch_does_not_dangle`) standing in for a guarantee the compiler does
 not yet make.
 
-**Impact.**
+**Acceptance criteria.**
 
 - Re-anchoring a per-call frame's borrowed parts with a lifetime longer than its
-  `Rc<CallArena>` witness is a compile error, so dispatch's frame re-anchor is sound by
-  type rather than re-argued in a SAFETY comment at each call.
-- The scheduler threads the captured child scope through a branded handle, so a
-  continuation that outlives its frame fails to compile.
-- The dispatch / scheduler integration tests (`type_op_dispatch_does_not_dangle`,
-  `try_inside_tco_position_preserves_frame_chain`, `module_body_dispatch_does_not_dangle`)
-  retire — their invariant is now type-enforced — shrinking the Miri slate toward the
-  minimal mirrors of the irreducible transmute plus the genuinely-dynamic checks (the
-  cycle gate, leak detection, and the `RefCell`-under-`&Module` discipline
-  `opaque_ascription_re_binds_do_not_alias_unsoundly` pins).
+  `Rc<CallArena>` witness is a compile error, and the `unsafe`
+  [`CallArena::anchored_parts`](../../src/machine/core/arena.rs) re-anchor is replaced
+  by the branded handle.
+- The MODULE `Combine` continuation threads the captured child scope through the branded
+  frame handle, so a continuation that outlives its frame is a compile error.
+- The branded handle carries `Scope<'a>`'s invariance structurally and is
+  variance-checked, so a covariant coercion that reintroduces a use-after-free is a
+  compile error.
+- The dispatch / scheduler integration tests `type_op_dispatch_does_not_dangle`,
+  `try_inside_tco_position_preserves_frame_chain`, and
+  `module_body_dispatch_does_not_dangle` are removed from the Miri slate, each retired
+  only once its regression is a compile error.
+- `opaque_ascription_re_binds_do_not_alias_unsoundly` remains on the Miri slate, since
+  it pins a `RefCell`-under-`&Module` borrow discipline rather than a lifetime
+  fabrication.
 
 **Directions.**
 
@@ -64,12 +69,9 @@ not yet make.
 
 ## Dependencies
 
-**Requires:** [Scheduler run/frame lifetime split](scheduler-lifetime-split.md) — a branded
-frame handle can make the re-anchor a compile error only once per-call scopes carry a
-lifetime distinct from the run `'a` for the brand to bind to; a spike established the brand
-is unreachable while the two are welded. The `CallArena` brand boundary this builds on has
-already shipped (the branded [`ScopePtr`](../../src/machine/core/scope_ptr.rs) concentrating
-scope-re-attach fabrication at the non-generic `CallArena`); `anchored_parts` is precisely
-the unsafe surface that boundary leaves for this follow-up.
+**Requires:**
+
+- [Scheduler run/frame lifetime split](scheduler-lifetime-split.md) — supplies the per-call
+  frame lifetime, distinct from the run `'a`, that the compile-time re-anchor brand binds to.
 
 **Unblocks:** none tracked yet.

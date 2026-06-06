@@ -8,7 +8,7 @@
 //! These exercise the *sigil boundary*: a `:(...)` expression evaluates its
 //! inner expression through the standard dispatch classifier and the result is
 //! a type-side carrier (`KTypeValue` for structural types, `Module` /
-//! `Signature` / `UserType` for nominal identities) that downstream slots
+//! `Signature` / `SetRef` for nominal identities) that downstream slots
 //! type-check naturally.
 //!
 //! Companion design: [design/typing/type-language-via-dispatch.md].
@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::{KObject, KType, UserTypeKind};
+use koan::machine::model::{KObject, KType, ProjectedSchema, RecursiveSet};
 use koan::machine::{RuntimeArena, Scheduler, Scope};
 use koan::parse::parse;
 
@@ -203,14 +203,13 @@ fn sigil_functor_lowers_to_kfunctor() {
 fn struct_field_accepts_keyworded_list_of_sigil() {
     let arena = RuntimeArena::new();
     let scope = run(&arena, "STRUCT Foo = (xs :(LIST OF Number))");
-    // STRUCT is type-only — its field schema rides the `UserType { Struct { fields } }`
-    // identity in `types`.
+    // STRUCT is type-only — its field schema rides the sealed `SetRef` member in `types`.
     let fields = match scope.resolve_type("Foo") {
-        Some(KType::UserType {
-            kind: UserTypeKind::Struct { fields },
-            ..
-        }) => fields.clone(),
-        other => panic!("Foo must be a Struct identity in types, got {other:?}"),
+        Some(KType::SetRef { set, index }) => match RecursiveSet::projected_schema(set, *index) {
+            ProjectedSchema::Struct(fields) => fields,
+            _ => panic!("Foo must project a Struct schema"),
+        },
+        other => panic!("Foo must be a Struct SetRef in types, got {other:?}"),
     };
     assert_eq!(fields.len(), 1);
     let (xs_name, xs_type) = fields.iter().next().expect("one field");
@@ -230,14 +229,13 @@ fn union_field_accepts_keyworded_map_sigil() {
         &arena,
         "UNION Maybe = (some :(MAP Str -> Number), none :Null)",
     );
-    // UNION is type-only — its variant schema rides the `UserType { Tagged { schema } }`
-    // identity in `types`.
+    // UNION is type-only — its variant schema rides the sealed `SetRef` member in `types`.
     let schema = match scope.resolve_type("Maybe") {
-        Some(KType::UserType {
-            kind: UserTypeKind::Tagged { schema },
-            ..
-        }) => schema.clone(),
-        other => panic!("Maybe must be a Tagged identity in types, got {other:?}"),
+        Some(KType::SetRef { set, index }) => match RecursiveSet::projected_schema(set, *index) {
+            ProjectedSchema::Tagged(schema) => schema,
+            _ => panic!("Maybe must project a Tagged schema"),
+        },
+        other => panic!("Maybe must be a Tagged SetRef in types, got {other:?}"),
     };
     let some_kt = schema.get("some").expect("some tag");
     match some_kt {
