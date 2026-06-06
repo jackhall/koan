@@ -16,7 +16,13 @@ child scope lives only as long as its [`CallArena`](../../src/machine/core/arena
 held — its arena drops per-frame, the TCO/Done reclamation that keeps loops O(1) memory. The
 scheduler papers over the gap by fabricating `'a` for that shorter-lived scope: the unsafe
 `anchored_parts` re-anchor and the `Node.scope: &'a` store both stand in for a lifetime the
-borrow checker is never shown. The single `'a` is itself load-bearing — nodes store work
+borrow checker is never shown. One such `Node.scope` capture is unavoidable and surface-independent:
+a deferred computed return type (`-> Er.Type`, `-> :(Set WITH {…})`) that references a parameter
+spawns a per-call sub-Dispatch bound to the per-call `child`
+([`invoke.rs`](../../src/machine/core/kfunction/invoke.rs)) — inherent to the deferral mechanism
+(every `:(…)`/dotted computed return rides it; made memory-safe by the Combine's per-call-frame Rc),
+so the split carries it like every other per-call scope rather than retiring it. The single `'a` is
+itself load-bearing — nodes store work
 built in an earlier step and read each other's outputs across steps
 (`read_result -> &'a KObject<'a>`), so it genuinely must span the whole run; per-call scopes
 are the one thing nested strictly inside it, and the only thing that needs a shorter one.
@@ -95,13 +101,8 @@ are the one thing nested strictly inside it, and the only thing that needs a sho
 
 ## Dependencies
 
-**Requires:**
-
-- [Plain-English type-operation surfaces](../type_language/type-operation-surfaces.md) — its
-  Phase 4 deletes FN's `KExpression`-return overload, whose per-call deferral spawns a
-  sub-Dispatch bound to the per-call `child` scope (`invoke.rs:180-186`); removing that
-  capture clears a per-call-scope-into-stored-scheduler-state entanglement the split would
-  otherwise have to carry.
+**Requires:** none — the per-call deferred-return scope capture this would otherwise wait on is
+inherent to the deferral mechanism (see Problem), not a surface that another item can retire.
 
 **Unblocks:**
 

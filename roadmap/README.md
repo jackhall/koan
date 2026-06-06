@@ -62,6 +62,13 @@ What's shipped that the open items below build on:
   block; self-recursion threads the declaring name. See
   [design/typing/user-types.md](../design/typing/user-types.md) and
   [design/typing/elaboration.md](../design/typing/elaboration.md).
+- *Plain-English type-operation surfaces.* The `type_ops.rs` underscore-keyword family is
+  retired: a module type-member is the dotted `M.T`, `:(LIST OF T)` / `:(MAP K -> V)` replace
+  `LIST_OF` / `DICT_OF`, and signature specialization is the infix `sig WITH {Slot = Type}`
+  (record-literal bindings). Computed return types are bare tokens or `:(…)` / dotted
+  `SigiledTypeExpr` carriers — the redundant parens-form `KType::KExpression` return overload is
+  gone. See [design/typing/functors.md](../design/typing/functors.md) and
+  [design/typing/ktype.md](../design/typing/ktype.md).
 
 ## Next items
 
@@ -72,8 +79,6 @@ without first landing something else:
   a codebase can span more than one source file and files become modules.
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md) —
   promote each `UNION` variant to its own `KType` so `MATCH` collapses into type-dispatch.
-- [Plain-English type-operation surfaces](type_language/type-operation-surfaces.md) —
-  retire the `type_ops.rs` underscore keywords into the existing spaced / dotted / infix forms.
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md) — the reduction pre-pass
   that lets a recognized operator run (`a + b + c`, `A | B | C`) evaluate by its group's mode.
 - [Modular implicits (predicate-typing stage 5)](predicate_typing/modular-implicits.md) —
@@ -99,7 +104,7 @@ coherence, witness types — that ride on top of the type-language substrate.
 The agreed design is captured in [design/typing/](../design/typing/README.md);
 stages 1 and 2 shipped (the module language: `MODULE`/`SIG` declarators,
 `:|`/`:!` ascription, per-module type identity, plus the scheduler-driven
-elaborator, `SIG_WITH` sharing constraints, and higher-kinded type-constructor
+elaborator, `WITH` sharing constraints, and higher-kinded type-constructor
 slots, plus runtime type-parameter carriers on `List` / `Dict` / `Result`
 values with ascription stamping at the FN return, argument, and `LET`
 boundaries):
@@ -140,7 +145,6 @@ build on:
 
 - [Anonymous structural unions](type_language/anonymous-unions.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
-- [Plain-English type-operation surfaces](type_language/type-operation-surfaces.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 
 ### Editor tooling — [editor_tooling/](editor_tooling/)

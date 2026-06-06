@@ -16,8 +16,10 @@ use std::rc::Rc;
 
 use super::param_refs::{kexpression_references_any, type_expr_references_any};
 
-/// `ExprCarrier` is captured raw rather than sub-dispatched in the outer scope because
-/// overload 2's expression may reference a parameter that is unbound there.
+/// `ExprCarrier` is captured raw rather than sub-dispatched in the outer scope because a
+/// `:(…)` / dotted return's inner expression may reference a parameter unbound there. It
+/// arrives via the `:SigiledTypeExpr` return overload, whose `resolve_for` unwraps the
+/// sigil to its inner `KObject::KExpression`.
 pub(crate) enum ReturnTypeRaw<'a> {
     Resolved(KType<'a>),
     TypeExprCarrier(TypeName),
@@ -34,7 +36,7 @@ pub(crate) enum ReturnTypeState<'a> {
         producers: Vec<NodeId>,
     },
     Deferred(DeferredReturn<'a>),
-    /// `Expression(_)` carrier (e.g. `-> (Mo.Ty)`) that doesn't reference any FN
+    /// `Expression(_)` carrier (e.g. `-> :(Mo.Ty)`) that doesn't reference any FN
     /// parameter; safe to resolve once at FN-def time. Scheduling happens via
     /// `super::finalize::defer_via_combine` so all owned-sub registration lives
     /// at one site.

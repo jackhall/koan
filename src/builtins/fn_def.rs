@@ -217,9 +217,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // once its signature is known. The constructed `KObject::KFunction` projects
     // its full signature through `ktype()` at the call site.
     //
-    // Two keyworded overloads cover the return-type carrier — `TypeExprRef` for
-    // `Type(_)` (`-> Number`), `KExpression` for parens-form
-    // (`-> Er.Type`). `Future(KTypeValue(_))` post-Combine wakes
+    // Two keyworded overloads cover the return-type carrier — `TypeExprRef` for a bare
+    // `Type(_)` (`-> Number`) and `SigiledTypeExpr` for a `:(…)` / dotted form
+    // (`-> Er.Type`, `-> :(Set WITH {…})`). `Future(KTypeValue(_))` post-Combine wakes
     // admit only against `TypeExprRef`. A third overload (below) carries the
     // anonymous `:{…}` record-schema signature.
     //
@@ -244,25 +244,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 arg("signature", KType::KExpression),
                 kw("->"),
                 arg("return_type", KType::TypeExprRef),
-                kw("="),
-                arg("body", KType::KExpression),
-            ],
-        ),
-        body,
-        None,
-        Some(binder_bucket),
-        false,
-    );
-    register_builtin_full(
-        scope,
-        "FN",
-        sig(
-            KType::Any,
-            vec![
-                kw("FN"),
-                arg("signature", KType::KExpression),
-                kw("->"),
-                arg("return_type", KType::KExpression),
                 kw("="),
                 arg("body", KType::KExpression),
             ],

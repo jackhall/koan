@@ -70,9 +70,9 @@ pub enum ReturnType<'a> {
 ///
 /// - `TypeExpr` — parser-preserved structured form (`Er`, `List<Er>`). Re-elaborated per
 ///   call via `elaborate_type_expr`. Owns its strings, so no arena lifetime.
-/// - `Expression` — captured parens-form expression (`Er.Type`). Re-runs
-///   as a sub-Dispatch under the per-call scope; the resulting `KTypeValue`'s inner
-///   `KType` is the per-call return type.
+/// - `Expression` — captured `:(…)` / dotted return expression (`Er.Type`,
+///   `Set WITH {…}`). Re-runs as a sub-Dispatch under the per-call scope; the resulting
+///   `KTypeValue`'s inner `KType` is the per-call return type.
 pub enum DeferredReturn<'a> {
     TypeExpr(TypeName),
     Expression(KExpression<'a>),

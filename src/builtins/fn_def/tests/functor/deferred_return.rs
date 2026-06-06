@@ -35,7 +35,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
     }
 }
 
-/// `Er.Type` parens-form return type registers as
+/// `Er.Type` dotted return type registers as
 /// `ReturnType::Deferred(Expression(...))` rather than erroring "unbound name
 /// `Er`" at FN-construction. Pins the FN-def side; the end-to-end invocation is
 /// covered by [`functor_get_zero_on_opaque_view_re_tags_slot_read`].
@@ -134,7 +134,7 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     );
     run(
         scope,
-        "FN (MK Er :OrderedSig) -> (Set WITH {Elt = Er.Type}) = \
+        "FN (MK Er :OrderedSig) -> :(Set WITH {Elt = Er.Type}) = \
          (MODULE Result = ((LET Elt = Number) (LET insert = 0)))",
     );
     let f = lookup_fn(scope, "MK");

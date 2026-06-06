@@ -60,6 +60,5 @@ manifest-equality rule to enforce.
 
 **Unblocks:** none tracked yet.
 
-Independent of the `SIG_WITH` → infix `WITH` surface migration (the `WITH` builtin's slot
-validation is unconstrained today precisely because there is no manifest/abstract distinction to
-enforce — this item is what would give it teeth).
+The infix `WITH` builtin's slot validation is unconstrained today precisely because there is no
+manifest/abstract distinction to enforce — this item is what would give it teeth.

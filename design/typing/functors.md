@@ -103,7 +103,7 @@ wording. FN imposes no such constraint.
 The same parameter-name scan that classifies an FN return type into
 `Resolved` / `Deferred` runs for FUNCTOR; the validation gates on the
 denotation of the resolved or deferred carrier. A return type like
-`(Set WITH {Elt = Er})` that references a per-call parameter is
+`:(Set WITH {Elt = Er})` that references a per-call parameter is
 admissible because the outer carrier (`WITH`) is a signature constructor;
 the `Er` reference resolves through the per-call `bindings.types` write at
 dispatch.
@@ -155,7 +155,7 @@ keeps the generative/applicative choice visible at the declaration. See
 Sharing constraints — pinning a functor's output abstract type to a
 specific concrete type — ride on the `WITH` builtin described in
 [Type expressions and constraints](#type-expressions-and-constraints). A
-FUNCTOR whose return type is `(SetSig WITH {Elt = Number})` declares
+FUNCTOR whose return type is `:(SetSig WITH {Elt = Number})` declares
 the constraint at the return slot; the body's `MODULE Result` must mirror
 `Elt = Number` for the return-type check to admit it. There is no separate
 `with type` keyword.
@@ -222,7 +222,7 @@ above the value language.
 ## Deferred return-type elaboration
 
 Return-type expressions that reference a per-call FUNCTOR parameter
-(`-> Er`, `-> Er.Type`, `-> (Set WITH {Elt = Er})`)
+(`-> Er`, `-> Er.Type`, `-> :(Set WITH {Elt = Er})`)
 ride a *deferred* return-type carrier through the per-call scope.
 [`ExpressionSignature::return_type`](../../src/machine/model/types/signature.rs)
 is a `ReturnType<'a>` enum, not a bare `KType`: `Resolved(KType)` covers
@@ -276,8 +276,8 @@ written with the `:(FUNCTOR (params) -> R)` sigil:
 
 ```
 LET MakeMap = (FUNCTOR (MAKEMAP Er :OrderedSig)
-                -> :(FUNCTOR (Vo :MonoidSig) -> (Map WITH {Key = Er.Type})) = (
-  FUNCTOR (Vo :MonoidSig) -> (Map WITH {Key = Er.Type}) = (
+                -> :(FUNCTOR (Vo :MonoidSig) -> :(Map WITH {Key = Er.Type})) = (
+  FUNCTOR (Vo :MonoidSig) -> :(Map WITH {Key = Er.Type}) = (
     MODULE Result = ( ... )
   )
 ))
