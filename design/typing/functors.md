@@ -205,7 +205,7 @@ model koan does not adopt.
 The same no-stratum reasoning extends symmetrically to bare type tokens. A
 `:Type`-typed parameter slot admits any `KTypeValue`-carried type — bare
 builtin tokens (`Number`, `Str`, `Bool`, `Null`) and the
-`KTypeValue(KType::UserType { .. })` carrier a struct / union nominal token
+`KTypeValue(KType::SetRef { .. })` carrier a struct / union nominal token
 synthesizes on demand — so `(MAKETREE Number)` against
 `FUNCTOR (MAKETREE Elt :Type) -> …` binds `Elt = KType::Number` per call
 with no call-site wrapping. The per-call type-side bind treats the
@@ -303,33 +303,34 @@ SIG Monad = (
 ```
 
 `(TEMPLATE <param>)` is the declaration form: inside a SIG body it
-binds the slot name (`Wrap` above) to a template
-`KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }`
-carrying the parameter symbol list. The builtin lives in
+binds the slot name (`Wrap` above) to a template `KType::SetRef` whose
+member is a `NominalKind::TypeConstructor` carrying the parameter symbol
+list. The builtin lives in
 [`type_ops.rs`](../../src/builtins/type_ops.rs).
 
 Application uses the `AS` keyworded builtin through the type-expression sigil:
 `:(Number AS Wrap)` in a type-position slot lowers to
-`KType::ConstructorApply { ctor: <the Wrap UserType>, args: [Number] }` —
+`KType::ConstructorApply { ctor: <the Wrap SetRef>, args: [Number] }` —
 structural identity by `(ctor, args)`, mirror of `List(_)` / `Dict(_, _)`.
 The constructor rides in as the `AS` right-hand `:Type` argument, not as a
 dispatch verb, so the call routes through the ordinary keyworded path the
 same way `:(LIST OF Number)` does; the
 [`AS` builtin](../../src/builtins/type_constructors.rs) checks the right-hand
-side is a `TypeConstructor` and arity-checks against its `param_names.len()`.
-A forward reference to an in-flight `LET` constructor name parks on its
-producer through the same bare-name arg resolution every `:Type` slot uses.
+side is a `TypeConstructor`-kind member and arity-checks against its
+`param_names.len()`. A forward reference to an in-flight `LET` constructor
+name parks on its producer through the same bare-name arg resolution every
+`:Type` slot uses.
 
 Higher-kinded slots are **per-call generative on the same path as ordinary
 abstract type slots**. Two opaque ascriptions of the same source module
 against the same SIG mint distinct `TypeConstructor` carriers under each
-resulting module's `type_members[Wrap]` — their `(scope_id, name)` pairs
-differ, so `First.Wrap<Number>` and `Second.Wrap<Number>` are incomparable
-types. The minting site is the same loop in `ascribe.rs:body_opaque` that
-mints `KType::AbstractType` slots; it inspects the SIG's
-`bindings.types[<slot>]` and matches `UserTypeKind::TypeConstructor` so the
-slot inherits its declared kind (falling back to `AbstractType` for plain
-`LET Type = ...` slots).
+resulting module's `type_members[Wrap]` — they sit in distinct sets, so
+their `(set ptr, index)` identities differ and `First.Wrap<Number>` and
+`Second.Wrap<Number>` are incomparable types. The minting site is the same
+loop in `ascribe.rs:body_opaque` that mints `KType::AbstractType` slots; it
+inspects the SIG's `bindings.types[<slot>]` and matches a
+`TypeConstructor`-kind member so the slot inherits its declared kind
+(falling back to `AbstractType` for plain `LET Type = ...` slots).
 
 The surface is **arity-1 only.** The `param_names` list always carries one
 entry; multi-parameter constructors (`Functor F G`) are tracked in

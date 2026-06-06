@@ -25,8 +25,8 @@ use super::super::types::KType;
 /// `"Outer.Inner"`); `type_members` maps the module's abstract type names to the `KType`
 /// they currently expose. Opaque-ascription members mint `KType::AbstractType { source:
 /// Module(self), name }`; the module value itself rides `KType::Module { module, frame }`
-/// in the surrounding `KObject::KTypeValue` (the two are distinguished by KType variant,
-/// not by a shared `UserType` `kind` tag).
+/// in the surrounding `KObject::KTypeValue` (the two are distinguished by `KType` variant —
+/// `AbstractType` vs `Module`).
 pub struct Module<'a> {
     pub path: String,
     child_scope_ptr: ScopePtr<'a>,

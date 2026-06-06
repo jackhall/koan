@@ -344,7 +344,7 @@ fn park_on_literal_producer<'a>(
 ///    lives in the type table, read in step 2.
 /// 2. `resolve_type_with_chain` (a pure `types[name]` read, no park) classifies the
 ///    identity:
-///    - a constructible `UserType` identity → the `Constructor` arm;
+///    - a constructible `SetRef` identity (a sealed nominal type) → the `Constructor` arm;
 ///    - a `KType::KFunctor { body: Some(f) }` (a bound functor) → the `Function`
 ///      arm — its result is a module;
 ///    - a `KType::KFunctor { body: None }` (a bare `:(FUNCTOR …)` annotation) is not
@@ -383,11 +383,10 @@ pub(super) fn type_call<'a>(
             )));
         }
     }
-    // Fresh `types[name]` lookup at construction time. The schema payload rides the
-    // identity, so a recursive type whose cycle-close pre-installed a payload-empty
-    // identity reads the schema-bearing one that finalize's upsert replaced it with —
-    // no value-side carrier involved. A bound functor lives here too, carrying its
-    // callable body on `KType::KFunctor { body: Some(f) }`.
+    // Fresh `types[name]` lookup at construction time. A sealed nominal type's identity is
+    // a `SetRef` whose member carries the schema (filled at the member's finalize) — no
+    // value-side carrier involved. A bound functor lives here too, carrying its callable
+    // body on `KType::KFunctor { body: Some(f) }`.
     let identity = match scope.resolve_type_with_chain(head_t.as_str(), chain) {
         Some(kt) => kt,
         None => {

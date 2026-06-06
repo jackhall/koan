@@ -69,8 +69,8 @@ pub enum NominalSchema<'a> {
     },
 }
 
-/// One nominal type within a [`RecursiveSet`]. `kind` is known at cycle-close; `schema` is
-/// filled at the member's own finalize (two-phase), so it rides a [`RefCell`].
+/// One nominal type within a [`RecursiveSet`]. `kind` is known when the set is created;
+/// `schema` is filled at the member's own finalize (two-phase), so it rides a [`RefCell`].
 pub struct NominalMember<'a> {
     /// Diagnostics / rendering only — never identity.
     pub name: String,
@@ -81,7 +81,7 @@ pub struct NominalMember<'a> {
 }
 
 impl<'a> NominalMember<'a> {
-    /// A member whose schema is not yet filled (cycle-close pre-seal).
+    /// A member whose schema is not yet filled — created before its declaration finalizes.
     pub fn pending(name: String, scope_id: ScopeId, kind: NominalKind) -> Self {
         Self {
             name,
@@ -108,8 +108,9 @@ impl<'a> NominalMember<'a> {
     }
 }
 
-/// A sealed strongly-connected component of nominal types. Created at cycle-close with the
-/// membership fixed; members fill their schemas as they finalize.
+/// A sealed strongly-connected component of nominal types — a singleton for a non-recursive
+/// or self-recursive type, or the whole group declared in a `RECURSIVE TYPES` block. Created
+/// with the membership fixed; members fill their schemas as they finalize.
 pub struct RecursiveSet<'a> {
     members: Vec<NominalMember<'a>>,
     /// `name → index` for sealing a member's transient `RecursiveRef(name)` to

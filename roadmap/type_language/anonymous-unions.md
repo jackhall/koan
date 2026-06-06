@@ -4,7 +4,7 @@ Untagged disjunction types — `:(Number | Str | Bool)` — as a first-class
 type and value, distinct from today's nominal tagged `UNION`.
 
 **Problem.** koan has only nominal tagged unions: `UNION Name = (tag :Type…)`
-declares a `UserType { kind: Tagged { schema } }` whose values carry a tag
+declares a tagged-union nominal (a `RecursiveSet` member of `NominalKind::Tagged`) whose values carry a tag
 discriminant (`src/builtins/union.rs`). There is no untagged disjunction
 `KType` variant (`src/machine/model/types/ktype.rs`), and the `:(...)` type
 language has no union form. A function or MATCH / TRY that legitimately
@@ -29,7 +29,7 @@ construct a tagged value in every arm, or coarsen the slot to `Any`.
 **Directions.**
 
 - *New KType variant — decided.* An untagged disjunction `KType` variant,
-  distinct from `UserTypeKind::Tagged`. Member set order-blind and
+  distinct from a `NominalKind::Tagged` nominal. Member set order-blind and
   idempotent (`A | A = A`); admissibility is set-based (a `:(A | B)` slot
   admits A-typed and B-typed values).
 - *Construction — decided.* A dedicated union-value constructor builtin.
@@ -56,9 +56,6 @@ construct a tagged value in every arm, or coarsen the slot to `Any`.
 
 **Unblocks:**
 
-- [Collapse `UserTypeKind` into a nominal-identity wrapper](nominal-identity-wrapper.md)
-  — the structural union `KType` this item adds is the repr a nominal tagged type
-  folds into.
 
 The underlying type and constructor builtin could be prototyped against a
 variadic type-constructor overload (the `RECORD` / nominal-`UNION` path)

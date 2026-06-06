@@ -61,8 +61,7 @@ for builtins is the root alone.
   seeding a bucket must preserve the builtin overloads, never replace them.
 - *Drop the builtin visibility carve-out — open.* With builtins present in every
   scope, the `idx == 0`-always-visible rule is redundant; confirm nothing else
-  relies on it (notably its interaction with the `nominal_binder` cutoff carve-out)
-  before removing.
+  relies on it before removing.
 
 ## Dependencies
 

@@ -63,8 +63,8 @@ recently-churned subsystems.
 **Unblocks:** none tracked yet — the audit is expected to spawn its own follow-up
 rename/merge items as it surfaces concrete candidates.
 
-The in-flight type-representation items (tagged-union variants as types,
-plain-English type-operation surfaces, and the `UserTypeKind` nominal-wrapper
-collapse) will themselves rename and reshape their own areas. Sequence the audit's
+The in-flight type-representation items (tagged-union variants as types, and
+plain-English type-operation surfaces) will themselves rename and reshape their own
+areas. Sequence the audit's
 passes over those areas after those items land, or coordinate, so the same region
 is not audited twice.

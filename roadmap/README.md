@@ -52,6 +52,16 @@ What's shipped that the open items below build on:
   gated on the [scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md)
   that gives per-call scopes a lifetime distinct from the run `'a` for a brand to bind to.
   See [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
+- *Position-dependent type resolution.* Type names obey strict source order like the value
+  language — a forward type reference is a position error — so the `nominal_binder`
+  visibility carve-out is retired and `visible` is the single `idx < cutoff` rule across both
+  languages. A nominal type is a member of an `Rc`-owned `RecursiveSet`: the external handle
+  is `KType::SetRef { set, index }`, an intra-set sibling is `SetLocal`, and lift is
+  `Rc::clone` of the whole cycle-aware group (replacing the per-declaration `UserType` tag).
+  Mutual recursion of two or more types is co-declared with the `RECURSIVE TYPES Name = (...)`
+  block; self-recursion threads the declaring name. See
+  [design/typing/user-types.md](../design/typing/user-types.md) and
+  [design/typing/elaboration.md](../design/typing/elaboration.md).
 
 ## Next items
 
@@ -74,9 +84,6 @@ without first landing something else:
   reconcile names with behavior across `src/**` (best sequenced after the in-flight type-language items).
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md) —
   make builtins reachable at every scope so the hottest lookups stop walking the chain to root.
-- [Retire the lexical-visibility carve-outs](refactor/position-dependent-type-resolution.md) —
-  make type-name resolution obey source order like the value language, leaving one visibility
-  rule and no per-binding or per-callsite bypass.
 
 ## Open items
 
@@ -134,8 +141,6 @@ build on:
 - [Anonymous structural unions](type_language/anonymous-unions.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
 - [Plain-English type-operation surfaces](type_language/type-operation-surfaces.md)
-- [Collapse `UserTypeKind` into a nominal-identity wrapper](type_language/nominal-identity-wrapper.md)
-- [`RECURSIVE TYPES` block for mutually-recursive nominals](type_language/recursive-types-block.md)
 
 ### Editor tooling — [editor_tooling/](editor_tooling/)
 
@@ -161,4 +166,3 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   compile and the dispatch/scheduler Miri pins retire; rides on the lifetime split above.
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
 - [Collapse the bare-leaf type resolvers](refactor/collapse-bare-leaf-type-resolvers.md)
-- [Retire the lexical-visibility carve-outs](refactor/position-dependent-type-resolution.md)

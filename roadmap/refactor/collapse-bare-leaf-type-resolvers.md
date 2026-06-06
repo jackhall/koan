@@ -8,10 +8,10 @@ two functions that overlap on the scope-chain walk:
 
 - `elaborate_type_expr`
   ([`src/machine/model/types/resolver.rs`](../../src/machine/model/types/resolver.rs)),
-  wrapped by the memoized `Scope::resolve_type_expr` bridge
+  wrapped by the chain-gated, memoized `Scope::resolve_type_expr` bridge
   (`src/machine/execute/dispatch/resolve_type_expr.rs:36`), returns a `KType`, can
-  `Park` on an unfinalized type binder, and threads recursion (`RecursiveRef`) plus
-  synchronous SCC cycle-close. Used by FN/FUNCTOR signatures, LET RHS, ascription, and
+  `Park` on an earlier still-finalizing type binder, and resolves bare leaves against
+  the consumer's lexical chain. Used by FN/FUNCTOR signatures, LET RHS, ascription, and
   return-type slots.
 - `coerce_type_token_value` (`src/machine/execute/dispatch/resolve_type_expr.rs:71`)
   returns a `KObject` carrier *synchronously* — it cannot park — and is the resolver
@@ -22,7 +22,7 @@ two functions that overlap on the scope-chain walk:
 Both bottom out in the same `resolve_type` lookup plus `KType::from_name` fallback. The
 duplicated scope-walk-and-park spine is the value-dispatch name-resolution protocol
 (`resolve_dispatch.rs`'s `NameOutcome`) expressed a second time. `coerce`'s one distinct
-behavior — recovering a paired value-side carrier for a `UserType`/`Module` identity
+behavior — recovering a paired value-side carrier for a `SetRef`/`Module` identity
 instead of synthesizing a `KTypeValue` — is documented as typically-dead: no nominal
 binder dual-writes anymore (SIG was the last), so the recovery misses and falls through
 to synthesis (`src/machine/execute/dispatch/resolve_type_expr.rs:63-66`). And because the
@@ -48,12 +48,12 @@ not-yet-finalized binder has no parking path the compound type forms get.
 - *Paired-carrier recovery — open.* Verify the recovery branch is dead — that no
   dual-writing binder survives — then delete it; otherwise keep it behind the adapter.
   Recommended: prove dead and remove.
-- *Visibility chain — deferred.* `coerce` threads `chain: Option<&LexicalFrame>` via
-  `resolve_type_with_chain`; `elaborate_type_expr` uses plain `resolve_type`. The fold
-  must not simply drop the chain (that bakes in the carve-out). The prerequisite
-  [Retire the lexical-visibility carve-outs](position-dependent-type-resolution.md)
-  chain-gates the elaborator, after which both sides agree and the two chain-passing
-  callsites (`single_poll.rs:241`, `dispatch.rs:97`) fold without a semantics choice.
+- *Visibility chain — decided.* Both sides are now chain-gated: `coerce` threads
+  `chain: Option<&LexicalFrame>` via `resolve_type_with_chain`, and the elaborator
+  behind `Scope::resolve_type_expr` carries its own `LexicalFrame` chain and resolves
+  bare leaves under the same `idx < cutoff` rule. The two agree on visibility, so the
+  fold inherits one rule and the two chain-passing callsites (`single_poll.rs:241`,
+  `dispatch.rs:97`) collapse without a semantics choice.
 - *Parkability — open.* Parking needs the `Combine`-over-producers `NodeStep::Replace`
   shape the sigil lane already uses (`NodeStep` has no `Park` variant). Decide whether to
   gain parking now — one behavior change to validate — or keep the arm synchronous and
@@ -67,11 +67,8 @@ not-yet-finalized binder has no parking path the compound type forms get.
 - [Type language via dispatch](../../design/typing/type-language-via-dispatch.md) — the
   `SigiledTypeExpr` → sub-Dispatch substrate that already routes every compound type form
   through dispatch, leaving the bare leaf as the residual non-dispatch path.
-- [Retire the lexical-visibility carve-outs](position-dependent-type-resolution.md) —
-  settles the visibility-chain direction below: it chain-gates the elaborator, so the
-  fold target inherits one visibility rule instead of dropping the cutoff.
 
 **Unblocks:** none tracked yet.
 
-A leaf cleanup whose only roadmap-level prerequisite is the visibility redesign; it
+A leaf cleanup that builds on the shipped chain-gated `resolve_type_expr` substrate; it
 blocks no open item, and is independent of the in-flight type-language surface work.

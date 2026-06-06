@@ -386,7 +386,7 @@ impl<'a> Scope<'a> {
 
     /// Upsert install for a type-only nominal finalize (STRUCT / named UNION / Result /
     /// MODULE). Writes the sealed `SetRef` identity into [`Bindings::types`], overwriting
-    /// a `PartialEq`-equal `SetRef` the SCC seal pre-installed (same set + index).
+    /// a `PartialEq`-equal `SetRef` a `RECURSIVE TYPES` block pre-installed (same set + index).
     /// Returns the arena-allocated `&KType` so the caller can yield it as a
     /// `KObject::KTypeValue`. Same conditional-defer shape as [`Self::register_type`];
     /// `Err(Rebind)` on a genuine non-equal collision.
@@ -417,15 +417,15 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Synchronous identity install for the SCC seal sweep. Writes `name` → `ktype` (a
-    /// `KType::SetRef` into the freshly-sealed `RecursiveSet`) to [`Bindings::types`], but
-    /// panics on borrow conflict instead of deferring, and panics on `Rebind` — a cycle
-    /// member's identity must not already be in `types` when the seal fires.
+    /// Synchronous identity install for a `RECURSIVE TYPES` block's pre-seal. Writes
+    /// `name` → `ktype` (a `KType::SetRef` into the block's shared `RecursiveSet`) to
+    /// [`Bindings::types`], but panics on borrow conflict instead of deferring, and panics
+    /// on `Rebind` — a member's identity must not already be in `types` when the block
+    /// pre-installs it.
     ///
-    /// The seal runs from the elaborator's `Resolution::Placeholder` arm with no outer
-    /// `bindings` borrow held; a conflict here is a programming error. The member's schema
-    /// is filled later, at its own finalize, against the same shared set recovered from
-    /// this `SetRef`.
+    /// The block runs this with no outer `bindings` borrow held; a conflict here is a
+    /// programming error. The member's schema is filled later, at its own declaration's
+    /// finalize, against the same shared set recovered from this `SetRef`.
     pub fn cycle_close_install_identity(
         &self,
         name: String,

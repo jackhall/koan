@@ -8,7 +8,7 @@ value-side string identifiers, not types. `UNION Maybe = (some :Int, none :Null)
 parses each tag through `FieldNameKind::Identifier` — strict lowercase user
 identifiers (`src/parse/triple_list.rs`) — stores the schema as
 `Rc<HashMap<String, KType>>` keyed by tag-string
-(`UserTypeKind::Tagged`, `src/machine/model/types/ktype.rs`), and a value carries
+(`NominalKind::Tagged`, `src/machine/model/types/ktype.rs`), and a value carries
 its tag as a plain `String` (`KObject::Tagged`, `src/machine/model/values/kobject.rs`).
 Construction extracts the first call argument as a bare `Identifier` and looks it
 up by string key (`src/machine/execute/dispatch/constructors/tagged_union.rs`);
@@ -72,7 +72,7 @@ other typed value. A tag classifies as `BareIdentifier`, never `BareTypeLeaf`
 **Requires:**
 
 - [Type-only nominal identities](../../design/typing/user-types.md) — the shipped
-  `UserTypeKind::Tagged` schema and type-side-only nominal install this work
+  `NominalKind::Tagged` schema and type-side-only nominal install this work
   re-shapes into per-variant `KType` identities.
 - [Type language via dispatch](../../design/typing/type-language-via-dispatch.md)
   — variant types ride the same `:(...)` / dispatch substrate that eliminates

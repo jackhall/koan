@@ -121,7 +121,7 @@ impl<'a> FnValueState<'a> {
 
     /// Resolve the already-bound head value to a [`ResolvedCallable`] and hand
     /// off to the shared apply-a-callable tail. A `KFunction` (functor or not)
-    /// is the `Function` arm; a `KTypeValue(UserType)` alias of a constructible
+    /// is the `Function` arm; a `KTypeValue(SetRef)` alias of a constructible
     /// type — `LET outcome = Outcome` then `(outcome (err "x"))` — is the
     /// `Constructor` arm, reading the schema off the identity
     /// `bindings.types[name]` holds. Anything else is a non-callable

@@ -6,7 +6,7 @@
 //! `NEWTYPE` declarations; every member name is in scope for every body inside the block,
 //! so a cross-reference lowers to a transient `RecursiveRef` and seals to a `SetLocal`
 //! index into the shared set. See
-//! [recursive-types-block.md](../../roadmap/type_language/recursive-types-block.md).
+//! [user-types.md](../../design/typing/user-types.md).
 //!
 //! Mechanism: discover the members (name + kind) from the body declarations, mint one
 //! shared `RecursiveSet` (members `pending`), and dispatch the declarations against a child

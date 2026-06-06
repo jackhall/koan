@@ -21,7 +21,7 @@
   per-call-elaborated, its `ret` box holds a `DeferredReturn(DeferredReturnSurface)`
   carrier — see [Record fields and `KType` hashing](#record-fields-and-ktype-hashing).
 - Structural record: `Record(Box<Record<KType>>)` — an identifier-keyed field schema
-  (`:{x :Number, y :Str}`), distinct from the nominal `UserType { kind: Struct }`
+  (`:{x :Number, y :Str}`), distinct from a nominal `Struct`-kind `SetRef`
   (records are structural, structs nominal). A record *value* (`KObject::Record`,
   surface `{x = 1, y = "a"}`) memoizes its per-field type record as its carried type.
   Width/depth subtyping orders record *values* in the dispatch lattice — see
@@ -41,22 +41,40 @@
   [`KType::Type::accepts_part`](../../src/machine/model/types/ktype_predicates.rs)
   and the pin test
   [`type_slot_admits_bare_builtin_tokens_and_user_type_carriers`](../../src/machine/model/types/ktype_predicates/tests.rs).
-- User-declared nominal types: `UserType { kind: UserTypeKind, scope_id: usize,
-  name: String }` — the per-declaration identity tag synthesized by
-  `KObject::ktype()` for `Struct` and `Tagged` carriers. Two distinct STRUCTs
-  produce different `scope_id`s, giving the per-declaration-distinctness
-  identity property dispatch keys on.
-  `UserTypeKind` is `Struct | Tagged | Newtype { repr } |
-  TypeConstructor { param_names }`. The two payload-carrying variants
-  (`Newtype`, `TypeConstructor`) have a manual `PartialEq` that ignores their
-  payloads — identity equality is by variant tag plus the carrier's
-  `(scope_id, name)`, so wildcard / concrete pairs compare equal.
-  The companion `AnyUserType { kind }` wildcard accepts any `UserType` of the
-  matching kind, used for slot types that admit "any user-declared X" — ATTR's
-  `body_struct` slot, construction primitives' return types. The surface
-  keywords `Newtype` and `TypeConstructor` are pinned for diagnostic rendering
-  but not registered as writable surface names (no entry in
-  [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)).
+- User-declared nominal types — three variants reference members of an
+  `Rc`-owned [`RecursiveSet`](../../src/machine/model/types/recursive_set.rs),
+  the atomic unit of nominal allocation, identity, and lift (one strongly-connected
+  component of mutually-recursive types; a non-recursive type is a singleton set).
+  See [user-types.md](user-types.md) for the full model.
+  - `SetRef { set: Rc<RecursiveSet>, index }` — the **external** handle, the
+    per-declaration identity synthesized by `KObject::ktype()` for `Struct` and
+    `Tagged` carriers and held by `bindings.types`. Identity is
+    `(Rc::as_ptr(set), index)` — never the schema, which may be cyclic. Two
+    distinct STRUCTs sit at distinct `(set ptr, index)` pairs, giving the
+    per-declaration-distinctness dispatch keys on. The member's `kind` (read via
+    `set.member(index).kind`) is `NominalKind::{Struct, Tagged, Newtype,
+    TypeConstructor}`. Lift `Rc::clone`s the whole set, so the recursive group
+    travels as one cycle-aware unit.
+  - `SetLocal(index)` — the **intra-set sibling** reference inside a member's
+    schema, a bare index resolved against the ambient set during deep traversal.
+    It carries no `Rc` (so the set holds no internal refcount cycle) and never
+    reaches the predicates — matching is shallow `SetRef` identity that does not
+    descend a member's schema.
+  - `RecursiveGroup(Rc<RecursiveSet>)` — the first-class handle to a whole set,
+    bound by a `RECURSIVE TYPES` group name. Identity is the set pointer
+    (`Rc::ptr_eq`); inert in value dispatch.
+
+  The companion `AnyUserType { kind: NominalKind }` wildcard accepts any nominal
+  carrier of the matching kind, used for slot types that admit "any user-declared
+  X" — ATTR's `body_struct` slot, construction primitives' return types. The
+  surface keywords `Newtype` and `TypeConstructor` are pinned for diagnostic
+  rendering but not registered as writable surface names (no entry in
+  [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs); only
+  `Struct` / `Tagged` lower to a wildcard there).
+- `RecursiveRef(String)` — a **definition-time transient only**: a self or
+  forward-sibling reference lowers to it during elaboration and the member's
+  finalize seals it to `SetLocal(index)`. It never appears in a sealed type and
+  never reaches the predicates. Equality is by name only.
 - Module / signature carriers (the [module system](modules.md) rests on
   these): `Module { module: &'a Module<'a>, frame: Option<Rc<CallArena>> }`
   is the first-class module value's type — the arena-pinned `&Module`
@@ -96,10 +114,10 @@
   introspectable too.
 - Higher-kinded application: `ConstructorApply { ctor: Box<KType>, args:
   Vec<KType> }` — structural identity by `(ctor, args)`, mirror of `List(_)`
-  / `Dict(_, _)`. Emitted by `elaborate_type_expr` when the outer name of a
-  parameterized type expression resolves to a
-  `UserType { kind: TypeConstructor { .. }, .. }`; renders as `ctor<arg1,
-  arg2>` in diagnostics. See
+  / `Dict(_, _)`. `ctor` is a `SetRef` to a `TypeConstructor`-kind member.
+  Emitted by `elaborate_type_expr` when the outer name of a parameterized type
+  expression resolves to such a member; renders as `ctor<arg1, arg2>` in
+  diagnostics. See
   [functors.md § Higher-kinded type slots](functors.md#higher-kinded-type-slots)
   for the surface form and per-call generativity.
 - `Any` — the no-op fast-path.
@@ -273,7 +291,7 @@ dispatch and slot admission see the full instantiation, not just the outer shape
   element / key+value type at construction (`KObject::list` / `KObject::dict`).
 - `KObject::Tagged { type_args, .. }` carries the applied type arguments of a
   parameterized union (`Result<T, E>`). Empty `type_args` means erased — `ktype()`
-  reports the bare `UserType` as before; a populated carrier makes `ktype()`
+  reports the bare `SetRef`; a populated carrier makes `ktype()`
   synthesize `ConstructorApply { ctor, args: type_args }`. Construction
   (`tagged_union::construct`, `CATCH`) erases by default; the carrier is populated
   only by ascription stamping.
@@ -332,8 +350,8 @@ constructed function's projected `ktype()` carries its real shape at runtime.
 `TypeExprRef` is the meta-type for argument slots that capture a parsed type-name
 token (`ExpressionPart::Type(_)`). The slot resolves to a
 `KObject::KTypeValue(KType)` carrying the elaborated type — name, nested
-parameters, and (for recursive types) `Mu` / `RecursiveRef` structure — so
-parameterized types like `:(LIST OF Number)` and recursive types like `Tree`
+parameters, and (for recursive types) the `SetRef` into a sealed `RecursiveSet` —
+so parameterized types like `:(LIST OF Number)` and recursive types like `Tree`
 survive the parser → dispatch boundary as a single canonical value. Used by
 FN's return-type slot, by STRUCT and UNION's name slots, and by `type_call`'s
 verb slot. Slots that want only a bare name (STRUCT/UNION) check the elaborated
@@ -486,12 +504,12 @@ Function-bucket lookup pre-filters by per-overload visibility before the strict
 admit predicate runs — the [lookup → admit protocol](lookup-protocol.md)'s
 Layer 2 (`Bindings::lookup_function`) applied per-overload rather than per
 name. Each `functions` entry carries a per-overload
-[`BindingIndex`](../../src/machine/core/bindings.rs) — the lexical statement
-index at which the overload was registered, paired with a `nominal_binder` flag.
-A consumer between two same-bucket overloads sees only the earlier; the
-later-sibling overload is hidden, and dispatch falls through to outer scopes
-unaffected by the not-yet-visible registration. The `nominal_binder` carve-out
-does **not** apply to FN-bucket overloads — they're value-style gated.
+[`BindingIndex { idx }`](../../src/machine/core/bindings.rs) — the lexical
+statement index at which the overload was registered. The visibility predicate
+is `idx < cutoff`, one rule across the value and type languages. A consumer
+between two same-bucket overloads sees only the earlier; the later-sibling
+overload is hidden, and dispatch falls through to outer scopes unaffected by the
+not-yet-visible registration.
 [`OverloadBucket::pick_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
 receives the pre-filtered survivor list (the `FunctionLookup`'s `overloads`)
 and runs only the admit predicate over it. The same lookup also surfaces the
@@ -500,22 +518,19 @@ earliest-index visible `pending_overloads[key]` producer in `FunctionLookup`'s
 wake, since it would shadow once finalized.
 
 The result: an FN reference resolves under the same lexical-position rule as a
-value-LET reference. Forward calls between sibling FNs work through the
-`nominal_binder` carve-out — an FN's name binding is itself nominal so the
-call's *resolve* sees it across the sibling cutoff, while the bucket entry for
-each new overload remains gated on its own `BindingIndex`. A bare value-LET
-forward reference inside a sibling expression surfaces `UnboundName` directly:
-visibility is lexical, and the parking edges are reserved for visible-but-not-ready
-producers.
+value-LET reference, and a bare forward reference inside a sibling expression
+surfaces `UnboundName` directly — visibility is lexical, and the parking edges
+are reserved for visible-but-not-ready producers.
 
 ## Record fields and `KType` hashing
 
 A struct schema's fields are a [`Record<V>`](../../src/machine/model/types/record.rs) —
 an ordered identifier-keyed map, generic over its value, so the type level stores
 `Record<KType>` and a value level can later store `Record<KObject>`.
-`UserTypeKind::Struct` carries `Rc<Record<KType>>`; the `STRUCT` elaborator wraps the
-parser's declaration-ordered `(name, KType)` pairs into a `Record` once, at the
-`finalize_struct` boundary.
+A set member's [`NominalSchema::Struct(Record<KType>)`](../../src/machine/model/types/recursive_set.rs)
+carries the field record by value; the `STRUCT` elaborator wraps the parser's
+declaration-ordered `(name, KType)` pairs into a `Record` once, at the
+`finalize_struct` boundary, and fills the member's schema cell.
 
 The same `Record<KType>` substrate backs `KFunction` / `KFunctor` parameter
 identity: both variants store their parameters as `params: Record<KType>`
@@ -547,11 +562,12 @@ The shape has two defining properties:
 `Record<V>: Hash` needs `V: Hash`, so `KType` implements `Hash`, kept consistent with
 its hand-written `PartialEq` arm-for-arm: the discriminant leads (so distinct variants
 never alias and the unit variants need no further mixing), then each compound arm
-hashes exactly the fields its `PartialEq` arm compares. The arena-pointer variants hash
-their stable identity key — `Module` hashes `scope_id()`, `AbstractType` hashes its
-`source.scope_id()`, `Signature` hashes `sig_id()` — never the raw pointer, and
-`UserTypeKind`'s payload-ignoring
-equality is mirrored by a discriminant-only `Hash`.
+hashes exactly the fields its `PartialEq` arm compares. The pointer-identity
+variants hash their stable identity key — `Module` hashes `scope_id()`,
+`AbstractType` hashes its `source.scope_id()`, `Signature` hashes `sig_id()`,
+`SetRef` hashes `(Rc::as_ptr(set), index)` and `RecursiveGroup` hashes
+`Rc::as_ptr(set)` — never descending the (possibly cyclic) member schema, so
+hashing terminates and agrees arm-for-arm with the pointer-keyed `PartialEq`.
 
 `KType::DeferredReturn(DeferredReturnSurface)` is a confined hashable leaf: it
 holds the type-language shadow of a per-call-elaborated function return —

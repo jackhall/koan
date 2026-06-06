@@ -67,7 +67,7 @@ impl<'a> Scope<'a> {
 /// canonical value-side `KObject` carrier.
 ///
 /// - Parameterized shapes (`List<...>`, `Function<...>` etc.) are rejected with `ShapeError`.
-/// - For a `UserType` / `Module` identity, recover the paired value-side carrier when
+/// - For a `SetRef` / `Module` identity, recover the paired value-side carrier when
 ///   present, so downstream operators see the original value rather than a synthesized
 ///   `KTypeValue`. No nominal binder dual-writes anymore (SIG was the last), so the
 ///   recovery typically misses and falls through to synthesis.

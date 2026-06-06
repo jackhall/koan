@@ -8,7 +8,7 @@
 //! - `HeadDeferred` (head is a nested `Expression`, `type_only = false`): the
 //!   resumed value may be a `KFunction` (functor or not — the `Function` arm), a
 //!   bound functor reached through the type table (`KTypeValue(KFunctor { body:
-//!   Some })` — also the `Function` arm), or a `KTypeValue(UserType)` (the
+//!   Some })` — also the `Function` arm), or a `KTypeValue(SetRef)` (the
 //!   `Constructor` arm); any other value is a non-callable `DispatchFailed`.
 //! - `TypeHeadDeferred` (head is a `:(...)` sigil, `type_only = true`): the
 //!   resumed value is admitted only when it is type-shaped — a constructible type

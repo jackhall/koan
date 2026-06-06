@@ -169,8 +169,8 @@ pub enum KType<'a> {
     },
     /// Definition-time transient: a reference to a not-yet-sealed nominal (self or forward
     /// sibling) while elaborating a type-definition body. Sealed into a [`KType::SetLocal`]
-    /// index at SCC cycle-close, so it never survives into a sealed type and never reaches
-    /// the predicates. Equality is by name only.
+    /// index at the member's finalize, so it never survives into a sealed type and never
+    /// reaches the predicates. Equality is by name only.
     RecursiveRef(String),
     Any,
 }
