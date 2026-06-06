@@ -227,8 +227,18 @@ impl<'a> KFunction<'a> {
                             deps.push(t);
                         }
                         let function_summary = self.summarize();
-                        let combine_id =
-                            sched.add_combine(
+                        // The Combine reads `child` (in the per-call arena) when it runs, but its
+                        // deps — the body and return-type sub-Dispatches — drop their arena Rc
+                        // clones on Done, so without its own clone the arena would free before the
+                        // Combine runs. `with_active_frame` stamps the Combine node's `frame` with a
+                        // per-call-arena Rc, keeping `child` live until the Combine completes.
+                        let mut combine_slot: Option<crate::machine::core::kfunction::NodeId> =
+                            None;
+                        let mut pending = Some((deps, per_call_ret, function_summary));
+                        sched.with_active_frame(frame.clone(), &mut |s| {
+                            let (deps, per_call_ret, function_summary) =
+                                pending.take().expect("with_active_frame body runs once");
+                            combine_slot = Some(s.add_combine(
                                 deps,
                                 vec![],
                                 child,
@@ -274,11 +284,11 @@ impl<'a> KFunction<'a> {
                                     let stamped = body_value.deep_clone().stamp_type(&per_call_ret);
                                     BodyResult::Value(_scope.arena.alloc_object(stamped))
                                 }),
-                            );
-                        // Rc clones inside `with_active_frame` above keep the per-call
-                        // arena alive across sub-slot lifetimes; the FN's slot retains
-                        // its own `frame` via `defer_to_lift`'s frame-stay-attached
-                        // contract.
+                            ));
+                        });
+                        let combine_id = combine_slot.expect("combine must spawn");
+                        // The Combine node now carries its own per-call-arena Rc (stamped above),
+                        // so this local clone is no longer load-bearing.
                         drop(frame);
                         BodyResult::DeferTo(combine_id)
                     }

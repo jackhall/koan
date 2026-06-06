@@ -58,7 +58,6 @@ digraph {
     "koan::builtins::type_ops" [label="pub(self) mod|builtins::type_ops", fillcolor="#db5367"]; // "mod" node
     "koan::builtins::type_ops::dict_of" [label="pub(self) mod|builtins::type_ops::dict_of", fillcolor="#db5367"]; // "mod" node
     "koan::builtins::type_ops::list_of" [label="pub(self) mod|builtins::type_ops::list_of", fillcolor="#db5367"]; // "mod" node
-    "koan::builtins::type_ops::module_type_of" [label="pub(self) mod|builtins::type_ops::module_type_of", fillcolor="#db5367"]; // "mod" node
     "koan::builtins::type_ops::sig_with" [label="pub(self) mod|builtins::type_ops::sig_with", fillcolor="#db5367"]; // "mod" node
     "koan::builtins::type_ops::type_constructor" [label="pub(self) mod|builtins::type_ops::type_constructor", fillcolor="#db5367"]; // "mod" node
     "koan::builtins::union" [label="pub(self) mod|builtins::union", fillcolor="#db5367"]; // "mod" node
@@ -429,7 +428,6 @@ digraph {
     "koan::builtins::type_ops" -> "koan::builtins" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::type_ops" -> "koan::builtins::type_ops::dict_of" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::builtins::type_ops" -> "koan::builtins::type_ops::list_of" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
-    "koan::builtins::type_ops" -> "koan::builtins::type_ops::module_type_of" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::builtins::type_ops" -> "koan::builtins::type_ops::sig_with" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::builtins::type_ops" -> "koan::builtins::type_ops::type_constructor" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::builtins::type_ops" -> "koan::machine::core::scope" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
@@ -448,13 +446,6 @@ digraph {
     "koan::builtins::type_ops::list_of" -> "koan::machine::core::scope" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::type_ops::list_of" -> "koan::machine::model::types::ktype" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::type_ops::list_of" -> "koan::machine::model::values::kobject" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
-    "koan::builtins::type_ops::module_type_of" -> "koan::builtins" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
-    "koan::builtins::type_ops::module_type_of" -> "koan::machine::core::kerror" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
-    "koan::builtins::type_ops::module_type_of" -> "koan::machine::core::kfunction::argument_bundle" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
-    "koan::builtins::type_ops::module_type_of" -> "koan::machine::core::kfunction::body" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
-    "koan::builtins::type_ops::module_type_of" -> "koan::machine::core::kfunction::scheduler_handle" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
-    "koan::builtins::type_ops::module_type_of" -> "koan::machine::core::scope" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
-    "koan::builtins::type_ops::module_type_of" -> "koan::machine::model::values::kobject" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::type_ops::sig_with" -> "koan::builtins" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::type_ops::sig_with" -> "koan::builtins::ascribe" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::type_ops::sig_with" -> "koan::machine::core::kerror" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
