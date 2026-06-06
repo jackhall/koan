@@ -217,10 +217,13 @@ impl<'a> DictFrame<'a> {
             for (key, value) in self.pairs {
                 let name = match key {
                     ExpressionPart::Identifier(s) => s,
+                    // A capitalized Type token is a valid literal field name (kept verbatim,
+                    // never name-resolved) — e.g. abstract type-slot names in `WITH {Elt = T}`.
+                    ExpressionPart::Type(t) => t.render(),
                     other => {
                         return Err(KError::parse(
                             format!(
-                                "record field name must be a bare identifier, got `{}`",
+                                "record field name must be a bare identifier or Type token, got `{}`",
                                 other.summarize()
                             ),
                             None,

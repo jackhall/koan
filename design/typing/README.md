@@ -47,7 +47,7 @@ Module-system mechanics:
   calls.
 - [functors.md](functors.md) — modules parameterized by modules: surface
   vs machine semantics, per-call generativity, deferred return types,
-  higher-kinded type-constructor slots, and the `SIG_WITH` parens-form
+  higher-kinded type-constructor slots, and the `WITH` infix
   builtin family for sharing constraints and witness-typed
   instantiations.
 - [implicits.md](implicits.md) — implicit module parameters, lexical

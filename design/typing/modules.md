@@ -147,7 +147,7 @@ sig, pinned_slots }` for SIG) into `bindings.types` via
 value-side carrier — `bindings.data` carries zero type carriers. `LET M2 = M1`
 module aliases and `LET S2 = OrderedSig` signature aliases likewise route
 through `register_type` against the type entry. Value-position references — a
-module named as an ATTR receiver, a signature introspected by `:|` or `SIG_WITH`,
+module named as an ATTR receiver, a signature introspected by `:|` or `WITH`,
 or either surfaced by `USING … SCOPE` — synthesize the
 `KObject::KTypeValue(KType::Module { .. } | KType::Signature { .. })` carrier on
 demand from the type entry via
@@ -157,7 +157,7 @@ than a raw `bindings.data` lookup.
 
 `KType::Module` carries the live `&Module` pointer (plus the per-call
 frame anchor for functor-built modules); `KType::Signature { sig, pinned_slots }`
-carries the arena-pinned `&Signature` plus any `SIG_WITH` abstract-type
+carries the arena-pinned `&Signature` plus any `WITH` abstract-type
 pins; `KType::AbstractType { source, name }` carries an abstract-type member —
 either a SIG-declared member (`source: Sig(scope_id)`) or the per-call mint of an
 opaquely-ascribed module (`source: Module(view)`). Module identity is by
@@ -191,8 +191,8 @@ case and would be strictly less expressive than the operators that already
 exist.
 
 FN parameters and return types accept signature names directly. The
-constrained-signature case (`(SIG_WITH OrderedSig ((Type: Number)))`)
-uses the `SIG_WITH` builtin in
+constrained-signature case (`(OrderedSig WITH {Type = Number})`)
+uses the `WITH` builtin in
 [functors.md § Type expressions and constraints](functors.md#type-expressions-and-constraints).
 
 Signature-typed FN parameters plus first-class module values give

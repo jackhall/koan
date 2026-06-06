@@ -26,7 +26,7 @@ LET sort = (FN (SORT xs :(LIST OF Mo.Type) {Mo: OrderedSig}) -> :(LIST OF Mo.Typ
 
 At a call site `(SORT [3, 1, 2])`, the compiler infers `Mo.Type = Number`,
 searches in scope for a module satisfying
-`(SIG_WITH OrderedSig ((Type: Number)))`, and inserts it. Searching is
+`(OrderedSig WITH {Type = Number})`, and inserts it. Searching is
 **lexical**: the candidate set is the implicit modules defined in the current
 module plus those explicitly imported. Nothing leaks through transitive
 dependencies.
@@ -45,7 +45,7 @@ read OCaml-shaped (`with type t = ...`, `module type ... = sig ... end`,
 `observation ... via ...`) are pre-Koan placeholders. The surface forms,
 along with sugar (block-scoped binding, module priority, selective imports),
 are tracked in [open-work.md](open-work.md). The constraint half — the
-signature expression to the right of `:` — uses the `SIG_WITH` builtin
+signature expression to the right of `:` — uses the `WITH` builtin
 described in
 [functors.md § Type expressions and constraints](functors.md#type-expressions-and-constraints).
 

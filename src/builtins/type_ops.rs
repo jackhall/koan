@@ -1,4 +1,4 @@
-//! Type-constructor builtins — `LIST_OF`, `DICT_OF`, `TEMPLATE`, `SIG_WITH`. Each
+//! Type-constructor builtins — `LIST_OF`, `DICT_OF`, `TEMPLATE`, `WITH`. Each
 //! ships as a scheduled `KFunction` over `TypeExprRef`-typed slots, so a
 //! parameterized type assembles via sub-expression evaluation:
 //! `(LIST_OF (DICT_OF Str Number))` wakes the outer slot only after
@@ -9,9 +9,10 @@
 
 mod dict_of;
 mod list_of;
-mod sig_with;
 mod type_constructor;
+mod with;
 
+use crate::machine::model::types::Record;
 use crate::machine::model::KType;
 use crate::machine::Scope;
 
@@ -49,19 +50,21 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ),
         type_constructor::body,
     );
-    // `bindings` is `KExpression` (lazy) so sub-Dispatch of inner value
-    // expressions stays the body's responsibility — see [`sig_with::body`].
+    // Infix `<sig> WITH {Slot = Type, …}`. A lone binary
+    // keyword classifies as `Keyworded` (leading-slot signature like `FROM` / `:|`), and
+    // the record-literal `bindings` operand eager-evaluates so its `(name, KTypeValue)`
+    // fields read directly — see [`with::body`].
     register_builtin(
         scope,
-        "SIG_WITH",
+        "WITH",
         sig(
             KType::TypeExprRef,
             vec![
-                kw("SIG_WITH"),
                 arg("sig", KType::AnySignature),
-                arg("bindings", KType::KExpression),
+                kw("WITH"),
+                arg("bindings", KType::Record(Box::new(Record::new()))),
             ],
         ),
-        sig_with::body,
+        with::body,
     );
 }

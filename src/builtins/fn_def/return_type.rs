@@ -205,17 +205,17 @@ fn verdict_for_deferred_type_expr<'a>(
     }
 }
 
-/// Head-keyword classification for deferred return-type carriers: `SIG_WITH`
-/// admits (yields `Signature { .. }`); a dotted `ATTR` head (`Er.Type`, a module
-/// type-member access) rejects (yields `AbstractType`); other heads fall through to
-/// a generic rejection.
+/// Head-keyword classification for deferred return-type carriers: `WITH` (a `sig WITH
+/// {…}` specialization) admits (yields `Signature { .. }`); a dotted `ATTR` head
+/// (`Er.Type`, a module type-member access) rejects (yields `AbstractType`); other heads
+/// fall through to a generic rejection.
 fn verdict_for_deferred_expression(e: &KExpression<'_>) -> AdmissibleVerdict {
     let head_keyword = e.parts.iter().find_map(|p| match &p.value {
         ExpressionPart::Keyword(s) => Some(s.as_str()),
         _ => None,
     });
     match head_keyword {
-        Some("SIG_WITH") => AdmissibleVerdict::Admissible,
+        Some("WITH") => AdmissibleVerdict::Admissible,
         Some("ATTR") => AdmissibleVerdict::Rejected(KError::new(KErrorKind::ShapeError(
             "FUNCTOR return-type slot must denote a module, signature, or functor; \
              a module type-member access (`Er.Type`) produces an abstract type, \

@@ -141,6 +141,7 @@ build on:
 - [Anonymous structural unions](type_language/anonymous-unions.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
 - [Plain-English type-operation surfaces](type_language/type-operation-surfaces.md)
+- [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 
 ### Editor tooling — [editor_tooling/](editor_tooling/)
 

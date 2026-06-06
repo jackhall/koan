@@ -109,8 +109,8 @@
   satisfying OrderedSig," never "the signature value itself"), while a
   signature *value* `KTypeValue(KType::Signature { .. })` is matched only
   by the `AnySignature` wildcard. `pinned_slots` (empty for a bare
-  signature) carries `SIG_WITH` abstract-type specializations; because the
-  same variant rides a live `&Signature`, a `SIG_WITH` result is
+  signature) carries `WITH` abstract-type specializations; because the
+  same variant rides a live `&Signature`, a `WITH` result is
   introspectable too.
 - Higher-kinded application: `ConstructorApply { ctor: Box<KType>, args:
   Vec<KType> }` — structural identity by `(ctor, args)`, mirror of `List(_)`

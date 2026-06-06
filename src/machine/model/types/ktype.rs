@@ -137,7 +137,7 @@ pub enum KType<'a> {
     /// parameter slot it matches a module whose `compatible_sigs` contains `sig.sig_id()`; as
     /// a value (`KTypeValue(Signature { .. })`) it is matched by the `AnySignature` wildcard.
     ///
-    /// `pinned_slots` carries `SIG_WITH` abstract-type specializations (empty for a bare
+    /// `pinned_slots` carries `WITH` abstract-type specializations (empty for a bare
     /// signature), each an abstract-type slot pinned to a concrete `KType`. The vec is
     /// order-preserving (rather than a `HashMap`) so structural equality is deterministic.
     /// Identity is `sig.sig_id()` + `pinned_slots`; `sig.path` is diagnostic-only.
@@ -228,9 +228,9 @@ impl<'a> KType<'a> {
                     // Display-only; does not round-trip through the parser.
                     let inner: Vec<String> = pinned_slots
                         .iter()
-                        .map(|(name, kt)| format!("({}: {})", name, kt.name()))
+                        .map(|(name, kt)| format!("{} = {}", name, kt.name()))
                         .collect();
-                    format!("(SIG_WITH {} ({}))", sig.path, inner.join(" "))
+                    format!("({} WITH {{{}}})", sig.path, inner.join(", "))
                 }
             }
             KType::Module { module, .. } => module.path.clone(),

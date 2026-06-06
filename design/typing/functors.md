@@ -91,7 +91,7 @@ execution.
 FUNCTOR's return-type slot must denote a module, signature, or functor
 kind. The admissible carriers are `KType::AnySignature`,
 `KType::Signature { .. }` (the unified constraint-and-value variant,
-covering both a bare `:OrderedSig` and a `(SIG_WITH …)` pin),
+covering both a bare `:OrderedSig` and a `(… WITH {…})` pin),
 `KType::AnyModule`, `KType::Module { .. }`, and `KType::KFunctor { … }`
 (recursively — the inner `ret` is validated the same way, so curried
 multi-module functors and any deeper nesting flow through one rule). Any
@@ -103,8 +103,8 @@ wording. FN imposes no such constraint.
 The same parameter-name scan that classifies an FN return type into
 `Resolved` / `Deferred` runs for FUNCTOR; the validation gates on the
 denotation of the resolved or deferred carrier. A return type like
-`(SIG_WITH Set ((Elt: Er)))` that references a per-call parameter is
-admissible because the outer carrier (`SIG_WITH`) is a signature constructor;
+`(Set WITH {Elt = Er})` that references a per-call parameter is
+admissible because the outer carrier (`WITH`) is a signature constructor;
 the `Er` reference resolves through the per-call `bindings.types` write at
 dispatch.
 
@@ -153,9 +153,9 @@ keeps the generative/applicative choice visible at the declaration. See
 ## Sharing constraints
 
 Sharing constraints — pinning a functor's output abstract type to a
-specific concrete type — ride on the `SIG_WITH` builtin described in
+specific concrete type — ride on the `WITH` builtin described in
 [Type expressions and constraints](#type-expressions-and-constraints). A
-FUNCTOR whose return type is `(SIG_WITH SetSig ((Elt: Number)))` declares
+FUNCTOR whose return type is `(SetSig WITH {Elt = Number})` declares
 the constraint at the return slot; the body's `MODULE Result` must mirror
 `Elt = Number` for the return-type check to admit it. There is no separate
 `with type` keyword.
@@ -222,7 +222,7 @@ above the value language.
 ## Deferred return-type elaboration
 
 Return-type expressions that reference a per-call FUNCTOR parameter
-(`-> Er`, `-> Er.Type`, `-> (SIG_WITH Set ((Elt: Er)))`)
+(`-> Er`, `-> Er.Type`, `-> (Set WITH {Elt = Er})`)
 ride a *deferred* return-type carrier through the per-call scope.
 [`ExpressionSignature::return_type`](../../src/machine/model/types/signature.rs)
 is a `ReturnType<'a>` enum, not a bare `KType`: `Resolved(KType)` covers
@@ -276,8 +276,8 @@ written with the `:(FUNCTOR (params) -> R)` sigil:
 
 ```
 LET MakeMap = (FUNCTOR (MAKEMAP Er :OrderedSig)
-                -> :(FUNCTOR (Vo :MonoidSig) -> (SIG_WITH Map ((Key: Er.Type)))) = (
-  FUNCTOR (Vo :MonoidSig) -> (SIG_WITH Map ((Key: Er.Type))) = (
+                -> :(FUNCTOR (Vo :MonoidSig) -> (Map WITH {Key = Er.Type})) = (
+  FUNCTOR (Vo :MonoidSig) -> (Map WITH {Key = Er.Type}) = (
     MODULE Result = ( ... )
   )
 ))
@@ -357,25 +357,24 @@ and `:(FN (args) -> R)`
 ([ktype.md § Container type parameterization](ktype.md#container-type-parameterization))
 for positional structural types. Sharing constraints,
 modular-implicit signature constraints, and witness-typed
-instantiations ride on a separate **parens-form builtin family** that
-reuses the `name: value` triple shape FN parameters and STRUCT fields
-use. The two surfaces stay disjoint: `:(...)` for structural shapes whose
-slot semantics are positional, parens-form builtins for slot-named
-constraints.
+instantiations ride on the **infix `WITH` builtin**, which keys its
+specializations by slot name in a record literal — `<sig> WITH {Slot = Type}`.
+The two surfaces stay disjoint: `:(...)` for structural shapes whose
+slot semantics are positional, `WITH {…}` for slot-named constraints.
 
-- **`SIG_WITH`.** Pins abstract type slots of a signature to specific
-  concrete types. `(SIG_WITH OrderedSig ((Type: Number)))` is
-  `OrderedSig` with its `Type` slot pinned to `Number`;
-  `(SIG_WITH Set ((Elt: Number) (Ord: IntOrd)))` pins multiple slots in
-  one call. The inner parens groups are each one `name: value` triple,
-  matching the shape FN parameters parse.
-- **Type-valued slot values.** `SIG_WITH` slot values accept any
+- **`WITH`.** Infix signature specialization — `<sig> WITH {Slot = Type, …}`
+  pins abstract type slots of a signature to specific concrete types.
+  `(OrderedSig WITH {Type = Number})` is `OrderedSig` with its `Type` slot
+  pinned to `Number`; `(Set WITH {Elt = Number, Ord = IntOrd})` pins multiple
+  slots in one call. The bindings are a record literal keyed by slot name
+  (capitalized Type-token field names); each `Slot = Type` field is one pin.
+- **Type-valued slot values.** `WITH` slot values accept any
   expression that evaluates to a `KType`, not only bare type-name
-  tokens. `(SIG_WITH MySig ((Elt: Mo.Type)))`
+  tokens. `(MySig WITH {Elt = Mo.Type})`
   works because the dotted `Mo.Type` access returns the abstract type of
   module `Mo`. The slot's declared kind decides what the engine expects.
 - **Module-kind slots.** Type constructors can declare slots that take
-  modules. `(SIG_WITH Set ((Elt: Number) (Ord: IntOrd)))` works because
+  modules. `(Set WITH {Elt = Number, Ord = IntOrd})` works because
   `Set`'s `Ord` slot is declared `OrderedSig`-kind. Distinct module
   values bound to the same slot give distinct concrete types — the
   mechanism behind witness types in

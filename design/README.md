@@ -82,7 +82,7 @@ Type and module system ([typing/](typing/README.md)):
 - [typing/functors.md](typing/functors.md) — modules parameterized by
   modules: surface vs machine semantics, per-call generativity,
   deferred return types, higher-kinded type-constructor slots, and
-  the `SIG_WITH` parens-form builtin family.
+  the `WITH` infix builtin family.
 - [typing/implicits.md](typing/implicits.md) — implicit module
   parameters, lexical resolution, axioms with property-tested
   checking, cross-implicit equivalence checking, and the

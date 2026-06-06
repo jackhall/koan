@@ -2,7 +2,7 @@
 //! dependent / deferred return types.
 //!
 //! - [`elaboration`] — scope-aware type elaboration of FN signatures.
-//! - [`sharing`] — `SIG_WITH` sharing constraints on functor parameters and
+//! - [`sharing`] — `WITH` sharing constraints on functor parameters and
 //!   return types.
 //! - [`per_call_type_side_bind`] — per-call type-side bind for module-typed
 //!   parameters at dispatch time.

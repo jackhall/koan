@@ -1,4 +1,4 @@
-//! Return-type expressions that reference earlier parameters (`p.T`, bare param name, `SIG_WITH p.T`), resolved per-call.
+//! Return-type expressions that reference earlier parameters (`p.T`, bare param name, `sig WITH {S = p.T}`), resolved per-call.
 
 use crate::builtins::test_support::{lookup_fn, parse_one, run, run_one, run_root_silent};
 use crate::machine::model::{KObject, KType};
@@ -114,7 +114,7 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
     }
 }
 
-/// `(SIG_WITH Set ((Elt: Er.Type)))` — the sharing-constraint
+/// `(Set WITH {Elt = Er.Type})` — the sharing-constraint
 /// surface canonical for `module Make (E : ORDERED) : SET with type elt = E.t`.
 /// Pins that FN-def registers `Deferred(_)` without erroring `Unbound` on `Er`;
 /// the body's `MODULE Result` isn't sig-ascribed to `Set`, so end-to-end
@@ -134,7 +134,7 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     );
     run(
         scope,
-        "FN (MK Er :OrderedSig) -> (SIG_WITH Set ((Elt Er.Type))) = \
+        "FN (MK Er :OrderedSig) -> (Set WITH {Elt = Er.Type}) = \
          (MODULE Result = ((LET Elt = Number) (LET insert = 0)))",
     );
     let f = lookup_fn(scope, "MK");

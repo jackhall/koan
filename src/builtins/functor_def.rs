@@ -171,7 +171,7 @@ fn collect_param_types<'a>(
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Two overloads mirror FN: `TypeExprRef` for `-> Number` / `-> Er` /
     // `-> :(Functor ...)` and `KExpression` for parens-form carriers like
-    // `-> (SIG_WITH …)`. `binder_bucket` lets a sibling bare-arg call park on
+    // `-> (… WITH {…})`. `binder_bucket` lets a sibling bare-arg call park on
     // a still-finalizing overload; sibling overloads sharing a bucket key all
     // install for it and only the first finalize wins. No `binder_name` —
     // FUNCTOR registers under `functions[bucket]`, not a value-side carrier.
