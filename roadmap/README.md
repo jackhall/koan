@@ -69,6 +69,14 @@ What's shipped that the open items below build on:
   `SigiledTypeExpr` carriers — the redundant parens-form `KType::KExpression` return overload is
   gone. See [design/typing/functors.md](../design/typing/functors.md) and
   [design/typing/ktype.md](../design/typing/ktype.md).
+- *One bare-leaf type resolver.* The synchronous `coerce_type_token_value` is folded into
+  [`resolve_type_leaf_carrier`](../src/machine/execute/dispatch/resolve_type_expr.rs) over the
+  memoized, park-capable `Scope::resolve_type_expr` bridge, so a bare type-name leaf resolves
+  through one cache and parks on an earlier still-finalizing binder like every compound type
+  form; the dead paired-carrier-recovery branch is gone. The type/value binding partition is
+  now total at the LET boundary — a type binds only under a Type-classified name, so
+  `LET t = Point` under a value-classified name is rejected. See
+  [design/typing/elaboration.md](../design/typing/elaboration.md).
 
 ## Next items
 
@@ -170,4 +178,3 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   yokes `anchored_parts` to its frame `Rc` so a re-anchor outliving its frame fails to
   compile and the dispatch/scheduler Miri pins retire; rides on the lifetime split above.
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
-- [Collapse the bare-leaf type resolvers](refactor/collapse-bare-leaf-type-resolvers.md)

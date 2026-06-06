@@ -12,8 +12,10 @@
 //! `pending_types`). The `Park` arm — a referenced type still in flight — never writes the
 //! cache, so a half-built identity cannot leak into a later memo hit.
 
+use std::rc::Rc;
+
 use crate::machine::core::kfunction::NodeId;
-use crate::machine::core::{KError, KErrorKind, LexicalFrame, Scope, ScopeId};
+use crate::machine::core::{LexicalFrame, Scope, ScopeId};
 use crate::machine::model::ast::TypeName;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::KObject;
@@ -63,35 +65,39 @@ impl<'a> Scope<'a> {
     }
 }
 
-/// Resolve a bare leaf [`TypeName`] against `scope`'s type-side bindings and return the
-/// canonical value-side `KObject` carrier.
+/// Outcome of [`resolve_type_leaf_carrier`] — the value-side `KObject` adaptation of
+/// [`ResolveTypeExprOutcome`] for the three bare-leaf token call sites.
+pub(crate) enum TypeLeafCarrier<'a> {
+    /// A `KObject::KTypeValue` wrapping the memoized `&KType`, ready to ride the same
+    /// dispatch transport every other body consumes.
+    Resolved(&'a KObject<'a>),
+    /// The bare leaf names a still-finalizing type; the producer `NodeId`s the caller
+    /// parks on (single-producer in practice, see the module-level invariant).
+    Park(Vec<NodeId>),
+    /// No binding for the leaf name.
+    Unbound(String),
+}
+
+/// Resolve a bare leaf [`TypeName`] through the memoized, park-capable
+/// [`Scope::resolve_type_expr`] bridge and adapt the result into a value-side `KObject`
+/// carrier.
 ///
-/// - Parameterized shapes (`List<...>`, `Function<...>` etc.) are rejected with `ShapeError`.
-/// - For a `SetRef` / `Module` identity, recover the paired value-side carrier when
-///   present, so downstream operators see the original value rather than a synthesized
-///   `KTypeValue`. No nominal binder dual-writes anymore (SIG was the last), so the
-///   recovery typically misses and falls through to synthesis.
-/// - Otherwise synthesize `KObject::KTypeValue(kt.clone())` so the value sits in the
-///   same dispatch transport every other body consumes — this is how a struct / union /
-///   module / Result / signature type token reaches a constructor or ATTR call site.
-/// - Miss surfaces `UnboundName(name)`.
-pub fn coerce_type_token_value<'a>(
+/// A resolved leaf is wrapped as `KObject::KTypeValue(kt.clone())` so a struct / union /
+/// module / Result / signature type token reaches a constructor or ATTR call site through
+/// the same transport every other body consumes. A leaf naming a not-yet-sealed type
+/// parks on the producers the bridge surfaces, so a bare leaf never observes a half-sealed
+/// identity. A miss surfaces `Unbound(name)`.
+pub(crate) fn resolve_type_leaf_carrier<'a>(
     scope: &'a Scope<'a>,
     t: &TypeName,
-    chain: Option<&LexicalFrame>,
-) -> Result<&'a KObject<'a>, KError> {
-    let name = t.as_str();
-    match scope.resolve_type_with_chain(name, chain) {
-        Some(kt) => {
-            if matches!(kt, KType::SetRef { .. } | KType::Module { .. }) {
-                if let Some(obj) = scope.lookup_with_chain(name, chain) {
-                    return Ok(obj);
-                }
-                // Defensive fall-through when finalize skipped the paired-carrier install.
-            }
-            Ok(scope.arena.alloc_object(KObject::KTypeValue(kt.clone())))
+    chain: Option<Rc<LexicalFrame>>,
+) -> TypeLeafCarrier<'a> {
+    match scope.resolve_type_expr(t, chain) {
+        ResolveTypeExprOutcome::Done(kt) => {
+            TypeLeafCarrier::Resolved(scope.arena.alloc_object(KObject::KTypeValue(kt.clone())))
         }
-        None => Err(KError::new(KErrorKind::UnboundName(name.to_string()))),
+        ResolveTypeExprOutcome::Park(producers) => TypeLeafCarrier::Park(producers),
+        ResolveTypeExprOutcome::Unbound(message) => TypeLeafCarrier::Unbound(message),
     }
 }
 
@@ -339,13 +345,13 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
-    mod coerce_type_token_value {
-        use super::super::coerce_type_token_value;
+    mod resolve_type_leaf_carrier {
+        use super::super::{resolve_type_leaf_carrier, TypeLeafCarrier};
         use crate::builtins::test_support::run_root_bare;
-        use crate::machine::core::{BindingIndex, ScopeId};
+        use crate::machine::core::BindingIndex;
         use crate::machine::model::ast::TypeName;
         use crate::machine::model::{KObject, KType};
-        use crate::machine::{KError, KErrorKind, RuntimeArena};
+        use crate::machine::RuntimeArena;
 
         #[test]
         fn builtin_synthesizes_ktypevalue() {
@@ -353,76 +359,109 @@ mod tests {
             let scope = run_root_bare(&arena);
             scope.register_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
             let leaf = TypeName::leaf("Number".to_string());
-            let obj = coerce_type_token_value(scope, &leaf, None).expect("expected Number lookup");
-            assert!(matches!(obj, KObject::KTypeValue(KType::Number)));
-        }
-
-        #[test]
-        fn unbound_returns_error() {
-            let arena = RuntimeArena::new();
-            let scope = run_root_bare(&arena);
-            let leaf = TypeName::leaf("Missing".to_string());
-            match coerce_type_token_value(scope, &leaf, None) {
-                Err(KError {
-                    kind: KErrorKind::UnboundName(name),
-                    ..
-                }) => {
-                    assert_eq!(name, "Missing");
-                }
-                other => panic!("expected UnboundName, got {:?}", other.map(|_| "Ok(_)")),
+            match resolve_type_leaf_carrier(scope, &leaf, None) {
+                TypeLeafCarrier::Resolved(KObject::KTypeValue(KType::Number)) => {}
+                other => panic!(
+                    "expected Resolved(KTypeValue(Number)), got {:?}",
+                    carrier_tag(&other)
+                ),
             }
         }
 
-        /// A singleton struct `SetRef` named `name` at `scope_id`.
-        fn struct_setref<'a>(name: &str, scope_id: ScopeId) -> KType<'a> {
-            use crate::machine::model::types::{NominalSchema, RecursiveSet};
-            use crate::machine::model::Record;
-            let set = RecursiveSet::singleton(
-                name.into(),
-                scope_id,
-                NominalSchema::Struct(Record::new()),
-            );
-            KType::SetRef { set, index: 0 }
-        }
-
         #[test]
-        fn recovers_paired_value() {
+        fn unbound_returns_unbound() {
             let arena = RuntimeArena::new();
             let scope = run_root_bare(&arena);
-            let kt = struct_setref("Point", scope.id);
-            scope.register_type("Point".into(), kt.clone(), BindingIndex::BUILTIN);
-            let paired = arena.alloc_object(KObject::KTypeValue(kt));
-            scope
-                .bind_value("Point".to_string(), paired, BindingIndex::BUILTIN)
-                .unwrap();
-
-            let leaf = TypeName::leaf("Point".to_string());
-            let obj = coerce_type_token_value(scope, &leaf, None).expect("expected Point lookup");
-            assert!(std::ptr::eq(obj, paired));
-        }
-
-        /// Defensive paired-recovery fall-through: when `bindings.types[name]` holds a
-        /// nominal identity but `bindings.data[name]` is empty, the helper must not
-        /// panic — it synthesizes a fresh `KTypeValue(kt)` so the dispatch transport
-        /// stays valid. Unreachable in normal flow (nominal binders install both atomically).
-        #[test]
-        fn falls_through_when_paired_value_absent() {
-            let arena = RuntimeArena::new();
-            let scope = run_root_bare(&arena);
-            let kt = struct_setref("Orphan", scope.id);
-            // types-side only — no paired `bind_value`.
-            scope.register_type("Orphan".into(), kt.clone(), BindingIndex::BUILTIN);
-
-            let leaf = TypeName::leaf("Orphan".to_string());
-            let obj = coerce_type_token_value(scope, &leaf, None).expect("fall-through must Ok");
-            match obj {
-                KObject::KTypeValue(KType::SetRef { set, index }) => {
-                    assert_eq!(set.member(*index).name, "Orphan");
-                }
-                other => panic!(
-                    "expected synthesized KTypeValue(SetRef(Orphan)), got {:?}",
-                    other.ktype()
+            let leaf = TypeName::leaf("Missing".to_string());
+            match resolve_type_leaf_carrier(scope, &leaf, None) {
+                // The bridge surfaces the elaborator's `unknown type name` diagnostic, which
+                // names the leaf rather than carrying the bare name.
+                TypeLeafCarrier::Unbound(message) => assert!(
+                    message.contains("Missing"),
+                    "expected an unbound message naming `Missing`, got: {message}",
                 ),
+                other => panic!("expected Unbound, got {:?}", carrier_tag(&other)),
+            }
+        }
+
+        /// A bare leaf naming a member caught mid-seal — its `SetRef` identity is
+        /// pre-installed but the member is still `pending` and a value-side placeholder
+        /// stands in for the producer — parks rather than handing back the half-sealed
+        /// identity, then resolves once the member fills and the placeholder clears. This
+        /// is the regression the bridge-routed leaf closes: the prior synchronous resolver
+        /// returned the pre-installed `SetRef` while the schema was still empty.
+        #[test]
+        fn mid_seal_member_parks_then_resolves() {
+            use crate::machine::core::kfunction::NodeId;
+            use crate::machine::core::{Bindings, PendingTypeEntry};
+            use crate::machine::core::BindingIndex;
+            use crate::machine::model::ast::KExpression;
+            use crate::machine::model::types::{
+                NominalKind, NominalMember, NominalSchema, RecursiveSet,
+            };
+            use crate::machine::model::Record;
+
+            let arena = RuntimeArena::new();
+            let scope = run_root_bare(&arena);
+            // Pre-install a singleton set whose one member is still `pending` (schema
+            // unfilled) and bind its external `SetRef` into `bindings.types`, mirroring the
+            // `RECURSIVE TYPES` pre-install window.
+            let member = NominalMember::pending("Node".into(), scope.id, NominalKind::Struct);
+            let set = std::rc::Rc::new(RecursiveSet::new(vec![member]));
+            scope.preinstall_identity(
+                "Node".into(),
+                KType::SetRef {
+                    set: std::rc::Rc::clone(&set),
+                    index: 0,
+                },
+                BindingIndex::value(0),
+            );
+            // Mark the binder in-flight (the `pending_types` entry the finalize gate reads)
+            // and install a value-side placeholder for the producer node to park on.
+            let bindings: &Bindings<'_> = scope.bindings();
+            let pending_guard = bindings.insert_pending_type(
+                "Node".into(),
+                PendingTypeEntry {
+                    kind: NominalKind::Struct,
+                    scope_id: scope.id,
+                    schema_expr: KExpression::new(Vec::new()),
+                },
+            );
+            scope
+                .install_placeholder("Node".into(), NodeId(7), BindingIndex::value(0))
+                .expect("placeholder install");
+
+            let leaf = TypeName::leaf("Node".to_string());
+            match resolve_type_leaf_carrier(scope, &leaf, None) {
+                TypeLeafCarrier::Park(producers) => {
+                    assert_eq!(producers, vec![NodeId(7)], "parks on the single producer");
+                }
+                other => panic!("expected Park mid-seal, got {:?}", carrier_tag(&other)),
+            }
+
+            // Seal: fill the member, drop the in-flight guard. The re-resolve now admits
+            // (the name is no longer in `pending_types`) and hands back the sealed carrier.
+            set.member(0).fill(NominalSchema::Struct(Record::from_pairs([(
+                "x".to_string(),
+                KType::Number,
+            )])));
+            drop(pending_guard);
+
+            match resolve_type_leaf_carrier(scope, &leaf, None) {
+                TypeLeafCarrier::Resolved(KObject::KTypeValue(KType::SetRef { set: s, index })) => {
+                    assert_eq!(s.member(*index).name, "Node");
+                }
+                other => {
+                    panic!("expected Resolved(SetRef) after seal, got {:?}", carrier_tag(&other))
+                }
+            }
+        }
+
+        fn carrier_tag(c: &TypeLeafCarrier<'_>) -> &'static str {
+            match c {
+                TypeLeafCarrier::Resolved(_) => "Resolved",
+                TypeLeafCarrier::Park(_) => "Park",
+                TypeLeafCarrier::Unbound(_) => "Unbound",
             }
         }
     }

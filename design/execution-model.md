@@ -627,13 +627,15 @@ The rails the dispatch driver feeds:
     `Lift(LiftState::Pending(producer_id))` (the same shim `BodyResult::Tail`
     uses for sub-Bind waits), `UnboundName` falls through to the keyworded
     path so `value_lookup`'s body produces the structured error.
-  - `BareTypeLeaf` (`(Number)`, `(IntOrd)`) — `fast_lane_bare_type_leaf`
-    routes through `coerce_type_token_value` so the dispatch-phase carrier
-    matches what `value_lookup::body_type_expr` would synthesize. Failures
-    surface directly; there is no candidate-machinery alternative for a
-    bare leaf type. See
+  - `BareTypeLeaf` (`(Number)`, `(IntOrd)`) — `bare_type_leaf`
+    routes through `resolve_type_leaf_carrier` over the memoized,
+    park-capable `Scope::resolve_type_expr` bridge: a leaf naming an
+    earlier still-finalizing binder parks on its producer and re-resolves
+    on wake, like every compound type form, and other failures surface
+    directly. There is no candidate-machinery alternative for a bare leaf
+    type. See
     [typing/elaboration.md § Layers](typing/elaboration.md#layers)
-    § Layer 4 for the shared coercion seam.
+    § Layer 4 for the shared resolver seam.
   - `TypeCall` (`MyStruct {x = 1}`, `MyFunctor {T = IntOrd}`) —
     [`type_call`](../src/machine/execute/dispatch/single_poll.rs)
     resolves the head Type token to its `bindings.types` identity. A

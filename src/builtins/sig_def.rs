@@ -59,7 +59,7 @@ pub fn body<'a>(
         // One unified identity in `bindings.types`: `KType::Signature { sig, pinned_slots }`
         // is both the introspectable value (`decl_scope` via `sig`) and the dispatch
         // constraint. A slot annotation `:OrderedSig` means "any module satisfying
-        // OrderedSig"; the signature value is recovered via `coerce_type_token_value`,
+        // OrderedSig"; the signature value is recovered via `resolve_type_leaf_carrier`,
         // which synthesizes `KTypeValue(KType::Signature { .. })`. SIG doesn't join an SCC
         // type cycle, so the upsert's overwrite arm never fires — its insert-if-absent /
         // non-equal-Rebind behaviour (two `SIG Foo` in one scope error) carries here.

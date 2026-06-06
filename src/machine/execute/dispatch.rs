@@ -50,7 +50,8 @@ use keyworded::KeywordedState;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
-pub use resolve_type_expr::{coerce_type_token_value, ResolveTypeExprOutcome};
+pub use resolve_type_expr::ResolveTypeExprOutcome;
+pub(crate) use resolve_type_expr::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use single_poll::{BareIdState, BareTypeState, CtorState, LitState, SigilState};
 
 /// The shape classification and classifier live in
@@ -77,16 +78,7 @@ pub(super) fn resolve_name_part<'a>(
     let chain = scheduler.chain_deref();
     match scope.resolve_with_chain(name, chain) {
         Resolution::Placeholder(producer) => {
-            return if scheduler.is_result_ready(producer) {
-                match scheduler.read_result(producer) {
-                    Err(e) => NameOutcome::ProducerErrored(e.clone_for_propagation()),
-                    Ok(_) => NameOutcome::Unbound(name.to_string()),
-                }
-            } else if matches!(consumer, Some(c) if scheduler.would_create_cycle(producer, c)) {
-                NameOutcome::Cycle(name.to_string())
-            } else {
-                NameOutcome::Parked(producer)
-            };
+            return disposition_for_producer(scheduler, name, producer, consumer);
         }
         Resolution::Value(obj) if is_type.is_none() => {
             return NameOutcome::Resolved(obj);
@@ -94,15 +86,41 @@ pub(super) fn resolve_name_part<'a>(
         Resolution::Value(_) | Resolution::UnboundName => {}
     }
     match is_type {
-        Some(t) => match coerce_type_token_value(scope, t, chain) {
-            Ok(obj) => NameOutcome::Resolved(obj),
-            Err(KError {
-                kind: KErrorKind::UnboundName(n),
-                ..
-            }) => NameOutcome::Unbound(n),
-            Err(e) => NameOutcome::ProducerErrored(e),
+        // The bare-leaf type token routes through the memoized, park-capable bridge. A
+        // not-yet-sealed referent parks on its single producer (a visible type alias has
+        // already resolved its RHS, so a leaf parks on at most one binder), reusing the
+        // same ready/cycle disposition the value-side placeholder arm applies.
+        Some(t) => match resolve_type_leaf_carrier(scope, t, scheduler.active_chain_clone()) {
+            TypeLeafCarrier::Resolved(obj) => NameOutcome::Resolved(obj),
+            TypeLeafCarrier::Unbound(n) => NameOutcome::Unbound(n),
+            TypeLeafCarrier::Park(producers) => match producers.first() {
+                Some(producer) => disposition_for_producer(scheduler, name, *producer, consumer),
+                None => NameOutcome::Unbound(name.to_string()),
+            },
         },
         None => NameOutcome::Unbound(name.to_string()),
+    }
+}
+
+/// Map a still-finalizing producer for a parked name onto a [`NameOutcome`]: a
+/// ready-but-errored producer surfaces its error, a ready-and-bound producer means the
+/// name finalized to a non-shadowing value (`Unbound`), a parking edge that would close a
+/// wake cycle is `Cycle`, and otherwise the name parks on the producer.
+fn disposition_for_producer<'a>(
+    scheduler: &Scheduler<'a>,
+    name: &str,
+    producer: NodeId,
+    consumer: Option<NodeId>,
+) -> NameOutcome<'a> {
+    if scheduler.is_result_ready(producer) {
+        match scheduler.read_result(producer) {
+            Err(e) => NameOutcome::ProducerErrored(e.clone_for_propagation()),
+            Ok(_) => NameOutcome::Unbound(name.to_string()),
+        }
+    } else if matches!(consumer, Some(c) if scheduler.would_create_cycle(producer, c)) {
+        NameOutcome::Cycle(name.to_string())
+    } else {
+        NameOutcome::Parked(producer)
     }
 }
 
@@ -396,10 +414,11 @@ pub(in crate::machine::execute) fn run_dispatch<'a>(
         DispatchState::FunctionValueCall(fs) => return fs.resume(ctx, scope, idx),
         DispatchState::TypeCall(cs) => return (*cs).resume(ctx, scope, idx),
         DispatchState::HeadDeferred(hd) => return Ok(hd.resume(ctx, scope, idx)),
+        DispatchState::BareTypeLeaf(bs) if bs.park.is_some() => return bs.resume(ctx, scope, idx),
         _ => unreachable!(
             "remaining fast-lane stateful variants terminalize in one poll; \
-             only Keyworded, FunctionValueCall, TypeCall, and HeadDeferred \
-             re-enter from a parked track"
+             only Keyworded, FunctionValueCall, TypeCall, HeadDeferred, and a \
+             parked BareTypeLeaf re-enter from a parked track"
         ),
     };
     match expr.shape() {
@@ -409,7 +428,7 @@ pub(in crate::machine::execute) fn run_dispatch<'a>(
                 ExpressionPart::Type(t) => t.clone(),
                 _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
             };
-            Ok(single_poll::bare_type_leaf(ctx, &t, scope))
+            Ok(single_poll::bare_type_leaf(ctx, &t, scope, idx))
         }
         DispatchShape::BareIdentifier => {
             debug_assert!(init.pre_subs.is_empty());

@@ -2,7 +2,7 @@
 //! shapes called out in the eager-wrap-resolve plan:
 //!
 //! - Bare leaf Type-token (`MAKESET IntOrd`) — wrap-slot value resolves directly via
-//!   `coerce_type_token_value`; the picked function binds without a sub-Dispatch detour.
+//!   `resolve_type_leaf_carrier`; the picked function binds without a sub-Dispatch detour.
 //! - Forward Identifier reference in a wrap-slot — the eager pass parks on the
 //!   producer's placeholder and re-dispatches on wake.
 //! - Chained Type access (`:(LIST OF Mo.Ty)`) — `Deferred` arm, not `wrap_indices`. Pinned

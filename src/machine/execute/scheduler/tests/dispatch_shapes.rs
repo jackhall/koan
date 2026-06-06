@@ -68,7 +68,7 @@ fn bind_identity_fn<'a>(scope: &'a Scope<'a>) {
 }
 
 /// `(Number)` — single bare leaf Type token. Classifies as `BareTypeLeaf`; the
-/// fast-lane handler routes through `coerce_type_token_value`.
+/// fast-lane handler routes through `resolve_type_leaf_carrier`.
 #[test]
 fn bare_type_leaf_short_circuits() {
     let arena = RuntimeArena::new();
@@ -319,12 +319,12 @@ fn fast_lane_on_non_function_returns_error() {
     );
 }
 
-/// Tagged-union construction via a LET-bound lowercase alias. The FnValueCall
-/// fast lane resolves `maybe` to its `KTypeValue(UserType { Tagged { schema } })`
-/// identity and constructs from the schema payload via
+/// Tagged-union construction through the type name. The TypeCall fast lane
+/// resolves `Maybe` to its `KTypeValue(UserType { Tagged { schema } })` identity
+/// and constructs from the schema payload via
 /// `constructors::dispatch_construct_tagged`.
 ///
-/// Counter contract: every step in the chain (FnValueCall head resolution +
+/// Counter contract: every step in the chain (TypeCall head resolution +
 /// construct-from-identity + LiteralPassThrough on the value-cell) is fast-lane;
 /// nothing enters `resolve_dispatch`.
 #[test]
@@ -332,12 +332,9 @@ fn fast_lane_on_tagged_union_constructs() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(
-        scope,
-        "UNION Maybe = (some :Number none :Null)\nLET maybe = Maybe",
-    );
+    run(scope, "UNION Maybe = (some :Number none :Null)");
     reset_resolve_dispatch_entry_count();
-    let result = run_one(scope, parse_one("maybe (some 42)"));
+    let result = run_one(scope, parse_one("Maybe (some 42)"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -354,12 +351,12 @@ fn fast_lane_on_tagged_union_constructs() {
     }
 }
 
-/// Struct construction via a LET-bound lowercase alias. `(STRUCT Pt = ...)`
-/// returns the `KTypeValue(UserType { Struct { fields } })` identity which LET binds
-/// under `pt`; the fast lane constructs from the fields payload via
+/// Struct construction through the type name. `STRUCT Pt = ...` registers the
+/// `KTypeValue(UserType { Struct { fields } })` identity type-side; the TypeCall
+/// fast lane constructs from the fields payload via
 /// `constructors::dispatch_construct_struct`.
 ///
-/// Counter contract: every step is fast-lane (FnValueCall head resolution +
+/// Counter contract: every step is fast-lane (TypeCall head resolution +
 /// construct-from-identity + LiteralPassThrough per value-cell); no entry into
 /// `resolve_dispatch`.
 #[test]
@@ -367,9 +364,9 @@ fn fast_lane_on_struct_type_constructs() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "LET pt = (STRUCT Pt = (x :Number, y :Number))");
+    run(scope, "STRUCT Pt = (x :Number, y :Number)");
     reset_resolve_dispatch_entry_count();
-    let result = run_one(scope, parse_one("pt {x = 3, y = 4}"));
+    let result = run_one(scope, parse_one("Pt {x = 3, y = 4}"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -973,18 +970,16 @@ fn head_deferred_applies_returned_functor_to_module() {
 }
 
 /// `HeadDeferred` → constructor. A head that evaluates to a `KTypeValue(UserType)`
-/// (the `:(Point)` sigil-free value path via a `LET t = Point` alias dispatched
-/// inside a nested head expression) routes through the `Constructor` arm.
+/// (a nested head expression naming a type) routes through the `Constructor` arm.
 #[test]
 fn head_deferred_constructs_from_returned_type_value() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "STRUCT Point = (x :Number, y :Number)");
-    run(scope, "LET t = Point");
-    // `(t) {x = 1, y = 2}`: the nested-`Expression` head `(t)` resolves the value
-    // alias `t` to `KTypeValue(Point)`, then the body constructs.
-    let out = run_one(scope, parse_one("(t) {x = 1, y = 2}"));
+    // `(Point) {x = 1, y = 2}`: the nested-`Expression` head `(Point)` resolves the
+    // type leaf to `KTypeValue(Point)`, then the body constructs.
+    let out = run_one(scope, parse_one("(Point) {x = 1, y = 2}"));
     assert_eq!(out.ktype().name(), "Point", "got {}", out.summarize());
 }
 
@@ -1094,19 +1089,6 @@ fn type_call_on_functor_annotation_type_mismatches() {
     }
 }
 
-/// `FunctionValueCall` → type value. `LET t = Point` then `t {x = 1, y = 2}`:
-/// the value-classified alias carries the type identity and constructs.
-#[test]
-fn function_value_call_on_type_value_constructs() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
-    run(scope, "STRUCT Point = (x :Number, y :Number)");
-    run(scope, "LET t = Point");
-    let out = run_one(scope, parse_one("t {x = 1, y = 2}"));
-    assert_eq!(out.ktype().name(), "Point", "got {}", out.summarize());
-}
-
 /// `NonCallableHead`. A literal / list head in a multi-part expression is not
 /// callable; the dispatch entry raises a `DispatchFailed` directly (not a node
 /// terminal), so it surfaces through `execute()`. The reason embeds the head
@@ -1140,7 +1122,6 @@ fn type_call_and_head_deferred_skip_resolve_dispatch() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "STRUCT Point = (x :Number, y :Number)");
-    run(scope, "LET t = Point");
 
     reset_resolve_dispatch_entry_count();
     let _ = dispatch_one(scope, parse_one("Point {x = 1, y = 2}"));
@@ -1152,7 +1133,7 @@ fn type_call_and_head_deferred_skip_resolve_dispatch() {
     );
 
     reset_resolve_dispatch_entry_count();
-    let _ = dispatch_one(scope, parse_one("(t) {x = 1, y = 2}"));
+    let _ = dispatch_one(scope, parse_one("(Point) {x = 1, y = 2}"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,

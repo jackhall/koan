@@ -74,9 +74,13 @@ fn let_t_cycle_errors() {
         .expect("execute does not surface per-slot errors");
     let res = sched.read_result(ids[0]);
     match res {
+        // The bare-leaf RHS resolves through the memoized type-expr bridge, whose miss
+        // surfaces the elaborator's `unknown type name` diagnostic naming `Ty`. The
+        // index-gated invisibility of the in-progress binding is what turns the cycle into
+        // a miss rather than a self-park.
         Err(e) => assert!(
-            matches!(&e.kind, KErrorKind::UnboundName(name) if name == "Ty"),
-            "expected UnboundName('Ty'), got {e}",
+            matches!(&e.kind, KErrorKind::UnboundName(msg) if msg.contains("Ty")),
+            "expected UnboundName naming Ty, got {e}",
         ),
         Ok(v) => panic!("expected UnboundName error, got value {:?}", v.ktype()),
     }

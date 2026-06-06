@@ -33,12 +33,14 @@ pub fn body<'a>(
     let mut type_for_types_map: Option<KType<'a>> = None;
     let name = match bundle.get("name") {
         Some(KObject::KString(s)) => {
-            // Partition guard: value-classified binder names cannot carry a module
-            // or signature value. See design/typing/elaboration.md § Binding-map
-            // partition.
+            // Partition guard enforcing the language invariant: a value-classified
+            // (lowercase-leading) binder name cannot carry any type-language value.
+            // A type aliases only under a Type-classified name. See
+            // design/typing/elaboration.md § Binding-map partition.
             let kind = match value {
                 KObject::KTypeValue(KType::Module { .. }) => Some("module"),
                 KObject::KTypeValue(KType::Signature { .. }) => Some("signature"),
+                KObject::KTypeValue(_) | KObject::TypeNameRef(_) => Some("type"),
                 _ => None,
             };
             if let Some(kind) = kind {

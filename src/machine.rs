@@ -19,6 +19,6 @@ pub use core::{
     LexicalFrame, Resolution, RuntimeArena, Scope, ScopeId, ScopeKind,
 };
 pub use execute::{
-    coerce_type_token_value, interpret, interpret_with_writer, interpret_with_writer_path,
-    NameOutcome, ResolveOutcome, ResolveTypeExprOutcome, Resolved, Scheduler,
+    interpret, interpret_with_writer, interpret_with_writer_path, NameOutcome, ResolveOutcome,
+    ResolveTypeExprOutcome, Resolved, Scheduler,
 };

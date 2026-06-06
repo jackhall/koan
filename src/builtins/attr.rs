@@ -9,7 +9,7 @@
 //! family by `NominalKind`, and `AnyModule` admits modules), so dispatch picks unambiguously
 //! without a specificity tiebreaker.
 
-use crate::machine::execute::coerce_type_token_value;
+use crate::machine::execute::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::model::types::{AbstractSource, NominalKind};
 use crate::machine::model::values::{Module, NonWrappedRef};
 use crate::machine::model::{KObject, KType};
@@ -94,15 +94,25 @@ pub fn body_type_lhs<'a>(
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    // The Type-classed lhs is a nominal type-side binding. Modules / signatures keep
-    // a value-side carrier (`KTypeValue(Module/Signature)`), which `coerce_type_token_value`
-    // recovers; struct / union names are type-only, so it synthesizes a
-    // `KTypeValue(SetRef)` that `access_field` rejects with the same TypeMismatch a
-    // static struct field access produces.
+    // The Type-classed lhs is a nominal type-side binding. A module / signature identity
+    // resolves to a `KTypeValue(Module/Signature)` carrier `access_field` projects a member
+    // off; a struct / union name resolves to a `KTypeValue(SetRef)` that `access_field`
+    // rejects with the same TypeMismatch a static struct field access produces. Dispatch
+    // resolves this ATTR type argument before the body runs, so a `Park` outcome is
+    // unreachable here and surfaces as a loud structured error rather than a silent stall.
     let leaf = crate::machine::model::ast::TypeName::leaf(s_name);
-    let target = match coerce_type_token_value(scope, &leaf, None) {
-        Ok(obj) => obj,
-        Err(e) => return err(e),
+    let target = match resolve_type_leaf_carrier(scope, &leaf, None) {
+        TypeLeafCarrier::Resolved(obj) => obj,
+        TypeLeafCarrier::Unbound(name) => return err(KError::new(KErrorKind::UnboundName(name))),
+        TypeLeafCarrier::Park(producers) => {
+            return err(KError::new(KErrorKind::ShapeError(format!(
+                "ATTR lhs type `{}` resolved to a still-finalizing type \
+                 (parked on {} producer(s)); the type argument should already be sealed \
+                 at body entry",
+                leaf.render(),
+                producers.len(),
+            ))))
+        }
     };
     access_field(scope, target, &field_name)
 }

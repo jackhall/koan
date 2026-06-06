@@ -151,7 +151,7 @@ module named as an ATTR receiver, a signature introspected by `:|` or `WITH`,
 or either surfaced by `USING … SCOPE` — synthesize the
 `KObject::KTypeValue(KType::Module { .. } | KType::Signature { .. })` carrier on
 demand from the type entry via
-[`coerce_type_token_value`](../../src/machine/execute/dispatch/resolve_type_expr.rs);
+[`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_expr.rs);
 ATTR's `body_type_lhs` routes its Type-classed receiver through that seam rather
 than a raw `bindings.data` lookup.
 

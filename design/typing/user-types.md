@@ -94,7 +94,7 @@ signature values ride
 `bindings.data` holds only runtime instances. A value-position reference to a
 nominal type token (passing `Outcome` to a constructor or ATTR call) synthesizes
 [`KObject::KTypeValue(identity)`](../../src/machine/execute/dispatch/resolve_type_expr.rs)
-on demand from the `bindings.types` entry via `coerce_type_token_value` — no
+on demand from the `bindings.types` entry via `resolve_type_leaf_carrier` — no
 value-side schema carrier exists for struct / union / module / Result.
 
 ## Type-only nominal install

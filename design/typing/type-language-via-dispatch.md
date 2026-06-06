@@ -148,9 +148,9 @@ inner expression's parts decide its shape:
   [`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs).
 - `BareTypeLeaf` / `BareIdentifier` for single-name sigils
   (`:(Number)`, `:(MyType)`). The `BareTypeLeaf` fast lane is the
-  primary caller of `coerce_type_token_value` — see
+  primary caller of `resolve_type_leaf_carrier` — see
   [elaboration.md § Layers](elaboration.md#layers) § Layer 4 for the
-  shared coercion seam.
+  shared resolver seam.
 - `TypeCall` for a leaf-Type head with non-empty rest — routes a
   Struct / Tagged / Newtype head through its construction primitive
   (`:(MyStruct {x = 1})`) and a `KType::KFunctor { body: Some }` head

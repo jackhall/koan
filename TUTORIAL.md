@@ -301,9 +301,10 @@ Construct a value by calling the type with a `(tag value)` pair:
 LET m = (Maybe (some 42))
 ```
 
-Aliasing the type token to a lowercase identifier (`LET maybe = Maybe`) and
-calling `maybe (...)` works too: `call_by_name` recognizes `TaggedUnionType` as
-a callable and routes to the same constructor.
+A type aliases only under a Type-classified (uppercase-leading) name — e.g.
+`LET Maybe2 = Maybe`, then `Maybe2 (...)` constructs through the same lane. A
+type can never bind to a value-classified (lowercase) identifier: `LET maybe =
+Maybe` is rejected.
 
 Pattern-match on the tag with `MATCH ... WITH`. The branches are
 `<tag> -> <body>` triples. A trailing comma joins the next line into the

@@ -94,7 +94,7 @@ pub fn body<'a>(
         };
         // Type-only install: the module's identity (carrying its `&Module` and per-call
         // frame anchor) lives in `bindings.types`; ATTR access recovers the value-side
-        // `KTypeValue(Module)` via `coerce_type_token_value`. MODULE doesn't join an SCC
+        // `KTypeValue(Module)` via `resolve_type_leaf_carrier`. MODULE doesn't join an SCC
         // type cycle (bodies park on the outer scheduler), so the upsert's overwrite arm
         // never fires for a module — its insert-if-absent / non-equal-Rebind behaviour is
         // what carries here, sharing the one nominal-finalize primitive.
