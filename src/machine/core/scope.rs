@@ -417,36 +417,36 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Synchronous identity install for a `RECURSIVE TYPES` block's pre-seal. Writes
-    /// `name` → `ktype` (a `KType::SetRef` into the block's shared `RecursiveSet`) to
-    /// [`Bindings::types`], but panics on borrow conflict instead of deferring, and panics
-    /// on `Rebind` — a member's identity must not already be in `types` when the block
-    /// pre-installs it.
+    /// Synchronous pre-install of a nominal type's identity — `name` → `ktype` (a
+    /// `KType::SetRef` into the declaring set's shared `RecursiveSet`) — into
+    /// [`Bindings::types`] *before* the declaration's schema finalizes, so the body can
+    /// reference the name (self-recursion, or sibling members in a `RECURSIVE TYPES` block).
+    /// Unlike the finalize-time upsert it panics on borrow conflict instead of deferring,
+    /// and panics on `Rebind` — the identity must not already be in `types`.
     ///
-    /// The block runs this with no outer `bindings` borrow held; a conflict here is a
-    /// programming error. The member's schema is filled later, at its own declaration's
-    /// finalize, against the same shared set recovered from this `SetRef`.
-    pub fn cycle_close_install_identity(
+    /// Callers run this with no outer `bindings` borrow held; a conflict here is a
+    /// programming error. The schema is filled later, at the declaration's own finalize,
+    /// against the same shared set recovered from this `SetRef`.
+    pub fn preinstall_identity(
         &self,
         name: String,
         ktype: crate::machine::model::types::KType<'a>,
         index: BindingIndex,
     ) {
         if self.bindings.is_borrowed() {
-            self.write_target()
-                .cycle_close_install_identity(name, ktype, index);
+            self.write_target().preinstall_identity(name, ktype, index);
             return;
         }
         let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc_ktype(ktype);
         match self.bindings.get().try_register_type(&name, kt_ref, index) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => panic!(
-                "cycle_close_install_identity borrow conflict on `{name}` — cycle-close \
-                 runs from the elaborator with no outer types borrow held",
+                "preinstall_identity borrow conflict on `{name}` — runs with no outer \
+                 types borrow held",
             ),
             Err(e) => panic!(
-                "cycle_close_install_identity Rebind for `{name}`: {e} — cycle member \
-                 identity should not already be in bindings.types",
+                "preinstall_identity Rebind for `{name}`: {e} — the identity should not \
+                 already be in bindings.types",
             ),
         }
     }

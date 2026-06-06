@@ -363,7 +363,7 @@ mod tests {
             set: std::rc::Rc::clone(&pre_set),
             index: 0,
         };
-        scope.cycle_close_install_identity("Maybe".into(), pre_identity, BindingIndex::value(0));
+        scope.preinstall_identity("Maybe".into(), pre_identity, BindingIndex::value(0));
         let first = super::finalize_union(
             scope,
             "Maybe".into(),

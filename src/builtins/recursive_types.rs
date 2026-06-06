@@ -76,7 +76,7 @@ pub fn body<'a>(
     // the shared set rather than minting a singleton (the same routing the reactive SCC seal
     // uses). The members co-declare at one lexical position, so index 0 is fine.
     for (index, (name, _)) in members.iter().enumerate() {
-        child.cycle_close_install_identity(
+        child.preinstall_identity(
             name.clone(),
             KType::SetRef {
                 set: Rc::clone(&set),

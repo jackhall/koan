@@ -24,7 +24,7 @@ fn finalize_struct_idempotent_after_seal_pre_install() {
         set: std::rc::Rc::clone(&pre_set),
         index: 0,
     };
-    scope.cycle_close_install_identity("Foo".into(), pre_identity, BindingIndex::value(0));
+    scope.preinstall_identity("Foo".into(), pre_identity, BindingIndex::value(0));
     // First finalize: fills the pre-installed member in place.
     let first = super::super::finalize_struct(
         scope,
