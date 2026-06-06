@@ -264,7 +264,7 @@ mod tests {
         }
     }
 
-    /// Exercises the Combine-on-sub-dispatches path: an inner `MODULE_TYPE_OF` call
+    /// Exercises the Combine-on-sub-dispatches path: an inner `Elem.Type` access
     /// in a pin-value position sub-dispatches and surfaces in `pinned_slots`.
     #[test]
     fn sig_with_inner_module_attr_path_elaborates() {
@@ -277,10 +277,7 @@ mod tests {
              SIG SetSig = ((LET Elt = Number) (VAL insert :Number))\n\
              LET Elem = (IntOrd :| OrderedSig)",
         );
-        let result = run_one(
-            scope,
-            parse_one("SIG_WITH SetSig ((Elt (MODULE_TYPE_OF Elem Type)))"),
-        );
+        let result = run_one(scope, parse_one("SIG_WITH SetSig ((Elt Elem.Type))"));
         match result {
             KObject::KTypeValue(KType::Signature { sig, pinned_slots }) => {
                 assert_eq!(sig.path, "SetSig");

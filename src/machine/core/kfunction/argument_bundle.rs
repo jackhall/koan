@@ -125,6 +125,7 @@ pub(crate) fn extract_bare_type_name<'a>(
             | KType::Null
             | KType::Identifier
             | KType::KExpression
+            | KType::SigiledTypeExpr
             | KType::TypeExprRef
             | KType::Type
             | KType::AnyModule

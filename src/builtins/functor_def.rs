@@ -213,6 +213,27 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         Some(super::fn_def::binder_bucket),
         false,
     );
+    // Lazy `:(...)` return carrier — the FN counterpart's rationale applies: a dotted
+    // `-> Er.Type` defers per-call rather than eager-sub-dispatching to an unbound parameter.
+    register_builtin_full(
+        scope,
+        "FUNCTOR",
+        sig(
+            KType::Any,
+            vec![
+                kw("FUNCTOR"),
+                arg("signature", KType::KExpression),
+                kw("->"),
+                arg("return_type", KType::SigiledTypeExpr),
+                kw("="),
+                arg("body", KType::KExpression),
+            ],
+        ),
+        body,
+        None,
+        Some(super::fn_def::binder_bucket),
+        false,
+    );
 }
 
 #[cfg(test)]

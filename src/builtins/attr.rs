@@ -515,7 +515,7 @@ mod tests {
 
     /// An opaque (`:|`) view re-tags a VAL-slot read with the per-call abstract identity:
     /// `IntOrdView.zero` reads as the abstract `Type` (`ktype().name() == "Type"`), not the
-    /// underlying `Number`, so a deferred return `(MODULE_TYPE_OF Er Type)` accepts the body.
+    /// underlying `Number`, so a deferred return `Er.Type` accepts the body.
     #[test]
     fn opaque_view_slot_read_re_tags_with_abstract_type() {
         let arena = RuntimeArena::new();

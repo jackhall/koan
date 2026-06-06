@@ -766,9 +766,9 @@ fn deferred_return_surface_eq_and_hash() {
         s.hash(&mut hasher);
         hasher.finish()
     }
-    let a = DeferredReturnSurface::Expression("MODULE_TYPE_OF Er Type".into());
-    let b = DeferredReturnSurface::Expression("MODULE_TYPE_OF Er Type".into());
-    let c = DeferredReturnSurface::Expression("MODULE_TYPE_OF Ar Type".into());
+    let a = DeferredReturnSurface::Expression("ATTR Er Type".into());
+    let b = DeferredReturnSurface::Expression("ATTR Er Type".into());
+    let c = DeferredReturnSurface::Expression("ATTR Ar Type".into());
     assert_eq!(a, b);
     assert_eq!(h(&a), h(&b));
     assert_ne!(a, c);

@@ -162,7 +162,7 @@ the constraint at the return slot; the body's `MODULE Result` must mirror
 
 Pin values that reference only the FUNCTOR's outer scope are elaborated at
 binder-construction time. Concrete builtins (`Number`, `Str`) and
-outer-scope-bound type values (`(MODULE_TYPE_OF Mo Type)` where `Mo` is
+outer-scope-bound type values (`Mo.Type` where `Mo` is
 bound outside the FUNCTOR) both work as pin values resolved eagerly.
 
 ## Parameters
@@ -177,7 +177,7 @@ predicate gates the write — `Signature { .. }`, `Type`, `TypeExprRef`,
 `KType::AnyModule`, and `KType::AnySignature` all carry meaningful
 type-language identity at the binder, and the corresponding argument is
 admitted as a single carrier shape. Body-position references to the
-parameter (`Er.compare`, `(MODULE_TYPE_OF Er Type)`) resolve through
+parameter (`Er.compare`, `Er.Type`) resolve through
 `Scope::resolve_type`'s outer-chain walk against the per-call scope, and
 [`attr.rs`](../../src/builtins/attr.rs)'s `body_identifier` arm falls
 through to `resolve_type` for `KType::Module` / `AbstractType` so ATTR on
@@ -222,7 +222,7 @@ above the value language.
 ## Deferred return-type elaboration
 
 Return-type expressions that reference a per-call FUNCTOR parameter
-(`-> Er`, `-> (MODULE_TYPE_OF Er Type)`, `-> (SIG_WITH Set ((Elt: Er)))`)
+(`-> Er`, `-> Er.Type`, `-> (SIG_WITH Set ((Elt: Er)))`)
 ride a *deferred* return-type carrier through the per-call scope.
 [`ExpressionSignature::return_type`](../../src/machine/model/types/signature.rs)
 is a `ReturnType<'a>` enum, not a bare `KType`: `Resolved(KType)` covers
@@ -371,9 +371,9 @@ constraints.
   matching the shape FN parameters parse.
 - **Type-valued slot values.** `SIG_WITH` slot values accept any
   expression that evaluates to a `KType`, not only bare type-name
-  tokens. `(SIG_WITH MySig ((Elt: (MODULE_TYPE_OF Mo Type))))`
-  works because `MODULE_TYPE_OF` returns the abstract type of module
-  `Mo`. The slot's declared kind decides what the engine expects.
+  tokens. `(SIG_WITH MySig ((Elt: Mo.Type)))`
+  works because the dotted `Mo.Type` access returns the abstract type of
+  module `Mo`. The slot's declared kind decides what the engine expects.
 - **Module-kind slots.** Type constructors can declare slots that take
   modules. `(SIG_WITH Set ((Elt: Number) (Ord: IntOrd)))` works because
   `Set`'s `Ord` slot is declared `OrderedSig`-kind. Distinct module

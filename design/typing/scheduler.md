@@ -17,7 +17,7 @@ kind; there is no `KType::TypeVar`.
 The mechanism:
 
 - **Type-returning builtins are ordinary builtins.** `LIST_OF`,
-  `DICT_OF`, `MODULE_TYPE_OF` and the like dispatch and
+  `DICT_OF` and the like dispatch and
   execute on the value path; their result is the elaborated type carried
   in `KObject::KTypeValue(KType)`. A `LET MyList = (LIST_OF Number)`
   binding finalizes once and makes `MyList` available as a type name in

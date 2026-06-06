@@ -116,7 +116,7 @@ ATTR's `access_module_member`
 `type_id` is the per-call abstract identity — the same `Wrapped` variant NEWTYPE
 uses, distinguished by its `type_id`'s KType. So `(IntOrdView.zero)` reads as the
 abstract `Type` (opaque), not the underlying `Number`, and a functor body
-`(FN (GET_ZERO Er :WithZero) -> (MODULE_TYPE_OF Er Type) = (Er.zero))` whose return
+`(FN (GET_ZERO Er :WithZero) -> Er.Type = (Er.zero))` whose return
 type is the per-call abstract member admits the slot read. The carrier and its
 `type_id` are allocated in the *module's* arena (declaration-stable), so the
 `type_id` outlives any lift or deep-clone of the read value into a per-call functor

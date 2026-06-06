@@ -413,10 +413,12 @@ fn slot_admits_strict<'a>(
             {
                 return true;
             }
-            // Lazy-candidate relaxation (see `has_lazy_kexpr_slot`).
+            // Lazy-candidate relaxation (see `has_lazy_kexpr_slot`). A `:SigiledTypeExpr`
+            // slot is part-kind-strict like `:KExpression` — it admits only its own part
+            // shape, so the return-type overloads stay disjoint (no `Expression` ↔ sigil tie).
             if has_lazy_kexpr_slot
                 && matches!(part_value, ExpressionPart::Expression(_))
-                && !matches!(arg.ktype, KType::KExpression)
+                && !matches!(arg.ktype, KType::KExpression | KType::SigiledTypeExpr)
             {
                 return true;
             }

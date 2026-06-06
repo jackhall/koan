@@ -74,9 +74,18 @@ fn build_attr<'a>(
     let start = lhs.span.map(|s| s.start).unwrap_or(trigger.start);
     let end = rhs.span.map(|s| s.end).unwrap_or(trigger.end);
     let outer = Span { start, end };
+    // A Type-classed field is a type member (`M.T`), so the access is a type operation:
+    // wrap it `SigiledTypeExpr` so its result flows into a `TypeExprRef` / `Type` slot. A
+    // value field (lowercase `Identifier`, e.g. `M.x`) stays the value-context `Expression`.
+    let type_context = matches!(rhs.value, ExpressionPart::Type(_));
     let kw = Spanned::at(ExpressionPart::Keyword("ATTR".to_string()), trigger);
     let kexp = KExpression::build(vec![kw, lhs, rhs], Some(outer), source::current());
-    Spanned::at(ExpressionPart::Expression(Box::new(kexp)), outer)
+    let part = if type_context {
+        ExpressionPart::SigiledTypeExpr(Box::new(kexp))
+    } else {
+        ExpressionPart::Expression(Box::new(kexp))
+    };
+    Spanned::at(part, outer)
 }
 
 fn build_try<'a>(lhs: Spanned<ExpressionPart<'a>>, trigger: Span) -> Spanned<ExpressionPart<'a>> {

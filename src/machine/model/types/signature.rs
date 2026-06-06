@@ -6,7 +6,7 @@
 //! [`crate::machine::model::values::module::Signature`].
 //!
 //! `return_type` is a [`ReturnType`] rather than a bare [`KType`] so functor return types
-//! that reference a per-call parameter (`-> Er`, `-> (MODULE_TYPE_OF Er Type)`) survive
+//! that reference a per-call parameter (`-> Er`, `-> Er.Type`) survive
 //! FN-definition without sub-dispatching against the outer scope.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
@@ -70,7 +70,7 @@ pub enum ReturnType<'a> {
 ///
 /// - `TypeExpr` — parser-preserved structured form (`Er`, `List<Er>`). Re-elaborated per
 ///   call via `elaborate_type_expr`. Owns its strings, so no arena lifetime.
-/// - `Expression` — captured parens-form expression (`(MODULE_TYPE_OF Er Type)`). Re-runs
+/// - `Expression` — captured parens-form expression (`Er.Type`). Re-runs
 ///   as a sub-Dispatch under the per-call scope; the resulting `KTypeValue`'s inner
 ///   `KType` is the per-call return type.
 pub enum DeferredReturn<'a> {

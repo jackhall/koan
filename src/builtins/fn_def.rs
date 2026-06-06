@@ -219,7 +219,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     //
     // Two keyworded overloads cover the return-type carrier — `TypeExprRef` for
     // `Type(_)` (`-> Number`), `KExpression` for parens-form
-    // (`-> (MODULE_TYPE_OF Er Type)`). `Future(KTypeValue(_))` post-Combine wakes
+    // (`-> Er.Type`). `Future(KTypeValue(_))` post-Combine wakes
     // admit only against `TypeExprRef`. A third overload (below) carries the
     // anonymous `:{…}` record-schema signature.
     //
@@ -263,6 +263,29 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 arg("signature", KType::KExpression),
                 kw("->"),
                 arg("return_type", KType::KExpression),
+                kw("="),
+                arg("body", KType::KExpression),
+            ],
+        ),
+        body,
+        None,
+        Some(binder_bucket),
+        false,
+    );
+    // Lazy `:(...)` return carrier — a dotted/sigil return (`-> Er.Type`, `-> :(LIST OF T)`)
+    // is a `SigiledTypeExpr`; the `:SigiledTypeExpr` slot captures it raw (more specific than
+    // `:TypeExprRef`, so it wins) and `extract_return_type_raw` defers a param-referencing one
+    // per-call instead of eager-sub-dispatching it to an unbound parameter.
+    register_builtin_full(
+        scope,
+        "FN",
+        sig(
+            KType::Any,
+            vec![
+                kw("FN"),
+                arg("signature", KType::KExpression),
+                kw("->"),
+                arg("return_type", KType::SigiledTypeExpr),
                 kw("="),
                 arg("body", KType::KExpression),
             ],

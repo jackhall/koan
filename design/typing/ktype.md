@@ -153,9 +153,9 @@ sigil-and-dispatch contract.
 constructors — `LIST OF`, `MAP _ -> _`, `FN <sig> -> _`, and
 `FUNCTOR <sig> -> _` — register in
 [`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs)
-alongside the older `LIST_OF` / `DICT_OF` /
-`MODULE_TYPE_OF` builtins in
-[`type_ops/`](../../src/builtins/type_ops.rs). Both surfaces produce
+alongside the older `LIST_OF` / `DICT_OF` builtins in
+[`type_ops/`](../../src/builtins/type_ops.rs) (a module type-member is named by
+the dotted `M.T` access, not a builtin). Both surfaces produce
 `KObject::KTypeValue(KType::...)` carriers; the keyworded forms are the
 canonical syntax served by the type-language dispatch path, and the
 `type_ops/` forms are the value-side construction primitives that

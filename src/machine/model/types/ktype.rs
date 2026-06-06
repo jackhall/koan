@@ -83,7 +83,7 @@ pub enum KType<'a> {
     },
     /// Confined carrier for a synthesized FN/FUNCTOR `ret` slot whose source return is a
     /// `ReturnType::Deferred` — a per-call-elaborated return like `-> Er` or
-    /// `-> (MODULE_TYPE_OF Er Type)`. Holds only the hashable surface shadow
+    /// `-> Er.Type`. Holds only the hashable surface shadow
     /// ([`DeferredReturnSurface`]) so equality/hashing/specificity read the deferred
     /// shape directly instead of coarsening it to `Any`. Valid *only* inside a
     /// `KFunction`/`KFunctor` `ret` box that `function_value_ktype` builds; no runtime
@@ -96,6 +96,12 @@ pub enum KType<'a> {
     /// Lazy slot: accepts an unevaluated `ExpressionPart::Expression` so the builtin chooses
     /// when (or whether) to run it.
     KExpression,
+    /// Lazy slot for a `:(...)` type expression — the sibling of [`KType::KExpression`] for a
+    /// `SigiledTypeExpr` part. Captures it raw (via `resolve_for`, as the inner
+    /// `KObject::KExpression`) instead of eager-sub-dispatching, so a builtin can defer a
+    /// param-referencing dotted/sigil return (`-> Er.Type`) to per-call elaboration. More
+    /// specific than [`KType::TypeExprRef`], so it wins the overload when both admit.
+    SigiledTypeExpr,
     /// Meta-type for slots capturing a parsed type-name token. Carries the full structured
     /// `TypeName` rather than flattening to a name string.
     TypeExprRef,
@@ -203,6 +209,7 @@ impl<'a> KType<'a> {
             KType::DeferredReturn(s) => s.render(),
             KType::Identifier => "Identifier".into(),
             KType::KExpression => "KExpression".into(),
+            KType::SigiledTypeExpr => "SigiledTypeExpr".into(),
             KType::TypeExprRef => "TypeExprRef".into(),
             KType::Type => "Type".into(),
             KType::SetRef { set, index } => set.member(*index).name.clone(),
@@ -280,6 +287,7 @@ impl<'a> PartialEq for KType<'a> {
             | (Null, Null)
             | (Identifier, Identifier)
             | (KExpression, KExpression)
+            | (SigiledTypeExpr, SigiledTypeExpr)
             | (TypeExprRef, TypeExprRef)
             | (Type, Type)
             | (Any, Any)
@@ -372,8 +380,8 @@ impl<'a> std::hash::Hash for KType<'a> {
         use KType::*;
         std::mem::discriminant(self).hash(state);
         match self {
-            Number | Str | Bool | Null | Identifier | KExpression | TypeExprRef | Type | Any
-            | AnyModule | AnySignature => {}
+            Number | Str | Bool | Null | Identifier | KExpression | SigiledTypeExpr
+            | TypeExprRef | Type | Any | AnyModule | AnySignature => {}
             List(t) => t.hash(state),
             Dict(k, v) => {
                 k.hash(state);

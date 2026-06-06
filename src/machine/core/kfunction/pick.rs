@@ -54,6 +54,12 @@ impl<'a> KFunction<'a> {
                         has_lazy_slot = true;
                     }
                     (KType::KExpression, _) => return None,
+                    // `:SigiledTypeExpr` is the lazy sibling of `:KExpression` for a `:(...)`
+                    // part — captured raw (`resolve_for`), never sub-dispatched here.
+                    (KType::SigiledTypeExpr, ExpressionPart::SigiledTypeExpr(_)) => {
+                        has_lazy_slot = true;
+                    }
+                    (KType::SigiledTypeExpr, _) => return None,
                     (_, ExpressionPart::Expression(_))
                     | (_, ExpressionPart::SigiledTypeExpr(_)) => {
                         // Speculative: assume the eager-evaluated result will type-match
