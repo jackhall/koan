@@ -16,19 +16,19 @@ whatever file a change happens to touch, never as a systematic sweep. The
 accumulation predates the recent refactors and is not confined to the
 recently-churned subsystems.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *Names can be trusted.* Every concept-level name (type, variant, field, public
-  method, module) describes its current behavior, so a reader navigates by name
-  without cross-checking the implementation.
-- *Distinct concepts read as distinct.* Overlapping name families are
-  disambiguated, removing the second-guessing where two similar names mean
-  different things.
-- *One responsibility, one owner.* Logic that had drifted into two symbols under
-  different names is merged, shrinking the surface a future change must keep in
-  sync.
-- *Source and design docs share one vocabulary*, lowering ramp-up cost and keeping
-  the design tree's terms aligned with the code.
+- Every concept-level name (type, variant, field, public method, module)
+  describes the behavior the code performs today, with no name left over from a
+  former role.
+- Each surfaced overlapping/ambiguous name family is disambiguated, so two
+  distinct concepts no longer carry confusingly similar names and one name no
+  longer covers two concepts.
+- Each duplicated responsibility surfaced by the audit lives in a single owner,
+  with the second symbol removed or folded in.
+- Every renamed symbol that appears in a `//` comment or design doc is updated
+  to the new name, so source and the design tree share one vocabulary and
+  `doclinks check` reports no resulting broken reference.
 
 **Directions.**
 
@@ -58,13 +58,11 @@ recently-churned subsystems.
 
 ## Dependencies
 
+Ordering: sequence the audit's passes over the type-representation areas after the
+in-flight type-representation items land (or coordinate), so the same region is not
+audited twice.
+
 **Requires:** none — an audit depends on nothing.
 
 **Unblocks:** none tracked yet — the audit is expected to spawn its own follow-up
 rename/merge items as it surfaces concrete candidates.
-
-The in-flight type-representation items (tagged-union variants as types, and
-plain-English type-operation surfaces) will themselves rename and reshape their own
-areas. Sequence the audit's
-passes over those areas after those items land, or coordinate, so the same region
-is not audited twice.

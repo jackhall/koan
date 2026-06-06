@@ -15,20 +15,18 @@ operator group resolves through the per-scope operator registry walked by
 terminates at an explicit reduction seam — a `"operator-chain folding not yet
 implemented"` error — because nothing yet reduces a recognized run to a value.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *A recognized run evaluates by its group's mode.* The reducer reads the
+- A recognized operator run evaluates to a value: the reducer reads the
   resolved [`OperatorGroup`](../../src/machine/model/operators.rs) and reduces
   the operands by the mode it declares.
-- *Relational chains read as written.* `a < b < c` and `1 <= x < 10` evaluate
-  through the pairwise mode rather than mis-folding into a type error.
-- *Cross-group mixing stays explicit.* Groups are incomparable — no global
-  precedence table — so `a + b * c` is a clean registry miss until written
-  `a + (b * c)`, keeping mixed-kind expressions unambiguous by construction.
-- *The disjunction surface evaluates.* The `|` surface of
-  [anonymous structural unions](../type_language/anonymous-unions.md) ceases to
-  be a recognized-but-inert run and produces a union value; a unary-mode `|`
-  builds the whole union in one pass rather than splicing pairwise.
+- `a < b < c` and `1 <= x < 10` evaluate through the pairwise mode and yield a
+  single boolean result.
+- A run spanning two groups (`a + b * c`) resolves as a registry miss, and the
+  parenthesized form `a + (b * c)` evaluates.
+- A `|` run over [anonymous structural
+  unions](../type_language/anonymous-unions.md) produces a union value, with a
+  unary-mode `|` building the whole union in one pass.
 
 **Directions.**
 

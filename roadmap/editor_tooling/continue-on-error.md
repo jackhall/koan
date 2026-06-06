@@ -8,12 +8,12 @@ failed expression instead of running the next one.
 [`Scheduler::execute`](../../src/machine/execute/scheduler.rs) return
 `Result<(), KError>`, so the first error propagates all the way out.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *REPL survives a bad expression.* A top-level failure no longer ends the
-  session; the prompt returns and the next expression still runs.
-- *Batch mode runs the whole file.* The CLI reports each failed expression and
-  continues, so a single error no longer masks the rest of the run.
+- After a top-level expression raises a `KError` in the REPL, the prompt
+  returns and a subsequent expression evaluates normally.
+- In batch mode, every top-level expression in a file is attempted; a failed
+  expression is reported and execution proceeds to the next one.
 
 **Directions.**
 

@@ -13,21 +13,16 @@ notion of modules — structures, signatures, and ascription — but says nothin
 about how source files map onto that notion or how one file reaches into
 another. This item closes that gap.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *Decomposition.* Programs split across multiple files — related groups of
-  functions and types live in their own files instead of cramming everything
-  into one or pushing it down into Rust as a builtin.
-- *Standard library in Koan itself.* "List utilities," "string helpers," and
-  other naturally-Koan-expressible code ships as `.koan` files rather than
-  Rust builtins, putting the right code at the right layer.
-- *Per-file privacy boundary.* When each file becomes a module (or contains
-  modules), the signature/ascription machinery from the module system gives
-  exports a syntactic anchor; names stop having to globally not collide
-  across the whole codebase.
-- *Tests live alongside code.* A test file referencing the function it tests
-  becomes expressible — the default shape of a test suite in every other
-  language.
+- A Koan program spanning multiple `.koan` files runs, with one file
+  referencing definitions in another through the import surface.
+- A `.koan` source file defines functions and types that another file uses
+  via `IMPORT`, without those definitions being Rust builtins.
+- An imported file exposes only the names its signature/ascription anchors as
+  exports; an unexported name is not in scope at the importing site.
+- A test file imports the function it tests from a separate source file and
+  exercises it.
 
 **Directions.**
 
@@ -85,14 +80,12 @@ another. This item closes that gap.
 
 ## Dependencies
 
-**Requires:**
+Soft prerequisite: lands cleanly any time after the module language is in place;
+otherwise orthogonal to the effect and error work.
+
+**Requires:** none.
 
 **Unblocks:**
 
 - [Standard library](standard-library.md) — the stdlib lives across
   multiple `.koan` files; user code needs an import surface to load them.
-
-Otherwise mostly orthogonal to the effect and error work — the file loader
-uses whatever `BuiltinFn` signature exists at the time, and downstream
-features (effects, the eventual checker) use whatever loader exists at
-the time. Lands cleanly any time after the module language is in place.

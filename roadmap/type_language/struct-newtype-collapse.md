@@ -17,23 +17,21 @@ wrap), and a redundant `NominalKind::Struct` / `NominalSchema::Struct` /
 `ProjectedSchema::Struct` triple plus the struct arm of `apply_constructor`
 (`src/machine/execute/dispatch/apply_callable.rs`) and `dispatch_construct_struct`.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *One nominal product primitive.* A struct is a `NominalKind::Newtype` member whose
-  repr is a `KType::Record`, carried as `Wrapped { inner: KObject::Record, type_id }`.
-  The `Struct` carrier, schema variant, projected-schema variant, kind, and dedicated
-  constructor path all retire.
-- *Record-repr newtype construction reaches struct parity.* `(Point {x = 1, y = 2})`
-  builds the record and wraps it; `(Point r)` wraps an existing record value. Both ride
-  the newtype construction path, which branches on repr shape (record vs scalar) rather
-  than on a separate kind.
-- *Constructors reified as first-class function values.* `(<Type> CONSTRUCTOR)`
-  evaluates to a `KObject::KFunction` typed `:(FN (fields…) -> <Type>)`, so a
-  constructor binds anywhere a function does — a higher-order argument, an `FN`-typed
-  slot, a `LET`. With one constructible nominal kind, the reification is uniform.
-- *`.x` access through the unified carrier.* Field access on an ex-struct extends ATTR's
-  existing `Wrapped` fall-through (already handling newtype-over-struct) to
-  newtype-over-record.
+- A struct is a `NominalKind::Newtype` member whose repr is a `KType::Record`, carried
+  as `Wrapped { inner: KObject::Record, type_id }`.
+- The `KObject::Struct` carrier, `NominalSchema::Struct` schema variant,
+  `ProjectedSchema::Struct` projected-schema variant, `NominalKind::Struct` kind, and the
+  `dispatch_construct_struct` constructor path are removed.
+- `(Point {x = 1, y = 2})` builds the record and wraps it, and `(Point r)` wraps an
+  existing record value, both routed through the newtype construction path that branches
+  on repr shape (record vs scalar) rather than a separate kind.
+- `(<Type> CONSTRUCTOR)` evaluates to a `KObject::KFunction` typed
+  `:(FN (fields…) -> <Type>)`, so a constructor binds wherever a function does — a
+  higher-order argument, an `FN`-typed slot, a `LET`.
+- `.x` field access on an ex-struct resolves through ATTR's `Wrapped` fall-through over a
+  record repr.
 
 **Directions.**
 
@@ -78,10 +76,5 @@ wrap), and a redundant `NominalKind::Struct` / `NominalSchema::Struct` /
 **Unblocks:**
 
 - [Tagged-union variants as dispatchable types](tagged-variant-types.md) — the sum-side
-  sequel of the `NominalKind` → `Newtype` collapse: it dissolves `Tagged` by making each
-  variant a `Newtype` over its payload, building on the product-side primitive this item
-  establishes.
-
-This item is **phase one** of shrinking `NominalKind` from four kinds toward
-`{Newtype, TypeConstructor}` — it dissolves `Struct` into `Newtype`. The sum-side
-`Tagged` sequel and its prerequisites are framed in the Scope direction above.
+  sequel that builds each variant as a `Newtype` over its payload, on the product-side
+  primitive this item establishes.

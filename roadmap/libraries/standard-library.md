@@ -11,30 +11,22 @@ doesn't exist yet. The builtin `Result` type also ships with no
 combinators, so user code chaining fallible computations writes MATCH
 boilerplate by hand for every step.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *Collections ship as Koan-source functor FNs.* `Set`, `Map`,
-  `OrderedMap`, and friends are written once as functors over the
-  required operations (`Element` with an ordering, `Key` with equality,
-  etc.) and instantiated by user code — no per-element-type duplication,
-  no Rust-side builtin shim per concrete type.
-- *Standard library lives across multiple files.* The stdlib is a
-  directory of `.koan` files, imported by user code through the same
-  surface every Koan project uses, so it doubles as the canonical
-  example of file-and-import structure.
-- *Effect modules have a canonical home.* Standard effect modules
-  (`Random`, `IO`, `Time` from
-  [monadic-side-effects](monadic-side-effects.md)) ship as stdlib
-  entries rather than as ad-hoc top-level definitions, so the in-language
-  `Monad` story has working stdlib examples to point at.
-- *Idiomatic Koan has a worked example.* New users have a body of Koan
-  code that exercises modules, signatures, functors, imports, and
-  effects together — so the answer to "how do I structure a real Koan
-  program?" is a directory they can read.
-- *`Result` combinators ship as stdlib code.* `map` / `bind` /
-  `unwrap_or` and friends over the builtin `Result` type let user code
-  thread a value through fallible steps without a hand-written MATCH at
-  each one, so typed-error returns become ergonomic rather than verbose.
+- `Set`, `Map`, `OrderedMap`, and friends are written once as Koan-source
+  functors over the required operations (`Element` with an ordering, `Key`
+  with equality, etc.) and instantiated by user code at multiple element
+  types from that single definition.
+- The stdlib is a directory of `.koan` files that user code imports through
+  the same surface every Koan project uses.
+- The standard effect modules (`Random`, `IO`, `Time` from
+  [monadic-side-effects](monadic-side-effects.md)) ship as stdlib entries
+  ascribing the in-language `Monad` signature.
+- A reader points to a directory of stdlib Koan code that exercises modules,
+  signatures, functors, imports, and effects together as a worked example.
+- `map`, `bind`, `unwrap_or`, and friends over the builtin `Result` type let
+  user code thread a value through fallible steps without a hand-written
+  MATCH at each one.
 
 **Directions.**
 

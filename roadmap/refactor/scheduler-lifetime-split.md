@@ -27,15 +27,20 @@ built in an earlier step and read each other's outputs across steps
 (`read_result -> &'a KObject<'a>`), so it genuinely must span the whole run; per-call scopes
 are the one thing nested strictly inside it, and the only thing that needs a shorter one.
 
-**Impact.**
+**Acceptance criteria.**
 
-- Per-call scopes carry their real frame lifetime, so the scheduler stores a borrow whose
-  extent the borrow checker tracks rather than a fabricated run-length one.
-- A branded/yoked frame handle becomes expressible: with a distinct frame lifetime to bind
-  to, [Type-enforced frame re-anchor](type-enforced-frame-reanchor.md) can make a re-anchor
-  that outlives its frame a compile error and retire its Miri integration pins.
-- The dispatch/builtin surface states the scope↦output lifetime relationship in types,
-  replacing the arena-drop-order convention that today carries it implicitly.
+- Per-call frame scopes carry a frame lifetime `'s` distinct from the run `'a`, so the
+  borrow the scheduler stores for a frame scope has its true (shorter) extent tracked by the
+  borrow checker.
+- The dispatch chain (`run_dispatch` → `DispatchCtx` → `BuiltinFn` → `BodyResult` →
+  `SchedulerHandle`) is `'s`-polymorphic with `'a: 's`, so a frame-bounded scope feeds into
+  dispatch and lifts to `'a` only at the `lift_kobject` Done boundary — supplying the distinct
+  frame lifetime that [Type-enforced frame re-anchor](type-enforced-frame-reanchor.md) binds
+  its brand to.
+- The dispatch/builtin surface states the scope↦output lifetime relationship in its types
+  rather than carrying it through the arena-drop-order convention.
+- The `recursive_eval_no_uaf` test runs green under `MIRIFLAGS=-Zmiri-tree-borrows` and is
+  admitted to [`observe/miri_slate.md`](../../observe/miri_slate.md).
 
 **Directions.**
 

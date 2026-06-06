@@ -32,7 +32,7 @@ Before writing a single doc edit, verify the main agent's account against the di
 - **Summary/diff divergence.** Does every "Files changed" entry match a real hunk? Does the diff contain changes the summary omits? 
 - **Undocumented design decisions.** A behavioral fork visible in the diff (a new dispatch arm, a changed default, a dropped validation) that the "Design decisions" section doesn't mention. The summary should not be able to hide a decision the code makes.
 - **Scope creep.** Changes in the diff that the roadmap item didn't ask for and the summary doesn't justify. 
-- **Roadmap-delta honesty.** Does the work actually complete the item it claims to? Is the "should be deleted" call correct against what shipped, or is the item only partially done?
+- **Acceptance-criteria satisfaction.** Read the roadmap item's `**Acceptance criteria.**` section — each bullet is a verifiable done-condition. Take each one to the diff and the verify slate's test results and mark it **met / partial / unmet**, citing the hunk or test that satisfies it. Every criterion met ⇒ the item shipped and may be deleted; any partial or unmet ⇒ the item is only partially done, stays in `roadmap/`, and the status is at best yellow. This is the spine of the roadmap-delta call — the "should be deleted" decision in step 3 follows directly from it. (An item with no `**Acceptance criteria.**` section, or work not driven by a roadmap item, has nothing to check here — say so.)
 - **Caveat suppression.** Open follow-ups visible in the code (a `TODO`, a hard-coded special case, a punted branch) that the "Caveats" section claims are "none".
 
 Record every finding. Findings are the point of this pass — a clean audit is a real result, but a silent one is a failure.
@@ -49,7 +49,7 @@ If the changes may have memory safety implications and the Miri slate has not be
 ### 3. Apply the partition rules to this work item's delta
 
 - **Surface source-tree drift.** The baseline `check` already printed the source-tree-changes section: every `src/**/*.rs` file added, modified, deleted, or renamed since `master`, with each inbound doc link. This is your decision input for which source changes warrant a `README.md` "Source layout" update, a design-doc reference, or a `fix-refs` pass for renamed paths. Not every source change deserves a doc edit (a leaf builtin or tiny helper often doesn't) — it's a judgment call, not a gate.
-- **Roadmap item shipped?** Run `python3 tools/doclinks.py rm-roadmap roadmap/<item>.md` (use `--dry-run` first if you want to inspect). The tool deletes the file, prunes intra-roadmap dependency bullets, strips the entry from `roadmap/README.md`'s "Open items", regenerates the derived "Next items" list (adding any dependent the delete just unblocked), and then runs `check` itself — any broken-link output it prints is your job to fix: design-doc "Open work" sections, source-file `//` comments, prose mentions inside Dependencies sections. **Only delete if your audit confirms the item actually shipped** — a partially-done item stays.
+- **Roadmap item shipped?** Run `python3 tools/doclinks.py rm-roadmap roadmap/<item>.md` (use `--dry-run` first if you want to inspect). The tool deletes the file, prunes intra-roadmap dependency bullets, strips the entry from `roadmap/README.md`'s "Open items", regenerates the derived "Next items" list (adding any dependent the delete just unblocked), and then runs `check` itself — any broken-link output it prints is your job to fix: design-doc "Open work" sections, source-file `//` comments, prose mentions inside Dependencies sections. **Only delete if every Acceptance criterion is met** (per the acceptance-criteria check in step 2) — a partially-done item stays.
 - **Update `roadmap/README.md` prose:** add a phrase to the "What's shipped so far" paragraph if the item warrants mention. (`rm-roadmap` and `sync-next` only touch the bullet lists.)
 - **Update `design/*.md`:** if a design doc's "Open work" section pointed to the deleted roadmap item, replace with either a body section describing what shipped (when there's explanatory value) or remove the bullet (when the body already covers it). If the design doc's invariants changed, update them in place.
 - **Update `README.md` / `TUTORIAL.md`** if the work changes user-facing surface or directory layout.
@@ -92,6 +92,11 @@ Report shape:
 
 - <finding>: <summary claim> vs <what the diff shows>. <severity / what it implies>.
 - <none — summary and diff agree, scope matches the roadmap item> if the audit came up clean.
+
+## Acceptance criteria
+
+- <criterion>: met / partial / unmet — <hunk or test that satisfies it, or what's missing>
+- <n/a — work not driven by a roadmap item, or the item has no Acceptance criteria section> if there is nothing to check.
 
 ## Doc edits
 

@@ -10,20 +10,18 @@ stronger-than-probabilistic coherence at the cost of more verbose types.
 This is the polish stage; everything below is additive over stages 1-6 and
 breaks no existing programs.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *Concise disambiguation.* Block-scoped binding, module-level priority,
-  and selective imports — sugar designed against the patterns that actually
-  emerged in real stage-5 code — replace the deliberately ugly stage-5
-  placeholder. Routine disambiguation stops being a tax on the cases where
-  coherence checking can't silently pick.
-- *Deductive coherence as an opt-in.* Witness types reflect the implicit's
-  identity as a module-kind slot on the type constructor (see
+- Routine implicit disambiguation is written with block-scoped binding,
+  module-level priority, or selective imports rather than stage 5's
+  deliberately ugly placeholder form.
+- A type constructor carrying a witness as a module-kind slot (see
   [design/typing/functors.md](../../design/typing/functors.md#type-expressions-and-constraints))
-  — distinct module values bound to that slot produce distinct types, and
-  the type system enforces non-mixing. Users who want
-  stronger-than-probabilistic certainty get it, at the cost of a slightly
-  more verbose type, while everyone else keeps stage 6's behavior.
+  yields distinct types for distinct module values bound to that slot, and
+  mixing two such types is a type error.
+- Type inference elides the module-kind witness slot in source, so a program
+  that does not opt into witness types writes no slot and keeps stage 6's
+  behavior.
 
 **Directions.**
 
@@ -52,12 +50,12 @@ breaks no existing programs.
 
 ## Dependencies
 
+The deferred-syntax discipline relies on stage 5 having shipped with a
+deliberately ugly placeholder; designing this stage before stage 5 has
+real-world use defeats the purpose.
+
 **Requires:**
 
 - [Stage 5 — Modular implicits](modular-implicits.md)
 
 **Unblocks:** none — stage 7 is a leaf.
-
-The deferred-syntax discipline relies on stage 5 having shipped with a
-deliberately ugly placeholder; designing this stage before stage 5 has
-real-world use defeats the purpose.

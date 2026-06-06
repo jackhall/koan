@@ -23,16 +23,17 @@ re-pinning a manifest and impose no constraint on a truly abstract slot. The mod
 satisfaction check ([`compatible_sigs`](../../src/machine/model/types/ktype.rs)) likewise has no
 manifest-equality rule to enforce.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *SIGs express abstract vs manifest type members*, so a signature states which type slots are
-  open for sharing and which are fixed — the OCaml module-type vocabulary.
-- *Module satisfaction is sound on type members*: a module matches a SIG only when its manifest
-  type members equal the declared ones, while abstract members stay free.
-- *`WITH` sharing constraints carry their real meaning*: pinning targets abstract slots, and an
-  incompatible manifest pin is a type error rather than a silently-accepted re-binding.
-- *The `AbstractType` identity rests on a clean split* rather than the witness-with-default hybrid,
-  so opaque ascription and abstract-type identity have one coherent model to reason about.
+- A SIG declares abstract (witness-less, open for sharing) and manifest (fixed-witness) type
+  members as distinct surface forms.
+- A module matches a SIG only when each of its manifest type members equals the declared one,
+  while abstract members stay unconstrained — enforced through `compatible_sigs`.
+- `WITH` pins target abstract slots; an incompatible manifest pin (e.g. `Ord = Str` onto a
+  `Number`-manifest slot) is a type error.
+- Abstract members carry no concrete witness and manifest members carry no `AbstractType`
+  identity, so the witness-with-default hybrid is gone and opaque ascription reads abstract and
+  manifest members through one model.
 
 **Directions.**
 
@@ -59,6 +60,3 @@ manifest-equality rule to enforce.
 **Requires:** none — builds on the shipped SIG / opaque-ascription / `AbstractType` substrate.
 
 **Unblocks:** none tracked yet.
-
-The infix `WITH` builtin's slot validation is unconstrained today precisely because there is no
-manifest/abstract distinction to enforce — this item is what would give it teeth.

@@ -23,20 +23,19 @@ reports the flat `TypeExprRef` marker — `src/machine/model/values/kobject.rs`)
 type-meta markers — `TypeExprRef`, `Type`, `AnyModule`, `AnySignature` — are kinds living
 as `KType` variants, unable to express a type constructor's arity.
 
-**Impact.**
+**Acceptance criteria.**
 
-- *Types flow as themselves.* The currency becomes `Object(&KObject) | Type(&KType)`: a
-  type-operator returns a raw `&KType`, and a type argument arrives as a `Type` arm. The
-  two boxes and the box/unbox round-trip retire.
-- *Representation matches the enforced partition.* "Types aren't values" becomes
-  structural rather than a bind-time check alone — a type result binds only a type name,
-  and the `ktype()` Module/Signature special-case folds away.
-- *Modules and signatures are types.* They live in the `Type` arm; `as_module` /
-  `as_signature` project from it, so first-class module and signature flow stops riding a
-  value carrier.
-- *A type's kind is first-class.* A shallow `KKind` classifies a `Type`-arm argument at
-  dispatch, and the four type-meta markers move out of `KType` into `KKind` — a clean
-  home that leaves an extension point for constructor arity.
+- The value currency is `Object(&KObject) | Type(&KType)`: a type-operator returns a raw
+  `&KType` and a type argument arrives as a `Type` arm.
+- `KObject::KTypeValue` and `KObject::TypeNameRef` are removed, along with the box/unbox
+  round-trip at the binding seam.
+- "Types aren't values" is enforced structurally: a `Type`-arm result binds only a type
+  name, and the `ktype()` Module/Signature special-case is gone.
+- Modules and signatures travel in the `Type` arm, with `as_module` / `as_signature`
+  projecting from it.
+- A shallow `KKind` — `{ Proper, Module(sig), Signature, Any }` — classifies a `Type`-arm
+  argument at dispatch, and the `TypeExprRef`, `Type`, `AnyModule`, and `AnySignature`
+  markers live on `KKind` rather than `KType`.
 
 **Directions.**
 
@@ -71,6 +70,10 @@ as `KType` variants, unable to express a type constructor's arity.
 
 ## Dependencies
 
+The shallow `KKind` leaves an extension point — `KKind::Constructor` and the `* -> *`
+tower — for the higher-kinded type-constructor work; that is a soft downstream pull, not
+a tracked build-order edge.
+
 **Requires:**
 
 - [Type-only nominal identities](../../design/typing/user-types.md) — the `bindings.types`
@@ -80,7 +83,3 @@ as `KType` variants, unable to express a type constructor's arity.
   dispatch substrate the `KKind` `Type`-arm matching extends.
 
 **Unblocks:** none tracked yet.
-
-The shallow `KKind` leaves an extension point — `KKind::Constructor` and the `* -> *`
-tower — for the higher-kinded type-constructor work; that is a soft downstream pull, not
-a tracked build-order edge.

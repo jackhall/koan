@@ -20,26 +20,25 @@ instead of reusing the type-dispatch machinery that already eliminates every
 other typed value. A tag classifies as `BareIdentifier`, never `BareTypeLeaf`
 (`classify_dispatch_shape`, `src/machine/model/ast.rs`).
 
-**Impact.**
+**Acceptance criteria.**
 
-- *Each variant is a dispatchable nominal type.* A declared variant mints a
-  `KType` refinement of its union, so a slot can be typed to a single variant and
-  a function can accept only `some`, rejecting `none` at bind time.
-- *Tagged-union elimination collapses into ordinary type-dispatch.* The same
-  mechanism that eliminates [anonymous structural unions](anonymous-unions.md) by
-  runtime type also eliminates tagged unions; `MATCH` becomes sugar over
+- A declared variant mints a `KType` refinement of its union, so a slot can be
+  typed to a single variant and a function accepting only `some` rejects `none`
+  at bind time.
+- Tagged-union elimination runs through ordinary type-dispatch — the same
+  mechanism that eliminates [anonymous structural
+  unions](anonymous-unions.md) by runtime type — with `MATCH` lowering to
   type-dispatch rather than a parallel string-matching form.
-- *Same-payload variants stay distinct.* Discrimination is by variant-type
-  identity, not payload type, so `UNION R = (ok :Int, error :Int)` keeps two arms.
-- *Variants join the type language.* A variant is a first-class type-position
-  citizen — usable inside `:(...)`, as an agreed return type, and as a dispatch
-  key — closing the value/type split that today routes tags through
+- Discrimination keys on variant-type identity, so `UNION R = (ok :Int,
+  error :Int)` keeps two distinct arms.
+- A variant is usable inside `:(...)`, as an agreed return type, and as a
+  dispatch key, classifying as a type leaf rather than through
   `BareIdentifier`.
-- *Sum-side completion of the `NominalKind` collapse.* Each variant — a nominal identity
-  over its payload — is a `Newtype`, and the union is their anonymous-union join, so
-  `NominalKind::Tagged` dissolves into `Newtype`. With the product-side [struct →
-  record-repr `NEWTYPE` collapse](struct-newtype-collapse.md), `NominalKind` shrinks from
-  four kinds toward `{Newtype, TypeConstructor}`.
+- Each variant is a `Newtype` over its payload and the union is their
+  anonymous-union join, so `NominalKind::Tagged` dissolves into `Newtype`;
+  combined with the product-side [struct → record-repr `NEWTYPE`
+  collapse](struct-newtype-collapse.md), `NominalKind` is reduced toward
+  `{Newtype, TypeConstructor}`.
 
 **Directions.**
 
@@ -74,6 +73,11 @@ other typed value. A tag classifies as `BareIdentifier`, never `BareTypeLeaf`
 
 ## Dependencies
 
+Cross-link (not a dependency edge): [anonymous structural
+unions](anonymous-unions.md) shares the type-dispatch elimination model — that item
+handles *untagged* unions, this one supplies the variant `KType` so *tagged* unions
+eliminate the same way — but neither blocks the other.
+
 **Requires:**
 
 - [Type-only nominal identities](../../design/typing/user-types.md) — the shipped
@@ -84,18 +88,8 @@ other typed value. A tag classifies as `BareIdentifier`, never `BareTypeLeaf`
   every other typed value.
 - [Branch-arm return contract](../../design/execution-model.md#arms-as-own-blocks)
   — the `MATCH` arm machinery this work lowers into type-dispatch.
-- [Collapse `STRUCT` into a record-repr `NEWTYPE`](struct-newtype-collapse.md) — the
-  product-side phase one of the `NominalKind` → `Newtype` collapse. Landing it first makes
-  `Newtype` the sole nominal-over-shape primitive, so each variant is built directly as a
-  `Newtype` over its payload rather than a parallel nominal mechanism this work would
-  otherwise introduce and then rework.
+- [Collapse `STRUCT` into a record-repr `NEWTYPE`](struct-newtype-collapse.md) — landing
+  this product-side phase first makes `Newtype` the sole nominal-over-shape primitive, so
+  each variant builds directly on it instead of a parallel mechanism.
 
 **Unblocks:** none tracked yet.
-
-Sibling of anonymous structural unions (linked from Impact and Directions
-above): that item supplies type-dispatch elimination and
-union-as-join-of-members for *untagged* unions; this item supplies the missing
-variant `KType` so *tagged* unions eliminate the same way, and would satisfy the
-deferred "match by type" arm sugar that item parks. Neither blocks the other —
-they share the elimination model but not a build order, so this is a cross-link,
-not a dependency edge.
