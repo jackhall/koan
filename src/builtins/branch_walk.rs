@@ -7,9 +7,11 @@
 
 use crate::builtins::fn_def::return_type::{extract_return_type_raw, ReturnTypeRaw};
 use crate::machine::core::kfunction::body::ReturnContract;
+use crate::machine::core::LexicalFrame;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::KType;
 use crate::machine::{ArgumentBundle, KError, KErrorKind, ResolveTypeExprOutcome, Scope};
+use std::rc::Rc;
 
 /// Resolve a MATCH / TRY `-> :T` annotation slot into the [`ReturnContract::Arm`] its
 /// arms are checked against. Reuses the FN return-type extraction, then resolves the
@@ -21,10 +23,12 @@ pub(crate) fn resolve_arm_return_contract<'a>(
     scope: &'a Scope<'a>,
     bundle: &mut ArgumentBundle<'a>,
     kind: &'static str,
+    chain: Option<Rc<LexicalFrame>>,
 ) -> Result<ReturnContract<'a>, KError> {
     let kt = match extract_return_type_raw(bundle)? {
         ReturnTypeRaw::Resolved(kt) => kt,
-        ReturnTypeRaw::TypeExprCarrier(te) => match scope.resolve_type_expr(&te, None) {
+        // Gated to the MATCH / TRY position — a forward type reference is a position error.
+        ReturnTypeRaw::TypeExprCarrier(te) => match scope.resolve_type_expr(&te, chain) {
             ResolveTypeExprOutcome::Done(kt) => kt.clone(),
             _ => KType::from_name(&te.render()).ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(

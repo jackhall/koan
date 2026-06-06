@@ -6,11 +6,13 @@ use std::collections::HashMap;
 use crate::machine::core::kfunction::argument_bundle::{
     extract_kexpression, extract_ktype, extract_type_name_ref,
 };
+use crate::machine::core::LexicalFrame;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::types::{DeferredReturn, ReturnType};
 use crate::machine::model::{KObject, KType};
 use crate::machine::ResolveTypeExprOutcome;
 use crate::machine::{ArgumentBundle, KError, KErrorKind, NodeId, Scope};
+use std::rc::Rc;
 
 use super::param_refs::{kexpression_references_any, type_expr_references_any};
 
@@ -101,6 +103,7 @@ pub(crate) fn classify_return_type<'a>(
     raw: ReturnTypeRaw<'a>,
     param_names: &[String],
     scope: &'a Scope<'a>,
+    chain: Option<Rc<LexicalFrame>>,
     functor_param_types: Option<&HashMap<String, KType<'a>>>,
 ) -> Result<(ReturnTypeState<'a>, AdmissibleVerdict), KError> {
     match raw {
@@ -120,7 +123,9 @@ pub(crate) fn classify_return_type<'a>(
                 ));
             }
             let name = te.render();
-            let state = match scope.resolve_type_expr(&te, None) {
+            // Gated to the FN's lexical position — a return type naming a later type is a
+            // position error, like any other forward reference.
+            let state = match scope.resolve_type_expr(&te, chain) {
                 ResolveTypeExprOutcome::Done(kt) => ReturnTypeState::Done(kt.clone()),
                 ResolveTypeExprOutcome::Park(producers) => {
                     ReturnTypeState::Pending { te, producers }

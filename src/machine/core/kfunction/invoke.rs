@@ -149,6 +149,11 @@ impl<'a> KFunction<'a> {
                     ReturnType::Deferred(d) => {
                         let per_call_ret: PerCallReturnType<'a> = match d {
                             DeferredReturn::TypeExpr(te) => {
+                                // Resolved at call time against the per-call `child`: the
+                                // params bind at index 0 (visible) and every outer type the
+                                // signature named is already finalized. A deferred return
+                                // type references a parameter (that is why it deferred), so
+                                // there is no lexical-forward-reference case to gate here.
                                 let mut el = Elaborator::new(child);
                                 let kt = match elaborate_type_expr(&mut el, te) {
                                     ElabResult::Done(kt) => kt,

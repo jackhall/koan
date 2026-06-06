@@ -70,20 +70,20 @@ Phase 2 is a mechanical re-home, not a fresh judgment.
   binder scan a distinct method (e.g. `lookup_member` / `lookup_own`), so
   `resolve_type(None)` stops meaning two things and the genuine carve-outs are the only
   `None` callers left.
-- *Phase 3 — chain-gate the elaborator — mostly shipped.* `Elaborator` carries a
-  `LexicalFrame` and resolves bare leaves via `resolve_type_with_chain` /
-  `resolve_with_chain`; `Scope::resolve_type_expr` takes a chain and the `type_expr_memo`
-  re-keys by `(TypeName, cutoff)`. The five binders (STRUCT / UNION / SIG / MODULE /
-  FUNCTOR) install non-nominal, so a forward type reference is a position error and the
-  reactive SCC seal (`detect_pending_cycle` / `seal_type_cycle` / pending-edge bookkeeping)
-  is retired; mutual recursion is expressed with a `RECURSIVE TYPES` block. The binder
-  field sites (STRUCT/UNION/NEWTYPE), FN parameters, and FUNCTOR parameters are gated.
-  *Remaining:* the return-type-position resolvers (`fn_def/return_type.rs`,
-  `branch_walk.rs`) and the sigil sub-dispatch finish closures (`type_constructors.rs`)
-  still pass `chain = None`, so a forward type reference *in a return type or a
-  `:(LIST OF Later)` sigil* is not yet a position error — thread the captured chain through
-  those sites. The `nominal_binder` field / `is_nominal_binder` / `register_nominal_binder`
-  are now dead and collapse to `idx < c` in Phase 4.
+- *Phase 3 — chain-gate the elaborator — shipped.* `Elaborator` carries a `LexicalFrame`
+  and resolves bare leaves via `resolve_type_with_chain` / `resolve_with_chain`;
+  `Scope::resolve_type_expr` takes a chain and the `type_expr_memo` re-keys by
+  `(TypeName, cutoff)`. The five binders (STRUCT / UNION / SIG / MODULE / FUNCTOR) install
+  non-nominal, so a forward type reference is a position error and the reactive SCC seal
+  (`detect_pending_cycle` / `seal_type_cycle` / pending-edge bookkeeping) is retired; mutual
+  recursion is expressed with a `RECURSIVE TYPES` block. Every definition-time resolution is
+  gated to its binder's position: binder fields, FN / FUNCTOR parameters, and FN / MATCH /
+  TRY return types (`classify_return_type` / `resolve_arm_return_contract` thread the chain).
+  A deferred (parameter-referencing) return type resolves at call time against the per-call
+  scope, where the params bind at index 0 and every outer type is already finalized — no
+  forward-reference case to gate.
+- *Phase 4 — retire `nominal_binder` — shipped.* The flag, `is_nominal_binder`,
+  `register_nominal_binder`, and `BindingIndex::nominal` are removed; `visible` is `idx < c`.
 - *`BindingIndex::BUILTIN` stays — decided (out of scope).* `idx 0` / non-nominal is the
   base "declared before statement 1," correctly visible via `0 < c`; it is not a
   carve-out.

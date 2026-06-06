@@ -40,10 +40,12 @@ pub fn body<'a>(
             )));
         }
     };
-    let contract = match resolve_arm_return_contract(scope, &mut bundle, "TRY") {
-        Ok(c) => c,
-        Err(e) => return err(e),
-    };
+    let contract =
+        match resolve_arm_return_contract(scope, &mut bundle, "TRY", sched.current_lexical_chain())
+        {
+            Ok(c) => c,
+            Err(e) => return err(e),
+        };
     let branches_expr = match extract_kexpression(&mut bundle, "branches") {
         Some(e) => e,
         None => {

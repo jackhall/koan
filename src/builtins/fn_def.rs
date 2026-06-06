@@ -66,11 +66,16 @@ pub fn body<'a>(
 
     // `None` verdict context: FUNCTOR's arm consumes a verdict computed against
     // `Some(&param_type_map)`; FN computes a no-op `Admissible` and drops it.
-    let (return_type_state, _verdict) =
-        match classify_return_type(return_type_raw, &param_names, scope, None) {
-            Ok(p) => p,
-            Err(e) => return err(e),
-        };
+    let (return_type_state, _verdict) = match classify_return_type(
+        return_type_raw,
+        &param_names,
+        scope,
+        sched.current_lexical_chain(),
+        None,
+    ) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
 
     let params = match signature::parse_fn_param_list(&signature_expr, &mut elaborator) {
         ParamListOutcome::Done(es) => ParamListResult::Done(es),
@@ -160,11 +165,16 @@ pub fn body_record_schema<'a>(
 
     // `None` verdict context: the FUNCTOR-only return admissibility check is
     // skipped (an anonymous function is never a functor).
-    let (return_type_state, _verdict) =
-        match classify_return_type(return_type_raw, &param_names, scope, None) {
-            Ok(p) => p,
-            Err(e) => return err(e),
-        };
+    let (return_type_state, _verdict) = match classify_return_type(
+        return_type_raw,
+        &param_names,
+        scope,
+        sched.current_lexical_chain(),
+        None,
+    ) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
 
     let bind_index = sched
         .current_lexical_chain()

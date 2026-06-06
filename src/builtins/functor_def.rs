@@ -74,11 +74,16 @@ pub fn body<'a>(
 
     // `Some(&map)` activates the FUNCTOR-return verdict. `Rejected` short-circuits;
     // `DeferredToCombine` rides Combine-finish via the `is_functor` flag below.
-    let (return_type_state, verdict) =
-        match classify_return_type(return_type_raw, &param_names, scope, Some(&param_type_map)) {
-            Ok(p) => p,
-            Err(e) => return err(e),
-        };
+    let (return_type_state, verdict) = match classify_return_type(
+        return_type_raw,
+        &param_names,
+        scope,
+        sched.current_lexical_chain(),
+        Some(&param_type_map),
+    ) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
     if let AdmissibleVerdict::Rejected(e) = verdict {
         return err(e);
     }

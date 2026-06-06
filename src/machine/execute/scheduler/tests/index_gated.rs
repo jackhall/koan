@@ -1,9 +1,8 @@
 //! End-to-end tests for the index-gated resolution rule.
 //!
-//! Shared expectation: a binding at index `i` is visible to a consumer at index
-//! `c` iff `i < c` **or** the binding's `BindingIndex.nominal_binder` flag is set
-//! (STRUCT / named UNION / SIG / FUNCTOR / MODULE). `chain.index_for(scope) = None`
-//! (a "complete" scope) makes every entry visible.
+//! Shared expectation: a binding at index `i` is visible to a consumer at index `c` iff
+//! `i < c` — type binders included, with no source-order exemption. `chain.index_for(scope)
+//! = None` (a "complete" scope) makes every entry visible.
 
 use std::cell::RefCell;
 use std::io::Write;
@@ -238,5 +237,37 @@ fn value_let_after_reference_is_unbound_not_carved_out() {
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(n) if n == "later_name"),
         "expected UnboundName('later_name'), got {err}",
+    );
+}
+
+/// A FN return type that forward-references a STRUCT declared later is a position error,
+/// just like a forward reference in a parameter type or a struct field.
+#[test]
+fn fn_return_type_forward_reference_is_position_error() {
+    let err = run_collect_err(
+        "FN (FOO x :Number) -> Later = (x)\n\
+         STRUCT Later = (n :Number)",
+    )
+    .expect("a forward STRUCT reference in a FN return type should error");
+    assert!(
+        format!("{err}").contains("Later"),
+        "expected the error to name the forward type `Later`, got {err}",
+    );
+}
+
+/// A backward return-type reference (the type is declared earlier) still resolves.
+#[test]
+fn fn_return_type_backward_reference_resolves() {
+    let arena = RuntimeArena::new();
+    let scope = run_scope(
+        &arena,
+        "STRUCT Early = (n :Number)\n\
+         FN (FOO x :Number) -> Early = (Early {n = x})\n\
+         LET out = (FOO 5)",
+    );
+    assert!(
+        scope.lookup("out").is_some(),
+        "a backward return-type reference must resolve; got {:?}",
+        scope.lookup("out").map(|o| o.summarize()),
     );
 }

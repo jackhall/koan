@@ -48,7 +48,12 @@ pub fn body<'a>(
         }
         None => return err(KError::new(KErrorKind::MissingArg("value".to_string()))),
     };
-    let contract = match resolve_arm_return_contract(scope, &mut bundle, "MATCH") {
+    let contract = match resolve_arm_return_contract(
+        scope,
+        &mut bundle,
+        "MATCH",
+        sched.current_lexical_chain(),
+    ) {
         Ok(c) => c,
         Err(e) => return err(e),
     };
