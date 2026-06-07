@@ -398,27 +398,46 @@ fn slot_admits_strict<'a>(
         (SignatureElement::Keyword(_), _) => false,
         (SignatureElement::Argument(arg), part_value) => {
             // Binder declaration slot: the slot owns the name, so admission
-            // is shape-only. SigiledTypeExpr still admits speculatively (it
-            // sub-dispatches to a type-side carrier).
+            // is shape-only. SigiledTypeExpr / RecordType still admit speculatively
+            // (they sub-dispatch to a type-side carrier — e.g. the FN record-schema
+            // overload's `TypeExprRef` signature slot taking a `:{…}`).
             if matches!(arg.ktype, KType::Identifier | KType::TypeExprRef) {
-                if matches!(part_value, ExpressionPart::SigiledTypeExpr(_)) {
+                if matches!(
+                    part_value,
+                    ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)
+                ) {
                     return true;
                 }
                 return arg.matches(part_value);
             }
-            // SigiledTypeExpr in a non-KExpression slot sub-dispatches to a
-            // type-side carrier.
-            if matches!(part_value, ExpressionPart::SigiledTypeExpr(_))
-                && !matches!(arg.ktype, KType::KExpression)
-            {
-                return true;
+            // A sigil / record-type part in a slot that is neither `:KExpression` nor the
+            // *other* lazy raw-capture kind sub-dispatches to a type-side carrier. The two
+            // lazy raw-capture slots (`:SigiledTypeExpr`, `:RecordType`) are part-kind-exact
+            // and mutually exclusive — a `:{…}` must not be admitted to a `:SigiledTypeExpr`
+            // slot, nor a `:(…)` to a `:RecordType` slot — else the two overloads tie
+            // incomparably and the eager fallback wins (dropping the lazy raw capture).
+            match part_value {
+                ExpressionPart::SigiledTypeExpr(_)
+                    if !matches!(arg.ktype, KType::KExpression | KType::RecordType) =>
+                {
+                    return true;
+                }
+                ExpressionPart::RecordType(_)
+                    if !matches!(arg.ktype, KType::KExpression | KType::SigiledTypeExpr) =>
+                {
+                    return true;
+                }
+                _ => {}
             }
-            // Lazy-candidate relaxation (see `has_lazy_kexpr_slot`). A `:SigiledTypeExpr`
-            // slot is part-kind-strict like `:KExpression` — it admits only its own part
-            // shape, so the return-type overloads stay disjoint (no `Expression` ↔ sigil tie).
+            // Lazy-candidate relaxation (see `has_lazy_kexpr_slot`). The `:SigiledTypeExpr`
+            // and `:RecordType` slots are part-kind-strict like `:KExpression` — each admits
+            // only its own part shape, so the return-type overloads stay disjoint.
             if has_lazy_kexpr_slot
                 && matches!(part_value, ExpressionPart::Expression(_))
-                && !matches!(arg.ktype, KType::KExpression | KType::SigiledTypeExpr)
+                && !matches!(
+                    arg.ktype,
+                    KType::KExpression | KType::SigiledTypeExpr | KType::RecordType
+                )
             {
                 return true;
             }
@@ -445,6 +464,7 @@ fn is_eager_part(part: &ExpressionPart<'_>) -> bool {
         part,
         ExpressionPart::Expression(_)
             | ExpressionPart::SigiledTypeExpr(_)
+            | ExpressionPart::RecordType(_)
             | ExpressionPart::ListLiteral(_)
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_)

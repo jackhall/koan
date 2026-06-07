@@ -662,6 +662,17 @@ impl<'a> Bindings<'a> {
         }
     }
 
+    /// Remove every value-side placeholder pointing at `producer`. The success write
+    /// paths clear a binder's placeholder by name on finalize; this is the error-path
+    /// companion, called when `producer`'s node finalizes with an error so a binder body
+    /// that failed before its write path does not leak a scheduler-local [`NodeId`] into
+    /// a later run on a persistent scope. Same tolerant `try_borrow_mut`.
+    pub fn clear_placeholders_for_producer(&self, producer: NodeId) {
+        if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
+            ph.retain(|_, (id, _)| *id != producer);
+        }
+    }
+
     /// Bucket-keyed companion to [`Self::clear_placeholder_best_effort`].
     /// Removes only the entry whose `BindingIndex` matches — sibling binders
     /// stay as wake sources. Empties drop the map entry. Same tolerant

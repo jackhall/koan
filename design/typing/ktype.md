@@ -135,10 +135,13 @@ types on the variant directly. `KType` is not `Copy`; structural payloads are
 
 **Surface syntax** is a glued-right `:` sigil opening an S-expression
 type-expression group. The parser treats `:(...)` as a parse-context marker
-anchored to the `:` — every sigil emits one
+anchored to the `:` — a `:(...)` sigil emits one
 [`ExpressionPart::SigiledTypeExpr(Box<KExpression>)`](../../src/machine/model/ast.rs)
 wrapping the raw inner expression verbatim, with no shape recognition at
-parse time. Shape decisions (keyworded `:(LIST OF Number)`, user-functor
+parse time. (The one structurally-recognized sigil is `:{…}`, which emits a
+first-class `ExpressionPart::RecordType` instead — see
+[type-language-via-dispatch.md § Record-type sigil](type-language-via-dispatch.md#record-type-sigil).)
+Shape decisions (keyworded `:(LIST OF Number)`, user-functor
 `:(MyFunctor {T = IntOrd})`, etc.) are the dispatcher's responsibility — the
 parser's only job is to flag "this slot evaluates to a type". `<` and `>` flow through unencumbered as keyword
 tokens, leaving the arithmetic comparison operators available. The framing

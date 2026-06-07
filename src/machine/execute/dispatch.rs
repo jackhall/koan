@@ -32,6 +32,7 @@ use super::scheduler::Scheduler;
 pub(in crate::machine::execute) mod apply_callable;
 mod constructors;
 mod ctx;
+pub(in crate::machine) mod field_list;
 pub(in crate::machine::execute) mod fn_value;
 pub(in crate::machine::execute) mod head_deferred;
 pub(in crate::machine::execute) mod keyworded;
@@ -51,6 +52,7 @@ use keyworded::KeywordedState;
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
 pub use resolve_type_expr::ResolveTypeExprOutcome;
+pub(crate) use field_list::defer_field_list_via_combine;
 pub(crate) use resolve_type_expr::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use single_poll::{BareIdState, BareTypeState, CtorState, LitState, SigilState};
 
@@ -257,6 +259,12 @@ pub(super) fn stage_all_eager_parts<'a>(
             ExpressionPart::SigiledTypeExpr(boxed) => {
                 let wrapped =
                     KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(boxed))]);
+                staged.push((i, PendingSub::Dispatch(wrapped)));
+                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+            }
+            ExpressionPart::RecordType(boxed) => {
+                let wrapped =
+                    KExpression::new(vec![Spanned::bare(ExpressionPart::RecordType(boxed))]);
                 staged.push((i, PendingSub::Dispatch(wrapped)));
                 new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
             }
@@ -473,6 +481,10 @@ pub(in crate::machine::execute) fn run_dispatch<'a>(
         DispatchShape::SigiledTypeExpr => {
             debug_assert!(init.pre_subs.is_empty());
             Ok(single_poll::sigiled_type_expr(expr))
+        }
+        DispatchShape::RecordType => {
+            debug_assert!(init.pre_subs.is_empty());
+            Ok(single_poll::record_type(ctx, expr, scope, idx))
         }
         DispatchShape::LiteralPassThrough => {
             debug_assert!(init.pre_subs.is_empty());

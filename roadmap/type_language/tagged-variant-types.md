@@ -36,9 +36,8 @@ other typed value. A tag classifies as `BareIdentifier`, never `BareTypeLeaf`
   `BareIdentifier`.
 - Each variant is a `Newtype` over its payload and the union is their
   anonymous-union join, so `NominalKind::Tagged` dissolves into `Newtype`;
-  combined with the product-side [struct → record-repr `NEWTYPE`
-  collapse](struct-newtype-collapse.md), `NominalKind` is reduced toward
-  `{Newtype, TypeConstructor}`.
+  combined with the shipped product-side struct → record-repr `NEWTYPE`
+  collapse, `NominalKind` is reduced toward `{Newtype, TypeConstructor}`.
 
 **Directions.**
 
@@ -88,8 +87,5 @@ eliminate the same way — but neither blocks the other.
   every other typed value.
 - [Branch-arm return contract](../../design/execution-model.md#arms-as-own-blocks)
   — the `MATCH` arm machinery this work lowers into type-dispatch.
-- [Collapse `STRUCT` into a record-repr `NEWTYPE`](struct-newtype-collapse.md) — landing
-  this product-side phase first makes `Newtype` the sole nominal-over-shape primitive, so
-  each variant builds directly on it instead of a parallel mechanism.
 
 **Unblocks:** none tracked yet.

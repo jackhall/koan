@@ -83,7 +83,7 @@ fn dispatch_branch<'a>(
     let (tag, it_value, original_err): (String, KObject<'a>, Option<KError>) = match result {
         Ok(v) => ("ok".to_string(), v.deep_clone(), None),
         Err(e) => {
-            let tagged: KObject<'a> = e.to_tagged();
+            let tagged: KObject<'a> = e.to_tagged(scope.arena);
             let (tag, payload) = match tagged {
                 KObject::Tagged { tag, value, .. } => (tag, (*value).deep_clone()),
                 _ => unreachable!("KError::to_tagged always returns Tagged"),

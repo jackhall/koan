@@ -133,28 +133,33 @@ fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
     drop(obj);
 }
 
-/// A KFuture whose `bundle.args` carries a Struct with a borrowing field
-/// exercises recursion through the fields map.
+/// A KFuture whose `bundle.args` carries a record-repr newtype with a borrowing field
+/// exercises recursion through the `Wrapped`'s inner record.
 #[test]
-fn kfuture_bundle_arg_with_struct_field_anchors() {
+fn kfuture_bundle_arg_with_wrapped_field_anchors() {
     use crate::machine::ScopeId;
-    use indexmap::IndexMap;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallArena::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
-    use crate::machine::model::types::{NominalSchema, RecursiveSet};
-    let mut fields: IndexMap<String, KObject> = IndexMap::new();
-    fields.insert("f".into(), KObject::KFunction(kf_ref, None));
-    let s = KObject::Struct {
+    use crate::machine::model::types::{KType, NominalSchema, RecursiveSet};
+    use crate::machine::model::values::NonWrappedRef;
+    let record = KObject::record(Record::from_pairs(vec![(
+        "f".to_string(),
+        KObject::KFunction(kf_ref, None),
+    )]));
+    let type_id: &KType = arena.alloc_ktype(KType::SetRef {
         set: RecursiveSet::singleton(
             "S".into(),
             ScopeId::next(),
-            NominalSchema::Struct(Record::new()),
+            NominalSchema::Newtype(Box::new(KType::Record(Box::new(Record::new())))),
         ),
         index: 0,
-        fields: Rc::new(fields),
+    });
+    let s = KObject::Wrapped {
+        inner: NonWrappedRef::peel(&record),
+        type_id,
     };
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");

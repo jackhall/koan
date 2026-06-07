@@ -231,8 +231,7 @@ impl<'a> KType<'a> {
             KType::AnySignature => matches!(obj, KObject::KTypeValue(KType::Signature { .. })),
             KType::AnyUserType { kind } => matches!(
                 (kind, obj),
-                (NominalKind::Struct, KObject::Struct { .. })
-                    | (NominalKind::Tagged, KObject::Tagged { .. })
+                (NominalKind::Tagged, KObject::Tagged { .. })
                     | (NominalKind::Newtype, KObject::Wrapped { .. })
             ),
             // A stamped `type_args` carrier (from ascription) takes precedence and is
@@ -349,6 +348,7 @@ impl<'a> KType<'a> {
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
             KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
             KType::SigiledTypeExpr => matches!(part, ExpressionPart::SigiledTypeExpr(_)),
+            KType::RecordType => matches!(part, ExpressionPart::RecordType(_)),
             // A `KTypeValue` carrier of a first-class module or signature is NOT a
             // `TypeExprRef` admission — those route through the dedicated `AnyModule` /
             // `AnySignature` / `Module` / `Signature` slot shapes. Otherwise an
@@ -382,8 +382,7 @@ impl<'a> KType<'a> {
             KType::AnyUserType { kind } => match part {
                 ExpressionPart::Future(obj) => matches!(
                     (kind, obj),
-                    (NominalKind::Struct, KObject::Struct { .. })
-                        | (NominalKind::Tagged, KObject::Tagged { .. })
+                    (NominalKind::Tagged, KObject::Tagged { .. })
                         | (NominalKind::Newtype, KObject::Wrapped { .. })
                 ),
                 _ => false,

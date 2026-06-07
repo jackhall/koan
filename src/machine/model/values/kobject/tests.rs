@@ -220,10 +220,10 @@ fn wrapped_summarize_renders_surface_form() {
     assert_eq!(w.summarize(), "Distance(3)");
 }
 
-/// `deep_clone` copies arena references without re-allocating — cloned `inner`
-/// and `type_id` point at the same slots.
+/// `deep_clone` is shallow: it `Rc::clone`s the inner (sharing the same allocation as the
+/// source `Wrapped`, not re-deep-cloning the repr) and copies the `&'a` `type_id` slot.
 #[test]
-fn wrapped_deep_clone_preserves_arena_references() {
+fn wrapped_deep_clone_shares_inner_rc_and_type_id() {
     use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
     let inner = arena.alloc_object(KObject::Number(3.0));
@@ -233,13 +233,23 @@ fn wrapped_deep_clone_preserves_arena_references() {
         inner: NonWrappedRef::peel(inner),
         type_id,
     };
+    // `peel` `Rc`-boxes a fresh deep_clone, so the source's inner is its own allocation;
+    // `deep_clone` must then share *that* allocation, never re-allocate.
+    let original_inner: *const KObject = match &original {
+        KObject::Wrapped { inner, .. } => inner.get(),
+        _ => unreachable!(),
+    };
     let cloned = original.deep_clone();
     match cloned {
         KObject::Wrapped {
             inner: ci,
             type_id: ct,
         } => {
-            assert!(std::ptr::eq(ci.get(), inner));
+            assert_eq!(
+                ci.get() as *const KObject,
+                original_inner,
+                "deep_clone must Rc::clone the inner, sharing the source allocation",
+            );
             assert!(std::ptr::eq(ct, type_id));
         }
         _ => panic!("expected Wrapped after deep_clone"),

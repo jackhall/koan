@@ -133,7 +133,11 @@ where
         KObject::List(items, _) => items.iter().any(|x| any_descendant(x, predicate)),
         KObject::Dict(entries, _, _) => entries.values().any(|x| any_descendant(x, predicate)),
         KObject::Tagged { value, .. } => any_descendant(value, predicate),
-        KObject::Struct { fields, .. } => fields.values().any(|x| any_descendant(x, predicate)),
+        // A `Wrapped` carrier holds its repr by `Rc` (lift-stable), but the repr may itself
+        // hold a descendant (a record field) that borrows the dying arena — recurse into it.
+        KObject::Wrapped { inner, .. } => any_descendant(inner.get(), predicate),
+        // A record's fields are the ex-struct field walk: a field may borrow the dying arena.
+        KObject::Record(values, _) => values.iter().any(|(_, x)| any_descendant(x, predicate)),
         KObject::KExpression(e) => e.parts.iter().any(|p| match &p.value {
             ExpressionPart::Future(obj) => any_descendant(obj, predicate),
             ExpressionPart::Expression(inner) | ExpressionPart::SigiledTypeExpr(inner) => {
@@ -152,9 +156,10 @@ where
 
 /// True iff lifting `v` against `dying_frame` would attach an `Rc` to some descendant.
 ///
-/// Bottoms out on `Struct`/`KExpression`: those variants aren't reachable as values
-/// inside a List/Dict/Tagged at lift time in current Koan, so `any_descendant`'s
-/// recursion through them is left forward-compatible without changing the answer.
+/// Bottoms out on `Wrapped`/`KExpression`: a `Wrapped` holds its repr by `Rc` (lift-stable
+/// by `Rc::clone`, like the retired `Struct`'s `Rc<IndexMap>` fields), and a bare
+/// `KExpression` isn't reachable as a value inside a List/Dict/Tagged at lift time in current
+/// Koan, so neither needs an arena anchor of its own.
 fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
     let dying_runtime: *const RuntimeArena = dying_frame.arena();
     any_descendant(v, &|obj: &KObject<'b>| match obj {
@@ -173,7 +178,7 @@ fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
             let module_runtime: *const RuntimeArena = m.child_scope().arena;
             Some(std::ptr::eq(module_runtime, dying_runtime))
         }
-        KObject::Struct { .. } | KObject::KExpression(_) => Some(false),
+        KObject::KExpression(_) => Some(false),
         KObject::List(..) | KObject::Dict(..) | KObject::Tagged { .. } => None,
         _ => Some(false),
     })
@@ -238,9 +243,11 @@ fn kobject_borrows_arena<'b>(v: &KObject<'b>, arena: &RuntimeArena) -> bool {
             m.child_scope().arena,
             arena as *const RuntimeArena,
         )),
-        KObject::List(..) | KObject::Dict(..) | KObject::Tagged { .. } | KObject::Struct { .. } => {
-            None
-        }
+        KObject::List(..)
+        | KObject::Dict(..)
+        | KObject::Tagged { .. }
+        | KObject::Wrapped { .. }
+        | KObject::Record(..) => None,
         _ => Some(false),
     })
 }

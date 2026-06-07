@@ -71,7 +71,7 @@ fn forward_reference_parks_then_resolves_on_wake() {
     // STRUCT (like MODULE) is a nominal binder, so the placeholder is visible
     // to the forward reference and parks rather than reading as Unbound.
     let exprs = parse(
-        "STRUCT Foo = (x :Number)\n\
+        "NEWTYPE Foo = :{x :Number}\n\
          LET Fwd = Foo\n\
          PRINT Fwd",
     )

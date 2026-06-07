@@ -195,21 +195,20 @@ fn sigil_functor_lowers_to_kfunctor() {
 
 // --- Keyworded sigiled type expressions inside STRUCT/UNION field schemas ---
 
-/// `STRUCT Foo = (xs :(LIST OF Number))` — the keyworded `LIST OF` sigil sub-Dispatches
+/// `NEWTYPE Foo = :{xs :(LIST OF Number)}` — the keyworded `LIST OF` sigil sub-Dispatches
 /// through the dispatcher, producing a `KTypeValue(List<Number>)` carrier that the
-/// field-walker splices back as the field's resolved KType. Mirror of the
-/// legacy-positional `:(List Number)` form which the walker still elaborates inline.
+/// field-walker splices back as the field's resolved KType inside the record repr.
 #[test]
-fn struct_field_accepts_keyworded_list_of_sigil() {
+fn newtype_record_field_accepts_keyworded_list_of_sigil() {
     let arena = RuntimeArena::new();
-    let scope = run(&arena, "STRUCT Foo = (xs :(LIST OF Number))");
-    // STRUCT is type-only — its field schema rides the sealed `SetRef` member in `types`.
+    let scope = run(&arena, "NEWTYPE Foo = :{xs :(LIST OF Number)}");
+    // NEWTYPE is type-only — its record repr rides the sealed `SetRef` member in `types`.
     let fields = match scope.resolve_type("Foo") {
         Some(KType::SetRef { set, index }) => match RecursiveSet::projected_schema(set, *index) {
-            ProjectedSchema::Struct(fields) => fields,
-            _ => panic!("Foo must project a Struct schema"),
+            ProjectedSchema::Newtype(KType::Record(fields)) => fields,
+            _ => panic!("Foo must project a record-repr Newtype schema"),
         },
-        other => panic!("Foo must be a Struct SetRef in types, got {other:?}"),
+        other => panic!("Foo must be a Newtype SetRef in types, got {other:?}"),
     };
     assert_eq!(fields.len(), 1);
     let (xs_name, xs_type) = fields.iter().next().expect("one field");

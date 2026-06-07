@@ -501,6 +501,13 @@ fn part_walk<'a>(
                     new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
                     continue;
                 }
+                ExpressionPart::RecordType(boxed) => {
+                    let wrapped =
+                        KExpression::new(vec![Spanned::bare(ExpressionPart::RecordType(boxed))]);
+                    staged_subs.push((i, PendingSub::Dispatch(wrapped)));
+                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+                    continue;
+                }
                 ExpressionPart::ListLiteral(items) => {
                     staged_subs.push((i, PendingSub::ListLit(items)));
                     new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));

@@ -37,10 +37,9 @@ pub(super) enum Frame<'a> {
         expr: KExpression<'a>,
         span_start: u32,
     },
-    /// Opened by a glued `:{` sigil. Collects a typed field list verbatim and folds into
-    /// `SigiledTypeExpr([Keyword("RECORD"), Expression(<field list>)])` so the internal
-    /// `RECORD` type-constructor overload builds the `KType::Record`. `span_start` is the
-    /// cursor of the leading `:`.
+    /// Opened by a glued `:{` sigil. Collects a typed field list verbatim and folds into a
+    /// first-class [`ExpressionPart::RecordType`] the elaborator turns into a `KType::Record`
+    /// directly. `span_start` is the cursor of the leading `:`.
     RecordTypeExpr {
         expr: KExpression<'a>,
         span_start: u32,
@@ -153,8 +152,9 @@ impl<'a> Frame<'a> {
                     span,
                 ))
             }
-            // `:{x :Number}` → `SigiledTypeExpr([Keyword("RECORD"), Expression(<fields>)])`,
-            // routed through the internal RECORD type-constructor overload.
+            // `:{x :Number}` → `RecordType(<field list>)` — a first-class part the
+            // elaborator folds straight to `KType::Record`. The inner `KExpression` is the
+            // bare `(x :Number, …)` field list; `span_start` is the leading `:`.
             Frame::RecordTypeExpr {
                 mut expr,
                 span_start,
@@ -166,20 +166,8 @@ impl<'a> Frame<'a> {
                 expr.span = Some(span);
                 expr.file = file;
                 expr.fill_cache();
-                let sigil_span = Span {
-                    start: span_start,
-                    end: span_start + 1,
-                };
-                let wrapped = KExpression::build(
-                    vec![
-                        Spanned::at(ExpressionPart::Keyword("RECORD".to_string()), sigil_span),
-                        Spanned::at(ExpressionPart::Expression(Box::new(expr)), span),
-                    ],
-                    Some(span),
-                    file,
-                );
                 Ok(Spanned::at(
-                    ExpressionPart::SigiledTypeExpr(Box::new(wrapped)),
+                    ExpressionPart::RecordType(Box::new(expr)),
                     span,
                 ))
             }

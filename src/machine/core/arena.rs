@@ -159,7 +159,8 @@ fn obj_anchors_to(obj: &KObject<'_>, arena_ptr: *const RuntimeArena) -> bool {
         KObject::List(items, _) => items.iter().any(|x| obj_anchors_to(x, arena_ptr)),
         KObject::Dict(entries, _, _) => entries.values().any(|x| obj_anchors_to(x, arena_ptr)),
         KObject::Tagged { value, .. } => obj_anchors_to(value, arena_ptr),
-        KObject::Struct { fields, .. } => fields.values().any(|x| obj_anchors_to(x, arena_ptr)),
+        KObject::Wrapped { inner, .. } => obj_anchors_to(inner.get(), arena_ptr),
+        KObject::Record(values, _) => values.iter().any(|(_, x)| obj_anchors_to(x, arena_ptr)),
         _ => false,
     }
 }

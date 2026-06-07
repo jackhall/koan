@@ -1,13 +1,13 @@
-//! `ATTR <s> <field:Identifier>` — struct, module, or NEWTYPE field access. Surface
-//! syntax is the `.` infix operator. Overloads share the bucket
+//! `ATTR <s> <field:Identifier>` — newtype (record-repr or scalar), module, or signature
+//! field access. Surface syntax is the `.` infix operator. Overloads share the bucket
 //! `[Keyword, Slot, Slot]` and pick by lhs shape: [`body_identifier`] for `p.x` where
-//! the lhs is still an `Identifier`, [`body_struct`] for chained struct access and the
-//! NEWTYPE fall-through, [`body_module`] for chained module access.
+//! the lhs is still an `Identifier`, [`body_newtype`] for a `Wrapped` lhs (a record-repr
+//! newtype's `.x` reads through to the wrapped record), [`body_module`] for chained module
+//! access.
 //!
 //! The slot types are disjoint (`KType::Identifier` only matches `ExpressionPart::Identifier`;
-//! the three `AnyUserType { kind: Struct | Newtype }` slots each admit a distinct `KObject`
-//! family by `NominalKind`, and `AnyModule` admits modules), so dispatch picks unambiguously
-//! without a specificity tiebreaker.
+//! the `AnyUserType { kind: Newtype }` slot admits a `KObject::Wrapped`, and `AnyModule`
+//! admits modules), so dispatch picks unambiguously without a specificity tiebreaker.
 
 use crate::machine::execute::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::model::types::{AbstractSource, NominalKind};
@@ -117,7 +117,7 @@ pub fn body_type_lhs<'a>(
     access_field(scope, target, &field_name)
 }
 
-pub fn body_struct<'a>(
+pub fn body_newtype<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
@@ -175,16 +175,6 @@ fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
 
 fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> BodyResult<'a> {
     match target {
-        KObject::Struct {
-            set, index, fields, ..
-        } => match fields.get(field) {
-            Some(value) => BodyResult::Value(scope.arena.alloc_object(value.deep_clone())),
-            None => err(KError::new(KErrorKind::ShapeError(format!(
-                "struct `{}` has no field `{}`",
-                set.member(*index).name,
-                field
-            )))),
-        },
         KObject::KTypeValue(KType::Module { module: m, .. }) => access_module_member(m, field),
         // ATTR over a first-class signature value — reverse-lookup against the decl scope.
         KObject::KTypeValue(KType::Signature { sig: s, .. }) => {
@@ -209,13 +199,26 @@ fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> 
             source: AbstractSource::Module(m),
             ..
         }) => access_module_member(m, field),
-        // NEWTYPE fall-through. `Wrapped.inner` is invariantly not a `Wrapped` (the
-        // construction-time collapse rule in `super::newtype_def::newtype_construct`
-        // peels any `Wrapped` before re-wrapping), so this recurses exactly one level.
-        KObject::Wrapped { inner, .. } => access_field(scope, inner.get(), field),
+        // NEWTYPE fall-through. A record-repr newtype (an ex-struct) wraps a
+        // `KObject::Record`; read the field straight off it, naming the nominal type in the
+        // miss diagnostic so `b.z` on a `Point` still reports `Point`. `Wrapped.inner` is
+        // invariantly not a `Wrapped` (the construction-time collapse rule peels any
+        // `Wrapped` before re-wrapping), so a scalar inner (a NEWTYPE-over-`Number`, which
+        // has no fields) falls to the `other` arm.
+        KObject::Wrapped { inner, type_id } => match inner.get() {
+            KObject::Record(values, _) => match values.get(field) {
+                Some(value) => BodyResult::Value(scope.arena.alloc_object(value.deep_clone())),
+                None => err(KError::new(KErrorKind::ShapeError(format!(
+                    "`{}` has no field `{}`",
+                    type_id.name(),
+                    field
+                )))),
+            },
+            inner => access_field(scope, inner, field),
+        },
         other => err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
-            expected: "Struct".to_string(),
+            expected: "a value with fields".to_string(),
             got: other.ktype().name().to_string(),
         })),
     }
@@ -225,7 +228,7 @@ fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> 
 /// then value-side `data`, then type-side `bindings.types`.
 ///
 /// Preferring `data` over `bindings.types` matters for nominal binders like
-/// `MODULE Sub = (...)` and `STRUCT P = (...)`, which install into both: chained access
+/// `MODULE Sub = (...)` and `NEWTYPE P = :{...}`, which install into both: chained access
 /// `Outer.Inner.X` needs the inner *module value* from `data`, not its type identity,
 /// so the next ATTR step can recurse into the inner module's child scope.
 ///
@@ -271,9 +274,6 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    let struct_ty = KType::AnyUserType {
-        kind: NominalKind::Struct,
-    };
     let module_ty = KType::AnyModule;
     let newtype_ty = KType::AnyUserType {
         kind: NominalKind::Newtype,
@@ -299,29 +299,16 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("ATTR"),
-                arg("s", struct_ty),
-                arg("field", KType::Identifier),
-            ],
-        ),
-        body_struct,
-    );
-    register_builtin(
-        scope,
-        "ATTR",
-        sig(
-            KType::Any,
-            vec![
-                kw("ATTR"),
                 arg("s", module_ty.clone()),
                 arg("field", KType::Identifier),
             ],
         ),
         body_module,
     );
-    // NEWTYPE fall-through. The `AnyUserType { kind: Newtype }` slot admits any
-    // `KObject::Wrapped` (the wildcard keys on `NominalKind`, never the repr). Reuses
-    // `body_struct` because `access_field` dispatches on the lhs shape — its `Wrapped`
-    // arm recurses one level into `inner`.
+    // NEWTYPE fall-through, including ex-structs. The `AnyUserType { kind: Newtype }` slot
+    // admits any `KObject::Wrapped` (the wildcard keys on `NominalKind`, never the repr).
+    // `access_field`'s `Wrapped` arm reads a record repr's field directly and recurses one
+    // level for any other inner.
     register_builtin(
         scope,
         "ATTR",
@@ -333,7 +320,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 arg("field", KType::Identifier),
             ],
         ),
-        body_struct,
+        body_newtype,
     );
     register_builtin(
         scope,
@@ -389,7 +376,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "STRUCT Point = (x :Number, y :Number)\nLET p = (Point {x = 3, y = 4})",
+            "NEWTYPE Point = :{x :Number, y :Number}\nLET p = (Point {x = 3, y = 4})",
         );
         let result = run_one(scope, parse_one("p.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 3.0));
@@ -401,7 +388,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "STRUCT Point = (x :Number, y :Number)\nLET p = (Point {x = 3, y = 4})",
+            "NEWTYPE Point = :{x :Number, y :Number}\nLET p = (Point {x = 3, y = 4})",
         );
         assert!(matches!(run_one(scope, parse_one("p.x")), KObject::Number(n) if *n == 3.0));
         assert!(matches!(run_one(scope, parse_one("p.y")), KObject::Number(n) if *n == 4.0));
@@ -413,8 +400,8 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "STRUCT Point = (x :Number, y :Number)\n\
-             STRUCT Line = (start :Struct, finish :Struct)\n\
+            "NEWTYPE Point = :{x :Number, y :Number}\n\
+             NEWTYPE Line = :{start :Point, finish :Point}\n\
              LET origin = (Point {x = 0, y = 0})\n\
              LET tip = (Point {x = 3, y = 4})\n\
              LET seg = (Line {start = origin, finish = tip})",
@@ -443,7 +430,7 @@ mod tests {
         match &err.kind {
             KErrorKind::TypeMismatch { arg, expected, got } => {
                 assert_eq!(arg, "s");
-                assert_eq!(expected, "Struct");
+                assert_eq!(expected, "a value with fields");
                 assert_eq!(got, "Number");
             }
             _ => panic!("expected TypeMismatch on non-struct lhs, got {err}"),
@@ -456,7 +443,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "STRUCT Point = (x :Number, y :Number)\nLET p = (Point {x = 3, y = 4})",
+            "NEWTYPE Point = :{x :Number, y :Number}\nLET p = (Point {x = 3, y = 4})",
         );
         let err = run_one_err(scope, parse_one("p.z"));
         assert!(
@@ -472,8 +459,8 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "STRUCT Point = (x :Number, y :Number)\n\
-             STRUCT Line = (start :Struct, finish :Struct)\n\
+            "NEWTYPE Point = :{x :Number, y :Number}\n\
+             NEWTYPE Line = :{start :Point, finish :Point}\n\
              LET origin = (Point {x = 0, y = 0})\n\
              LET tip = (Point {x = 3, y = 4})\n\
              LET seg = (Line {start = origin, finish = tip})",
@@ -486,14 +473,14 @@ mod tests {
         );
     }
 
-    /// `b.x` on a NEWTYPE-wrapped struct reads through to the underlying field.
+    /// `b.x` on a NEWTYPE-wrapped record-newtype reads through to the underlying field.
     #[test]
-    fn access_field_falls_through_wrapped_struct() {
+    fn access_field_falls_through_wrapped_record_newtype() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "STRUCT Point = (x :Number, y :Number)\n\
+            "NEWTYPE Point = :{x :Number, y :Number}\n\
              NEWTYPE Boxed = Point\n\
              LET p = (Point {x = 1, y = 2})\n\
              LET b = (Boxed (p))",
@@ -516,7 +503,7 @@ mod tests {
         match &err.kind {
             KErrorKind::TypeMismatch { arg, expected, got } => {
                 assert_eq!(arg, "s");
-                assert_eq!(expected, "Struct");
+                assert_eq!(expected, "a value with fields");
                 assert_eq!(got, "Number");
             }
             _ => panic!("expected TypeMismatch on NEWTYPE-over-Number field access, got {err}"),
@@ -565,15 +552,16 @@ mod tests {
         );
     }
 
-    /// The fall-through preserves inner-struct error attribution: a missing field on a
-    /// wrapped `Point` names `Point` in the `ShapeError`, not the wrapper.
+    /// A missing field on the wrapped record names the carrier's nominal type in the
+    /// `ShapeError`. The newtype-over-newtype collapse peels the inner `Point` identity, so
+    /// `b = Boxed(p)` wraps the bare record tagged `Boxed`; the diagnostic names `Boxed`.
     #[test]
     fn access_field_falls_through_wrapped_with_missing_field() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "STRUCT Point = (x :Number, y :Number)\n\
+            "NEWTYPE Point = :{x :Number, y :Number}\n\
              NEWTYPE Boxed = Point\n\
              LET p = (Point {x = 1, y = 2})\n\
              LET b = (Boxed (p))",
@@ -581,8 +569,8 @@ mod tests {
         let err = run_one_err(scope, parse_one("b.z"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
-                if msg.contains("Point") && msg.contains("`z`")),
-            "expected ShapeError naming Point and z on Wrapped fall-through, got {err}",
+                if msg.contains("Boxed") && msg.contains("`z`")),
+            "expected ShapeError naming Boxed and z on Wrapped fall-through, got {err}",
         );
     }
 }

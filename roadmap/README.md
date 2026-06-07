@@ -77,6 +77,18 @@ What's shipped that the open items below build on:
   now total at the LET boundary — a type binds only under a Type-classified name, so
   `LET t = Point` under a value-classified name is rejected. See
   [design/typing/elaboration.md](../design/typing/elaboration.md).
+- *Product-side nominal collapse.* A struct is a `NominalKind::Newtype` over a `KType::Record`,
+  carried as `Wrapped { inner: Rc<KObject::Record>, type_id }`; the `STRUCT` declarator,
+  `KObject::Struct` carrier, the `NominalSchema` / `ProjectedSchema` / `NominalKind` `Struct`
+  triple, the `:Struct` wildcard, and `dispatch_construct_struct` are retired. The spelling is
+  `NEWTYPE Name = :{fields}`; `.x` reads the field through ATTR's `Wrapped` fall-through over
+  the record repr. A record repr threads its binder name, so a self-reference
+  (`NEWTYPE Node = :{next :Node}`), a `:(LIST OF Self)` field, and `RECURSIVE TYPES` blocks of
+  record newtypes all seal to `SetLocal` back-edges. The `:{…}` record type is now first-class:
+  the parser emits a dedicated `ExpressionPart::RecordType` part that the elaborator folds
+  straight to `KType::Record` (the internal `RECORD` type-constructor builtin and its desugar
+  are retired), and a nested record field type elaborates inline so the outer binder threads in.
+  See [design/typing/user-types.md](../design/typing/user-types.md).
 
 ## Next items
 
@@ -92,8 +104,9 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md)
+- [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
-- [Collapse `STRUCT` into a record-repr `NEWTYPE`](type_language/struct-newtype-collapse.md)
+- [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
 - [Carry types in the value-flow channel](type_language/types-in-value-channel.md)
 
 ## Open items
@@ -147,7 +160,7 @@ are represented in `KType` and routed through dispatch. The substrate the
 predicate-typing stages and the stdlib's functor-heavy collections both
 build on:
 
-- [Collapse `STRUCT` into a record-repr `NEWTYPE`](type_language/struct-newtype-collapse.md)
+- [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Carry types in the value-flow channel](type_language/types-in-value-channel.md)
 - [Anonymous structural unions](type_language/anonymous-unions.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)

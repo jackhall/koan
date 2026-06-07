@@ -25,6 +25,7 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
                 Some(ExpressionPart::Type(_))
                     | Some(ExpressionPart::Expression(_))
                     | Some(ExpressionPart::SigiledTypeExpr(_))
+                    | Some(ExpressionPart::RecordType(_))
                     | Some(ExpressionPart::Future(_))
             );
             if next_is_type_slot {
@@ -112,6 +113,15 @@ pub(crate) fn parse_fn_param_list<'a>(
                         // splices the type-side carrier back as `Future(_)`.
                         let wrapped = KExpression::new(vec![Spanned::bare(
                             ExpressionPart::SigiledTypeExpr(boxed.clone()),
+                        )]);
+                        sub_dispatches.push((i + 1, wrapped));
+                        i += 2;
+                    }
+                    Some(ExpressionPart::RecordType(boxed)) => {
+                        // A `:{…}` record param type sub-Dispatches to a `KType::Record`
+                        // carrier the Combine finish splices back as `Future(_)`.
+                        let wrapped = KExpression::new(vec![Spanned::bare(
+                            ExpressionPart::RecordType(boxed.clone()),
                         )]);
                         sub_dispatches.push((i + 1, wrapped));
                         i += 2;
@@ -205,6 +215,7 @@ pub(crate) fn binder_bucket(
                         ExpressionPart::Type(_)
                             | ExpressionPart::Expression(_)
                             | ExpressionPart::SigiledTypeExpr(_)
+                            | ExpressionPart::RecordType(_)
                             | ExpressionPart::Future(_)
                     )
                 });
@@ -222,6 +233,7 @@ pub(crate) fn binder_bucket(
                         ExpressionPart::Type(_)
                             | ExpressionPart::Expression(_)
                             | ExpressionPart::SigiledTypeExpr(_)
+                            | ExpressionPart::RecordType(_)
                             | ExpressionPart::Future(_)
                     )
                 });

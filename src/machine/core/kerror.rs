@@ -1,16 +1,15 @@
 use std::fmt;
 use std::rc::Rc;
 
-use indexmap::IndexMap;
-
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::scope_id::ScopeId;
 use crate::machine::core::source::{self, FileId, SourceLoc, Span};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
-    NominalKind, NominalMember, NominalSchema, Parseable, RecursiveSet,
+    KType, NominalKind, NominalMember, NominalSchema, Parseable, Record, RecursiveSet,
 };
-use crate::machine::model::values::KObject;
+use crate::machine::model::values::{KObject, NonWrappedRef};
+use crate::machine::RuntimeArena;
 
 /// Structured runtime error propagated as a value via `BodyResult::Err`. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.
@@ -170,12 +169,20 @@ impl KError {
 
     /// Lower this error into a `KObject::Tagged` for `TRY-WITH` to dispatch
     /// on. The `tag` names the `KErrorKind` variant (e.g. `"type_mismatch"`);
-    /// the payload is a `KObject::Struct` mirroring the variant's fields plus
-    /// `frames :List<Str>`. Both the payload `Struct` and the wrapping `Tagged` carry a
-    /// synthetic singleton [`RecursiveSet`] (named `struct_name` / `"KError"`, scope
-    /// [`ScopeId::SENTINEL`]) because TRY's branch walker reads `tag` and `value` directly
-    /// without going through dispatch — these carriers never need real nominal identity.
-    pub fn to_tagged<'a>(&self) -> KObject<'a> {
+    /// the payload is a record-repr `KObject::Wrapped` mirroring the variant's fields plus
+    /// `frames :List<Str>`, so TRY's `it.field` ATTR reads through the `Wrapped` arm. The
+    /// payload's `type_id` and the wrapping `Tagged`'s `set` are synthetic singleton
+    /// [`RecursiveSet`]s (named `struct_name` / `"KError"`, scope [`ScopeId::SENTINEL`])
+    /// because TRY's branch walker reads `tag` and `value` directly without going through
+    /// dispatch — these carriers never need real nominal identity.
+    ///
+    /// `arena` homes the payload's `&'a` `type_id`. It is the call-site scope's arena, like
+    /// any newtype's construction-site identity; unlike a declared NEWTYPE (whose identity
+    /// lives in its outer declaring scope), this synthetic identity is minted here, so a TRY
+    /// arm that returns the raw payload across a frame boundary inherits the general
+    /// `Wrapped.type_id` re-anchor gap (the `inner` record itself rides an `Rc` and is
+    /// lift-safe).
+    pub fn to_tagged<'a>(&self, arena: &'a RuntimeArena) -> KObject<'a> {
         let (tag, struct_name, fields) = self.kind.to_struct_fields();
         let frames_list = KObject::list(
             self.frames
@@ -192,15 +199,16 @@ impl KError {
                 })
                 .collect(),
         );
-        let mut map: IndexMap<String, KObject<'a>> = IndexMap::with_capacity(fields.len() + 1);
-        for (k, v) in fields {
-            map.insert(k, v);
-        }
-        map.insert("frames".to_string(), frames_list);
-        let payload = KObject::Struct {
-            set: synthetic_singleton(struct_name, NominalKind::Struct),
+        let mut pairs: Vec<(String, KObject<'a>)> = fields;
+        pairs.push(("frames".to_string(), frames_list));
+        let record = KObject::record(Record::from_pairs(pairs));
+        let type_id: &'a KType<'a> = arena.alloc_ktype(KType::SetRef {
+            set: synthetic_singleton(struct_name, NominalKind::Newtype),
             index: 0,
-            fields: Rc::new(map),
+        });
+        let payload = KObject::Wrapped {
+            inner: NonWrappedRef::peel(&record),
+            type_id,
         };
         KObject::Tagged {
             tag,
@@ -213,12 +221,13 @@ impl KError {
 }
 
 /// A throwaway singleton `RecursiveSet` for an unregistered carrier (the `KError`
-/// to-tagged payload). Its one member carries an empty schema — these carriers are read
-/// directly by the TRY branch walker, never dispatched on, so the schema is never consulted.
+/// to-tagged payload `type_id` and union `set`). Its one member carries an empty schema —
+/// these carriers are read directly by the TRY branch walker, never dispatched on, so the
+/// schema is never consulted.
 fn synthetic_singleton<'a>(name: String, kind: NominalKind) -> Rc<RecursiveSet<'a>> {
     let member = NominalMember::pending(name, ScopeId::SENTINEL, kind);
     member.fill(match kind {
-        NominalKind::Struct => NominalSchema::Struct(crate::machine::model::Record::new()),
+        NominalKind::Newtype => NominalSchema::Newtype(Box::new(KType::Any)),
         _ => NominalSchema::Tagged(std::collections::HashMap::new()),
     });
     Rc::new(RecursiveSet::new(vec![member]))

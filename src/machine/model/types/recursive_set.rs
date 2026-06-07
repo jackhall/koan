@@ -28,13 +28,11 @@ use std::rc::Rc;
 use crate::machine::core::ScopeId;
 
 use super::ktype::KType;
-use super::record::Record;
 
 /// Surface family of a nominal type. Drives `AnyUserType { kind }` wildcard admission;
 /// payload-free, so it is `Copy` and cheap to compare.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum NominalKind {
-    Struct,
     Tagged,
     Newtype,
     TypeConstructor,
@@ -44,7 +42,6 @@ impl NominalKind {
     /// Surface keyword rendered in diagnostics and `AnyUserType` names.
     pub fn surface_keyword(self) -> &'static str {
         match self {
-            NominalKind::Struct => "Struct",
             NominalKind::Tagged => "Tagged",
             NominalKind::Newtype => "Newtype",
             NominalKind::TypeConstructor => "TypeConstructor",
@@ -56,8 +53,6 @@ impl NominalKind {
 /// `KType`s are [`KType::SetLocal`] indices into the enclosing [`RecursiveSet`].
 #[derive(Debug)]
 pub enum NominalSchema<'a> {
-    /// Record schema in declaration order.
-    Struct(Record<KType<'a>>),
     /// Tagged-union schema keyed by tag.
     Tagged(HashMap<String, KType<'a>>),
     /// Fresh nominal over a transparent representation; `repr` is not part of identity.
@@ -256,7 +251,6 @@ impl<'a> NominalSchema<'a> {
     /// Surface family of this schema.
     pub fn kind(&self) -> NominalKind {
         match self {
-            NominalSchema::Struct(_) => NominalKind::Struct,
             NominalSchema::Tagged(_) => NominalKind::Tagged,
             NominalSchema::Newtype(_) => NominalKind::Newtype,
             NominalSchema::TypeConstructor { .. } => NominalKind::TypeConstructor,
@@ -268,7 +262,6 @@ impl<'a> NominalSchema<'a> {
 /// resolved to external [`KType::SetRef`] handles, so each field/variant type matches and
 /// navigates directly. Produced by [`RecursiveSet::projected_schema`].
 pub enum ProjectedSchema<'a> {
-    Struct(Record<KType<'a>>),
     Tagged(HashMap<String, KType<'a>>),
     Newtype(KType<'a>),
     TypeConstructor {
@@ -288,9 +281,6 @@ impl<'a> RecursiveSet<'a> {
             .as_ref()
             .expect("projected_schema on an unfilled member — finalize must run first");
         match schema {
-            NominalSchema::Struct(record) => {
-                ProjectedSchema::Struct(record.map(|t| resolve_set_locals(set, t)))
-            }
             NominalSchema::Tagged(map) => ProjectedSchema::Tagged(
                 map.iter()
                     .map(|(k, v)| (k.clone(), resolve_set_locals(set, v)))

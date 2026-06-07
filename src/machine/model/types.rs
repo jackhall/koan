@@ -29,5 +29,5 @@ pub use signature::{
     ReturnType, SignatureElement, UntypedElement, UntypedKey,
 };
 pub use typed_field_list::{
-    parse_typed_field_list_via_elaborator, FieldListOutcome, FieldNameKind,
+    parse_typed_field_list_via_elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
 };

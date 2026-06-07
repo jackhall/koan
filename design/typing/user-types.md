@@ -202,7 +202,36 @@ placeholder that survives into a sealed type.
 representation. Declaration seals a singleton set whose one member is a
 [`NominalSchema::Newtype { repr }`](../../src/machine/model/types/recursive_set.rs)
 and writes only `bindings.types` — the same type-only shape STRUCT / UNION / MODULE
-/ Result use. The `repr` is not part of identity.
+/ Result use. The `repr` is not part of identity. A record repr
+(`NEWTYPE Point = :{x :Number, y :Number}`) is a `NominalSchema::Newtype` over a
+`KType::Record` — the product-side nominal form; `.x` reads the field through ATTR's
+`Wrapped` fall-through over the record repr.
+
+The [`NEWTYPE`](../../src/builtins/newtype_def.rs) declarator carries three overloads
+selected by the repr part-kind:
+
+- A **scalar / bare-leaf** repr (`= Number`, `= Foo`) rides the `:TypeExprRef` slot
+  and resolves eagerly to a `KType`, sealing a plain singleton Newtype over it.
+- A **non-record sigil** repr (`= :(LIST OF T)`) rides a `:SigiledTypeExpr` slot that
+  captures the sigil *raw* — more specific than `:TypeExprRef`, so it wins with no
+  admission-rule change. There is no self-reference to thread, so the shared `body`
+  sub-dispatches the captured sigil to a resolved `KType` and seals a plain Newtype
+  over it.
+- A **record** repr (`= :{…}`) rides a distinct `:RecordType` slot — the sibling of
+  `:SigiledTypeExpr`, also more specific than `:TypeExprRef` — routed to its own
+  `body_record_repr` overload. Capturing the field list raw lets the declarator own its
+  elaboration: it threads the binder name
+  ([`Elaborator::with_threaded`](../../src/machine/model/types/resolver.rs)) through
+  [`parse_typed_field_list_via_elaborator`](../../src/machine/model/types/typed_field_list.rs),
+  so a self-reference (`NEWTYPE Node = :{value :Number, next :Node}`) lowers to a
+  transient `RecursiveRef` and seals — via the shared
+  [`finalize_nominal_member`](../../src/machine/model/types/recursive_set.rs) /
+  [`seal_recursive_refs`](../../src/machine/model/types/recursive_set.rs) path `UNION`
+  uses — to a `SetLocal` back-edge into the declaring member's set. A `:(LIST OF Self)`
+  field threads the same way, sealing `List(SetLocal)`, and a nested record field type
+  (`:{inner :{owner :Node}}`) elaborates inline through the same walker so it threads
+  too. A `NEWTYPE` member of a `RECURSIVE TYPES` block routes through this path,
+  filling the block's shared set rather than minting a singleton.
 
 Construction (`Distance(3.0)`, `Bar(Foo(3.0))`) flows through
 [`type_call`](../../src/machine/execute/dispatch/single_poll.rs)'s `Newtype` arm —

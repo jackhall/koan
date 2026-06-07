@@ -17,9 +17,14 @@ fn tagged_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
     )
 }
 
-/// A singleton struct set named `name`, for a lift-test carrier identity.
-fn struct_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
-    RecursiveSet::singleton(name.into(), scope_id, NominalSchema::Struct(Record::new()))
+/// A singleton record-repr newtype (ex-struct) set named `name`, for a lift-test carrier
+/// identity.
+fn record_newtype_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
+    RecursiveSet::singleton(
+        name.into(),
+        scope_id,
+        NominalSchema::Newtype(Box::new(KType::Record(Box::new(Record::new())))),
+    )
 }
 
 /// `List<Dict<KFunction>>` drives `any_descendant` recursion through both the
@@ -198,22 +203,25 @@ fn list_with_unanchored_kmodule_anchors() {
     assert_eq!(count_after, before + 1);
 }
 
-/// Struct and KExpression are `needs_lift` leaves, so a list of only those
-/// must reuse its Rc.
+/// Wrapped (record-repr newtype) and KExpression are `needs_lift` leaves, so a list of only
+/// those must reuse its Rc.
 #[test]
-fn list_with_struct_and_kexpression_descendants_clones_rc() {
+fn list_with_wrapped_and_kexpression_descendants_clones_rc() {
+    use crate::machine::model::values::NonWrappedRef;
     use crate::machine::ScopeId;
-    use indexmap::IndexMap;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallArena::new(scope, None);
     defeat_fast_path(&dying);
 
-    let fields: IndexMap<String, KObject> = IndexMap::new();
-    let s = KObject::Struct {
-        set: struct_set("S", ScopeId::next()),
+    let record = KObject::record(Record::new());
+    let type_id: &KType = arena.alloc_ktype(KType::SetRef {
+        set: record_newtype_set("S", ScopeId::next()),
         index: 0,
-        fields: Rc::new(fields),
+    });
+    let s = KObject::Wrapped {
+        inner: NonWrappedRef::peel(&record),
+        type_id,
     };
     let e = KObject::KExpression(KExpression::new(vec![]));
     let items = Rc::new(vec![s, e]);
@@ -444,12 +452,14 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
     defeat_fast_path(&dying);
 
     // A self-recursive `Tree` whose `children` field is `List(SetLocal(0))` — the shape a
-    // `STRUCT Tree = (children :(LIST OF Tree))` seals into.
-    let member = NominalMember::pending("Tree".into(), ScopeId::next(), NominalKind::Struct);
-    member.fill(NominalSchema::Struct(Record::from_pairs(vec![(
-        "children".into(),
-        KType::List(Box::new(KType::SetLocal(0))),
-    )])));
+    // `NEWTYPE Tree = :{children :(LIST OF Tree)}` seals into.
+    let member = NominalMember::pending("Tree".into(), ScopeId::next(), NominalKind::Newtype);
+    member.fill(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
+        Record::from_pairs(vec![(
+            "children".into(),
+            KType::List(Box::new(KType::SetLocal(0))),
+        )]),
+    )))));
     let set = Rc::new(RecursiveSet::new(vec![member]));
     let type_value = KObject::KTypeValue(KType::SetRef {
         set: Rc::clone(&set),
@@ -474,13 +484,14 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
             // Navigable: the member's self-edge `SetLocal(0)` survives the lift.
             let borrow = lifted_set.member(*index).schema();
             match borrow.as_ref() {
-                Some(NominalSchema::Struct(fields)) => {
-                    assert_eq!(
+                Some(NominalSchema::Newtype(repr)) => match repr.as_ref() {
+                    KType::Record(fields) => assert_eq!(
                         fields.get("children"),
                         Some(&KType::List(Box::new(KType::SetLocal(0))))
-                    );
-                }
-                other => panic!("expected a navigable Struct schema after lift, got {other:?}"),
+                    ),
+                    other => panic!("expected a record repr after lift, got {other:?}"),
+                },
+                other => panic!("expected a navigable Newtype schema after lift, got {other:?}"),
             }
         }
         other => panic!(
@@ -490,62 +501,75 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
     }
 }
 
-/// A recursive STRUCT *value* (`KObject::Struct` carrying a `SetRef` into a self-recursive
-/// set) lifts across the dying arena by sharing the set's `Rc` — the recursive group travels
-/// as one unit and stays navigable (the `children` field type is the self-edge
-/// `SetLocal(0)`). Builds the value directly so the assertion targets the lift path without
-/// FN-dispatch incidentals.
+/// A recursive record-repr-newtype *value* (`KObject::Wrapped` whose `type_id` is a `SetRef`
+/// into a self-recursive set) lifts across the dying arena: its `inner` record rides an `Rc`
+/// (lift-stable by `Rc::clone`) and its `type_id` is the declaration-stable `SetRef`, so the
+/// recursive group stays navigable (the `children` field type is the self-edge `SetLocal(0)`).
+/// Builds the value directly so the assertion targets the lift path without FN-dispatch
+/// incidentals. Unlike the retired `KObject::Struct` (which carried the set `Rc` directly and
+/// bumped its strong count on lift), the `Wrapped` reaches the set through its `&'a` `type_id`,
+/// so lift copies that reference rather than `Rc::clone`ing the set — the assertion is
+/// navigability, not a refcount bump.
 #[test]
-fn recursive_struct_value_lifts_and_navigates() {
+fn recursive_newtype_value_lifts_and_navigates() {
     use crate::machine::model::types::{NominalKind, NominalMember, NominalSchema};
-    use indexmap::IndexMap;
+    use crate::machine::model::values::NonWrappedRef;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallArena::new(scope, None);
     defeat_fast_path(&dying);
 
-    let member = NominalMember::pending("Tree".into(), ScopeId::next(), NominalKind::Struct);
-    member.fill(NominalSchema::Struct(Record::from_pairs(vec![(
-        "children".into(),
-        KType::List(Box::new(KType::SetLocal(0))),
-    )])));
+    let member = NominalMember::pending("Tree".into(), ScopeId::next(), NominalKind::Newtype);
+    member.fill(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
+        Record::from_pairs(vec![(
+            "children".into(),
+            KType::List(Box::new(KType::SetLocal(0))),
+        )]),
+    )))));
     let set = Rc::new(RecursiveSet::new(vec![member]));
-    let mut fields: IndexMap<String, KObject> = IndexMap::new();
-    fields.insert("children".into(), KObject::list(vec![]));
-    let tree_value = KObject::Struct {
+    let record = KObject::record(Record::from_pairs(vec![(
+        "children".to_string(),
+        KObject::list(vec![]),
+    )]));
+    let type_id: &KType = arena.alloc_ktype(KType::SetRef {
         set: Rc::clone(&set),
         index: 0,
-        fields: Rc::new(fields),
+    });
+    let tree_value = KObject::Wrapped {
+        inner: NonWrappedRef::peel(&record),
+        type_id,
     };
-    let before = Rc::strong_count(&set);
 
     let lifted = lift_kobject(&tree_value, &dying);
 
-    assert_eq!(
-        Rc::strong_count(&set),
-        before + 1,
-        "lift Rc::clones the set"
-    );
     match &lifted {
-        KObject::Struct {
-            set: lifted_set,
-            index,
+        KObject::Wrapped {
+            type_id: lifted_type_id,
             ..
-        } => {
-            assert!(
-                Rc::ptr_eq(lifted_set, &set),
-                "lift shares the set allocation"
-            );
-            let borrow = lifted_set.member(*index).schema();
-            match borrow.as_ref() {
-                Some(NominalSchema::Struct(fields)) => assert_eq!(
-                    fields.get("children"),
-                    Some(&KType::List(Box::new(KType::SetLocal(0)))),
-                    "the lifted Tree's self-reference must still be SetLocal(0)",
-                ),
-                other => panic!("expected a navigable Struct schema, got {other:?}"),
+        } => match lifted_type_id {
+            KType::SetRef {
+                set: lifted_set,
+                index,
+            } => {
+                assert!(
+                    Rc::ptr_eq(lifted_set, &set),
+                    "lift shares the set allocation through type_id"
+                );
+                let borrow = lifted_set.member(*index).schema();
+                match borrow.as_ref() {
+                    Some(NominalSchema::Newtype(repr)) => match repr.as_ref() {
+                        KType::Record(fields) => assert_eq!(
+                            fields.get("children"),
+                            Some(&KType::List(Box::new(KType::SetLocal(0)))),
+                            "the lifted Tree's self-reference must still be SetLocal(0)",
+                        ),
+                        other => panic!("expected a record repr, got {other:?}"),
+                    },
+                    other => panic!("expected a navigable Newtype schema, got {other:?}"),
+                }
             }
-        }
-        other => panic!("expected a lifted Struct value, got {:?}", other.ktype()),
+            other => panic!("expected a SetRef type_id, got {other:?}"),
+        },
+        other => panic!("expected a lifted Wrapped value, got {:?}", other.ktype()),
     }
 }

@@ -24,6 +24,8 @@ fn part_references_any(part: &ExpressionPart<'_>, param_names: &[String]) -> boo
         ExpressionPart::Type(t) => type_expr_references_any(t, param_names),
         ExpressionPart::Expression(boxed) => kexpression_references_any(boxed, param_names),
         ExpressionPart::SigiledTypeExpr(boxed) => kexpression_references_any(boxed, param_names),
+        // A `:{…}` field type can reference a param in a nested sigil (`:{y :Er.Type}`).
+        ExpressionPart::RecordType(boxed) => kexpression_references_any(boxed, param_names),
         ExpressionPart::ListLiteral(items) => {
             items.iter().any(|p| part_references_any(p, param_names))
         }

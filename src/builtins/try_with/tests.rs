@@ -70,14 +70,16 @@ fn shape_error_arm_catches_shape_error() {
 }
 
 #[test]
-fn type_mismatch_arm_catches_struct_field_type_mismatch() {
+fn type_mismatch_arm_catches_record_newtype_value_mismatch() {
+    // A record-repr newtype type-checks its value against the whole record repr, so the
+    // mismatch names the record type rather than a single field type.
     let bytes = run_program(
-        "STRUCT Point = (x :Number, y :Number)\n\
+        "NEWTYPE Point = :{x :Number, y :Number}\n\
          TRY (Point {x = \"hi\", y = 4}) -> :Str WITH (\
             type_mismatch -> (PRINT it.expected)\
          )",
     );
-    assert_eq!(bytes, b"Number\n");
+    assert_eq!(bytes, b":{x :Number y :Number}\n");
 }
 
 #[test]
@@ -178,7 +180,7 @@ fn frames_non_empty_after_recursive_call() {
 #[test]
 fn nested_try_catches_inner_separately_from_outer() {
     let bytes = run_program(
-        "STRUCT Point = (x :Number, y :Number)\n\
+        "NEWTYPE Point = :{x :Number, y :Number}\n\
          TRY (\
             TRY (Point {x = \"hi\", y = 4}) -> :Str WITH (\
                 type_mismatch -> (PRINT \"inner\")\
