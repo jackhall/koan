@@ -15,7 +15,8 @@ use crate::machine::model::types::{NominalKind, NominalMember, NominalSchema, Re
 use crate::machine::model::values::KObject;
 use crate::machine::model::KType;
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, SchedulerHandle, Scope,
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, KError, KErrorKind, Resolution,
+    SchedulerHandle, Scope,
 };
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
@@ -33,62 +34,88 @@ pub fn body<'a>(
         Ok(n) => n,
         Err(e) => return err(e),
     };
+    // Gated to the NEWTYPE's lexical position: a repr naming a later type is a position
+    // error, like any other forward type reference.
+    let chain = sched.current_lexical_chain();
+    let bind_index = chain
+        .as_ref()
+        .map(|c| BindingIndex::value(c.index))
+        .unwrap_or(BindingIndex::BUILTIN);
     // `TypeExprRef` carriers split two ways: `KTypeValue` for resolved leaves /
     // structural shapes, `TypeNameRef` for bare-leaf names. Peek before extracting
     // so we route to the right helper — both consume the slot.
-    let repr: KType = match bundle.get("repr") {
-        Some(KObject::KTypeValue(_)) => match extract_ktype(&mut bundle, "repr") {
-            Some(t) => t,
-            None => unreachable!("get(KTypeValue) then extract_ktype must succeed"),
-        },
+    match bundle.get("repr") {
+        Some(KObject::KTypeValue(_)) => {
+            let repr = match extract_ktype(&mut bundle, "repr") {
+                Some(t) => t,
+                None => unreachable!("get(KTypeValue) then extract_ktype must succeed"),
+            };
+            finalize_newtype(scope, name, repr, bind_index)
+        }
         Some(KObject::TypeNameRef(_)) => {
             // Bare-leaf carrier (`NEWTYPE Bar = Foo` where `Foo` is user-declared):
-            // walk the scope chain for the resolved identity. Unresolved is hard error
-            // — the NEWTYPE declaration site doesn't produce pending placeholders.
+            // walk the scope chain for the resolved identity.
             let te = match extract_type_name_ref(&mut bundle, "repr") {
                 Some(te) => te,
                 None => unreachable!("get(TypeNameRef) then extract_type_name_ref must succeed"),
             };
-            // Gated to the NEWTYPE's lexical position: a repr naming a later type is a
-            // position error, like any other forward type reference.
-            let chain = sched.current_lexical_chain();
-            match scope.resolve_type_with_chain(te.as_str(), chain.as_deref()) {
-                Some(kt) => kt.clone(),
-                None => {
-                    return err(KError::new(KErrorKind::ShapeError(format!(
-                        "NEWTYPE repr slot = unknown type name `{}`",
-                        te.as_str(),
-                    ))));
-                }
+            if let Some(kt) = scope.resolve_type_with_chain(te.as_str(), chain.as_deref()) {
+                return finalize_newtype(scope, name, kt.clone(), bind_index);
             }
+            // The repr names a type that is still finalizing in this scheduler — e.g. a
+            // record-repr dependency whose `:{…}` defers its own finalize behind a
+            // sub-dispatch, so this dependent's body can run first. Park on the
+            // producer and re-resolve at Combine-finish, once its identity is in
+            // `types`. A name with no in-flight producer is a genuine forward/unknown
+            // reference — a position error.
+            if let Resolution::Placeholder(producer) =
+                scope.resolve_with_chain(te.as_str(), chain.as_deref())
+            {
+                let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
+                    match scope.resolve_type_with_chain(te.as_str(), chain.as_deref()) {
+                        Some(kt) => finalize_newtype(scope, name, kt.clone(), bind_index),
+                        None => err(KError::new(KErrorKind::ShapeError(format!(
+                            "NEWTYPE repr slot = unknown type name `{}`",
+                            te.as_str(),
+                        )))),
+                    }
+                });
+                let combine_id = sched.add_combine(Vec::new(), vec![producer], scope, finish);
+                return BodyResult::DeferTo(combine_id);
+            }
+            err(KError::new(KErrorKind::ShapeError(format!(
+                "NEWTYPE repr slot = unknown type name `{}`",
+                te.as_str(),
+            ))))
         }
-        _ => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "NEWTYPE repr slot must be a type expression (e.g. `Number`, `Foo`)".to_string(),
-            )));
-        }
-    };
-    // A NEWTYPE is non-recursive (its `repr` is already resolved), so it seals into a
-    // singleton set of one member. The wildcard `AnyUserType { kind: Newtype }` admits any
-    // such member, since identity never descends `repr`.
+        _ => err(KError::new(KErrorKind::ShapeError(
+            "NEWTYPE repr slot must be a type expression (e.g. `Number`, `Foo`)".to_string(),
+        ))),
+    }
+}
+
+/// Seal a resolved `repr` into the NEWTYPE's identity and register it. A NEWTYPE is
+/// non-recursive (its `repr` is already resolved), so it seals into a singleton set of one
+/// member. The wildcard `AnyUserType { kind: Newtype }` admits any such member, since
+/// identity never descends `repr`.
+fn finalize_newtype<'a>(
+    scope: &'a Scope<'a>,
+    name: String,
+    repr: KType<'a>,
+    bind_index: BindingIndex,
+) -> BodyResult<'a> {
     let scope_id = scope.id;
     let member = NominalMember::pending(name.clone(), scope_id, NominalKind::Newtype);
     member.fill(NominalSchema::Newtype(Box::new(repr)));
     let set = Rc::new(RecursiveSet::new(vec![member]));
     let identity = KType::SetRef { set, index: 0 };
-    let arena = scope.arena;
-    let kt_ref: &'a KType = arena.alloc_ktype(identity);
-    let bind_index = sched
-        .current_lexical_chain()
-        .map(|chain| BindingIndex::value(chain.index))
-        .unwrap_or(BindingIndex::BUILTIN);
+    let kt_ref: &'a KType = scope.arena.alloc_ktype(identity);
     match scope
         .bindings()
         .try_register_type(&name, kt_ref, bind_index)
     {
         Ok(ApplyOutcome::Applied) => {
-            let v: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(kt_ref.clone()));
-            BodyResult::Value(v)
+            BodyResult::Value(scope.arena.alloc_object(KObject::KTypeValue(kt_ref.clone())))
         }
         // Finalize sites run post-Combine outside the re-entrant hot path, so borrow
         // contention here is a programming error. Surface as a structured error rather
@@ -197,6 +224,54 @@ mod tests {
             matches!(&err.kind, KErrorKind::TypeMismatch { expected, got, .. }
                 if expected == "Number" && got == "Str"),
             "expected TypeMismatch(Number, Str), got {err}",
+        );
+    }
+
+    /// A record-repr NEWTYPE and a NEWTYPE depending on it, declared in the *same*
+    /// scheduler, then constructed. The dependency's `:{…}` defers its finalize behind a
+    /// sub-dispatch, so the dependent's body would run first; it must park on the
+    /// dependency's producer rather than error on an unresolved repr (which previously
+    /// leaked a stale value-side placeholder that panicked the next construction).
+    #[test]
+    fn dependent_newtype_parks_on_record_repr_dependency() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "NEWTYPE Point = :{x :Number, y :Number}\nNEWTYPE Boxed = Point",
+        );
+        // No placeholder may survive the declaration run: a leaked one corrupts the next
+        // scheduler on this REPL-persistent scope.
+        assert!(
+            scope.bindings().placeholders().is_empty(),
+            "NEWTYPE declarations must leave no value-side placeholder, got {:?}",
+            *scope.bindings().placeholders(),
+        );
+        let result = run_one(scope, parse_one("(Boxed (Point {x = 1, y = 2}))"));
+        assert!(
+            matches!(result, KObject::Wrapped { .. }),
+            "expected Wrapped, got {:?}",
+            result.ktype(),
+        );
+    }
+
+    /// A NEWTYPE whose repr names a genuinely unknown type errors — and clears the
+    /// value-side placeholder its dispatch installed, so a later construction of the same
+    /// name fails cleanly (unbound) rather than tripping over a leaked producer `NodeId`.
+    #[test]
+    fn unknown_repr_errors_without_leaking_placeholder() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(scope, "NEWTYPE Boxed = Nope");
+        assert!(
+            scope.bindings().placeholders().is_empty(),
+            "a failed NEWTYPE must not leak its placeholder, got {:?}",
+            *scope.bindings().placeholders(),
+        );
+        let err = run_one_err(scope, parse_one("(Boxed (3.0))"));
+        assert!(
+            matches!(&err.kind, KErrorKind::UnboundName(n) if n == "Boxed"),
+            "expected UnboundName(Boxed) after failed declaration, got {err}",
         );
     }
 

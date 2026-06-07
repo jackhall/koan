@@ -76,6 +76,7 @@ impl<'a> Scheduler<'a> {
                                         got: lifted_obj.ktype().name(),
                                     })
                                     .with_frame(Frame::bare(label.clone(), label));
+                                    scope.clear_placeholders_for_producer(id);
                                     self.finalize(idx, NodeOutput::Err(err));
                                     continue;
                                 }
@@ -98,9 +99,13 @@ impl<'a> Scheduler<'a> {
                                 }
                                 None => e,
                             };
+                            scope.clear_placeholders_for_producer(id);
                             self.finalize(idx, NodeOutput::Err(with_frame));
                         }
                         (other, None) => {
+                            if matches!(other, NodeOutput::Err(_)) {
+                                scope.clear_placeholders_for_producer(id);
+                            }
                             self.finalize(idx, other);
                         }
                     }

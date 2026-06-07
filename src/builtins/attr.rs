@@ -474,18 +474,14 @@ mod tests {
     }
 
     /// `b.x` on a NEWTYPE-wrapped record-newtype reads through to the underlying field.
-    // `Point` is declared in its own statement batch: declaring a record-repr NEWTYPE in
-    // the same scheduler as a NEWTYPE that depends on it currently leaks a value-side
-    // placeholder (a known scheduler/binder bug, tracked separately). Splitting the batch
-    // keeps this test focused on the ATTR fall-through it actually exercises.
     #[test]
     fn access_field_falls_through_wrapped_record_newtype() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
         run(
             scope,
-            "NEWTYPE Boxed = Point\n\
+            "NEWTYPE Point = :{x :Number, y :Number}\n\
+             NEWTYPE Boxed = Point\n\
              LET p = (Point {x = 1, y = 2})\n\
              LET b = (Boxed (p))",
         );
@@ -559,16 +555,14 @@ mod tests {
     /// A missing field on the wrapped record names the carrier's nominal type in the
     /// `ShapeError`. The newtype-over-newtype collapse peels the inner `Point` identity, so
     /// `b = Boxed(p)` wraps the bare record tagged `Boxed`; the diagnostic names `Boxed`.
-    /// (`Point` is declared in its own batch — see the sibling test's note on the scheduler
-    /// placeholder bug.)
     #[test]
     fn access_field_falls_through_wrapped_with_missing_field() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
         run(
             scope,
-            "NEWTYPE Boxed = Point\n\
+            "NEWTYPE Point = :{x :Number, y :Number}\n\
+             NEWTYPE Boxed = Point\n\
              LET p = (Point {x = 1, y = 2})\n\
              LET b = (Boxed (p))",
         );

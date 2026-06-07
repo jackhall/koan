@@ -526,6 +526,18 @@ impl<'a> Scope<'a> {
             .try_install_placeholder(name, idx, index)
     }
 
+    /// Error-path companion to [`Self::install_placeholder`]: remove any value-side
+    /// placeholder pointing at `producer`. Routes to the same target the install used so a
+    /// failed binder body can't leak a scheduler-local placeholder into a later run on a
+    /// persistent scope. See [`Bindings::clear_placeholders_for_producer`].
+    pub fn clear_placeholders_for_producer(&self, producer: NodeId) {
+        if self.bindings.is_borrowed() {
+            self.write_target().clear_placeholders_for_producer(producer);
+            return;
+        }
+        self.bindings.get().clear_placeholders_for_producer(producer);
+    }
+
     /// Bucket-keyed companion to [`Self::install_placeholder`]: appends a
     /// `pending_overloads[bucket]` entry so dispatch's no-bucket fallback parks
     /// bare-arg calls on the producing FN/FUNCTOR binder. Sibling installs sharing the

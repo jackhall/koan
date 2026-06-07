@@ -49,10 +49,13 @@ The retired `STRUCT` declarator threaded its name through
 
 ## Dependencies
 
-Assumes the same-scheduler value-side-placeholder bug is resolved (a record-repr `NEWTYPE`
-declared alongside a dependent `NEWTYPE` in one scheduler leaks a stale placeholder — see
-`scratch/scheduler-stale-placeholder-bug.md`), since a `RECURSIVE TYPES` block declares
-several record newtypes in one scheduler.
+The same-scheduler value-side-placeholder bug is **resolved**: a dependent `NEWTYPE` now
+parks on a still-finalizing repr dependency via a Combine (`newtype_def::body`), and a
+binder body that errors clears its value-side placeholder on the node-finalize error path
+(`scheduler::execute`), so a record-repr `NEWTYPE` declared alongside a dependent `NEWTYPE`
+in one scheduler no longer leaks a stale placeholder. Pinned by
+`newtype_def::tests::dependent_newtype_parks_on_record_repr_dependency`. This unblocks a
+`RECURSIVE TYPES` block declaring several record newtypes in one scheduler.
 
 **Requires:**
 
