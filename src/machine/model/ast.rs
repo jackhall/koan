@@ -4,8 +4,10 @@ use crate::machine::model::types::KKind;
 use std::collections::HashMap;
 
 use crate::machine::core::source::{FileId, Span, Spanned};
+use std::rc::Rc;
+
 use crate::machine::model::{
-    Carried, KKey, KObject, Parseable, Record, Serializable, UntypedElement, UntypedKey,
+    ArgValue, Carried, KKey, KObject, Parseable, Record, Serializable, UntypedElement, UntypedKey,
 };
 
 #[cfg(test)]
@@ -152,36 +154,33 @@ impl<'a> ExpressionPart<'a> {
         }
     }
 
-    /// Slot-aware resolve. Identical to `resolve` except for `Type` into a `TypeExprRef`
-    /// slot: builtin shapes (`Number`, `List<Number>`, `Function<...>`) lower to
-    /// `KObject::KTypeValue`; bare user names lower to `KObject::TypeNameRef`, deferring
-    /// scope-aware elaboration to consumers via `Scope::resolve_type_expr`. Runs at
-    /// `KFunction::bind` time, which has no `Scope` in hand.
-    pub fn resolve_for(&self, slot: &crate::machine::model::KType<'a>) -> KObject<'a> {
+    /// Slot-aware resolve producing the bundle's owned [`ArgValue`]. A type rides the `Type`
+    /// arm raw; a runtime value rides the `Object` arm. Runs at `KFunction::bind` time, which
+    /// has no `Scope` in hand.
+    ///
+    /// - A `Future(Carried::Type(_))` sub-result threads its type straight into the `Type` arm.
+    /// - A parser `Type`-name token into a proper-type slot lowers to a concrete `KType` via
+    ///   [`KType::from_type_expr`], or to the [`KType::Unresolved`] transient for a bare user
+    ///   name (a name not in the builtin table) — scope-aware elaboration defers to
+    ///   [`Scope::resolve_type_expr`](crate::machine::core::Scope::resolve_type_expr).
+    /// - Lazy `:(...)` / `:{…}` slots capture the inner expression raw in the `Object` arm.
+    pub fn resolve_for(&self, slot: &crate::machine::model::KType<'a>) -> ArgValue<'a> {
         use crate::machine::model::types::KType;
+        if let ExpressionPart::Future(Carried::Type(kt)) = self {
+            return ArgValue::Type((*kt).clone());
+        }
         if let (ExpressionPart::Type(t), KType::OfKind(KKind::Proper)) = (self, slot) {
-            // Builtin shapes lower directly at the caller's lifetime; bare user names
-            // defer to `Scope::resolve_type_expr` via the `TypeNameRef` carrier.
-            return match KType::<'a>::from_type_expr(t) {
-                Ok(kt) => KObject::KTypeValue(kt),
-                Err(_) => KObject::TypeNameRef(t.clone()),
-            };
+            let kt =
+                KType::<'a>::from_type_expr(t).unwrap_or_else(|_| KType::Unresolved(t.clone()));
+            return ArgValue::Type(kt);
         }
-        // Lazy `:(...)` slot: capture the type expression raw as its inner `KExpression`, so the
-        // builtin defers a param-referencing return (`-> Er.Type`) or sub-dispatches it itself.
-        // The global `resolve()` stays `unreachable!` for a SigiledTypeExpr — only this
-        // slot-typed capture unwraps it.
         if let (ExpressionPart::SigiledTypeExpr(inner), KType::SigiledTypeExpr) = (self, slot) {
-            return KObject::KExpression((**inner).clone());
+            return ArgValue::Object(Rc::new(KObject::KExpression((**inner).clone())));
         }
-        // Lazy `:{…}` record-type slot: capture the field list raw so the NEWTYPE
-        // record-repr declarator owns its elaboration (threading its own binder name
-        // through a self-recursive `:{next :Node}`). Same raw-capture shape as the sigil
-        // slot above; the `RecordType` slot is more specific, so it wins overload pick.
         if let (ExpressionPart::RecordType(inner), KType::RecordType) = (self, slot) {
-            return KObject::KExpression((**inner).clone());
+            return ArgValue::Object(Rc::new(KObject::KExpression((**inner).clone())));
         }
-        self.resolve()
+        ArgValue::Object(Rc::new(self.resolve()))
     }
 
     pub fn resolve(&self) -> KObject<'a> {

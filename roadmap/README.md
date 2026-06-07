@@ -99,6 +99,20 @@ What's shipped that the open items below build on:
   remaining `MATCH`-onto-type-dispatch lowering and recursive variant references are still open
   under [tagged-union variants as dispatchable types](type_language/tagged-variant-types.md).
   See [design/typing/user-types.md](../design/typing/user-types.md).
+- *Types ride the value channel raw.* The scheduler's value currency is a two-arm sum
+  [`Carried<'a> { Object(&KObject) | Type(&KType) }`](../src/machine/model/values/carried.rs)
+  — a type-operator returns a raw `&KType` and a type argument arrives in the `Type` arm,
+  retiring the `KObject::KTypeValue` / `KObject::TypeNameRef` transport boxes and their
+  box/unbox round-trip at the binding seam. The bundle dual is `ArgValue` and an aggregate
+  cell is `Held` (a list/dict/record element may be a first-class type). A deferred bare
+  user-name leaf is now the `KType::Unresolved(TypeName)` transient (sibling to
+  `RecursiveRef`), consumed by `Scope::resolve_type_expr`. Modules and signatures travel in
+  the `Type` arm (projected by `require_module` / `require_signature`), and a shallow
+  [`KKind` `{ Proper, Module, Signature, Any }`](../src/machine/model/types/kkind.rs) carried
+  as `KType::OfKind` classifies a type at dispatch — absorbing the former `TypeExprRef` /
+  `Type` / `AnyModule` / `AnySignature` `KType` markers. See
+  [design/typing/elaboration.md](../design/typing/elaboration.md) and
+  [design/execution-model.md](../design/execution-model.md).
 
 ## Next items
 
@@ -117,7 +131,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
-- [Carry types in the value-flow channel](type_language/types-in-value-channel.md)
 
 ## Open items
 
@@ -171,7 +184,6 @@ predicate-typing stages and the stdlib's functor-heavy collections both
 build on:
 
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
-- [Carry types in the value-flow channel](type_language/types-in-value-channel.md)
 - [Anonymous structural unions](type_language/anonymous-unions.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)

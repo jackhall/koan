@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::machine::model::types::{NominalKind, NominalMember, NominalSchema, RecursiveSet};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::KType;
 use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, Scope, ScopeId};
 
 use crate::builtins::err;
@@ -33,16 +33,12 @@ pub fn body<'a>(
         param_names: vec![param],
     });
     let set = Rc::new(RecursiveSet::new(vec![member]));
-    BodyResult::value(
-        scope
-            .arena
-            .alloc_object(KObject::KTypeValue(KType::SetRef { set, index: 0 })),
-    )
+    BodyResult::ktype(scope.arena.alloc_ktype(KType::SetRef { set, index: 0 }))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+    use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
     use crate::machine::execute::Scheduler;
     use crate::machine::model::types::{NominalKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
@@ -75,14 +71,14 @@ mod tests {
     fn type_constructor_builtin_returns_ktype_value() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let result = run_one(scope, parse_one("TEMPLATE Type"));
+        let result = run_one_type(scope, parse_one("TEMPLATE Type"));
         match result {
-            KObject::KTypeValue(kt @ KType::SetRef { set, index }) => {
+            kt @ KType::SetRef { set, index } => {
                 let name = assert_type_constructor(kt, &["Type"]);
                 assert_eq!(set.member(*index).scope_id, ScopeId::SENTINEL);
                 assert_eq!(name, "_typeconstructor");
             }
-            other => panic!("expected KTypeValue(SetRef), got {:?}", other.ktype()),
+            other => panic!("expected SetRef type, got {other:?}"),
         }
     }
 
@@ -167,11 +163,9 @@ mod tests {
         };
         let wrap_kt: &KType = s.decl_scope().bindings().expect_type("Wrap");
         assert_type_constructor(wrap_kt, &["Type"]);
-        let pure = s.decl_scope().bindings().expect_value("pure");
-        let kt = match pure {
-            KObject::KTypeValue(kt) => kt,
-            other => panic!("pure must be a KTypeValue, got {:?}", other.ktype()),
-        };
+        // A SIG-body `VAL pure :T` slot lives in `bindings.types` under its value-class
+        // name, carrying the declared type directly.
+        let kt: &KType = s.decl_scope().bindings().expect_type("pure");
         match kt {
             KType::KFunction { params, ret } => {
                 assert_eq!(params.get("x"), Some(&KType::Number));

@@ -40,7 +40,11 @@ pub fn interpret_with_writer_path(
     for id in top_level {
         match scheduler.read_result(id) {
             Err(e) => return Err(e.clone()),
-            Ok(value) if value.object().is_unstamped_empty_container() => {
+            Ok(value)
+                if value
+                    .as_object()
+                    .is_some_and(|o| o.is_unstamped_empty_container()) =>
+            {
                 return Err(KError::new(crate::machine::KErrorKind::ShapeError(
                     "bare empty container has no element type to infer; annotate its \
                      type (e.g. via a typed FN return) or use a non-empty literal"

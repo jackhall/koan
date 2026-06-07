@@ -5,7 +5,7 @@ use super::super::Scheduler;
 use crate::builtins::default_scope;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::ReturnType;
-use crate::machine::model::KObject;
+use crate::machine::model::{Carried, KObject};
 use crate::machine::RuntimeArena;
 
 use super::let_expr;
@@ -22,7 +22,7 @@ fn combine_waits_on_deps_then_runs_finish() {
     let dep_b = sched.add_dispatch(let_expr("cb", 11.0), scope);
     let finish: CombineFinish = Box::new(|scope, _sched, results| {
         let a = match results[0] {
-            KObject::Number(n) => *n,
+            Carried::Object(KObject::Number(n)) => *n,
             _ => {
                 return BodyResult::Err(crate::machine::KError::new(
                     crate::machine::KErrorKind::ShapeError("a not number".into()),
@@ -30,7 +30,7 @@ fn combine_waits_on_deps_then_runs_finish() {
             }
         };
         let b = match results[1] {
-            KObject::Number(n) => *n,
+            Carried::Object(KObject::Number(n)) => *n,
             _ => {
                 return BodyResult::Err(crate::machine::KError::new(
                     crate::machine::KErrorKind::ShapeError("b not number".into()),

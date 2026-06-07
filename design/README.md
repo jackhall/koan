@@ -61,7 +61,7 @@ Type and module system ([typing/](typing/README.md)):
 - [typing/elaboration.md](typing/elaboration.md) — how a type name
   resolves to a `KType` through the scheduler-driven elaborator: strict
   source-order resolution (a forward type reference is a position error),
-  the binding-map partition, the `KObject::TypeNameRef` bare-leaf carrier,
+  the binding-map partition, the `KType::Unresolved` bare-leaf transient,
   the resolution memo, and the `RECURSIVE TYPES` block for mutual
   recursion.
 - [typing/user-types.md](typing/user-types.md) — the `RecursiveSet`

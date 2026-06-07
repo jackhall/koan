@@ -42,9 +42,10 @@ a `SetLocal` index into one shared `RecursiveSet`. Exiting the block guarantees
 every forward reference resolved — a member that never seals is an error at the
 block boundary, so no unresolved forward reference escapes.
 
-**One canonical runtime type representation.** Type bindings finalize to
-`KObject::KTypeValue(KType)`. Consumers read the elaborated type
-directly; there is no surface/elaborated split, no per-lookup
+**One canonical runtime type representation.** A type flows raw as a `&KType` in the
+value channel's `Type` arm ([`Carried::Type`](../../src/machine/model/values/carried.rs)),
+and a type binding finalizes to the arena `&KType` in `bindings.types`. Consumers read the
+elaborated type directly; there is no surface/elaborated split, no per-lookup
 re-elaboration, no parallel surface-name representation flowing through
 dispatch. A recursive group's identity is its `RecursiveSet` pointer, so
 cycle-aware traversals (equality, printing, hashing) key on
@@ -58,8 +59,8 @@ stack overflow.
 module's `type_members` table (opaque-ascription type bindings), then
 the child scope's `data` (so chained `Outer.Inner.X` reads the inner
 *module value* and the chain stays drillable), then the child scope's
-type-side `bindings.types` via `Scope::resolve_type` — synthesizing a
-`KTypeValue` carrier so type-position consumers (e.g. a LET-RHS routing
+type-side `bindings.types` via `Scope::resolve_type` — surfacing the type in the value
+channel's `Type` arm so type-position consumers (e.g. a LET-RHS routing
 through Combine) see a first-class `KType` value. The resolved type is
 the leaf's existing per-declaration `KType::SetRef { set, index }`; no new
 variant, no path field.
@@ -102,10 +103,12 @@ cross-link this section rather than restating its slice.
   `ExpressionPart::resolve_for` lowers a bare `Type` token against the
   builtin table via
   [`KType::from_type_expr`](../../src/machine/model/types/ktype_resolution.rs)
-  (a match over the ~10-entry builtin map, re-run per call). A hit lowers to
-  `KObject::KTypeValue`; a miss — a user-bound leaf — defers to
-  `KObject::TypeNameRef`. Runs at `KFunction::bind` time, which has no `Scope`
-  in hand, so it is builtin-only and scope-independent.
+  (a match over the ~10-entry builtin map, re-run per call). A hit lowers to a resolved
+  `&KType` in the value channel's `Type` arm; a miss — a user-bound leaf — defers to the
+  [`KType::Unresolved(TypeName)`](../../src/machine/model/types/ktype.rs) transient, which
+  preserves the parser-side name verbatim until the park-capable
+  `Scope::resolve_type_expr` consumes it. Runs at `KFunction::bind` time, which has no
+  `Scope` in hand, so it is builtin-only and scope-independent.
 - **Layer 2 — scope-bound elaboration memo (the sole cache tier)** in
   [`bindings.rs`](../../src/machine/core/bindings.rs). A
   `RefCell<HashMap<(TypeName, Option<usize>), &'a KType>>` on `Bindings`
@@ -140,19 +143,19 @@ cross-link this section rather than restating its slice.
   splice walk's eager name-resolve pass. It wraps the same memoized,
   park-capable `Scope::resolve_type_expr` bridge (Layer 2) every compound type
   form uses, returning `TypeLeafCarrier::{Resolved, Park, Unbound}`: `Resolved`
-  wraps the bridge's cached `&KType` in `KObject::KTypeValue`, and `Park` lets a
-  leaf naming an earlier still-finalizing binder park on its producer and
+  carries the bridge's cached `&KType` raw in the value channel's `Type` arm, and `Park`
+  lets a leaf naming an earlier still-finalizing binder park on its producer and
   re-resolve on wake. See
   [Bare-leaf type-name carrier](#bare-leaf-type-name-carrier) below for
   the downstream consumers.
-- **Layer 5 — surface-form-survives-bind carrier** in
-  [`kobject.rs`](../../src/machine/model/values/kobject.rs).
-  `KObject::TypeNameRef(TypeName)` preserves the parser-side `TypeName`
-  verbatim for bare-leaf type names not in the builtin table — so
-  diagnostics quote the user's identifier exactly as written rather than
-  the elaborated canonical form. See
-  [Bare-leaf type-name carrier](#bare-leaf-type-name-carrier) for the
-  consumers that carry a `TypeNameRef` arm beside the `KTypeValue` arm.
+- **Layer 5 — surface-form-survives-bind transient** in
+  [`ktype.rs`](../../src/machine/model/types/ktype.rs).
+  [`KType::Unresolved(TypeName)`](../../src/machine/model/types/ktype.rs) preserves the
+  parser-side `TypeName` verbatim for bare-leaf type names not in the builtin table — so
+  diagnostics quote the user's identifier exactly as written rather than the elaborated
+  canonical form. A transient sibling to `RecursiveRef`, it never reaches the dispatch
+  predicates: `Scope::resolve_type_expr` consumes and replaces it. See
+  [Bare-leaf type-name carrier](#bare-leaf-type-name-carrier) for the consumers.
 
 ## Binding-map partition
 
@@ -186,16 +189,16 @@ nominal binder — no binder dual-writes `(bindings.types, bindings.data)`.
 Type-class LHS and dispatches through `register_type` for `TypeExprRef`-LHS
 RHSes (type-valued aliases). A bind-time
 `KErrorKind::TypeClassBindingExpectsType` diagnostic gates the RHS via an
-**allowlist**, `is_admissible_type_class_rhs`: a Type-class LET admits a value
-only if it carries type-language identity — any `KObject::KTypeValue(_)`
-(struct / union / module / Result / signature identities all flow as
-`KTypeValue` now), or `KObject::KFunction(f, _)` with `f.is_functor` set (the
+**allowlist**, `is_admissible_type_class_rhs`: a Type-class LET admits an RHS
+only if it carries type-language identity — any value-channel `Type` arm
+(struct / union / module / Result / signature identities all flow raw as `&KType`),
+or `KObject::KFunction(f, _)` with `f.is_functor` set (the
 `FUNCTOR` binder's output). Plain `KFunction` rejects, closing the
 `LET Plain = (FN …)`-binds-a-plain-function-under-a-Type-class-name hole
 that a pure value-shape gate cannot discriminate; the `is_functor` flag
 is the discrimination signal. The lockstep partner `type_side_identity` maps
 each admitted value to the `KType` identity that lands in `bindings.types`: a
-`KTypeValue(kt)` registers `kt` directly, while a bound functor registers its
+`Type`-arm `kt` registers `kt` directly, while a bound functor registers its
 `KType::KFunctor { body: Some(f) }` projection so the callable rides the
 type-table identity and a later `:(F {…})` / `F {…}` application can invoke it
 (see [functors.md § Application and binding](functors.md#application-and-binding)).
@@ -210,11 +213,11 @@ original, with no separate nominal-install path.
 
 The partition is one-way and total against type-language carriers. A
 value-classified LET (lowercase-leading binder name) rejects **any** type
-carrier RHS at the LET site with a `ShapeError` redirecting the user to a
-Type-classified name: every `KObject::KTypeValue` (struct / union / module /
-Result / signature / builtin type) and the parser-form `KObject::TypeNameRef`,
-plus an `is_functor`-flagged `KFunction` (a functor lives in the type namespace
-only). A type therefore binds only under a Type-classified name; construction
+RHS at the LET site with a `ShapeError` redirecting the user to a
+Type-classified name: every value-channel `Type` arm (struct / union / module /
+Result / signature / builtin type, including the `KType::Unresolved` parser-form
+transient), plus an `is_functor`-flagged `KFunction` (a functor lives in the type
+namespace only). A type therefore binds only under a Type-classified name; construction
 names the type directly (`Point {…}`) or through a Type-classified alias
 (`LET Pt2 = Point` then `Pt2 {…}`), never a value-classified one. Combined with
 the Type-class LET allowlist above, this makes `bindings.types` the single home
@@ -228,7 +231,7 @@ partition guard lives in
 The value-side ATTR walker and ascription's abstract-type member sweep both
 walk `bindings.types` and `bindings.data` via the `abstract_type_names_of`
 helper, so SIG `Type` declarations resolve uniformly whether the signature
-body's LET wrote to `types` (Type-class LHS, `KTypeValue` RHS) or to `data`
+body's LET wrote to `types` (Type-class LHS, `Type`-arm RHS) or to `data`
 (other type-language carriers).
 
 ## Bare-leaf type-name carrier
@@ -236,25 +239,26 @@ body's LET wrote to `types` (Type-class LHS, `KTypeValue` RHS) or to `data`
 Bare-leaf type names that aren't in
 [`KType::from_name`](../../src/machine/model/types/ktype.rs)'s builtin
 table (`Point`, `IntOrd`, `MyList`) are lowered by
-[`ExpressionPart::resolve_for`](../../src/machine/model/ast.rs) into
-`KObject::TypeNameRef(TypeName)` rather than a placeholder `KType` variant.
-The carrier preserves the parser-side `TypeName` for diagnostics and for
-consumers that want the user's surface identifier verbatim. Both `TypeNameRef`
-and the fully-resolved `KTypeValue` report
-`ktype() = KType::TypeExprRef`, so the slot's dispatch position is identical —
+[`ExpressionPart::resolve_for`](../../src/machine/model/ast.rs) into the
+[`KType::Unresolved(TypeName)`](../../src/machine/model/types/ktype.rs) transient — riding
+the value channel's `Type` arm like any other type — rather than a resolved `&KType`.
+The transient preserves the parser-side `TypeName` for diagnostics and for
+consumers that want the user's surface identifier verbatim. Both `Unresolved`
+and a fully-resolved type carry in the `Type` arm and report
+`ktype() = KType::OfKind(Proper)`, so the slot's dispatch position is identical —
 whether the surface form already lowered to a concrete `KType` at bind time
 or is still in parser-form is an internal detail.
 
-Three downstream consumers each carry a `TypeNameRef` arm beside the existing
-`KTypeValue` arm:
+Downstream consumers branch on the `Type` arm, handling the `Unresolved` transient where
+a bare user name can still be pending:
 
 - the shared
   [`extract_bare_type_name`](../../src/machine/core/kfunction/argument_bundle.rs)
   helper (used by STRUCT/UNION declaration sites and the dispatcher's
-  `TypeCall` fast lane);
+  `TypeCall` fast lane), which renders either an `Unresolved` name or a resolved type;
 - [ATTR's `body_type_lhs` and `read_field_name`](../../src/builtins/attr.rs);
 - [`let_binding`'s name slot](../../src/builtins/let_binding.rs), which
-  runs the same primitive/container blocklist as the `KTypeValue` arm and
+  runs a primitive/container blocklist over the `Type` arm and
   routes to `register_type` for type-valued RHSes.
 
 The single-part bare-`Type` lookup that those consumers' siblings need is
@@ -266,20 +270,19 @@ which calls
 name-resolve pass
 ([`dispatch.rs`](../../src/machine/execute/dispatch.rs)).
 The seam wraps the memoized, park-capable `Scope::resolve_type_expr` bridge: on
-a resolved leaf it synthesizes `KObject::KTypeValue(identity)` for every
-type-only nominal — struct / union / module / Result *and* signature — from the
-bridge's cached `&KType`; on an earlier still-finalizing binder it parks; on a
-miss it surfaces `Unbound`.
+a resolved leaf it surfaces the bridge's cached `&KType` in the value channel's `Type` arm
+for every type-only nominal — struct / union / module / Result *and* signature; on an
+earlier still-finalizing binder it parks; on a miss it surfaces `Unbound`.
 
-FN's deferred return-type elaboration peeks the slot to pick between
-[`extract_ktype`](../../src/machine/core/kfunction/argument_bundle.rs)
-(resolved carrier) and the sibling
-[`extract_type_name_ref`](../../src/machine/core/kfunction/argument_bundle.rs)
-(deferred carrier consuming the parser-preserved `TypeName`), then drives the
-existing park-on-placeholder machinery from there. The sole
-`KObject::KTypeValue` synthesis site for dispatch transport lives in
+FN's deferred return-type elaboration reads the slot via
+[`extract_ktype`](../../src/machine/core/kfunction/argument_bundle.rs), which yields any
+`Type`-arm type — a resolved `&KType` or the `KType::Unresolved` transient — and then
+branches on `Unresolved` to drive the park-on-placeholder machinery
+([`type_identity_for`](../../src/machine/core/kfunction/invoke.rs) elaborates the transient
+against the definition scope). The sole bare-leaf resolution site for dispatch transport
+lives in
 [`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_expr.rs),
-which wraps the bridge's resolved `&KType`. Bare leaves resolve through the same
+which surfaces the bridge's resolved `&KType`. Bare leaves resolve through the same
 memo and parking discipline as compound type forms — there is no separate
 synchronous bare-leaf path.
 

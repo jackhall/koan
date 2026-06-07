@@ -10,7 +10,7 @@ use super::scope_ptr::ScopePtr;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::KType;
-use crate::machine::model::values::{KObject, Module, Signature};
+use crate::machine::model::values::{Held, KObject, Module, Signature};
 /// Run-lifetime allocator. Lives for one program run. Sub-arenas store `T<'static>`
 /// (phantom); each `alloc*` re-anchors to the caller's `'a` on the way out.
 ///
@@ -154,14 +154,21 @@ fn obj_anchors_to(obj: &KObject<'_>, arena_ptr: *const RuntimeArena) -> bool {
     match obj {
         KObject::KFunction(_, Some(rc)) => rc_targets(rc, arena_ptr),
         KObject::KFuture(_, Some(rc)) => rc_targets(rc, arena_ptr),
-        // A module value rides `KTypeValue(KType::Module { frame, .. })`.
-        KObject::KTypeValue(kt) => ktype_anchors_to(kt, arena_ptr),
-        KObject::List(items, _) => items.iter().any(|x| obj_anchors_to(x, arena_ptr)),
-        KObject::Dict(entries, _, _) => entries.values().any(|x| obj_anchors_to(x, arena_ptr)),
+        KObject::List(items, _) => items.iter().any(|x| held_anchors_to(x, arena_ptr)),
+        KObject::Dict(entries, _, _) => entries.values().any(|x| held_anchors_to(x, arena_ptr)),
         KObject::Tagged { value, .. } => obj_anchors_to(value, arena_ptr),
         KObject::Wrapped { inner, .. } => obj_anchors_to(inner.get(), arena_ptr),
-        KObject::Record(values, _) => values.iter().any(|(_, x)| obj_anchors_to(x, arena_ptr)),
+        KObject::Record(values, _) => values.iter().any(|(_, x)| held_anchors_to(x, arena_ptr)),
         _ => false,
+    }
+}
+
+/// An aggregate cell anchors to `arena_ptr` iff its `Object` arm does, or its `Type` arm is
+/// a `Module` whose frame `Rc` backs that arena.
+fn held_anchors_to(cell: &Held<'_>, arena_ptr: *const RuntimeArena) -> bool {
+    match cell {
+        Held::Object(o) => obj_anchors_to(o, arena_ptr),
+        Held::Type(t) => ktype_anchors_to(t, arena_ptr),
     }
 }
 

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::ExpressionPart;
-use crate::machine::model::{KKey, KObject, Record, Serializable};
+use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
 use crate::machine::{
     BodyResult, CombineFinish, Frame, KError, KErrorKind, NameOutcome, NodeId, Scope,
 };
@@ -15,19 +15,20 @@ use super::Scheduler;
 /// Combine's results: `Park(i)` reads position `i` of the park-producer prefix; `Owned(j)`
 /// reads position `park_count + j` of the owned-sub suffix.
 enum Slot<'a> {
-    Static(KObject<'a>),
+    Static(Held<'a>),
     Park(usize),
     Owned(usize),
 }
 
 impl<'a> Slot<'a> {
-    /// Deep-clones `Park` / `Owned` results because the produced `KList` / `KDict` owns its
-    /// elements and can't borrow `&'a KObject` into `Rc<Vec<KObject>>`.
-    fn materialize(self, results: &[&'a KObject<'a>], park_count: usize) -> KObject<'a> {
+    /// Deep-clones `Park` / `Owned` results because the produced container owns its cells
+    /// and can't borrow a `&'a` carrier into its `Rc<…>`. A literal element may be a runtime
+    /// value *or* a first-class type, so each carrier widens to a [`Held`] cell.
+    fn materialize(self, results: &[Carried<'a>], park_count: usize) -> Held<'a> {
         match self {
-            Slot::Static(obj) => obj,
-            Slot::Park(i) => results[i].deep_clone(),
-            Slot::Owned(j) => results[park_count + j].deep_clone(),
+            Slot::Static(held) => held,
+            Slot::Park(i) => Held::from_carried(results[i]),
+            Slot::Owned(j) => Held::from_carried(results[park_count + j]),
         }
     }
 }
@@ -49,11 +50,11 @@ impl<'a> Scheduler<'a> {
         }
         let park_count = park_producers.len();
         let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
-            let items: Vec<KObject<'a>> = layout
+            let items: Vec<Held<'a>> = layout
                 .into_iter()
                 .map(|slot| slot.materialize(results, park_count))
                 .collect();
-            let allocated: &'a KObject<'a> = scope.arena.alloc_object(KObject::list(items));
+            let allocated: &'a KObject<'a> = scope.arena.alloc_object(KObject::list_of_held(items));
             BodyResult::value(allocated)
         });
         self.add_combine(deps, park_producers, scope, finish)
@@ -80,11 +81,23 @@ impl<'a> Scheduler<'a> {
         let frame_label = || Frame::bare("<dict>", "dict literal");
         let park_count = park_producers.len();
         let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
-            let mut map: HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>> = HashMap::new();
+            let mut map: HashMap<Box<dyn Serializable<'a> + 'a>, Held<'a>> = HashMap::new();
             for (k_slot, v_slot) in layout {
-                let key_obj = k_slot.materialize(results, park_count);
-                let value_obj = v_slot.materialize(results, park_count);
-                let kkey = match KKey::try_from_kobject(&key_obj) {
+                let key_held = k_slot.materialize(results, park_count);
+                let value_held = v_slot.materialize(results, park_count);
+                // Keys stay scalar: only a value can be a `KKey`, never a first-class type.
+                let key_obj = match key_held.as_object() {
+                    Some(obj) => obj,
+                    None => {
+                        return BodyResult::Err(
+                            KError::new(KErrorKind::ShapeError(
+                                "dict key must be a value, not a type".to_string(),
+                            ))
+                            .with_frame(frame_label()),
+                        )
+                    }
+                };
+                let kkey = match KKey::try_from_kobject(key_obj) {
                     Ok(k) => k,
                     Err(msg) => {
                         return BodyResult::Err(
@@ -92,9 +105,9 @@ impl<'a> Scheduler<'a> {
                         )
                     }
                 };
-                map.insert(Box::new(kkey), value_obj);
+                map.insert(Box::new(kkey), value_held);
             }
-            let allocated: &'a KObject<'a> = scope.arena.alloc_object(KObject::dict(map));
+            let allocated: &'a KObject<'a> = scope.arena.alloc_object(KObject::dict_of_held(map));
             BodyResult::value(allocated)
         });
         self.add_combine(deps, park_producers, scope, finish)
@@ -120,12 +133,13 @@ impl<'a> Scheduler<'a> {
         }
         let park_count = park_producers.len();
         let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
-            let record: Record<KObject<'a>> = names
+            let record: Record<Held<'a>> = names
                 .into_iter()
                 .zip(layout)
                 .map(|(name, slot)| (name, slot.materialize(results, park_count)))
                 .collect();
-            let allocated: &'a KObject<'a> = scope.arena.alloc_object(KObject::record(record));
+            let allocated: &'a KObject<'a> =
+                scope.arena.alloc_object(KObject::record_of_held(record));
             BodyResult::value(allocated)
         });
         self.add_combine(deps, park_producers, scope, finish)
@@ -183,7 +197,7 @@ impl<'a> Scheduler<'a> {
             ref p @ ExpressionPart::Type(_) if wrap_identifiers => {
                 self.resolve_aggregate_bare_name(p, scope, deps, park_producers)
             }
-            other => Slot::Static(other.resolve()),
+            other => Slot::Static(Held::Object(other.resolve())),
         }
     }
 
@@ -199,7 +213,9 @@ impl<'a> Scheduler<'a> {
         park_producers: &mut Vec<NodeId>,
     ) -> Slot<'a> {
         match resolve_name_part(scope, part, self, None) {
-            NameOutcome::Resolved(obj) => Slot::Static(obj.deep_clone()),
+            // An aggregate literal element may resolve to a value or a first-class type;
+            // both ride into the cell as a `Held`.
+            NameOutcome::Resolved(c) => Slot::Static(Held::from_carried(c)),
             NameOutcome::Parked(producer) => {
                 let pos = park_producers.len();
                 park_producers.push(producer);

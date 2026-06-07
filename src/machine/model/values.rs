@@ -11,7 +11,7 @@ mod kobject;
 mod module;
 mod named_pairs;
 
-pub use carried::Carried;
+pub use carried::{ArgValue, Carried, Held};
 pub use kkey::KKey;
 pub use kobject::{KObject, NonWrappedRef};
 pub use module::{Module, Signature};

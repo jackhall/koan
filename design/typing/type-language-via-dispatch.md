@@ -6,8 +6,8 @@ the inner expression as evaluating to a type rather than a value, but
 the inner expression itself routes through the same classifier,
 candidate-bucket lookup, and binder admission as any value-side call.
 Builtin parameterized types (`LIST`, `MAP`, `FN`, `FUNCTOR`) register as
-keyworded overloads that produce `KTypeValue` (or paired-carrier)
-results. User-defined functors slot in identically — they're
+keyworded overloads that produce a `&KType` in the value channel's `Type` arm.
+User-defined functors slot in identically — they're
 `KFunction` carriers bound to Type-shape names, dispatched through
 their declared keyword skeletons.
 
@@ -27,8 +27,8 @@ parser does not fold the inner expression's args into `TypeParams::List`
 or any positional collapse. Dispatch sees the raw multi-part expression
 through the AST wrapper described below, runs the normal candidate walk
 against a registered overload, and the picked overload's body returns a
-`KObject::KTypeValue(...)` (for structural types) or the paired carrier
-(for nominal `SetRef` / `Module` / `Signature` identities).
+`&KType` in the value channel's `Type` arm — a structural type, or a nominal
+`SetRef` / `Module` / `Signature` identity.
 
 ## AST representation
 
@@ -200,12 +200,12 @@ tail-replace with a sub-Dispatch — it folds the field list straight to
 or sub-dispatches. A `:{…}` head in a multi-part expression classifies as
 `NonCallableHead` (a record type is a value, not a callable).
 
-The sigil boundary — "the returned carrier must be type-side
-(`KTypeValue`, `Module`, `Signature`, `SetRef`, `KFunctor`)" — is
+The sigil boundary — "the result must ride the value channel's `Type` arm
+(a `Module`, `Signature`, `SetRef`, `KFunctor`, or any other `&KType`)" — is
 enforced implicitly by the consuming slot's KType machinery rather
-than by a dedicated tail at the sigil. A value-side carrier (number,
+than by a dedicated tail at the sigil. An `Object`-arm value (number,
 instance struct, plain function value) flowing out of `:(...)`
-reaches a `TypeExprRef` / `Type` / `AnyModule` / `AnySignature` slot
+reaches an `OfKind(Proper)` / `OfKind(Any)` / `OfKind(Module)` / `OfKind(Signature)` slot
 and surfaces a standard `TypeMismatch`. The sigil handler itself does
 no extra check; the slot-type rails are the single source of truth.
 
@@ -216,8 +216,8 @@ handles the sigil embedded in `STRUCT` / `UNION` field schemas through a
 single path. Keyworded shapes (`:(LIST OF Tree)`, `:(MAP Tree -> _)`)
 sub-Dispatch through the standalone dispatcher, which carries no threaded
 binder set, so `rewrite_threaded_self_refs` first rewrites every threaded
-self / group-sibling reference to a `Future(KTypeValue(RecursiveRef(name)))`
-carrier — the same type-side transport `:(LIST OF Number)` rides — before the
+self / group-sibling reference to a `Future(Carried::Type(RecursiveRef(name)))`
+carrier — the same `Type`-arm transport `:(LIST OF Number)` rides — before the
 sub-Dispatch. This lowers `STRUCT Tree = (children :(LIST OF Tree))`'s
 field to `List(RecursiveRef("Tree"))`, which seals to `List(SetLocal(_))` at
 the member's finalize, rather than parking on `Tree`'s own placeholder and

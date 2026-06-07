@@ -1,4 +1,4 @@
-use crate::machine::model::KObject;
+use crate::machine::model::{Carried, KObject};
 use crate::machine::{BodyResult, CatchFinish, CombineFinish, Frame, KError, NodeId, Scope};
 
 use super::super::dispatch::propagate_dep_error;
@@ -36,8 +36,10 @@ impl<'a> Scheduler<'a> {
                 return NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(make_frame()))));
             }
         }
-        // Pre-collect refs so `finish` (which takes `&mut self`) doesn't reborrow for reads.
-        let values: Vec<&'a KObject<'a>> = deps.iter().map(|d| self.read(*d).object()).collect();
+        // Pre-collect carriers so `finish` (which takes `&mut self`) doesn't reborrow for
+        // reads. A type-resolving dep arrives as `Carried::Type`; the finish closure
+        // narrows each arm it expects.
+        let values: Vec<Carried<'a>> = deps.iter().map(|d| self.read(*d)).collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
         let body = finish(scope, self, &values);
         self.reclaim_deps(idx, owned_indices);

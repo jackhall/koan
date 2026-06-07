@@ -2,14 +2,12 @@
 //! a `Body` (builtin `fn` pointer or captured user-defined `KExpression`), and the
 //! lexical scope captured at definition time.
 
-use std::rc::Rc;
-
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use crate::machine::core::{KError, KErrorKind, KFuture, Scope, ScopePtr};
 use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
-use crate::machine::model::values::{KObject, NamedPairs};
+use crate::machine::model::values::{ArgValue, NamedPairs};
 
 pub mod argument_bundle;
 pub mod body;
@@ -115,7 +113,7 @@ impl<'a> KFunction<'a> {
                 got: expr.parts.len(),
             }));
         }
-        let mut args: Record<Rc<KObject<'a>>> = Record::new();
+        let mut args: Record<ArgValue<'a>> = Record::new();
         for (el, part) in self.signature.elements.iter().zip(expr.parts.iter()) {
             let part_value = &part.value;
             match el {
@@ -142,10 +140,7 @@ impl<'a> KFunction<'a> {
                             got: part_value.summarize(),
                         }));
                     }
-                    args.insert(
-                        arg.name.clone(),
-                        Rc::new(part_value.resolve_for(&arg.ktype)),
-                    );
+                    args.insert(arg.name.clone(), part_value.resolve_for(&arg.ktype));
                 }
             }
         }
@@ -200,7 +195,7 @@ mod tests {
     use crate::machine::core::{RuntimeArena, Scope};
     use crate::machine::model::ast::{KLiteral, TypeName};
     use crate::machine::model::types::{Argument, ExpressionSignature, KType, ReturnType};
-    use crate::machine::model::KKind;
+    use crate::machine::model::{KKind, KObject};
 
     fn body_any<'a>(
         s: &'a Scope<'a>,

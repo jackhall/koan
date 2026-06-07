@@ -333,18 +333,18 @@ pub(crate) fn defer_via_combine<'a>(
     let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
         let mut spliced_parts = signature_expr.parts.clone();
         for &(slot_idx, results_pos) in &splice_layout {
-            let obj = results[results_pos];
+            let carrier = results[results_pos];
             // Catch non-type results here so we can name the slot's part-index;
             // `parse_fn_param_list` would otherwise reject in its `Future(other)`
             // arm without that context.
-            if !matches!(obj, KObject::KTypeValue(_)) {
+            if !matches!(carrier, Carried::Type(_)) {
                 return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
                     "FN signature slot at part-index {slot_idx} expected a type expression, \
                      got a {} value",
-                    obj.ktype().name(),
+                    carrier.ktype().name(),
                 ))));
             }
-            spliced_parts[slot_idx].value = ExpressionPart::Future(Carried::Object(obj));
+            spliced_parts[slot_idx].value = ExpressionPart::Future(carrier);
         }
         let spliced_signature = KExpression::new(spliced_parts);
 

@@ -173,7 +173,7 @@ fn record_value_admission_and_matches() {
 }
 
 /// Admission table for `KType::accepts_part`: bare builtin type tokens
-/// and newtype / union `KTypeValue(UserType)` identities admit; module and signature
+/// and newtype / union `Carried::Type(SetRef)` identities admit; module and signature
 /// carriers reject so the `:Type` vs `:Module` / `:Signature` overload distinction
 /// stays intact; non-type-denoting carriers reject.
 #[test]
@@ -185,46 +185,45 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let t = KType::OfKind(KKind::Any);
-    let kt_number: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Number));
-    let kt_str: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Str));
-    let kt_bool: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Bool));
-    let kt_null: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Null));
-    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Object(kt_number))));
-    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Object(kt_str))));
-    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Object(kt_bool))));
-    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Object(kt_null))));
-    // Newtype / union type tokens flow as `KTypeValue(SetRef { .. })` now — a `:Type`
-    // slot admits them via the generic `Future(KTypeValue(_))` arm.
+    let kt_number: &KType<'_> = arena.alloc_ktype(KType::Number);
+    let kt_str: &KType<'_> = arena.alloc_ktype(KType::Str);
+    let kt_bool: &KType<'_> = arena.alloc_ktype(KType::Bool);
+    let kt_null: &KType<'_> = arena.alloc_ktype(KType::Null);
+    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Type(kt_number))));
+    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Type(kt_str))));
+    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Type(kt_bool))));
+    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Type(kt_null))));
+    // Newtype / union type tokens flow as `SetRef { .. }` in the type channel — a `:Type`
+    // slot admits them via the generic `Future(Carried::Type(_))` arm.
     let tagged_set = RecursiveSet::singleton(
         "Maybe".into(),
         ScopeId::SENTINEL,
         NominalSchema::Tagged(HashMap::new()),
     );
-    let tagged_token: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::SetRef {
+    let tagged_token: &KType<'_> = arena.alloc_ktype(KType::SetRef {
         set: tagged_set,
         index: 0,
-    }));
-    let struct_token: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(
-        record_newtype_setref("Point", ScopeId::SENTINEL),
-    ));
-    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Object(tagged_token))));
-    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Object(struct_token))));
+    });
+    let struct_token: &KType<'_> =
+        arena.alloc_ktype(record_newtype_setref("Point", ScopeId::SENTINEL));
+    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Type(tagged_token))));
+    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Type(struct_token))));
     let child = arena.alloc_scope(crate::machine::Scope::child_under_module(
         scope,
         "IntMod".into(),
     ));
     let module = arena.alloc_module(Module::new("IntMod".into(), child));
-    let kt_module: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Module {
+    let kt_module: &KType<'_> = arena.alloc_ktype(KType::Module {
         module,
         frame: None,
-    }));
-    assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Object(kt_module))));
+    });
+    assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Type(kt_module))));
     let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
-    let kt_sig: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Signature {
+    let kt_sig: &KType<'_> = arena.alloc_ktype(KType::Signature {
         sig,
         pinned_slots: Vec::new(),
-    }));
-    assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Object(kt_sig))));
+    });
+    assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Type(kt_sig))));
     let n: &KObject<'_> = arena.alloc_object(KObject::Number(7.0));
     let s: &KObject<'_> = arena.alloc_object(KObject::KString("hi".into()));
     assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Object(n))));

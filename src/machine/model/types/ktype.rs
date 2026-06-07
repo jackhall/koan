@@ -16,6 +16,7 @@ use super::recursive_set::{NominalKind, RecursiveSet};
 use super::signature::DeferredReturnSurface;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, ScopeId};
+use crate::machine::model::ast::TypeName;
 use crate::machine::model::values::{Module, Signature};
 use std::rc::Rc;
 
@@ -158,7 +159,8 @@ pub enum KType<'a> {
     /// A module signature: both the introspectable value (`decl_scope` via `sig`) and the
     /// dispatch constraint ("any module satisfying `sig`"). Disambiguated by position — as a
     /// parameter slot it matches a module whose `compatible_sigs` contains `sig.sig_id()`; as
-    /// a value (`KTypeValue(Signature { .. })`) it is matched by the `OfKind(Signature)` wildcard.
+    /// a value (a `Signature { .. }` in the value channel's `Type` arm) it is matched by the
+    /// `OfKind(Signature)` wildcard.
     ///
     /// `pinned_slots` carries `WITH` abstract-type specializations (empty for a bare
     /// signature), each an abstract-type slot pinned to a concrete `KType`. The vec is
@@ -197,6 +199,14 @@ pub enum KType<'a> {
     /// index at the member's finalize, so it never survives into a sealed type and never
     /// reaches the predicates. Equality is by name only.
     RecursiveRef(String),
+    /// Bind-time transient for a bare-leaf type name that couldn't be lowered to a concrete
+    /// `KType` at the synchronous [`ExpressionPart::resolve_for`](crate::machine::model::ast::ExpressionPart::resolve_for)
+    /// seam — a name not in [`KType::from_name`]'s builtin table (`Point`, `IntOrd`, `MyList`).
+    /// Sibling to [`RecursiveRef`](KType::RecursiveRef): it rides the value channel's `Type`
+    /// arm, never reaches the dispatch predicates, and is consumed + replaced by the
+    /// park-capable [`Scope::resolve_type_expr`](crate::machine::core::Scope::resolve_type_expr).
+    /// Carries the structured `TypeName` so the surface form survives the bind.
+    Unresolved(TypeName),
     Any,
 }
 
@@ -265,6 +275,7 @@ impl<'a> KType<'a> {
             KType::Module { module, .. } => module.path.clone(),
             KType::AbstractType { name, .. } => name.clone(),
             KType::RecursiveRef(name) => name.clone(),
+            KType::Unresolved(t) => t.render(),
             KType::ConstructorApply { ctor, args } => {
                 let arg_names: Vec<String> = args.iter().map(|a| a.name()).collect();
                 format!(":({} {})", ctor.name(), arg_names.join(" "))
@@ -406,6 +417,7 @@ impl<'a> PartialEq for KType<'a> {
                 c1 == c2 && a1 == a2
             }
             (RecursiveRef(n1), RecursiveRef(n2)) => n1 == n2,
+            (Unresolved(a), Unresolved(b)) => a == b,
             // Whole-set handle: identity is the set pointer, never the (cyclic) schema.
             (RecursiveGroup(a), RecursiveGroup(b)) => Rc::ptr_eq(a, b),
             (DeferredReturn(a), DeferredReturn(b)) => a == b,
@@ -475,6 +487,7 @@ impl<'a> std::hash::Hash for KType<'a> {
                 args.hash(state);
             }
             RecursiveRef(n) => n.hash(state),
+            Unresolved(t) => t.hash(state),
             // Set-pointer identity ONLY — never the cyclic schema, matching `PartialEq`.
             RecursiveGroup(set) => (Rc::as_ptr(set) as *const ()).hash(state),
             DeferredReturn(s) => s.hash(state),

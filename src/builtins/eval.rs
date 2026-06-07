@@ -1,9 +1,7 @@
 use std::rc::Rc;
 
-use crate::machine::model::{KObject, KType};
-use crate::machine::{
-    ArgumentBundle, BodyResult, CallArena, KError, KErrorKind, SchedulerHandle, Scope,
-};
+use crate::machine::model::KType;
+use crate::machine::{ArgumentBundle, BodyResult, CallArena, SchedulerHandle, Scope};
 
 use super::{arg, err, kw, register_builtin, sig};
 
@@ -18,19 +16,9 @@ pub fn body<'a>(
     sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let rc = match bundle.args.get("expr") {
-        Some(rc) => Rc::clone(rc),
-        None => return err(KError::new(KErrorKind::MissingArg("expr".to_string()))),
-    };
-    let inner = match &*rc {
-        KObject::KExpression(e) => e.clone(),
-        other => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "expr".to_string(),
-                expected: "KExpression".to_string(),
-                got: other.ktype().name(),
-            }));
-        }
+    let inner = match bundle.require_kexpression("expr") {
+        Ok(e) => e.clone(),
+        Err(e) => return err(e),
     };
     // Chain the call-site's frame Rc onto the new frame so the parent's per-call arena
     // stays alive while the new frame's `outer`-scope pointer is in use.

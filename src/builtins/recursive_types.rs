@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::machine::model::types::{NominalKind, NominalMember, RecursiveSet};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::KType;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind,
     SchedulerHandle, Scope,
@@ -126,11 +126,7 @@ pub fn body<'a>(
         }
         let handle = KType::RecursiveGroup(Rc::clone(&set));
         match parent_scope.register_type_upsert(group_name.clone(), handle, bind_index) {
-            Ok(kt_ref) => BodyResult::value(
-                parent_scope
-                    .arena
-                    .alloc_object(KObject::KTypeValue(kt_ref.clone())),
-            ),
+            Ok(kt_ref) => BodyResult::ktype(parent_scope.arena.alloc_ktype(kt_ref.clone())),
             Err(e) => BodyResult::Err(e.with_frame(frame())),
         }
     });

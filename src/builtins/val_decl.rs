@@ -2,19 +2,19 @@
 //! slots whose declared type is recorded explicitly. See
 //! [design/typing/modules.md § Structures and signatures](../../design/typing/modules.md#structures-and-signatures).
 //!
-//! Inside a SIG decl_scope `bindings.data[name] = KObject::KTypeValue(declared_kt)`
-//! means "value slot whose declared type is `kt`" rather than "name bound to a type
-//! value"; the disambiguation is by scope context.
+//! A VAL slot records "value member whose declared type is `kt`" into the SIG decl_scope's
+//! `bindings.types[name]` — the same type table the SIG-local `LET <TypeName> = …` abstract
+//! members live in. A value-class slot name keeps it distinguishable from an abstract-type
+//! member (Type-class name) when ascription enumerates the table.
 //!
-//! Type resolution dispatches on the `ty` carrier shape: leaf carriers (builtin
-//! `KTypeValue` or unresolved-leaf `TypeNameRef`) re-dispatch against decl_scope so a
-//! SIG-local `LET <name> = ...` shadow wins over the builtin table; structural
-//! carriers (`KFunction`, `List`, ...) are lifted directly.
+//! Type resolution dispatches on the `ty` carrier shape: a [`KType::Unresolved`] leaf or a
+//! builtin leaf re-dispatch against decl_scope so a SIG-local `LET <name> = ...` shadow wins
+//! over the builtin table; structural carriers (`KFunction`, `List`, ...) are taken directly.
 
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::types::KKind;
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, KError, KErrorKind, NodeId,
     SchedulerHandle, Scope,
@@ -31,28 +31,21 @@ fn schedule_type_resolve<'a>(
     sched.add_dispatch(expr, decl_scope)
 }
 
-fn typeexpr_from_carrier<'a>(obj: &KObject<'a>) -> Result<CarrierForm<'a>, KError> {
-    match obj {
-        KObject::KTypeValue(kt) => match kt {
-            KType::Number
-            | KType::Str
-            | KType::Bool
-            | KType::Null
-            | KType::OfKind(KKind::Any)
-            | KType::OfKind(KKind::Signature)
-            | KType::OfKind(KKind::Module)
-            | KType::Any
-            | KType::Identifier
-            | KType::KExpression
-            | KType::OfKind(KKind::Proper) => Ok(CarrierForm::Leaf(TypeName::leaf(kt.name()))),
-            _ => Ok(CarrierForm::Direct(kt.clone())),
-        },
-        KObject::TypeNameRef(te) => Ok(CarrierForm::Raw(te.clone())),
-        other => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: "ty".to_string(),
-            expected: "TypeExprRef".to_string(),
-            got: other.ktype().name(),
-        })),
+fn typeexpr_from_carrier<'a>(kt: &KType<'a>) -> CarrierForm<'a> {
+    match kt {
+        KType::Unresolved(te) => CarrierForm::Raw(te.clone()),
+        KType::Number
+        | KType::Str
+        | KType::Bool
+        | KType::Null
+        | KType::OfKind(KKind::Any)
+        | KType::OfKind(KKind::Signature)
+        | KType::OfKind(KKind::Module)
+        | KType::Any
+        | KType::Identifier
+        | KType::KExpression
+        | KType::OfKind(KKind::Proper) => CarrierForm::Leaf(TypeName::leaf(kt.name())),
+        _ => CarrierForm::Direct(kt.clone()),
     }
 }
 
@@ -98,13 +91,18 @@ pub fn body<'a>(
         ))));
     }
 
-    let ty_obj = match bundle.get("ty") {
-        Some(o) => o,
-        None => return err(KError::new(KErrorKind::MissingArg("ty".to_string()))),
-    };
-    let carrier = match typeexpr_from_carrier(ty_obj) {
-        Ok(c) => c,
-        Err(e) => return err(e),
+    let carrier = match bundle.get_type("ty") {
+        Some(kt) => typeexpr_from_carrier(kt),
+        None => {
+            return err(match bundle.get("ty") {
+                Some(other) => KError::new(KErrorKind::TypeMismatch {
+                    arg: "ty".to_string(),
+                    expected: "TypeExprRef".to_string(),
+                    got: other.ktype().name(),
+                }),
+                None => KError::new(KErrorKind::MissingArg("ty".to_string())),
+            });
+        }
     };
 
     // Value-style: strict lexical cutoff against the SIG body's chain index.
@@ -129,18 +127,19 @@ pub fn body<'a>(
     }
 }
 
+/// Record the value slot's declared type in `bindings.types`. A VAL is a *value* member
+/// whose *declared type* we keep; storing the `KType` directly (not a boxed carrier) keeps
+/// the type table the single home for everything ascription enumerates. Uses the same
+/// infallible `register_type` path as a SIG-local `LET <TypeName> = …` abstract member.
 fn finalize_val<'a>(
     scope: &'a Scope<'a>,
     name: String,
     declared_kt: KType<'a>,
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {
-    let arena = scope.arena;
-    let allocated: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(declared_kt));
-    if let Err(e) = scope.bind_value(name, allocated, bind_index) {
-        return err(e);
-    }
-    BodyResult::value(allocated)
+    let kt_ref: &'a KType<'a> = scope.arena.alloc_ktype(declared_kt.clone());
+    scope.register_type(name, declared_kt, bind_index);
+    BodyResult::ktype(kt_ref)
 }
 
 /// Errored deps short-circuit via `run_combine` before the closure runs.
@@ -156,11 +155,10 @@ fn defer_val_via_combine<'a>(
     let te_for_finish = te;
     let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
         debug_assert_eq!(results.len(), 1, "VAL Combine has exactly one dep");
-        let resolved = results[0];
-        let kt = match resolved {
-            KObject::KTypeValue(kt) => kt.clone(),
+        let kt = match results[0] {
+            Carried::Type(kt) => kt.clone(),
             // Routing bug — surface structured, don't panic.
-            other => {
+            Carried::Object(other) => {
                 return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
                     "VAL type `{}` sub-dispatch resolved to a non-type value of kind `{}`",
                     te_for_finish.render(),

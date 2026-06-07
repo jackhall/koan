@@ -8,7 +8,7 @@ use crate::machine::model::types::{
     AbstractSource, KKind, NominalKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet,
 };
 use crate::machine::model::values::Module;
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::KType;
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
 
 use super::{arg, kw, register_builtin, sig};
@@ -99,11 +99,16 @@ pub fn body_opaque<'a>(
     {
         let tm = new_module.type_members.borrow();
         let mut tags: Vec<(String, KType<'a>)> = Vec::new();
-        for (slot_name, value) in s.decl_scope().bindings().iter_data() {
-            if let KObject::KTypeValue(KType::AbstractType {
+        for (slot_name, kt) in s.decl_scope().bindings().iter_types() {
+            // Only value-slot (VAL) entries carry a slot tag; the abstract-type members
+            // themselves are Type-class names read type-side, not value-side slots.
+            if is_abstract_type_name(&slot_name) {
+                continue;
+            }
+            if let KType::AbstractType {
                 source: AbstractSource::Sig(_),
                 name: member,
-            }) = value
+            } = kt
             {
                 if let Some(per_call) = tm.get(member) {
                     tags.push((slot_name, per_call.clone()));
@@ -125,11 +130,11 @@ pub fn body_opaque<'a>(
 
     new_module.mark_satisfies(s.sig_id());
 
-    let module_obj: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(KType::Module {
+    let module_obj: &'a KType<'a> = arena.alloc_ktype(KType::Module {
         module: new_module,
         frame: None,
-    }));
-    BodyResult::value(module_obj)
+    });
+    BodyResult::ktype(module_obj)
 }
 
 /// `<m:Module> :! <s:Signature>` — transparent ascription.
@@ -152,11 +157,11 @@ pub fn body_transparent<'a>(
         m.child_scope(),
     ));
     new_module.mark_satisfies(s.sig_id());
-    let module_obj: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(KType::Module {
+    let module_obj: &'a KType<'a> = arena.alloc_ktype(KType::Module {
         module: new_module,
         frame: None,
-    }));
-    BodyResult::value(module_obj)
+    });
+    BodyResult::ktype(module_obj)
 }
 
 /// Verify every non-abstract-type name in `sig` has a binding in `src_scope`.
@@ -168,10 +173,13 @@ fn shape_check<'a>(
         abstract_type_names_of(sig.decl_scope())
             .into_iter()
             .collect();
+    // SIG members all live in the type table: abstract types (skipped below) and VAL value
+    // slots — the names a satisfying module must supply. The module supplies them as values,
+    // so the satisfaction check looks for each in the source's value table.
     let sig_names: Vec<String> = sig
         .decl_scope()
         .bindings()
-        .iter_data()
+        .iter_types()
         .into_iter()
         .map(|(n, _)| n)
         .collect();
@@ -196,18 +204,18 @@ fn shape_check<'a>(
 }
 
 /// Collect every name in `scope`'s `Bindings` that classifies as an abstract Type member.
-/// Sweeps both `types` (Type-class LET aliases) and `data` (Type-token carriers) so the
-/// answer is robust to either binding home; names already in `types` are not duplicated.
+/// Every SIG-body declaration lives in `bindings.types`: abstract-type members
+/// (`LET <TypeName> = …`) under Type-class names and value slots (`VAL …`) under value-class
+/// names. An abstract type member is exactly a Type-class-named type-table entry, so the
+/// value slots filter out by name class.
 pub(super) fn abstract_type_names_of<'a>(scope: &crate::machine::Scope<'a>) -> Vec<String> {
-    let bindings = scope.bindings();
-    let mut names: Vec<String> = bindings.iter_types().into_iter().map(|(n, _)| n).collect();
-    let types_set: std::collections::HashSet<String> = names.iter().cloned().collect();
-    for (name, _) in bindings.iter_data() {
-        if is_abstract_type_name(&name) && !types_set.contains(&name) {
-            names.push(name);
-        }
-    }
-    names
+    scope
+        .bindings()
+        .iter_types()
+        .into_iter()
+        .map(|(n, _)| n)
+        .filter(|n| is_abstract_type_name(n))
+        .collect()
 }
 
 /// True iff `name` classifies as a Type token (first char uppercase + at least one

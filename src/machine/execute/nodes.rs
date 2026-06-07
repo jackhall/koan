@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::{Carried, KObject};
+use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::{CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, Scope};
 
 use super::dispatch::DispatchState;
@@ -21,6 +21,11 @@ impl<'a> NodeOutput<'a> {
     /// Wrap a runtime object as the `Object` arm.
     pub(super) fn value(o: &'a KObject<'a>) -> Self {
         NodeOutput::Value(Carried::Object(o))
+    }
+
+    /// Wrap a type as the `Type` arm. Pair with `arena.alloc_ktype`.
+    pub(super) fn ktype(t: &'a KType<'a>) -> Self {
+        NodeOutput::Value(Carried::Type(t))
     }
 }
 

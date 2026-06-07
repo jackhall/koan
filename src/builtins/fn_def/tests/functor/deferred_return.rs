@@ -1,6 +1,8 @@
 //! Return-type expressions that reference earlier parameters (`p.T`, bare param name, `sig WITH {S = p.T}`), resolved per-call.
 
-use crate::builtins::test_support::{lookup_fn, parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{
+    lookup_fn, parse_one, run, run_one, run_one_type, run_root_silent,
+};
 use crate::machine::model::{KObject, KType};
 use crate::machine::RuntimeArena;
 
@@ -25,13 +27,13 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
         "USE_ID's return type should be Deferred, got {:?}",
         f.signature.return_type,
     );
-    let result = run_one(scope, parse_one("USE_ID IntOrdView"));
+    let result = run_one_type(scope, parse_one("USE_ID IntOrdView"));
     match result {
-        KObject::KTypeValue(KType::Module {
+        KType::Module {
             module: _,
             frame: _,
-        }) => {}
-        other => panic!("expected KModule from USE_ID, got {:?}", other.ktype()),
+        } => {}
+        other => panic!("expected KModule from USE_ID, got {other:?}"),
     }
 }
 

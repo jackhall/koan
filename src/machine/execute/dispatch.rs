@@ -23,7 +23,7 @@
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::Parseable;
+use crate::machine::model::{Carried, Parseable};
 use crate::machine::{Frame, KError, KErrorKind, NodeId, Resolution, Scope};
 
 use super::nodes::{NodeOutput, NodeStep};
@@ -83,7 +83,7 @@ pub(super) fn resolve_name_part<'a>(
             return disposition_for_producer(scheduler, name, producer, consumer);
         }
         Resolution::Value(obj) if is_type.is_none() => {
-            return NameOutcome::Resolved(obj);
+            return NameOutcome::Resolved(Carried::Object(obj));
         }
         Resolution::Value(_) | Resolution::UnboundName => {}
     }
@@ -93,7 +93,7 @@ pub(super) fn resolve_name_part<'a>(
         // already resolved its RHS, so a leaf parks on at most one binder), reusing the
         // same ready/cycle disposition the value-side placeholder arm applies.
         Some(t) => match resolve_type_leaf_carrier(scope, t, scheduler.active_chain_clone()) {
-            TypeLeafCarrier::Resolved(obj) => NameOutcome::Resolved(obj),
+            TypeLeafCarrier::Resolved(kt) => NameOutcome::Resolved(Carried::Type(kt)),
             TypeLeafCarrier::Unbound(n) => NameOutcome::Unbound(n),
             TypeLeafCarrier::Park(producers) => match producers.first() {
                 Some(producer) => disposition_for_producer(scheduler, name, *producer, consumer),

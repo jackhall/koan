@@ -22,7 +22,7 @@ pub enum KKind {
     /// The module-satisfies-a-signature *constraint* role lives on the separate
     /// [`KType::Signature`](super::ktype::KType::Signature) slot, so the dispatch *kind* of a
     /// module needs no sig payload here. A future unification could fold that constraint in as
-    /// `Module(Some(sig))` (the roadmap's `Module(sig)` shape).
+    /// `Module(Some(sig))`.
     Module,
     /// A first-class signature value's kind, and the `:Signature` wildcard slot. The
     /// sig-as-constraint role is the separate [`KType::Signature`](super::ktype::KType::Signature).
@@ -33,6 +33,6 @@ pub enum KKind {
     /// specific than `Proper` for tie-breaking.
     Any,
     // Constructor(arity) — the `* -> *` arity tower for higher-kinded type constructors —
-    // is the deferred extension point (see the roadmap item). This enum ships the shallow
-    // kinds only.
+    // is the deferred extension point for higher-kinded type-constructor work. This enum
+    // ships the shallow kinds only.
 }

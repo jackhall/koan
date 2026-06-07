@@ -15,7 +15,7 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
 };
-use crate::machine::model::{KObject, KType, Record};
+use crate::machine::model::{KType, Record};
 use crate::machine::{
     BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, SchedulerHandle, Scope,
 };
@@ -99,11 +99,7 @@ pub(crate) fn elaborate_record_value<'a>(
 ) -> BodyResult<'a> {
     fn fold<'a>(scope: &'a Scope<'a>, pairs: Vec<(String, KType<'a>)>) -> BodyResult<'a> {
         let record = Record::from_pairs(pairs);
-        BodyResult::value(
-            scope
-                .arena
-                .alloc_object(KObject::KTypeValue(KType::Record(Box::new(record)))),
-        )
+        BodyResult::ktype(scope.arena.alloc_ktype(KType::Record(Box::new(record))))
     }
     let mut elaborator = Elaborator::new(scope).with_chain(chain.clone());
     match parse_typed_field_list_via_elaborator(

@@ -21,4 +21,4 @@ pub(crate) use dispatch::{
 pub use dispatch::{NameOutcome, ResolveOutcome, ResolveTypeExprOutcome, Resolved};
 
 #[cfg(test)]
-pub use lift::lift_kobject_for_test;
+pub use lift::lift_ktype_for_test;

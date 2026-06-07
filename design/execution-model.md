@@ -667,9 +667,9 @@ The rails the dispatch driver feeds:
     nested-parens part (the *only* call shape — koan has no `f 1 2`
     positional call syntax for function values, so the named-arg shape
     is the whole user-facing surface). A `KFunction(f, _)` head resolves to a
-    `ResolvedCallable::Function` and a `KTypeValue(KType::SetRef { .. })`
-    head — the carrier a value-classified alias of a constructible type
-    synthesizes (`LET outcome = Outcome` then `(outcome (Err "x"))`) — to a
+    `ResolvedCallable::Function` and a `KType::SetRef { .. }` head in the value channel's
+    `Type` arm — the identity a value-classified alias of a constructible type
+    surfaces (`LET outcome = Outcome` then `(outcome (Err "x"))`) — to a
     `ResolvedCallable::Constructor`, both flowing through the shared
     apply-a-callable tail (below). Any other carrier (number, string, instance
     struct, module, …) surfaces a `TypeMismatch` directly. A `Placeholder` head
@@ -872,7 +872,7 @@ parameter type (`xs :(LIST OF Number)`) rides the same Combine:
 `parse_fn_param_list` records the `(slot_idx, sub_expr)` pair, FN-def
 schedules each sub-expression as its own `Dispatch`, and the Combine's
 finish closure splices each result into
-`signature_expr.parts[slot_idx]` as `Future(KTypeValue(_))` before
+`signature_expr.parts[slot_idx]` as `Future(Carried::Type(_))` before
 re-running the parameter-list walk against the spliced signature. STRUCT
 and UNION share the same elaborator-and-Combine shape for their
 field-type lists. The fused walk's per-park cycle check
@@ -1035,16 +1035,18 @@ expression the user-facing diagnostic should sample.
 ## `KObject` and the model/core boundary
 
 [`KObject`](../src/machine/model/values/kobject.rs) is the universal
-runtime value type. Pure-data variants (`Number`, `KString`, `Bool`,
-`List`, `Dict`, `KExpression`, `Tagged`,
-`Struct`, `TypeNameRef`, `Null`) carry no references into
+runtime value type — the `Object` arm of the scheduler's value currency
+[`Carried`](../src/machine/model/values/carried.rs); a type rides the
+`Type` arm as a raw `&KType`, with no `KObject` box. Pure-data variants
+(`Number`, `KString`, `Bool`, `List`, `Dict`, `KExpression`, `Tagged`,
+`Record`, `Null`) carry no references into
 [`machine::core`](../src/machine/core.rs). The runtime-reference
-variants do — `KFunction`, `KFuture`, `Wrapped`, and `KTypeValue`
-(when it carries `KType::Module { &Module, Option<Rc<CallArena>> }`,
-`KType::Signature(&Signature)`, or `KType::AbstractType { &Module,
-.. }`) embed `&'a KFunction<'a>`, `KFuture<'a>`, `&'a Module<'a>`,
-`&'a Signature<'a>`, `&'a KType`, and an `Option<Rc<CallArena>>`
-lifecycle anchor. These references are why `model::values::kobject`
+variants do — `KFunction`, `KFuture`, and `Wrapped`
+embed `&'a KFunction<'a>`, `KFuture<'a>`, `&'a KType`, and an
+`Option<Rc<CallArena>>` lifecycle anchor. (A module / signature value
+travels the `Type` arm as `KType::Module { &Module, .. }` /
+`KType::Signature { &Signature, .. }`, so those references live on `KType`,
+not `KObject`.) These references are why `model::values::kobject`
 imports from `core::{arena, kfunction, scope, scope_id}`.
 
 The references are structural, not incidental. Three hot consumers
@@ -1053,10 +1055,11 @@ read the concrete runtime shape directly:
 - [`lift.rs`](../src/machine/execute/lift.rs) compares
   `f.captured_scope().arena` and `m.child_scope().arena` against the
   dying frame to decide whether a per-call function or module needs
-  its `Rc<CallArena>` anchor cloned onto the lifted value.
+  its `Rc<CallArena>` anchor cloned onto the lifted value — `lift_kobject`
+  for the `Object` arm, `lift_ktype` for a `Type`-arm module/signature.
 - [`KObject::ktype()`](../src/machine/model/values/kobject.rs)
-  projects the carried `KType` directly out of a `KTypeValue`
-  carrier — a module value reports `KType::Module { module, .. }`,
+  reports each value's runtime tag, while a `Type`-arm carrier *is* its own
+  `KType` identity — a module value reports `KType::Module { module, .. }`,
   a signature value reports `KType::Signature { sig, .. }` — so the
   dispatcher reads the same identity the carrier holds rather than
   a synthesized shadow.

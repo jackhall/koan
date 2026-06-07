@@ -18,7 +18,7 @@ use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
     NominalKind, ProjectedSchema, RecursiveSet,
 };
-use crate::machine::model::{KObject, KType, Record};
+use crate::machine::model::{KType, Record};
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
 
 use super::{arg, err, kw, register_builtin, sig};
@@ -59,11 +59,7 @@ fn body_list_of<'a>(
         Ok(t) => t.clone(),
         Err(e) => return err(e),
     };
-    BodyResult::value(
-        scope
-            .arena
-            .alloc_object(KObject::KTypeValue(KType::List(Box::new(elem)))),
-    )
+    BodyResult::ktype(scope.arena.alloc_ktype(KType::List(Box::new(elem))))
 }
 
 fn body_map<'a>(
@@ -79,10 +75,10 @@ fn body_map<'a>(
         Ok(t) => t.clone(),
         Err(e) => return err(e),
     };
-    BodyResult::value(
+    BodyResult::ktype(
         scope
             .arena
-            .alloc_object(KObject::KTypeValue(KType::Dict(Box::new(k), Box::new(v)))),
+            .alloc_ktype(KType::Dict(Box::new(k), Box::new(v))),
     )
 }
 
@@ -126,14 +122,10 @@ fn body_apply_as<'a>(
             ctor.name(),
         ))));
     }
-    BodyResult::value(
-        scope
-            .arena
-            .alloc_object(KObject::KTypeValue(KType::ConstructorApply {
-                ctor: Box::new(ctor),
-                args: vec![applied],
-            })),
-    )
+    BodyResult::ktype(scope.arena.alloc_ktype(KType::ConstructorApply {
+        ctor: Box::new(ctor),
+        args: vec![applied],
+    }))
 }
 
 /// `sig` is `KExpression` (lazy) so the parser-emitted nested-parens
@@ -192,7 +184,7 @@ fn build_carrier<'a>(
         None,
     ) {
         FieldListOutcome::Done(fields) => {
-            BodyResult::value(finalize_carrier(scope, fields, ret, kind))
+            BodyResult::ktype(finalize_carrier(scope, fields, ret, kind))
         }
         FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
         // An anonymous function/functor type has no self-reference binder, so the
@@ -213,7 +205,7 @@ fn build_carrier<'a>(
             None,
             None,
             Box::new(move |scope, fields| {
-                BodyResult::value(finalize_carrier(scope, fields, ret, kind))
+                BodyResult::ktype(finalize_carrier(scope, fields, ret, kind))
             }),
         ),
     }
@@ -227,7 +219,7 @@ fn finalize_carrier<'a>(
     fields: Vec<(String, KType<'a>)>,
     ret: KType<'a>,
     kind: CarrierKind,
-) -> &'a KObject<'a> {
+) -> &'a KType<'a> {
     let record = Record::from_pairs(fields);
     let kt = match kind {
         // A `:(FUNCTOR …)` type-position annotation is a shape, not a bound
@@ -242,7 +234,7 @@ fn finalize_carrier<'a>(
             ret: Box::new(ret),
         },
     };
-    scope.arena.alloc_object(KObject::KTypeValue(kt))
+    scope.arena.alloc_ktype(kt)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
@@ -314,21 +306,16 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, run_one, run_root_silent};
-    use crate::machine::model::{KKind, KObject, KType, Record};
+    use crate::builtins::test_support::{parse_one, run_one_type, run_root_silent};
+    use crate::machine::model::{KKind, KType, Record};
     use crate::machine::{RuntimeArena, Scope};
 
     #[test]
     fn list_of_number_lowers_to_list_number() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let result = run_one(scope, parse_one(":(LIST OF Number)"));
-        match result {
-            KObject::KTypeValue(kt) => {
-                assert_eq!(*kt, KType::List(Box::new(KType::Number)));
-            }
-            other => panic!("expected KTypeValue, got {:?}", other.ktype()),
-        }
+        let result = run_one_type(scope, parse_one(":(LIST OF Number)"));
+        assert_eq!(*result, KType::List(Box::new(KType::Number)));
     }
 
     // A root-scope-bound `Wrap` TypeConstructor applied with `:(Number AS Wrap)`
@@ -355,9 +342,9 @@ mod tests {
             },
             BindingIndex::BUILTIN,
         );
-        let result = run_one(scope, parse_one(":(Number AS Wrap)"));
+        let result = run_one_type(scope, parse_one(":(Number AS Wrap)"));
         match result {
-            KObject::KTypeValue(KType::ConstructorApply { ctor, args }) => {
+            KType::ConstructorApply { ctor, args } => {
                 match ctor.as_ref() {
                     KType::SetRef { set, index } => {
                         assert_eq!(set.member(*index).kind, NominalKind::TypeConstructor);
@@ -366,10 +353,7 @@ mod tests {
                 }
                 assert_eq!(*args, vec![KType::Number]);
             }
-            other => panic!(
-                "expected ConstructorApply KTypeValue, got {:?}",
-                other.ktype()
-            ),
+            other => panic!("expected ConstructorApply, got {other:?}"),
         }
     }
 
@@ -377,57 +361,42 @@ mod tests {
     fn map_str_number_lowers_to_dict() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let result = run_one(scope, parse_one(":(MAP Str -> Number)"));
-        match result {
-            KObject::KTypeValue(kt) => {
-                assert_eq!(
-                    *kt,
-                    KType::Dict(Box::new(KType::Str), Box::new(KType::Number))
-                );
-            }
-            other => panic!("expected KTypeValue, got {:?}", other.ktype()),
-        }
+        let result = run_one_type(scope, parse_one(":(MAP Str -> Number)"));
+        assert_eq!(
+            *result,
+            KType::Dict(Box::new(KType::Str), Box::new(KType::Number))
+        );
     }
 
     #[test]
     fn fn_lowers_to_kfunction() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let result = run_one(scope, parse_one(":(FN (x :Number, y :Str) -> Bool)"));
-        match result {
-            KObject::KTypeValue(kt) => {
-                assert_eq!(
-                    *kt,
-                    KType::KFunction {
-                        params: Record::from_pairs(vec![
-                            ("x".into(), KType::Number),
-                            ("y".into(), KType::Str),
-                        ]),
-                        ret: Box::new(KType::Bool),
-                    }
-                );
+        let result = run_one_type(scope, parse_one(":(FN (x :Number, y :Str) -> Bool)"));
+        assert_eq!(
+            *result,
+            KType::KFunction {
+                params: Record::from_pairs(vec![
+                    ("x".into(), KType::Number),
+                    ("y".into(), KType::Str),
+                ]),
+                ret: Box::new(KType::Bool),
             }
-            other => panic!("expected KTypeValue, got {:?}", other.ktype()),
-        }
+        );
     }
 
     #[test]
     fn fn_nullary_lowers_to_kfunction() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let result = run_one(scope, parse_one(":(FN () -> Number)"));
-        match result {
-            KObject::KTypeValue(kt) => {
-                assert_eq!(
-                    *kt,
-                    KType::KFunction {
-                        params: Record::new(),
-                        ret: Box::new(KType::Number),
-                    }
-                );
+        let result = run_one_type(scope, parse_one(":(FN () -> Number)"));
+        assert_eq!(
+            *result,
+            KType::KFunction {
+                params: Record::new(),
+                ret: Box::new(KType::Number),
             }
-            other => panic!("expected KTypeValue, got {:?}", other.ktype()),
-        }
+        );
     }
 
     // Param name `Ty` uses two letters because koan rejects single-uppercase-letter tokens.
@@ -435,23 +404,15 @@ mod tests {
     fn functor_lowers_to_kfunctor() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let result = run_one(scope, parse_one(":(FUNCTOR (Ty :Signature) -> Module)"));
-        match result {
-            KObject::KTypeValue(kt) => {
-                assert_eq!(
-                    *kt,
-                    KType::KFunctor {
-                        params: Record::from_pairs(vec![(
-                            "Ty".into(),
-                            KType::OfKind(KKind::Signature)
-                        )]),
-                        ret: Box::new(KType::OfKind(KKind::Module)),
-                        body: None,
-                    }
-                );
+        let result = run_one_type(scope, parse_one(":(FUNCTOR (Ty :Signature) -> Module)"));
+        assert_eq!(
+            *result,
+            KType::KFunctor {
+                params: Record::from_pairs(vec![("Ty".into(), KType::OfKind(KKind::Signature))]),
+                ret: Box::new(KType::OfKind(KKind::Module)),
+                body: None,
             }
-            other => panic!("expected KTypeValue, got {:?}", other.ktype()),
-        }
+        );
     }
 
     /// A nested parameterized param type (`:(LIST OF Number)`) sub-Dispatches through the
@@ -460,40 +421,29 @@ mod tests {
     fn fn_with_nested_list_param_lowers_to_kfunction() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let result = run_one(scope, parse_one(":(FN (xs :(LIST OF Number)) -> Bool)"));
-        match result {
-            KObject::KTypeValue(kt) => {
-                assert_eq!(
-                    *kt,
-                    KType::KFunction {
-                        params: Record::from_pairs(vec![(
-                            "xs".into(),
-                            KType::List(Box::new(KType::Number)),
-                        )]),
-                        ret: Box::new(KType::Bool),
-                    }
-                );
+        let result = run_one_type(scope, parse_one(":(FN (xs :(LIST OF Number)) -> Bool)"));
+        assert_eq!(
+            *result,
+            KType::KFunction {
+                params: Record::from_pairs(vec![(
+                    "xs".into(),
+                    KType::List(Box::new(KType::Number)),
+                )]),
+                ret: Box::new(KType::Bool),
             }
-            other => panic!("expected KTypeValue, got {:?}", other.ktype()),
-        }
+        );
     }
 
     /// `t.name()` round-trips: rendering `expected` and re-running its surface form yields
-    /// a `KTypeValue` equal to `expected`. The expected value is built at each call site so
+    /// a type carrier equal to `expected`. The expected value is built at each call site so
     /// it shares the scope's lifetime, keeping the comparison off `'static`.
     fn assert_round_trips<'a>(scope: &'a Scope<'a>, expected: KType<'a>) {
         let rendered = expected.name();
-        let result = run_one(scope, parse_one(&rendered));
-        match result {
-            KObject::KTypeValue(kt) => assert_eq!(
-                *kt, expected,
-                "round-trip of `{rendered}` did not reproduce the original KType",
-            ),
-            other => panic!(
-                "expected KTypeValue from `{rendered}`, got {:?}",
-                other.ktype()
-            ),
-        }
+        let result = run_one_type(scope, parse_one(&rendered));
+        assert_eq!(
+            *result, expected,
+            "round-trip of `{rendered}` did not reproduce the original KType",
+        );
     }
 
     #[test]

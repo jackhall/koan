@@ -12,7 +12,7 @@
 
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::Signature;
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::KType;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind,
     SchedulerHandle, Scope,
@@ -69,9 +69,7 @@ pub fn body<'a>(
             pinned_slots: Vec::new(),
         };
         match parent_scope.register_type_upsert(name_for_finish.clone(), identity, bind_index) {
-            Ok(kt_ref) => {
-                BodyResult::value(arena.alloc_object(KObject::KTypeValue(kt_ref.clone())))
-            }
+            Ok(kt_ref) => BodyResult::ktype(arena.alloc_ktype(kt_ref.clone())),
             Err(e) => BodyResult::Err(e.with_frame(Frame::bare(
                 "<signature>",
                 format!("SIG {} body", name_for_finish),
@@ -109,7 +107,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{run, run_root_silent};
-    use crate::machine::model::KObject;
     use crate::machine::RuntimeArena;
     use crate::parse::parse;
 
@@ -160,12 +157,14 @@ mod tests {
             Some(KType::Signature { sig, .. }) => *sig,
             _ => panic!("Foo should be a signature"),
         };
-        let inner = sig.decl_scope().bindings().data();
-        let (x, _) = inner.get("x").expect("x must live in SIG's data");
+        let x = sig
+            .decl_scope()
+            .bindings()
+            .lookup_type("x", None)
+            .expect("VAL slot `x` must live in SIG's type table");
         assert!(
-            matches!(x, KObject::KTypeValue(crate::machine::model::KType::Number)),
-            "x's declared type must elaborate to Number through the alias, got {:?}",
-            x.ktype(),
+            matches!(x, KType::Number),
+            "x's declared type must elaborate to Number through the alias, got {x:?}",
         );
     }
 

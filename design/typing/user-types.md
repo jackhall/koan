@@ -47,7 +47,7 @@ for first-class signature values (and for the satisfies-this-signature slot
 constraint — one variant, disambiguated by position), and
 [`KType::AbstractType { source, name }`](../../src/machine/model/types/ktype.rs)
 for abstract-type members (SIG-declared or minted by opaque ascription) — with
-`KType::AnyModule` and `KType::AnySignature` as the matching wildcards
+`KType::OfKind(KKind::Module)` and `KType::OfKind(KKind::Signature)` as the matching wildcards
 (see [modules.md](modules.md) for the carrier model).
 
 ## Identity is the set pointer plus index
@@ -79,8 +79,8 @@ place a concrete `SetRef` strictly below `AnyUserType { kind: K }` strictly belo
 member's kind via `set.member(index).kind`, so each kind ranks alongside the
 others with no per-kind branching at the dispatcher. The module/signature
 variants follow the parallel stratification: `KType::Module { .. }` ≺
-`KType::AnyModule` ≺ `Any`, and `KType::Signature { .. }` ≺ `KType::AnySignature`
-≺ `Any`. This is the identity-and-wildcard slice of Layer 3 of the
+`KType::OfKind(KKind::Module)` ≺ `Any`, and `KType::Signature { .. }` ≺
+`KType::OfKind(KKind::Signature)` ≺ `Any`. This is the identity-and-wildcard slice of Layer 3 of the
 [lookup → admit protocol](lookup-protocol.md); the predicate is the same one
 every dispatch admit pass runs.
 
@@ -91,15 +91,15 @@ and [`KObject::Tagged`](../../src/machine/model/values/kobject.rs) — carry
 `(set, index)` directly, populated at finalize time. `ktype()` on either
 synthesizes `KType::SetRef { set, index }` by `Rc::clone`ing the carried set — the
 dispatch identity is the set pointer and index, not the schema. Module and
-signature values ride
-[`KObject::KTypeValue(KType::Module { .. })`](../../src/machine/model/values/kobject.rs) /
-`KObject::KTypeValue(KType::Signature { .. })`; `ktype()` projects the carried
-`KType` directly, so the identity is the carrier rather than a synthesized shadow.
+signature values ride the value channel's `Type` arm as
+[`KType::Module { .. }`](../../src/machine/model/types/ktype.rs) /
+`KType::Signature { .. }` ([`Carried::Type`](../../src/machine/model/values/carried.rs)); the
+identity is the carried `&KType` itself rather than a synthesized shadow.
 
 `bindings.data` holds only runtime instances. A value-position reference to a
-nominal type token (passing `Outcome` to a constructor or ATTR call) synthesizes
-[`KObject::KTypeValue(identity)`](../../src/machine/execute/dispatch/resolve_type_expr.rs)
-on demand from the `bindings.types` entry via `resolve_type_leaf_carrier` — no
+nominal type token (passing `Outcome` to a constructor or ATTR call) surfaces the
+[`bindings.types` identity in the `Type` arm](../../src/machine/execute/dispatch/resolve_type_expr.rs)
+on demand via `resolve_type_leaf_carrier` — no
 value-side schema carrier exists for struct / union / module / Result.
 
 ## Tagged-union variants
@@ -167,7 +167,7 @@ SIG installs the same way, through
 `KType::Signature { sig, pinned_slots }` identity in `bindings.types` serves
 *both* roles. As a slot annotation (`Er :OrderedSig`) it is the constraint form —
 "any module satisfying OrderedSig"; as a value
-(`KTypeValue(KType::Signature { .. })`) it is the identity-bearing signature
+(`KType::Signature { .. }` in the `Type` arm) it is the identity-bearing signature
 carrier, carrying the live `decl_scope` via `sig`. The roles are disambiguated by
 position, not by separate variants, so no value-side carrier is written;
 `bindings.data` holds zero type carriers. Every nominal binder is a single

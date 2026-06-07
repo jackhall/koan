@@ -20,14 +20,25 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
-use crate::machine::model::{KObject, Parseable};
+use crate::machine::model::values::Held;
+use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{BindingIndex, KFunction, RuntimeArena, Scope};
 
 fn dispatch_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
+    sched_read_carried(scope, expr).object()
+}
+
+/// Like [`dispatch_one`] but yields the raw carrier, so a type-producing expression can be
+/// inspected on its [`Carried::Type`] arm instead of panicking through `.object()`.
+fn dispatch_one_carried<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> Carried<'a> {
+    sched_read_carried(scope, expr)
+}
+
+fn sched_read_carried<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> Carried<'a> {
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().expect("scheduler should succeed");
-    sched.read(id).object()
+    sched.read(id)
 }
 
 /// Accepts one Number arg and returns it unchanged. The signature is `<n :Number>`
@@ -75,15 +86,15 @@ fn bare_type_leaf_short_circuits() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let expr = parse_one("(Number)");
     reset_resolve_dispatch_entry_count();
-    let result = dispatch_one(scope, expr);
+    let result = dispatch_one_carried(scope, expr);
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
         "BareTypeLeaf must not enter resolve_dispatch",
     );
     assert!(
-        matches!(result, KObject::KTypeValue(KType::Number)),
-        "(Number) must terminate to KTypeValue(Number); got {}",
+        matches!(result, Carried::Type(KType::Number)),
+        "(Number) must terminate to a Number type; got {}",
         result.summarize(),
     );
 }
@@ -379,8 +390,12 @@ fn fast_lane_on_newtype_record_type_constructs() {
             assert_eq!(type_id.name(), "Pt");
             match inner.get() {
                 KObject::Record(values, _) => {
-                    assert!(matches!(values.get("x"), Some(KObject::Number(n)) if *n == 3.0));
-                    assert!(matches!(values.get("y"), Some(KObject::Number(n)) if *n == 4.0));
+                    assert!(
+                        matches!(values.get("x"), Some(Held::Object(KObject::Number(n))) if *n == 3.0)
+                    );
+                    assert!(
+                        matches!(values.get("y"), Some(Held::Object(KObject::Number(n))) if *n == 4.0)
+                    );
                 }
                 other => panic!("expected record inner, got {:?}", other.ktype()),
             }
@@ -506,7 +521,7 @@ fn fast_lane_list_of_closures_escapes_outer_call_with_rc_attached() {
     };
     assert_eq!(items.len(), 1, "list should hold the single inner closure");
     match &items[0] {
-        KObject::KFunction(_, frame) => assert!(
+        Held::Object(KObject::KFunction(_, frame)) => assert!(
             frame.is_some(),
             "list-borne escaping closure must have an :(Rc CallArena) attached by \
              lift_kobject's recursion through the List variant",
@@ -957,7 +972,7 @@ fn head_deferred_calls_returned_function() {
 /// functor-application-as-function-call decision.
 #[test]
 fn head_deferred_applies_returned_functor_to_module() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
+    use crate::builtins::test_support::{run, run_one_type, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -965,12 +980,11 @@ fn head_deferred_applies_returned_functor_to_module() {
         "FN (GET_FUNCTOR) -> Any = \
          (FUNCTOR (APPLYIT x :Number) -> Module = (MODULE Inner = (LET inner = x)))",
     );
-    let out = run_one(scope, parse_one("(GET_FUNCTOR) {x = 5}"));
+    let out = run_one_type(scope, parse_one("(GET_FUNCTOR) {x = 5}"));
     assert!(
-        matches!(out, KObject::KTypeValue(KType::Module { .. })),
-        "applying a functor value must yield a module; got {} ({})",
-        out.summarize(),
-        out.ktype().name(),
+        matches!(out, KType::Module { .. }),
+        "applying a functor value must yield a module; got {}",
+        out.name(),
     );
 }
 
@@ -1046,7 +1060,7 @@ fn type_head_deferred_constructs_from_sigil_type() {
 /// (value-side) is empty.
 #[test]
 fn type_call_applies_let_bound_functor() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
+    use crate::builtins::test_support::{run, run_one_type, run_root_silent};
     use crate::machine::model::KType;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
@@ -1065,12 +1079,11 @@ fn type_call_applies_let_bound_functor() {
         ),
         "ApplyIt should resolve type-side to a body-bearing KFunctor",
     );
-    let out = run_one(scope, parse_one("ApplyIt {x = 5}"));
+    let out = run_one_type(scope, parse_one("ApplyIt {x = 5}"));
     assert!(
-        matches!(out, KObject::KTypeValue(KType::Module { .. })),
-        "applying a type-bound functor must yield a module; got {} ({})",
-        out.summarize(),
-        out.ktype().name(),
+        matches!(out, KType::Module { .. }),
+        "applying a type-bound functor must yield a module; got {}",
+        out.name(),
     );
 }
 

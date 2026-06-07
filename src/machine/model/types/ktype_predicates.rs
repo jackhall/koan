@@ -10,7 +10,7 @@ use super::record::Record;
 use super::recursive_set::NominalKind;
 use super::signature::{ExpressionSignature, SignatureElement};
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
-use crate::machine::model::values::{Carried, KObject};
+use crate::machine::model::values::{Carried, Held, KObject};
 
 impl<'a> KType<'a> {
     /// True iff a parameter declared with this `KType` carries a value whose nominal
@@ -168,18 +168,30 @@ impl<'a> KType<'a> {
     /// True iff a runtime `KObject` value satisfies this declared type. A `KFuture`
     /// thunk is accepted because its result isn't known yet — the full check defers to
     /// runtime.
+    /// Aggregate-cell satisfaction: an `Object` cell defers to [`matches_value`]; a `Type`
+    /// cell (a first-class type stored in a list/dict/record) satisfies a type-accepting
+    /// slot — `Any`, a matching `OfKind` kind, or an exact type identity.
+    pub fn matches_held(&self, cell: &Held<'a>) -> bool {
+        match cell {
+            Held::Object(o) => self.matches_value(o),
+            Held::Type(t) => {
+                matches!(self, KType::Any) || *self == KType::OfKind(t.kind_of()) || self == t
+            }
+        }
+    }
+
     pub fn matches_value(&self, obj: &KObject<'a>) -> bool {
         match self {
             KType::Any => true,
             KType::List(elem) => match obj {
-                KObject::List(items, _) => items.iter().all(|x| elem.matches_value(x)),
+                KObject::List(items, _) => items.iter().all(|x| elem.matches_held(x)),
                 _ => false,
             },
             KType::Dict(k_ty, v_ty) => match obj {
                 KObject::Dict(map, _, _) => map.iter().all(|(k_key, v_obj)| {
                     let k_t = k_key.ktype();
                     (matches!(k_ty.as_ref(), KType::Any) || **k_ty == k_t)
-                        && v_ty.matches_value(v_obj)
+                        && v_ty.matches_held(v_obj)
                 }),
                 _ => false,
             },
@@ -189,7 +201,7 @@ impl<'a> KType<'a> {
                 KObject::Record(values, _) => fields.iter().all(|(name, ft)| {
                     values
                         .get(name)
-                        .map(|v| ft.matches_value(v))
+                        .map(|v| ft.matches_held(v))
                         .unwrap_or(false)
                 }),
                 _ => false,
@@ -214,32 +226,16 @@ impl<'a> KType<'a> {
                 KObject::KFuture(_, _) => true,
                 _ => false,
             },
-            // Constraint role: a `Signature { .. }` slot matches a *module* whose
-            // `compatible_sigs` contains `sig.sig_id()` (+ pinned-slot check). A signature
-            // *value* is matched by the `OfKind(Signature)` wildcard below, never here.
-            KType::Signature { sig, pinned_slots } => match obj {
-                KObject::KTypeValue(KType::Module { module: m, .. }) => {
-                    if !m.compatible_sigs.borrow().contains(&sig.sig_id()) {
-                        return false;
-                    }
-                    if pinned_slots.is_empty() {
-                        return true;
-                    }
-                    let tm = m.type_members.borrow();
-                    pinned_slots.iter().all(|(name, expected)| {
-                        tm.get(name)
-                            .map(|actual| actual == expected)
-                            .unwrap_or(false)
-                    })
-                }
-                _ => false,
-            },
-            // A type-accepting slot, by shallow kind. `Module` / `Signature` admit their
-            // boxed type values; `Proper` / `Any` admit a proper type value via the carried
-            // `ktype()` identity (`OfKind(Proper) == ktype()`).
+            // Constraint role: a `Signature { .. }` slot is satisfied by a *module*, which
+            // rides the type channel — no runtime `KObject` value satisfies it (the
+            // type-channel check lives in `accepts_part` / `matches_type`).
+            KType::Signature { .. } => false,
+            // A type-accepting slot, by shallow kind. Modules / signatures ride the type
+            // channel, so no runtime value satisfies their kinds; `Proper` / `Any` admit a
+            // proper type value via the carried `ktype()` identity (`OfKind(Proper) ==
+            // ktype()`).
             KType::OfKind(k) => match k {
-                KKind::Module => matches!(obj, KObject::KTypeValue(KType::Module { .. })),
-                KKind::Signature => matches!(obj, KObject::KTypeValue(KType::Signature { .. })),
+                KKind::Module | KKind::Signature => false,
                 KKind::Proper | KKind::Any => *self == obj.ktype(),
             },
             KType::AnyUserType { kind } => matches!(
@@ -298,6 +294,44 @@ impl<'a> KType<'a> {
             // A variant slot admits exactly the tagged values of that one variant.
             KType::Variant { .. } => *self == obj.ktype(),
             _ => *self == obj.ktype(),
+        }
+    }
+
+    /// True iff a first-class type `t` (flowing in the type channel) satisfies this declared
+    /// slot — the type-channel analog of [`matches_value`]. A `Signature` slot is satisfied by
+    /// a module satisfying it (sig membership + pinned-slot agreement); an `OfKind` slot by
+    /// shallow kind; `Any` by anything; a module/signature slot by structural identity. Other
+    /// proper-type slots compare against the `OfKind(Proper)` dispatch identity a type carrier
+    /// reports, so they admit no bare type value on their own.
+    pub fn matches_type(&self, t: &KType<'a>) -> bool {
+        // The shallow dispatch identity a type carrier reports: a module / signature carries
+        // its identity directly; every other type fills the `OfKind(Proper)` marker.
+        let carrier_ktype = match t {
+            KType::Module { .. } | KType::Signature { .. } => t.clone(),
+            _ => KType::OfKind(KKind::Proper),
+        };
+        match self {
+            KType::Any => true,
+            KType::Signature { sig, pinned_slots } => match t {
+                KType::Module { module: m, .. } => {
+                    if !m.compatible_sigs.borrow().contains(&sig.sig_id()) {
+                        return false;
+                    }
+                    if pinned_slots.is_empty() {
+                        return true;
+                    }
+                    let tm = m.type_members.borrow();
+                    pinned_slots.iter().all(|(name, expected)| {
+                        tm.get(name)
+                            .map(|actual| actual == expected)
+                            .unwrap_or(false)
+                    })
+                }
+                _ => false,
+            },
+            KType::OfKind(KKind::Module) => matches!(t, KType::Module { .. }),
+            KType::OfKind(KKind::Signature) => matches!(t, KType::Signature { .. }),
+            _ => *self == carrier_ktype,
         }
     }
 
@@ -388,26 +422,23 @@ impl<'a> KType<'a> {
             KType::OfKind(k) => match k {
                 KKind::Proper | KKind::Any => match part {
                     ExpressionPart::Type(_) => true,
-                    ExpressionPart::Future(Carried::Object(KObject::KTypeValue(
-                        KType::Module { .. },
-                    )))
-                    | ExpressionPart::Future(Carried::Object(KObject::KTypeValue(
-                        KType::Signature { .. },
-                    ))) => false,
-                    ExpressionPart::Future(Carried::Object(KObject::KTypeValue(_))) => true,
+                    // Modules / signatures route through their own kinds, not `Proper` /
+                    // `Any` — the module/sig wall keeps a chained `[ATTR <m> <field>]` call
+                    // from tying between the `body_module` and `body_type_lhs` overloads.
+                    ExpressionPart::Future(Carried::Type(
+                        KType::Module { .. } | KType::Signature { .. },
+                    )) => false,
+                    // Any other proper type token (struct / union / Result `SetRef`, etc.).
+                    ExpressionPart::Future(Carried::Type(_)) => true,
                     _ => false,
                 },
                 KKind::Module => matches!(
                     part,
-                    ExpressionPart::Future(Carried::Object(KObject::KTypeValue(
-                        KType::Module { .. }
-                    )))
+                    ExpressionPart::Future(Carried::Type(KType::Module { .. }))
                 ),
                 KKind::Signature => matches!(
                     part,
-                    ExpressionPart::Future(Carried::Object(KObject::KTypeValue(
-                        KType::Signature { .. }
-                    )))
+                    ExpressionPart::Future(Carried::Type(KType::Signature { .. }))
                 ),
             },
             // Strict `(set ptr, index)` equality is the per-declaration identity check for a
@@ -451,10 +482,7 @@ impl<'a> KType<'a> {
             // match; they must pass through `:|` / `:!` first. A signature *value* is
             // admitted by the `OfKind(Signature)` wildcard above, never here.
             KType::Signature { sig, pinned_slots } => match part {
-                ExpressionPart::Future(Carried::Object(KObject::KTypeValue(KType::Module {
-                    module: m,
-                    ..
-                }))) => {
+                ExpressionPart::Future(Carried::Type(KType::Module { module: m, .. })) => {
                     if !m.compatible_sigs.borrow().contains(&sig.sig_id()) {
                         return false;
                     }
@@ -473,7 +501,8 @@ impl<'a> KType<'a> {
             // Transient / intra-set leaves never reach a real argument slot: `RecursiveRef`
             // is sealed away before dispatch, and `SetLocal` only appears inside a member's
             // schema (reached by navigation, which carries the ambient set).
-            KType::RecursiveRef(_) => true,
+            // Transient: consumed by `Scope::resolve_type_expr` before reaching a real slot.
+            KType::RecursiveRef(_) | KType::Unresolved(_) => true,
             KType::SetLocal(_) => false,
             // A whole-set handle names a group of types, not a value type — it admits no
             // argument; the `RECURSIVE TYPES` group name is a reserved value-language seam.
@@ -482,10 +511,10 @@ impl<'a> KType<'a> {
             // argument slot, so it admits nothing on its own.
             KType::DeferredReturn(_) => false,
             // Meta-type path: no runtime carrier synthesizes a `ConstructorApply`
-            // `ktype()`, so admit only `Future(KTypeValue(_))` with structurally-equal
+            // `ktype()`, so admit only a `Future(Carried::Type(_))` with structurally-equal
             // inner `KType`.
             KType::ConstructorApply { .. } => match part {
-                ExpressionPart::Future(Carried::Object(KObject::KTypeValue(kt))) => kt == self,
+                ExpressionPart::Future(Carried::Type(kt)) => *kt == self,
                 _ => false,
             },
         }

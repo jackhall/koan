@@ -1,4 +1,4 @@
-use crate::machine::model::types::KKind;
+use crate::machine::model::ArgValue;
 use std::rc::Rc;
 
 use super::body::split_body_statements;
@@ -10,7 +10,7 @@ use crate::machine::model::types::{
     elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, ReturnType,
     SignatureElement,
 };
-use crate::machine::model::values::KObject;
+use crate::machine::model::values::Carried;
 use crate::machine::ResolveTypeExprOutcome;
 
 use super::argument_bundle::ArgumentBundle;
@@ -55,58 +55,52 @@ impl<'a> KFunction<'a> {
                     .unwrap_or_else(|| CallArena::new(outer, None));
                 let (inner_arena, child): (&'a RuntimeArena, &'a Scope<'a>) =
                     frame.anchored_parts();
-                for (name, rc) in bundle.args.iter() {
-                    let mut cloned = rc.deep_clone();
-                    // Splice-time element check + stamp for parameterized carriers
-                    // (`:(LIST OF T)`, `:(MAP K -> V)`, `:(Result T E)`). Dispatch-time
-                    // admission is shape-only and cannot do content-recursive element
-                    // checking, so it lands here, symmetric with the return boundary
-                    // in the Deferred Combine below.
-                    if let Some(arg) = signature_argument_by_name(self, name) {
-                        if is_parameterized_carrier(&arg.ktype) {
-                            if !arg.ktype.matches_value(&cloned) {
-                                return BodyResult::Err(
-                                    KError::new(KErrorKind::TypeMismatch {
-                                        arg: name.clone(),
-                                        expected: arg.ktype.name(),
-                                        got: cloned.ktype().name(),
-                                    })
-                                    .with_frame(
-                                        crate::machine::Frame::bare(
-                                            self.summarize(),
-                                            self.summarize(),
-                                        ),
-                                    ),
-                                );
-                            }
-                            cloned = cloned.stamp_type(&arg.ktype);
-                        }
-                    }
-                    let allocated = inner_arena.alloc_object(cloned);
-                    // Type-denoting parameters write ONLY into `bindings.types`;
-                    // ATTR-on-type projects through that carrier for `Er.pure(x)`-style
-                    // references. Value-typed parameters write `bindings.data`.
-                    let is_type_denoting = signature_argument_by_name(self, name)
-                        .map(|a| a.ktype.is_type_denoting())
-                        .unwrap_or(false);
+                for (name, arg_val) in bundle.args.iter() {
                     // FN parameters bind at idx 0; the body's statements sit at idx >= 1,
                     // so the strict `idx < cutoff` rule makes the parameters visible to the
                     // body (same as MATCH / TRY `it`).
                     let param_index = BindingIndex::value(0);
-                    if !is_type_denoting {
-                        // Signature parser enforces parameter-name uniqueness.
-                        let _ = child.bind_value(name.clone(), allocated, param_index);
-                    }
-                    if let Some(arg) = signature_argument_by_name(self, name) {
-                        if arg.ktype.is_type_denoting() {
-                            match type_identity_for(name, allocated, &arg.ktype, outer) {
-                                Ok(Some(identity)) => {
-                                    child.register_type(name.clone(), identity, param_index);
+                    match arg_val {
+                        // A value parameter writes `bindings.data`.
+                        ArgValue::Object(rc) => {
+                            let mut cloned = rc.deep_clone();
+                            // Splice-time element check + stamp for parameterized carriers
+                            // (`:(LIST OF T)`, `:(MAP K -> V)`, `:(Result T E)`). Dispatch-time
+                            // admission is shape-only and cannot do content-recursive element
+                            // checking, so it lands here, symmetric with the return boundary
+                            // in the Deferred Combine below.
+                            if let Some(arg) = signature_argument_by_name(self, name) {
+                                if is_parameterized_carrier(&arg.ktype) {
+                                    if !arg.ktype.matches_value(&cloned) {
+                                        return BodyResult::Err(
+                                            KError::new(KErrorKind::TypeMismatch {
+                                                arg: name.clone(),
+                                                expected: arg.ktype.name(),
+                                                got: cloned.ktype().name(),
+                                            })
+                                            .with_frame(crate::machine::Frame::bare(
+                                                self.summarize(),
+                                                self.summarize(),
+                                            )),
+                                        );
+                                    }
+                                    cloned = cloned.stamp_type(&arg.ktype);
                                 }
-                                Ok(None) => {}
-                                Err(e) => return BodyResult::Err(e),
                             }
+                            let allocated = inner_arena.alloc_object(cloned);
+                            // Signature parser enforces parameter-name uniqueness.
+                            let _ = child.bind_value(name.clone(), allocated, param_index);
                         }
+                        // A type-denoting parameter writes ONLY into `bindings.types`;
+                        // ATTR-on-type projects through that carrier for `Er.pure(x)`-style
+                        // references.
+                        ArgValue::Type(kt) => match type_identity_for(name, kt, outer) {
+                            Ok(Some(identity)) => {
+                                child.register_type(name.clone(), identity, param_index);
+                            }
+                            Ok(None) => {}
+                            Err(e) => return BodyResult::Err(e),
+                        },
                     }
                 }
                 let body_expr = expr.clone();
@@ -244,13 +238,13 @@ impl<'a> KFunction<'a> {
                                 vec![],
                                 child,
                                 Box::new(move |_scope, _sched, results| {
-                                    let body_value: &KObject<'_> = results[body_terminal_idx];
+                                    let body_carried = results[body_terminal_idx];
                                     let per_call_ret: KType<'_> = match per_call_ret {
                                         PerCallReturnType::Ready(kt) => kt,
                                         PerCallReturnType::Pending(_) => {
                                             match results.get(body_terminal_idx + 1).copied() {
-                                                Some(KObject::KTypeValue(kt)) => kt.clone(),
-                                                Some(other) => {
+                                                Some(Carried::Type(kt)) => kt.clone(),
+                                                Some(Carried::Object(other)) => {
                                                     return BodyResult::Err(KError::new(
                                                         KErrorKind::ShapeError(format!(
                                                             "FN deferred return-type expression \
@@ -263,27 +257,47 @@ impl<'a> KFunction<'a> {
                                             }
                                         }
                                     };
-                                    if !per_call_ret.matches_value(body_value) {
-                                        return BodyResult::Err(
+                                    let mismatch = |got: String| {
+                                        BodyResult::Err(
                                             KError::new(KErrorKind::TypeMismatch {
                                                 arg: "<return>".to_string(),
                                                 expected: format!(
                                                     "{} (per-call return type)",
                                                     per_call_ret.name(),
                                                 ),
-                                                got: body_value.ktype().name(),
+                                                got,
                                             })
                                             .with_frame(crate::machine::Frame::bare(
                                                 function_summary.clone(),
                                                 function_summary.clone(),
                                             )),
-                                        );
+                                        )
+                                    };
+                                    match body_carried {
+                                        // A type-valued body (e.g. a functor returning a module,
+                                        // or `(Er)` returning a type-class param) rides the type
+                                        // channel: validate the type against the declared return
+                                        // slot and pass it through without value stamping.
+                                        Carried::Type(body_type) => {
+                                            if !per_call_ret.matches_type(body_type) {
+                                                return mismatch(body_type.name());
+                                            }
+                                            BodyResult::ktype(
+                                                _scope.arena.alloc_ktype(body_type.clone()),
+                                            )
+                                        }
+                                        Carried::Object(body_value) => {
+                                            if !per_call_ret.matches_value(body_value) {
+                                                return mismatch(body_value.ktype().name());
+                                            }
+                                            // Stamp the carrier to the resolved per-call return
+                                            // type at the return boundary, symmetric with the
+                                            // param-bind stamp above.
+                                            let stamped =
+                                                body_value.deep_clone().stamp_type(&per_call_ret);
+                                            BodyResult::value(_scope.arena.alloc_object(stamped))
+                                        }
                                     }
-                                    // Stamp the carrier to the resolved per-call return type
-                                    // at the return boundary, symmetric with the param-bind
-                                    // stamp above.
-                                    let stamped = body_value.deep_clone().stamp_type(&per_call_ret);
-                                    BodyResult::value(_scope.arena.alloc_object(stamped))
                                 }),
                             ));
                         });
@@ -322,64 +336,35 @@ fn signature_argument_by_name<'a>(
     })
 }
 
-/// Compute the per-call type-language identity for a parameter whose declared `KType`
-/// is type-denoting (caller gates on `KType::is_type_denoting`). Returns the `KType`
-/// to register in the per-call scope's `bindings.types`.
+/// Compute the per-call type-language identity for a type-denoting parameter, given the
+/// type it received in the value channel's `Type` arm. Returns the `KType` to register in
+/// the per-call scope's `bindings.types`.
 ///
-/// | Declared `KType`               | Bound `KObject`                                  | Identity                                              |
-/// | ------------------------------ | ------------------------------------------------ | ----------------------------------------------------- |
-/// | `Signature { .. }` (slot)      | `KTypeValue(KType::Module { module, frame })`    | `KType::Module { module, frame }` (same carrier)      |
-/// | `OfKind(Module)`               | `KTypeValue(KType::Module { module, frame })`    | same                                                  |
-/// | `OfKind(Signature)`            | `KTypeValue(KType::Signature { .. })`            | `KType::Signature { .. }` (same carrier)              |
-/// | `OfKind(Any)`                  | `KTypeValue(kt)`                                 | `kt.clone()`                                          |
-/// | `OfKind(Proper)`               | `KTypeValue(kt)`                                 | `kt.clone()`                                          |
-/// | `OfKind(Proper)`               | `TypeNameRef(t)`                                 | elaborated via `definition_scope.resolve_type_expr`   |
+/// A [`KType::Unresolved`] transient (a bare user name the synchronous bind seam couldn't
+/// lower) is elaborated against `definition_scope` — where every type the signature names is
+/// already finalized, so no lexical-order gating applies. Every other type is its own identity.
 ///
-/// `Ok(None)`: carrier shape didn't match any row; skip the type-side install.
-/// `Err(TypeIdentityPendingAtDispatch)`: a `TypeNameRef` elaborates against
+/// `Ok(None)`: the name is unbound — skip the type-side install; the body's value-side
+/// dispatch surfaces the real error.
+/// `Err(TypeIdentityPendingAtDispatch)`: an `Unresolved` name elaborates against
 /// `definition_scope` but the result still references a pending-finalize type.
 pub(crate) fn type_identity_for<'a>(
     param_name: &str,
-    obj: &KObject<'a>,
-    declared: &KType<'a>,
+    kt: &KType<'a>,
     definition_scope: &'a Scope<'a>,
 ) -> Result<Option<KType<'a>>, KError> {
-    match declared {
-        KType::Signature { .. } => Ok(match obj {
-            KObject::KTypeValue(kt @ KType::Module { .. }) => Some(kt.clone()),
-            _ => None,
-        }),
-        KType::OfKind(KKind::Module) => Ok(match obj {
-            KObject::KTypeValue(kt @ KType::Module { .. }) => Some(kt.clone()),
-            _ => None,
-        }),
-        KType::OfKind(KKind::Signature) => Ok(match obj {
-            KObject::KTypeValue(kt @ KType::Signature { .. }) => Some(kt.clone()),
-            _ => None,
-        }),
-        KType::OfKind(KKind::Any) => Ok(match obj {
-            KObject::KTypeValue(kt) => Some(kt.clone()),
-            _ => None,
-        }),
-        KType::OfKind(KKind::Proper) => match obj {
-            KObject::KTypeValue(kt) => Ok(Some(kt.clone())),
-            // Resolved against the definition scope at call time, where every type the
-            // signature names is already finalized — no lexical-order gating applies.
-            KObject::TypeNameRef(t) => match definition_scope.resolve_type_expr(t, None) {
-                ResolveTypeExprOutcome::Done(kt) => Ok(Some(kt.clone())),
-                ResolveTypeExprOutcome::Park(pending_on) => {
-                    Err(KError::new(KErrorKind::TypeIdentityPendingAtDispatch {
-                        param: param_name.to_string(),
-                        surface: t.render(),
-                        pending_on,
-                    }))
-                }
-                // Unbound: skip the type-side install; the body's value-side
-                // dispatch will surface the real error.
-                ResolveTypeExprOutcome::Unbound(_) => Ok(None),
-            },
-            _ => Ok(None),
+    match kt {
+        KType::Unresolved(t) => match definition_scope.resolve_type_expr(t, None) {
+            ResolveTypeExprOutcome::Done(resolved) => Ok(Some(resolved.clone())),
+            ResolveTypeExprOutcome::Park(pending_on) => {
+                Err(KError::new(KErrorKind::TypeIdentityPendingAtDispatch {
+                    param: param_name.to_string(),
+                    surface: t.render(),
+                    pending_on,
+                }))
+            }
+            ResolveTypeExprOutcome::Unbound(_) => Ok(None),
         },
-        _ => Ok(None),
+        other => Ok(Some(other.clone())),
     }
 }

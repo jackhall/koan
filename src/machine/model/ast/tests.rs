@@ -4,7 +4,8 @@ use crate::machine::model::ast::{
 };
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::KType;
-use crate::machine::model::{KObject, Parseable};
+use crate::machine::model::values::ArgValue;
+use crate::machine::model::Parseable;
 
 fn kw(s: &str) -> ExpressionPart<'static> {
     ExpressionPart::Keyword(s.into())
@@ -26,21 +27,21 @@ fn parts_of(items: Vec<ExpressionPart<'static>>) -> Vec<Spanned<ExpressionPart<'
 }
 
 #[test]
-fn resolve_for_lowers_builtin_leaf_to_ktypevalue() {
+fn resolve_for_lowers_builtin_leaf_to_type_arm() {
     let part: ExpressionPart<'static> = ExpressionPart::Type(TypeName::leaf("Number".into()));
     let slot = KType::OfKind(KKind::Proper);
     match part.resolve_for(&slot) {
-        KObject::KTypeValue(kt) => assert_eq!(kt, KType::Number),
-        _ => panic!("expected KTypeValue"),
+        ArgValue::Type(kt) => assert_eq!(kt, KType::Number),
+        _ => panic!("expected a Type-arm carrier"),
     }
 }
 
 #[test]
-fn resolve_for_defers_user_bound_leaf_to_typenameref() {
+fn resolve_for_defers_user_bound_leaf_to_unresolved() {
     let part: ExpressionPart<'static> = ExpressionPart::Type(TypeName::leaf("MyType".into()));
     let slot = KType::OfKind(KKind::Proper);
     let r = part.resolve_for(&slot);
-    assert!(matches!(r, KObject::TypeNameRef(_)));
+    assert!(matches!(r, ArgValue::Type(KType::Unresolved(_))));
 }
 
 #[test]

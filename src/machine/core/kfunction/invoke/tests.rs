@@ -6,11 +6,11 @@
 use super::*;
 use crate::builtins::default_scope;
 use crate::machine::core::RuntimeArena;
-use crate::machine::model::types::KKind;
+use crate::machine::model::ast::TypeName;
 use crate::machine::model::values::{Module, Signature};
 
 #[test]
-fn type_identity_for_signature_bound_yields_module_carrier() {
+fn type_identity_for_module_yields_module_carrier() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let child = arena.alloc_scope(crate::machine::Scope::child_under_module(
@@ -18,42 +18,11 @@ fn type_identity_for_signature_bound_yields_module_carrier() {
         "Foo".into(),
     ));
     let module = arena.alloc_module(Module::new("Foo".into(), child));
-    let obj = arena.alloc_object(KObject::KTypeValue(KType::Module {
+    let kt = KType::Module {
         module,
         frame: None,
-    }));
-    let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
-    let declared = KType::Signature {
-        sig,
-        pinned_slots: Vec::new(),
     };
-    let identity = type_identity_for("p", obj, &declared, scope)
-        .expect("Ok expected")
-        .expect("module identity expected");
-    assert_eq!(
-        identity,
-        KType::Module {
-            module,
-            frame: None
-        }
-    );
-}
-
-#[test]
-fn type_identity_for_any_module_yields_module_carrier() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let child = arena.alloc_scope(crate::machine::Scope::child_under_module(
-        scope,
-        "Bar".into(),
-    ));
-    let module = arena.alloc_module(Module::new("Bar".into(), child));
-    let obj = arena.alloc_object(KObject::KTypeValue(KType::Module {
-        module,
-        frame: None,
-    }));
-    let declared = KType::OfKind(KKind::Module);
-    let identity = type_identity_for("p", obj, &declared, scope)
+    let identity = type_identity_for("p", &kt, scope)
         .expect("Ok expected")
         .expect("module identity expected");
     assert_eq!(
@@ -70,12 +39,11 @@ fn type_identity_for_signature_yields_signature_carrier() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
-    let obj = arena.alloc_object(KObject::KTypeValue(KType::Signature {
+    let kt = KType::Signature {
         sig,
         pinned_slots: Vec::new(),
-    }));
-    let declared = KType::OfKind(KKind::Signature);
-    let identity = type_identity_for("p", obj, &declared, scope)
+    };
+    let identity = type_identity_for("p", &kt, scope)
         .expect("Ok expected")
         .expect("signature identity expected");
     assert_eq!(
@@ -88,45 +56,36 @@ fn type_identity_for_signature_yields_signature_carrier() {
 }
 
 #[test]
-fn type_identity_for_type_yields_inner_ktype() {
+fn type_identity_for_structural_type_yields_itself() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let inner = KType::List(Box::new(KType::Number));
-    let obj = arena.alloc_object(KObject::KTypeValue(inner.clone()));
-    let declared = KType::OfKind(KKind::Any);
-    let identity = type_identity_for("p", obj, &declared, scope)
+    let identity = type_identity_for("p", &inner, scope)
         .expect("Ok expected")
         .expect("type identity expected");
     assert_eq!(identity, inner);
 }
 
 #[test]
-fn type_identity_for_type_expr_ref_kt_carrier_yields_inner_ktype() {
+fn type_identity_for_leaf_type_yields_itself() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let inner = KType::Number;
-    let obj = arena.alloc_object(KObject::KTypeValue(inner.clone()));
-    let declared = KType::OfKind(KKind::Proper);
-    let identity = type_identity_for("p", obj, &declared, scope)
+    let identity = type_identity_for("p", &inner, scope)
         .expect("Ok expected")
         .expect("type identity expected");
     assert_eq!(identity, inner);
 }
 
-/// `matches_value` is supposed to have gated this case already; reaching the
-/// helper with a mismatched carrier means `is_type_denoting` and `matches_value`
-/// disagree, so skip the type-side install rather than panic.
+/// An `Unresolved` transient that doesn't resolve against the definition scope yields
+/// `Ok(None)` — the type-side install is skipped and the body's value-side dispatch
+/// surfaces the real error.
 #[test]
-fn type_identity_for_carrier_mismatch_returns_none() {
+fn type_identity_for_unbound_unresolved_name_returns_none() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let obj = arena.alloc_object(KObject::Number(1.0));
-    let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
-    let declared = KType::Signature {
-        sig,
-        pinned_slots: Vec::new(),
-    };
-    assert!(type_identity_for("p", obj, &declared, scope)
+    let kt = KType::Unresolved(TypeName::leaf("Nonexistent".into()));
+    assert!(type_identity_for("p", &kt, scope)
         .expect("Ok expected")
         .is_none());
 }

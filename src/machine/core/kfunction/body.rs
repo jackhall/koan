@@ -156,6 +156,12 @@ impl<'a> BodyResult<'a> {
         BodyResult::Value(Carried::Object(o))
     }
 
+    /// Wrap a type as the `Type` arm of the value currency — a type-operator's result rides
+    /// the type channel raw (no `KObject` box). Pair with `scope.arena.alloc_ktype`.
+    pub fn ktype(t: &'a KType<'a>) -> Self {
+        BodyResult::Value(Carried::Type(t))
+    }
+
     /// Test helper for bodies that contractually yield only `Value` or `Err`:
     /// extracts the `Value` payload, panicking with `ctx` otherwise.
     #[cfg(test)]

@@ -293,7 +293,7 @@ pub(super) fn bare_type_leaf<'a>(
     idx: usize,
 ) -> NodeStep<'a> {
     match resolve_type_leaf_carrier(scope, t, ctx.active_chain()) {
-        TypeLeafCarrier::Resolved(obj) => NodeStep::Done(NodeOutput::value(obj)),
+        TypeLeafCarrier::Resolved(kt) => NodeStep::Done(NodeOutput::ktype(kt)),
         TypeLeafCarrier::Unbound(n) => {
             NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))))
         }

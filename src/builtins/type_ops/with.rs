@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
 
 use crate::builtins::ascribe::abstract_type_names_of;
@@ -45,8 +45,8 @@ pub fn body<'a>(
             ))));
         }
         match value {
-            KObject::KTypeValue(kt) => pinned.push((name.clone(), kt.clone())),
-            other => {
+            Held::Type(kt) => pinned.push((name.clone(), kt.clone())),
+            Held::Object(other) => {
                 return err(KError::new(KErrorKind::ShapeError(format!(
                     "WITH binding `{name}` value must be a type, got `{}`",
                     other.ktype().name(),
@@ -54,21 +54,17 @@ pub fn body<'a>(
             }
         }
     }
-    BodyResult::value(
-        scope
-            .arena
-            .alloc_object(KObject::KTypeValue(KType::Signature {
-                sig: s,
-                pinned_slots: pinned,
-            })),
-    )
+    BodyResult::ktype(scope.arena.alloc_ktype(KType::Signature {
+        sig: s,
+        pinned_slots: pinned,
+    }))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+    use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
     use crate::machine::execute::Scheduler;
-    use crate::machine::model::{KObject, KType};
+    use crate::machine::model::KType;
     use crate::machine::RuntimeArena;
 
     #[test]
@@ -83,16 +79,16 @@ mod tests {
             Some(KType::Signature { sig, .. }) => sig.sig_id(),
             _ => panic!("OrderedSig must bind a Signature KType"),
         };
-        let result = run_one(scope, parse_one("OrderedSig WITH {Type = Number}"));
+        let result = run_one_type(scope, parse_one("OrderedSig WITH {Type = Number}"));
         match result {
-            KObject::KTypeValue(KType::Signature { sig, pinned_slots }) => {
+            KType::Signature { sig, pinned_slots } => {
                 assert_eq!(sig.sig_id(), sig_id);
                 assert_eq!(sig.path, "OrderedSig");
                 assert_eq!(pinned_slots.len(), 1);
                 assert_eq!(pinned_slots[0].0, "Type");
                 assert_eq!(pinned_slots[0].1, KType::Number);
             }
-            other => panic!("expected Signature KTypeValue, got {:?}", other.ktype()),
+            other => panic!("expected Signature type, got {other:?}"),
         }
     }
 
@@ -105,16 +101,16 @@ mod tests {
             scope,
             "SIG Set = ((LET Elt = Number) (LET Ord = Number) (VAL tag :Number))",
         );
-        let result = run_one(scope, parse_one("Set WITH {Elt = Number, Ord = Str}"));
+        let result = run_one_type(scope, parse_one("Set WITH {Elt = Number, Ord = Str}"));
         match result {
-            KObject::KTypeValue(KType::Signature { pinned_slots, .. }) => {
+            KType::Signature { pinned_slots, .. } => {
                 assert_eq!(pinned_slots.len(), 2);
                 assert_eq!(pinned_slots[0].0, "Elt");
                 assert_eq!(pinned_slots[0].1, KType::Number);
                 assert_eq!(pinned_slots[1].0, "Ord");
                 assert_eq!(pinned_slots[1].1, KType::Str);
             }
-            other => panic!("expected Signature KTypeValue, got {:?}", other.ktype()),
+            other => panic!("expected Signature type, got {other:?}"),
         }
     }
 
@@ -132,9 +128,9 @@ mod tests {
              SIG SetSig = ((LET Elt = Number) (VAL insert :Number))\n\
              LET Elem = (IntOrd :| OrderedSig)",
         );
-        let result = run_one(scope, parse_one("SetSig WITH {Elt = Elem.Type}"));
+        let result = run_one_type(scope, parse_one("SetSig WITH {Elt = Elem.Type}"));
         match result {
-            KObject::KTypeValue(KType::Signature { pinned_slots, .. }) => {
+            KType::Signature { pinned_slots, .. } => {
                 assert_eq!(pinned_slots.len(), 1);
                 assert_eq!(pinned_slots[0].0, "Elt");
                 match &pinned_slots[0].1 {
@@ -142,7 +138,7 @@ mod tests {
                     other => panic!("expected pinned Elt = AbstractType(Type), got {:?}", other),
                 }
             }
-            other => panic!("expected Signature KTypeValue, got {:?}", other.ktype()),
+            other => panic!("expected Signature type, got {other:?}"),
         }
     }
 

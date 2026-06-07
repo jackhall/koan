@@ -221,7 +221,7 @@ mod tests {
     fn functor_per_call_module_lifts_correctly() {
         use crate::machine::core::kfunction::{Body, KFunction};
         use crate::machine::core::{CallArena, RuntimeArena as RA};
-        use crate::machine::execute::lift_kobject_for_test;
+        use crate::machine::execute::lift_ktype_for_test;
         use crate::machine::model::types::{
             ExpressionSignature, KType, ReturnType, SignatureElement,
         };
@@ -260,19 +260,19 @@ mod tests {
             "Inner".into(),
         ));
         let module = inner_arena.alloc_module(Module::new("Inner".into(), inner_scope));
-        let m_obj = KObject::KTypeValue(KType::Module {
+        let m_type = KType::Module {
             module,
             frame: None,
-        });
+        };
 
         let strong_before = Rc::strong_count(&frame);
-        let lifted = lift_kobject_for_test(&m_obj, &frame);
+        let lifted = lift_ktype_for_test(&m_type, &frame);
         match &lifted {
-            KObject::KTypeValue(KType::Module { frame: anchor, .. }) => assert!(
+            KType::Module { frame: anchor, .. } => assert!(
                 anchor.is_some(),
                 "Module carrier whose child scope lives in the dying arena must lift with frame=Some(rc)",
             ),
-            other => panic!("expected lifted Module carrier, got {:?}", other.ktype()),
+            other => panic!("expected lifted Module carrier, got {}", other.name()),
         }
         assert_eq!(
             Rc::strong_count(&frame),
@@ -281,6 +281,6 @@ mod tests {
         );
         // Drop borrowers before `frame` so arena teardown order is well-defined.
         drop(lifted);
-        drop(m_obj);
+        drop(m_type);
     }
 }

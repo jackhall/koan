@@ -4,7 +4,7 @@
 //! deferred-return re-elaboration path's agnosticism to builtin-vs-nominal
 //! carriers.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{parse_one, run, run_one, run_one_type, run_root_silent};
 use crate::machine::execute::Scheduler;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::{KObject, KType};
@@ -37,13 +37,12 @@ fn functor_admits_bare_number_token_at_type_slot() {
         scope,
         "FUNCTOR (MAKETREE Elt :Type) -> Module = (MODULE Result = (LET inner = 1))",
     );
-    let result = run_one(scope, parse_one("MAKETREE Number"));
+    let result = run_one_type(scope, parse_one("MAKETREE Number"));
     match result {
-        KObject::KTypeValue(KType::Module { .. }) => {}
-        other => panic!(
-            "expected MAKETREE Number to dispatch and return a module, got {:?}",
-            other.ktype(),
-        ),
+        KType::Module { .. } => {}
+        other => {
+            panic!("expected MAKETREE Number to dispatch and return a module, got {other:?}")
+        }
     }
 }
 
@@ -57,13 +56,12 @@ fn functor_admits_bare_str_bool_null_tokens_at_type_slot() {
     );
     for token in ["Str", "Bool", "Null"] {
         let src = format!("MAKETREE {token}");
-        let result = run_one(scope, parse_one(&src));
+        let result = run_one_type(scope, parse_one(&src));
         match result {
-            KObject::KTypeValue(KType::Module { .. }) => {}
-            other => panic!(
-                "expected MAKETREE {token} to dispatch and return a module, got {:?}",
-                other.ktype(),
-            ),
+            KType::Module { .. } => {}
+            other => {
+                panic!("expected MAKETREE {token} to dispatch and return a module, got {other:?}")
+            }
         }
     }
 }
@@ -77,10 +75,10 @@ fn functor_per_call_type_side_bind_is_observable_via_module_type_members() {
         "FUNCTOR (MAKETREE Elt :Type) -> Module = \
          (MODULE Result = ((LET ElemType = Elt) (LET inner = 1)))",
     );
-    let result = run_one(scope, parse_one("MAKETREE Number"));
+    let result = run_one_type(scope, parse_one("MAKETREE Number"));
     let module = match result {
-        KObject::KTypeValue(KType::Module { module, .. }) => *module,
-        other => panic!("expected module result, got {:?}", other.ktype()),
+        KType::Module { module, .. } => *module,
+        other => panic!("expected module result, got {other:?}"),
     };
     let tm = module.type_members.borrow();
     match tm.get("ElemType") {
@@ -111,7 +109,7 @@ fn functor_bare_value_carrier_is_dispatch_no_match_not_typemismatch() {
 }
 
 /// Module carriers stay out of `:Type` slots — the cut-(a) wall at
-/// [`KType::accepts_part`]'s `Future(KObject::KTypeValue(KType::Module
+/// [`KType::accepts_part`]'s `Future(Carried::Type(KType::Module
 /// { .. }))` arm. Asserts only that no value comes back; either
 /// `DispatchFailed` (admission-time reject) or per-node `TypeMismatch`
 /// (committed-then-failed bind) satisfies the wall's contract.
