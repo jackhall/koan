@@ -614,3 +614,10 @@ dict (see [type-language-via-dispatch.md § Record-type sigil](type-language-via
   `ReturnContract::Arm`, so their `-> :T` is enforced.
 The two-phase execution work in [open-work.md](open-work.md) closes both
 uniformly.
+
+## Open work
+
+- [Type values as data carriers](../../roadmap/type_language/type-values-as-data-carriers.md)
+  — moves a user type used as a value onto a `KObject` data carrier instead of the
+  `Carried::Type(&KType)` arm, unifying the `OfKind(KKind)` / `AnyUserType(NominalKind)`
+  wildcard pair into one `ktype()`-keyed kind-matched slot.

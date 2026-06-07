@@ -126,11 +126,13 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
+- [Consolidate identified code duplication](refactor/consolidate-identified-duplication.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
+- [Type values as data carriers](type_language/type-values-as-data-carriers.md)
 
 ## Open items
 
@@ -184,6 +186,7 @@ predicate-typing stages and the stdlib's functor-heavy collections both
 build on:
 
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
+- [Type values as data carriers](type_language/type-values-as-data-carriers.md)
 - [Anonymous structural unions](type_language/anonymous-unions.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
@@ -204,6 +207,10 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
+- [Consolidate identified code duplication](refactor/consolidate-identified-duplication.md) —
+  six pre-located copy-paste clusters (per-builtin `binder_name`, FN/FUNCTOR bodies, the
+  scheduler `Object`/`Type` arms, `finish.rs` arms, `dict_literal` accept pair, the
+  slot-extract error envelope) each collapsed to one owner.
 - [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md) —
   separate the per-frame scope lifetime from the run `'a`; the prerequisite that makes a
   compile-time frame re-anchor brand expressible.
