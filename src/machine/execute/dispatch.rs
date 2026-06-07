@@ -262,6 +262,12 @@ pub(super) fn stage_all_eager_parts<'a>(
                 staged.push((i, PendingSub::Dispatch(wrapped)));
                 new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
             }
+            ExpressionPart::RecordType(boxed) => {
+                let wrapped =
+                    KExpression::new(vec![Spanned::bare(ExpressionPart::RecordType(boxed))]);
+                staged.push((i, PendingSub::Dispatch(wrapped)));
+                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+            }
             ExpressionPart::ListLiteral(items) => {
                 staged.push((i, PendingSub::ListLit(items)));
                 new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
@@ -475,6 +481,10 @@ pub(in crate::machine::execute) fn run_dispatch<'a>(
         DispatchShape::SigiledTypeExpr => {
             debug_assert!(init.pre_subs.is_empty());
             Ok(single_poll::sigiled_type_expr(expr))
+        }
+        DispatchShape::RecordType => {
+            debug_assert!(init.pre_subs.is_empty());
+            Ok(single_poll::record_type(ctx, expr, scope, idx))
         }
         DispatchShape::LiteralPassThrough => {
             debug_assert!(init.pre_subs.is_empty());

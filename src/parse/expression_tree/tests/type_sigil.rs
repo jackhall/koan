@@ -114,21 +114,18 @@ fn comma_outside_type_sigil_unchanged_inside_paren() {
     );
 }
 
-// --- Record-type sigil `:{...}` (desugars to `RECORD (fields)`) ---
+// --- Record-type sigil `:{...}` (a first-class `RecordType` part) ---
 
 #[test]
 fn record_type_sigil_one_field() {
-    assert_eq!(
-        tree(":{x :Number}").unwrap(),
-        "[:(t(RECORD) [t(x) T(Number)])]",
-    );
+    assert_eq!(tree(":{x :Number}").unwrap(), "[:{t(x) T(Number)}]");
 }
 
 #[test]
 fn record_type_sigil_two_fields() {
     assert_eq!(
         tree(":{x :Number, y :Str}").unwrap(),
-        "[:(t(RECORD) [t(x) T(Number) t(y) T(Str)])]",
+        "[:{t(x) T(Number) t(y) T(Str)}]",
     );
 }
 
@@ -136,7 +133,7 @@ fn record_type_sigil_two_fields() {
 fn record_type_sigil_in_param_slot() {
     assert_eq!(
         tree("(r :{x :Number})").unwrap(),
-        "[[t(r) :(t(RECORD) [t(x) T(Number)])]]",
+        "[[t(r) :{t(x) T(Number)}]]",
     );
 }
 

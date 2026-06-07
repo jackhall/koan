@@ -13,9 +13,9 @@ use std::rc::Rc;
 use crate::machine::core::{LexicalFrame, PendingBinderGuard};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
-    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
+    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
 };
-use crate::machine::model::KType;
+use crate::machine::model::{KObject, KType, Record};
 use crate::machine::{
     BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, SchedulerHandle, Scope,
 };
@@ -54,7 +54,7 @@ pub(crate) fn defer_field_list_via_combine<'a>(
         let _pending_guard = pending_guard;
         // `results` = `[park results.. , owned-sub results..]`; the re-walk consumes only
         // the owned-sub carriers, in the DFS order they were scheduled above.
-        let mut sub_results = results[park_count..].iter().copied();
+        let mut feed = ResultFeed::new(&results[park_count..]);
         let mut elaborator = Elaborator::new(scope)
             .with_threaded(threaded.iter().cloned())
             .with_chain(chain.clone());
@@ -63,7 +63,7 @@ pub(crate) fn defer_field_list_via_combine<'a>(
             context,
             name_kind,
             &mut elaborator,
-            Some(&mut sub_results),
+            Some(&mut feed),
         ) {
             FieldListOutcome::Done(fields) => finalize(scope, fields),
             FieldListOutcome::Err(msg) => {
@@ -82,4 +82,53 @@ pub(crate) fn defer_field_list_via_combine<'a>(
     });
     let combine_id = sched.add_combine(owned_subs, park_producers, scope, finish);
     BodyResult::DeferTo(combine_id)
+}
+
+/// Elaborate a standalone `:{…}` record type to `KObject::KTypeValue(KType::Record(_))`.
+/// The `fields` expression is the record's `(name :Type, …)` field list. A record type at a
+/// value/type position declares no binder, so the elaborator threads no self-reference; a
+/// field naming a forward type parks and a sigil field type sub-dispatches, both deferred
+/// through one Combine (the field walker's own re-walk handles nested records).
+pub(crate) fn elaborate_record_value<'a>(
+    scope: &'a Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
+    fields: KExpression<'a>,
+    chain: Option<Rc<LexicalFrame>>,
+) -> BodyResult<'a> {
+    fn fold<'a>(scope: &'a Scope<'a>, pairs: Vec<(String, KType<'a>)>) -> BodyResult<'a> {
+        let record = Record::from_pairs(pairs);
+        BodyResult::Value(
+            scope
+                .arena
+                .alloc_object(KObject::KTypeValue(KType::Record(Box::new(record)))),
+        )
+    }
+    let mut elaborator = Elaborator::new(scope).with_chain(chain.clone());
+    match parse_typed_field_list_via_elaborator(
+        &fields,
+        "record fields",
+        FieldNameKind::Identifier,
+        &mut elaborator,
+        None,
+    ) {
+        FieldListOutcome::Done(pairs) => fold(scope, pairs),
+        FieldListOutcome::Err(msg) => BodyResult::Err(KError::new(KErrorKind::ShapeError(msg))),
+        FieldListOutcome::Pending {
+            park_producers,
+            sub_dispatches,
+        } => defer_field_list_via_combine(
+            scope,
+            sched,
+            fields,
+            park_producers,
+            sub_dispatches,
+            "record fields",
+            FieldNameKind::Identifier,
+            Vec::new(),
+            chain,
+            None,
+            None,
+            Box::new(fold),
+        ),
+    }
 }

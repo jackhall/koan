@@ -60,11 +60,18 @@ impl<'a> KFunction<'a> {
                         has_lazy_slot = true;
                     }
                     (KType::SigiledTypeExpr, _) => return None,
+                    // `:RecordType` is the lazy sibling for a `:{…}` part — captured raw so
+                    // the NEWTYPE record-repr declarator owns its field-list elaboration.
+                    (KType::RecordType, ExpressionPart::RecordType(_)) => {
+                        has_lazy_slot = true;
+                    }
+                    (KType::RecordType, _) => return None,
                     (_, ExpressionPart::Expression(_))
-                    | (_, ExpressionPart::SigiledTypeExpr(_)) => {
+                    | (_, ExpressionPart::SigiledTypeExpr(_))
+                    | (_, ExpressionPart::RecordType(_)) => {
                         // Speculative: assume the eager-evaluated result will type-match
-                        // at late dispatch. SigiledTypeExpr rides the Expression path —
-                        // sub-dispatch produces a type-side Future the slot then validates.
+                        // at late dispatch. SigiledTypeExpr / RecordType ride the Expression
+                        // path — sub-dispatch produces a type-side Future the slot validates.
                         eager_indices.push(i);
                     }
                     (_, other) => {

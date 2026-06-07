@@ -104,6 +104,13 @@ pub enum KType<'a> {
     /// param-referencing dotted/sigil return (`-> Er.Type`) to per-call elaboration. More
     /// specific than [`KType::TypeExprRef`], so it wins the overload when both admit.
     SigiledTypeExpr,
+    /// Lazy slot for a `:{…}` record type — the sibling of [`KType::SigiledTypeExpr`] for a
+    /// [`ExpressionPart::RecordType`](crate::machine::model::ast::ExpressionPart::RecordType)
+    /// part. Captures the field list raw (via `resolve_for`, as the inner
+    /// `KObject::KExpression`) so the NEWTYPE record-repr declarator owns its elaboration and
+    /// threads its own binder name. More specific than [`KType::TypeExprRef`], so it wins the
+    /// overload when both admit.
+    RecordType,
     /// Meta-type for slots capturing a parsed type-name token. Carries the full structured
     /// `TypeName` rather than flattening to a name string.
     TypeExprRef,
@@ -212,6 +219,7 @@ impl<'a> KType<'a> {
             KType::Identifier => "Identifier".into(),
             KType::KExpression => "KExpression".into(),
             KType::SigiledTypeExpr => "SigiledTypeExpr".into(),
+            KType::RecordType => "RecordType".into(),
             KType::TypeExprRef => "TypeExprRef".into(),
             KType::Type => "Type".into(),
             KType::SetRef { set, index } => set.member(*index).name.clone(),
@@ -290,6 +298,7 @@ impl<'a> PartialEq for KType<'a> {
             | (Identifier, Identifier)
             | (KExpression, KExpression)
             | (SigiledTypeExpr, SigiledTypeExpr)
+            | (RecordType, RecordType)
             | (TypeExprRef, TypeExprRef)
             | (Type, Type)
             | (Any, Any)
@@ -383,7 +392,7 @@ impl<'a> std::hash::Hash for KType<'a> {
         std::mem::discriminant(self).hash(state);
         match self {
             Number | Str | Bool | Null | Identifier | KExpression | SigiledTypeExpr
-            | TypeExprRef | Type | Any | AnyModule | AnySignature => {}
+            | RecordType | TypeExprRef | Type | Any | AnyModule | AnySignature => {}
             List(t) => t.hash(state),
             Dict(k, v) => {
                 k.hash(state);

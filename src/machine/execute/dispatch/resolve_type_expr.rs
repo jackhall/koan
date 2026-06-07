@@ -215,6 +215,7 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
                 | KType::Identifier
                 | KType::KExpression
                 | KType::SigiledTypeExpr
+                | KType::RecordType
                 | KType::TypeExprRef
                 | KType::Type
                 | KType::AnyModule

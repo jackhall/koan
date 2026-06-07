@@ -15,7 +15,7 @@ use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{KObject, KType, RecursiveSet};
-use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
+use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, SchedulerHandle};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::apply_callable::{apply_callable, ResolvedCallable};
@@ -347,6 +347,28 @@ pub(super) fn sigiled_type_expr<'a>(expr: KExpression<'a>) -> NodeStep<'a> {
         block_entry: None,
         body_index: 0,
     }
+}
+
+/// `:{x :Number, y :Str}` — a single-part record-type sigil. Folds the field list straight
+/// to `KObject::KTypeValue(KType::Record(_))` via the shared field-list elaborator, deferring
+/// through a Combine when a field forward-references or sub-dispatches. No type-constructor
+/// builtin is involved — the record type is structural.
+pub(super) fn record_type<'a>(
+    ctx: &mut DispatchCtx<'a, '_>,
+    expr: KExpression<'a>,
+    scope: &'a Scope<'a>,
+    idx: usize,
+) -> NodeStep<'a> {
+    let fields = match expr.parts.into_iter().next() {
+        Some(Spanned {
+            value: ExpressionPart::RecordType(boxed),
+            ..
+        }) => *boxed,
+        _ => unreachable!("RecordType shape implies a single RecordType part"),
+    };
+    let chain = ctx.current_lexical_chain();
+    let body = super::field_list::elaborate_record_value(scope, ctx, fields, chain);
+    schedule_constructor_body(ctx, body, idx)
 }
 
 /// `(99)`, `("x")`, `([1 2 3])`, `((inner))` etc. — single-part

@@ -31,6 +31,14 @@ pub(super) fn describe(e: &KExpression<'_>) -> String {
                     .unwrap_or(&inner);
                 format!(":({stripped})")
             }
+            ExpressionPart::RecordType(e) => {
+                let inner = describe(e);
+                let stripped = inner
+                    .strip_prefix('[')
+                    .and_then(|s| s.strip_suffix(']'))
+                    .unwrap_or(&inner);
+                format!(":{{{stripped}}}")
+            }
             ExpressionPart::ListLiteral(items) => {
                 let inner: Vec<String> = items.iter().map(describe_part).collect();
                 format!("L[{}]", inner.join(" "))

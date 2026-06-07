@@ -62,6 +62,13 @@ pub enum ExpressionPart<'a> {
     /// dispatcher's responsibility — the parser does no folding here. See
     /// [design/typing/type-language-via-dispatch.md](../../../design/typing/type-language-via-dispatch.md).
     SigiledTypeExpr(Box<KExpression<'a>>),
+    /// First-class record type `:{x :Number, y :Str}`. The boxed `KExpression` is the
+    /// field-list `(x :Number, y :Str)` — the same `<name> :<Type>` pair shape STRUCT /
+    /// UNION / FN parameter lists use. Unlike `SigiledTypeExpr`, this is matched
+    /// structurally (the elaborator folds it straight to `KType::Record`); there is no
+    /// internal type-constructor builtin behind it. See
+    /// [design/typing/type-language-via-dispatch.md](../../../design/typing/type-language-via-dispatch.md).
+    RecordType(Box<KExpression<'a>>),
     ListLiteral(Vec<ExpressionPart<'a>>),
     DictLiteral(Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>),
     /// Anonymous record literal (`{x = 1, y = "a"}`) — identifier-keyed `=` pairs. The
@@ -82,6 +89,7 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
             ExpressionPart::SigiledTypeExpr(e) => {
                 f.debug_tuple("SigiledTypeExpr").field(e).finish()
             }
+            ExpressionPart::RecordType(e) => f.debug_tuple("RecordType").field(e).finish(),
             ExpressionPart::ListLiteral(items) => {
                 f.debug_tuple("ListLiteral").field(items).finish()
             }
@@ -112,6 +120,7 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::Type(t) => t.render(),
             ExpressionPart::Expression(e) => e.summarize(),
             ExpressionPart::SigiledTypeExpr(e) => format!(":({})", e.summarize()),
+            ExpressionPart::RecordType(e) => format!(":{{{}}}", e.summarize()),
             ExpressionPart::ListLiteral(items) => {
                 let inner: Vec<String> = items.iter().map(|p| p.summarize()).collect();
                 format!("[{}]", inner.join(" "))
@@ -162,6 +171,13 @@ impl<'a> ExpressionPart<'a> {
         if let (ExpressionPart::SigiledTypeExpr(inner), KType::SigiledTypeExpr) = (self, slot) {
             return KObject::KExpression((**inner).clone());
         }
+        // Lazy `:{…}` record-type slot: capture the field list raw so the NEWTYPE
+        // record-repr declarator owns its elaboration (threading its own binder name
+        // through a self-recursive `:{next :Node}`). Same raw-capture shape as the sigil
+        // slot above; the `RecordType` slot is more specific, so it wins overload pick.
+        if let (ExpressionPart::RecordType(inner), KType::RecordType) = (self, slot) {
+            return KObject::KExpression((**inner).clone());
+        }
         self.resolve()
     }
 
@@ -181,6 +197,11 @@ impl<'a> ExpressionPart<'a> {
             // that marker.
             ExpressionPart::SigiledTypeExpr(_) => {
                 unreachable!("SigiledTypeExpr only valid in type-context dispatch")
+            }
+            // Like SigiledTypeExpr: a record type reaches a value through the dispatcher's
+            // `RecordType` fast lane or a raw `:RecordType`-slot capture, never `resolve()`.
+            ExpressionPart::RecordType(_) => {
+                unreachable!("RecordType only valid in type-context dispatch")
             }
             ExpressionPart::ListLiteral(items) => {
                 KObject::list(items.iter().map(|p| p.resolve()).collect())
@@ -220,6 +241,7 @@ impl<'a> Clone for ExpressionPart<'a> {
             ExpressionPart::Type(t) => ExpressionPart::Type(t.clone()),
             ExpressionPart::Expression(e) => ExpressionPart::Expression(e.clone()),
             ExpressionPart::SigiledTypeExpr(e) => ExpressionPart::SigiledTypeExpr(e.clone()),
+            ExpressionPart::RecordType(e) => ExpressionPart::RecordType(e.clone()),
             ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(items.clone()),
             ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(pairs.clone()),
             ExpressionPart::RecordLiteral(pairs) => ExpressionPart::RecordLiteral(pairs.clone()),
@@ -261,6 +283,10 @@ pub enum DispatchShape {
     FunctionValueCall,
     /// Single-part `:(...)` sigiled type-expression wrapper.
     SigiledTypeExpr,
+    /// Single-part `:{…}` record-type sigil. The handler folds the field list straight
+    /// to `KType::Record` (deferring through a Combine when a field type sub-dispatches
+    /// or forward-references), with no internal type-constructor builtin behind it.
+    RecordType,
     /// Single-part literal-shaped expression — `Literal`, `Future`, nested
     /// `Expression`, `ListLiteral`, `DictLiteral`, or `RecordLiteral`. Surfaces the
     /// inner value without a bucket lookup.
@@ -308,6 +334,7 @@ pub fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
             ExpressionPart::Identifier(_) => DispatchShape::BareIdentifier,
             ExpressionPart::Type(_) => DispatchShape::BareTypeLeaf,
             ExpressionPart::SigiledTypeExpr(_) => DispatchShape::SigiledTypeExpr,
+            ExpressionPart::RecordType(_) => DispatchShape::RecordType,
             ExpressionPart::Literal(_)
             | ExpressionPart::Future(_)
             | ExpressionPart::Expression(_)
@@ -329,14 +356,16 @@ pub fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
         ExpressionPart::Identifier(_) => DispatchShape::FunctionValueCall,
         ExpressionPart::Expression(_) => DispatchShape::HeadDeferred,
         ExpressionPart::SigiledTypeExpr(_) => DispatchShape::TypeHeadDeferred,
-        // A literal / list / dict / record / future head in a multi-part
-        // expression: heads are always eager and must resolve to something
-        // callable, so a non-callable head surfaces a loud `DispatchFailed`.
+        // A literal / list / dict / record-literal / record-type / future head in a
+        // multi-part expression: heads are always eager and must resolve to something
+        // callable, so a non-callable head surfaces a loud `DispatchFailed`. A record
+        // *type* is a value, not a callable, so a `:{…}` head joins them here.
         ExpressionPart::Literal(_)
         | ExpressionPart::Future(_)
         | ExpressionPart::ListLiteral(_)
         | ExpressionPart::DictLiteral(_)
-        | ExpressionPart::RecordLiteral(_) => DispatchShape::NonCallableHead,
+        | ExpressionPart::RecordLiteral(_)
+        | ExpressionPart::RecordType(_) => DispatchShape::NonCallableHead,
         ExpressionPart::Keyword(_) => {
             unreachable!("no-keyword precondition: the sweep above caught every Keyword part")
         }

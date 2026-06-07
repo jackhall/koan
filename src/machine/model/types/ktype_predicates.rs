@@ -348,6 +348,7 @@ impl<'a> KType<'a> {
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
             KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
             KType::SigiledTypeExpr => matches!(part, ExpressionPart::SigiledTypeExpr(_)),
+            KType::RecordType => matches!(part, ExpressionPart::RecordType(_)),
             // A `KTypeValue` carrier of a first-class module or signature is NOT a
             // `TypeExprRef` admission — those route through the dedicated `AnyModule` /
             // `AnySignature` / `Module` / `Signature` slot shapes. Otherwise an
