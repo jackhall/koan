@@ -219,14 +219,14 @@ fn newtype_record_field_accepts_keyworded_list_of_sigil() {
     }
 }
 
-/// `UNION Maybe = (some :(MAP Str -> Number), none :Null)` — keyworded `MAP` sigil
+/// `UNION Maybe = (Some :(MAP Str -> Number), None :Null)` — keyworded `MAP` sigil
 /// inside a UNION field. Same sub-Dispatch path, different field-walker invocation.
 #[test]
 fn union_field_accepts_keyworded_map_sigil() {
     let arena = RuntimeArena::new();
     let scope = run(
         &arena,
-        "UNION Maybe = (some :(MAP Str -> Number), none :Null)",
+        "UNION Maybe = (Some :(MAP Str -> Number), None :Null)",
     );
     // UNION is type-only — its variant schema rides the sealed `SetRef` member in `types`.
     let schema = match scope.resolve_type("Maybe") {
@@ -236,13 +236,13 @@ fn union_field_accepts_keyworded_map_sigil() {
         },
         other => panic!("Maybe must be a Tagged SetRef in types, got {other:?}"),
     };
-    let some_kt = schema.get("some").expect("some tag");
+    let some_kt = schema.get("Some").expect("Some tag");
     match some_kt {
         KType::Dict(k, v) => {
             assert_eq!(**k, KType::Str);
             assert_eq!(**v, KType::Number);
         }
-        other => panic!("some must be KType::Dict(Str, Number), got {other:?}"),
+        other => panic!("Some must be KType::Dict(Str, Number), got {other:?}"),
     }
 }
 

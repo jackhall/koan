@@ -14,9 +14,10 @@ use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{KType, RecursiveSet};
 use crate::machine::model::values::KObject;
 
-/// Validate the args shape: exactly two parts, the first an `Identifier`
-/// tag. The value part rides through unchanged so the dispatcher can
-/// sub-Dispatch it before construction sees its resolved value.
+/// Validate the args shape: exactly two parts, the first a `Type`-token
+/// tag (tags are capitalized variant types). The value part rides through
+/// unchanged so the dispatcher can sub-Dispatch it before construction
+/// sees its resolved value.
 pub(in crate::machine::execute) fn prepare_args<'a>(
     args_parts: Vec<Spanned<ExpressionPart<'a>>>,
 ) -> Result<(String, ExpressionPart<'a>), KError> {
@@ -30,10 +31,10 @@ pub(in crate::machine::execute) fn prepare_args<'a>(
     let tag_part = iter.next().unwrap();
     let value_part = iter.next().unwrap();
     let tag = match tag_part.value {
-        ExpressionPart::Identifier(s) => s,
+        ExpressionPart::Type(t) => t.render(),
         other => {
             return Err(KError::new(KErrorKind::ShapeError(format!(
-                "tagged-union construction = first arg must be a bare-identifier tag, got {}",
+                "tagged-union construction = first arg must be a capitalized variant tag, got {}",
                 other.summarize()
             ))));
         }

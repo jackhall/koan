@@ -143,9 +143,9 @@ mod tests {
     #[test]
     fn match_dispatches_branch_for_matching_tag() {
         let bytes = run_program(
-            "UNION Maybe = (some :Number none :Null)\n\
-             LET m = (Maybe (some 42))\n\
-             MATCH (m) -> :Str WITH (some -> (PRINT \"got\") none -> (PRINT \"no\"))",
+            "UNION Maybe = (Some :Number None :Null)\n\
+             LET m = (Maybe (Some 42))\n\
+             MATCH (m) -> :Str WITH (Some -> (PRINT \"got\") None -> (PRINT \"no\"))",
         );
         assert_eq!(bytes, b"got\n");
     }
@@ -153,9 +153,9 @@ mod tests {
     #[test]
     fn match_binds_inner_value_to_it() {
         let bytes = run_program(
-            "UNION Outcome = (ok :Str err :Str)\n\
-             LET r = (Outcome (ok \"all good\"))\n\
-             MATCH (r) -> :Str WITH (ok -> (PRINT it) err -> (PRINT \"failed\"))",
+            "UNION Outcome = (Ok :Str Err :Str)\n\
+             LET r = (Outcome (Ok \"all good\"))\n\
+             MATCH (r) -> :Str WITH (Ok -> (PRINT it) Err -> (PRINT \"failed\"))",
         );
         assert_eq!(bytes, b"all good\n");
     }
@@ -163,9 +163,9 @@ mod tests {
     #[test]
     fn match_does_not_run_unmatched_branches() {
         let bytes = run_program(
-            "UNION Maybe = (some :Number none :Null)\n\
-             LET m = (Maybe (some 1))\n\
-             MATCH (m) -> :Str WITH (some -> (PRINT \"yes\") none -> (PRINT \"NO_SHOULD_NOT_APPEAR\"))",
+            "UNION Maybe = (Some :Number None :Null)\n\
+             LET m = (Maybe (Some 1))\n\
+             MATCH (m) -> :Str WITH (Some -> (PRINT \"yes\") None -> (PRINT \"NO_SHOULD_NOT_APPEAR\"))",
         );
         assert_eq!(bytes, b"yes\n");
     }
@@ -176,14 +176,14 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "UNION Maybe = (some :Number none :Null)\nLET m = (Maybe (none null))",
+            "UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (None null))",
         );
         let err = run_one_err(
             scope,
-            parse_one("MATCH (m) -> :Str WITH (some -> (PRINT \"yes\"))"),
+            parse_one("MATCH (m) -> :Str WITH (Some -> (PRINT \"yes\"))"),
         );
         assert!(
-            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("inexhaustive") && msg.contains("`none`")),
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("inexhaustive") && msg.contains("`None`")),
             "expected inexhaustive ShapeError, got {err}",
         );
     }
@@ -194,12 +194,12 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "UNION Maybe = (some :Number none :Null)\nLET m = (Maybe (some 1))",
+            "UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (Some 1))",
         );
         // Declared `:Number`, but the taken arm returns a Str (PRINT's rendered string).
         let err = run_one_err(
             scope,
-            parse_one("MATCH (m) -> :Number WITH (some -> (PRINT \"x\") none -> (PRINT \"y\"))"),
+            parse_one("MATCH (m) -> :Number WITH (Some -> (PRINT \"x\") None -> (PRINT \"y\"))"),
         );
         assert!(
             matches!(&err.kind, KErrorKind::TypeMismatch { arg, .. } if arg == "<return>"),
@@ -212,10 +212,10 @@ mod tests {
         // The arm result is re-tagged to the declared `:Number`, so a Number-typed
         // FN slot admits the whole MATCH expression.
         let bytes = run_program(
-            "UNION Maybe = (some :Number none :Null)\n\
-             LET m = (Maybe (some 7))\n\
+            "UNION Maybe = (Some :Number None :Null)\n\
+             LET m = (Maybe (Some 7))\n\
              FN (ID n :Number) -> :Number = (n)\n\
-             PRINT (ID (MATCH (m) -> :Number WITH (some -> (it) none -> (0))))",
+             PRINT (ID (MATCH (m) -> :Number WITH (Some -> (it) None -> (0))))",
         );
         assert_eq!(bytes, b"7\n");
     }
@@ -223,9 +223,9 @@ mod tests {
     #[test]
     fn match_other_branch_runs_when_tag_matches() {
         let bytes = run_program(
-            "UNION Maybe = (some :Number none :Null)\n\
-             LET m = (Maybe (none null))\n\
-             MATCH (m) -> :Str WITH (some -> (PRINT \"yes\") none -> (PRINT \"nothing\"))",
+            "UNION Maybe = (Some :Number None :Null)\n\
+             LET m = (Maybe (None null))\n\
+             MATCH (m) -> :Str WITH (Some -> (PRINT \"yes\") None -> (PRINT \"nothing\"))",
         );
         assert_eq!(bytes, b"nothing\n");
     }
@@ -251,12 +251,12 @@ mod tests {
         // Pins the `outer_frame` chain — per-call-arena-protocol.md
         // § MATCH frame lifetime under tail recursion.
         let bytes = run_program(
-            "UNION Bit = (one :Null zero :Null)\n\
+            "UNION Bit = (One :Null Zero :Null)\n\
              FN (HOP b :Tagged) -> Any = (MATCH (b) -> :Str WITH (\
-                 one -> (HOP (Bit (zero null)))\
-                 zero -> (PRINT \"done\")\
+                 One -> (HOP (Bit (Zero null)))\
+                 Zero -> (PRINT \"done\")\
              ))\n\
-             HOP (Bit (one null))",
+             HOP (Bit (One null))",
         );
         assert_eq!(bytes, b"done\n");
     }
@@ -278,11 +278,11 @@ mod tests {
     #[test]
     fn multi_statement_match_branch_returns_last_value() {
         let bytes = run_program(
-            "UNION Maybe = (some :Number none :Null)\n\
-             LET m = (Maybe (some 5))\n\
+            "UNION Maybe = (Some :Number None :Null)\n\
+             LET m = (Maybe (Some 5))\n\
              MATCH (m) -> :Str WITH (\
-                 some -> ((PRINT \"got\") (PRINT it))\
-                 none -> (PRINT \"no\")\
+                 Some -> ((PRINT \"got\") (PRINT it))\
+                 None -> (PRINT \"no\")\
              )",
         );
         let s = String::from_utf8_lossy(&bytes);
@@ -293,15 +293,15 @@ mod tests {
     #[test]
     fn fn_recursion_with_multi_statement_body_via_match_terminates() {
         let bytes = run_program(
-            "UNION Bit = (one :Null zero :Null)\n\
+            "UNION Bit = (One :Null Zero :Null)\n\
              FN (HOP b :Tagged) -> Any = (\
                  (PRINT \"step\")\
                  (MATCH (b) -> :Str WITH (\
-                     one -> (HOP (Bit (zero null)))\
-                     zero -> (PRINT \"done\")\
+                     One -> (HOP (Bit (Zero null)))\
+                     Zero -> (PRINT \"done\")\
                  ))\
              )\n\
-             HOP (Bit (one null))",
+             HOP (Bit (One null))",
         );
         let s = String::from_utf8_lossy(&bytes);
         assert!(s.contains("done"), "expected 'done' to print, got {s:?}");

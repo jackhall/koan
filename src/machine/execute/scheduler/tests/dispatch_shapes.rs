@@ -332,9 +332,9 @@ fn fast_lane_on_tagged_union_constructs() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "UNION Maybe = (some :Number none :Null)");
+    run(scope, "UNION Maybe = (Some :Number None :Null)");
     reset_resolve_dispatch_entry_count();
-    let result = run_one(scope, parse_one("Maybe (some 42)"));
+    let result = run_one(scope, parse_one("Maybe (Some 42)"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -344,7 +344,7 @@ fn fast_lane_on_tagged_union_constructs() {
     );
     match result {
         KObject::Tagged { tag, value, .. } => {
-            assert_eq!(tag, "some");
+            assert_eq!(tag, "Some");
             assert!(matches!(&**value, KObject::Number(n) if *n == 42.0));
         }
         other => panic!("expected Tagged, got {:?}", other.ktype()),
@@ -598,15 +598,15 @@ fn classifier_struct_construct_routes_to_type_call() {
     );
 }
 
-/// `(Maybe (some 42))` — leaf-Type head, single nested-`Expression` body
-/// holding `(some 42)`. Must route to `TypeCall`.
+/// `(Maybe (Some 42))` — leaf-Type head, single nested-`Expression` body
+/// holding `(Some 42)`. Must route to `TypeCall`.
 #[test]
 fn classifier_tagged_construct_routes_to_type_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
-    let expr = parse_one("Maybe (some 42)");
+    let expr = parse_one("Maybe (Some 42)");
     assert!(
         matches!(classify_dispatch_shape(&expr), DispatchShape::TypeCall),
-        "expected TypeCall for `Maybe (some 42)`",
+        "expected TypeCall for `Maybe (Some 42)`",
     );
 }
 

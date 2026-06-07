@@ -21,9 +21,10 @@ use crate::machine::core::kfunction::argument_bundle::{
 
 /// `UNION <name:TypeExprRef> = (<schema>)` — declare a named tagged-union type.
 ///
-/// The schema slot is a parens-wrapped expression of `<tag:Identifier> :<type:Type>`
-/// pairs. Parens keep the parts from dispatching as their own expression so the
-/// elaborator sees identifier/type pairs directly. Type-only: the variant schema rides
+/// The schema slot is a parens-wrapped expression of `<tag:Type> :<type:Type>`
+/// pairs — variant tags are capitalized type names. Parens keep the parts from
+/// dispatching as their own expression so the elaborator sees tag/type pairs
+/// directly. Type-only: the variant schema rides
 /// the sealed `RecursiveSet` member in `bindings.types`, and the declaration yields a
 /// `KTypeValue(SetRef)` first-class type value — no value-side carrier.
 pub fn body<'a>(
@@ -66,7 +67,7 @@ pub fn body<'a>(
     let outcome = parse_typed_field_list_via_elaborator(
         &schema_expr,
         "UNION schema",
-        FieldNameKind::Identifier,
+        FieldNameKind::Type,
         &mut elaborator,
         None,
     );
@@ -90,7 +91,7 @@ pub fn body<'a>(
                 park_producers,
                 sub_dispatches,
                 "UNION schema",
-                FieldNameKind::Identifier,
+                FieldNameKind::Type,
                 vec![name.clone()],
                 chain,
                 Some(pending_guard),
@@ -200,7 +201,7 @@ mod tests {
 
     #[test]
     fn binder_name_extracts_named_union_name() {
-        let expr = parse_one("UNION Maybe = (some :Number, none :Null)");
+        let expr = parse_one("UNION Maybe = (Some :Number, None :Null)");
         let name = super::binder_name(&expr);
         assert_eq!(name.as_deref(), Some("Maybe"));
     }
@@ -211,7 +212,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         // UNION is type-only: the declaration yields a `KTypeValue(SetRef)` whose Tagged
         // member carries the variant schema, registered into `types`.
-        let result = run_one(scope, parse_one("UNION Maybe = (some :Number none :Null)"));
+        let result = run_one(scope, parse_one("UNION Maybe = (Some :Number None :Null)"));
         match result {
             KObject::KTypeValue(KType::SetRef { set, index }) => {
                 assert_eq!(set.member(*index).kind, NominalKind::Tagged);
@@ -222,8 +223,8 @@ mod tests {
             ),
         }
         let schema = tagged_schema(scope, "Maybe");
-        assert_eq!(schema.get("some"), Some(&KType::Number));
-        assert_eq!(schema.get("none"), Some(&KType::Null));
+        assert_eq!(schema.get("Some"), Some(&KType::Number));
+        assert_eq!(schema.get("None"), Some(&KType::Null));
         assert!(
             scope.bindings().data().get("Maybe").is_none(),
             "UNION must not write a value-side carrier into data",
@@ -233,7 +234,7 @@ mod tests {
     /// No anonymous `UNION (...)` form: the bare two-part shape matches no UNION
     /// overload (the declarator is `UNION <name> = (<schema>)`, four elements), so
     /// dispatch fails cleanly with `DispatchFailed` rather than eagerly evaluating the
-    /// `(ok …)` operand and leaking `UnboundName("ok")` — the relaxed admission pass
+    /// `(Ok …)` operand and leaking an unbound-name miss — the relaxed admission pass
     /// keeps it a clean miss (see
     /// [scheduler.md § In-walk dispatch precedence](../../design/typing/scheduler.md#in-walk-dispatch-precedence)).
     #[test]
@@ -243,7 +244,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let mut sched = Scheduler::new();
-        sched.add_dispatch(parse_one("UNION (ok :Number err :Str)"), scope);
+        sched.add_dispatch(parse_one("UNION (Ok :Number Err :Str)"), scope);
         let err = sched
             .execute()
             .expect_err("a bare anonymous UNION (...) must fail dispatch");
@@ -257,7 +258,7 @@ mod tests {
     fn union_rejects_unknown_type_name() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let err = run_one_err(scope, parse_one("UNION Bad = (some :Bogus)"));
+        let err = run_one_err(scope, parse_one("UNION Bad = (Some :Bogus)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("Bogus")),
             "expected ShapeError mentioning Bogus, got {err}",
@@ -279,9 +280,9 @@ mod tests {
     fn union_rejects_duplicate_tag() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let err = run_one_err(scope, parse_one("UNION Dupe = (some :Number some :Str)"));
+        let err = run_one_err(scope, parse_one("UNION Dupe = (Some :Number Some :Str)"));
         assert!(
-            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`some`")),
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`Some`")),
             "expected ShapeError on duplicate tag, got {err}",
         );
     }
@@ -310,18 +311,18 @@ mod tests {
         let first = super::finalize_union(
             scope,
             "Maybe".into(),
-            vec![("some".into(), KType::Number)],
+            vec![("Some".into(), KType::Number)],
             BindingIndex::value(0),
         );
         assert!(matches!(first, crate::machine::BodyResult::Value(_)));
         // The member of the *pre-installed* set is now filled in place.
         assert!(pre_set.member(0).is_filled());
         let schema = tagged_schema(scope, "Maybe");
-        assert_eq!(schema.get("some"), Some(&KType::Number));
+        assert_eq!(schema.get("Some"), Some(&KType::Number));
         let second = super::finalize_union(
             scope,
             "Maybe".into(),
-            vec![("some".into(), KType::Number)],
+            vec![("Some".into(), KType::Number)],
             BindingIndex::value(0),
         );
         match second {
@@ -345,7 +346,7 @@ mod tests {
         // rejected by the pair-list walker.
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let err = run_one_err(scope, parse_one("UNION Pair = (some :Number none)"));
+        let err = run_one_err(scope, parse_one("UNION Pair = (Some :Number None)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("pair") || msg.contains("multiple of 2")),
             "expected ShapeError on odd part count, got {err}",

@@ -669,7 +669,7 @@ The rails the dispatch driver feeds:
     is the whole user-facing surface). A `KFunction(f, _)` head resolves to a
     `ResolvedCallable::Function` and a `KTypeValue(KType::SetRef { .. })`
     head — the carrier a value-classified alias of a constructible type
-    synthesizes (`LET outcome = Outcome` then `(outcome (err "x"))`) — to a
+    synthesizes (`LET outcome = Outcome` then `(outcome (Err "x"))`) — to a
     `ResolvedCallable::Constructor`, both flowing through the shared
     apply-a-callable tail (below). Any other carrier (number, string, instance
     struct, module, …) surfaces a `TypeMismatch` directly. A `Placeholder` head

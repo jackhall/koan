@@ -197,12 +197,12 @@ Every value in Koan has a type. The names you can write in source are:
 | `:(LIST OF T)`             | ordered sequence                    | `[1, 2, 3]`                               |
 | `:(MAP K -> V)`            | scalar-keyed map                    | `{a: 1, b: 2}`                            |
 | `:(FN (args) -> R)`        | callable function value             | `(FN (DOUBLE x :Number) -> Number = (x))` |
-| `Tagged`                   | a value of a tagged union           | `Maybe (some 42)` (see `UNION` below)     |
+| `Tagged`                   | a value of a tagged union           | `Maybe (Some 42)` (see `UNION` below)     |
 | `Any`                      | wildcard — accepts any value        | (used in annotations only)                |
 
 A type name appears wherever you annotate something: the type of a parameter
 slot (`x :(LIST OF Number)`), the return type on a function (`-> Number`), the
-type of a tagged-union variant (`some :Number`). Ascriptions use the
+payload type of a tagged-union variant (`Some :Number`). Ascriptions use the
 glued-right `:` sigil with no space between the `:` and the type — `x :Number`,
 not `x: Number`. Parameterized type expressions extend the same form into an
 S-expression group: `:(LIST OF Number)`, `:(MAP Str -> Number)`,
@@ -288,17 +288,18 @@ body. Recursion is the iteration model; tail calls reuse the calling slot.
 `UNION` declares a type whose values carry a *tag* and a payload:
 
 ```
-UNION Maybe = (some :Number none :Null)
+UNION Maybe = (Some :Number None :Null)
 ```
 
-A tag is a bare identifier; a type is a type-name token. The schema body is a
-parens-wrapped sequence of `<tag> :<Type>` triples. Every UNION carries a
+A tag is a **capitalized** type-name token (`Some`, not `some`); the payload is a
+type-name token too. The schema body is a parens-wrapped sequence of `<Tag>
+:<Type>` pairs. A lowercase tag is a parse error. Every UNION carries a
 per-declaration identity — the bare `UNION (...)` form is not accepted.
 
-Construct a value by calling the type with a `(tag value)` pair:
+Construct a value by calling the type with a `(Tag value)` pair:
 
 ```
-LET m = (Maybe (some 42))
+LET m = (Maybe (Some 42))
 ```
 
 A type aliases only under a Type-classified (uppercase-leading) name — e.g.
@@ -306,23 +307,34 @@ A type aliases only under a Type-classified (uppercase-leading) name — e.g.
 type can never bind to a value-classified (lowercase) identifier: `LET maybe =
 Maybe` is rejected.
 
+Each variant is its own type, reached through its union with the
+union-qualified sigil `:(Maybe Some)`. A slot typed `:(Maybe Some)` admits only
+`Some` values, while a `:Maybe` slot admits any variant — so functions can
+dispatch on a single variant:
+
+```
+FN (DESC x :(Maybe Some)) -> :Str = ("is-some")
+FN (DESC x :(Maybe None)) -> :Str = ("is-none")
+PRINT (DESC (Maybe (Some 1)))     ; is-some
+```
+
 Pattern-match on the tag with `MATCH ... WITH`. The branches are
-`<tag> -> <body>` triples. A trailing comma joins the next line into the
+`<Tag> -> <body>` triples. A trailing comma joins the next line into the
 same group:
 
 ```
 MATCH (m) WITH
-  some -> (PRINT "got"),
-  none -> (PRINT "no")
+  Some -> (PRINT "got"),
+  None -> (PRINT "no")
 ```
 
 Only the matching branch's body is dispatched. Inside a branch, `it` is bound
 to the inner value:
 
 ```
-UNION Outcome = (ok :Str err :Str)
-LET r = (Outcome (ok "all good"))
-MATCH (r) WITH (ok -> (PRINT it) err -> (PRINT "failed"))
+UNION Outcome = (Ok :Str Err :Str)
+LET r = (Outcome (Ok "all good"))
+MATCH (r) WITH (Ok -> (PRINT it) Err -> (PRINT "failed"))
 ```
 
 A non-exhaustive match (no branch for the actual tag) errors with
@@ -527,24 +539,24 @@ literal, `PRINT`'s return) are not errors.
 
 `TRY (<expr>) WITH (<branches>)` evaluates `<expr>` in a catching context
 and dispatches a branch keyed on the result. Each branch is a
-`<tag> -> <body>` triple: `ok` runs on success with `it` bound to the
-value, the lowercased `KErrorKind` names (`type_mismatch`, `missing_arg`,
-`unbound_name`, `arity_mismatch`, `ambiguous_dispatch`, `dispatch_failed`,
-`shape_error`, `parse_error`, `user`) catch the matching error with `it`
+`<Tag> -> <body>` triple: `Ok` runs on success with `it` bound to the
+value, the capitalized `KErrorKind` names (`TypeMismatch`, `MissingArg`,
+`UnboundName`, `ArityMismatch`, `AmbiguousDispatch`, `DispatchFailed`,
+`ShapeError`, `ParseError`, `User`) catch the matching error with `it`
 bound to a per-variant payload struct, and `_` is an optional wildcard:
 
 ```
 TRY (RISKY x) WITH
-  ok            -> (PRINT it)
-  type_mismatch -> (PRINT it.expected)
-  _             -> (PRINT "something else went wrong")
+  Ok           -> (PRINT it)
+  TypeMismatch -> (PRINT it.expected)
+  _            -> (PRINT "something else went wrong")
 ```
 
 Each error arm's `it` payload carries the variant's structured fields
 plus `it.frames :List<Str>` (one entry per call frame, rendered
-`"in <expression> (<function>)"`). The `ok` arm binds `it` to the bare
+`"in <expression> (<function>)"`). The `Ok` arm binds `it` to the bare
 success value, not a wrapper. No matching arm and no `_` re-raises the
-original error; a successful expression with no `ok` arm raises a
+original error; a successful expression with no `Ok` arm raises a
 synthetic `ShapeError`. The TRY body and each WITH arm are their own
 lexical blocks — a `LET` inside the body or an arm is local to that
 arm and is not visible after the `TRY`. See
@@ -554,15 +566,15 @@ shape table.
 ## Putting it together
 
 ```
-UNION Greeting = (formal :Str casual :Str)
+UNION Greeting = (Formal :Str Casual :Str)
 
 FN (SAY msg :Str) -> Null = (PRINT msg)
 
-LET hello = (Greeting (casual "hey"))
+LET hello = (Greeting (Casual "hey"))
 
 MATCH (hello) WITH
-  formal -> (SAY "greetings, sir"),
-  casual -> (SAY it)
+  Formal -> (SAY "greetings, sir"),
+  Casual -> (SAY it)
 ```
 
 What runs:
@@ -570,9 +582,9 @@ What runs:
 1. `UNION Greeting = ...` registers a tagged-union type with two variants.
 2. `FN (SAY msg :Str) -> Null = (PRINT msg)` defines a one-arg function over
    strings.
-3. `LET hello = (Greeting (casual "hey"))` builds a `Tagged` value with tag
-   `casual` and payload `"hey"`, and binds it as `hello`.
-4. `MATCH` sees the `casual` tag, runs the `casual` branch, and `SAY it`
+3. `LET hello = (Greeting (Casual "hey"))` builds a `Tagged` value with tag
+   `Casual` and payload `"hey"`, and binds it as `hello`.
+4. `MATCH` sees the `Casual` tag, runs the `Casual` branch, and `SAY it`
    prints `hey`.
 
 ## Builtin reference
@@ -590,7 +602,7 @@ One line per surface form. Sources under
 | `NEWTYPE <Name> = <Repr>`                | Declare a fresh nominal identity over a transparent representation — a scalar (`Number`) or a record (`:{x :Number, y :Number}`, the ex-`STRUCT` shape). `(Name value)` / `(Name {fields})` constructs. | [newtype_def.rs](src/builtins/newtype_def.rs)        |
 | `MATCH <value:Tagged> WITH (<branches>)` | Branch by tag; only the matching branch's body runs. `it` binds the inner value.                | [match_case.rs](src/builtins/match_case.rs)          |
 | `TRY (<expr>) WITH (<branches>)`         | Evaluate `<expr>` in a catching context; branch on `ok` / the `KErrorKind` tags / `_`. `it` is the value (success) or per-variant payload (error). | [try_with.rs](src/builtins/try_with.rs)              |
-| `<verb:Type> (<args>)`                   | Construct a tagged or newtype value, e.g. `Maybe (some 42)` or `Point {x = 3, y = 4}`.            | [dispatch/single_poll.rs](src/machine/execute/dispatch/single_poll.rs) (`TypeCall` fast lane) |
+| `<verb:Type> (<args>)`                   | Construct a tagged or newtype value, e.g. `Maybe (Some 42)` or `Point {x = 3, y = 4}`.            | [dispatch/single_poll.rs](src/machine/execute/dispatch/single_poll.rs) (`TypeCall` fast lane) |
 | `<verb:Identifier> (<args>)`             | Call a function, tagged-union type, or newtype bound under `<verb>`.                            | [dispatch/fn_value.rs](src/machine/execute/dispatch/fn_value.rs) (`FunctionValueCall` fast lane) |
 | `<s>.<field>` (`ATTR <s> <field>`)       | Read `<field>` off a record-repr newtype value. Compound-token `.` operator; `s.x.y` chains.     | [attr.rs](src/builtins/attr.rs)                      |
 | `(<fields>) FROM <r:{}>`                 | Project a record value to the named fields, e.g. `(x y) FROM r` — re-tags the carried type to `{x, y}` to pick one of two incomparable dispatch arms. | [record_projection.rs](src/builtins/record_projection.rs) |

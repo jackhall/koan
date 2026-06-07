@@ -257,7 +257,7 @@ fn any_user_type_newtype_accepts_wrapped_only() {
         NominalSchema::Tagged(std::collections::HashMap::new()),
     );
     let s: &KObject<'_> = arena.alloc_object(KObject::Tagged {
-        tag: "some".into(),
+        tag: "Some".into(),
         value: std::rc::Rc::new(KObject::Number(1.0)),
         set: tagged_set,
         index: 0,
@@ -510,7 +510,7 @@ fn constructor_apply_result_checks_inhabited_error_param() {
         ctor: ctor.clone(),
         args: vec![KType::Any, myerr_ty.clone()],
     };
-    let caught = result_value(&r_set, "error", error_carrier(&kerror_set));
+    let caught = result_value(&r_set, "Error", error_carrier(&kerror_set));
     assert!(!slot_myerr.matches_value(&caught));
 
     let slot_kerror = KType::ConstructorApply {
@@ -519,13 +519,13 @@ fn constructor_apply_result_checks_inhabited_error_param() {
     };
     assert!(slot_kerror.matches_value(&caught));
 
-    let my_error = result_value(&r_set, "error", error_carrier(&myerr_set));
+    let my_error = result_value(&r_set, "Error", error_carrier(&myerr_set));
     assert!(slot_myerr.matches_value(&my_error));
 }
 
-/// The `ok` field maps to param 0, so `:(Result Number E)` checks the `ok` payload
-/// against `Number` regardless of `E`: an `ok(42)` value admits any `E` (the absent
-/// `error` parameter is unconstrained at the value).
+/// The `Ok` field maps to param 0, so `:(Result Number E)` checks the `Ok` payload
+/// against `Number` regardless of `E`: an `Ok(42)` value admits any `E` (the absent
+/// `Error` parameter is unconstrained at the value).
 #[test]
 fn constructor_apply_result_ok_admits_any_error_param() {
     let result_sid = ScopeId::from_raw(0, 0x9001);
@@ -539,7 +539,7 @@ fn constructor_apply_result_ok_admits_any_error_param() {
         set: tagged_set("MyErr", myerr_sid),
         index: 0,
     };
-    let ok_value = result_value(&r_set, "ok", KObject::Number(42.0));
+    let ok_value = result_value(&r_set, "Ok", KObject::Number(42.0));
     let slot = KType::ConstructorApply {
         ctor: ctor.clone(),
         args: vec![KType::Number, myerr_ty],
@@ -552,14 +552,14 @@ fn constructor_apply_result_ok_admits_any_error_param() {
     assert!(!slot_str.matches_value(&ok_value));
 }
 
-/// `result_field_param_index` is the field→param linkage source of truth: `ok`→0,
-/// `error`→1, `None` for any other carrier or tag.
+/// `result_field_param_index` is the field→param linkage source of truth: `Ok`→0,
+/// `Error`→1, `None` for any other carrier or tag.
 #[test]
 fn result_field_param_index_table() {
-    assert_eq!(super::result_field_param_index("Result", "ok"), Some(0));
-    assert_eq!(super::result_field_param_index("Result", "error"), Some(1));
-    assert_eq!(super::result_field_param_index("Result", "other"), None);
-    assert_eq!(super::result_field_param_index("Maybe", "ok"), None);
+    assert_eq!(super::result_field_param_index("Result", "Ok"), Some(0));
+    assert_eq!(super::result_field_param_index("Result", "Error"), Some(1));
+    assert_eq!(super::result_field_param_index("Result", "Other"), None);
+    assert_eq!(super::result_field_param_index("Maybe", "Ok"), None);
 }
 
 /// Covariance for `ConstructorApply` carriers: a `Result<Number, MyErr>` value is
@@ -580,7 +580,7 @@ fn constructor_apply_covariant_admission_and_specificity() {
         index: 0,
     };
     let stamped = KObject::Tagged {
-        tag: "ok".into(),
+        tag: "Ok".into(),
         value: std::rc::Rc::new(KObject::Number(1.0)),
         set: Rc::clone(&r_set),
         index: 0,
@@ -611,7 +611,7 @@ fn constructor_apply_stamped_type_args_checked_structurally() {
         index: 0,
     });
     let stamped = KObject::Tagged {
-        tag: "ok".into(),
+        tag: "Ok".into(),
         value: std::rc::Rc::new(KObject::Number(1.0)),
         set: Rc::clone(&r_set),
         index: 0,

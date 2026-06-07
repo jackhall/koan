@@ -134,6 +134,19 @@ impl<'a> KType<'a> {
             (SetRef { set, index }, AnyUserType { kind: b }) if set.member(*index).kind == *b => {
                 true
             }
+            // A variant refines its union: `:(Maybe Some)` is strictly more specific than
+            // `:Maybe` and than `:Tagged`, so a variant-typed overload wins over a
+            // union-typed sibling that also admits the value.
+            (Variant { set, index, .. }, SetRef { set: us, index: ui })
+                if Rc::ptr_eq(set, us) && index == ui =>
+            {
+                true
+            }
+            (Variant { set, index, .. }, AnyUserType { kind: b })
+                if set.member(*index).kind == *b =>
+            {
+                true
+            }
             (ConstructorApply { ctor: ca, args: aa }, ConstructorApply { ctor: cb, args: ab })
                 if ca == cb && aa.len() == ab.len() =>
             {
@@ -271,6 +284,19 @@ impl<'a> KType<'a> {
                 }
                 _ => false,
             },
+            // A user-`UNION` value's `ktype()` is now a `Variant`, but a union-typed slot
+            // still admits every variant. A `TypeConstructor` (`Result`) value reports a
+            // `SetRef` / `ConstructorApply` and is handled by the identity fallback below.
+            KType::SetRef { set, index } => match obj {
+                KObject::Tagged {
+                    set: s2, index: i2, ..
+                } if s2.member(*i2).kind == NominalKind::Tagged => {
+                    Rc::ptr_eq(set, s2) && index == i2
+                }
+                _ => *self == obj.ktype(),
+            },
+            // A variant slot admits exactly the tagged values of that one variant.
+            KType::Variant { .. } => *self == obj.ktype(),
             _ => *self == obj.ktype(),
         }
     }
@@ -375,8 +401,20 @@ impl<'a> KType<'a> {
             },
             // Strict `(set ptr, index)` equality is the per-declaration identity check for a
             // sealed nominal type — `obj.ktype()` yields a `SetRef` whose `PartialEq` keys on
-            // the shared allocation and index.
-            KType::SetRef { .. } => {
+            // the shared allocation and index. A user-`UNION` value reports a `Variant`, so a
+            // union-typed slot admits any variant of that union explicitly.
+            KType::SetRef { set, index } => match part {
+                ExpressionPart::Future(KObject::Tagged {
+                    set: s2, index: i2, ..
+                }) if s2.member(*i2).kind == NominalKind::Tagged => {
+                    Rc::ptr_eq(set, s2) && index == i2
+                }
+                ExpressionPart::Future(obj) => &obj.ktype() == self,
+                _ => false,
+            },
+            // A variant slot admits exactly its own tagged values via `(set, index, tag)`
+            // identity.
+            KType::Variant { .. } => {
                 matches!(part, ExpressionPart::Future(obj) if &obj.ktype() == self)
             }
             KType::AnyUserType { kind } => match part {
@@ -512,14 +550,14 @@ fn record_value_more_specific<'a>(a: &Record<KType<'a>>, b: &Record<KType<'a>>) 
 }
 
 /// Field→type-parameter linkage for the builtin `Result` parameterized union:
-/// `ok`→0 (`T`), `error`→1 (`E`), mirroring the `param_names: ["T", "E"]` registered
+/// `Ok`→0 (`T`), `Error`→1 (`E`), mirroring the `param_names: ["T", "E"]` registered
 /// in [`crate::builtins::result`]. Returns `None` for any other carrier — user UNIONs
 /// don't yet carry runtime type arguments, so their `ConstructorApply` admission
 /// falls back to a ctor-identity-only check.
 pub fn result_field_param_index(carrier_name: &str, tag: &str) -> Option<usize> {
     match (carrier_name, tag) {
-        ("Result", "ok") => Some(0),
-        ("Result", "error") => Some(1),
+        ("Result", "Ok") => Some(0),
+        ("Result", "Error") => Some(1),
         _ => None,
     }
 }

@@ -15,7 +15,7 @@ use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{KObject, KType, RecursiveSet};
-use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, SchedulerHandle};
+use crate::machine::{KError, KErrorKind, NodeId, Resolution, SchedulerHandle, Scope};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::apply_callable::{apply_callable, ResolvedCallable};

@@ -10,14 +10,16 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 /// Which token shapes are accepted as a field/parameter *name* by [`parse_pair_list`].
 ///
-/// STRUCT / UNION fields are lowercase user identifiers, so they require `Identifier`.
+/// STRUCT / record fields are lowercase user identifiers, so they require `Identifier`.
 /// FN / FUNCTOR parameters may be conventionally capitalized (`Ty`, `Er`), which lexes
-/// as a `Type` token, so they opt into `IdentifierOrType` — the name string is then read
-/// via `TypeName::render()`. STRUCT / UNION keep the strict `Identifier`-only rule.
+/// as a `Type` token, so they opt into `IdentifierOrType`. UNION variant tags *are*
+/// types (`Some`, `Ok`) and so require `Type` — a lowercase tag is rejected. In every
+/// type-token case the name string is read via `TypeName::render()`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FieldNameKind {
     Identifier,
     IdentifierOrType,
+    Type,
 }
 
 /// `context` is woven into error messages; `name_kind` selects which token shapes are
@@ -39,10 +41,23 @@ pub fn parse_pair_list<'a, T>(
     let mut i = 0;
     while i < parts.len() {
         let name = match (&parts[i].value, name_kind) {
-            (ExpressionPart::Identifier(s), _) => s.clone(),
-            // Capitalized parameter names (`Ty`, `Er`) lex as `Type` tokens; admitted
-            // only under `IdentifierOrType` (FN / FUNCTOR), never for STRUCT / UNION.
-            (ExpressionPart::Type(t), FieldNameKind::IdentifierOrType) => t.render(),
+            (
+                ExpressionPart::Identifier(s),
+                FieldNameKind::Identifier | FieldNameKind::IdentifierOrType,
+            ) => s.clone(),
+            // Capitalized names (`Ty`, `Er` params; `Some`, `Ok` variant tags) lex as
+            // `Type` tokens; admitted under `IdentifierOrType` (FN / FUNCTOR) and `Type`
+            // (UNION tags), never for STRUCT / record fields.
+            (ExpressionPart::Type(t), FieldNameKind::IdentifierOrType | FieldNameKind::Type) => {
+                t.render()
+            }
+            // A lowercase tag under the `Type` policy — tags must be capitalized type names.
+            (other, FieldNameKind::Type) => {
+                return Err(format!(
+                    "{context} variant tag must be a capitalized type name, got {}",
+                    other.summarize(),
+                ));
+            }
             (other, _) => {
                 return Err(format!(
                     "{context} name must be a bare identifier, got {}",

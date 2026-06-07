@@ -1,74 +1,64 @@
 # Tagged-union variants as dispatchable types
 
-Promote each `UNION` variant from a value-side string label to its own nominal
-`KType`, so tagged-union elimination collapses into ordinary type-dispatch.
+Converge tagged-union `MATCH` onto the ordinary type-dispatch that now eliminates
+every other typed value — the deferred half of the variant work whose identity,
+dispatch, and surface already [shipped](../../design/typing/user-types.md#tagged-union-variants).
 
-**Problem.** koan's nominal tagged unions carry their variant labels as
-value-side string identifiers, not types. `UNION Maybe = (some :Int, none :Null)`
-parses each tag through `FieldNameKind::Identifier` — strict lowercase user
-identifiers (`src/parse/triple_list.rs`) — stores the schema as
-`Rc<HashMap<String, KType>>` keyed by tag-string
-(`NominalKind::Tagged`, `src/machine/model/types/ktype.rs`), and a value carries
-its tag as a plain `String` (`KObject::Tagged`, `src/machine/model/values/kobject.rs`).
-Construction extracts the first call argument as a bare `Identifier` and looks it
-up by string key (`src/machine/execute/dispatch/constructors/tagged_union.rs`);
-elimination is a bespoke `MATCH` form that re-extracts the tag string and matches
-arms by name (`src/builtins/match_case.rs`). A variant is therefore invisible to
-the type language: it has no `KType` identity, can't fill a typed slot, can't be
-dispatched on, and `MATCH` re-implements discrimination as string comparison
-instead of reusing the type-dispatch machinery that already eliminates every
-other typed value. A tag classifies as `BareIdentifier`, never `BareTypeLeaf`
-(`classify_dispatch_shape`, `src/machine/model/ast.rs`).
+**Problem.** A user-`UNION` value's `ktype()` now reports a
+`KType::Variant { set, index, tag }`, so variants fill typed slots and dispatch
+by identity — but `MATCH` (`src/builtins/match_case.rs`) is still a *distinct*
+elimination form: it reads the value's carried tag and selects an arm by name
+through the shared [`branch_walk`](../../src/builtins/branch_walk.rs), rather than
+lowering to the ordinary type-dispatch that eliminates every other typed value.
+Two consequences remain. A typo'd arm head (`MATCH (m) WITH (Bogus -> …)`) yields
+the generic inexhaustive-match error, not a "Bogus is not a variant of Maybe"
+schema error, because `branch_walk` doesn't carry the union's variant set. And a
+field typed as a variant of the type currently being sealed has no `SetLocal`
+form, so recursive variant references inside a schema are unsupported (external
+`Variant`s pass through seal/resolve walks fine).
 
 **Acceptance criteria.**
 
-- A declared variant mints a `KType` refinement of its union, so a slot can be
-  typed to a single variant and a function accepting only `some` rejects `none`
-  at bind time.
-- Tagged-union elimination runs through ordinary type-dispatch — the same
-  mechanism that eliminates [anonymous structural
-  unions](anonymous-unions.md) by runtime type — with `MATCH` lowering to
-  type-dispatch rather than a parallel string-matching form.
-- Discrimination keys on variant-type identity, so `UNION R = (ok :Int,
-  error :Int)` keeps two distinct arms.
-- A variant is usable inside `:(...)`, as an agreed return type, and as a
-  dispatch key, classifying as a type leaf rather than through
-  `BareIdentifier`.
-- Each variant is a `Newtype` over its payload and the union is their
-  anonymous-union join, so `NominalKind::Tagged` dissolves into `Newtype`;
-  combined with the shipped product-side struct → record-repr `NEWTYPE`
-  collapse, `NominalKind` is reduced toward `{Newtype, TypeConstructor}`.
+- `MATCH` lowers to ordinary type-dispatch — the same mechanism that eliminates
+  [anonymous structural unions](anonymous-unions.md) by runtime type — rather
+  than the parallel name-matching `branch_walk` form, so the two elimination
+  paths converge.
+- A `MATCH` arm whose head names a non-variant of the scrutinee's union is a
+  schema error naming the offending tag and the real variants, not a generic
+  inexhaustive-match miss.
+- A schema field can be typed as a variant of the type currently being sealed:
+  a `KType::Variant` inside a schema folds to its `SetLocal` form at seal and
+  resolves back at projection, like `SetRef`.
 
 **Directions.**
 
-- *Variant identity as its own `KType` — decided.* Each declared variant mints a
-  nominal `KType` refinement of its union, distinct from its payload type; the
-  union type is the join of its variant types (each variant a subtype of the
-  union), mirroring the member/union subtyping of
-  [anonymous structural unions](anonymous-unions.md). Discrimination keys on
-  variant identity, not payload type, so same-payload variants stay distinct.
-- *Tag namespace — open.* Where variant types live. Options: (a) global type
-  names (`some`) — simplest, but collides across unions and loses today's free
-  per-union namespacing; (b) union-scoped path (`Maybe.some`) — collision-free,
-  but needs a member-path surface koan lacks; (c) structurally keyed by
-  `(union-identity, tag)`, reachable only through the union — collision-free with
-  no new global names, mirroring opaque-member identity
-  (`AbstractSource` / `Wrapped`). Recommended: (c), with (b) layered on if a path
-  surface lands.
-- *Lexical reclassification — decided.* Tags parse as type-leaf tokens
-  (`BareTypeLeaf`) rather than `FieldNameKind::Identifier`
-  (`src/parse/triple_list.rs`), so a variant is type-classified everywhere
-  `classify_dispatch_shape` runs. Whether type-leaf lexing forces a
-  capitalization convention (`Some` vs `some`) rides the same tokenizer change.
-- *MATCH vs dispatch — open.* Whether `MATCH` becomes pure sugar lowering to
-  type-dispatch arms, or stays a distinct form that reuses the variant-type
-  machinery internally. The tag-free "match by type" arm shape is the same sugar
-  [anonymous-unions](anonymous-unions.md) defers. Recommended: keep `MATCH` as
-  surface sugar that lowers to type-dispatch.
-- *Construction surface — open.* Whether construction stays union-name-led
-  (`(Maybe (some 42))`) or becomes variant-led (`(some 42)`) with the union
-  inferred from the variant type. Recommended: defer until the tag namespace is
-  settled — variant-led construction presumes a reachable variant name.
+- *Variant identity as its own `KType` — decided, shipped.* Each declared variant
+  is a `KType::Variant { set, index, tag }` refinement of its union, keyed
+  structurally by `(union-set ptr, index, tag)` and reached *through* the union —
+  namespace option (c), no global variant names. A variant is strictly more
+  specific than its union's `SetRef` and than `AnyUserType { kind: Tagged }`;
+  discrimination keys on `(set, index, tag)`, so same-payload variants stay
+  distinct. See [user-types.md § Tagged-union variants](../../design/typing/user-types.md#tagged-union-variants).
+- *Tag lexing / capitalization — decided, shipped.* Tags are capitalized `Type`
+  tokens (`some`→`Some`, `ok`→`Ok`/`Error`), keyed by the tokenizer's
+  capitalization rule via `FieldNameKind::Type` (`src/parse/triple_list.rs`); a
+  lowercase tag is a clear parse error. A variant is therefore type-classified
+  everywhere `classify_dispatch_shape` runs.
+- *Variant-reference surface — decided, shipped.* A variant type is spelled
+  `:(Maybe Some)` — a union-qualified sigil reaching the variant through its
+  union, disambiguated from construction `(Maybe (Some v))` by the absence of a
+  payload. No general `.` path operator. Variant-led construction (`(Some 42)`
+  with the union inferred) stays deferred — it presumes a reachable bare variant
+  name this namespace does not provide.
+- *MATCH vs dispatch — deferred to [anonymous-unions](anonymous-unions.md).*
+  `MATCH` shipped as a distinct fast-track form (option B): it selects the arm by
+  the carried tag, now validated as a `Type` token, with O(1) variant admission
+  on the dispatch fast path. Full lowering to type-dispatch / removing the
+  parallel form rides the shared "match by type" sugar that item already defers.
+- *Recursive variant references in a schema — open.* A field typed as a variant
+  of the type currently being sealed needs a `SetLocal`-variant form in the
+  seal/resolve walks. Recommended: add a `Variant` arm alongside `SetRef` in
+  `seal_recursive_refs` / `resolve_set_locals`, mirroring the existing fold.
 
 ## Dependencies
 
@@ -79,13 +69,7 @@ eliminate the same way — but neither blocks the other.
 
 **Requires:**
 
-- [Type-only nominal identities](../../design/typing/user-types.md) — the shipped
-  `NominalKind::Tagged` schema and type-side-only nominal install this work
-  re-shapes into per-variant `KType` identities.
-- [Type language via dispatch](../../design/typing/type-language-via-dispatch.md)
-  — variant types ride the same `:(...)` / dispatch substrate that eliminates
-  every other typed value.
 - [Branch-arm return contract](../../design/execution-model.md#arms-as-own-blocks)
-  — the `MATCH` arm machinery this work lowers into type-dispatch.
+  — the `MATCH` arm machinery the remaining work lowers into type-dispatch.
 
 **Unblocks:** none tracked yet.

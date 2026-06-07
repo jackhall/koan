@@ -87,8 +87,24 @@ Symmetric with the function-type rule:
 `KType::KFunctor { params, ret }`'s parameter `Record<KType>` the same
 way, and render back through `KType::name()`. FUNCTOR's capitalized
 `Type`-token parameter names (`Ty`, `Er`) are admitted by the
-field-list parser's `FieldNameKind::IdentifierOrType` policy, where
-STRUCT / UNION stay Identifier-only.
+field-list parser's `FieldNameKind::IdentifierOrType` policy. A `UNION`
+schema's variant tags go one step further — they *must* be capitalized
+`Type` tokens (`FieldNameKind::Type`), since a variant is itself a type
+(see [user-types.md § Tagged-union variants](user-types.md#tagged-union-variants));
+record fields stay `Identifier`-only.
+
+## Variant-reference sigil
+
+A single tagged-union variant is named through its union: `:(Maybe Some)` — a
+union head followed by a bare variant `Type` token, resolving to the variant
+`KType` ([apply_callable.rs](../../src/machine/execute/dispatch/apply_callable.rs)).
+The same `(Union Tag …)` head-call shape constructs (`Maybe (Some 42)`); the two
+are disambiguated by body shape — a bare `Type`-token body with no payload is the
+variant *reference*, a paren-group payload (`(Some 42)`) is *construction*. An
+unknown tag at the reference surface is a schema error listing the union's
+variants. There is no global `:Some` name and no `.` path operator; the variant
+is reachable only through its union. See
+[user-types.md § Tagged-union variants](user-types.md#tagged-union-variants).
 
 ## Record-type sigil
 

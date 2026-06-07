@@ -64,15 +64,15 @@ fn match_driven_tail_recursion_completes() {
 
     run(
         scope,
-        "UNION Bit = (one :Null zero :Null)\n\
+        "UNION Bit = (One :Null Zero :Null)\n\
          FN (HOP b :Tagged) -> Any = (MATCH (b) -> :Str WITH (\
-             one -> (HOP (Bit (zero null)))\
-             zero -> (PRINT \"done\")\
+             One -> (HOP (Bit (Zero null)))\
+             Zero -> (PRINT \"done\")\
          ))",
     );
 
     let mut sched = Scheduler::new();
-    sched.add_dispatch(parse_one("HOP (Bit (one null))"), scope);
+    sched.add_dispatch(parse_one("HOP (Bit (One null))"), scope);
     sched.execute().expect("HOP should run");
 
     assert_eq!(captured.borrow().as_slice(), b"done\n");
@@ -109,26 +109,26 @@ fn body_subexpression_slots_recycle_across_calls() {
 
     run(
         scope,
-        "UNION Bit = (one :Null zero :Null)\n\
+        "UNION Bit = (One :Null Zero :Null)\n\
          FN (LOOK b :Tagged) -> Any = (MATCH (b) -> :Str WITH (\
-             one -> (PRINT \"one\")\
-             zero -> (PRINT \"zero\")\
+             One -> (PRINT \"one\")\
+             Zero -> (PRINT \"zero\")\
          ))",
     );
 
     let mut sched = Scheduler::new();
 
     // Warmup: populates the free-list with the body's transient pool.
-    sched.add_dispatch(parse_one("LOOK (Bit (one null))"), scope);
+    sched.add_dispatch(parse_one("LOOK (Bit (One null))"), scope);
     sched.execute().expect("LOOK should run");
     let after_warmup = sched.len();
 
     let n = 30;
     for i in 1..=n {
         let src = if i % 2 == 0 {
-            "LOOK (Bit (one null))"
+            "LOOK (Bit (One null))"
         } else {
-            "LOOK (Bit (zero null))"
+            "LOOK (Bit (Zero null))"
         };
         sched.add_dispatch(parse_one(src), scope);
         sched.execute().expect("LOOK should run");

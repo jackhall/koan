@@ -45,6 +45,7 @@ pub(in crate::machine::execute) mod single_poll;
 mod tests;
 
 pub(in crate::machine::execute) use ctx::DispatchCtx;
+pub(crate) use field_list::defer_field_list_via_combine;
 use fn_value::FnValueState;
 use head_deferred::HeadDeferredState;
 use keyworded::KeywordedState;
@@ -52,7 +53,6 @@ use keyworded::KeywordedState;
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
 pub use resolve_type_expr::ResolveTypeExprOutcome;
-pub(crate) use field_list::defer_field_list_via_combine;
 pub(crate) use resolve_type_expr::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use single_poll::{BareIdState, BareTypeState, CtorState, LitState, SigilState};
 

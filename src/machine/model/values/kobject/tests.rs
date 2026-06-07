@@ -105,13 +105,47 @@ fn list_with_type_carrier_is_authoritative_for_ktype() {
     assert_eq!(stamped.ktype(), KType::List(Box::new(KType::Any)));
 }
 
+/// A user-`UNION` (`Tagged` kind) value reports its *variant* refinement, keyed on the
+/// inhabited tag, so a `:(Maybe Some)` slot can dispatch on it.
 #[test]
-fn tagged_ktype_erased_vs_applied() {
+fn tagged_value_ktype_reports_variant() {
     use std::rc::Rc;
     let sid = ScopeId::from_raw(0, 0x55);
-    let set = tagged_singleton("Result", sid);
+    let set = tagged_singleton("Maybe", sid);
+    let value = KObject::Tagged {
+        tag: "Some".into(),
+        value: Rc::new(KObject::Number(1.0)),
+        set: Rc::clone(&set),
+        index: 0,
+        type_args: Rc::new(vec![]),
+    };
+    match value.ktype() {
+        KType::Variant { set: s, index, tag } => {
+            assert_eq!(s.member(index).name, "Maybe");
+            assert_eq!(tag, "Some");
+        }
+        other => panic!("expected Variant, got {other:?}"),
+    }
+}
+
+/// A `TypeConstructor` (`Result`) value keeps the union identity: erased `type_args`
+/// reports the bare `SetRef`, a populated carrier the applied `ConstructorApply`.
+#[test]
+fn type_constructor_ktype_erased_vs_applied() {
+    use std::rc::Rc;
+    let sid = ScopeId::from_raw(0, 0x55);
+    let member = crate::machine::model::types::NominalMember::pending(
+        "Result".into(),
+        sid,
+        crate::machine::model::types::NominalKind::TypeConstructor,
+    );
+    member.fill(NominalSchema::TypeConstructor {
+        schema: HashMap::new(),
+        param_names: vec!["T".into(), "E".into()],
+    });
+    let set = std::rc::Rc::new(RecursiveSet::new(vec![member]));
     let erased = KObject::Tagged {
-        tag: "ok".into(),
+        tag: "Ok".into(),
         value: Rc::new(KObject::Number(1.0)),
         set: Rc::clone(&set),
         index: 0,
@@ -122,7 +156,7 @@ fn tagged_ktype_erased_vs_applied() {
         other => panic!("expected SetRef, got {other:?}"),
     }
     let applied = KObject::Tagged {
-        tag: "ok".into(),
+        tag: "Ok".into(),
         value: Rc::new(KObject::Number(1.0)),
         set: Rc::clone(&set),
         index: 0,

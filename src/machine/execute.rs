@@ -15,7 +15,9 @@ mod scheduler;
 pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path};
 pub use scheduler::Scheduler;
 
-pub(crate) use dispatch::{defer_field_list_via_combine, resolve_type_leaf_carrier, TypeLeafCarrier};
+pub(crate) use dispatch::{
+    defer_field_list_via_combine, resolve_type_leaf_carrier, TypeLeafCarrier,
+};
 pub use dispatch::{NameOutcome, ResolveOutcome, ResolveTypeExprOutcome, Resolved};
 
 #[cfg(test)]

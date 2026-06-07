@@ -89,6 +89,16 @@ What's shipped that the open items below build on:
   straight to `KType::Record` (the internal `RECORD` type-constructor builtin and its desugar
   are retired), and a nested record field type elaborates inline so the outer binder threads in.
   See [design/typing/user-types.md](../design/typing/user-types.md).
+- *Tagged-union variants as dispatchable types.* Each `UNION` variant is its own
+  `KType::Variant { set, index, tag }` — a refinement reached through its union, keyed on
+  `(set ptr, index, tag)` — so a variant value's `ktype()` reports the variant, a
+  `:(Maybe Some)` slot dispatches on a single variant while `:Maybe` admits any, and a
+  variant ≺ its union ≺ `:Tagged`. Variant tags are now capitalized `Type` tokens (`Some`,
+  `Ok` / `Error`), and the union-qualified `:(Maybe Some)` sigil names a variant type. The
+  `Result` / `CATCH` / `TRY` error model keeps its `TypeConstructor` identity unchanged. The
+  remaining `MATCH`-onto-type-dispatch lowering and recursive variant references are still open
+  under [tagged-union variants as dispatchable types](type_language/tagged-variant-types.md).
+  See [design/typing/user-types.md](../design/typing/user-types.md).
 
 ## Next items
 

@@ -136,16 +136,16 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
     let buf = Rc::new(RefCell::new(Vec::new()));
     let scope = default_scope(&arena, Box::new(SharedBuf(buf.clone())));
     let exprs = parse(
-        "UNION Tick = (more :Null done :Null)\n\
+        "UNION Tick = (More :Null Done :Null)\n\
          FN (PING n :Number c :Tagged) -> Number = (MATCH (c) -> :Number WITH (\
-            more -> (PONG (n) (Tick (done null)))\
-            done -> (n)\
+            More -> (PONG (n) (Tick (Done null)))\
+            Done -> (n)\
          ))\n\
          FN (PONG n :Number c :Tagged) -> Number = (MATCH (c) -> :Number WITH (\
-            more -> (PING (n) (Tick (done null)))\
-            done -> (n)\
+            More -> (PING (n) (Tick (Done null)))\
+            Done -> (n)\
          ))\n\
-         LET out = (PING 42 (Tick (more null)))",
+         LET out = (PING 42 (Tick (More null)))",
     )
     .expect("parse should succeed");
     let mut sched = Scheduler::new();

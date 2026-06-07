@@ -63,6 +63,14 @@
   - `RecursiveGroup(Rc<RecursiveSet>)` — the first-class handle to a whole set,
     bound by a `RECURSIVE TYPES` group name. Identity is the set pointer
     (`Rc::ptr_eq`); inert in value dispatch.
+  - `Variant { set: Rc<RecursiveSet>, index, tag }` — a **refinement** of a
+    `Tagged`-kind member: `(set, index)` names the union, `tag` selects one
+    variant. Identity is `(Rc::as_ptr(set), index, tag)` — the union member plus
+    tag, never the schema. It is what a user-`UNION` value's `ktype()` reports and
+    what a `:(Maybe Some)` slot carries; a variant is strictly more specific than
+    its union's `SetRef`. Lift `Rc::clone`s the whole set like `SetRef`. Variant
+    tags are capitalized `Type` tokens, so a variant is type-classified
+    everywhere. See [user-types.md § Tagged-union variants](user-types.md#tagged-union-variants).
 
   The companion `AnyUserType { kind: NominalKind }` wildcard accepts any nominal
   carrier of the matching kind, used for slot types that admit "any user-declared

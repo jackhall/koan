@@ -97,7 +97,7 @@ and surface at the top level. `TRY-WITH` (below) lets code that needs to
 recover from them — a REPL, a sandbox, a defensive wrapper — intercept
 the propagation and dispatch on the `KErrorKind`; `CATCH expr` lifts a
 single fault into a `Result<T, KError>` so the caller can bind it via
-`LET`, MATCH on `ok` / `error`, and (inside the `error` arm) dispatch
+`LET`, MATCH on `Ok` / `Error`, and (inside the `Error` arm) dispatch
 on the per-kind tag carried in the payload (see [`CATCH`](#catch)).
 The shared `Result` shape means a function that wraps a `CATCH` and a
 function with a typed user-error return present the same destructuring
@@ -114,7 +114,7 @@ errors carry the type discipline. `KErrorKind` itself is a closed set.
 ## `Result`
 
 `Result` is a builtin parameterized type — a two-variant tagged union over two
-type parameters, `ok :T` and `error :E`. It is the shared return-type shape for
+type parameters, `Ok :T` and `Error :E`. It is the shared return-type shape for
 [`CATCH`](#catch) (`Result<T, KError>`) and for user functions with typed error
 returns (`Result<T, MyErr>`). It is *not* a module-system functor: functors
 produce modules, whereas `Result` is a type constructor producing a tagged-union
@@ -124,7 +124,7 @@ It is registered once in the root scope by
 [`result::register`](../src/builtins/result.rs), **type-only** the way a `UNION`
 declaration is: `bindings.types["Result"]` holds a `TypeConstructor` identity
 whose payload carries both the parameter names `T` / `E` and the variant
-`schema` `{ok, error}` (both `Any`). `Result (ok v)` / `Result (error e)`
+`schema` `{Ok, Error}` (both `Any`). `Result (Ok v)` / `Result (Error e)`
 construct by reading that schema off a fresh `types["Result"]` lookup — the
 same identity-borne path `UNION`-declared constructors use, with no value-side
 carrier. Type-position application of `Result`'s two parameters is not yet
@@ -141,14 +141,14 @@ the binder-placeholder install refuses a name already bound to a non-function
 value.
 
 A `Result` value's type arguments are erased at construction — both `CATCH`
-and a `Result (ok v)` / `Result (error e)` constructor leave the carrier's
+and a `Result (Ok v)` / `Result (Error e)` constructor leave the carrier's
 `type_args` empty. A `:(Result T E)` slot is nonetheless runtime-checkable: the
 `matches_value(ConstructorApply, Tagged)` arm (see
 [ktype.md § Runtime type-parameter carriers](typing/ktype.md#runtime-type-parameter-carriers))
 confirms the constructor identity and then checks the *inhabited* tag's payload
-against the type argument that field maps to (`ok`→`T`, `error`→`E`). So a caught
+against the type argument that field maps to (`Ok`→`T`, `Error`→`E`). So a caught
 `Result<_, KError>` is rejected where a `Result<_, MyErr>` is declared, because
-the `error` payload (a `KError`) does not satisfy `MyErr`. Ascription at an
+the `Error` payload (a `KError`) does not satisfy `MyErr`. Ascription at an
 annotated boundary stamps the carrier's `type_args` to the declared instantiation;
 the remaining per-call parameter-slot binding for generic value-slot functions is
 tracked under
@@ -168,19 +168,20 @@ The catch surface is the [`TRY`](../src/builtins/try_with.rs) builtin:
 
 ```
 TRY (<expr>) WITH (
-  ok            -> <body>
-  type_mismatch -> <body>
+  Ok           -> <body>
+  TypeMismatch -> <body>
   ...
-  _             -> <body>   ; optional wildcard
+  _            -> <body>   ; optional wildcard
 )
 ```
 
-Both slots are lazy `KExpression`s. `<expr>` is evaluated in a catching
-sub-context: on success the `ok` arm runs with `it` bound to the bare
-success value; on failure the arm matching the `KErrorKind` runs with `it`
-bound to a per-variant payload struct. No matching arm and no `_` →
-re-raise the original `KError`. Success with no `ok` arm and no `_` →
-synthetic `ShapeError("TRY missing ok arm")`.
+Arm heads are capitalized variant tags (`Type` tokens) — `Ok` and the
+capitalized `KErrorKind` names. Both slots are lazy `KExpression`s. `<expr>`
+is evaluated in a catching sub-context: on success the `Ok` arm runs with `it`
+bound to the bare success value; on failure the arm matching the `KErrorKind`
+runs with `it` bound to a per-variant payload struct. No matching arm and no
+`_` → re-raise the original `KError`. Success with no `Ok` arm and no `_` →
+synthetic `ShapeError("TRY missing Ok arm")`.
 
 The TRY body and each WITH arm are independent lexical blocks: any
 `LET` introduced inside the body or an arm binds into that arm's own
@@ -203,25 +204,26 @@ does not short-circuit — TRY's finish always runs.
 
 User-meaningful subset. Each error arm's `it` is a Struct under one
 shared `KError` tagged-union identity ([`KError::to_tagged`](../src/machine/core/kerror.rs))
-with heterogeneous payload shape per arm; `ok` binds `it` to the bare
-success value (no wrapper):
+with heterogeneous payload shape per arm; `Ok` binds `it` to the bare
+success value (no wrapper). Tags are the capitalized `KErrorKind` names — a
+`Type` token, since Type tokens cannot contain underscores:
 
 | Tag | `it` shape |
 |---|---|
-| `ok` | the success value (bare, not a struct) |
-| `type_mismatch` | `{arg :Str, expected :Str, got :Str, frames :List<Str>}` |
-| `missing_arg` | `{name :Str, frames :List<Str>}` |
-| `unbound_name` | `{name :Str, frames :List<Str>}` |
-| `arity_mismatch` | `{expected :Number, got :Number, frames :List<Str>}` |
-| `ambiguous_dispatch` | `{expr :Str, candidates :Number, frames :List<Str>}` |
-| `dispatch_failed` | `{expr :Str, reason :Str, frames :List<Str>}` |
-| `shape_error` | `{message :Str, frames :List<Str>}` |
-| `parse_error` | `{message :Str, frames :List<Str>}` |
+| `Ok` | the success value (bare, not a struct) |
+| `TypeMismatch` | `{arg :Str, expected :Str, got :Str, frames :List<Str>}` |
+| `MissingArg` | `{name :Str, frames :List<Str>}` |
+| `UnboundName` | `{name :Str, frames :List<Str>}` |
+| `ArityMismatch` | `{expected :Number, got :Number, frames :List<Str>}` |
+| `AmbiguousDispatch` | `{expr :Str, candidates :Number, frames :List<Str>}` |
+| `DispatchFailed` | `{expr :Str, reason :Str, frames :List<Str>}` |
+| `ShapeError` | `{message :Str, frames :List<Str>}` |
+| `ParseError` | `{message :Str, frames :List<Str>}` |
 
 `frames` is a `List<Str>`, each entry rendered `"in <expression> (<function>)"`.
 
-The four dispatcher-internal kinds (`rebind`, `duplicate_overload`,
-`type_class_binding_expects_type`, `type_identity_pending_at_dispatch`)
+The four dispatcher-internal kinds (`Rebind`, `DuplicateOverload`,
+`TypeClassBindingExpectsType`, `TypeIdentityPendingAtDispatch`)
 are only catchable via `_`; `it` is then bound to a minimal
 `{kind :Str, message :Str, frames :List<Str>}` struct.
 
@@ -233,8 +235,8 @@ counterpart to [`TRY-WITH`](#try-with): where `TRY-WITH` forces the caller to
 spell out catch arms at the catch site, `CATCH` hands back a `Result<T, KError>`
 the caller binds with `LET`, passes as an argument, or returns:
 
-- `ok(v)` on success, where `v` is the bare success value;
-- `error(e)` on failure, where `e` is
+- `Ok(v)` on success, where `v` is the bare success value;
+- `Error(e)` on failure, where `e` is
   [`KError::to_tagged`](../src/machine/core/kerror.rs)'s value — still carrying
   the per-`KErrorKind` tag and payload struct, so per-kind dispatch is reached by
   MATCH-ing `e` after destructuring the `Result`.

@@ -65,8 +65,8 @@ fn ctor_fast_lane_rejects_value_of_wrong_type() {
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
-    run(scope, "UNION Maybe = (some :Number none :Null)");
-    let err = run_one_err(scope, parse_one("Maybe (some \"oops\")"));
+    run(scope, "UNION Maybe = (Some :Number None :Null)");
+    let err = run_one_err(scope, parse_one("Maybe (Some \"oops\")"));
     match &err.kind {
         KErrorKind::TypeMismatch { arg, expected, got } => {
             assert_eq!(arg, "value");
@@ -83,11 +83,11 @@ fn ctor_fast_lane_propagates_tag_validation_error() {
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
-    run(scope, "UNION Maybe = (some :Number none :Null)");
-    let err = run_one_err(scope, parse_one("Maybe (other 42)"));
+    run(scope, "UNION Maybe = (Some :Number None :Null)");
+    let err = run_one_err(scope, parse_one("Maybe (Other 42)"));
     assert!(
-        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`other`")),
-        "expected ShapeError mentioning `other`, got {err}",
+        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`Other`")),
+        "expected ShapeError mentioning `Other`, got {err}",
     );
 }
 
@@ -98,11 +98,11 @@ fn ctor_fast_lane_with_sub_expression_value() {
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
-    run(scope, "UNION Maybe = (some :Number none :Null)\nLET x = 7");
-    let result = run_one(scope, parse_one("Maybe (some (x))"));
+    run(scope, "UNION Maybe = (Some :Number None :Null)\nLET x = 7");
+    let result = run_one(scope, parse_one("Maybe (Some (x))"));
     match result {
         KObject::Tagged { tag, value, .. } => {
-            assert_eq!(tag, "some");
+            assert_eq!(tag, "Some");
             assert!(matches!(&**value, KObject::Number(n) if *n == 7.0));
         }
         other => panic!("expected Tagged, got {:?}", other.ktype()),

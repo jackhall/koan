@@ -26,8 +26,8 @@ use crate::machine::core::{ApplyOutcome, LexicalFrame, PendingTypeEntry};
 use crate::machine::execute::defer_field_list_via_combine;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
-    finalize_nominal_member, parse_typed_field_list_via_elaborator, seal_recursive_refs, Elaborator,
-    FieldListOutcome, FieldNameKind, NominalKind, NominalMember, NominalSchema, Record,
+    finalize_nominal_member, parse_typed_field_list_via_elaborator, seal_recursive_refs,
+    Elaborator, FieldListOutcome, FieldNameKind, NominalKind, NominalMember, NominalSchema, Record,
     RecursiveSet, SchemaSealResult, SealOutcome,
 };
 use crate::machine::model::values::KObject;
@@ -92,15 +92,16 @@ pub fn body<'a>(
             if let Resolution::Placeholder(producer) =
                 scope.resolve_with_chain(te.as_str(), chain.as_deref())
             {
-                let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
-                    match scope.resolve_type_with_chain(te.as_str(), chain.as_deref()) {
-                        Some(kt) => finalize_newtype(scope, name, kt.clone(), bind_index),
-                        None => err(KError::new(KErrorKind::ShapeError(format!(
-                            "NEWTYPE repr slot = unknown type name `{}`",
-                            te.as_str(),
-                        )))),
-                    }
-                });
+                let finish: CombineFinish<'a> =
+                    Box::new(move |scope, _sched, _results| {
+                        match scope.resolve_type_with_chain(te.as_str(), chain.as_deref()) {
+                            Some(kt) => finalize_newtype(scope, name, kt.clone(), bind_index),
+                            None => err(KError::new(KErrorKind::ShapeError(format!(
+                                "NEWTYPE repr slot = unknown type name `{}`",
+                                te.as_str(),
+                            )))),
+                        }
+                    });
                 let combine_id = sched.add_combine(Vec::new(), vec![producer], scope, finish);
                 return BodyResult::DeferTo(combine_id);
             }
@@ -146,9 +147,11 @@ fn finalize_newtype<'a>(
         .bindings()
         .try_register_type(&name, kt_ref, bind_index)
     {
-        Ok(ApplyOutcome::Applied) => {
-            BodyResult::Value(scope.arena.alloc_object(KObject::KTypeValue(kt_ref.clone())))
-        }
+        Ok(ApplyOutcome::Applied) => BodyResult::Value(
+            scope
+                .arena
+                .alloc_object(KObject::KTypeValue(kt_ref.clone())),
+        ),
         // Finalize sites run post-Combine outside the re-entrant hot path, so borrow
         // contention here is a programming error. Surface as a structured error rather
         // than panicking — a future re-entrant caller still gets a recoverable diag.
@@ -281,26 +284,25 @@ fn finalize_record_newtype<'a>(
             let sealed = Record::from_pairs(sealed_pairs);
             match missing.into_inner().into_iter().next() {
                 Some(m) => SchemaSealResult::Dangling(m),
-                None => {
-                    SchemaSealResult::Ok(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
-                        sealed,
-                    )))))
-                }
+                None => SchemaSealResult::Ok(NominalSchema::Newtype(Box::new(KType::Record(
+                    Box::new(sealed),
+                )))),
             }
         },
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => {
-            BodyResult::Value(scope.arena.alloc_object(KObject::KTypeValue(kt_ref.clone())))
-        }
+        SealOutcome::Sealed(kt_ref) => BodyResult::Value(
+            scope
+                .arena
+                .alloc_object(KObject::KTypeValue(kt_ref.clone())),
+        ),
         SealOutcome::DanglingRef(missing) => err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE `{name}` record repr references unsealed type `{missing}`",
         )))),
         SealOutcome::Rebind(e) => err(e),
     }
 }
-
 
 /// A non-record sigil repr (`NEWTYPE Stream = :(LIST OF Number)`): no self-reference to thread, so
 /// re-wrap the captured sigil and sub-dispatch it to a resolved `KType`, then seal a plain Newtype
@@ -312,9 +314,9 @@ fn defer_resolved_sigil<'a>(
     inner: KExpression<'a>,
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {
-    let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(Box::new(
-        inner,
-    )))]);
+    let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
+        Box::new(inner),
+    ))]);
     let sub = sched.add_dispatch(wrapped, scope);
     let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| match results[0] {
         KObject::KTypeValue(kt) => finalize_newtype(scope, name, kt.clone(), bind_index),
@@ -577,7 +579,11 @@ mod tests {
         run(scope, "NEWTYPE Tree = :{children :(LIST OF Tree)}");
         let (set, fields) = record_fields(scope, "Tree");
         let tree_idx = set.index_of("Tree").expect("Tree is its own set member");
-        assert_eq!(set.len(), 1, "a self-recursive type seals into a singleton set");
+        assert_eq!(
+            set.len(),
+            1,
+            "a self-recursive type seals into a singleton set"
+        );
         assert_eq!(
             fields.iter().find(|(f, _)| f == "children").map(|(_, t)| t),
             Some(&KType::List(Box::new(KType::SetLocal(tree_idx)))),

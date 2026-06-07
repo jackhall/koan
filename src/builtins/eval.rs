@@ -122,12 +122,12 @@ mod tests {
         // enclosing frame on TCO replace would free memory the EVAL frame still references
         // through its `outer` pointer.
         let bytes = run_program(
-            "UNION Bit = (one :Null zero :Null)\n\
+            "UNION Bit = (One :Null Zero :Null)\n\
              FN (HOP b :Tagged) -> Any = (MATCH (b) -> :Str WITH (\
-                 one -> $(#(HOP (Bit (zero null))))\
-                 zero -> (PRINT \"done\")\
+                 One -> $(#(HOP (Bit (Zero null))))\
+                 Zero -> (PRINT \"done\")\
              ))\n\
-             HOP (Bit (one null))",
+             HOP (Bit (One null))",
         );
         assert_eq!(bytes, b"done\n");
     }

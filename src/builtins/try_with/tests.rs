@@ -16,13 +16,13 @@ fn run_program(source: &str) -> Vec<u8> {
 
 #[test]
 fn ok_arm_runs_on_success_and_binds_it_to_value() {
-    let bytes = run_program("TRY (PRINT \"hello\") -> :Str WITH (ok -> (PRINT \"caught ok\"))");
+    let bytes = run_program("TRY (PRINT \"hello\") -> :Str WITH (Ok -> (PRINT \"caught ok\"))");
     assert_eq!(bytes, b"hello\ncaught ok\n");
 }
 
 #[test]
 fn ok_binds_it_to_success_value() {
-    let bytes = run_program("TRY (PRINT \"value\") -> :Str WITH (ok -> (PRINT it))");
+    let bytes = run_program("TRY (PRINT \"value\") -> :Str WITH (Ok -> (PRINT it))");
     assert_eq!(bytes, b"value\nvalue\n");
 }
 
@@ -33,7 +33,7 @@ fn arm_violating_declared_return_type_errors() {
     let scope = run_root_silent(&arena);
     let err = run_one_err(
         scope,
-        parse_one("TRY (PRINT \"v\") -> :Number WITH (ok -> (PRINT \"caught\"))"),
+        parse_one("TRY (PRINT \"v\") -> :Number WITH (Ok -> (PRINT \"caught\"))"),
     );
     assert!(
         matches!(&err.kind, KErrorKind::TypeMismatch { arg, .. } if arg == "<return>"),
@@ -45,8 +45,8 @@ fn arm_violating_declared_return_type_errors() {
 fn unbound_name_arm_catches_unbound_name() {
     let bytes = run_program(
         "TRY (foo) -> :Str WITH (\
-            ok -> (PRINT \"ok\")\
-            unbound_name -> (PRINT it.name)\
+            Ok -> (PRINT \"ok\")\
+            UnboundName -> (PRINT it.name)\
          )",
     );
     assert_eq!(bytes, b"foo\n");
@@ -56,10 +56,10 @@ fn unbound_name_arm_catches_unbound_name() {
 fn shape_error_arm_catches_shape_error() {
     // Inexhaustive MATCH is a deterministic ShapeError trigger.
     let bytes = run_program(
-        "UNION Maybe = (some :Number none :Null)\n\
-         LET m = (Maybe (some 1))\n\
-         TRY (MATCH (m) -> :Number WITH (none -> (0))) -> :Str WITH (\
-            shape_error -> (PRINT it.message)\
+        "UNION Maybe = (Some :Number None :Null)\n\
+         LET m = (Maybe (Some 1))\n\
+         TRY (MATCH (m) -> :Number WITH (None -> (0))) -> :Str WITH (\
+            ShapeError -> (PRINT it.message)\
          )",
     );
     let text = std::str::from_utf8(&bytes).unwrap();
@@ -76,7 +76,7 @@ fn type_mismatch_arm_catches_record_newtype_value_mismatch() {
     let bytes = run_program(
         "NEWTYPE Point = :{x :Number, y :Number}\n\
          TRY (Point {x = \"hi\", y = 4}) -> :Str WITH (\
-            type_mismatch -> (PRINT it.expected)\
+            TypeMismatch -> (PRINT it.expected)\
          )",
     );
     assert_eq!(bytes, b":{x :Number y :Number}\n");
@@ -88,7 +88,7 @@ fn re_raise_when_no_arm_matches_error_kind() {
     let scope = run_root_silent(&arena);
     let err = run_one_err(
         scope,
-        parse_one("TRY (foo) -> :Str WITH (type_mismatch -> (PRINT \"never\"))"),
+        parse_one("TRY (foo) -> :Str WITH (TypeMismatch -> (PRINT \"never\"))"),
     );
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(name) if name == "foo"),
@@ -102,11 +102,11 @@ fn missing_ok_arm_on_success_raises_shape_error() {
     let scope = run_root_silent(&arena);
     let err = run_one_err(
         scope,
-        parse_one("TRY (PRINT \"x\") -> :Str WITH (type_mismatch -> (PRINT \"never\"))"),
+        parse_one("TRY (PRINT \"x\") -> :Str WITH (TypeMismatch -> (PRINT \"never\"))"),
     );
     assert!(
-        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("missing ok arm")),
-        "expected ShapeError about missing ok arm, got {err}",
+        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("missing Ok arm")),
+        "expected ShapeError about missing Ok arm, got {err}",
     );
 }
 
@@ -114,7 +114,7 @@ fn missing_ok_arm_on_success_raises_shape_error() {
 fn wildcard_arm_catches_when_no_specific_match() {
     let bytes = run_program(
         "TRY (foo) -> :Str WITH (\
-            type_mismatch -> (PRINT \"never\")\
+            TypeMismatch -> (PRINT \"never\")\
             _ -> (PRINT \"caught wildcard\")\
          )",
     );
@@ -154,7 +154,7 @@ fn specific_arm_wins_over_wildcard() {
     let bytes = run_program(
         "TRY (foo) -> :Str WITH (\
             _ -> (PRINT \"wildcard\")\
-            unbound_name -> (PRINT \"specific\")\
+            UnboundName -> (PRINT \"specific\")\
          )",
     );
     assert_eq!(bytes, b"specific\n");
@@ -167,7 +167,7 @@ fn frames_non_empty_after_recursive_call() {
     let bytes = run_program(
         "FN (BAD n :Number) -> Any = (missing_name)\n\
          TRY (BAD 1) -> :Str WITH (\
-            unbound_name -> (PRINT it.frames)\
+            UnboundName -> (PRINT it.frames)\
          )",
     );
     let text = std::str::from_utf8(&bytes).unwrap();
@@ -183,10 +183,10 @@ fn nested_try_catches_inner_separately_from_outer() {
         "NEWTYPE Point = :{x :Number, y :Number}\n\
          TRY (\
             TRY (Point {x = \"hi\", y = 4}) -> :Str WITH (\
-                type_mismatch -> (PRINT \"inner\")\
+                TypeMismatch -> (PRINT \"inner\")\
             )\
          ) -> :Str WITH (\
-            ok -> (PRINT \"outer ok\")\
+            Ok -> (PRINT \"outer ok\")\
          )",
     );
     assert_eq!(bytes, b"inner\nouter ok\n");
@@ -200,7 +200,7 @@ fn it_resolves_via_scope_for_eval_of_top_level_quoted_reference() {
     let bytes = run_program(
         "LET q = #(it)\n\
          TRY (PRINT \"value\") -> :Str WITH (\
-            ok -> (PRINT $(q))\
+            Ok -> (PRINT $(q))\
          )",
     );
     assert_eq!(bytes, b"value\nvalue\n");
@@ -211,12 +211,12 @@ fn try_inside_tco_position_preserves_frame_chain() {
     // Mirror of `match_case::recursive_tagged_match_no_uaf`: the catch path
     // must keep the call-site frame Rc chained on the new frame.
     let bytes = run_program(
-        "UNION Bit = (one :Null zero :Null)\n\
+        "UNION Bit = (One :Null Zero :Null)\n\
          FN (HOP b :Tagged) -> Any = (TRY (MATCH (b) -> :Str WITH (\
-            one -> (HOP (Bit (zero null)))\
-            zero -> (PRINT \"done\")\
-         )) -> :Str WITH (ok -> it))\n\
-         HOP (Bit (one null))",
+            One -> (HOP (Bit (Zero null)))\
+            Zero -> (PRINT \"done\")\
+         )) -> :Str WITH (Ok -> it))\n\
+         HOP (Bit (One null))",
     );
     assert_eq!(bytes, b"done\n");
 }

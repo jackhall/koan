@@ -532,10 +532,13 @@ impl<'a> Scope<'a> {
     /// persistent scope. See [`Bindings::clear_placeholders_for_producer`].
     pub fn clear_placeholders_for_producer(&self, producer: NodeId) {
         if self.bindings.is_borrowed() {
-            self.write_target().clear_placeholders_for_producer(producer);
+            self.write_target()
+                .clear_placeholders_for_producer(producer);
             return;
         }
-        self.bindings.get().clear_placeholders_for_producer(producer);
+        self.bindings
+            .get()
+            .clear_placeholders_for_producer(producer);
     }
 
     /// Bucket-keyed companion to [`Self::install_placeholder`]: appends a

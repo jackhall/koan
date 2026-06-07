@@ -2,9 +2,10 @@
 //!
 //! `-> :T` is the mandatory declared return type every arm agrees on, checked and
 //! re-tagged when the selected arm's value lifts (the `ReturnContract::Arm` carried on
-//! the tail). Surface shape otherwise mirrors [`match_case`](super::match_case); arms key on `ok`, the
-//! `KErrorKind` tag from [`KError::to_tagged`](crate::machine::KError::to_tagged),
-//! or `_` (wildcard catching dispatcher-internal kinds without a public tag).
+//! the tail). Surface shape otherwise mirrors [`match_case`](super::match_case); arms key
+//! on `Ok`, the capitalized `KErrorKind` tag from
+//! [`KError::to_tagged`](crate::machine::KError::to_tagged), or `_` (wildcard catching
+//! dispatcher-internal kinds without a public tag).
 //!
 //! `expr` is `KExpression` so the catch path can intercept evaluation — an eager
 //! slot would short-circuit through eager-subs dep-error propagation before `TRY`'s
@@ -81,7 +82,7 @@ fn dispatch_branch<'a>(
     // On `ok`, `it` is the bare success value; on error, the per-variant payload
     // Struct unwrapped from `KError::to_tagged`'s Tagged carrier.
     let (tag, it_value, original_err): (String, KObject<'a>, Option<KError>) = match result {
-        Ok(v) => ("ok".to_string(), v.deep_clone(), None),
+        Ok(v) => ("Ok".to_string(), v.deep_clone(), None),
         Err(e) => {
             let tagged: KObject<'a> = e.to_tagged(scope.arena);
             let (tag, payload) = match tagged {
@@ -98,7 +99,7 @@ fn dispatch_branch<'a>(
             return match original_err {
                 Some(e) => BodyResult::Err(e),
                 None => err(KError::new(KErrorKind::ShapeError(
-                    "TRY missing ok arm".to_string(),
+                    "TRY missing Ok arm".to_string(),
                 ))),
             };
         }

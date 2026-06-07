@@ -22,8 +22,8 @@ fn result_registers_type_constructor_with_schema() {
                     schema,
                 } => {
                     assert_eq!(param_names.len(), 2);
-                    assert_eq!(schema.get("ok"), Some(&KType::Any));
-                    assert_eq!(schema.get("error"), Some(&KType::Any));
+                    assert_eq!(schema.get("Ok"), Some(&KType::Any));
+                    assert_eq!(schema.get("Error"), Some(&KType::Any));
                 }
                 _ => panic!("expected a TypeConstructor schema"),
             }
@@ -40,7 +40,7 @@ fn result_registers_type_constructor_with_schema() {
 fn result_constructs_ok_variant() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let result = run_one(scope, parse_one("Result (ok 1)"));
+    let result = run_one(scope, parse_one("Result (Ok 1)"));
     match result {
         KObject::Tagged {
             tag,
@@ -49,7 +49,7 @@ fn result_constructs_ok_variant() {
             index,
             ..
         } => {
-            assert_eq!(tag, "ok");
+            assert_eq!(tag, "Ok");
             assert_eq!(set.member(*index).name, "Result");
             assert!(matches!(&**value, KObject::Number(n) if *n == 1.0));
         }
@@ -61,7 +61,7 @@ fn result_constructs_ok_variant() {
 fn result_constructs_error_variant() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let result = run_one(scope, parse_one("Result (error \"x\")"));
+    let result = run_one(scope, parse_one("Result (Error \"x\")"));
     match result {
         KObject::Tagged {
             tag,
@@ -70,7 +70,7 @@ fn result_constructs_error_variant() {
             index,
             ..
         } => {
-            assert_eq!(tag, "error");
+            assert_eq!(tag, "Error");
             assert_eq!(set.member(*index).name, "Result");
             assert!(matches!(&**value, KObject::KString(s) if s == "x"));
         }
@@ -82,10 +82,10 @@ fn result_constructs_error_variant() {
 fn result_rejects_unknown_tag() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let err = run_one_err(scope, parse_one("Result (bogus 1)"));
+    let err = run_one_err(scope, parse_one("Result (Bogus 1)"));
     assert!(
-        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`bogus`")),
-        "expected ShapeError mentioning `bogus`, got {err}",
+        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`Bogus`")),
+        "expected ShapeError mentioning `Bogus`, got {err}",
     );
 }
 
@@ -96,7 +96,7 @@ fn result_matches_ok_branch() {
     let (scope, buf) = crate::builtins::test_support::run_root_with_buf(&arena);
     run(
         scope,
-        "MATCH (Result (ok 1)) -> :Str WITH (ok -> (PRINT it) error -> (PRINT \"no\"))",
+        "MATCH (Result (Ok 1)) -> :Str WITH (Ok -> (PRINT it) Error -> (PRINT \"no\"))",
     );
     assert_eq!(buf.borrow().as_slice(), b"1\n");
 }
@@ -107,7 +107,7 @@ fn result_matches_ok_branch() {
 fn redeclaring_result_errors() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let err = run_one_err(scope, parse_one("UNION Result = (ok :Str err :Str)"));
+    let err = run_one_err(scope, parse_one("UNION Result = (Ok :Str Err :Str)"));
     assert!(
         matches!(&err.kind, KErrorKind::Rebind { name } if name == "Result"),
         "expected Rebind on Result, got {err}",

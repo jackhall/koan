@@ -23,6 +23,7 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
+use crate::machine::model::KObject;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::super::nodes::{NodeOutput, NodeStep};
@@ -115,21 +116,50 @@ fn apply_constructor<'a>(
                 idx,
             ),
         },
-        // Positional construction: `Outcome (err "x")` (paren-group body). Tagged unions
-        // and higher-kinded `TypeConstructor`s both construct positionally.
-        ProjectedSchema::Tagged(schema) => match extract_call_body(expr) {
-            Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
-                ctx,
-                Rc::clone(set),
-                *index,
-                Rc::new(schema),
-                parts,
-                scope,
-                idx,
-            ),
-            Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
-            Err(e) => NodeStep::Done(NodeOutput::Err(e)),
-        },
+        // A bare variant-tag token with no payload (`Maybe Some`) names the variant
+        // *type*, reached through its union — distinct from construction `Maybe (Some v)`,
+        // which wraps the tag in a paren group. Yielded as a first-class type value.
+        ProjectedSchema::Tagged(schema) => {
+            if let [Spanned {
+                value: ExpressionPart::Type(t),
+                ..
+            }] = expr.parts[1..].as_ref()
+            {
+                let tag = t.render();
+                if !schema.contains_key(&tag) {
+                    return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::ShapeError(
+                        format!(
+                            "`{tag}` is not a variant of `{}` (variants: {})",
+                            set.member(*index).name,
+                            sorted_variant_names(&schema),
+                        ),
+                    ))));
+                }
+                let variant = KType::Variant {
+                    set: Rc::clone(set),
+                    index: *index,
+                    tag,
+                };
+                return NodeStep::Done(NodeOutput::Value(
+                    scope.arena.alloc_object(KObject::KTypeValue(variant)),
+                ));
+            }
+            // Positional construction: `Outcome (Error "x")` (paren-group body). Tagged
+            // unions and higher-kinded `TypeConstructor`s both construct positionally.
+            match extract_call_body(expr) {
+                Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
+                    ctx,
+                    Rc::clone(set),
+                    *index,
+                    Rc::new(schema),
+                    parts,
+                    scope,
+                    idx,
+                ),
+                Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
+                Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+            }
+        }
         ProjectedSchema::TypeConstructor { schema, .. } => match extract_call_body(expr) {
             Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
                 ctx,
@@ -144,6 +174,14 @@ fn apply_constructor<'a>(
             Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         },
     }
+}
+
+/// Sorted, comma-joined variant tags of a projected tagged schema — for the
+/// "not a variant of …" diagnostic.
+fn sorted_variant_names(schema: &std::collections::HashMap<String, KType<'_>>) -> String {
+    let mut names: Vec<&str> = schema.keys().map(|s| s.as_str()).collect();
+    names.sort_unstable();
+    names.join(", ")
 }
 
 /// Call a `KFunction` by name. Named args reconstruct the exact-arity positional

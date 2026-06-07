@@ -2,7 +2,7 @@
 //! Shares the `add_catch` primitive with [`TRY-WITH`](super::try_with) but
 //! lacks branches, an `it` binding, and the re-raise path: the finish closure
 //! wraps the outcome in the prelude [`Result`](super::result) carrier as
-//! either `ok(v)` or `error(KError::to_tagged())`.
+//! either `Ok(v)` or `Error(KError::to_tagged())`.
 
 use std::rc::Rc;
 
@@ -38,8 +38,8 @@ pub fn body<'a>(
     let sub_id = sched.add_dispatch(expr_inner, scope);
     let finish: CatchFinish<'a> = Box::new(move |scope, _sched, result| {
         let (tag, payload): (&str, KObject<'a>) = match result {
-            Ok(v) => ("ok", v.deep_clone()),
-            Err(e) => ("error", e.to_tagged(scope.arena)),
+            Ok(v) => ("Ok", v.deep_clone()),
+            Err(e) => ("Error", e.to_tagged(scope.arena)),
         };
         let tagged = KObject::Tagged {
             tag: tag.to_string(),

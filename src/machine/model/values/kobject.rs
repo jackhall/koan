@@ -5,7 +5,7 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, KFuture};
 use crate::machine::model::ast::{KExpression, TypeName};
 use crate::machine::model::types::{
-    KType, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
+    KType, NominalKind, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
 };
 
 #[cfg(test)]
@@ -245,25 +245,36 @@ impl<'a> KObject<'a> {
             KObject::KFunction(f, _) => function_value_ktype(f),
             KObject::KFuture(t, _) => function_value_ktype(t.function),
             KObject::KExpression(_) => KType::KExpression,
-            // Erased `type_args` reports the bare `SetRef` identity; a populated carrier
-            // synthesizes the applied form so dispatch sees the full instantiation
-            // (`Result<Number, MyErr>`).
+            // A user-`UNION` (`Tagged` kind) value reports its *variant* refinement, so a
+            // slot typed `:(Maybe Some)` dispatches on it. A `TypeConstructor` value
+            // (`Result`) keeps the bare/applied union identity: erased `type_args` reports
+            // the `SetRef`, a populated carrier synthesizes the applied form so dispatch
+            // sees the full instantiation (`Result<Number, MyErr>`).
             KObject::Tagged {
+                tag,
                 set,
                 index,
                 type_args,
                 ..
             } => {
-                let bare = KType::SetRef {
-                    set: Rc::clone(set),
-                    index: *index,
-                };
-                if type_args.is_empty() {
-                    bare
+                if set.member(*index).kind == NominalKind::Tagged {
+                    KType::Variant {
+                        set: Rc::clone(set),
+                        index: *index,
+                        tag: tag.clone(),
+                    }
                 } else {
-                    KType::ConstructorApply {
-                        ctor: Box::new(bare),
-                        args: type_args.as_ref().clone(),
+                    let bare = KType::SetRef {
+                        set: Rc::clone(set),
+                        index: *index,
+                    };
+                    if type_args.is_empty() {
+                        bare
+                    } else {
+                        KType::ConstructorApply {
+                            ctor: Box::new(bare),
+                            args: type_args.as_ref().clone(),
+                        }
                     }
                 }
             }

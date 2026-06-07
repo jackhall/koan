@@ -23,6 +23,11 @@ Three `KType` variants reference set members:
   is the first-class handle to a whole set, bound by a `RECURSIVE TYPES` group
   name. It is inert in value dispatch — it names a group of types, not a value
   type — and is reserved for value-language cycle construction.
+- [`KType::Variant { set: Rc<RecursiveSet>, index, tag }`](../../src/machine/model/types/ktype.rs)
+  is a **refinement** of a `Tagged`-kind member: `(set, index)` names the union,
+  `tag` selects one variant within it. It is what a user-`UNION` value's `ktype()`
+  reports, and what a `:(Maybe Some)` slot carries — see
+  [Tagged-union variants](#tagged-union-variants) below.
 
 The companion
 [`KType::AnyUserType { kind: NominalKind }`](../../src/machine/model/types/ktype.rs)
@@ -96,6 +101,53 @@ nominal type token (passing `Outcome` to a constructor or ATTR call) synthesizes
 [`KObject::KTypeValue(identity)`](../../src/machine/execute/dispatch/resolve_type_expr.rs)
 on demand from the `bindings.types` entry via `resolve_type_leaf_carrier` — no
 value-side schema carrier exists for struct / union / module / Result.
+
+## Tagged-union variants
+
+A declared `UNION` variant is its own dispatchable type. A user-`UNION`
+(`NominalKind::Tagged`) value's `ktype()` reports
+[`KType::Variant { set, index, tag }`](../../src/machine/model/types/ktype.rs) —
+a refinement of the union member at `(set, index)` selecting the inhabited `tag` —
+rather than the bare `SetRef`
+([kobject.rs](../../src/machine/model/values/kobject.rs)). Variant tags are
+capitalized [`Type` tokens](tokens.md): `UNION Maybe = (Some :Number None :Null)`,
+not `some` / `none`. The `UNION` schema field-list runs under
+[`FieldNameKind::Type`](../../src/parse/triple_list.rs), so a lowercase tag is a
+parse error — the tokenizer keys `Type` vs `Identifier` purely on capitalization,
+and a variant has to be type-classified to flow through dispatch.
+
+**Identity is `(set ptr, index, tag)`** — manual `PartialEq` / `Hash` arms keyed
+on the set pointer, member index, and tag string, never the (cyclic) schema
+([ktype.rs](../../src/machine/model/types/ktype.rs)). Two same-payload variants
+of one union stay distinct because the tag is part of identity, and a variant of
+union A never equals a variant of union B. The whole set rides every `Variant`,
+so lifting one is `Rc::clone` of the group, exactly as for `SetRef`.
+
+**Variants slot into the specificity stratification** below their union: a
+concrete `Variant` ≺ its union's `SetRef` ≺ `AnyUserType { kind: Tagged }` ≺
+`Any` ([ktype_predicates.rs](../../src/machine/model/types/ktype_predicates.rs)).
+So a slot typed `:(Maybe Some)` admits only `Some` values, a `:Maybe` slot admits
+*any* variant (the union `SetRef` arm explicitly matches any `Tagged`-kind value
+of that union), and a `:Tagged` wildcard admits any tagged value — and a
+variant-typed overload wins over a union-typed sibling that also admits the value.
+
+**The variant-reference surface is the union-qualified sigil `:(Maybe Some)`** —
+a variant type reached through its union, with no global `:Some` name and no `.`
+path operator. The dispatcher's `Tagged` constructor arm
+([apply_callable.rs](../../src/machine/execute/dispatch/apply_callable.rs))
+disambiguates by body shape: a bare `Type`-token body (`Maybe Some`) yields the
+variant `KType` value, while a payload body (`Maybe (Some 42)`) constructs. An
+unknown tag at the reference surface is a schema error listing the union's
+variants. The variant renders back to `:(Maybe Some)` so it round-trips.
+
+The `TypeConstructor` carve-out: a `Result` value (`NominalKind::TypeConstructor`)
+keeps the bare/applied union identity (`SetRef` / `ConstructorApply`), so the
+`Result` / `CATCH` / `TRY` error machinery is untouched — only `Tagged`-kind
+values report a `Variant`. See [error-handling.md](../error-handling.md). Routing
+`MATCH` itself through ordinary type-dispatch (instead of its current distinct
+fast-track form) and recursive variant references inside a schema are open work,
+tracked under
+[tagged-union variants as dispatchable types](../../roadmap/type_language/tagged-variant-types.md).
 
 ## Type-only nominal install
 

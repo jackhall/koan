@@ -49,10 +49,14 @@ construct a tagged value in every arm, or coarsen the slot to `Any`.
   desugars (the parse→dispatch bridge) to a dispatched, associative-flattening
   union builtin, so arbitrary arity falls out of associativity rather than new
   parse arity. Precedence inside `:(...)` (e.g. `List A | B`) is settled there.
-- *Elimination — decided (dispatch); type-MATCH deferred.* A union is
-  consumed via ordinary type-dispatch. A tag-free "match by type" arm shape
-  in [`branch_walk`](../../src/builtins/branch_walk.rs) is optional sugar over
-  that mechanism and is deferred.
+- *Elimination — decided (dispatch); MATCH lowering owned here.* A union is
+  consumed via ordinary type-dispatch. The tag-free "match by type" arm shape in
+  [`branch_walk`](../../src/builtins/branch_walk.rs) is sugar over that mechanism,
+  and converging the existing nominal-tagged `MATCH` onto the same lowering —
+  removing its parallel name-matching form, the deferred half of [tagged-union
+  variants as dispatchable types](tagged-variant-types.md) — is this item's
+  responsibility, since both elimination paths collapse onto the one match-by-type
+  mechanism this item introduces.
 
 ## Dependencies
 

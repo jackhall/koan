@@ -19,7 +19,7 @@ fn success_wraps_value_in_ok() {
     // Double "v\n": PRINT both renders and returns its argument, so the ok
     // arm's `(PRINT it)` re-prints the same string CATCH captured.
     let bytes = run_program(
-        "MATCH (CATCH (PRINT \"v\")) -> :Str WITH (ok -> (PRINT it) error -> (PRINT \"no\"))",
+        "MATCH (CATCH (PRINT \"v\")) -> :Str WITH (Ok -> (PRINT it) Error -> (PRINT \"no\"))",
     );
     assert_eq!(bytes, b"v\nv\n");
 }
@@ -30,8 +30,8 @@ fn failure_wraps_to_tagged_in_error() {
     // the kind tag, and `.name` is the unbound_name variant's payload field.
     let bytes = run_program(
         "MATCH (CATCH (foo)) -> :Str WITH (\
-            ok -> (PRINT \"no\")\
-            error -> (MATCH it -> :Str WITH (unbound_name -> (PRINT it.name)))\
+            Ok -> (PRINT \"no\")\
+            Error -> (MATCH it -> :Str WITH (UnboundName -> (PRINT it.name)))\
          )",
     );
     assert_eq!(bytes, b"foo\n");
@@ -58,8 +58,8 @@ fn nested_catch_wraps_inner_result_in_outer_ok() {
     // `ok`; `it` then names the inner `error(...)` Result.
     let bytes = run_program(
         "MATCH (CATCH (CATCH (foo))) -> :Str WITH (\
-            ok -> (MATCH it -> :Str WITH (ok -> (PRINT \"inner-ok\") error -> (PRINT \"inner-error\")))\
-            error -> (PRINT \"outer-error\")\
+            Ok -> (MATCH it -> :Str WITH (Ok -> (PRINT \"inner-ok\") Error -> (PRINT \"inner-error\")))\
+            Error -> (PRINT \"outer-error\")\
          )",
     );
     assert_eq!(bytes, b"inner-error\n");
@@ -71,12 +71,12 @@ fn catch_inside_tco_position_preserves_frame_chain() {
     // the new frame across recursive HOPs, or the TCO continuation loses its
     // resumption context.
     let bytes = run_program(
-        "UNION Bit = (one :Null zero :Null)\n\
+        "UNION Bit = (One :Null Zero :Null)\n\
          FN (HOP b :Tagged) -> Any = (CATCH (MATCH (b) -> :Str WITH (\
-            one -> (HOP (Bit (zero null)))\
-            zero -> (PRINT \"done\")\
+            One -> (HOP (Bit (Zero null)))\
+            Zero -> (PRINT \"done\")\
          )))\n\
-         HOP (Bit (one null))",
+         HOP (Bit (One null))",
     );
     assert_eq!(bytes, b"done\n");
 }
@@ -88,7 +88,7 @@ fn catch_result_shares_identity_with_constructed_result() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let caught = run_one(scope, parse_one("CATCH (foo)"));
-    let constructed = run_one(scope, parse_one("Result (ok 1)"));
+    let constructed = run_one(scope, parse_one("Result (Ok 1)"));
     match (caught, constructed) {
         (
             KObject::Tagged {

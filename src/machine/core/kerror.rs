@@ -168,13 +168,14 @@ impl KError {
     }
 
     /// Lower this error into a `KObject::Tagged` for `TRY-WITH` to dispatch
-    /// on. The `tag` names the `KErrorKind` variant (e.g. `"type_mismatch"`);
-    /// the payload is a record-repr `KObject::Wrapped` mirroring the variant's fields plus
-    /// `frames :List<Str>`, so TRY's `it.field` ATTR reads through the `Wrapped` arm. The
-    /// payload's `type_id` and the wrapping `Tagged`'s `set` are synthetic singleton
-    /// [`RecursiveSet`]s (named `struct_name` / `"KError"`, scope [`ScopeId::SENTINEL`])
-    /// because TRY's branch walker reads `tag` and `value` directly without going through
-    /// dispatch — these carriers never need real nominal identity.
+    /// on. The `tag` is the capitalized `KErrorKind` variant name (e.g. `"TypeMismatch"`),
+    /// a valid type-token tag a TRY arm catches by name; the payload is a record-repr
+    /// `KObject::Wrapped` mirroring the variant's fields plus `frames :List<Str>`, so TRY's
+    /// `it.field` ATTR reads through the `Wrapped` arm. The payload's `type_id` and the
+    /// wrapping `Tagged`'s `set` are synthetic singleton [`RecursiveSet`]s (named after the
+    /// variant / `"KError"`, scope [`ScopeId::SENTINEL`]) because TRY's branch walker reads
+    /// `tag` and `value` directly without going through dispatch — these carriers never need
+    /// real nominal identity.
     ///
     /// `arena` homes the payload's `&'a` `type_id`. It is the call-site scope's arena, like
     /// any newtype's construction-site identity; unlike a declared NEWTYPE (whose identity
@@ -183,7 +184,7 @@ impl KError {
     /// `Wrapped.type_id` re-anchor gap (the `inner` record itself rides an `Rc` and is
     /// lift-safe).
     pub fn to_tagged<'a>(&self, arena: &'a RuntimeArena) -> KObject<'a> {
-        let (tag, struct_name, fields) = self.kind.to_struct_fields();
+        let (name, fields) = self.kind.to_struct_fields();
         let frames_list = KObject::list(
             self.frames
                 .iter()
@@ -203,7 +204,7 @@ impl KError {
         pairs.push(("frames".to_string(), frames_list));
         let record = KObject::record(Record::from_pairs(pairs));
         let type_id: &'a KType<'a> = arena.alloc_ktype(KType::SetRef {
-            set: synthetic_singleton(struct_name, NominalKind::Newtype),
+            set: synthetic_singleton(name.clone(), NominalKind::Newtype),
             index: 0,
         });
         let payload = KObject::Wrapped {
@@ -211,7 +212,7 @@ impl KError {
             type_id,
         };
         KObject::Tagged {
-            tag,
+            tag: name,
             value: Rc::new(payload),
             set: synthetic_singleton("KError".to_string(), NominalKind::Tagged),
             index: 0,
@@ -234,14 +235,14 @@ fn synthetic_singleton<'a>(name: String, kind: NominalKind) -> Rc<RecursiveSet<'
 }
 
 impl KErrorKind {
-    /// `(tag, struct_name, fields)` for `KError::to_tagged`. Field order
-    /// mirrors the variant's declaration order; `frames` is appended by the
-    /// caller. Dispatcher-internal kinds flatten to `{ kind, message }` since
+    /// `(name, fields)` for `KError::to_tagged`. `name` is the capitalized variant tag —
+    /// a TRY arm catches it by name (`TypeMismatch -> …`) — and also the payload newtype's
+    /// identity. Field order mirrors the variant's declaration order; `frames` is appended
+    /// by the caller. Dispatcher-internal kinds flatten to `{ kind, message }` since
     /// they're only catchable via `_`.
-    fn to_struct_fields<'a>(&self) -> (String, String, Vec<(String, KObject<'a>)>) {
+    fn to_struct_fields<'a>(&self) -> (String, Vec<(String, KObject<'a>)>) {
         match self {
             KErrorKind::TypeMismatch { arg, expected, got } => (
-                "type_mismatch".to_string(),
                 "TypeMismatch".to_string(),
                 vec![
                     ("arg".to_string(), KObject::KString(arg.clone())),
@@ -250,17 +251,14 @@ impl KErrorKind {
                 ],
             ),
             KErrorKind::MissingArg(name) => (
-                "missing_arg".to_string(),
                 "MissingArg".to_string(),
                 vec![("name".to_string(), KObject::KString(name.clone()))],
             ),
             KErrorKind::UnboundName(name) => (
-                "unbound_name".to_string(),
                 "UnboundName".to_string(),
                 vec![("name".to_string(), KObject::KString(name.clone()))],
             ),
             KErrorKind::ArityMismatch { expected, got } => (
-                "arity_mismatch".to_string(),
                 "ArityMismatch".to_string(),
                 vec![
                     ("expected".to_string(), KObject::Number(*expected as f64)),
@@ -268,7 +266,6 @@ impl KErrorKind {
                 ],
             ),
             KErrorKind::AmbiguousDispatch { expr, candidates } => (
-                "ambiguous_dispatch".to_string(),
                 "AmbiguousDispatch".to_string(),
                 vec![
                     ("expr".to_string(), KObject::KString(expr.clone())),
@@ -279,7 +276,6 @@ impl KErrorKind {
                 ],
             ),
             KErrorKind::DispatchFailed { expr, reason } => (
-                "dispatch_failed".to_string(),
                 "DispatchFailed".to_string(),
                 vec![
                     ("expr".to_string(), KObject::KString(expr.clone())),
@@ -287,7 +283,6 @@ impl KErrorKind {
                 ],
             ),
             KErrorKind::ShapeError(msg) => (
-                "shape_error".to_string(),
                 "ShapeError".to_string(),
                 vec![("message".to_string(), KObject::KString(msg.clone()))],
             ),
@@ -332,10 +327,9 @@ impl KErrorKind {
                     "col_utf16".to_string(),
                     KObject::Number(col_utf16.unwrap_or(0) as f64),
                 ));
-                ("parse_error".to_string(), "ParseError".to_string(), fields)
+                ("ParseError".to_string(), fields)
             }
             KErrorKind::User(msg) => (
-                "user".to_string(),
                 "User".to_string(),
                 vec![("message".to_string(), KObject::KString(msg.clone()))],
             ),
@@ -344,29 +338,20 @@ impl KErrorKind {
             | KErrorKind::TypeClassBindingExpectsType { .. }
             | KErrorKind::TypeIdentityPendingAtDispatch { .. }
             | KErrorKind::SchedulerDeadlock { .. } => {
-                let (tag, struct_name) = match self {
-                    KErrorKind::Rebind { .. } => ("rebind", "Rebind"),
-                    KErrorKind::DuplicateOverload { .. } => {
-                        ("duplicate_overload", "DuplicateOverload")
+                let name = match self {
+                    KErrorKind::Rebind { .. } => "Rebind",
+                    KErrorKind::DuplicateOverload { .. } => "DuplicateOverload",
+                    KErrorKind::TypeClassBindingExpectsType { .. } => "TypeClassBindingExpectsType",
+                    KErrorKind::TypeIdentityPendingAtDispatch { .. } => {
+                        "TypeIdentityPendingAtDispatch"
                     }
-                    KErrorKind::TypeClassBindingExpectsType { .. } => (
-                        "type_class_binding_expects_type",
-                        "TypeClassBindingExpectsType",
-                    ),
-                    KErrorKind::TypeIdentityPendingAtDispatch { .. } => (
-                        "type_identity_pending_at_dispatch",
-                        "TypeIdentityPendingAtDispatch",
-                    ),
-                    KErrorKind::SchedulerDeadlock { .. } => {
-                        ("scheduler_deadlock", "SchedulerDeadlock")
-                    }
+                    KErrorKind::SchedulerDeadlock { .. } => "SchedulerDeadlock",
                     _ => unreachable!(),
                 };
                 (
-                    tag.to_string(),
-                    struct_name.to_string(),
+                    name.to_string(),
                     vec![
-                        ("kind".to_string(), KObject::KString(tag.to_string())),
+                        ("kind".to_string(), KObject::KString(name.to_string())),
                         ("message".to_string(), KObject::KString(format!("{self}"))),
                     ],
                 )

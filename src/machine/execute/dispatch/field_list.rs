@@ -75,9 +75,11 @@ pub(crate) fn defer_field_list_via_combine<'a>(
             }
             // Every producer waited on is terminal by Combine invariant, so a second
             // park is a scheduling inconsistency rather than a recoverable forward ref.
-            FieldListOutcome::Pending { .. } => BodyResult::Err(KError::new(KErrorKind::ShapeError(
-                format!("{context}: forward type reference still unresolved after Combine wake"),
-            ))),
+            FieldListOutcome::Pending { .. } => {
+                BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                    "{context}: forward type reference still unresolved after Combine wake"
+                ))))
+            }
         }
     });
     let combine_id = sched.add_combine(owned_subs, park_producers, scope, finish);

@@ -124,6 +124,19 @@ pub enum KType<'a> {
         set: Rc<RecursiveSet<'a>>,
         index: usize,
     },
+    /// A single variant of a tagged-union member, reached *through* its union. `(set, index)`
+    /// names the `NominalKind::Tagged` member; `tag` selects one variant within it. A
+    /// refinement of the union: `Variant` is strictly more specific than the union's
+    /// `SetRef` and than `AnyUserType { kind: Tagged }`, so a slot typed `:(Maybe Some)`
+    /// admits only `Some` values while a `:Maybe` slot admits any variant. A Tagged-kind
+    /// `KObject::Tagged` value reports its `Variant` from `ktype()`. Identity is
+    /// `(set ptr, index, tag)`; the whole set rides every `Variant`, so lift shares it by
+    /// `Rc::clone`, like [`KType::SetRef`].
+    Variant {
+        set: Rc<RecursiveSet<'a>>,
+        index: usize,
+        tag: String,
+    },
     /// Intra-set sibling reference — a bare index resolved against the ambient set during
     /// deep traversal only. Carries no `Rc`, so a set holds no internal refcount cycle and
     /// frees once its last external handle drops. Never reaches the predicates (matching is
@@ -223,6 +236,11 @@ impl<'a> KType<'a> {
             KType::TypeExprRef => "TypeExprRef".into(),
             KType::Type => "Type".into(),
             KType::SetRef { set, index } => set.member(*index).name.clone(),
+            // `:(Maybe Some)` — the variant reached through its union. Round-trips through
+            // the union-qualified type sigil.
+            KType::Variant { set, index, tag } => {
+                format!(":({} {})", set.member(*index).name, tag)
+            }
             // Diagnostic-only: a sibling reference renders against no ambient set here, so
             // report the slot index. Deep traversal resolves it against the set.
             KType::SetLocal(i) => format!("SetLocal({i})"),
@@ -336,6 +354,20 @@ impl<'a> PartialEq for KType<'a> {
             (SetRef { set: s1, index: i1 }, SetRef { set: s2, index: i2 }) => {
                 Rc::ptr_eq(s1, s2) && i1 == i2
             }
+            // Variant identity is `(set ptr, index, tag)` — the union member plus the
+            // selected tag, never the (cyclic) schema.
+            (
+                Variant {
+                    set: s1,
+                    index: i1,
+                    tag: t1,
+                },
+                Variant {
+                    set: s2,
+                    index: i2,
+                    tag: t2,
+                },
+            ) => Rc::ptr_eq(s1, s2) && i1 == i2 && t1 == t2,
             (SetLocal(a), SetLocal(b)) => a == b,
             (AnyUserType { kind: k1 }, AnyUserType { kind: k2 }) => k1 == k2,
             (
@@ -411,6 +443,12 @@ impl<'a> std::hash::Hash for KType<'a> {
             SetRef { set, index } => {
                 (Rc::as_ptr(set) as *const ()).hash(state);
                 index.hash(state);
+            }
+            // Set-pointer + index + tag — matching `PartialEq`, never the cyclic schema.
+            Variant { set, index, tag } => {
+                (Rc::as_ptr(set) as *const ()).hash(state);
+                index.hash(state);
+                tag.hash(state);
             }
             SetLocal(i) => i.hash(state),
             AnyUserType { kind } => kind.hash(state),

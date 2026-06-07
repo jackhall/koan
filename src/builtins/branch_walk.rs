@@ -71,8 +71,9 @@ pub(crate) fn find_branch_body<'a>(
         let arrow_part = &parts[i + 1];
         let body_part = &parts[i + 2];
         let tag_name = match &tag_part.value {
-            ExpressionPart::Identifier(s) => s.clone(),
-            // Booleans parse as `KLiteral::Boolean`, not identifiers; accept them so
+            // Variant tags are capitalized type names (`Some`, `Ok`, `TypeMismatch`).
+            ExpressionPart::Type(t) => t.render(),
+            // Booleans parse as `KLiteral::Boolean`, not type tokens; accept them so
             // `MATCH` on a `Bool` can spell its arms `true ->` / `false ->`.
             ExpressionPart::Literal(KLiteral::Boolean(b)) => {
                 if *b {
@@ -81,11 +82,11 @@ pub(crate) fn find_branch_body<'a>(
                     "false".to_string()
                 }
             }
-            // `_` is a pure-symbol token classified as `Keyword`, not `Identifier`.
+            // `_` is a pure-symbol token classified as `Keyword`, not a type name.
             ExpressionPart::Keyword(s) if allow_wildcard && s == "_" => s.clone(),
             other => {
                 return Err(format!(
-                    "branch tag must be a bare identifier or boolean literal, got {}",
+                    "branch tag must be a capitalized variant tag or boolean literal, got {}",
                     other.summarize()
                 ));
             }
