@@ -25,7 +25,6 @@ use crate::machine::model::KType;
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
 
 use super::{arg, err, kw, register_builtin, sig};
-use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -57,13 +56,9 @@ pub fn body<'a>(
             None => return err(KError::new(KErrorKind::MissingArg("m".to_string()))),
         },
     };
-    let body_expr = match extract_kexpression(&mut bundle, "body") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "USING body slot must be a parenthesized expression".to_string(),
-            )));
-        }
+    let body_expr = match bundle.extract_kexpression_or_shape_error("USING", "body") {
+        Ok(e) => e,
+        Err(e) => return err(e),
     };
 
     // Root the frame `Rc` in the call-site arena so the borrowed window outlives

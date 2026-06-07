@@ -3,6 +3,7 @@ mod param_refs;
 pub(crate) mod return_type;
 pub(crate) mod signature;
 
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::Elaborator;
 use crate::machine::model::types::KKind;
 use crate::machine::model::{Argument, KType, SignatureElement};
@@ -11,13 +12,12 @@ use crate::machine::{
 };
 
 use super::{arg, err, kw, register_builtin_full, sig};
-use crate::machine::core::kfunction::argument_bundle::{extract_kexpression, extract_ktype};
+use crate::machine::core::kfunction::argument_bundle::extract_ktype;
 
 use finalize::{
-    classify, defer_via_combine, finalize_fn, finalize_fn_with_kind, FnKind, FnPlan,
-    ParamListResult,
+    classify, defer_via_combine, finalize_fn_with_kind, FnKind, FnPlan, ParamListResult,
 };
-use return_type::{classify_return_type, extract_return_type_raw};
+use return_type::{classify_return_type, extract_return_type_raw, AdmissibleVerdict};
 use signature::ParamListOutcome;
 
 pub(crate) use signature::binder_bucket;
@@ -34,49 +34,69 @@ pub(crate) use signature::binder_name;
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
-    mut bundle: ArgumentBundle<'a>,
+    bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let signature_expr = match extract_kexpression(&mut bundle, "signature") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "FN signature slot must be a parenthesized expression".to_string(),
-            )));
-        }
+    build_fn_like(scope, sched, bundle, "FN", FnKind::Function)
+}
+
+/// Shared FN / FUNCTOR elaboration: extract the `signature` / return / `body`
+/// slots, collect param names, classify the return type, parse the param list,
+/// and route to [`finalize_fn_with_kind`] (synchronous) or [`defer_via_combine`]
+/// (Combine). `kind` is the sole behavioral fork — `FnKind::Functor` builds the
+/// param-type map and acts on the return-admissibility verdict; FN passes `None`
+/// and [`classify_return_type`] returns `Admissible`, so the `Rejected` check is a
+/// no-op. `builtin` (`"FN"` / `"FUNCTOR"`) names the surface in slot errors.
+pub(crate) fn build_fn_like<'a>(
+    scope: &'a Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
+    mut bundle: ArgumentBundle<'a>,
+    builtin: &str,
+    kind: FnKind,
+) -> BodyResult<'a> {
+    let signature_expr = match bundle.extract_kexpression_or_shape_error(builtin, "signature") {
+        Ok(e) => e,
+        Err(e) => return err(e),
     };
     let return_type_raw = match extract_return_type_raw(&mut bundle) {
         Ok(r) => r,
         Err(e) => return err(e),
     };
-    let body_expr = match extract_kexpression(&mut bundle, "body") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "FN body slot must be a parenthesized expression".to_string(),
-            )));
-        }
+    let body_expr = match bundle.extract_kexpression_or_shape_error(builtin, "body") {
+        Ok(e) => e,
+        Err(e) => return err(e),
     };
     // Scan param names against the raw signature: a param type still parked on a
     // placeholder still contributes its name, which the return-type carrier may
     // reference (deferring elaboration to per-call scope at invoke time).
     let param_names = signature::collect_param_names_from_signature(&signature_expr);
 
-    // Gate param type names to the FN's lexical position — a parameter naming a later type
-    // is a position error, like any other forward type reference.
+    // FUNCTOR-only: param-name → declared-`KType` map drives the deferred-arm head
+    // inspector's "is this bare-param ref type-denoting?" check (slots like `-> Er`).
+    // `Some(&map)` activates the FUNCTOR-return verdict; FN passes `None`.
+    let param_type_map = match kind {
+        FnKind::Functor => Some(collect_param_types(&signature_expr, scope)),
+        FnKind::Function | FnKind::Anonymous => None,
+    };
+
+    // Gate param type names to the binder's lexical position — a parameter naming a
+    // later type is a position error, like any other forward type reference.
     let mut elaborator = Elaborator::new(scope).with_chain(sched.current_lexical_chain());
 
-    // `None` verdict context: FUNCTOR's arm consumes a verdict computed against
-    // `Some(&param_type_map)`; FN computes a no-op `Admissible` and drops it.
-    let (return_type_state, _verdict) = match classify_return_type(
+    let (return_type_state, verdict) = match classify_return_type(
         return_type_raw,
         &param_names,
         scope,
         sched.current_lexical_chain(),
-        None,
+        param_type_map.as_ref(),
     ) {
         Ok(p) => p,
         Err(e) => return err(e),
     };
+    // `Rejected` short-circuits the FUNCTOR; `DeferredToCombine` rides Combine-finish
+    // via the `FnKind::Functor` gate in `finalize_fn_with_kind` / `defer_via_combine`.
+    if let AdmissibleVerdict::Rejected(e) = verdict {
+        return err(e);
+    }
 
     let params = match signature::parse_fn_param_list(&signature_expr, &mut elaborator) {
         ParamListOutcome::Done(es) => ParamListResult::Done(es),
@@ -90,7 +110,7 @@ pub fn body<'a>(
         },
     };
 
-    // The FN name binds at its own lexical position, like every other binder.
+    // The binder name binds at its own lexical position, like every other binder.
     let bind_index = sched
         .current_lexical_chain()
         .map(|chain| BindingIndex::value(chain.index))
@@ -100,17 +120,45 @@ pub fn body<'a>(
         FnPlan::Synchronous {
             elements,
             return_type,
-        } => finalize_fn(scope, elements, return_type, body_expr, bind_index),
-        FnPlan::Combine(inputs) => defer_via_combine(
-            scope,
-            sched,
-            signature_expr,
-            inputs,
-            body_expr,
-            FnKind::Function,
-            bind_index,
-        ),
+        } => finalize_fn_with_kind(scope, elements, return_type, body_expr, kind, bind_index),
+        FnPlan::Combine(inputs) => {
+            defer_via_combine(scope, sched, signature_expr, inputs, body_expr, kind, bind_index)
+        }
     }
+}
+
+/// Build a map of `param_name → declared-KType` for the FUNCTOR deferred-arm head
+/// inspector. Skips slots that don't elaborate eagerly; the Combine path's
+/// resolved validator catches the slack.
+fn collect_param_types<'a>(
+    signature: &KExpression<'a>,
+    scope: &'a Scope<'a>,
+) -> std::collections::HashMap<String, KType<'a>> {
+    use crate::machine::model::types::{elaborate_type_expr, ElabResult};
+    let mut map = std::collections::HashMap::new();
+    let mut el = Elaborator::new(scope);
+    let parts = &signature.parts;
+    let mut i = 0;
+    while i < parts.len() {
+        let param_name: Option<String> = match &parts[i].value {
+            ExpressionPart::Identifier(name) => Some(name.clone()),
+            ExpressionPart::Type(t) => Some(t.render()),
+            _ => None,
+        };
+        if let Some(name) = param_name {
+            if let Some(next_part) = parts.get(i + 1) {
+                if let ExpressionPart::Type(t) = &next_part.value {
+                    if let ElabResult::Done(kt) = elaborate_type_expr(&mut el, t) {
+                        map.insert(name, kt);
+                    }
+                }
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    map
 }
 
 /// Anonymous-FN body: `FN :{<record schema>} -> ReturnType = (<body>)`.
@@ -156,13 +204,9 @@ pub fn body_record_schema<'a>(
         Ok(r) => r,
         Err(e) => return err(e),
     };
-    let body_expr = match extract_kexpression(&mut bundle, "body") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "FN body slot must be a parenthesized expression".to_string(),
-            )));
-        }
+    let body_expr = match bundle.extract_kexpression_or_shape_error("FN", "body") {
+        Ok(e) => e,
+        Err(e) => return err(e),
     };
 
     // `None` verdict context: the FUNCTOR-only return admissibility check is

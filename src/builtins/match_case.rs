@@ -10,7 +10,6 @@ use crate::machine::{
 
 use super::branch_walk::{find_branch_body, resolve_arm_return_contract};
 use super::{arg, err, kw, register_builtin, sig};
-use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 use crate::machine::core::kfunction::body::split_body_statements;
 
 /// `MATCH <value:Any> -> :<T> WITH <branches:KExpression>` — branch by tag.
@@ -58,13 +57,9 @@ pub fn body<'a>(
         Ok(c) => c,
         Err(e) => return err(e),
     };
-    let branches_expr = match extract_kexpression(&mut bundle, "branches") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "MATCH branches slot must be a parenthesized expression".to_string(),
-            )));
-        }
+    let branches_expr = match bundle.extract_kexpression_or_shape_error("MATCH", "branches") {
+        Ok(e) => e,
+        Err(e) => return err(e),
     };
     let branch_body = match find_branch_body(&branches_expr, &tag, false) {
         Ok(Some(body)) => body,

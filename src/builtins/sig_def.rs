@@ -14,16 +14,12 @@ use crate::machine::model::types::KKind;
 use crate::machine::model::values::Signature;
 use crate::machine::model::KType;
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind,
-    SchedulerHandle, Scope,
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, SchedulerHandle, Scope,
 };
 
-use crate::machine::model::ast::KExpression;
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
-use crate::machine::core::kfunction::argument_bundle::{
-    extract_bare_type_name, extract_kexpression,
-};
+use crate::machine::core::kfunction::argument_bundle::extract_bare_type_name;
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -34,13 +30,9 @@ pub fn body<'a>(
         Ok(n) => n,
         Err(e) => return err(e),
     };
-    let body_expr = match extract_kexpression(&mut bundle, "body") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "SIG body slot must be a parenthesized expression".to_string(),
-            )));
-        }
+    let body_expr = match bundle.extract_kexpression_or_shape_error("SIG", "body") {
+        Ok(e) => e,
+        Err(e) => return err(e),
     };
 
     let arena = scope.arena;
@@ -80,12 +72,6 @@ pub fn body<'a>(
     BodyResult::DeferTo(combine_id)
 }
 
-/// Dispatch-time placeholder extractor: pulls the signature name from `parts[1]`'s
-/// `Type(t)` token. Same shape as STRUCT / MODULE / named UNION.
-pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
-    expr.binder_name_from_type_part()
-}
-
 pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_binder(
         scope,
@@ -100,7 +86,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         body,
-        Some(binder_name),
+        Some(super::type_part_binder_name),
     );
 }
 
@@ -114,7 +100,7 @@ mod tests {
     fn binder_name_extracts_sig_name() {
         let mut exprs = parse("SIG OrderedSig = (VAL x :Number)").expect("parse should succeed");
         let expr = exprs.remove(0);
-        let name = super::binder_name(&expr);
+        let name = expr.binder_name_from_type_part();
         assert_eq!(name.as_deref(), Some("OrderedSig"));
     }
 

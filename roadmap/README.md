@@ -37,6 +37,16 @@ What's shipped that the open items below build on:
   admits. It makes the [standard library](libraries/standard-library.md)'s
   higher-order combinators ergonomic to call with an inline function. See
   [design/functional-programming.md § Anonymous functions](../design/functional-programming.md#anonymous-functions).
+- *Duplication consolidation.* Five pre-located copy-paste clusters each collapsed to a
+  single owner: per-builtin typed-binder `binder_name` (one shared
+  [`type_part_binder_name`](../src/builtins.rs)), the FN and FUNCTOR bodies (one shared
+  [`build_fn_like`](../src/builtins/fn_def.rs) keyed on `FnKind`), the `finish.rs`
+  `run_combine`/`run_catch` arms (one `dispatch_body_result`), the `dict_literal`
+  `accept_colon`/`accept_equals` pair (one `accept_separator`), and the slot-extract error
+  envelope (one [`ArgumentBundle::extract_kexpression_or_shape_error`](../src/machine/core/kfunction/argument_bundle.rs)
+  owning the parenthesized-slot error text). The sixth cluster — the scheduler
+  `Object`/`Type` finalize arms — stays open under
+  [consolidate identified code duplication](refactor/consolidate-identified-duplication.md).
 - *Arena unsafe consolidation.* The scattered per-call frame re-anchor is funnelled
   behind one [`CallArena::anchored_parts`](../src/machine/core/arena.rs), and every
   captured/defining-scope re-attach behind one
@@ -208,9 +218,8 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Consolidate identified code duplication](refactor/consolidate-identified-duplication.md) —
-  six pre-located copy-paste clusters (per-builtin `binder_name`, FN/FUNCTOR bodies, the
-  scheduler `Object`/`Type` arms, `finish.rs` arms, `dict_literal` accept pair, the
-  slot-extract error envelope) each collapsed to one owner.
+  the one remaining copy-paste cluster: the scheduler `Object`/`Type` finalize arms,
+  deferred behind the carrier work that dissolves the fork they mirror.
 - [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md) —
   separate the per-frame scope lifetime from the run `'a`; the prerequisite that makes a
   compile-time frame re-anchor brand expressible.

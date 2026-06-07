@@ -13,7 +13,6 @@ use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, Frame, KError, KErrorKind, SchedulerHandle, Scope,
 };
 
-use crate::machine::model::ast::KExpression;
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
 use crate::machine::core::kfunction::argument_bundle::{
@@ -150,12 +149,6 @@ fn finalize_union<'a>(
     }
 }
 
-/// Dispatch-time placeholder extractor: pulls the binder name from `parts[1]`'s
-/// `Type(t)` token. Same shape as STRUCT / MODULE / SIG.
-pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
-    expr.binder_name_from_type_part()
-}
-
 pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_binder(
         scope,
@@ -170,7 +163,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         body,
-        Some(binder_name),
+        Some(super::type_part_binder_name),
     );
 }
 
@@ -199,7 +192,7 @@ mod tests {
     #[test]
     fn binder_name_extracts_named_union_name() {
         let expr = parse_one("UNION Maybe = (Some :Number, None :Null)");
-        let name = super::binder_name(&expr);
+        let name = expr.binder_name_from_type_part();
         assert_eq!(name.as_deref(), Some("Maybe"));
     }
 

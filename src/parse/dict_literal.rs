@@ -97,22 +97,24 @@ impl<'a> DictFrame<'a> {
         }
     }
 
-    /// Errors if no key was buffered or if a `:` arrives while a value is already
-    /// being built — one `:` per pair. Selects (or confirms) dict mode.
-    pub(super) fn accept_colon(&mut self) -> Result<(), KError> {
-        if self.mode == BraceMode::Record {
+    /// Shared separator step for `:` (dict) and `=` (record): commit the buffered
+    /// key/field and open a value slot, or error. A separator in the opposite mode
+    /// is a mixed-delimiter error; an empty buffer or a second separator inside a
+    /// value uses the mode-specific `missing`/`inside_value` message.
+    fn accept_separator(
+        &mut self,
+        target: BraceMode,
+        conflict: BraceMode,
+        missing: &str,
+        inside_value: &str,
+    ) -> Result<(), KError> {
+        if self.mode == conflict {
             return Err(KError::parse(MIXED_DELIMITERS, None));
         }
-        self.mode = BraceMode::Dict;
+        self.mode = target;
         match std::mem::replace(&mut self.state, DictPairState::Empty) {
-            DictPairState::Empty => Err(KError::parse(
-                "missing key before ':' in dict literal",
-                None,
-            )),
-            DictPairState::Key(parts) if parts.is_empty() => Err(KError::parse(
-                "missing key before ':' in dict literal",
-                None,
-            )),
+            DictPairState::Empty => Err(KError::parse(missing, None)),
+            DictPairState::Key(parts) if parts.is_empty() => Err(KError::parse(missing, None)),
             DictPairState::Key(parts) => {
                 self.state = DictPairState::Value {
                     key: single_or_wrapped(parts),
@@ -122,39 +124,31 @@ impl<'a> DictFrame<'a> {
             }
             DictPairState::Value { key, value } => {
                 self.state = DictPairState::Value { key, value };
-                Err(KError::parse("unexpected ':' inside dict value", None))
+                Err(KError::parse(inside_value, None))
             }
         }
+    }
+
+    /// Errors if no key was buffered or if a `:` arrives while a value is already
+    /// being built — one `:` per pair. Selects (or confirms) dict mode.
+    pub(super) fn accept_colon(&mut self) -> Result<(), KError> {
+        self.accept_separator(
+            BraceMode::Dict,
+            BraceMode::Record,
+            "missing key before ':' in dict literal",
+            "unexpected ':' inside dict value",
+        )
     }
 
     /// Record counterpart of [`accept_colon`](Self::accept_colon): a `=` separates a
     /// field name from its value. Selects (or confirms) record mode; one `=` per field.
     pub(super) fn accept_equals(&mut self) -> Result<(), KError> {
-        if self.mode == BraceMode::Dict {
-            return Err(KError::parse(MIXED_DELIMITERS, None));
-        }
-        self.mode = BraceMode::Record;
-        match std::mem::replace(&mut self.state, DictPairState::Empty) {
-            DictPairState::Empty => Err(KError::parse(
-                "missing field name before '=' in record literal",
-                None,
-            )),
-            DictPairState::Key(parts) if parts.is_empty() => Err(KError::parse(
-                "missing field name before '=' in record literal",
-                None,
-            )),
-            DictPairState::Key(parts) => {
-                self.state = DictPairState::Value {
-                    key: single_or_wrapped(parts),
-                    value: Vec::new(),
-                };
-                Ok(())
-            }
-            DictPairState::Value { key, value } => {
-                self.state = DictPairState::Value { key, value };
-                Err(KError::parse("unexpected '=' inside record value", None))
-            }
-        }
+        self.accept_separator(
+            BraceMode::Record,
+            BraceMode::Dict,
+            "missing field name before '=' in record literal",
+            "unexpected '=' inside record value",
+        )
     }
 
     /// Trailing or repeated commas no-op (`{a: 1,}` and `{a: 1,, b: 2}` both legal);

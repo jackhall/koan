@@ -30,9 +30,7 @@ use crate::machine::{
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
-use crate::machine::core::kfunction::argument_bundle::{
-    extract_bare_type_name, extract_kexpression,
-};
+use crate::machine::core::kfunction::argument_bundle::extract_bare_type_name;
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -43,13 +41,9 @@ pub fn body<'a>(
         Ok(n) => n,
         Err(e) => return err(e),
     };
-    let body_expr = match extract_kexpression(&mut bundle, "body") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "RECURSIVE TYPES body slot must be a parenthesized expression".to_string(),
-            )));
-        }
+    let body_expr = match bundle.extract_kexpression_or_shape_error("RECURSIVE TYPES", "body") {
+        Ok(e) => e,
+        Err(e) => return err(e),
     };
     // Discover the members (name + kind) before dispatching anything, so the shared set
     // exists when the declarations elaborate.
@@ -196,11 +190,6 @@ fn leading_keyword<'e>(decl: &'e KExpression<'_>) -> Option<&'e str> {
     })
 }
 
-/// Dispatch-time placeholder extractor: the group name at the first `Type` token.
-pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
-    expr.binder_name_from_type_part()
-}
-
 pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_binder(
         scope,
@@ -216,7 +205,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         body,
-        Some(binder_name),
+        Some(super::type_part_binder_name),
     );
 }
 

@@ -60,4 +60,4 @@ Independent — neither blocks the other — but a shared carrier representation
 
 **Requires:** none — foundation.
 
-**Unblocks:** none tracked yet.
+**Unblocks:** [consolidate identified code duplication](../refactor/consolidate-identified-duplication.md) — dissolving the carrier fork lets the scheduler `Object`/`Type` finalize arms collapse to one.

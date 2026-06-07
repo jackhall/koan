@@ -1,5 +1,5 @@
 //! Post-classification side of FN-def: turn the (return-type, parameter-list)
-//! pair into either a synchronous `finalize_fn` call or a Combine-deferred
+//! pair into either a synchronous `finalize_fn_with_kind` call or a Combine-deferred
 //! schedule, and own the Combine finish closure.
 //!
 //! [`classify`] collapses the 8-combinatoric `(ReturnTypeState × ParamListResult)`
@@ -129,7 +129,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
             },
         ) => FnPlan::Combine(CombineInputs {
             // Return type is per-call-deferred: carry the carrier verbatim
-            // through to `finalize_fn` once params land.
+            // through to `finalize_fn_with_kind` once params land.
             capture: ReturnTypeCapture::Deferred(d),
             park_producers,
             return_type_sub: None,
@@ -187,24 +187,6 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
     }
 }
 
-/// Build the `KFunction` and register it in `scope`. Shared between the
-/// synchronous (no-park) path and the Combine-finish path.
-pub(crate) fn finalize_fn<'a>(
-    scope: &'a Scope<'a>,
-    elements: Vec<SignatureElement<'a>>,
-    return_type: ReturnType<'a>,
-    body_expr: KExpression<'a>,
-    bind_index: BindingIndex,
-) -> BodyResult<'a> {
-    finalize_fn_with_kind(
-        scope,
-        elements,
-        return_type,
-        body_expr,
-        FnKind::Function,
-        bind_index,
-    )
-}
 
 /// Variant used by the keyworded FN (`FnKind::Function`), the FUNCTOR builtin
 /// (`FnKind::Functor`), and the anonymous record-schema binder

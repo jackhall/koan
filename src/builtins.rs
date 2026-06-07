@@ -71,6 +71,17 @@ pub fn register_builtin<'a>(
     register_builtin_with_binder(scope, name, signature, body, None);
 }
 
+/// Shared [`BinderNameFn`] for typed-binder builtins (SIG / MODULE / UNION /
+/// RECURSIVE TYPES / NEWTYPE): the binder name is `parts[1]`'s `Type(t)` token.
+/// A free function (not the `KExpression::binder_name_from_type_part` method
+/// reference) so the signature is higher-ranked over the expression lifetime, as
+/// `BinderNameFn` requires.
+pub(crate) fn type_part_binder_name(
+    expr: &crate::machine::model::ast::KExpression<'_>,
+) -> Option<String> {
+    expr.binder_name_from_type_part()
+}
+
 /// Collisions from `register_function` are dropped: each builtin registers once at
 /// run-root construction, so a collision would be a programming error.
 pub(crate) fn register_builtin_with_binder<'a>(

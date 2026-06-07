@@ -8,25 +8,18 @@ use std::rc::Rc;
 
 use crate::machine::model::types::NominalKind;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{
-    ArgumentBundle, BodyResult, CatchFinish, KError, KErrorKind, SchedulerHandle, Scope,
-};
+use crate::machine::{ArgumentBundle, BodyResult, CatchFinish, SchedulerHandle, Scope};
 
 use super::{arg, err, kw, register_builtin, sig};
-use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let expr_inner = match extract_kexpression(&mut bundle, "expr") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "CATCH expr slot must be a parenthesized expression".to_string(),
-            )));
-        }
+    let expr_inner = match bundle.extract_kexpression_or_shape_error("CATCH", "expr") {
+        Ok(e) => e,
+        Err(e) => return err(e),
     };
     // Capture the prelude `Result` member identity at body time (not in the finish
     // closure) so the CATCH-produced value shares the nominal identity of a

@@ -43,6 +43,13 @@ impl<'a> Scheduler<'a> {
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
         let body = finish(scope, self, &values);
         self.reclaim_deps(idx, owned_indices);
+        self.dispatch_body_result(body, idx)
+    }
+
+    /// Map a finished `BodyResult` to its `NodeStep`, shared by Combine and Catch:
+    /// a value/error completes the node, a `Tail` replaces it with a fresh dispatch,
+    /// and a `DeferTo` parks on the named lift. Callers free their deps first.
+    fn dispatch_body_result(&mut self, body: BodyResult<'a>, idx: usize) -> NodeStep<'a> {
         match body {
             BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
             BodyResult::Tail {
@@ -80,24 +87,7 @@ impl<'a> Scheduler<'a> {
         };
         let body = finish(scope, self, result);
         self.reclaim_deps(idx, vec![from.index()]);
-        match body {
-            BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
-            BodyResult::Tail {
-                expr,
-                frame,
-                function,
-                block_entry,
-                body_index,
-            } => NodeStep::Replace {
-                work: NodeWork::dispatch(expr),
-                frame,
-                function,
-                block_entry,
-                body_index,
-            },
-            BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
-            BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
-        }
+        self.dispatch_body_result(body, idx)
     }
 
     /// Consume the stamped Lift state. By pop time the notify-walk has

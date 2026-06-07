@@ -316,11 +316,6 @@ fn defer_resolved_sigil<'a>(
     BodyResult::DeferTo(combine_id)
 }
 
-/// Dispatch-time placeholder extractor.
-pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
-    expr.binder_name_from_type_part()
-}
-
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Three overloads, selected by the repr part-kind. Construction lives in the `TypeCall`
     // fast lane via `constructors::dispatch_construct_newtype`.
@@ -340,7 +335,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         body,
-        Some(binder_name),
+        Some(super::type_part_binder_name),
     );
     // Non-record sigil repr (`= :(LIST OF T)`): a `SigiledTypeExpr` part. The `:SigiledTypeExpr`
     // slot captures it *raw* (more specific than `:TypeExprRef`, so it wins) and `body`
@@ -358,7 +353,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         body,
-        Some(binder_name),
+        Some(super::type_part_binder_name),
     );
     // Record repr (`= :{…}`): a `RecordType` part. The `:RecordType` slot captures the field
     // list raw (more specific than `:TypeExprRef`, so it wins) so `body_record_repr` owns the
@@ -376,7 +371,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         body_record_repr,
-        Some(binder_name),
+        Some(super::type_part_binder_name),
     );
 }
 
