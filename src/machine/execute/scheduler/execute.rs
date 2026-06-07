@@ -4,9 +4,10 @@ use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::{assemble_body_chain, ScopeId};
 use crate::machine::{Frame, KError, KErrorKind, LexicalFrame, NodeId};
 
-use super::super::lift::lift_kobject;
+use super::super::lift::{lift_kobject, lift_ktype};
 use super::super::nodes::{LiftState, Node, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
+use crate::machine::model::Carried;
 
 impl<'a> Scheduler<'a> {
     /// On `Done` with a frame, the return `Value` references the per-call arena that's
@@ -45,7 +46,7 @@ impl<'a> Scheduler<'a> {
             match step {
                 NodeStep::Done(output) => {
                     match (output, prev_frame) {
-                        (NodeOutput::Value(v), Some(frame)) => {
+                        (NodeOutput::Value(Carried::Object(v)), Some(frame)) => {
                             let dest = scope
                                 .outer
                                 .expect("per-call scope must have an outer (its captured scope)")
@@ -86,7 +87,19 @@ impl<'a> Scheduler<'a> {
                                 lifted_obj = lifted_obj.stamp_type(declared);
                             }
                             let lifted = dest.alloc_object(lifted_obj);
-                            self.finalize(idx, NodeOutput::Value(lifted));
+                            self.finalize(idx, NodeOutput::Value(Carried::Object(lifted)));
+                        }
+                        // A type flowing the type channel re-anchors any `Module` frame and
+                        // re-allocs into the destination arena. Type-arm return-type checks
+                        // land with the type producers in a later phase.
+                        (NodeOutput::Value(Carried::Type(t)), Some(frame)) => {
+                            let dest = scope
+                                .outer
+                                .expect("per-call scope must have an outer (its captured scope)")
+                                .arena;
+                            let lifted_t = lift_ktype(t, &frame);
+                            let lifted = dest.alloc_ktype(lifted_t);
+                            self.finalize(idx, NodeOutput::Value(Carried::Type(lifted)));
                         }
                         (NodeOutput::Err(e), Some(_frame)) => {
                             let with_frame = match prev_function {

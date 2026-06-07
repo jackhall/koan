@@ -27,7 +27,7 @@ fn dispatch_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().expect("scheduler should succeed");
-    sched.read(id)
+    sched.read(id).object()
 }
 
 /// Accepts one Number arg and returns it unchanged. The signature is `<n :Number>`
@@ -39,7 +39,7 @@ fn body_identity<'a>(
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     match bundle.get("n") {
-        Some(obj) => BodyResult::Value(_scope.arena.alloc_object(obj.deep_clone())),
+        Some(obj) => BodyResult::value(_scope.arena.alloc_object(obj.deep_clone())),
         None => BodyResult::Err(crate::machine::KError::new(
             crate::machine::KErrorKind::MissingArg("n".to_string()),
         )),

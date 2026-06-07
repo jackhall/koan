@@ -10,7 +10,7 @@ use super::record::Record;
 use super::recursive_set::NominalKind;
 use super::signature::{ExpressionSignature, SignatureElement};
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
-use crate::machine::model::values::KObject;
+use crate::machine::model::values::{Carried, KObject};
 
 impl<'a> KType<'a> {
     /// True iff a parameter declared with this `KType` carries a value whose nominal
@@ -312,30 +312,33 @@ impl<'a> KType<'a> {
             KType::Number => matches!(
                 part,
                 ExpressionPart::Literal(KLiteral::Number(_))
-                    | ExpressionPart::Future(KObject::Number(_))
+                    | ExpressionPart::Future(Carried::Object(KObject::Number(_)))
             ),
             KType::Str => matches!(
                 part,
                 ExpressionPart::Literal(KLiteral::String(_))
-                    | ExpressionPart::Future(KObject::KString(_))
+                    | ExpressionPart::Future(Carried::Object(KObject::KString(_)))
             ),
             KType::Bool => matches!(
                 part,
                 ExpressionPart::Literal(KLiteral::Boolean(_))
-                    | ExpressionPart::Future(KObject::Bool(_))
+                    | ExpressionPart::Future(Carried::Object(KObject::Bool(_)))
             ),
             KType::Null => matches!(
                 part,
-                ExpressionPart::Literal(KLiteral::Null) | ExpressionPart::Future(KObject::Null)
+                ExpressionPart::Literal(KLiteral::Null)
+                    | ExpressionPart::Future(Carried::Object(KObject::Null))
             ),
             KType::List(elem) => match part {
                 ExpressionPart::ListLiteral(_) => true,
-                ExpressionPart::Future(KObject::List(_, carried)) => elem.satisfied_by(carried),
+                ExpressionPart::Future(Carried::Object(KObject::List(_, carried))) => {
+                    elem.satisfied_by(carried)
+                }
                 _ => false,
             },
             KType::Dict(k_ty, v_ty) => match part {
                 ExpressionPart::DictLiteral(_) => true,
-                ExpressionPart::Future(KObject::Dict(_, carried_k, carried_v)) => {
+                ExpressionPart::Future(Carried::Object(KObject::Dict(_, carried_k, carried_v))) => {
                     k_ty.satisfied_by(carried_k) && v_ty.satisfied_by(carried_v)
                 }
                 _ => false,
@@ -346,29 +349,29 @@ impl<'a> KType<'a> {
             // memoized field-type record against the slot via `satisfied_by`.
             KType::Record(_) => match part {
                 ExpressionPart::RecordLiteral(_) => true,
-                ExpressionPart::Future(KObject::Record(_, carried)) => {
+                ExpressionPart::Future(Carried::Object(KObject::Record(_, carried))) => {
                     self.satisfied_by(&KType::Record(carried.clone()))
                 }
                 _ => false,
             },
             KType::KFunction { params, ret } => match part {
-                ExpressionPart::Future(KObject::KFunction(f, _)) => {
+                ExpressionPart::Future(Carried::Object(KObject::KFunction(f, _))) => {
                     if f.is_functor {
                         return false;
                     }
                     function_compat(&f.signature, params, ret, false)
                 }
-                ExpressionPart::Future(KObject::KFuture(_, _)) => true,
+                ExpressionPart::Future(Carried::Object(KObject::KFuture(_, _))) => true,
                 _ => false,
             },
             KType::KFunctor { params, ret, .. } => match part {
-                ExpressionPart::Future(KObject::KFunction(f, _)) => {
+                ExpressionPart::Future(Carried::Object(KObject::KFunction(f, _))) => {
                     if !f.is_functor {
                         return false;
                     }
                     function_compat(&f.signature, params, ret, true)
                 }
-                ExpressionPart::Future(KObject::KFuture(_, _)) => true,
+                ExpressionPart::Future(Carried::Object(KObject::KFuture(_, _))) => true,
                 _ => false,
             },
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
@@ -385,18 +388,26 @@ impl<'a> KType<'a> {
             KType::OfKind(k) => match k {
                 KKind::Proper | KKind::Any => match part {
                     ExpressionPart::Type(_) => true,
-                    ExpressionPart::Future(KObject::KTypeValue(KType::Module { .. }))
-                    | ExpressionPart::Future(KObject::KTypeValue(KType::Signature { .. })) => false,
-                    ExpressionPart::Future(KObject::KTypeValue(_)) => true,
+                    ExpressionPart::Future(Carried::Object(KObject::KTypeValue(
+                        KType::Module { .. },
+                    )))
+                    | ExpressionPart::Future(Carried::Object(KObject::KTypeValue(
+                        KType::Signature { .. },
+                    ))) => false,
+                    ExpressionPart::Future(Carried::Object(KObject::KTypeValue(_))) => true,
                     _ => false,
                 },
                 KKind::Module => matches!(
                     part,
-                    ExpressionPart::Future(KObject::KTypeValue(KType::Module { .. }))
+                    ExpressionPart::Future(Carried::Object(KObject::KTypeValue(
+                        KType::Module { .. }
+                    )))
                 ),
                 KKind::Signature => matches!(
                     part,
-                    ExpressionPart::Future(KObject::KTypeValue(KType::Signature { .. }))
+                    ExpressionPart::Future(Carried::Object(KObject::KTypeValue(
+                        KType::Signature { .. }
+                    )))
                 ),
             },
             // Strict `(set ptr, index)` equality is the per-declaration identity check for a
@@ -404,9 +415,11 @@ impl<'a> KType<'a> {
             // the shared allocation and index. A user-`UNION` value reports a `Variant`, so a
             // union-typed slot admits any variant of that union explicitly.
             KType::SetRef { set, index } => match part {
-                ExpressionPart::Future(KObject::Tagged {
-                    set: s2, index: i2, ..
-                }) if s2.member(*i2).kind == NominalKind::Tagged => {
+                ExpressionPart::Future(Carried::Object(KObject::Tagged {
+                    set: s2,
+                    index: i2,
+                    ..
+                })) if s2.member(*i2).kind == NominalKind::Tagged => {
                     Rc::ptr_eq(set, s2) && index == i2
                 }
                 ExpressionPart::Future(obj) => &obj.ktype() == self,
@@ -418,7 +431,7 @@ impl<'a> KType<'a> {
                 matches!(part, ExpressionPart::Future(obj) if &obj.ktype() == self)
             }
             KType::AnyUserType { kind } => match part {
-                ExpressionPart::Future(obj) => matches!(
+                ExpressionPart::Future(Carried::Object(obj)) => matches!(
                     (kind, obj),
                     (NominalKind::Tagged, KObject::Tagged { .. })
                         | (NominalKind::Newtype, KObject::Wrapped { .. })
@@ -438,9 +451,10 @@ impl<'a> KType<'a> {
             // match; they must pass through `:|` / `:!` first. A signature *value* is
             // admitted by the `OfKind(Signature)` wildcard above, never here.
             KType::Signature { sig, pinned_slots } => match part {
-                ExpressionPart::Future(KObject::KTypeValue(KType::Module {
-                    module: m, ..
-                })) => {
+                ExpressionPart::Future(Carried::Object(KObject::KTypeValue(KType::Module {
+                    module: m,
+                    ..
+                }))) => {
                     if !m.compatible_sigs.borrow().contains(&sig.sig_id()) {
                         return false;
                     }
@@ -471,7 +485,7 @@ impl<'a> KType<'a> {
             // `ktype()`, so admit only `Future(KTypeValue(_))` with structurally-equal
             // inner `KType`.
             KType::ConstructorApply { .. } => match part {
-                ExpressionPart::Future(KObject::KTypeValue(kt)) => kt == self,
+                ExpressionPart::Future(Carried::Object(KObject::KTypeValue(kt))) => kt == self,
                 _ => false,
             },
         }

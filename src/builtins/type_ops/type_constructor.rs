@@ -33,7 +33,7 @@ pub fn body<'a>(
         param_names: vec![param],
     });
     let set = Rc::new(RecursiveSet::new(vec![member]));
-    BodyResult::Value(
+    BodyResult::value(
         scope
             .arena
             .alloc_object(KObject::KTypeValue(KType::SetRef { set, index: 0 })),

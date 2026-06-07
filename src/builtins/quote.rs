@@ -23,7 +23,7 @@ pub fn body<'a>(
         }
     };
     let arena = scope.arena;
-    BodyResult::Value(arena.alloc_object(KObject::KExpression(expr)))
+    BodyResult::value(arena.alloc_object(KObject::KExpression(expr)))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

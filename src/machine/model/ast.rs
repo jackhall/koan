@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::machine::core::source::{FileId, Span, Spanned};
 use crate::machine::model::{
-    KKey, KObject, Parseable, Record, Serializable, UntypedElement, UntypedKey,
+    Carried, KKey, KObject, Parseable, Record, Serializable, UntypedElement, UntypedKey,
 };
 
 #[cfg(test)]
@@ -77,7 +77,9 @@ pub enum ExpressionPart<'a> {
     /// `DictLiteral`. Field names are syntactic identifiers (never name-resolved).
     RecordLiteral(Vec<(String, ExpressionPart<'a>)>),
     Literal(KLiteral),
-    Future(&'a KObject<'a>),
+    /// A resolved sub-result spliced back into a parent expression — the dispatch-argument
+    /// carrier, in the two-arm [`Carried`] currency.
+    Future(Carried<'a>),
 }
 
 impl<'a> std::fmt::Debug for ExpressionPart<'a> {
@@ -228,8 +230,9 @@ impl<'a> ExpressionPart<'a> {
                 KObject::record(fields)
             }
             // Deep-clone, don't stringify: a Future-borne List or KExpression must
-            // materialize back to its structured form.
-            ExpressionPart::Future(obj) => obj.deep_clone(),
+            // materialize back to its structured form. A value-position Future is the
+            // `Object` arm; a type arm never reaches `resolve` (it flows the type channel).
+            ExpressionPart::Future(c) => c.object().deep_clone(),
         }
     }
 }
@@ -247,7 +250,7 @@ impl<'a> Clone for ExpressionPart<'a> {
             ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(pairs.clone()),
             ExpressionPart::RecordLiteral(pairs) => ExpressionPart::RecordLiteral(pairs.clone()),
             ExpressionPart::Literal(l) => ExpressionPart::Literal(l.clone()),
-            ExpressionPart::Future(o) => ExpressionPart::Future(o),
+            ExpressionPart::Future(o) => ExpressionPart::Future(*o),
         }
     }
 }

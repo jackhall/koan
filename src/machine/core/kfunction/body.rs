@@ -7,7 +7,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use crate::machine::core::{CallArena, KError, Scope, ScopeId};
 use crate::machine::model::types::UntypedKey;
-use crate::machine::model::values::KObject;
+use crate::machine::model::values::{Carried, KObject};
 use crate::machine::model::KType;
 
 use super::argument_bundle::ArgumentBundle;
@@ -49,7 +49,9 @@ pub enum ReturnContract<'a> {
 }
 
 pub enum BodyResult<'a> {
-    Value(&'a KObject<'a>),
+    /// A produced value in the scheduler's two-arm currency: a runtime [`KObject`] or a
+    /// type flowing raw. Use [`BodyResult::value`] to wrap an object.
+    Value(Carried<'a>),
     Tail {
         expr: KExpression<'a>,
         frame: Option<Rc<CallArena>>,
@@ -149,12 +151,19 @@ impl<'a> BodyResult<'a> {
         BodyResult::Err(e)
     }
 
+    /// Wrap a runtime object as the `Object` arm of the value currency.
+    pub fn value(o: &'a KObject<'a>) -> Self {
+        BodyResult::Value(Carried::Object(o))
+    }
+
     /// Test helper for bodies that contractually yield only `Value` or `Err`:
     /// extracts the `Value` payload, panicking with `ctx` otherwise.
     #[cfg(test)]
     pub fn expect_value(self, ctx: &str) -> &'a KObject<'a> {
         match self {
-            BodyResult::Value(v) => v,
+            BodyResult::Value(c) => c
+                .as_object()
+                .unwrap_or_else(|| panic!("{ctx}: expected Object value, got Type")),
             BodyResult::Tail { .. } => panic!("{ctx}: expected Value, got Tail"),
             BodyResult::DeferTo(_) => panic!("{ctx}: expected Value, got DeferTo"),
             BodyResult::Err(e) => panic!("{ctx}: expected Value, got Err({e})"),

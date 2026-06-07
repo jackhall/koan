@@ -62,7 +62,7 @@ pub fn body<'a>(
         // so the guard reads `types` (the carrier in `data` is gone).
         let bindings = parent_scope.bindings();
         if let Some(kt) = bindings.lookup_type(&name_for_finish, None) {
-            return BodyResult::Value(
+            return BodyResult::value(
                 parent_scope
                     .arena
                     .alloc_object(KObject::KTypeValue(kt.clone())),
@@ -105,7 +105,7 @@ pub fn body<'a>(
             identity.clone(),
             bind_index,
         ) {
-            Ok(kt_ref) => BodyResult::Value(
+            Ok(kt_ref) => BodyResult::value(
                 parent_scope
                     .arena
                     .alloc_object(KObject::KTypeValue(kt_ref.clone())),

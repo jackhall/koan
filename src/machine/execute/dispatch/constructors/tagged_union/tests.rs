@@ -43,7 +43,7 @@ fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().expect("scheduler should succeed");
-    sched.read(id)
+    sched.read(id).object()
 }
 
 fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> crate::machine::core::KError {

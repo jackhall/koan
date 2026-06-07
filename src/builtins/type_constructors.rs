@@ -59,7 +59,7 @@ fn body_list_of<'a>(
         Ok(t) => t.clone(),
         Err(e) => return err(e),
     };
-    BodyResult::Value(
+    BodyResult::value(
         scope
             .arena
             .alloc_object(KObject::KTypeValue(KType::List(Box::new(elem)))),
@@ -79,7 +79,7 @@ fn body_map<'a>(
         Ok(t) => t.clone(),
         Err(e) => return err(e),
     };
-    BodyResult::Value(
+    BodyResult::value(
         scope
             .arena
             .alloc_object(KObject::KTypeValue(KType::Dict(Box::new(k), Box::new(v)))),
@@ -126,7 +126,7 @@ fn body_apply_as<'a>(
             ctor.name(),
         ))));
     }
-    BodyResult::Value(
+    BodyResult::value(
         scope
             .arena
             .alloc_object(KObject::KTypeValue(KType::ConstructorApply {
@@ -192,7 +192,7 @@ fn build_carrier<'a>(
         None,
     ) {
         FieldListOutcome::Done(fields) => {
-            BodyResult::Value(finalize_carrier(scope, fields, ret, kind))
+            BodyResult::value(finalize_carrier(scope, fields, ret, kind))
         }
         FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
         // An anonymous function/functor type has no self-reference binder, so the
@@ -213,7 +213,7 @@ fn build_carrier<'a>(
             None,
             None,
             Box::new(move |scope, fields| {
-                BodyResult::Value(finalize_carrier(scope, fields, ret, kind))
+                BodyResult::value(finalize_carrier(scope, fields, ret, kind))
             }),
         ),
     }

@@ -54,7 +54,7 @@ pub fn body<'a>(
             }
         }
     }
-    BodyResult::Value(
+    BodyResult::value(
         scope
             .arena
             .alloc_object(KObject::KTypeValue(KType::Signature {

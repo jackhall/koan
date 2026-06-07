@@ -1,6 +1,7 @@
 //! Keyworded dispatch shape: the catch-all for any expression with a
 //! keyword present, or a head that isn't a fast-lane shape.
 
+use crate::machine::model::Carried;
 use std::marker::PhantomData;
 
 use crate::machine::core::kfunction::KFunction;
@@ -421,7 +422,7 @@ fn part_walk<'a>(
             match &bare_outcomes[i] {
                 Some(NameOutcome::Resolved(obj)) => {
                     new_parts.push(Spanned {
-                        value: ExpressionPart::Future(obj),
+                        value: ExpressionPart::Future(Carried::Object(obj)),
                         span,
                     });
                 }

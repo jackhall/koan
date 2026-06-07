@@ -120,7 +120,7 @@ impl<'a> HeadDeferredState<'a> {
             type_only,
         } = self;
         let head_obj = match ctx.read_result(head_sub) {
-            Ok(v) => v,
+            Ok(v) => v.object(),
             Err(e) => {
                 let err = e.clone_for_propagation();
                 ctx.clear_dep_edges(idx);

@@ -148,7 +148,7 @@ fn finalize_newtype<'a>(
         .bindings()
         .try_register_type(&name, kt_ref, bind_index)
     {
-        Ok(ApplyOutcome::Applied) => BodyResult::Value(
+        Ok(ApplyOutcome::Applied) => BodyResult::value(
             scope
                 .arena
                 .alloc_object(KObject::KTypeValue(kt_ref.clone())),
@@ -293,7 +293,7 @@ fn finalize_record_newtype<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => BodyResult::Value(
+        SealOutcome::Sealed(kt_ref) => BodyResult::value(
             scope
                 .arena
                 .alloc_object(KObject::KTypeValue(kt_ref.clone())),

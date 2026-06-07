@@ -18,6 +18,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::{ExpressionSignature, KType, SignatureElement};
 use crate::machine::model::values::KObject;
+use crate::machine::model::Carried;
 use crate::machine::NodeId;
 
 /// Cached outcome of resolving a bare-name part (`Identifier` or leaf `Type`).
@@ -443,9 +444,9 @@ fn slot_admits_strict<'a>(
                 return true;
             }
             match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
-                Some(NameOutcome::Resolved(obj)) => {
-                    arg.ktype.accepts_part(&ExpressionPart::Future(obj))
-                }
+                Some(NameOutcome::Resolved(obj)) => arg
+                    .ktype
+                    .accepts_part(&ExpressionPart::Future(Carried::Object(obj))),
                 // Speculative admit so the splice/park walk can surface the
                 // precise per-slot diagnostic.
                 Some(NameOutcome::Parked(_)) | Some(NameOutcome::Unbound(_)) => {

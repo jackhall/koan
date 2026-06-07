@@ -39,7 +39,12 @@ fn run_collecting_errors<'a>(
     }
     let _ = sched.execute();
     ids.into_iter()
-        .map(|id| sched.read_result(id).map_err(|e| e.clone()))
+        .map(|id| {
+            sched
+                .read_result(id)
+                .map(|c| c.object())
+                .map_err(|e| e.clone())
+        })
         .collect()
 }
 

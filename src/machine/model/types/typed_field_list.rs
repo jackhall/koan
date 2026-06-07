@@ -6,6 +6,7 @@ use super::ktype::KType;
 use super::resolver::{elaborate_type_expr, ElabResult, Elaborator};
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::values::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::Parseable;
 use crate::machine::model::Record;
@@ -144,8 +145,8 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
                     }
                 }
             }
-            ExpressionPart::Future(KObject::KTypeValue(kt)) => Ok(kt.clone()),
-            ExpressionPart::Future(other) => Err(format!(
+            ExpressionPart::Future(Carried::Object(KObject::KTypeValue(kt))) => Ok(kt.clone()),
+            ExpressionPart::Future(Carried::Object(other)) => Err(format!(
                 "{context} type for `{}` resolved to non-type value `{}`",
                 name,
                 other.summarize(),
@@ -194,7 +195,7 @@ fn rewrite_threaded_self_refs<'a>(
                     let obj = scope
                         .arena
                         .alloc_object(KObject::KTypeValue(KType::RecursiveRef(t.render())));
-                    ExpressionPart::Future(obj)
+                    ExpressionPart::Future(Carried::Object(obj))
                 }
                 ExpressionPart::SigiledTypeExpr(b) => ExpressionPart::SigiledTypeExpr(Box::new(
                     rewrite_threaded_self_refs(b, threaded, scope),

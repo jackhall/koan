@@ -184,7 +184,7 @@ pub fn body<'a>(
             return err(e);
         }
     }
-    BodyResult::Value(allocated)
+    BodyResult::value(allocated)
 }
 
 /// Type-class LET allowlist. A Type-class binder name admits a value only if it

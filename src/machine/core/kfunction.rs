@@ -207,7 +207,7 @@ mod tests {
         _h: &mut dyn SchedulerHandle<'a>,
         _a: ArgumentBundle<'a>,
     ) -> BodyResult<'a> {
-        BodyResult::Value(marker(s, "any"))
+        BodyResult::value(marker(s, "any"))
     }
 
     /// Coarse bucket-key lookup over the scope chain. Returns the first strict-shape

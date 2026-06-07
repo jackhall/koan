@@ -140,7 +140,7 @@ fn apply_constructor<'a>(
                     index: *index,
                     tag,
                 };
-                return NodeStep::Done(NodeOutput::Value(
+                return NodeStep::Done(NodeOutput::value(
                     scope.arena.alloc_object(KObject::KTypeValue(variant)),
                 ));
             }

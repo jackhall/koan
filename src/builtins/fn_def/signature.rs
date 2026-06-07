@@ -2,7 +2,8 @@
 
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator, Parseable};
+use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+use crate::machine::model::Carried;
 use crate::machine::model::{Argument, KObject, SignatureElement};
 use crate::machine::NodeId;
 
@@ -126,7 +127,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                         sub_dispatches.push((i + 1, wrapped));
                         i += 2;
                     }
-                    Some(ExpressionPart::Future(KObject::KTypeValue(kt))) => {
+                    Some(ExpressionPart::Future(Carried::Object(KObject::KTypeValue(kt)))) => {
                         elements.push(SignatureElement::Argument(Argument {
                             name: name.clone(),
                             ktype: (*kt).clone(),

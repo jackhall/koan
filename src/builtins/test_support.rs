@@ -63,7 +63,7 @@ pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KO
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().expect("scheduler should succeed");
-    sched.read(id)
+    sched.read(id).object()
 }
 
 /// Like [`run_one`] but returns the `KError` produced by the dispatched node.

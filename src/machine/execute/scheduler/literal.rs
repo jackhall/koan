@@ -54,7 +54,7 @@ impl<'a> Scheduler<'a> {
                 .map(|slot| slot.materialize(results, park_count))
                 .collect();
             let allocated: &'a KObject<'a> = scope.arena.alloc_object(KObject::list(items));
-            BodyResult::Value(allocated)
+            BodyResult::value(allocated)
         });
         self.add_combine(deps, park_producers, scope, finish)
     }
@@ -95,7 +95,7 @@ impl<'a> Scheduler<'a> {
                 map.insert(Box::new(kkey), value_obj);
             }
             let allocated: &'a KObject<'a> = scope.arena.alloc_object(KObject::dict(map));
-            BodyResult::Value(allocated)
+            BodyResult::value(allocated)
         });
         self.add_combine(deps, park_producers, scope, finish)
     }
@@ -126,7 +126,7 @@ impl<'a> Scheduler<'a> {
                 .map(|(name, slot)| (name, slot.materialize(results, park_count)))
                 .collect();
             let allocated: &'a KObject<'a> = scope.arena.alloc_object(KObject::record(record));
-            BodyResult::Value(allocated)
+            BodyResult::value(allocated)
         });
         self.add_combine(deps, park_producers, scope, finish)
     }

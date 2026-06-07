@@ -283,7 +283,7 @@ impl<'a> KFunction<'a> {
                                     // at the return boundary, symmetric with the param-bind
                                     // stamp above.
                                     let stamped = body_value.deep_clone().stamp_type(&per_call_ret);
-                                    BodyResult::Value(_scope.arena.alloc_object(stamped))
+                                    BodyResult::value(_scope.arena.alloc_object(stamped))
                                 }),
                             ));
                         });

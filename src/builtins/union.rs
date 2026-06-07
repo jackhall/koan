@@ -142,7 +142,7 @@ fn finalize_union<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => BodyResult::Value(
+        SealOutcome::Sealed(kt_ref) => BodyResult::value(
             scope
                 .arena
                 .alloc_object(KObject::KTypeValue(kt_ref.clone())),
@@ -327,10 +327,9 @@ mod tests {
             BindingIndex::value(0),
         );
         match second {
-            crate::machine::BodyResult::Value(KObject::KTypeValue(KType::SetRef {
-                set,
-                index,
-            })) => {
+            crate::machine::BodyResult::Value(crate::machine::model::values::Carried::Object(
+                KObject::KTypeValue(KType::SetRef { set, index }),
+            )) => {
                 assert_eq!(set.member(*index).name, "Maybe");
             }
             _ => panic!("expected short-circuit Value(KTypeValue(SetRef)) from finalize_union"),

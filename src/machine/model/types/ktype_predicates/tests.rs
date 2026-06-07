@@ -1,6 +1,7 @@
 use super::*;
 use crate::machine::core::ScopeId;
 use crate::machine::model::types::{NominalSchema, RecursiveSet};
+use crate::machine::model::Carried;
 use crate::machine::model::Record;
 use std::rc::Rc;
 
@@ -156,15 +157,15 @@ fn record_value_admission_and_matches() {
     ])));
 
     let narrow = record_ty(vec![("x", KType::Number)]);
-    assert!(narrow.accepts_part(&ExpressionPart::Future(value)));
+    assert!(narrow.accepts_part(&ExpressionPart::Future(Carried::Object(value))));
     assert!(narrow.matches_value(value));
 
     let mismatch = record_ty(vec![("x", KType::Str)]);
-    assert!(!mismatch.accepts_part(&ExpressionPart::Future(value)));
+    assert!(!mismatch.accepts_part(&ExpressionPart::Future(Carried::Object(value))));
     assert!(!mismatch.matches_value(value));
 
     let extra = record_ty(vec![("x", KType::Number), ("q", KType::Bool)]);
-    assert!(!extra.accepts_part(&ExpressionPart::Future(value)));
+    assert!(!extra.accepts_part(&ExpressionPart::Future(Carried::Object(value))));
     assert!(!extra.matches_value(value));
 
     // Unevaluated literal admits shape-only (defer-then-reevaluate on the typed value).
@@ -188,10 +189,10 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let kt_str: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Str));
     let kt_bool: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Bool));
     let kt_null: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Null));
-    assert!(t.accepts_part(&ExpressionPart::Future(kt_number)));
-    assert!(t.accepts_part(&ExpressionPart::Future(kt_str)));
-    assert!(t.accepts_part(&ExpressionPart::Future(kt_bool)));
-    assert!(t.accepts_part(&ExpressionPart::Future(kt_null)));
+    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Object(kt_number))));
+    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Object(kt_str))));
+    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Object(kt_bool))));
+    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Object(kt_null))));
     // Newtype / union type tokens flow as `KTypeValue(SetRef { .. })` now — a `:Type`
     // slot admits them via the generic `Future(KTypeValue(_))` arm.
     let tagged_set = RecursiveSet::singleton(
@@ -206,8 +207,8 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let struct_token: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(
         record_newtype_setref("Point", ScopeId::SENTINEL),
     ));
-    assert!(t.accepts_part(&ExpressionPart::Future(tagged_token)));
-    assert!(t.accepts_part(&ExpressionPart::Future(struct_token)));
+    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Object(tagged_token))));
+    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Object(struct_token))));
     let child = arena.alloc_scope(crate::machine::Scope::child_under_module(
         scope,
         "IntMod".into(),
@@ -217,17 +218,17 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         module,
         frame: None,
     }));
-    assert!(!t.accepts_part(&ExpressionPart::Future(kt_module)));
+    assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Object(kt_module))));
     let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
     let kt_sig: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Signature {
         sig,
         pinned_slots: Vec::new(),
     }));
-    assert!(!t.accepts_part(&ExpressionPart::Future(kt_sig)));
+    assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Object(kt_sig))));
     let n: &KObject<'_> = arena.alloc_object(KObject::Number(7.0));
     let s: &KObject<'_> = arena.alloc_object(KObject::KString("hi".into()));
-    assert!(!t.accepts_part(&ExpressionPart::Future(n)));
-    assert!(!t.accepts_part(&ExpressionPart::Future(s)));
+    assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Object(n))));
+    assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Object(s))));
 }
 
 /// A `Wrapped` value with a NEWTYPE identity fills the wildcard
@@ -263,8 +264,8 @@ fn any_user_type_newtype_accepts_wrapped_only() {
         index: 0,
         type_args: std::rc::Rc::new(vec![]),
     });
-    assert!(t.accepts_part(&ExpressionPart::Future(w)));
-    assert!(!t.accepts_part(&ExpressionPart::Future(s)));
+    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Object(w))));
+    assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Object(s))));
     assert!(t.matches_value(w));
     assert!(!t.matches_value(s));
 }

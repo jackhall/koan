@@ -181,10 +181,10 @@ fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> 
         KObject::KTypeValue(KType::Signature { sig: s, .. }) => {
             let scope = s.decl_scope();
             if let Some(Resolution::Value(obj)) = scope.bindings().lookup_value(field, None) {
-                return BodyResult::Value(obj);
+                return BodyResult::value(obj);
             }
             if let Some(kt) = scope.resolve_type(field) {
-                return BodyResult::Value(
+                return BodyResult::value(
                     scope.arena.alloc_object(KObject::KTypeValue(kt.clone())),
                 );
             }
@@ -208,7 +208,7 @@ fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> 
         // has no fields) falls to the `other` arm.
         KObject::Wrapped { inner, type_id } => match inner.get() {
             KObject::Record(values, _) => match values.get(field) {
-                Some(value) => BodyResult::Value(scope.arena.alloc_object(value.deep_clone())),
+                Some(value) => BodyResult::value(scope.arena.alloc_object(value.deep_clone())),
                 None => err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",
                     type_id.name(),
@@ -249,20 +249,20 @@ fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> 
 fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
     let module_scope = m.child_scope();
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
-        return BodyResult::Value(module_scope.arena.alloc_object(KObject::KTypeValue(kt)));
+        return BodyResult::value(module_scope.arena.alloc_object(KObject::KTypeValue(kt)));
     }
     if let Some(Resolution::Value(obj)) = module_scope.bindings().lookup_value(field, None) {
         if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
             let type_id = module_scope.arena.alloc_ktype(tag);
-            return BodyResult::Value(module_scope.arena.alloc_object(KObject::Wrapped {
+            return BodyResult::value(module_scope.arena.alloc_object(KObject::Wrapped {
                 inner: NonWrappedRef::peel(obj),
                 type_id,
             }));
         }
-        return BodyResult::Value(obj);
+        return BodyResult::value(obj);
     }
     if let Some(kt) = module_scope.resolve_type(field) {
-        return BodyResult::Value(
+        return BodyResult::value(
             module_scope
                 .arena
                 .alloc_object(KObject::KTypeValue(kt.clone())),

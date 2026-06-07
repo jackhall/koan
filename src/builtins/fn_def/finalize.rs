@@ -15,6 +15,7 @@
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{Elaborator, ReturnType};
+use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionSignature, KObject, SignatureElement};
 use crate::machine::{
     BindingIndex, Body, BodyResult, CombineFinish, KError, KErrorKind, NodeId, SchedulerHandle,
@@ -283,7 +284,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     }
     // Return the function reference so `LET f = (FN ...)` captures a callable
     // handle for the identifier-bound dispatch fallback.
-    BodyResult::Value(obj)
+    BodyResult::value(obj)
 }
 
 /// Schedule a `Combine` over `park_producers` plus any newly scheduled
@@ -343,7 +344,7 @@ pub(crate) fn defer_via_combine<'a>(
                     obj.ktype().name(),
                 ))));
             }
-            spliced_parts[slot_idx].value = ExpressionPart::Future(obj);
+            spliced_parts[slot_idx].value = ExpressionPart::Future(Carried::Object(obj));
         }
         let spliced_signature = KExpression::new(spliced_parts);
 

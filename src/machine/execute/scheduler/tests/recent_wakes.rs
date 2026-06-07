@@ -20,7 +20,7 @@ fn recent_wakes_empty_for_non_dispatch_consumer() {
     );
     let consumer = sched.add(NodeWork::Lift(LiftState::Pending(producer)), scope);
     let value = arena.alloc_object(KObject::Number(1.0));
-    sched.finalize(producer.index(), NodeOutput::Value(value));
+    sched.finalize(producer.index(), NodeOutput::value(value));
     assert!(sched.store.take_recent_wakes(consumer).is_empty());
 }
 
@@ -43,7 +43,7 @@ fn recent_wakes_records_producer_for_dispatch_consumer() {
     );
     sched.deps.add_park_edge(producer, consumer);
     let value = arena.alloc_object(KObject::Number(1.0));
-    sched.finalize(producer.index(), NodeOutput::Value(value));
+    sched.finalize(producer.index(), NodeOutput::value(value));
     let wakes = sched.store.take_recent_wakes(consumer);
     assert_eq!(wakes, vec![producer]);
     assert!(sched.store.take_recent_wakes(consumer).is_empty());

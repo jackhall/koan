@@ -20,8 +20,8 @@ fn dispatches_independent_expressions_in_order() {
 
     sched.execute().unwrap();
 
-    assert!(matches!(sched.read(id1), KObject::Number(n) if *n == 1.0));
-    assert!(matches!(sched.read(id2), KObject::Number(n) if *n == 2.0));
+    assert!(matches!(sched.read(id1).object(), KObject::Number(n) if *n == 1.0));
+    assert!(matches!(sched.read(id2).object(), KObject::Number(n) if *n == 2.0));
     let data = root.bindings().data();
     assert!(data.contains_key("x"));
     assert!(data.contains_key("y"));

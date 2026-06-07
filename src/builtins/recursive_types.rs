@@ -126,7 +126,7 @@ pub fn body<'a>(
         }
         let handle = KType::RecursiveGroup(Rc::clone(&set));
         match parent_scope.register_type_upsert(group_name.clone(), handle, bind_index) {
-            Ok(kt_ref) => BodyResult::Value(
+            Ok(kt_ref) => BodyResult::value(
                 parent_scope
                     .arena
                     .alloc_object(KObject::KTypeValue(kt_ref.clone())),

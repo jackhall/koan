@@ -245,7 +245,7 @@ mod tests {
                 elements: vec![SignatureElement::Keyword("__SLOW__".into())],
             },
             Body::Builtin(|s, _, _| {
-                crate::machine::core::kfunction::BodyResult::Value(
+                crate::machine::core::kfunction::BodyResult::value(
                     s.arena.alloc_object(KObject::Null),
                 )
             }),

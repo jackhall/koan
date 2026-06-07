@@ -11,7 +11,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
-use crate::machine::model::{KObject, Parseable};
+use crate::machine::model::KObject;
 use crate::machine::{RuntimeArena, Scope};
 
 fn body_identifier<'a>(
@@ -19,35 +19,35 @@ fn body_identifier<'a>(
     _h: &mut dyn SchedulerHandle<'a>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::Value(marker(s, "identifier"))
+    BodyResult::value(marker(s, "identifier"))
 }
 fn body_marker_any<'a>(
     s: &'a Scope<'a>,
     _h: &mut dyn SchedulerHandle<'a>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::Value(marker(s, "any"))
+    BodyResult::value(marker(s, "any"))
 }
 fn body_inner_any<'a>(
     s: &'a Scope<'a>,
     _h: &mut dyn SchedulerHandle<'a>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::Value(marker(s, "inner_any"))
+    BodyResult::value(marker(s, "inner_any"))
 }
 fn body_outer_number<'a>(
     s: &'a Scope<'a>,
     _h: &mut dyn SchedulerHandle<'a>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::Value(marker(s, "outer_number"))
+    BodyResult::value(marker(s, "outer_number"))
 }
 fn body_lowercase<'a>(
     s: &'a Scope<'a>,
     _h: &mut dyn SchedulerHandle<'a>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::Value(marker(s, "lowercase"))
+    BodyResult::value(marker(s, "lowercase"))
 }
 
 fn summarize_marker(obj: &KObject<'_>) -> String {
@@ -99,7 +99,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, inner);
     sched.execute().unwrap();
-    let result = sched.read(id);
+    let result = sched.read(id).object();
     assert!(
         matches!(result, KObject::KString(s) if s == "inner_any"),
         "inner Any must shadow outer Number (lexical shadowing > specificity), got {:?}",
@@ -174,6 +174,6 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().unwrap();
-    let result = sched.read(id);
+    let result = sched.read(id).object();
     assert!(matches!(result, KObject::KString(s) if s == "lowercase"));
 }

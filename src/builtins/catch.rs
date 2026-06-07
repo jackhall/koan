@@ -51,7 +51,7 @@ pub fn body<'a>(
             // directly, so leaving `type_args` empty still types correctly.
             type_args: Rc::new(vec![]),
         };
-        BodyResult::Value(scope.arena.alloc_object(tagged))
+        BodyResult::value(scope.arena.alloc_object(tagged))
     });
     let catch_id = sched.add_catch(sub_id, scope, finish);
     BodyResult::DeferTo(catch_id)

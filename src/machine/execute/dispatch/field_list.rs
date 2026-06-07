@@ -99,7 +99,7 @@ pub(crate) fn elaborate_record_value<'a>(
 ) -> BodyResult<'a> {
     fn fold<'a>(scope: &'a Scope<'a>, pairs: Vec<(String, KType<'a>)>) -> BodyResult<'a> {
         let record = Record::from_pairs(pairs);
-        BodyResult::Value(
+        BodyResult::value(
             scope
                 .arena
                 .alloc_object(KObject::KTypeValue(KType::Record(Box::new(record)))),

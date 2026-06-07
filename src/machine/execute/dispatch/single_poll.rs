@@ -220,7 +220,7 @@ impl<'a> CtorState<'a> {
         } = track.expect("TypeCall resume only entered after a track is installed");
         for (slot_idx, sub_id) in &subs {
             match ctx.read_result(*sub_id) {
-                Ok(v) => staged_values[*slot_idx] = Some(v),
+                Ok(v) => staged_values[*slot_idx] = Some(v.object()),
                 Err(e) => {
                     let err = e.clone_for_propagation();
                     ctx.clear_dep_edges(idx);
@@ -267,7 +267,7 @@ pub(super) fn bare_identifier<'a>(
     idx: usize,
 ) -> NodeStep<'a> {
     match scope.resolve_with_chain(&name, ctx.chain_deref()) {
-        Resolution::Value(obj) => NodeStep::Done(NodeOutput::Value(obj)),
+        Resolution::Value(obj) => NodeStep::Done(NodeOutput::value(obj)),
         Resolution::Placeholder(producer) => {
             // Notify edge, not Owned: producer is a sibling slot, we
             // only park for the wake.
@@ -293,7 +293,7 @@ pub(super) fn bare_type_leaf<'a>(
     idx: usize,
 ) -> NodeStep<'a> {
     match resolve_type_leaf_carrier(scope, t, ctx.active_chain()) {
-        TypeLeafCarrier::Resolved(obj) => NodeStep::Done(NodeOutput::Value(obj)),
+        TypeLeafCarrier::Resolved(obj) => NodeStep::Done(NodeOutput::value(obj)),
         TypeLeafCarrier::Unbound(n) => {
             NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))))
         }
@@ -388,9 +388,9 @@ pub(super) fn literal_pass_through<'a>(
     match only.value {
         ExpressionPart::Literal(_) => {
             let allocated = scope.arena.alloc_object(only.value.resolve());
-            NodeStep::Done(NodeOutput::Value(allocated))
+            NodeStep::Done(NodeOutput::value(allocated))
         }
-        ExpressionPart::Future(obj) => NodeStep::Done(NodeOutput::Value(obj)),
+        ExpressionPart::Future(c) => NodeStep::Done(NodeOutput::Value(c)),
         ExpressionPart::Expression(boxed) => NodeStep::Replace {
             work: NodeWork::dispatch(*boxed),
             frame: None,
@@ -543,7 +543,7 @@ pub(super) fn schedule_constructor_body<'a>(
             block_entry,
             body_index,
         },
-        BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
+        BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
         BodyResult::DeferTo(combine_id) => ctx.defer_to_lift(idx, combine_id),
         BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
     }

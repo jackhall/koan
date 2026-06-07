@@ -129,7 +129,7 @@ pub fn body_opaque<'a>(
         module: new_module,
         frame: None,
     }));
-    BodyResult::Value(module_obj)
+    BodyResult::value(module_obj)
 }
 
 /// `<m:Module> :! <s:Signature>` — transparent ascription.
@@ -156,7 +156,7 @@ pub fn body_transparent<'a>(
         module: new_module,
         frame: None,
     }));
-    BodyResult::Value(module_obj)
+    BodyResult::value(module_obj)
 }
 
 /// Verify every non-abstract-type name in `sig` has a binding in `src_scope`.

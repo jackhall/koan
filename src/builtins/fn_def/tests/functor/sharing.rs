@@ -1,6 +1,7 @@
 //! `WITH` sharing constraints on functor parameters and return types.
 
 use crate::builtins::test_support::{lookup_fn, parse_one, run, run_root_silent};
+use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::RuntimeArena;
 
@@ -69,11 +70,11 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     };
 
     assert!(slot.matches_value(m_num_obj));
-    assert!(slot.accepts_part(&ExpressionPart::Future(m_num_obj)));
+    assert!(slot.accepts_part(&ExpressionPart::Future(Carried::Object(m_num_obj))));
     assert!(!slot.matches_value(m_str_obj));
-    assert!(!slot.accepts_part(&ExpressionPart::Future(m_str_obj)));
+    assert!(!slot.accepts_part(&ExpressionPart::Future(Carried::Object(m_str_obj))));
     assert!(!slot.matches_value(m_none_obj));
-    assert!(!slot.accepts_part(&ExpressionPart::Future(m_none_obj)));
+    assert!(!slot.accepts_part(&ExpressionPart::Future(Carried::Object(m_none_obj))));
 
     let child_d = arena.alloc_scope(crate::machine::Scope::child_under_module(
         scope,
@@ -91,7 +92,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         frame: None,
     }));
     assert!(!slot.matches_value(m_unascribed_obj));
-    assert!(!slot.accepts_part(&ExpressionPart::Future(m_unascribed_obj)));
+    assert!(!slot.accepts_part(&ExpressionPart::Future(Carried::Object(m_unascribed_obj))));
 }
 
 /// Pure-type pinned slots (no parameter references) resolve synchronously at

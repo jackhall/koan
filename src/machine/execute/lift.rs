@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::{CallArena, KFuture, RuntimeArena};
 
 /// Lift a KObject out of `dying_frame`'s arena into the destination arena, attaching
@@ -116,6 +116,36 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
     }
 }
 
+/// Lift a `KType` out of `dying_frame`'s arena into the destination arena — the `Type`-arm
+/// dual of [`lift_kobject`]. A `KType::Module { frame }` re-anchors on the dying frame if its
+/// child scope was alloc'd there (mirroring the module arm of `lift_kobject`); every other
+/// `KType` is `Rc`-owned (recursive sets) or owned data, so it travels by `clone`.
+pub(super) fn lift_ktype<'b>(t: &KType<'b>, dying_frame: &Rc<CallArena>) -> KType<'b> {
+    match t {
+        KType::Module {
+            module: m,
+            frame: existing,
+        } => {
+            let new_frame = if existing.is_some() {
+                existing.clone()
+            } else {
+                let dying_runtime: *const RuntimeArena = dying_frame.arena();
+                let module_runtime: *const RuntimeArena = m.child_scope().arena;
+                if std::ptr::eq(module_runtime, dying_runtime) {
+                    Some(Rc::clone(dying_frame))
+                } else {
+                    None
+                }
+            };
+            KType::Module {
+                module: m,
+                frame: new_frame,
+            }
+        }
+        other => other.clone(),
+    }
+}
+
 /// True iff some descendant of `v` satisfies `predicate`. The predicate returns
 /// `Some(true)` to short-circuit, `Some(false)` to bottom out the current subtree
 /// without recursing, or `None` to let the walker recurse into composite payloads.
@@ -139,10 +169,10 @@ where
         // A record's fields are the ex-struct field walk: a field may borrow the dying arena.
         KObject::Record(values, _) => values.iter().any(|(_, x)| any_descendant(x, predicate)),
         KObject::KExpression(e) => e.parts.iter().any(|p| match &p.value {
-            ExpressionPart::Future(obj) => any_descendant(obj, predicate),
+            ExpressionPart::Future(Carried::Object(obj)) => any_descendant(obj, predicate),
             ExpressionPart::Expression(inner) | ExpressionPart::SigiledTypeExpr(inner) => {
                 inner.parts.iter().any(|p2| match &p2.value {
-                    ExpressionPart::Future(obj) => any_descendant(obj, predicate),
+                    ExpressionPart::Future(Carried::Object(obj)) => any_descendant(obj, predicate),
                     _ => false,
                 })
             }
@@ -186,7 +216,7 @@ fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
 
 /// True iff any descendant of an unanchored `KFuture` borrows into `arena`. Three
 /// borrow sites: the function ref's captured arena, the parsed expression's
-/// `Future(&KObject)` parts, and the bundle args.
+/// `Future(Carried)` parts, and the bundle args.
 fn kfuture_borrows_dying_arena<'b>(t: &KFuture<'b>, arena: &RuntimeArena) -> bool {
     if std::ptr::eq(
         t.function.captured_scope().arena,
@@ -211,7 +241,11 @@ fn expression_borrows_arena<'b>(expr: &KExpression<'b>, arena: &RuntimeArena) ->
 
 fn part_borrows_arena<'b>(part: &ExpressionPart<'b>, arena: &RuntimeArena) -> bool {
     match part {
-        ExpressionPart::Future(obj) => arena.owns_object(*obj as *const KObject<'b>),
+        // Only a value-arm Future borrows an arena `KObject`; a type arm's `Module` rides
+        // its own frame anchor, not an arena `KObject`.
+        ExpressionPart::Future(Carried::Object(obj)) => {
+            arena.owns_object(*obj as *const KObject<'b>)
+        }
         ExpressionPart::Expression(e) => expression_borrows_arena(e, arena),
         // Dispatch-time splicing can introduce `Future` parts inside a SigiledTypeExpr;
         // recurse through the type-context marker.

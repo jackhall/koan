@@ -70,7 +70,7 @@ pub fn body<'a>(
         };
         match parent_scope.register_type_upsert(name_for_finish.clone(), identity, bind_index) {
             Ok(kt_ref) => {
-                BodyResult::Value(arena.alloc_object(KObject::KTypeValue(kt_ref.clone())))
+                BodyResult::value(arena.alloc_object(KObject::KTypeValue(kt_ref.clone())))
             }
             Err(e) => BodyResult::Err(e.with_frame(Frame::bare(
                 "<signature>",

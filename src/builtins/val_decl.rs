@@ -140,7 +140,7 @@ fn finalize_val<'a>(
     if let Err(e) = scope.bind_value(name, allocated, bind_index) {
         return err(e);
     }
-    BodyResult::Value(allocated)
+    BodyResult::value(allocated)
 }
 
 /// Errored deps short-circuit via `run_combine` before the closure runs.
