@@ -84,8 +84,11 @@ What's shipped that the open items below build on:
   `NEWTYPE Name = :{fields}`; `.x` reads the field through ATTR's `Wrapped` fall-through over
   the record repr. A record repr threads its binder name, so a self-reference
   (`NEWTYPE Node = :{next :Node}`), a `:(LIST OF Self)` field, and `RECURSIVE TYPES` blocks of
-  record newtypes all seal to `SetLocal` back-edges. See
-  [design/typing/user-types.md](../design/typing/user-types.md).
+  record newtypes all seal to `SetLocal` back-edges. The `:{…}` record type is now first-class:
+  the parser emits a dedicated `ExpressionPart::RecordType` part that the elaborator folds
+  straight to `KType::Record` (the internal `RECORD` type-constructor builtin and its desugar
+  are retired), and a nested record field type elaborates inline so the outer binder threads in.
+  See [design/typing/user-types.md](../design/typing/user-types.md).
 
 ## Next items
 
@@ -102,7 +105,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
-- [First-class record-type sigil](type_language/first-class-record-type.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
 - [Carry types in the value-flow channel](type_language/types-in-value-channel.md)
@@ -158,7 +160,6 @@ are represented in `KType` and routed through dispatch. The substrate the
 predicate-typing stages and the stdlib's functor-heavy collections both
 build on:
 
-- [First-class record-type sigil](type_language/first-class-record-type.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Carry types in the value-flow channel](type_language/types-in-value-channel.md)
 - [Anonymous structural unions](type_language/anonymous-unions.md)

@@ -51,7 +51,7 @@ LET n = (inc {x = 41})
 
 Dispatch tells the two forms apart by the signature operand's part kind: a
 parenthesized `(…)` signature is a `KExpression`, while a `:{…}` schema is a
-`SigiledTypeExpr` that sub-dispatches to a resolved
+first-class `RecordType` part that sub-dispatches to a resolved
 [`KType::Record`](../src/machine/model/types/ktype.rs) before the binder runs.
 Three `FN` overloads share one bucket ([fn_def.rs](../src/builtins/fn_def.rs)) —
 two keyworded ones split on the return-type carrier, and one whose signature slot

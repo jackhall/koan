@@ -95,15 +95,27 @@ STRUCT / UNION stay Identifier-only.
 `:{x :Number, y :Str}` is the structural record type — an identifier-keyed field
 schema lowering to [`KType::Record(Record<KType>)`](ktype.md#record-fields-and-ktype-hashing),
 distinct from any nominal struct. The `:` type-sigil anchors to `{` (not only `(`),
-and the parser desugars `:{...}` to the keyworded shape `RECORD (...)`: it emits a
-`SigiledTypeExpr` wrapping `[Keyword("RECORD"), Expression(<field list>)]`, so the
-inner expression dispatches against an internal `RECORD` type-constructor overload in
-[`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs) — a direct
-sibling of `LIST` / `MAP` / `FN` / `FUNCTOR` that runs the shared field-list parser
-(`FieldNameKind::Identifier`, like STRUCT) and folds the fields into `KType::Record`.
-`RECORD` is internal-only — the surface is `:{...}`, never a writable keyword. The
-field list parses through the same path STRUCT / FN use, so nested parameterized
-field types sub-Dispatch (`:{xs :(LIST OF Number)}`).
+and the parser emits a first-class `ExpressionPart::RecordType(<field list>)` part
+([frame.rs](../../src/parse/frame.rs)) whose boxed `KExpression` is the bare
+`(x :Number, …)` field list. Unlike `:(...)` (which wraps a `SigiledTypeExpr` for the
+dispatcher to route), `:{...}` is matched *structurally*: the `DispatchShape::RecordType`
+handler folds the field list straight to `KType::Record` via the shared field-list parser
+(`elaborate_record_value` in
+[dispatch/field_list.rs](../../src/machine/execute/dispatch/field_list.rs),
+`FieldNameKind::Identifier`, like STRUCT), with no internal type-constructor builtin
+behind it. The field list parses through the same `parse_typed_field_list_via_elaborator`
+path STRUCT / FN use, so nested parameterized field types sub-Dispatch
+(`:{xs :(LIST OF Number)}`), while a nested record type `:{inner :{…}}` elaborates
+*inline* through the same walker — sharing the elaborator so the outer binder name
+threads into the inner record (`NEWTYPE Outer = :{inner :{owner :Outer}}` seals the
+inner `owner` to a `SetLocal` back-edge into `Outer`).
+
+A `:{...}` repr is also a distinct `NEWTYPE` overload (`arg("repr", KType::RecordType)`):
+the `:RecordType` slot captures the field list raw — the sibling of the `:SigiledTypeExpr`
+slot — so the declarator owns the elaboration and threads its own binder name through a
+recursive `:{next :Node}`. The two lazy raw-capture slots are part-kind-exact: a `:{…}`
+admits only to a `:RecordType` slot and a `:(…)` only to a `:SigiledTypeExpr` slot, so
+the overloads stay disjoint.
 
 The record *value* surface is `{x = 1, y = "a"}` (`=` pairs); the brace frame routes
 on the first pairing operator, so `:` pairs (`{k: v}`) stay a dict and `=` pairs a
@@ -163,6 +175,14 @@ expression; a `:(...)` head *followed by* a call body
 (`:(MyFunctor {base = IntOrd})` as a head) is the `TypeHeadDeferred` lane,
 which evaluates the head to a type-shaped value and admits only a
 constructible type or a functor.
+
+The classifier also carries a `RecordType` variant for a single-part `:{…}`,
+separate from the `SigiledTypeExpr` lane. Its handler (`record_type` in
+[single_poll.rs](../../src/machine/execute/dispatch/single_poll.rs)) does not
+tail-replace with a sub-Dispatch — it folds the field list straight to
+`KType::Record`, deferring through a Combine only when a field type forward-references
+or sub-dispatches. A `:{…}` head in a multi-part expression classifies as
+`NonCallableHead` (a record type is a value, not a callable).
 
 The sigil boundary — "the returned carrier must be type-side
 (`KTypeValue`, `Module`, `Signature`, `SetRef`, `KFunctor`)" — is

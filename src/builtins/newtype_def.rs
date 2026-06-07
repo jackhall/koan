@@ -4,11 +4,13 @@
 //! value with the NEWTYPE identity; the `Wrapped.inner` is invariantly non-`Wrapped`
 //! (newtype-over-newtype collapses to a single layer).
 //!
-//! Two registered overloads share [`body`], which branches on the repr carrier. A scalar /
-//! bare-leaf repr (`= Number`, `= Foo`) resolves eagerly through the `:TypeExprRef` slot. A
-//! sigil repr (`= :{…}`, `= :(LIST OF T)`) is captured *raw* through the `:SigiledTypeExpr`
-//! slot so the declarator owns its field-list elaboration: a record repr threads the binder
-//! name ([`Elaborator::with_threaded`]) so a self-reference (`:{next :Node}`) lowers to a
+//! Three registered overloads selected by the repr part-kind. A scalar / bare-leaf repr
+//! (`= Number`, `= Foo`) resolves eagerly through the `:TypeExprRef` slot. A non-record
+//! sigil repr (`= :(LIST OF T)`) is captured *raw* through the `:SigiledTypeExpr` slot and
+//! sub-dispatched to a resolved `KType` by the shared [`body`]. A record repr (`= :{…}`) is
+//! captured *raw* through its own `:RecordType` slot and routed to [`body_record_repr`], so
+//! the declarator owns its field-list elaboration and threads the binder name
+//! ([`Elaborator::with_threaded`]): a self-reference (`:{next :Node}`) lowers to a
 //! `RecursiveRef` and seals to a `SetLocal` back-edge — the same shared seal path
 //! ([`finalize_nominal_member`], [`seal_recursive_refs`]) `UNION` uses, and the path a
 //! `RECURSIVE TYPES` block routes its `NEWTYPE` members through.
@@ -189,8 +191,8 @@ pub fn body_record_repr<'a>(
 /// Elaborate + seal a record repr (`:{…}`), threading the binder name so a self-reference
 /// (`NEWTYPE Node = :{next :Node}`) lowers to a transient `RecursiveRef` and seals to a
 /// `SetLocal`. Mirrors the retired `STRUCT` declarator, sealing `NominalSchema::Newtype(Record)`
-/// rather than `Struct`. `fields` is the bare field list (`(name :Type, …)`) the parser nested
-/// under the desugared `RECORD` head.
+/// rather than `Struct`. `fields` is the bare field list (`(name :Type, …)`) carried by the
+/// `:{…}` `RecordType` part.
 fn elaborate_record_repr<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,

@@ -114,10 +114,11 @@ pub fn body<'a>(
 
 /// Anonymous-FN body: `FN :{<record schema>} -> ReturnType = (<body>)`.
 ///
-/// The record-schema sigil `:{…}` resolves (via the `RECORD` type constructor)
-/// to a `KType::Record` before this fires — the `signature` slot is typed
-/// `TypeExprRef`, so the operand sub-dispatches to a type-side carrier and the
-/// bundle hands us the resolved record. Each field becomes a keyword-less
+/// The record-schema sigil `:{…}` resolves to a `KType::Record` before this
+/// fires — it is a first-class `ExpressionPart::RecordType` the dispatcher folds
+/// structurally, and the `signature` slot is typed `TypeExprRef`, so the operand
+/// sub-dispatches to a type-side carrier and the bundle hands us the resolved
+/// record. Each field becomes a keyword-less
 /// `Argument`; the function registers no dispatch keyword (see
 /// [`FnKind::Anonymous`]) and is reachable only through the value it returns.
 pub fn body_record_schema<'a>(
@@ -276,7 +277,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         Some(binder_bucket),
         false,
     );
-    // Anonymous overload: a `:{…}` record-schema operand is a `SigiledTypeExpr`,
+    // Anonymous overload: a `:{…}` record-schema operand is a `RecordType` part,
     // which the two `KExpression`-signature overloads above reject and only this
     // `TypeExprRef`-signature overload admits (it sub-dispatches to a resolved
     // `KType::Record`). Selection is unambiguous by operand part-kind, so it

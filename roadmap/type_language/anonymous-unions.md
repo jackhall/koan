@@ -57,8 +57,7 @@ construct a tagged value in every arm, or coarsen the slot to `Any`.
 ## Dependencies
 
 Soft ordering: the underlying type and constructor builtin can be prototyped against
-a variadic type-constructor overload (the `RECORD` / nominal-`UNION` path) before the
-`|` surface lands.
+the nominal-`UNION` path before the `|` surface lands.
 
 **Requires:**
 

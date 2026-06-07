@@ -304,9 +304,9 @@ admission rule per cache entry on a bare-name part:
 **Binder declaration slots bypass the cache.** A slot typed `KType::Identifier`
 or `KType::TypeExprRef` owns the name (`x` in `LET x = …`, `Ty` in
 `STRUCT Ty = …`), so admission must be shape-only regardless of whether
-the name happens to be bound elsewhere. A `SigiledTypeExpr` part still
-admits speculatively in such a slot — it sub-dispatches to a type-side
-carrier downstream. The same shape-only-on-binder-slot rule covers
+the name happens to be bound elsewhere. A `SigiledTypeExpr` or `RecordType`
+part still admits speculatively in such a slot — it sub-dispatches to a
+type-side carrier downstream. The same shape-only-on-binder-slot rule covers
 `KExpression` slots: the slot owns its body, not a name lookup.
 
 A single cache tier amortizes the elaboration cost. Bind-time builtin lowering

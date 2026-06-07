@@ -524,7 +524,7 @@ variants run their own handlers and never enter
 `Scope::resolve_dispatch_with_chain`: there are no candidates in
 `bindings.functions` for these shapes, so the candidate machinery would do no
 useful work. The single-part lanes (`BareIdentifier`, `BareTypeLeaf`,
-`SigiledTypeExpr`, `LiteralPassThrough`) surface a name or value directly, while
+`SigiledTypeExpr`, `RecordType`, `LiteralPassThrough`) surface a name or value directly, while
 the multi-part head-position call lanes (`TypeCall`, `FunctionValueCall`,
 `HeadDeferred`, `TypeHeadDeferred`) each resolve their head to a callable and
 converge on the [shared apply-a-callable tail](#dispatch-time-name-placeholders). A
@@ -608,12 +608,14 @@ The rails the dispatch driver feeds:
   `classify_dispatch_shape` is one pass over `expr.parts`: keyword anywhere
   ⇒ `Keyworded` (refined to `OperatorChain` for the chain shape); single-part
   `Identifier` ⇒ `BareIdentifier`; single-part leaf `Type` ⇒ `BareTypeLeaf`;
-  single-part `SigiledTypeExpr` ⇒ `SigiledTypeExpr`; single-part literal /
+  single-part `SigiledTypeExpr` ⇒ `SigiledTypeExpr`; single-part `:{…}`
+  `RecordType` ⇒ `RecordType`; single-part literal /
   value ⇒ `LiteralPassThrough`. With the no-keyword precondition established,
   a multi-part expression branches on its head: leaf-`Type` head ⇒ `TypeCall`;
   `Identifier` head ⇒ `FunctionValueCall`; nested-`Expression` head ⇒
   `HeadDeferred`; `:(...)` `SigiledTypeExpr` head ⇒ `TypeHeadDeferred`; a
-  literal / list / dict / record head ⇒ `NonCallableHead`. The "sweep first,
+  literal / list / dict / record-literal / record-type head ⇒ `NonCallableHead`
+  (a record *type* is a value, not a callable). The "sweep first,
   branch on head second" ordering matters: a mixed shape like `(f IF x)`
   goes to `Keyworded` because only the candidate machinery knows how to
   dispatch the `(_ IF _)` bucket. `Keyworded` is never a catch-all for an
@@ -653,6 +655,12 @@ The rails the dispatch driver feeds:
     site does. See
     [type-language-via-dispatch.md](typing/type-language-via-dispatch.md)
     for the full type-language dispatch contract.
+  - `RecordType` (single-part `:{…}` record type) — `record_type` folds the
+    field list straight to `KType::Record` through the shared field-list
+    elaborator (no tail-replace, no internal type-constructor builtin),
+    deferring through a Combine only when a field type forward-references or
+    sub-dispatches. See
+    [type-language-via-dispatch.md § Record-type sigil](typing/type-language-via-dispatch.md#record-type-sigil).
   - `FunctionValueCall` (`f {x = 7}`) — [`FnValueState`](../src/machine/execute/dispatch/fn_value.rs)
     resolves the `Identifier` head and handles every admission outcome
     directly. The call shape admits iff `expr.parts[1..]` is exactly one
@@ -768,9 +776,10 @@ The rails the dispatch driver feeds:
     `Type` parts park here; non-bare-name parts are skipped by
     classification.
   - **Eager-sub slot.** `Expression` parts sub-Dispatch; `SigiledTypeExpr`
-    parts wrap into a single-part `KExpression` and sub-Dispatch (the
-    sub-Dispatch enters `run_dispatch`'s `SigiledTypeExpr` arm and
-    tail-replaces with the inner dispatch); `ListLiteral` and `DictLiteral`
+    and `RecordType` parts wrap into a single-part `KExpression` and
+    sub-Dispatch (the sub-Dispatch enters `run_dispatch`'s matching shape arm —
+    `SigiledTypeExpr` tail-replaces with the inner dispatch, `RecordType` folds
+    to `KType::Record`); `ListLiteral` and `DictLiteral`
     route through `schedule_list_literal` / `schedule_dict_literal` for the
     aggregate Combine; any other shape rides through unchanged. Lazy
     `Expression` parts in `KExpression` slots are filtered out by
