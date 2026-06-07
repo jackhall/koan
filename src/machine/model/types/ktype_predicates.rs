@@ -231,8 +231,7 @@ impl<'a> KType<'a> {
             KType::AnySignature => matches!(obj, KObject::KTypeValue(KType::Signature { .. })),
             KType::AnyUserType { kind } => matches!(
                 (kind, obj),
-                (NominalKind::Struct, KObject::Struct { .. })
-                    | (NominalKind::Tagged, KObject::Tagged { .. })
+                (NominalKind::Tagged, KObject::Tagged { .. })
                     | (NominalKind::Newtype, KObject::Wrapped { .. })
             ),
             // A stamped `type_args` carrier (from ascription) takes precedence and is
@@ -382,8 +381,7 @@ impl<'a> KType<'a> {
             KType::AnyUserType { kind } => match part {
                 ExpressionPart::Future(obj) => matches!(
                     (kind, obj),
-                    (NominalKind::Struct, KObject::Struct { .. })
-                        | (NominalKind::Tagged, KObject::Tagged { .. })
+                    (NominalKind::Tagged, KObject::Tagged { .. })
                         | (NominalKind::Newtype, KObject::Wrapped { .. })
                 ),
                 _ => false,

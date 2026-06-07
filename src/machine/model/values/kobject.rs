@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use indexmap::IndexMap;
-
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, KFuture};
 use crate::machine::model::ast::{KExpression, TypeName};
@@ -13,23 +11,27 @@ use crate::machine::model::types::{
 #[cfg(test)]
 mod tests;
 
-/// Reference to a [`KObject`] statically guaranteed not to be a [`KObject::Wrapped`].
-/// The sole constructor [`Self::peel`] collapses any `Wrapped` layer; by induction
-/// peeling one level suffices. Encodes the newtype-over-newtype collapse invariant in
-/// the type rather than caller discipline.
-#[derive(Copy, Clone)]
-pub struct NonWrappedRef<'a>(&'a KObject<'a>);
+/// An [`Rc`]-shared [`KObject`] statically guaranteed not to be a [`KObject::Wrapped`].
+/// The sole constructor [`Self::peel`] collapses any `Wrapped` layer; by induction peeling
+/// one level suffices. Encodes the newtype-over-newtype collapse invariant in the type
+/// rather than caller discipline. The payload rides an `Rc` (not an arena `&'a` reference)
+/// so a `Wrapped` carrier lifts across a dying frame by `Rc::clone` — the lift-stability the
+/// retired `KObject::Struct`'s `Rc<IndexMap>` fields had.
+#[derive(Clone)]
+pub struct NonWrappedRef<'a>(Rc<KObject<'a>>);
 
 impl<'a> NonWrappedRef<'a> {
-    pub fn peel(value: &'a KObject<'a>) -> Self {
+    /// Wrap `value`, collapsing one `Wrapped` layer: a `Wrapped` shares its inner `Rc`
+    /// (single-layer invariant), anything else is `Rc`-boxed via an independent `deep_clone`.
+    pub fn peel(value: &KObject<'a>) -> Self {
         match value {
-            KObject::Wrapped { inner, .. } => *inner,
-            _ => Self(value),
+            KObject::Wrapped { inner, .. } => inner.clone(),
+            _ => Self(Rc::new(value.deep_clone())),
         }
     }
 
-    pub fn get(&self) -> &'a KObject<'a> {
-        self.0
+    pub fn get(&self) -> &KObject<'a> {
+        &self.0
     }
 }
 
@@ -76,14 +78,6 @@ pub enum KObject<'a> {
         set: Rc<RecursiveSet<'a>>,
         index: usize,
         type_args: Rc<Vec<KType<'a>>>,
-    },
-    /// Struct value. `(set, index)` references the struct's sealed `RecursiveSet` member;
-    /// `ktype()` synthesizes `KType::SetRef { set, index }`, and lift shares the set by
-    /// `Rc::clone`.
-    Struct {
-        set: Rc<RecursiveSet<'a>>,
-        index: usize,
-        fields: Rc<IndexMap<String, KObject<'a>>>,
     },
     /// Anonymous structural record value (`{x = 1, y = "a"}`). The first field is the
     /// `Rc`-shared field record (identifier-keyed, declaration-ordered, order-blind
@@ -273,10 +267,6 @@ impl<'a> KObject<'a> {
                     }
                 }
             }
-            KObject::Struct { set, index, .. } => KType::SetRef {
-                set: Rc::clone(set),
-                index: *index,
-            },
             // O(1): read the memoized per-field type record rather than re-walking the
             // fields, mirroring `List` / `Dict`.
             KObject::Record(_, field_types) => KType::Record(field_types.clone()),
@@ -321,18 +311,13 @@ impl<'a> KObject<'a> {
                 index: *index,
                 type_args: Rc::clone(type_args),
             },
-            KObject::Struct { set, index, fields } => KObject::Struct {
-                set: Rc::clone(set),
-                index: *index,
-                fields: Rc::clone(fields),
-            },
             KObject::Record(fields, field_types) => {
                 KObject::Record(Rc::clone(fields), field_types.clone())
             }
             KObject::KTypeValue(t) => KObject::KTypeValue(t.clone()),
             KObject::TypeNameRef(t) => KObject::TypeNameRef(t.clone()),
             KObject::Wrapped { inner, type_id } => KObject::Wrapped {
-                inner: *inner,
+                inner: inner.clone(),
                 type_id,
             },
         }
@@ -446,16 +431,6 @@ impl<'a> Parseable<'a> for KObject<'a> {
             KObject::KFuture(t, _) => t.parsed.summarize(),
             KObject::KFunction(f, _) => f.summarize(),
             KObject::Tagged { tag, value, .. } => format!("{}({})", tag, value.summarize()),
-            KObject::Struct {
-                set, index, fields, ..
-            } => {
-                let name = &set.member(*index).name;
-                let parts: Vec<String> = fields
-                    .iter()
-                    .map(|(field, value)| format!("{}: {}", field, value.summarize()))
-                    .collect();
-                format!("{}({})", name, parts.join(", "))
-            }
             // Round-trips the `{x = 1, y = "a"}` value surface (`=` pairs).
             KObject::Record(fields, _) => {
                 let parts: Vec<String> = fields

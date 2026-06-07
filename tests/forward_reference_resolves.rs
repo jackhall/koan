@@ -197,7 +197,7 @@ fn forward_attr_lookup_through_value_let_is_unbound() {
     use koan::machine::KErrorKind;
     let err = run_collecting_first_err(
         "LET v = p.x\n\
-         STRUCT Pt = (x :Number, y :Number)\n\
+         NEWTYPE Pt = :{x :Number, y :Number}\n\
          LET p = (Pt {x = 7, y = 9})",
     )
     .expect("forward ATTR on value LET should surface UnboundName");
@@ -220,7 +220,7 @@ fn backward_attr_lookup_resolves_after_struct_binding() {
     let scope = run(
         &arena,
         captured,
-        "STRUCT Pt = (x :Number, y :Number)\n\
+        "NEWTYPE Pt = :{x :Number, y :Number}\n\
          LET p = (Pt {x = 7, y = 9})\n\
          LET v = p.x",
     );

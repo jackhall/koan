@@ -39,7 +39,7 @@ pub fn body<'a>(
     let finish: CatchFinish<'a> = Box::new(move |scope, _sched, result| {
         let (tag, payload): (&str, KObject<'a>) = match result {
             Ok(v) => ("ok", v.deep_clone()),
-            Err(e) => ("error", e.to_tagged()),
+            Err(e) => ("error", e.to_tagged(scope.arena)),
         };
         let tagged = KObject::Tagged {
             tag: tag.to_string(),

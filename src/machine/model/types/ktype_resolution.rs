@@ -26,9 +26,6 @@ impl<'a> KType<'a> {
             "Tagged" => Some(KType::AnyUserType {
                 kind: NominalKind::Tagged,
             }),
-            "Struct" => Some(KType::AnyUserType {
-                kind: NominalKind::Struct,
-            }),
             "Module" => Some(KType::AnyModule),
             "Signature" => Some(KType::AnySignature),
             "Any" => Some(KType::Any),

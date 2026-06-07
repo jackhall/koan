@@ -55,8 +55,8 @@ fn recursive_group_member_lowers_to_recursive_ref() {
     let arena = RuntimeArena::new();
     let parent = run_root_silent(&arena);
     let set = std::rc::Rc::new(RecursiveSet::new(vec![
-        NominalMember::pending("A".into(), parent.id, NominalKind::Struct),
-        NominalMember::pending("B".into(), parent.id, NominalKind::Struct),
+        NominalMember::pending("A".into(), parent.id, NominalKind::Newtype),
+        NominalMember::pending("B".into(), parent.id, NominalKind::Newtype),
     ]));
     let child = arena.alloc_scope(Scope::child_recursive_group(parent, set));
     let mut el = Elaborator::new(child);

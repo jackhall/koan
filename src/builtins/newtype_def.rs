@@ -9,17 +9,13 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_ktype, extract_type_name_ref,
 };
-use crate::machine::core::source::Spanned;
 use crate::machine::core::ApplyOutcome;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{
-    NominalKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet,
-};
-use crate::machine::model::values::{KObject, NonWrappedRef};
+use crate::machine::model::ast::KExpression;
+use crate::machine::model::types::{NominalKind, NominalMember, NominalSchema, RecursiveSet};
+use crate::machine::model::values::KObject;
 use crate::machine::model::KType;
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, KError, KErrorKind, SchedulerHandle,
-    Scope,
+    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, SchedulerHandle, Scope,
 };
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
@@ -109,70 +105,9 @@ pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     expr.binder_name_from_type_part()
 }
 
-/// Construction entry reached from the `TypeCall` fast lane's `Newtype` arm.
-/// Schedules the value sub-expression through `add_dispatch`, then registers a
-/// `Combine` whose finish closure type-checks against `repr`, applies the collapse
-/// rule, and produces the `KObject::Wrapped`.
-///
-/// No upper arity check on `parts.len()`: forms like `Bar(Foo(3.0))` legitimately
-/// produce multi-part `parts` that the scheduler dispatches as one expression
-/// yielding one inner value. Structural mismatches surface as `DispatchFailed`
-/// through the dep's terminal and short-circuit the Combine.
-pub fn newtype_construct<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
-    identity: &'a KType<'a>,
-    parts: Vec<Spanned<ExpressionPart<'a>>>,
-) -> BodyResult<'a> {
-    if parts.is_empty() {
-        return err(KError::new(KErrorKind::ArityMismatch {
-            expected: 1,
-            got: 0,
-        }));
-    }
-    let value_expr = KExpression::new(parts);
-    let value_id = sched.add_dispatch(value_expr, scope);
-    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
-        debug_assert_eq!(
-            results.len(),
-            1,
-            "newtype_construct registered exactly one dep"
-        );
-        let value: &'a KObject<'a> = results[0];
-        // `unreachable!` is structurally guarded by the `TypeCall` fast lane.
-        let (set, index) = match identity {
-            KType::SetRef { set, index } => (set, *index),
-            _ => unreachable!(
-                "TypeCall fast lane routed a non-SetRef identity into newtype_construct"
-            ),
-        };
-        // Project the member's `repr` (sibling `SetLocal`s resolved) for the type-check.
-        let repr = match RecursiveSet::projected_schema(set, index) {
-            ProjectedSchema::Newtype(repr) => repr,
-            _ => unreachable!("newtype_construct ran on a non-Newtype member"),
-        };
-        if !repr.matches_value(value) {
-            return BodyResult::Err(KError::new(KErrorKind::TypeMismatch {
-                arg: "value".to_string(),
-                expected: repr.name(),
-                got: value.ktype().name(),
-            }));
-        }
-        // `peel` enforces the single-layer invariant: `Bar(some_foo)` takes
-        // `some_foo.inner` directly. `identity` is the declaration-stable `&'a SetRef`.
-        let wrapped = KObject::Wrapped {
-            inner: NonWrappedRef::peel(value),
-            type_id: identity,
-        };
-        BodyResult::Value(scope.arena.alloc_object(wrapped))
-    });
-    let combine_id = sched.add_combine(vec![value_id], vec![], scope, finish);
-    BodyResult::DeferTo(combine_id)
-}
-
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    // Only the declaration form is registered; construction lives in the
-    // `TypeCall` fast lane via `newtype_construct`.
+    // Only the declaration form is registered; construction lives in the `TypeCall` fast lane
+    // via `constructors::dispatch_construct_newtype`.
     register_builtin_with_binder(
         scope,
         "NEWTYPE",

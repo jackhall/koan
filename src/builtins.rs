@@ -22,7 +22,6 @@ mod record_projection;
 mod recursive_types;
 mod result;
 mod sig_def;
-mod struct_def;
 mod try_with;
 mod type_constructors;
 mod type_ops;
@@ -146,13 +145,6 @@ pub fn default_scope<'a>(
         },
         BindingIndex::BUILTIN,
     );
-    scope.register_type(
-        "Struct".into(),
-        KType::AnyUserType {
-            kind: NominalKind::Struct,
-        },
-        BindingIndex::BUILTIN,
-    );
     scope.register_type("Module".into(), KType::AnyModule, BindingIndex::BUILTIN);
     scope.register_type(
         "Signature".into(),
@@ -167,7 +159,6 @@ pub fn default_scope<'a>(
     functor_def::register(scope);
     union::register(scope);
     result::register(scope);
-    struct_def::register(scope);
     newtype_def::register(scope);
     recursive_types::register(scope);
     match_case::register(scope);

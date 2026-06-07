@@ -159,19 +159,18 @@ fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, NominalKind)>
     };
     if decls.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
-            "RECURSIVE TYPES needs at least one STRUCT / UNION / NEWTYPE declaration".to_string(),
+            "RECURSIVE TYPES needs at least one UNION / NEWTYPE declaration".to_string(),
         )));
     }
     let mut members: Vec<(String, NominalKind)> = Vec::with_capacity(decls.len());
     let mut seen: HashSet<String> = HashSet::new();
     for decl in decls {
         let kind = match leading_keyword(decl) {
-            Some("STRUCT") => NominalKind::Struct,
             Some("UNION") => NominalKind::Tagged,
             Some("NEWTYPE") => NominalKind::Newtype,
             other => {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
-                    "RECURSIVE TYPES body admits only STRUCT / UNION / NEWTYPE declarations, \
+                    "RECURSIVE TYPES body admits only UNION / NEWTYPE declarations, \
                      got `{}`",
                     other.unwrap_or("<non-declaration>"),
                 ))));

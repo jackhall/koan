@@ -119,7 +119,6 @@ including `ExpressionSignature::most_specific` for the per-bucket tournament),
 `Rc`-owned unit of nominal identity, allocation, and lift),
 [builtins.rs](src/builtins.rs) (registry),
 [tagged_union.rs](src/machine/execute/dispatch/constructors/tagged_union.rs) (shared structure),
-[struct_value.rs](src/machine/execute/dispatch/constructors/struct_value.rs) (shared structure),
 [typed_field_list.rs](src/machine/model/types/typed_field_list.rs) (helper).
 
 ```

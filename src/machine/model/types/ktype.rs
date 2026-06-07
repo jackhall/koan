@@ -48,7 +48,9 @@ pub enum KType<'a> {
     /// Bare `Dict` lowers to `Dict<Any, Any>`.
     Dict(Box<KType<'a>>, Box<KType<'a>>),
     /// Structural record type (`:{x :Number, y :Str}`) — an identifier-keyed field
-    /// schema with width/depth subtyping, distinct from a nominal `Struct`-kind `SetRef`.
+    /// schema with width/depth subtyping. Anonymous: a record-repr `Newtype` `SetRef`
+    /// (an ex-struct) wraps this with a nominal identity, but the bare record type is
+    /// structural and order-blind.
     /// The inner `Record<KType>` is declaration-ordered for
     /// rendering and order-blind by `(name, type)` for identity. A record *value*
     /// (`KObject::Record`) memoizes this as its carried type. Subtyping is the dual of
@@ -437,10 +439,13 @@ mod tests {
     use super::super::recursive_set::{NominalMember, NominalSchema};
     use super::*;
 
-    /// A singleton `Rc<RecursiveSet>` over a struct member named `name`, schema filled.
-    fn struct_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
-        let member = NominalMember::pending(name.into(), scope_id, NominalKind::Struct);
-        member.fill(NominalSchema::Struct(Record::new()));
+    /// A singleton `Rc<RecursiveSet>` over a record-repr newtype member named `name`, schema
+    /// filled.
+    fn record_newtype_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
+        let member = NominalMember::pending(name.into(), scope_id, NominalKind::Newtype);
+        member.fill(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
+            Record::new(),
+        )))));
         Rc::new(RecursiveSet::new(vec![member]))
     }
 
@@ -585,7 +590,6 @@ mod tests {
 
     #[test]
     fn nominal_kind_surface_keywords() {
-        assert_eq!(NominalKind::Struct.surface_keyword(), "Struct");
         assert_eq!(NominalKind::Tagged.surface_keyword(), "Tagged");
         assert_eq!(NominalKind::Newtype.surface_keyword(), "Newtype");
         assert_eq!(
@@ -598,10 +602,10 @@ mod tests {
     fn any_user_type_name_renders_kind_keyword() {
         assert_eq!(
             KType::AnyUserType {
-                kind: NominalKind::Struct
+                kind: NominalKind::Newtype
             }
             .name(),
-            "Struct"
+            "Newtype"
         );
         assert_eq!(
             KType::AnyUserType {
@@ -690,7 +694,7 @@ mod tests {
         ];
         // A `SetRef` pair sharing one `Rc` — identity is `(set ptr, index)`, so the same
         // allocation must hash and compare equal.
-        let shared = struct_set("Point", sid);
+        let shared = record_newtype_set("Point", sid);
         let set_ref_a = KType::SetRef {
             set: Rc::clone(&shared),
             index: 0,
@@ -720,7 +724,7 @@ mod tests {
     #[test]
     fn hash_keys_set_ref_on_pointer_and_index() {
         let sid = ScopeId::from_raw(0, 0x1234);
-        let set = struct_set("Point", sid);
+        let set = record_newtype_set("Point", sid);
         let a = KType::SetRef {
             set: Rc::clone(&set),
             index: 0,
@@ -733,7 +737,7 @@ mod tests {
         assert_eq!(hash_of(&a), hash_of(&b));
 
         // A separate allocation with the same name is a distinct identity.
-        let other = struct_set("Point", sid);
+        let other = record_newtype_set("Point", sid);
         let c = KType::SetRef {
             set: other,
             index: 0,
@@ -763,7 +767,7 @@ mod tests {
     fn set_ref_name_renders_member_name() {
         // Renders the member's declared `name`, not the kind keyword: a `Point` struct
         // slot shows `Point`, not `Struct`.
-        let set = struct_set("Point", ScopeId::from_raw(0, 0x1234));
+        let set = record_newtype_set("Point", ScopeId::from_raw(0, 0x1234));
         let t = KType::SetRef { set, index: 0 };
         assert_eq!(t.name(), "Point");
     }

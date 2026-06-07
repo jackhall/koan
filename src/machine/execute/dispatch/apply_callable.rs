@@ -20,15 +20,15 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::model::ast::KExpression;
+use crate::machine::core::source::Spanned;
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::{
-    body_shape_err, constructors, extract_call_body, single_poll, stage_all_eager_parts, CallBody,
-    DispatchCtx, DispatchState, EagerSubsInstall, FnValueState, Initialized, NAMED_ONLY,
-    POSITIONAL_ONLY,
+    body_shape_err, constructors, extract_call_body, stage_all_eager_parts, CallBody, DispatchCtx,
+    DispatchState, EagerSubsInstall, FnValueState, Initialized, NAMED_ONLY, POSITIONAL_ONLY,
 };
 
 /// A head resolved to something callable. The lane decides which arm; the tail
@@ -51,29 +51,35 @@ pub(in crate::machine::execute) fn apply_callable<'a>(
     scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
-    let body = match extract_call_body(expr) {
-        Ok(b) => b,
-        Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
-    };
     match callable {
+        // A constructor branches on the projected schema before deciding what body shape it
+        // admits; the newtype arm in particular takes the trailing parts directly (so
+        // `(Point r)` works), so body extraction lives per-arm inside `apply_constructor`
+        // rather than here.
         ResolvedCallable::Constructor(identity) => {
-            apply_constructor(ctx, identity, expr, body, scope, idx)
+            apply_constructor(ctx, identity, expr, scope, idx)
         }
-        ResolvedCallable::Function(f) => apply_function(ctx, f, expr, body, scope, idx),
+        ResolvedCallable::Function(f) => {
+            let body = match extract_call_body(expr) {
+                Ok(b) => b,
+                Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+            };
+            apply_function(ctx, f, expr, body, scope, idx)
+        }
     }
 }
 
-/// Construct from a `KType::SetRef` member identity. Struct takes named args; Tagged /
-/// `TypeConstructor` / Newtype take a positional arg; cross-shape is a loud
-/// `DispatchFailed`. A non-constructible identity is a `TypeMismatch`. The schema is
-/// projected off the member (sibling `SetLocal`s resolved to external `SetRef`s) so each
-/// field/variant type matches and navigates directly; `(set, index)` is stamped onto the
-/// produced value.
+/// Construct from a `KType::SetRef` member identity. A newtype (record-repr or scalar) takes
+/// the trailing parts as its value expression — `(Point {x = 1, y = 2})` builds a record,
+/// `(Point r)` / `(Distance 3.0)` wrap a value — so it bypasses the `{name = value}` /
+/// `(value)` body split entirely. Tagged / `TypeConstructor` take a positional `(value)` body;
+/// a named body is a loud `DispatchFailed`. A non-constructible identity is a `TypeMismatch`.
+/// The schema is projected off the member (sibling `SetLocal`s resolved to external
+/// `SetRef`s); `(set, index)` is stamped onto a tagged value.
 fn apply_constructor<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     identity: &'a KType<'a>,
     expr: &KExpression<'a>,
-    body: CallBody<'a>,
     scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
@@ -85,23 +91,34 @@ fn apply_constructor<'a>(
         })));
     };
     match RecursiveSet::projected_schema(set, *index) {
-        // Named construction: `Point {x = 1, y = 2}` (record-literal body).
-        ProjectedSchema::Struct(fields) => match body {
-            CallBody::Named(record_fields) => constructors::dispatch_construct_struct(
+        // Newtype construction. A named record-literal body (`Point {x = 1, y = 2}`) builds a
+        // record per-field (so literal fields bind synchronously); any other trailing
+        // expression (`(Point r)`, `(Distance 3.0)`) is wrapped as a single positional value.
+        ProjectedSchema::Newtype(_) => match expr.parts.get(1..) {
+            Some(
+                [Spanned {
+                    value: ExpressionPart::RecordLiteral(fields),
+                    ..
+                }],
+            ) => constructors::dispatch_construct_record_newtype(
                 ctx,
-                Rc::clone(set),
-                *index,
-                Rc::new(fields),
-                record_fields,
+                identity,
+                fields.clone(),
                 scope,
                 idx,
             ),
-            CallBody::Positional(_) => body_shape_err(expr, NAMED_ONLY),
+            _ => constructors::dispatch_construct_newtype(
+                ctx,
+                identity,
+                expr.parts[1..].to_vec(),
+                scope,
+                idx,
+            ),
         },
         // Positional construction: `Outcome (err "x")` (paren-group body). Tagged unions
         // and higher-kinded `TypeConstructor`s both construct positionally.
-        ProjectedSchema::Tagged(schema) => match body {
-            CallBody::Positional(parts) => constructors::dispatch_construct_tagged(
+        ProjectedSchema::Tagged(schema) => match extract_call_body(expr) {
+            Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
                 ctx,
                 Rc::clone(set),
                 *index,
@@ -110,10 +127,11 @@ fn apply_constructor<'a>(
                 scope,
                 idx,
             ),
-            CallBody::Named(_) => body_shape_err(expr, POSITIONAL_ONLY),
+            Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
+            Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         },
-        ProjectedSchema::TypeConstructor { schema, .. } => match body {
-            CallBody::Positional(parts) => constructors::dispatch_construct_tagged(
+        ProjectedSchema::TypeConstructor { schema, .. } => match extract_call_body(expr) {
+            Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
                 ctx,
                 Rc::clone(set),
                 *index,
@@ -122,15 +140,8 @@ fn apply_constructor<'a>(
                 scope,
                 idx,
             ),
-            CallBody::Named(_) => body_shape_err(expr, POSITIONAL_ONLY),
-        },
-        ProjectedSchema::Newtype(_) => match body {
-            CallBody::Positional(parts) => {
-                let constructed =
-                    crate::builtins::newtype_def::newtype_construct(scope, ctx, identity, parts);
-                single_poll::schedule_constructor_body(ctx, constructed, idx)
-            }
-            CallBody::Named(_) => body_shape_err(expr, POSITIONAL_ONLY),
+            Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
+            Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         },
     }
 }

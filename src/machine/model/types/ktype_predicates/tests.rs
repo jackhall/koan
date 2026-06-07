@@ -4,10 +4,15 @@ use crate::machine::model::types::{NominalSchema, RecursiveSet};
 use crate::machine::model::Record;
 use std::rc::Rc;
 
-/// A singleton-set `KType::SetRef` for a struct named `name` (empty schema is fine — the
-/// predicates key on `(set ptr, index)` + `kind`, never the schema).
-fn struct_setref<'a>(name: &str, scope_id: ScopeId) -> KType<'a> {
-    let set = RecursiveSet::singleton(name.into(), scope_id, NominalSchema::Struct(Record::new()));
+/// A singleton-set `KType::SetRef` for a record-repr newtype (an ex-struct) named `name`
+/// (empty record repr is fine — the predicates key on `(set ptr, index)` + `kind`, never the
+/// schema).
+fn record_newtype_setref<'a>(name: &str, scope_id: ScopeId) -> KType<'a> {
+    let set = RecursiveSet::singleton(
+        name.into(),
+        scope_id,
+        NominalSchema::Newtype(Box::new(KType::Record(Box::new(Record::new())))),
+    );
     KType::SetRef { set, index: 0 }
 }
 
@@ -166,47 +171,8 @@ fn record_value_admission_and_matches() {
     assert!(mismatch.accepts_part(&ExpressionPart::RecordLiteral(vec![])));
 }
 
-#[test]
-fn any_user_type_struct_accepts_struct_future_only() {
-    use crate::machine::core::RuntimeArena;
-    use indexmap::IndexMap;
-    use std::rc::Rc;
-    // `KObject` is invariant in `'a`, so stack locals trip dropck; arena
-    // allocation hands out `&'a KObject<'a>` tied to the arena's lifetime.
-    let arena = RuntimeArena::new();
-    let t = KType::AnyUserType {
-        kind: NominalKind::Struct,
-    };
-    let struct_set = RecursiveSet::singleton(
-        "Point".into(),
-        ScopeId::SENTINEL,
-        NominalSchema::Struct(Record::new()),
-    );
-    let s: &KObject<'_> = arena.alloc_object(KObject::Struct {
-        set: struct_set,
-        index: 0,
-        fields: Rc::new(IndexMap::new()),
-    });
-    let tagged_set = RecursiveSet::singleton(
-        "Maybe".into(),
-        ScopeId::SENTINEL,
-        NominalSchema::Tagged(std::collections::HashMap::new()),
-    );
-    let tagged: &KObject<'_> = arena.alloc_object(KObject::Tagged {
-        tag: "some".into(),
-        value: Rc::new(KObject::Number(1.0)),
-        set: tagged_set,
-        index: 0,
-        type_args: Rc::new(vec![]),
-    });
-    let n: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
-    assert!(t.accepts_part(&ExpressionPart::Future(s)));
-    assert!(!t.accepts_part(&ExpressionPart::Future(tagged)));
-    assert!(!t.accepts_part(&ExpressionPart::Future(n)));
-}
-
 /// Admission table for `KType::Type::accepts_part`: bare builtin type tokens
-/// and struct / union `KTypeValue(UserType)` identities admit; module and signature
+/// and newtype / union `KTypeValue(UserType)` identities admit; module and signature
 /// carriers reject so the `:Type` vs `:Module` / `:Signature` overload distinction
 /// stays intact; non-type-denoting carriers reject.
 #[test]
@@ -226,7 +192,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     assert!(t.accepts_part(&ExpressionPart::Future(kt_str)));
     assert!(t.accepts_part(&ExpressionPart::Future(kt_bool)));
     assert!(t.accepts_part(&ExpressionPart::Future(kt_null)));
-    // Struct / union type tokens flow as `KTypeValue(SetRef { .. })` now — a `:Type`
+    // Newtype / union type tokens flow as `KTypeValue(SetRef { .. })` now — a `:Type`
     // slot admits them via the generic `Future(KTypeValue(_))` arm.
     let tagged_set = RecursiveSet::singleton(
         "Maybe".into(),
@@ -237,10 +203,9 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         set: tagged_set,
         index: 0,
     }));
-    let struct_token: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(struct_setref(
-        "Point",
-        ScopeId::SENTINEL,
-    )));
+    let struct_token: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(
+        record_newtype_setref("Point", ScopeId::SENTINEL),
+    ));
     assert!(t.accepts_part(&ExpressionPart::Future(tagged_token)));
     assert!(t.accepts_part(&ExpressionPart::Future(struct_token)));
     let child = arena.alloc_scope(crate::machine::Scope::child_under_module(
@@ -285,15 +250,18 @@ fn any_user_type_newtype_accepts_wrapped_only() {
         inner: crate::machine::model::values::NonWrappedRef::peel(inner),
         type_id,
     });
-    let struct_set = RecursiveSet::singleton(
-        "Point".into(),
+    // A different-kind nominal carrier (Tagged) must not fill the Newtype wildcard.
+    let tagged_set = RecursiveSet::singleton(
+        "Maybe".into(),
         ScopeId::SENTINEL,
-        NominalSchema::Struct(Record::new()),
+        NominalSchema::Tagged(std::collections::HashMap::new()),
     );
-    let s: &KObject<'_> = arena.alloc_object(KObject::Struct {
-        set: struct_set,
+    let s: &KObject<'_> = arena.alloc_object(KObject::Tagged {
+        tag: "some".into(),
+        value: std::rc::Rc::new(KObject::Number(1.0)),
+        set: tagged_set,
         index: 0,
-        fields: std::rc::Rc::new(indexmap::IndexMap::new()),
+        type_args: std::rc::Rc::new(vec![]),
     });
     assert!(t.accepts_part(&ExpressionPart::Future(w)));
     assert!(!t.accepts_part(&ExpressionPart::Future(s)));
@@ -302,20 +270,20 @@ fn any_user_type_newtype_accepts_wrapped_only() {
 }
 
 /// Pins the wildcard refinement: a `Newtype`-kind `SetRef` is strictly more specific than
-/// `AnyUserType { kind: Newtype }`, and incomparable with `AnyUserType { kind: Struct }`.
+/// `AnyUserType { kind: Newtype }`, and incomparable with `AnyUserType { kind: Tagged }`.
 #[test]
 fn user_type_newtype_specificity_lattice() {
     let any_newtype = KType::AnyUserType {
         kind: NominalKind::Newtype,
     };
-    let any_struct = KType::AnyUserType {
-        kind: NominalKind::Struct,
+    let any_tagged = KType::AnyUserType {
+        kind: NominalKind::Tagged,
     };
     let dist = newtype_setref("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
     assert!(dist.is_more_specific_than(&any_newtype));
     assert!(!any_newtype.is_more_specific_than(&dist));
-    assert!(!dist.is_more_specific_than(&any_struct));
-    assert!(!any_struct.is_more_specific_than(&dist));
+    assert!(!dist.is_more_specific_than(&any_tagged));
+    assert!(!any_tagged.is_more_specific_than(&dist));
 }
 
 /// Specificity ordering for the `SetRef` / `AnyUserType` variants:
@@ -325,19 +293,19 @@ fn user_type_newtype_specificity_lattice() {
 ///   (sibling families).
 #[test]
 fn user_type_specificity_lattice() {
-    let any_struct = KType::AnyUserType {
-        kind: NominalKind::Struct,
+    let any_newtype = KType::AnyUserType {
+        kind: NominalKind::Newtype,
     };
     let any_tagged = KType::AnyUserType {
         kind: NominalKind::Tagged,
     };
-    let point = struct_setref("Point", ScopeId::from_raw(0, 0xAA));
+    let point = record_newtype_setref("Point", ScopeId::from_raw(0, 0xAA));
     // `AnyUserType` strictly under `Any`.
-    assert!(any_struct.is_more_specific_than(&KType::Any));
-    assert!(!KType::Any.is_more_specific_than(&any_struct));
-    // A `Struct`-kind `SetRef` strictly under `AnyUserType { kind: Struct }`.
-    assert!(point.is_more_specific_than(&any_struct));
-    assert!(!any_struct.is_more_specific_than(&point));
+    assert!(any_newtype.is_more_specific_than(&KType::Any));
+    assert!(!KType::Any.is_more_specific_than(&any_newtype));
+    // A `Newtype`-kind `SetRef` strictly under `AnyUserType { kind: Newtype }`.
+    assert!(point.is_more_specific_than(&any_newtype));
+    assert!(!any_newtype.is_more_specific_than(&point));
     // Different-kind pairs incomparable.
     assert!(!point.is_more_specific_than(&any_tagged));
     assert!(!any_tagged.is_more_specific_than(&point));
@@ -367,10 +335,10 @@ fn is_type_denoting_table() {
     assert!(KType::Type.is_type_denoting());
     assert!(KType::TypeExprRef.is_type_denoting());
     assert!(KType::AnyModule.is_type_denoting());
-    // Wildcard struct/tagged slots don't make their parameter a type binder —
+    // Wildcard newtype/tagged slots don't make their parameter a type binder —
     // the value carries no nominal identity the caller hasn't already named.
     assert!(!KType::AnyUserType {
-        kind: NominalKind::Struct
+        kind: NominalKind::Newtype
     }
     .is_type_denoting());
     assert!(!KType::AnyUserType {
@@ -379,7 +347,7 @@ fn is_type_denoting_table() {
     .is_type_denoting());
     // Per-declaration `SetRef`: nominal identity already lives in the declaring
     // scope's `bindings.types`; rebinding per-call would be a no-op or shadow.
-    let ut = struct_setref("Foo", ScopeId::from_raw(0, 1));
+    let ut = record_newtype_setref("Foo", ScopeId::from_raw(0, 1));
     assert!(!ut.is_type_denoting());
     assert!(!KType::Number.is_type_denoting());
     assert!(!KType::Str.is_type_denoting());

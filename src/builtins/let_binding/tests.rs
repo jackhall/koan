@@ -208,7 +208,7 @@ fn let_aliases_struct_preserves_type_identity() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     run(
         scope,
-        "STRUCT Point = (x :Number, y :Number)\n\
+        "NEWTYPE Point = :{x :Number, y :Number}\n\
          LET Pt = Point",
     );
     let types = scope.bindings().types();

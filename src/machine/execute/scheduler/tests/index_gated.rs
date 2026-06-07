@@ -204,7 +204,7 @@ fn overload_pre_filter_hides_later_sibling_overload() {
 fn struct_forward_reference_in_fn_param_is_position_error() {
     let err = run_collect_err(
         "FN (TAKES p :Pt) -> Number = (p.x)\n\
-         STRUCT Pt = (x :Number, y :Number)",
+         NEWTYPE Pt = :{x :Number, y :Number}",
     )
     .expect("a forward STRUCT reference in a FN signature should error");
     assert!(
@@ -246,7 +246,7 @@ fn value_let_after_reference_is_unbound_not_carved_out() {
 fn fn_return_type_forward_reference_is_position_error() {
     let err = run_collect_err(
         "FN (FOO x :Number) -> Later = (x)\n\
-         STRUCT Later = (n :Number)",
+         NEWTYPE Later = :{n :Number}",
     )
     .expect("a forward STRUCT reference in a FN return type should error");
     assert!(
@@ -261,7 +261,7 @@ fn fn_return_type_backward_reference_resolves() {
     let arena = RuntimeArena::new();
     let scope = run_scope(
         &arena,
-        "STRUCT Early = (n :Number)\n\
+        "NEWTYPE Early = :{n :Number}\n\
          FN (FOO x :Number) -> Early = (Early {n = x})\n\
          LET out = (FOO 5)",
     );

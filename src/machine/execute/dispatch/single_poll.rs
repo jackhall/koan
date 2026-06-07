@@ -14,7 +14,7 @@ use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
-use crate::machine::model::{KObject, KType, Record, RecursiveSet};
+use crate::machine::model::{KObject, KType, RecursiveSet};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
@@ -77,13 +77,20 @@ pub(in crate::machine::execute) struct CtorTrack<'a> {
 
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
 /// slot is resolved. `(set, index)` is the sealed-member identity stamped onto the produced
-/// `KObject`; `fields` / `schema` is the projected (sibling-`SetLocal`-resolved) schema used
-/// for arg reordering and per-value type-checking.
+/// `KObject`; `schema` is the projected (sibling-`SetLocal`-resolved) schema used for
+/// per-value type-checking.
 pub(in crate::machine::execute) enum CtorKind<'a> {
-    Struct {
-        set: Rc<RecursiveSet<'a>>,
-        index: usize,
-        fields: Rc<Record<KType<'a>>>,
+    /// Newtype construction (record-repr or scalar) from a single positional value. One value
+    /// cell carrying the whole value expression; the finish type-checks it against the
+    /// member's `repr`, peels any `Wrapped` layer, and tags it with `identity`.
+    Newtype { identity: &'a KType<'a> },
+    /// Record-repr newtype construction from a named record-literal body (`Point {x = 1, y =
+    /// 2}`). One value cell per field, so a literal field stages in place (synchronous bind,
+    /// matching the retired struct path) instead of deferring the whole record literal; the
+    /// finish builds the `KObject::Record` and wraps it with `identity`.
+    RecordNewtype {
+        identity: &'a KType<'a>,
+        field_names: Vec<String>,
     },
     Tagged {
         schema: Rc<HashMap<String, KType<'a>>>,
@@ -121,7 +128,10 @@ impl<'a> BareTypeState<'a> {
         }
     }
 
-    pub(in crate::machine::execute) fn with_park(init: Initialized, park: BareTypeParkTrack) -> Self {
+    pub(in crate::machine::execute) fn with_park(
+        init: Initialized,
+        park: BareTypeParkTrack,
+    ) -> Self {
         Self {
             init,
             park: Some(park),

@@ -360,27 +360,32 @@ fn fast_lane_on_tagged_union_constructs() {
 /// construct-from-identity + LiteralPassThrough per value-cell); no entry into
 /// `resolve_dispatch`.
 #[test]
-fn fast_lane_on_struct_type_constructs() {
+fn fast_lane_on_newtype_record_type_constructs() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "STRUCT Pt = (x :Number, y :Number)");
+    run(scope, "NEWTYPE Pt = :{x :Number, y :Number}");
     reset_resolve_dispatch_entry_count();
     let result = run_one(scope, parse_one("Pt {x = 3, y = 4}"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
-        "struct construction is fully fast-lane: no `resolve_dispatch` \
+        "record-repr newtype construction is fully fast-lane: no `resolve_dispatch` \
          entries. Counter was {}",
         resolve_dispatch_entry_count(),
     );
     match result {
-        KObject::Struct { set, index, fields } => {
-            assert_eq!(set.member(*index).name, "Pt");
-            assert!(matches!(fields.get("x"), Some(KObject::Number(n)) if *n == 3.0));
-            assert!(matches!(fields.get("y"), Some(KObject::Number(n)) if *n == 4.0));
+        KObject::Wrapped { inner, type_id } => {
+            assert_eq!(type_id.name(), "Pt");
+            match inner.get() {
+                KObject::Record(values, _) => {
+                    assert!(matches!(values.get("x"), Some(KObject::Number(n)) if *n == 3.0));
+                    assert!(matches!(values.get("y"), Some(KObject::Number(n)) if *n == 4.0));
+                }
+                other => panic!("expected record inner, got {:?}", other.ktype()),
+            }
         }
-        other => panic!("expected Struct, got {:?}", other.ktype()),
+        other => panic!("expected Wrapped, got {:?}", other.ktype()),
     }
 }
 
@@ -922,7 +927,7 @@ fn type_call_constructs_struct() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "STRUCT Point = (x :Number, y :Number)");
+    run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
     let out = run_one(scope, parse_one("Point {x = 1, y = 2}"));
     assert_eq!(out.ktype().name(), "Point", "got {}", out.summarize());
 }
@@ -976,7 +981,7 @@ fn head_deferred_constructs_from_returned_type_value() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "STRUCT Point = (x :Number, y :Number)");
+    run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
     // `(Point) {x = 1, y = 2}`: the nested-`Expression` head `(Point)` resolves the
     // type leaf to `KTypeValue(Point)`, then the body constructs.
     let out = run_one(scope, parse_one("(Point) {x = 1, y = 2}"));
@@ -1030,7 +1035,7 @@ fn type_head_deferred_constructs_from_sigil_type() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "STRUCT Point = (x :Number, y :Number)");
+    run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
     let out = run_one(scope, parse_one(":(Point) {x = 1, y = 2}"));
     assert_eq!(out.ktype().name(), "Point", "got {}", out.summarize());
 }
@@ -1121,7 +1126,7 @@ fn type_call_and_head_deferred_skip_resolve_dispatch() {
     use crate::builtins::test_support::{run, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "STRUCT Point = (x :Number, y :Number)");
+    run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
 
     reset_resolve_dispatch_entry_count();
     let _ = dispatch_one(scope, parse_one("Point {x = 1, y = 2}"));

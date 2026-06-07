@@ -148,6 +148,7 @@ predicate-typing stages and the stdlib's functor-heavy collections both
 build on:
 
 - [Collapse `STRUCT` into a record-repr `NEWTYPE`](type_language/struct-newtype-collapse.md)
+- [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Carry types in the value-flow channel](type_language/types-in-value-channel.md)
 - [Anonymous structural unions](type_language/anonymous-unions.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)

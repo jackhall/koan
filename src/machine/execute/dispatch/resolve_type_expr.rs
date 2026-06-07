@@ -275,7 +275,7 @@ mod tests {
         use crate::builtins::test_support::{parse_one, run_one};
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run_one(scope, parse_one("STRUCT Point = (x :Number, y :Number)"));
+        run_one(scope, parse_one("NEWTYPE Point = :{x :Number, y :Number}"));
         let te = TypeName::leaf("Point".into());
         let kt = match scope.resolve_type_expr(&te, None) {
             ResolveTypeExprOutcome::Done(kt) => kt,
@@ -292,12 +292,15 @@ mod tests {
         assert!(std::ptr::eq(kt, kt2));
     }
 
-    /// A singleton struct `SetRef` named `name` at `scope_id`.
+    /// A singleton record-repr newtype `SetRef` named `name` at `scope_id`.
     fn struct_setref<'a>(name: &str, scope_id: ScopeId) -> KType<'a> {
         use crate::machine::model::types::{NominalSchema, RecursiveSet};
         use crate::machine::model::Record;
-        let set =
-            RecursiveSet::singleton(name.into(), scope_id, NominalSchema::Struct(Record::new()));
+        let set = RecursiveSet::singleton(
+            name.into(),
+            scope_id,
+            NominalSchema::Newtype(Box::new(KType::Record(Box::new(Record::new())))),
+        );
         KType::SetRef { set, index: 0 }
     }
 
@@ -393,8 +396,8 @@ mod tests {
         #[test]
         fn mid_seal_member_parks_then_resolves() {
             use crate::machine::core::kfunction::NodeId;
-            use crate::machine::core::{Bindings, PendingTypeEntry};
             use crate::machine::core::BindingIndex;
+            use crate::machine::core::{Bindings, PendingTypeEntry};
             use crate::machine::model::ast::KExpression;
             use crate::machine::model::types::{
                 NominalKind, NominalMember, NominalSchema, RecursiveSet,
@@ -406,7 +409,7 @@ mod tests {
             // Pre-install a singleton set whose one member is still `pending` (schema
             // unfilled) and bind its external `SetRef` into `bindings.types`, mirroring the
             // `RECURSIVE TYPES` pre-install window.
-            let member = NominalMember::pending("Node".into(), scope.id, NominalKind::Struct);
+            let member = NominalMember::pending("Node".into(), scope.id, NominalKind::Newtype);
             let set = std::rc::Rc::new(RecursiveSet::new(vec![member]));
             scope.preinstall_identity(
                 "Node".into(),
@@ -422,7 +425,7 @@ mod tests {
             let pending_guard = bindings.insert_pending_type(
                 "Node".into(),
                 PendingTypeEntry {
-                    kind: NominalKind::Struct,
+                    kind: NominalKind::Newtype,
                     scope_id: scope.id,
                     schema_expr: KExpression::new(Vec::new()),
                 },
@@ -441,10 +444,10 @@ mod tests {
 
             // Seal: fill the member, drop the in-flight guard. The re-resolve now admits
             // (the name is no longer in `pending_types`) and hands back the sealed carrier.
-            set.member(0).fill(NominalSchema::Struct(Record::from_pairs([(
-                "x".to_string(),
-                KType::Number,
-            )])));
+            set.member(0)
+                .fill(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
+                    Record::from_pairs([("x".to_string(), KType::Number)]),
+                )))));
             drop(pending_guard);
 
             match resolve_type_leaf_carrier(scope, &leaf, None) {
@@ -452,7 +455,10 @@ mod tests {
                     assert_eq!(s.member(*index).name, "Node");
                 }
                 other => {
-                    panic!("expected Resolved(SetRef) after seal, got {:?}", carrier_tag(&other))
+                    panic!(
+                        "expected Resolved(SetRef) after seal, got {:?}",
+                        carrier_tag(&other)
+                    )
                 }
             }
         }
