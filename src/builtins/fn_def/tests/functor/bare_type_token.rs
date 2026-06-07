@@ -1,6 +1,6 @@
 //! Bare type tokens (`Number`, `Str`, `Bool`, `Null`) as `:Type`-typed
 //! FUNCTOR arguments. Pins the widening at
-//! [`KType::Type::accepts_part`](crate::machine::model::types) and the
+//! [`KType::accepts_part`](crate::machine::model::types) and the
 //! deferred-return re-elaboration path's agnosticism to builtin-vs-nominal
 //! carriers.
 
@@ -111,7 +111,7 @@ fn functor_bare_value_carrier_is_dispatch_no_match_not_typemismatch() {
 }
 
 /// Module carriers stay out of `:Type` slots — the cut-(a) wall at
-/// [`KType::Type::accepts_part`]'s `Future(KObject::KTypeValue(KType::Module
+/// [`KType::accepts_part`]'s `Future(KObject::KTypeValue(KType::Module
 /// { .. }))` arm. Asserts only that no value comes back; either
 /// `DispatchFailed` (admission-time reject) or per-node `TypeMismatch`
 /// (committed-then-failed bind) satisfies the wall's contract.

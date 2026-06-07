@@ -1,3 +1,4 @@
+use crate::machine::model::types::KKind;
 use std::rc::Rc;
 
 use super::body::split_body_statements;
@@ -328,11 +329,11 @@ fn signature_argument_by_name<'a>(
 /// | Declared `KType`               | Bound `KObject`                                  | Identity                                              |
 /// | ------------------------------ | ------------------------------------------------ | ----------------------------------------------------- |
 /// | `Signature { .. }` (slot)      | `KTypeValue(KType::Module { module, frame })`    | `KType::Module { module, frame }` (same carrier)      |
-/// | `AnyModule`                    | `KTypeValue(KType::Module { module, frame })`    | same                                                  |
-/// | `AnySignature`                 | `KTypeValue(KType::Signature { .. })`            | `KType::Signature { .. }` (same carrier)              |
-/// | `Type`                         | `KTypeValue(kt)`                                 | `kt.clone()`                                          |
-/// | `TypeExprRef`                  | `KTypeValue(kt)`                                 | `kt.clone()`                                          |
-/// | `TypeExprRef`                  | `TypeNameRef(t)`                                 | elaborated via `definition_scope.resolve_type_expr`   |
+/// | `OfKind(Module)`               | `KTypeValue(KType::Module { module, frame })`    | same                                                  |
+/// | `OfKind(Signature)`            | `KTypeValue(KType::Signature { .. })`            | `KType::Signature { .. }` (same carrier)              |
+/// | `OfKind(Any)`                  | `KTypeValue(kt)`                                 | `kt.clone()`                                          |
+/// | `OfKind(Proper)`               | `KTypeValue(kt)`                                 | `kt.clone()`                                          |
+/// | `OfKind(Proper)`               | `TypeNameRef(t)`                                 | elaborated via `definition_scope.resolve_type_expr`   |
 ///
 /// `Ok(None)`: carrier shape didn't match any row; skip the type-side install.
 /// `Err(TypeIdentityPendingAtDispatch)`: a `TypeNameRef` elaborates against
@@ -348,19 +349,19 @@ pub(crate) fn type_identity_for<'a>(
             KObject::KTypeValue(kt @ KType::Module { .. }) => Some(kt.clone()),
             _ => None,
         }),
-        KType::AnyModule => Ok(match obj {
+        KType::OfKind(KKind::Module) => Ok(match obj {
             KObject::KTypeValue(kt @ KType::Module { .. }) => Some(kt.clone()),
             _ => None,
         }),
-        KType::AnySignature => Ok(match obj {
+        KType::OfKind(KKind::Signature) => Ok(match obj {
             KObject::KTypeValue(kt @ KType::Signature { .. }) => Some(kt.clone()),
             _ => None,
         }),
-        KType::Type => Ok(match obj {
+        KType::OfKind(KKind::Any) => Ok(match obj {
             KObject::KTypeValue(kt) => Some(kt.clone()),
             _ => None,
         }),
-        KType::TypeExprRef => match obj {
+        KType::OfKind(KKind::Proper) => match obj {
             KObject::KTypeValue(kt) => Ok(Some(kt.clone())),
             // Resolved against the definition scope at call time, where every type the
             // signature names is already finalized — no lexical-order gating applies.

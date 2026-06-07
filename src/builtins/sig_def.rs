@@ -10,6 +10,7 @@
 //! `LET Type = TypeName` for abstract type declarations. The ascription operators
 //! (`:|` / `:!`) iterate the stored scope at ascription time.
 
+use crate::machine::model::types::KKind;
 use crate::machine::model::values::Signature;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
@@ -92,10 +93,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "SIG",
         sig(
-            KType::AnySignature,
+            KType::OfKind(KKind::Signature),
             vec![
                 kw("SIG"),
-                arg("name", KType::TypeExprRef),
+                arg("name", KType::OfKind(KKind::Proper)),
                 kw("="),
                 arg("body", KType::KExpression),
             ],

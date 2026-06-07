@@ -1,6 +1,7 @@
 //! Surface-name and `TypeName` → `KType` elaboration, plus join (LUB) for inferring
 //! container element types from heterogeneous values.
 
+use super::kkind::KKind;
 use super::ktype::KType;
 use super::record::Record;
 use super::recursive_set::NominalKind;
@@ -22,12 +23,12 @@ impl<'a> KType<'a> {
             "List" => Some(KType::List(Box::new(KType::Any))),
             "Dict" => Some(KType::Dict(Box::new(KType::Any), Box::new(KType::Any))),
             "KExpression" => Some(KType::KExpression),
-            "Type" => Some(KType::Type),
+            "Type" => Some(KType::OfKind(KKind::Any)),
             "Tagged" => Some(KType::AnyUserType {
                 kind: NominalKind::Tagged,
             }),
-            "Module" => Some(KType::AnyModule),
-            "Signature" => Some(KType::AnySignature),
+            "Module" => Some(KType::OfKind(KKind::Module)),
+            "Signature" => Some(KType::OfKind(KKind::Signature)),
             "Any" => Some(KType::Any),
             _ => None,
         }
@@ -236,8 +237,8 @@ mod tests {
     /// `List<Any>`.
     #[test]
     fn join_same_shape_functors_yields_shared_functor() {
-        let g1 = functor(vec![("x", KType::Number)], KType::AnyModule);
-        let g2 = functor(vec![("x", KType::Number)], KType::AnyModule);
+        let g1 = functor(vec![("x", KType::Number)], KType::OfKind(KKind::Module));
+        let g2 = functor(vec![("x", KType::Number)], KType::OfKind(KKind::Module));
         let joined = KType::join(&g1, &g2);
         assert_eq!(joined, g1.clone());
         // The element type a `[g1, g2]` list literal memoizes is the shared functor, not `Any`.
@@ -251,8 +252,8 @@ mod tests {
     /// coarsens to `Any` — same fall-through as functions.
     #[test]
     fn join_different_shape_functors_yields_any() {
-        let g1 = functor(vec![("x", KType::Number)], KType::AnyModule);
-        let g2 = functor(vec![("y", KType::Number)], KType::AnyModule);
+        let g1 = functor(vec![("x", KType::Number)], KType::OfKind(KKind::Module));
+        let g2 = functor(vec![("y", KType::Number)], KType::OfKind(KKind::Module));
         assert_eq!(KType::join(&g1, &g2), KType::Any);
         assert_eq!(KType::join_iter(vec![g1, g2]), KType::Any);
     }

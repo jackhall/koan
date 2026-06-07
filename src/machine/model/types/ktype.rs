@@ -7,9 +7,10 @@
 //! Predicates live in `ktype_predicates.rs`; elaboration lives in `ktype_resolution.rs`.
 //!
 //! Lifetime parameter `'a`: the module/signature variants (`Module`, `Signature`,
-//! `AbstractType`, `AnyModule`, `AnySignature`) hold `&'a Module<'a>` / `&'a Signature<'a>`
-//! arena pointers; every other variant is owned data and ignores the parameter.
+//! `AbstractType`) hold `&'a Module<'a>` / `&'a Signature<'a>` arena pointers; every other
+//! variant is owned data and ignores the parameter.
 
+use super::kkind::KKind;
 use super::record::Record;
 use super::recursive_set::{NominalKind, RecursiveSet};
 use super::signature::DeferredReturnSurface;
@@ -102,20 +103,20 @@ pub enum KType<'a> {
     /// `SigiledTypeExpr` part. Captures it raw (via `resolve_for`, as the inner
     /// `KObject::KExpression`) instead of eager-sub-dispatching, so a builtin can defer a
     /// param-referencing dotted/sigil return (`-> Er.Type`) to per-call elaboration. More
-    /// specific than [`KType::TypeExprRef`], so it wins the overload when both admit.
+    /// specific than [`KType::OfKind(KKind::Proper)`], so it wins the overload when both admit.
     SigiledTypeExpr,
     /// Lazy slot for a `:{…}` record type — the sibling of [`KType::SigiledTypeExpr`] for a
     /// [`ExpressionPart::RecordType`](crate::machine::model::ast::ExpressionPart::RecordType)
     /// part. Captures the field list raw (via `resolve_for`, as the inner
     /// `KObject::KExpression`) so the NEWTYPE record-repr declarator owns its elaboration and
-    /// threads its own binder name. More specific than [`KType::TypeExprRef`], so it wins the
+    /// threads its own binder name. More specific than [`KType::OfKind`], so it wins the
     /// overload when both admit.
     RecordType,
-    /// Meta-type for slots capturing a parsed type-name token. Carries the full structured
-    /// `TypeName` rather than flattening to a name string.
-    TypeExprRef,
-    /// Meta-type for first-class type-values; both tagged-union and struct schemas report this.
-    Type,
+    /// Type-accepting argument slot, carrying the shallow [`KKind`] it admits — and the
+    /// `ktype()` a non-module / non-signature type value reports (`OfKind(Proper)`). A module
+    /// or signature *value* reports its exact `Module { .. }` / `Signature { .. }` identity
+    /// instead; `kind_of` classifies a type into its `KKind`, matched against the slot's kind.
+    OfKind(KKind),
     /// External reference to a member of a [`RecursiveSet`]. The `(set ptr, index)` pair
     /// is the dispatch identity; the member's `kind` (read via `set.member(index).kind`)
     /// drives the `AnyUserType { kind }` wildcard. The whole set rides every `SetRef`, so
@@ -157,7 +158,7 @@ pub enum KType<'a> {
     /// A module signature: both the introspectable value (`decl_scope` via `sig`) and the
     /// dispatch constraint ("any module satisfying `sig`"). Disambiguated by position — as a
     /// parameter slot it matches a module whose `compatible_sigs` contains `sig.sig_id()`; as
-    /// a value (`KTypeValue(Signature { .. })`) it is matched by the `AnySignature` wildcard.
+    /// a value (`KTypeValue(Signature { .. })`) it is matched by the `OfKind(Signature)` wildcard.
     ///
     /// `pinned_slots` carries `WITH` abstract-type specializations (empty for a bare
     /// signature), each an abstract-type slot pinned to a concrete `KType`. The vec is
@@ -184,10 +185,6 @@ pub enum KType<'a> {
         source: AbstractSource<'a>,
         name: String,
     },
-    /// `:Module` slot wildcard — admits first-class modules.
-    AnyModule,
-    /// `:Signature` slot wildcard — admits first-class signature values.
-    AnySignature,
     /// Application of a higher-kinded type constructor to arg types. `ctor` is a `SetRef`
     /// to a `TypeConstructor`-kind member; `args` are the elaborated arg types. Structural
     /// equality by `(ctor, args)`.
@@ -233,8 +230,12 @@ impl<'a> KType<'a> {
             KType::KExpression => "KExpression".into(),
             KType::SigiledTypeExpr => "SigiledTypeExpr".into(),
             KType::RecordType => "RecordType".into(),
-            KType::TypeExprRef => "TypeExprRef".into(),
-            KType::Type => "Type".into(),
+            KType::OfKind(k) => match k {
+                KKind::Proper => "TypeExprRef".into(),
+                KKind::Any => "Type".into(),
+                KKind::Module => "Module".into(),
+                KKind::Signature => "Signature".into(),
+            },
             KType::SetRef { set, index } => set.member(*index).name.clone(),
             // `:(Maybe Some)` — the variant reached through its union. Round-trips through
             // the union-qualified type sigil.
@@ -263,8 +264,6 @@ impl<'a> KType<'a> {
             }
             KType::Module { module, .. } => module.path.clone(),
             KType::AbstractType { name, .. } => name.clone(),
-            KType::AnyModule => "Module".into(),
-            KType::AnySignature => "Signature".into(),
             KType::RecursiveRef(name) => name.clone(),
             KType::ConstructorApply { ctor, args } => {
                 let arg_names: Vec<String> = args.iter().map(|a| a.name()).collect();
@@ -277,6 +276,18 @@ impl<'a> KType<'a> {
     /// Stable entry point for diagnostic rendering. Reserved seam for cycle-aware printing.
     pub fn render(&self) -> String {
         self.name()
+    }
+
+    /// Classify a *type* into its shallow dispatch [`KKind`] — the value-side direction of
+    /// `OfKind`. A module is `Module`, a signature is `Signature`, every other type is
+    /// `Proper`. Never returns `KKind::Any` (a slot-only expectation). Applied to the type a
+    /// type value carries, to match it against an `OfKind` slot.
+    pub fn kind_of(&self) -> KKind {
+        match self {
+            KType::Module { .. } => KKind::Module,
+            KType::Signature { .. } => KKind::Signature,
+            _ => KKind::Proper,
+        }
     }
 }
 
@@ -317,11 +328,8 @@ impl<'a> PartialEq for KType<'a> {
             | (KExpression, KExpression)
             | (SigiledTypeExpr, SigiledTypeExpr)
             | (RecordType, RecordType)
-            | (TypeExprRef, TypeExprRef)
-            | (Type, Type)
-            | (Any, Any)
-            | (AnyModule, AnyModule)
-            | (AnySignature, AnySignature) => true,
+            | (Any, Any) => true,
+            (OfKind(a), OfKind(b)) => a == b,
             (List(a), List(b)) => a == b,
             (Dict(ka, va), Dict(kb, vb)) => ka == kb && va == vb,
             (Record(a), Record(b)) => a == b,
@@ -424,7 +432,8 @@ impl<'a> std::hash::Hash for KType<'a> {
         std::mem::discriminant(self).hash(state);
         match self {
             Number | Str | Bool | Null | Identifier | KExpression | SigiledTypeExpr
-            | RecordType | TypeExprRef | Type | Any | AnyModule | AnySignature => {}
+            | RecordType | Any => {}
+            OfKind(k) => k.hash(state),
             List(t) => t.hash(state),
             Dict(k, v) => {
                 k.hash(state);
@@ -665,8 +674,8 @@ mod tests {
 
     #[test]
     fn any_module_and_any_signature_render_surface_keywords() {
-        let am: KType<'_> = KType::AnyModule;
-        let asg: KType<'_> = KType::AnySignature;
+        let am: KType<'_> = KType::OfKind(KKind::Module);
+        let asg: KType<'_> = KType::OfKind(KKind::Signature);
         assert_eq!(am.name(), "Module");
         assert_eq!(asg.name(), "Signature");
     }
@@ -690,11 +699,14 @@ mod tests {
             (KType::Null, KType::Null),
             (KType::Identifier, KType::Identifier),
             (KType::KExpression, KType::KExpression),
-            (KType::TypeExprRef, KType::TypeExprRef),
-            (KType::Type, KType::Type),
+            (KType::OfKind(KKind::Proper), KType::OfKind(KKind::Proper)),
+            (KType::OfKind(KKind::Any), KType::OfKind(KKind::Any)),
             (KType::Any, KType::Any),
-            (KType::AnyModule, KType::AnyModule),
-            (KType::AnySignature, KType::AnySignature),
+            (KType::OfKind(KKind::Module), KType::OfKind(KKind::Module)),
+            (
+                KType::OfKind(KKind::Signature),
+                KType::OfKind(KKind::Signature),
+            ),
             (
                 KType::List(Box::new(KType::Number)),
                 KType::List(Box::new(KType::Number)),

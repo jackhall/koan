@@ -5,6 +5,7 @@
 //! load-bearing shape concept the auto-wrap and replay-park rails turn on.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::types::KKind;
 use crate::machine::model::types::{KType, SignatureElement};
 
 use super::KFunction;
@@ -19,7 +20,7 @@ use super::KFunction;
 /// - `wrap_indices`: bare-Identifier / bare-Type parts in non-literal-name slots to
 ///   auto-wrap as sub-Dispatches.
 /// - `ref_name_indices`: bare-Identifier / bare-Type parts in literal-name slots
-///   (`KType::Identifier` / `KType::TypeExprRef`) of a non-`binder_name` function; candidates
+///   (`KType::Identifier` / `KType::OfKind(KKind::Proper)`) of a non-`binder_name` function; candidates
 ///   for replay-park.
 ///
 /// `picked_has_binder_name` distinguishes binder-shaped expressions (literal-name slots are
@@ -77,10 +78,13 @@ impl<'a> KFunction<'a> {
                     (_, other) => {
                         // Admit bare names in non-literal-name slots so a sibling
                         // `KExpression+Expression` slot can still drive lazy candidacy —
-                        // e.g. a builtin pairing a bare-name-typed slot (`:AnySignature` /
+                        // e.g. a builtin pairing a bare-name-typed slot (`:Signature` /
                         // `Type(...)`) with a lazy `:KExpression` slot would otherwise lose it.
                         if is_bare_name(other)
-                            && !matches!(arg.ktype, KType::Identifier | KType::TypeExprRef)
+                            && !matches!(
+                                arg.ktype,
+                                KType::Identifier | KType::OfKind(KKind::Proper)
+                            )
                         {
                             continue;
                         }
@@ -123,7 +127,7 @@ impl<'a> KFunction<'a> {
             match &arg.ktype {
                 // Binders' literal-name slots are *declarations* — the slot already owns
                 // the name and must not park on its own placeholder.
-                KType::Identifier | KType::TypeExprRef => {
+                KType::Identifier | KType::OfKind(KKind::Proper) => {
                     if !picked_has_binder_name {
                         ref_name_indices.push(i);
                     }

@@ -12,6 +12,7 @@
 //! `pending_types`). The `Park` arm — a referenced type still in flight — never writes the
 //! cache, so a half-built identity cannot leak into a later memo hit.
 
+use crate::machine::model::types::KKind;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::NodeId;
@@ -219,10 +220,10 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
                 | KType::KExpression
                 | KType::SigiledTypeExpr
                 | KType::RecordType
-                | KType::TypeExprRef
-                | KType::Type
-                | KType::AnyModule
-                | KType::AnySignature
+                | KType::OfKind(KKind::Proper)
+                | KType::OfKind(KKind::Any)
+                | KType::OfKind(KKind::Module)
+                | KType::OfKind(KKind::Signature)
                 | KType::Any
                 | KType::AnyUserType { .. }
                 | KType::DeferredReturn(_)

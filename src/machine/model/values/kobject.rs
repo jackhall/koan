@@ -5,7 +5,7 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, KFuture};
 use crate::machine::model::ast::{KExpression, TypeName};
 use crate::machine::model::types::{
-    KType, NominalKind, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
+    KKind, KType, NominalKind, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
 };
 
 #[cfg(test)]
@@ -89,7 +89,7 @@ pub enum KObject<'a> {
     Record(Rc<Record<KObject<'a>>>, Box<Record<KType<'a>>>),
     /// First-class type value carrying the elaborated `KType` directly. The parser's
     /// surface `TypeName` is lowered at the seam so downstream consumers never see
-    /// surface syntax again. Slot kind is still `KType::TypeExprRef`; the slot is the
+    /// surface syntax again. Slot kind is still `KType::OfKind(KKind::Proper)`; the slot is the
     /// dispatch-position marker, the variant is the runtime value.
     ///
     /// Also the value-side carrier for first-class modules and signatures: a module
@@ -287,10 +287,10 @@ impl<'a> KObject<'a> {
             // `TypeExprRef` dispatch-position marker.
             KObject::KTypeValue(kt) => match kt {
                 KType::Module { .. } | KType::Signature { .. } => kt.clone(),
-                _ => KType::TypeExprRef,
+                _ => KType::OfKind(KKind::Proper),
             },
-            // Dispatch-equivalent to `KTypeValue` — both fill a `TypeExprRef`-typed slot.
-            KObject::TypeNameRef(_) => KType::TypeExprRef,
+            // Dispatch-equivalent to `KTypeValue` — both fill an `OfKind(Proper)`-typed slot.
+            KObject::TypeNameRef(_) => KType::OfKind(KKind::Proper),
             KObject::Wrapped { type_id, .. } => (*type_id).clone(),
         }
     }

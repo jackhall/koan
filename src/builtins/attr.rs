@@ -6,10 +6,11 @@
 //! access.
 //!
 //! The slot types are disjoint (`KType::Identifier` only matches `ExpressionPart::Identifier`;
-//! the `AnyUserType { kind: Newtype }` slot admits a `KObject::Wrapped`, and `AnyModule`
+//! the `AnyUserType { kind: Newtype }` slot admits a `KObject::Wrapped`, and `OfKind(Module)`
 //! admits modules), so dispatch picks unambiguously without a specificity tiebreaker.
 
 use crate::machine::execute::{resolve_type_leaf_carrier, TypeLeafCarrier};
+use crate::machine::model::types::KKind;
 use crate::machine::model::types::{AbstractSource, NominalKind};
 use crate::machine::model::values::{Module, NonWrappedRef};
 use crate::machine::model::{KObject, KType};
@@ -274,7 +275,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    let module_ty = KType::AnyModule;
+    let module_ty = KType::OfKind(KKind::Module);
     let newtype_ty = KType::AnyUserType {
         kind: NominalKind::Newtype,
     };
@@ -329,7 +330,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("ATTR"),
-                arg("s", KType::TypeExprRef),
+                arg("s", KType::OfKind(KKind::Proper)),
                 arg("field", KType::Identifier),
             ],
         ),
@@ -342,8 +343,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("ATTR"),
-                arg("s", KType::TypeExprRef),
-                arg("field", KType::TypeExprRef),
+                arg("s", KType::OfKind(KKind::Proper)),
+                arg("field", KType::OfKind(KKind::Proper)),
             ],
         ),
         body_type_lhs,
@@ -357,7 +358,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             vec![
                 kw("ATTR"),
                 arg("s", module_ty),
-                arg("field", KType::TypeExprRef),
+                arg("field", KType::OfKind(KKind::Proper)),
             ],
         ),
         body_module,

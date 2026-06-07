@@ -7,6 +7,7 @@
 mod type_constructor;
 mod with;
 
+use crate::machine::model::types::KKind;
 use crate::machine::model::types::Record;
 use crate::machine::model::KType;
 use crate::machine::Scope;
@@ -18,8 +19,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "TEMPLATE",
         sig(
-            KType::TypeExprRef,
-            vec![kw("TEMPLATE"), arg("param", KType::TypeExprRef)],
+            KType::OfKind(KKind::Proper),
+            vec![kw("TEMPLATE"), arg("param", KType::OfKind(KKind::Proper))],
         ),
         type_constructor::body,
     );
@@ -31,9 +32,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "WITH",
         sig(
-            KType::TypeExprRef,
+            KType::OfKind(KKind::Proper),
             vec![
-                arg("sig", KType::AnySignature),
+                arg("sig", KType::OfKind(KKind::Signature)),
                 kw("WITH"),
                 arg("bindings", KType::Record(Box::new(Record::new()))),
             ],

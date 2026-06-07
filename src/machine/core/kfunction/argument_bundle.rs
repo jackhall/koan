@@ -106,7 +106,7 @@ pub(crate) fn extract_ktype<'a>(bundle: &mut ArgumentBundle<'a>, name: &str) -> 
     }
 }
 
-/// Resolve a `KType::TypeExprRef` slot to its bare type name. Either carrier may occupy
+/// Resolve a `KType::OfKind(KKind::Proper)` slot to its bare type name. Either carrier may occupy
 /// the slot: a `KTypeValue` (parser `TypeName` resolved to a builtin) or a `TypeNameRef`
 /// (unresolved-leaf fallback). Structural / parameterized shapes from either carrier are
 /// rejected as `ShapeError`. `surface` is the keyword (`"STRUCT"`, `"UNION"`, …) embedded
@@ -127,10 +127,7 @@ pub(crate) fn extract_bare_type_name<'a>(
             | KType::KExpression
             | KType::SigiledTypeExpr
             | KType::RecordType
-            | KType::TypeExprRef
-            | KType::Type
-            | KType::AnyModule
-            | KType::AnySignature
+            | KType::OfKind(_)
             | KType::Any
             | KType::SetRef { .. }
             | KType::AnyUserType { .. }

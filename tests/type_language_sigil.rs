@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::{KObject, KType, ProjectedSchema, RecursiveSet};
+use koan::machine::model::{KKind, KObject, KType, ProjectedSchema, RecursiveSet};
 use koan::machine::{RuntimeArena, Scheduler, Scope};
 use koan::parse::parse;
 
@@ -180,8 +180,8 @@ fn sigil_functor_lowers_to_kfunctor() {
     match mk {
         KType::KFunctor { params, ret, .. } => {
             assert_eq!(params.len(), 1);
-            assert_eq!(params.get("Ty"), Some(&KType::AnySignature));
-            assert_eq!(*ret, KType::AnyModule);
+            assert_eq!(params.get("Ty"), Some(&KType::OfKind(KKind::Signature)));
+            assert_eq!(*ret, KType::OfKind(KKind::Module));
         }
         other => panic!("mk must be KType::KFunctor, got {other:?}"),
     }
@@ -278,10 +278,10 @@ fn sigil_functor_forward_reference_defers_via_combine() {
             // forward reference resolved through the deferral path.
             let ty = params.get("Ty").expect("param `Ty` must be present");
             assert!(
-                ty.name().contains("OrderedSig") || *ty == KType::AnySignature,
+                ty.name().contains("OrderedSig") || *ty == KType::OfKind(KKind::Signature),
                 "param `Ty` should carry OrderedSig identity, got {ty:?}",
             );
-            assert_eq!(*ret, KType::AnyModule);
+            assert_eq!(*ret, KType::OfKind(KKind::Module));
         }
         other => panic!("mk must be KType::KFunctor, got {other:?}"),
     }

@@ -2,6 +2,7 @@ use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{
     classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, TypeName,
 };
+use crate::machine::model::types::KKind;
 use crate::machine::model::types::KType;
 use crate::machine::model::{KObject, Parseable};
 
@@ -27,7 +28,7 @@ fn parts_of(items: Vec<ExpressionPart<'static>>) -> Vec<Spanned<ExpressionPart<'
 #[test]
 fn resolve_for_lowers_builtin_leaf_to_ktypevalue() {
     let part: ExpressionPart<'static> = ExpressionPart::Type(TypeName::leaf("Number".into()));
-    let slot = KType::TypeExprRef;
+    let slot = KType::OfKind(KKind::Proper);
     match part.resolve_for(&slot) {
         KObject::KTypeValue(kt) => assert_eq!(kt, KType::Number),
         _ => panic!("expected KTypeValue"),
@@ -37,7 +38,7 @@ fn resolve_for_lowers_builtin_leaf_to_ktypevalue() {
 #[test]
 fn resolve_for_defers_user_bound_leaf_to_typenameref() {
     let part: ExpressionPart<'static> = ExpressionPart::Type(TypeName::leaf("MyType".into()));
-    let slot = KType::TypeExprRef;
+    let slot = KType::OfKind(KKind::Proper);
     let r = part.resolve_for(&slot);
     assert!(matches!(r, KObject::TypeNameRef(_)));
 }

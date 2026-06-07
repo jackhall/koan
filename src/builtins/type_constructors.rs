@@ -13,6 +13,7 @@
 
 use crate::machine::execute::defer_field_list_via_combine;
 use crate::machine::model::ast::KExpression;
+use crate::machine::model::types::KKind;
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
     NominalKind, ProjectedSchema, RecursiveSet,
@@ -249,8 +250,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "LIST",
         sig(
-            KType::Type,
-            vec![kw("LIST"), kw("OF"), arg("elem", KType::Type)],
+            KType::OfKind(KKind::Any),
+            vec![kw("LIST"), kw("OF"), arg("elem", KType::OfKind(KKind::Any))],
         ),
         body_list_of,
     );
@@ -258,12 +259,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "MAP",
         sig(
-            KType::Type,
+            KType::OfKind(KKind::Any),
             vec![
                 kw("MAP"),
-                arg("k", KType::Type),
+                arg("k", KType::OfKind(KKind::Any)),
                 kw("->"),
-                arg("v", KType::Type),
+                arg("v", KType::OfKind(KKind::Any)),
             ],
         ),
         body_map,
@@ -272,11 +273,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "AS",
         sig(
-            KType::Type,
+            KType::OfKind(KKind::Any),
             vec![
-                arg("applied", KType::Type),
+                arg("applied", KType::OfKind(KKind::Any)),
                 kw("AS"),
-                arg("ctor", KType::Type),
+                arg("ctor", KType::OfKind(KKind::Any)),
             ],
         ),
         body_apply_as,
@@ -285,12 +286,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "FN",
         sig(
-            KType::Type,
+            KType::OfKind(KKind::Any),
             vec![
                 kw("FN"),
                 arg("sig", KType::KExpression),
                 kw("->"),
-                arg("ret", KType::Type),
+                arg("ret", KType::OfKind(KKind::Any)),
             ],
         ),
         body_fn,
@@ -299,12 +300,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "FUNCTOR",
         sig(
-            KType::Type,
+            KType::OfKind(KKind::Any),
             vec![
                 kw("FUNCTOR"),
                 arg("sig", KType::KExpression),
                 kw("->"),
-                arg("ret", KType::Type),
+                arg("ret", KType::OfKind(KKind::Any)),
             ],
         ),
         body_functor,
@@ -314,7 +315,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run_one, run_root_silent};
-    use crate::machine::model::{KObject, KType, Record};
+    use crate::machine::model::{KKind, KObject, KType, Record};
     use crate::machine::{RuntimeArena, Scope};
 
     #[test]
@@ -440,8 +441,11 @@ mod tests {
                 assert_eq!(
                     *kt,
                     KType::KFunctor {
-                        params: Record::from_pairs(vec![("Ty".into(), KType::AnySignature)]),
-                        ret: Box::new(KType::AnyModule),
+                        params: Record::from_pairs(vec![(
+                            "Ty".into(),
+                            KType::OfKind(KKind::Signature)
+                        )]),
+                        ret: Box::new(KType::OfKind(KKind::Module)),
                         body: None,
                     }
                 );
@@ -542,8 +546,8 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let expected = KType::KFunctor {
-            params: Record::from_pairs(vec![("Ty".into(), KType::AnySignature)]),
-            ret: Box::new(KType::AnyModule),
+            params: Record::from_pairs(vec![("Ty".into(), KType::OfKind(KKind::Signature))]),
+            ret: Box::new(KType::OfKind(KKind::Module)),
             body: None,
         };
         // Param name `Ty` (capitalized, a `Type` token) must survive the round-trip.

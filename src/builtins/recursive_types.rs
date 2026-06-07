@@ -16,6 +16,7 @@
 //! the sealed members into the enclosing scope and binds the group handle: exiting the block
 //! guarantees every forward reference resolved.
 
+use crate::machine::model::types::KKind;
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -209,11 +210,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "RECURSIVE TYPES",
         sig(
-            KType::Type,
+            KType::OfKind(KKind::Any),
             vec![
                 kw("RECURSIVE"),
                 kw("TYPES"),
-                arg("name", KType::TypeExprRef),
+                arg("name", KType::OfKind(KKind::Proper)),
                 kw("="),
                 arg("body", KType::KExpression),
             ],

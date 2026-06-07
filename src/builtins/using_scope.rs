@@ -20,6 +20,7 @@
 //! which anchors the call-site frame, which keeps the rooted `Rc` alive.
 //! Top-level modules carry no `Rc` and need no rooting.
 
+use crate::machine::model::types::KKind;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
 
@@ -81,7 +82,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("USING"),
-                arg("m", KType::AnyModule),
+                arg("m", KType::OfKind(KKind::Module)),
                 kw("SCOPE"),
                 arg("body", KType::KExpression),
             ],

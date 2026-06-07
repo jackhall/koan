@@ -2,6 +2,7 @@
 //! every language object implements. Bottom of the dispatch dependency stack — `values`
 //! and `runtime` build on it.
 
+mod kkind;
 mod ktraits;
 mod ktype;
 mod ktype_predicates;
@@ -12,6 +13,7 @@ mod resolver;
 mod signature;
 mod typed_field_list;
 
+pub use kkind::KKind;
 pub use ktraits::{Parseable, Serializable};
 pub use ktype::{AbstractSource, KType};
 pub use record::Record;

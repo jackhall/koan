@@ -13,6 +13,7 @@
 
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
+use crate::machine::model::types::KKind;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, KError, KErrorKind, NodeId,
@@ -37,13 +38,13 @@ fn typeexpr_from_carrier<'a>(obj: &KObject<'a>) -> Result<CarrierForm<'a>, KErro
             | KType::Str
             | KType::Bool
             | KType::Null
-            | KType::Type
-            | KType::AnySignature
-            | KType::AnyModule
+            | KType::OfKind(KKind::Any)
+            | KType::OfKind(KKind::Signature)
+            | KType::OfKind(KKind::Module)
             | KType::Any
             | KType::Identifier
             | KType::KExpression
-            | KType::TypeExprRef => Ok(CarrierForm::Leaf(TypeName::leaf(kt.name()))),
+            | KType::OfKind(KKind::Proper) => Ok(CarrierForm::Leaf(TypeName::leaf(kt.name()))),
             _ => Ok(CarrierForm::Direct(kt.clone())),
         },
         KObject::TypeNameRef(te) => Ok(CarrierForm::Raw(te.clone())),
@@ -190,7 +191,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             vec![
                 kw("VAL"),
                 arg("name", KType::Identifier),
-                arg("ty", KType::TypeExprRef),
+                arg("ty", KType::OfKind(KKind::Proper)),
             ],
         ),
         body,

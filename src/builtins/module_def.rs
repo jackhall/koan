@@ -8,6 +8,7 @@
 //! `BodyResult::DeferTo(combine_id)` so the parent binding lands at Combine-finish,
 //! not when MODULE's body returns to the dispatcher.
 
+use crate::machine::model::types::KKind;
 use crate::machine::model::values::Module;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
@@ -129,10 +130,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "MODULE",
         sig(
-            KType::AnyModule,
+            KType::OfKind(KKind::Module),
             vec![
                 kw("MODULE"),
-                arg("name", KType::TypeExprRef),
+                arg("name", KType::OfKind(KKind::Proper)),
                 kw("="),
                 arg("body", KType::KExpression),
             ],

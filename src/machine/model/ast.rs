@@ -1,5 +1,6 @@
 //! AST node types shared across the parse module.
 
+use crate::machine::model::types::KKind;
 use std::collections::HashMap;
 
 use crate::machine::core::source::{FileId, Span, Spanned};
@@ -156,7 +157,7 @@ impl<'a> ExpressionPart<'a> {
     /// `KFunction::bind` time, which has no `Scope` in hand.
     pub fn resolve_for(&self, slot: &crate::machine::model::KType<'a>) -> KObject<'a> {
         use crate::machine::model::types::KType;
-        if let (ExpressionPart::Type(t), KType::TypeExprRef) = (self, slot) {
+        if let (ExpressionPart::Type(t), KType::OfKind(KKind::Proper)) = (self, slot) {
             // Builtin shapes lower directly at the caller's lifetime; bare user names
             // defer to `Scope::resolve_type_expr` via the `TypeNameRef` carrier.
             return match KType::<'a>::from_type_expr(t) {

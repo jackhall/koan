@@ -6,6 +6,7 @@
 use super::*;
 use crate::builtins::default_scope;
 use crate::machine::core::RuntimeArena;
+use crate::machine::model::types::KKind;
 use crate::machine::model::values::{Module, Signature};
 
 #[test]
@@ -51,7 +52,7 @@ fn type_identity_for_any_module_yields_module_carrier() {
         module,
         frame: None,
     }));
-    let declared = KType::AnyModule;
+    let declared = KType::OfKind(KKind::Module);
     let identity = type_identity_for("p", obj, &declared, scope)
         .expect("Ok expected")
         .expect("module identity expected");
@@ -73,7 +74,7 @@ fn type_identity_for_signature_yields_signature_carrier() {
         sig,
         pinned_slots: Vec::new(),
     }));
-    let declared = KType::AnySignature;
+    let declared = KType::OfKind(KKind::Signature);
     let identity = type_identity_for("p", obj, &declared, scope)
         .expect("Ok expected")
         .expect("signature identity expected");
@@ -92,7 +93,7 @@ fn type_identity_for_type_yields_inner_ktype() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let inner = KType::List(Box::new(KType::Number));
     let obj = arena.alloc_object(KObject::KTypeValue(inner.clone()));
-    let declared = KType::Type;
+    let declared = KType::OfKind(KKind::Any);
     let identity = type_identity_for("p", obj, &declared, scope)
         .expect("Ok expected")
         .expect("type identity expected");
@@ -105,7 +106,7 @@ fn type_identity_for_type_expr_ref_kt_carrier_yields_inner_ktype() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let inner = KType::Number;
     let obj = arena.alloc_object(KObject::KTypeValue(inner.clone()));
-    let declared = KType::TypeExprRef;
+    let declared = KType::OfKind(KKind::Proper);
     let identity = type_identity_for("p", obj, &declared, scope)
         .expect("Ok expected")
         .expect("type identity expected");

@@ -1,3 +1,4 @@
+use crate::machine::model::types::KKind;
 use std::collections::HashMap;
 
 use crate::machine::core::PendingTypeEntry;
@@ -164,10 +165,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "UNION",
         sig(
-            KType::Type,
+            KType::OfKind(KKind::Any),
             vec![
                 kw("UNION"),
-                arg("name", KType::TypeExprRef),
+                arg("name", KType::OfKind(KKind::Proper)),
                 kw("="),
                 arg("schema", KType::KExpression),
             ],

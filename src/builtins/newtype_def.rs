@@ -15,6 +15,7 @@
 //! ([`finalize_nominal_member`], [`seal_recursive_refs`]) `UNION` uses, and the path a
 //! `RECURSIVE TYPES` block routes its `NEWTYPE` members through.
 
+use crate::machine::model::types::KKind;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -344,12 +345,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "NEWTYPE",
         sig(
-            KType::Type,
+            KType::OfKind(KKind::Any),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::TypeExprRef),
+                arg("name", KType::OfKind(KKind::Proper)),
                 kw("="),
-                arg("repr", KType::TypeExprRef),
+                arg("repr", KType::OfKind(KKind::Proper)),
             ],
         ),
         body,
@@ -362,10 +363,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "NEWTYPE",
         sig(
-            KType::Type,
+            KType::OfKind(KKind::Any),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::TypeExprRef),
+                arg("name", KType::OfKind(KKind::Proper)),
                 kw("="),
                 arg("repr", KType::SigiledTypeExpr),
             ],
@@ -380,10 +381,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "NEWTYPE",
         sig(
-            KType::Type,
+            KType::OfKind(KKind::Any),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::TypeExprRef),
+                arg("name", KType::OfKind(KKind::Proper)),
                 kw("="),
                 arg("repr", KType::RecordType),
             ],

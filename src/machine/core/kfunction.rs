@@ -200,6 +200,7 @@ mod tests {
     use crate::machine::core::{RuntimeArena, Scope};
     use crate::machine::model::ast::{KLiteral, TypeName};
     use crate::machine::model::types::{Argument, ExpressionSignature, KType, ReturnType};
+    use crate::machine::model::KKind;
 
     fn body_any<'a>(
         s: &'a Scope<'a>,
@@ -333,7 +334,7 @@ mod tests {
                 SignatureElement::Keyword("OP".into()),
                 SignatureElement::Argument(Argument {
                     name: "v".into(),
-                    ktype: KType::TypeExprRef,
+                    ktype: KType::OfKind(KKind::Proper),
                 }),
             ],
         };

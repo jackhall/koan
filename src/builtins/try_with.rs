@@ -13,6 +13,7 @@
 //! finish closure walks `<branches>` against the `Result`, dispatching the matched
 //! arm (per-call `CallArena` for `it`) or re-raising on no-match.
 
+use crate::machine::model::types::KKind;
 use std::rc::Rc;
 
 use crate::machine::core::LexicalFrame;
@@ -147,7 +148,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("TRY"),
                 arg("expr", KType::KExpression),
                 kw("->"),
-                arg("return_type", KType::TypeExprRef),
+                arg("return_type", KType::OfKind(KKind::Proper)),
                 kw("WITH"),
                 arg("branches", KType::KExpression),
             ],

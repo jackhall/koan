@@ -1,5 +1,6 @@
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::AbstractSource;
+use crate::machine::model::types::KKind;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, SchedulerHandle, Scope,
@@ -270,7 +271,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("LET"),
-                arg("name", KType::TypeExprRef),
+                arg("name", KType::OfKind(KKind::Proper)),
                 kw("="),
                 arg("value", KType::Any),
             ],

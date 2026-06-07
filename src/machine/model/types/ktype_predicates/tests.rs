@@ -171,7 +171,7 @@ fn record_value_admission_and_matches() {
     assert!(mismatch.accepts_part(&ExpressionPart::RecordLiteral(vec![])));
 }
 
-/// Admission table for `KType::Type::accepts_part`: bare builtin type tokens
+/// Admission table for `KType::accepts_part`: bare builtin type tokens
 /// and newtype / union `KTypeValue(UserType)` identities admit; module and signature
 /// carriers reject so the `:Type` vs `:Module` / `:Signature` overload distinction
 /// stays intact; non-type-denoting carriers reject.
@@ -183,7 +183,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     use std::collections::HashMap;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let t = KType::Type;
+    let t = KType::OfKind(KKind::Any);
     let kt_number: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Number));
     let kt_str: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Str));
     let kt_bool: &KObject<'_> = arena.alloc_object(KObject::KTypeValue(KType::Bool));
@@ -331,10 +331,10 @@ fn is_type_denoting_table() {
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
     assert!(sb_pinned.is_type_denoting());
-    assert!(KType::AnySignature.is_type_denoting());
-    assert!(KType::Type.is_type_denoting());
-    assert!(KType::TypeExprRef.is_type_denoting());
-    assert!(KType::AnyModule.is_type_denoting());
+    assert!(KType::OfKind(KKind::Signature).is_type_denoting());
+    assert!(KType::OfKind(KKind::Any).is_type_denoting());
+    assert!(KType::OfKind(KKind::Proper).is_type_denoting());
+    assert!(KType::OfKind(KKind::Module).is_type_denoting());
     // Wildcard newtype/tagged slots don't make their parameter a type binder —
     // the value carries no nominal identity the caller hasn't already named.
     assert!(!KType::AnyUserType {
@@ -371,7 +371,7 @@ fn is_type_denoting_table() {
 /// - Different `sig_id`s are incomparable.
 /// - Same `sig_id` with disjoint constraint keys is incomparable.
 /// - Same-key-different-`KType` is incomparable.
-/// - A `Signature` (pinned or not) strictly refines `AnyModule`.
+/// - A `Signature` (pinned or not) strictly refines `OfKind(Module)`.
 #[test]
 fn is_more_specific_for_pinned_signature_bound() {
     use crate::builtins::default_scope;
@@ -415,7 +415,7 @@ fn is_more_specific_for_pinned_signature_bound() {
         sig: ordered,
         pinned_slots: vec![("Elt".into(), KType::Number)],
     };
-    let any_module = KType::AnyModule;
+    let any_module = KType::OfKind(KKind::Module);
 
     assert!(pinned_number.is_more_specific_than(&bare));
     assert!(!bare.is_more_specific_than(&pinned_number));

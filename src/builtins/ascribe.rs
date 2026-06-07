@@ -5,7 +5,7 @@
 //! the inference scheduler.
 
 use crate::machine::model::types::{
-    AbstractSource, NominalKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet,
+    AbstractSource, KKind, NominalKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet,
 };
 use crate::machine::model::values::Module;
 use crate::machine::model::{KObject, KType};
@@ -245,11 +245,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         ":|",
         sig(
-            KType::AnyModule,
+            KType::OfKind(KKind::Module),
             vec![
-                arg("m", KType::AnyModule),
+                arg("m", KType::OfKind(KKind::Module)),
                 kw(":|"),
-                arg("s", KType::AnySignature),
+                arg("s", KType::OfKind(KKind::Signature)),
             ],
         ),
         body_opaque,
@@ -258,11 +258,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         ":!",
         sig(
-            KType::AnyModule,
+            KType::OfKind(KKind::Module),
             vec![
-                arg("m", KType::AnyModule),
+                arg("m", KType::OfKind(KKind::Module)),
                 kw(":!"),
-                arg("s", KType::AnySignature),
+                arg("s", KType::OfKind(KKind::Signature)),
             ],
         ),
         body_transparent,

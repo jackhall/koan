@@ -207,7 +207,7 @@ fn type_name_ref_summarize_renders_surface_form() {
 fn type_name_ref_ktype_is_type_expr_ref() {
     use crate::machine::model::ast::TypeName;
     let v = KObject::TypeNameRef(TypeName::leaf("MyT".into()));
-    assert_eq!(v.ktype(), KType::TypeExprRef);
+    assert_eq!(v.ktype(), KType::OfKind(KKind::Proper));
 }
 
 #[test]
