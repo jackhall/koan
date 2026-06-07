@@ -15,12 +15,13 @@ use std::collections::HashSet;
 
 pub enum FieldListOutcome<'a> {
     Done(Vec<(String, KType<'a>)>),
-    /// `sub_dispatches` carries `(slot_idx_in_schema_parts, wrapped_expression)`
-    /// so the caller can splice each resolved `KObject::KTypeValue` back into the
-    /// right slot before re-walking.
+    /// `sub_dispatches` carries each sigil field's wrapped expression in DFS walk
+    /// order. The caller schedules them in that order and, on the Combine re-walk,
+    /// feeds the resolved `KObject::KTypeValue`s back through the `results` iterator —
+    /// the walk re-descends in the same order, so no slot index is needed.
     Pending {
         park_producers: Vec<NodeId>,
-        sub_dispatches: Vec<(usize, KExpression<'a>)>,
+        sub_dispatches: Vec<KExpression<'a>>,
     },
     Err(String),
 }
@@ -31,19 +32,23 @@ pub enum FieldListOutcome<'a> {
 /// Combine for the merged set. `name_kind` selects which token shapes are valid as a
 /// field/parameter name (STRUCT / UNION pass `Identifier`; FN / FUNCTOR pass
 /// `IdentifierOrType` so capitalized type-parameter names like `Ty` are accepted).
+///
+/// `results` is `None` on the first walk (each sigil field schedules a sub-Dispatch,
+/// collected into `Pending.sub_dispatches`) and `Some(iter)` on the Combine re-walk
+/// (each sigil field consumes the next resolved `KObject::KTypeValue` from `iter` in DFS
+/// walk order instead of re-scheduling). Because the re-walk re-descends the field list
+/// in the same deterministic order the first walk produced the subs, positional
+/// consumption needs no slot index — and nested field-lists fall out for free.
 pub fn parse_typed_field_list_via_elaborator<'a>(
     expr: &KExpression<'a>,
     context: &str,
     name_kind: FieldNameKind,
     elaborator: &mut Elaborator<'_, 'a>,
+    mut results: Option<&mut dyn Iterator<Item = &'a KObject<'a>>>,
 ) -> FieldListOutcome<'a> {
     let mut parks: Vec<NodeId> = Vec::new();
-    let mut sub_dispatches: Vec<(usize, KExpression<'a>)> = Vec::new();
-    // `parse_pair_list` walks `[name, slot, name, slot, ...]`; slot index is `2*pair_idx + 1`.
-    let mut pair_idx: usize = 0;
+    let mut sub_dispatches: Vec<KExpression<'a>> = Vec::new();
     let parsed = parse_pair_list(expr, context, name_kind, |part, name| {
-        let slot_idx = 2 * pair_idx + 1;
-        pair_idx += 1;
         match part {
             ExpressionPart::Type(t) => match elaborate_type_expr(elaborator, t) {
                 ElabResult::Done(kt) => Ok(kt),
@@ -60,17 +65,33 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
             // are pre-resolved to `RecursiveRef` carriers first — `STRUCT Tree =
             // (children :(LIST OF Tree))` must lower Tree to `RecursiveRef("Tree")`.
             ExpressionPart::SigiledTypeExpr(boxed) => {
-                let rewritten =
-                    rewrite_threaded_self_refs(boxed, &elaborator.threaded, elaborator.scope);
-                let wrapped = KExpression::new(vec![Spanned::bare(
-                    ExpressionPart::SigiledTypeExpr(Box::new(rewritten)),
-                )]);
-                sub_dispatches.push((slot_idx, wrapped));
-                Ok(KType::Any)
+                match results.as_mut().and_then(|it| it.next()) {
+                    // Re-walk: take the resolved carrier. The KTypeValue check is the
+                    // single guard that a sub returning a value-by-expression is rejected.
+                    Some(KObject::KTypeValue(kt)) => Ok(kt.clone()),
+                    Some(other) => Err(format!(
+                        "{context} type for `{}` resolved to non-type value `{}`",
+                        name,
+                        other.summarize(),
+                    )),
+                    None if results.is_some() => Err(format!(
+                        "{context}: Combine re-walk found fewer resolved sub-dispatches than slots",
+                    )),
+                    // First walk: pre-resolve threaded self-refs, then schedule a sub-Dispatch.
+                    None => {
+                        let rewritten = rewrite_threaded_self_refs(
+                            boxed,
+                            &elaborator.threaded,
+                            elaborator.scope,
+                        );
+                        sub_dispatches.push(KExpression::new(vec![Spanned::bare(
+                            ExpressionPart::SigiledTypeExpr(Box::new(rewritten)),
+                        )]));
+                        Ok(KType::Any)
+                    }
+                }
             }
-            ExpressionPart::Future(crate::machine::model::KObject::KTypeValue(kt)) => {
-                Ok(kt.clone())
-            }
+            ExpressionPart::Future(KObject::KTypeValue(kt)) => Ok(kt.clone()),
             ExpressionPart::Future(other) => Err(format!(
                 "{context} type for `{}` resolved to non-type value `{}`",
                 name,

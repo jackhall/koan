@@ -11,15 +11,14 @@
 //! connector words like `OF` don't pay a bucket-walk cost on every dispatched
 //! parameterized type.
 
-use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::execute::defer_field_list_via_combine;
+use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
     NominalKind, ProjectedSchema, RecursiveSet,
 };
 use crate::machine::model::{KObject, KType, Record};
-use crate::machine::{
-    ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, NodeId, SchedulerHandle, Scope,
-};
+use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
 
 use super::{arg, err, kw, register_builtin, sig};
 
@@ -205,22 +204,32 @@ fn build_carrier<'a>(
         kind.context(),
         kind.field_name_kind(),
         &mut elaborator,
+        None,
     ) {
         FieldListOutcome::Done(fields) => {
             BodyResult::Value(finalize_carrier(scope, fields, ret, kind))
         }
         FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
+        // An anonymous function/functor type has no self-reference binder, so the
+        // deferral threads no name and carries no pending-binder guard.
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,
-        } => defer_via_combine(
+        } => defer_field_list_via_combine(
             scope,
             sched,
             sig_expr,
-            ret,
             park_producers,
             sub_dispatches,
-            kind,
+            kind.context(),
+            kind.field_name_kind(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            Box::new(move |scope, fields| {
+                BodyResult::Value(finalize_carrier(scope, fields, ret, kind))
+            }),
         ),
     }
 }
@@ -250,72 +259,6 @@ fn finalize_carrier<'a>(
         CarrierKind::Record => KType::Record(Box::new(record)),
     };
     scope.arena.alloc_object(KObject::KTypeValue(kt))
-}
-
-/// Schedule a `Combine` over `park_producers` plus owned sub-Dispatches for
-/// sigiled-type-expression params (`xs :(LIST OF Number)`), then re-walk the parameter
-/// list in the finish closure. Mirrors [`super::struct_def::defer_struct_via_combine`]
-/// minus the named-binder bookkeeping — an anonymous function type has no self-reference
-/// binder, so there is no `pending_guard` / `insert_pending_type` / threaded name.
-#[allow(clippy::too_many_arguments)]
-fn defer_via_combine<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
-    sig_expr: KExpression<'a>,
-    ret: KType<'a>,
-    park_producers: Vec<NodeId>,
-    sub_dispatches: Vec<(usize, KExpression<'a>)>,
-    kind: CarrierKind,
-) -> BodyResult<'a> {
-    let context = kind.context();
-    // Build splice_layout before scheduling so each sub-Dispatch's `results_pos` matches
-    // its position in the combined deps vector (same `park_count + owned_subs.len()`
-    // formula as struct_def).
-    let park_count = park_producers.len();
-    let mut owned_subs: Vec<NodeId> = Vec::with_capacity(sub_dispatches.len());
-    let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
-    for (slot_idx, sub_expr) in sub_dispatches {
-        let id = sched.add_dispatch(sub_expr, scope);
-        splice_layout.push((slot_idx, park_count + owned_subs.len()));
-        owned_subs.push(id);
-    }
-    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
-        // Splice sub-Dispatch results into the parameter list as `Future(_)` carriers
-        // for the re-walk's `Future(KTypeValue(_))` arm.
-        let mut spliced_parts = sig_expr.parts.clone();
-        for &(slot_idx, results_pos) in &splice_layout {
-            let obj = results[results_pos];
-            if !matches!(obj, KObject::KTypeValue(_)) {
-                return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
-                    "{context} slot at part-index {slot_idx} expected a type expression, \
-                     got a {} value",
-                    obj.ktype().name(),
-                ))));
-            }
-            spliced_parts[slot_idx].value = ExpressionPart::Future(obj);
-        }
-        let spliced_sig = KExpression::new(spliced_parts);
-        let mut elaborator = Elaborator::new(scope);
-        match parse_typed_field_list_via_elaborator(
-            &spliced_sig,
-            context,
-            kind.field_name_kind(),
-            &mut elaborator,
-        ) {
-            FieldListOutcome::Done(fields) => {
-                BodyResult::Value(finalize_carrier(scope, fields, ret.clone(), kind))
-            }
-            FieldListOutcome::Err(msg) => BodyResult::Err(KError::new(KErrorKind::ShapeError(msg))),
-            FieldListOutcome::Pending { .. } => {
-                BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
-                    "{context}: forward type reference still unresolved after Combine wake — \
-                     every producer was terminal by invariant; scheduling inconsistency"
-                ))))
-            }
-        }
-    });
-    let combine_id = sched.add_combine(owned_subs, park_producers, scope, finish);
-    BodyResult::DeferTo(combine_id)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use crate::machine::core::{PendingBinderGuard, PendingTypeEntry};
+use crate::machine::core::PendingTypeEntry;
+use crate::machine::execute::defer_field_list_via_combine;
 use crate::machine::model::types::{
     finalize_nominal_member, parse_typed_field_list_via_elaborator, seal_recursive_refs,
     Elaborator, FieldListOutcome, FieldNameKind, NominalKind, NominalSchema, SchemaSealResult,
@@ -8,8 +9,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
-    SchedulerHandle, Scope,
+    ArgumentBundle, BindingIndex, BodyResult, Frame, KError, KErrorKind, SchedulerHandle, Scope,
 };
 
 use crate::machine::model::ast::KExpression;
@@ -68,6 +68,7 @@ pub fn body<'a>(
         "UNION schema",
         FieldNameKind::Identifier,
         &mut elaborator,
+        None,
     );
     // Non-nominal: the UNION name obeys source order like any other type name.
     let bind_index = chain
@@ -80,17 +81,25 @@ pub fn body<'a>(
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,
-        } => defer_union_via_combine(
-            scope,
-            sched,
-            name,
-            schema_expr,
-            park_producers,
-            sub_dispatches,
-            pending_guard,
-            bind_index,
-            chain,
-        ),
+        } => {
+            let name_for_finish = name.clone();
+            defer_field_list_via_combine(
+                scope,
+                sched,
+                schema_expr,
+                park_producers,
+                sub_dispatches,
+                "UNION schema",
+                FieldNameKind::Identifier,
+                vec![name.clone()],
+                chain,
+                Some(pending_guard),
+                Some(Frame::bare("<union>", format!("UNION {name} schema"))),
+                Box::new(move |scope, fields| {
+                    finalize_union(scope, name_for_finish, fields, bind_index)
+                }),
+            )
+        }
     }
 }
 
@@ -141,72 +150,6 @@ fn finalize_union<'a>(
         )))),
         SealOutcome::Rebind(e) => err(e),
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn defer_union_via_combine<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
-    name: String,
-    schema_expr: KExpression<'a>,
-    park_producers: Vec<NodeId>,
-    sub_dispatches: Vec<(usize, KExpression<'a>)>,
-    pending_guard: PendingBinderGuard<'a>,
-    bind_index: BindingIndex,
-    chain: Option<std::rc::Rc<crate::machine::core::LexicalFrame>>,
-) -> BodyResult<'a> {
-    use crate::machine::model::ast::ExpressionPart;
-    let name_for_finish = name.clone();
-    let park_count = park_producers.len();
-    let mut owned_subs: Vec<NodeId> = Vec::with_capacity(sub_dispatches.len());
-    let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
-    for (slot_idx, sub_expr) in sub_dispatches {
-        let id = sched.add_dispatch(sub_expr, scope);
-        splice_layout.push((slot_idx, park_count + owned_subs.len()));
-        owned_subs.push(id);
-    }
-    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
-        let _pending_guard = pending_guard;
-        let mut spliced_parts = schema_expr.parts.clone();
-        for &(slot_idx, results_pos) in &splice_layout {
-            let obj = results[results_pos];
-            if !matches!(obj, KObject::KTypeValue(_)) {
-                return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
-                    "UNION schema slot at part-index {slot_idx} expected a type expression, \
-                     got a {} value",
-                    obj.ktype().name(),
-                ))));
-            }
-            spliced_parts[slot_idx].value = ExpressionPart::Future(obj);
-        }
-        let spliced_schema = KExpression::new(spliced_parts);
-        let mut elaborator = Elaborator::new(scope)
-            .with_threaded([name_for_finish.clone()])
-            .with_chain(chain.clone());
-        match parse_typed_field_list_via_elaborator(
-            &spliced_schema,
-            "UNION schema",
-            FieldNameKind::Identifier,
-            &mut elaborator,
-        ) {
-            FieldListOutcome::Done(fields) => {
-                finalize_union(scope, name_for_finish.clone(), fields, bind_index)
-            }
-            FieldListOutcome::Err(msg) => BodyResult::Err(
-                KError::new(KErrorKind::ShapeError(msg)).with_frame(Frame::bare(
-                    "<union>",
-                    format!("UNION {} schema", name_for_finish),
-                )),
-            ),
-            FieldListOutcome::Pending { .. } => {
-                BodyResult::Err(KError::new(KErrorKind::ShapeError(
-                    "UNION schema elaboration parked again after Combine wake".to_string(),
-                )))
-            }
-        }
-    });
-    let combine_id = sched.add_combine(owned_subs, park_producers, scope, finish);
-    BodyResult::DeferTo(combine_id)
 }
 
 /// Dispatch-time placeholder extractor: pulls the binder name from `parts[1]`'s

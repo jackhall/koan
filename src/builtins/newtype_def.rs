@@ -20,7 +20,8 @@ use crate::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_kexpression, extract_ktype, extract_type_name_ref,
 };
 use crate::machine::core::source::Spanned;
-use crate::machine::core::{ApplyOutcome, LexicalFrame, PendingBinderGuard, PendingTypeEntry};
+use crate::machine::core::{ApplyOutcome, LexicalFrame, PendingTypeEntry};
+use crate::machine::execute::defer_field_list_via_combine;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
     finalize_nominal_member, parse_typed_field_list_via_elaborator, seal_recursive_refs, Elaborator,
@@ -30,8 +31,8 @@ use crate::machine::model::types::{
 use crate::machine::model::values::KObject;
 use crate::machine::model::KType;
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
-    Resolution, SchedulerHandle, Scope,
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, Resolution,
+    SchedulerHandle, Scope,
 };
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
@@ -203,6 +204,7 @@ fn elaborate_record_repr<'a>(
         "NEWTYPE record repr",
         FieldNameKind::Identifier,
         &mut elaborator,
+        None,
     );
     match outcome {
         FieldListOutcome::Done(sealed) => finalize_record_newtype(scope, name, sealed, bind_index),
@@ -210,17 +212,25 @@ fn elaborate_record_repr<'a>(
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,
-        } => defer_record_via_combine(
-            scope,
-            sched,
-            name,
-            fields,
-            park_producers,
-            sub_dispatches,
-            pending_guard,
-            bind_index,
-            chain,
-        ),
+        } => {
+            let name_for_finish = name.clone();
+            defer_field_list_via_combine(
+                scope,
+                sched,
+                fields,
+                park_producers,
+                sub_dispatches,
+                "NEWTYPE record repr",
+                FieldNameKind::Identifier,
+                vec![name.clone()],
+                chain,
+                Some(pending_guard),
+                Some(Frame::bare("<newtype>", format!("NEWTYPE {name}"))),
+                Box::new(move |scope, sealed| {
+                    finalize_record_newtype(scope, name_for_finish, sealed, bind_index)
+                }),
+            )
+        }
     }
 }
 
@@ -275,74 +285,6 @@ fn finalize_record_newtype<'a>(
     }
 }
 
-/// Schedule a `Combine` over `park_producers` plus owned sub-Dispatches for sigiled field
-/// types (`next :(LIST OF Node)`), then re-run the field-list elaboration in the finish closure.
-/// Mirrors the retired `STRUCT` declarator's `defer_struct_via_combine`. Combine layout:
-/// `[park_producers ++ owned_subs…]`; `splice_layout[k] = (slot_idx, results_pos)` splices
-/// `results[results_pos]` into `fields.parts[slot_idx]` as `Future(_)` before the re-walk. The
-/// `pending_guard` moves into the closure so its Drop fires on any finish arm.
-#[allow(clippy::too_many_arguments)]
-fn defer_record_via_combine<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
-    name: String,
-    fields: KExpression<'a>,
-    park_producers: Vec<NodeId>,
-    sub_dispatches: Vec<(usize, KExpression<'a>)>,
-    pending_guard: PendingBinderGuard<'a>,
-    bind_index: BindingIndex,
-    chain: Option<Rc<LexicalFrame>>,
-) -> BodyResult<'a> {
-    let name_for_finish = name.clone();
-    let park_count = park_producers.len();
-    let mut owned_subs: Vec<NodeId> = Vec::with_capacity(sub_dispatches.len());
-    let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
-    for (slot_idx, sub_expr) in sub_dispatches {
-        let id = sched.add_dispatch(sub_expr, scope);
-        splice_layout.push((slot_idx, park_count + owned_subs.len()));
-        owned_subs.push(id);
-    }
-    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
-        let _pending_guard = pending_guard;
-        let mut spliced_parts = fields.parts.clone();
-        for &(slot_idx, results_pos) in &splice_layout {
-            let obj = results[results_pos];
-            if !matches!(obj, KObject::KTypeValue(_)) {
-                return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
-                    "NEWTYPE record repr slot at part-index {slot_idx} expected a type \
-                     expression, got a {} value",
-                    obj.ktype().name(),
-                ))));
-            }
-            spliced_parts[slot_idx].value = ExpressionPart::Future(obj);
-        }
-        let spliced = KExpression::new(spliced_parts);
-        let mut elaborator = Elaborator::new(scope)
-            .with_threaded([name_for_finish.clone()])
-            .with_chain(chain.clone());
-        match parse_typed_field_list_via_elaborator(
-            &spliced,
-            "NEWTYPE record repr",
-            FieldNameKind::Identifier,
-            &mut elaborator,
-        ) {
-            FieldListOutcome::Done(sealed) => {
-                finalize_record_newtype(scope, name_for_finish.clone(), sealed, bind_index)
-            }
-            FieldListOutcome::Err(msg) => BodyResult::Err(
-                KError::new(KErrorKind::ShapeError(msg))
-                    .with_frame(Frame::bare("<newtype>", format!("NEWTYPE {name_for_finish}"))),
-            ),
-            FieldListOutcome::Pending { .. } => BodyResult::Err(KError::new(
-                KErrorKind::ShapeError(
-                    "NEWTYPE record repr elaboration parked again after Combine wake".to_string(),
-                ),
-            )),
-        }
-    });
-    let combine_id = sched.add_combine(owned_subs, park_producers, scope, finish);
-    BodyResult::DeferTo(combine_id)
-}
 
 /// A non-record sigil repr (`NEWTYPE Stream = :(LIST OF Number)`): no self-reference to thread, so
 /// re-wrap the captured sigil and sub-dispatch it to a resolved `KType`, then seal a plain Newtype

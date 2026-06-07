@@ -32,6 +32,7 @@ use super::scheduler::Scheduler;
 pub(in crate::machine::execute) mod apply_callable;
 mod constructors;
 mod ctx;
+pub(in crate::machine) mod field_list;
 pub(in crate::machine::execute) mod fn_value;
 pub(in crate::machine::execute) mod head_deferred;
 pub(in crate::machine::execute) mod keyworded;
@@ -51,6 +52,7 @@ use keyworded::KeywordedState;
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
 pub use resolve_type_expr::ResolveTypeExprOutcome;
+pub(crate) use field_list::defer_field_list_via_combine;
 pub(crate) use resolve_type_expr::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use single_poll::{BareIdState, BareTypeState, CtorState, LitState, SigilState};
 
