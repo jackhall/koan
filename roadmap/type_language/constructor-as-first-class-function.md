@@ -36,10 +36,10 @@ the function it applies.
 
 ## Dependencies
 
-**Requires:**
+The single `NominalKind::Newtype` construction path this reifies a function over already
+shipped with the product-side struct → record-repr-newtype collapse, so there is no open
+prerequisite.
 
-- [Collapse `STRUCT` into a record-repr `NEWTYPE`](struct-newtype-collapse.md) — supplies the
-  single `NominalKind::Newtype` construction path a constructor function reifies over, instead of
-  a per-kind struct/newtype split.
+**Requires:** none — foundation.
 
 **Unblocks:** none tracked yet.

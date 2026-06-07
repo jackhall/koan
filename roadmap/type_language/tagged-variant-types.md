@@ -88,8 +88,8 @@ eliminate the same way — but neither blocks the other.
   every other typed value.
 - [Branch-arm return contract](../../design/execution-model.md#arms-as-own-blocks)
   — the `MATCH` arm machinery this work lowers into type-dispatch.
-- [Collapse `STRUCT` into a record-repr `NEWTYPE`](struct-newtype-collapse.md) — landing
-  this product-side phase first makes `Newtype` the sole nominal-over-shape primitive, so
-  each variant builds directly on it instead of a parallel mechanism.
+- [Record-repr NEWTYPE recursion](struct-newtype-collapse.md) — establishes the binder-name
+  back-edge threading a recursive tagged union reuses to thread a `SetLocal` through its
+  union name. (The product-side `Newtype` primitive each variant builds on already shipped.)
 
 **Unblocks:** none tracked yet.
