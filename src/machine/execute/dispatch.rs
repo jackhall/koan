@@ -54,7 +54,7 @@ pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_
 pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
 pub use resolve_type_expr::ResolveTypeExprOutcome;
 pub(crate) use resolve_type_expr::{resolve_type_leaf_carrier, TypeLeafCarrier};
-use single_poll::{BareIdState, BareTypeState, CtorState, LitState, SigilState};
+use single_poll::{BareTypeState, CtorState};
 
 /// The shape classification and classifier live in
 /// [`crate::machine::model::ast`] (pure-structural, cached on the node at parse
@@ -334,18 +334,6 @@ impl<'a> EagerSubsTrack<'a> {
             picked: None,
         }
     }
-
-    pub(in crate::machine::execute) fn fn_value(
-        working_expr: KExpression<'a>,
-        subs: Vec<(usize, NodeId)>,
-        picked: &'a KFunction<'a>,
-    ) -> Self {
-        Self {
-            working_expr,
-            subs,
-            picked: Some(picked),
-        }
-    }
 }
 
 /// One variant per [`DispatchShape`], plus the pre-classification
@@ -355,7 +343,6 @@ impl<'a> EagerSubsTrack<'a> {
 /// past clippy's `large_enum_variant` threshold.
 pub(in crate::machine::execute) enum DispatchState<'a> {
     Initialized(Initialized),
-    BareIdentifier(BareIdState<'a>),
     BareTypeLeaf(BareTypeState<'a>),
     /// Boxed for the same reason as `Keyworded` / `FunctionValueCall`: the
     /// `CtorState` carries an eager-subs `CtorTrack` (schemas, staged values) or a
@@ -366,8 +353,6 @@ pub(in crate::machine::execute) enum DispatchState<'a> {
     /// Shared by the `HeadDeferred` and `TypeHeadDeferred` shapes; the state's
     /// `type_only` flag selects the admitted-arm set on resume.
     HeadDeferred(Box<HeadDeferredState<'a>>),
-    LiteralPassThrough(LitState<'a>),
-    SigiledTypeExpr(SigilState<'a>),
     Keyworded(Box<KeywordedState<'a>>),
 }
 

@@ -36,36 +36,6 @@ pub enum ElabResult<'a> {
     Unbound(String),
 }
 
-impl<'a> ElabResult<'a> {
-    /// Reduce sub-elaboration results with precedence **Unbound > Park > Done**.
-    /// `Ok` preserves input order; `Err` carries the first `Unbound` or merged `Park`
-    /// producers.
-    fn collect<I: IntoIterator<Item = ElabResult<'a>>>(
-        results: I,
-    ) -> Result<Vec<KType<'a>>, ElabResult<'a>> {
-        let iter = results.into_iter();
-        let (lower, _) = iter.size_hint();
-        let mut dones: Vec<KType<'a>> = Vec::with_capacity(lower);
-        let mut parks: Vec<NodeId> = Vec::new();
-        let mut unbound: Option<String> = None;
-        for r in iter {
-            match r {
-                ElabResult::Done(kt) => dones.push(kt),
-                ElabResult::Park(ps) => parks.extend(ps),
-                ElabResult::Unbound(m) if unbound.is_none() => unbound = Some(m),
-                ElabResult::Unbound(_) => {}
-            }
-        }
-        if let Some(m) = unbound {
-            Err(ElabResult::Unbound(m))
-        } else if !parks.is_empty() {
-            Err(ElabResult::Park(parks))
-        } else {
-            Ok(dones)
-        }
-    }
-}
-
 /// Per-elaboration-walk state.
 ///
 /// - `threaded`: binder names currently being elaborated, so a self-reference becomes

@@ -41,12 +41,9 @@ pub(crate) enum ReturnTypeState<'a> {
     ExprToSubDispatch(KExpression<'a>),
 }
 
-/// `TypeExpr` plumbs the structured form verbatim so a re-elaboration sees the same
-/// surface shape — rendering and re-parsing would strip it.
 pub(crate) enum ReturnTypeCapture<'a> {
     Resolved(KType<'a>),
     Unresolved(String),
-    TypeExpr(TypeName),
     Deferred(DeferredReturn<'a>),
     /// `results_pos` indexes the Combine closure's `&[Carried<'a>]` slice.
     ReturnTypeExpr {
@@ -264,15 +261,6 @@ pub(super) fn resolve_capture_at_finish<'a>(
                 },
             }
         }
-        ReturnTypeCapture::TypeExpr(t) => match scope.resolve_type_expr(&t, None) {
-            ResolveTypeExprOutcome::Done(kt) => Ok(ReturnType::Resolved(kt.clone())),
-            ResolveTypeExprOutcome::Park(_) => Err(KError::new(KErrorKind::ShapeError(
-                "FN return type parked after Combine wake".to_string(),
-            ))),
-            ResolveTypeExprOutcome::Unbound(msg) => Err(KError::new(KErrorKind::ShapeError(
-                format!("FN return-type slot: {msg}"),
-            ))),
-        },
         ReturnTypeCapture::Deferred(d) => Ok(ReturnType::Deferred(d)),
         ReturnTypeCapture::ReturnTypeExpr { results_pos } => match results[results_pos] {
             Carried::Type(kt) => Ok(ReturnType::Resolved(kt.clone())),

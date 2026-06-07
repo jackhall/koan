@@ -791,7 +791,7 @@ fn keyworded_parked_carrier_expr_reads_state() {
         Initialized {
             pre_subs: Vec::new(),
         },
-        BareNameParkTrack::new(carrier_expr(), Vec::new()),
+        BareNameParkTrack::new(carrier_expr()),
     )));
     assert_eq!(
         with_bare_name
@@ -805,7 +805,7 @@ fn keyworded_parked_carrier_expr_reads_state() {
         Initialized {
             pre_subs: Vec::new(),
         },
-        OverloadParkTrack::new(carrier_expr(), Vec::new()),
+        OverloadParkTrack::new(carrier_expr()),
     )));
     assert_eq!(
         with_overload

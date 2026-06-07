@@ -19,9 +19,6 @@ fn ty(s: &str) -> ExpressionPart<'static> {
 fn expr(parts: Vec<ExpressionPart<'static>>) -> ExpressionPart<'static> {
     ExpressionPart::expression(parts)
 }
-fn sp(p: ExpressionPart<'static>) -> Spanned<ExpressionPart<'static>> {
-    Spanned::bare(p)
-}
 fn parts_of(items: Vec<ExpressionPart<'static>>) -> Vec<Spanned<ExpressionPart<'static>>> {
     items.into_iter().map(Spanned::bare).collect()
 }

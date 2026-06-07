@@ -40,14 +40,6 @@ impl<'a> FnValueHeadPlaceholderTrack<'a> {
 }
 
 impl<'a> FnValueState<'a> {
-    pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self {
-            init,
-            eager_subs: None,
-            head_placeholder: None,
-        }
-    }
-
     pub(in crate::machine::execute) fn with_eager_subs(
         init: Initialized,
         track: EagerSubsTrack<'a>,

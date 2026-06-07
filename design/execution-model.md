@@ -1293,7 +1293,7 @@ The chain is read by name resolution through
 the lookup primitive that returns the consumer's statement index in a
 given scope (or `None` when that scope is not on the chain — "already
 returned", visibility unconstrained). The
-[`visible`](../src/machine/core/scope.rs) predicate consumes it as
+[`Bindings::visible`](../src/machine/core/bindings.rs) predicate consumes it as
 `b.idx < cutoff` — one rule across the value and type languages; the
 value-side `Scope::resolve_with_chain`, the type-side `resolve_type_with_chain`, the
 bare-identifier `lookup_with_chain`, and the per-scope

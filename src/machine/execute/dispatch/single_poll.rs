@@ -21,13 +21,7 @@ use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::{DispatchCtx, DispatchState, Initialized};
 
-pub(in crate::machine::execute) struct BareIdState<'a> {
-    pub(in crate::machine::execute) init: Initialized,
-    _ph: PhantomData<&'a ()>,
-}
-
 pub(in crate::machine::execute) struct BareTypeState<'a> {
-    pub(in crate::machine::execute) init: Initialized,
     /// Set when `bare_type_leaf` parked on a still-finalizing referent (a
     /// `RECURSIVE TYPES` member caught mid-seal). On resume the leaf re-resolves
     /// against the now-sealed binding through the same memoized bridge.
@@ -100,40 +94,11 @@ pub(in crate::machine::execute) enum CtorKind<'a> {
     },
 }
 
-pub(in crate::machine::execute) struct SigilState<'a> {
-    pub(in crate::machine::execute) init: Initialized,
-    _ph: PhantomData<&'a ()>,
-}
-
-pub(in crate::machine::execute) struct LitState<'a> {
-    pub(in crate::machine::execute) init: Initialized,
-    _ph: PhantomData<&'a ()>,
-}
-
-impl<'a> BareIdState<'a> {
-    pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self {
-            init,
-            _ph: PhantomData,
-        }
-    }
-}
-
 impl<'a> BareTypeState<'a> {
-    pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self {
-            init,
-            park: None,
-            _ph: PhantomData,
-        }
-    }
-
     pub(in crate::machine::execute) fn with_park(
-        init: Initialized,
         park: BareTypeParkTrack,
     ) -> Self {
         Self {
-            init,
             park: Some(park),
             _ph: PhantomData,
         }
@@ -161,14 +126,6 @@ impl<'a> BareTypeState<'a> {
 }
 
 impl<'a> CtorState<'a> {
-    pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self {
-            init,
-            track: None,
-            head_placeholder: None,
-        }
-    }
-
     pub(in crate::machine::execute) fn with_track(init: Initialized, track: CtorTrack<'a>) -> Self {
         Self {
             init,
@@ -240,24 +197,6 @@ impl<'a> CtorState<'a> {
     }
 }
 
-impl<'a> SigilState<'a> {
-    pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self {
-            init,
-            _ph: PhantomData,
-        }
-    }
-}
-
-impl<'a> LitState<'a> {
-    pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self {
-            init,
-            _ph: PhantomData,
-        }
-    }
-}
-
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
 pub(super) fn bare_identifier<'a>(
@@ -318,15 +257,12 @@ pub(super) fn bare_type_leaf<'a>(
                 return bare_type_leaf(ctx, t, scope, idx);
             }
             ctx.add_park_edge(producer, NodeId(idx));
-            let init = Initialized {
-                pre_subs: Vec::new(),
-            };
             let track = BareTypeParkTrack {
                 leaf: t.clone(),
                 producer,
             };
             ctx.replace_with_parked_dispatch(DispatchState::BareTypeLeaf(BareTypeState::with_park(
-                init, track,
+                track,
             )))
         }
     }

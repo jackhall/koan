@@ -52,18 +52,13 @@ impl<'a> ParkTrack<'a> {
 /// bare-name token — so resume re-runs `initial` against it.
 pub(in crate::machine::execute) struct BareNameParkTrack<'a> {
     pub(in crate::machine::execute) working_expr: KExpression<'a>,
-    pub(in crate::machine::execute) producers: Vec<NodeId>,
     _ph: PhantomData<&'a KFunction<'a>>,
 }
 
 impl<'a> BareNameParkTrack<'a> {
-    pub(in crate::machine::execute) fn new(
-        working_expr: KExpression<'a>,
-        producers: Vec<NodeId>,
-    ) -> Self {
+    pub(in crate::machine::execute) fn new(working_expr: KExpression<'a>) -> Self {
         Self {
             working_expr,
-            producers,
             _ph: PhantomData,
         }
     }
@@ -74,15 +69,13 @@ impl<'a> BareNameParkTrack<'a> {
 /// straight back to `initial`.
 pub(in crate::machine::execute) struct OverloadParkTrack<'a> {
     pub(in crate::machine::execute) expr: KExpression<'a>,
-    pub(in crate::machine::execute) producers: Vec<NodeId>,
     _ph: PhantomData<&'a KFunction<'a>>,
 }
 
 impl<'a> OverloadParkTrack<'a> {
-    pub(in crate::machine::execute) fn new(expr: KExpression<'a>, producers: Vec<NodeId>) -> Self {
+    pub(in crate::machine::execute) fn new(expr: KExpression<'a>) -> Self {
         Self {
             expr,
-            producers,
             _ph: PhantomData,
         }
     }
@@ -317,7 +310,7 @@ impl<'a> KeywordedState<'a> {
         for p in &to_wait {
             ctx.add_park_edge(*p, NodeId(idx));
         }
-        let track = OverloadParkTrack::new(expr, to_wait);
+        let track = OverloadParkTrack::new(expr);
         let init = Initialized { pre_subs };
         ctx.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
             Self::with_overload_park(init, track),
@@ -354,7 +347,7 @@ impl<'a> KeywordedState<'a> {
         for p in &producers {
             ctx.add_park_edge(*p, NodeId(idx));
         }
-        let track = BareNameParkTrack::new(working_expr, producers);
+        let track = BareNameParkTrack::new(working_expr);
         let init = Initialized { pre_subs };
         ctx.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
             Self::with_bare_name_park(init, track),

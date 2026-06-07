@@ -16,27 +16,6 @@ use super::scope_id::ScopeId;
 use crate::machine::core::kfunction::{ArgumentBundle, KFunction, NodeId};
 use crate::machine::model::values::KObject;
 
-/// Index-gated visibility predicate. Production lookups apply this inside
-/// [`Bindings::lookup_value`] / [`Bindings::lookup_type`] /
-/// [`Bindings::lookup_function`] after translating `Option<&LexicalFrame>`
-/// into a per-scope cutoff via [`LexicalFrame::index_for`]. Kept as the
-/// predicate's documented home.
-///
-/// - `chain = None` (test fixtures, builtin registration) — gate disabled.
-/// - `chain.index_for(scope_id) = None` — scope is off the consumer's chain
-///   (a completed sibling block); everything visible.
-/// - `chain.index_for(scope_id) = Some(c)` — visible iff `b.idx < c`.
-#[allow(dead_code)]
-pub(crate) fn visible(scope_id: ScopeId, b: BindingIndex, chain: Option<&LexicalFrame>) -> bool {
-    let Some(chain) = chain else {
-        return true;
-    };
-    match chain.index_for(scope_id) {
-        None => true,
-        Some(c) => b.idx < c,
-    }
-}
-
 /// A resolved-but-not-yet-executed call: the original expression, the chosen `KFunction`,
 /// and the `ArgumentBundle` from `KFunction::bind`. Unit of deferred work in dispatch.
 pub struct KFuture<'a> {
