@@ -5,7 +5,7 @@ use super::super::Scheduler;
 use crate::builtins::default_scope;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::ReturnType;
-use crate::machine::model::KObject;
+use crate::machine::model::{Carried, KObject};
 use crate::machine::RuntimeArena;
 
 use super::let_expr;
@@ -22,7 +22,7 @@ fn combine_waits_on_deps_then_runs_finish() {
     let dep_b = sched.add_dispatch(let_expr("cb", 11.0), scope);
     let finish: CombineFinish = Box::new(|scope, _sched, results| {
         let a = match results[0] {
-            KObject::Number(n) => *n,
+            Carried::Object(KObject::Number(n)) => *n,
             _ => {
                 return BodyResult::Err(crate::machine::KError::new(
                     crate::machine::KErrorKind::ShapeError("a not number".into()),
@@ -30,7 +30,7 @@ fn combine_waits_on_deps_then_runs_finish() {
             }
         };
         let b = match results[1] {
-            KObject::Number(n) => *n,
+            Carried::Object(KObject::Number(n)) => *n,
             _ => {
                 return BodyResult::Err(crate::machine::KError::new(
                     crate::machine::KErrorKind::ShapeError("b not number".into()),
@@ -40,11 +40,11 @@ fn combine_waits_on_deps_then_runs_finish() {
         let allocated = scope
             .arena
             .alloc_object(KObject::KString(format!("{a}+{b}")));
-        BodyResult::Value(allocated)
+        BodyResult::value(allocated)
     });
     let combine_id = sched.add_combine(vec![dep_a, dep_b], vec![], scope, finish);
     sched.execute().unwrap();
-    assert!(matches!(sched.read(combine_id), KObject::KString(s) if s == "7+11"));
+    assert!(matches!(sched.read(combine_id).object(), KObject::KString(s) if s == "7+11"));
 }
 
 #[test]
@@ -68,7 +68,7 @@ fn combine_short_circuits_on_dep_error() {
     let _ = sched.queues.pop_next();
     let _ = sched.queues.pop_next();
     let value = arena.alloc_object(KObject::Number(99.0));
-    sched.store.set_result(dep_ok, NodeOutput::Value(value));
+    sched.store.set_result(dep_ok, NodeOutput::value(value));
     sched.store.set_result(
         dep_err,
         NodeOutput::Err(KError::new(KErrorKind::ShapeError(
@@ -80,7 +80,7 @@ fn combine_short_circuits_on_dep_error() {
     let invoked_clone = Rc::clone(&invoked);
     let finish: CombineFinish = Box::new(move |_scope, _sched, _results| {
         invoked_clone.set(true);
-        BodyResult::Value(value)
+        BodyResult::value(value)
     });
     let combine_id = sched.add_combine(vec![dep_ok, dep_err], vec![], scope, finish);
     sched.execute().unwrap();
@@ -115,7 +115,7 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
             let v = scope
                 .arena
                 .alloc_object(KObject::KString("from-combine".into()));
-            BodyResult::Value(v)
+            BodyResult::value(v)
         });
         let combine_id = sched.add_combine(Vec::new(), Vec::new(), scope, finish);
         BodyResult::DeferTo(combine_id)
@@ -142,7 +142,7 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
     );
     sched.execute().unwrap();
     assert!(
-        matches!(sched.read(id), KObject::KString(s) if s == "from-combine"),
+        matches!(sched.read(id).object(), KObject::KString(s) if s == "from-combine"),
         "DEFERTEST slot's terminal should match the Combine's terminal",
     );
 }
@@ -161,7 +161,7 @@ fn tail_call_reuses_node_slot_in_place() {
 
     sched.execute().unwrap();
 
-    assert!(matches!(sched.read(id), KObject::KString(s) if s == "hi"));
+    assert!(matches!(sched.read(id).object(), KObject::KString(s) if s == "hi"));
     assert_eq!(
         sched.len(),
         1,

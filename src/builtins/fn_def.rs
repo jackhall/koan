@@ -4,6 +4,7 @@ pub(crate) mod return_type;
 pub(crate) mod signature;
 
 use crate::machine::model::types::Elaborator;
+use crate::machine::model::types::KKind;
 use crate::machine::model::{Argument, KType, SignatureElement};
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, SchedulerHandle, Scope,
@@ -244,7 +245,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("FN"),
                 arg("signature", KType::KExpression),
                 kw("->"),
-                arg("return_type", KType::TypeExprRef),
+                arg("return_type", KType::OfKind(KKind::Proper)),
                 kw("="),
                 arg("body", KType::KExpression),
             ],
@@ -289,9 +290,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("FN"),
-                arg("signature", KType::TypeExprRef),
+                arg("signature", KType::OfKind(KKind::Proper)),
                 kw("->"),
-                arg("return_type", KType::TypeExprRef),
+                arg("return_type", KType::OfKind(KKind::Proper)),
                 kw("="),
                 arg("body", KType::KExpression),
             ],

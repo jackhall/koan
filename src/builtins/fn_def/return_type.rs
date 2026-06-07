@@ -3,13 +3,11 @@
 
 use std::collections::HashMap;
 
-use crate::machine::core::kfunction::argument_bundle::{
-    extract_kexpression, extract_ktype, extract_type_name_ref,
-};
+use crate::machine::core::kfunction::argument_bundle::{extract_kexpression, extract_ktype};
 use crate::machine::core::LexicalFrame;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::types::{DeferredReturn, ReturnType};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::ResolveTypeExprOutcome;
 use crate::machine::{ArgumentBundle, KError, KErrorKind, NodeId, Scope};
 use std::rc::Rc;
@@ -50,34 +48,35 @@ pub(crate) enum ReturnTypeCapture<'a> {
     Unresolved(String),
     TypeExpr(TypeName),
     Deferred(DeferredReturn<'a>),
-    /// `results_pos` indexes the Combine closure's `&[&'a KObject<'a>]` slice.
+    /// `results_pos` indexes the Combine closure's `&[Carried<'a>]` slice.
     ReturnTypeExpr {
         results_pos: usize,
     },
 }
 
-/// `unreachable!` arms guard the `get(kind) → extract_kind` pairing — an internal
-/// `ArgumentBundle` invariant, not a user-surface error.
+/// `unreachable!` arms guard the `peek → extract` pairing — an internal `ArgumentBundle`
+/// invariant, not a user-surface error. A resolved type rides the `Type` arm: a bare user
+/// name surfaces as [`KType::Unresolved`] (→ `TypeExprCarrier`), every other shape is
+/// `Resolved`. A `:(…)` / dotted return rides the `Object` arm as a `KObject::KExpression`.
 pub(crate) fn extract_return_type_raw<'a>(
     bundle: &mut ArgumentBundle<'a>,
 ) -> Result<ReturnTypeRaw<'a>, KError> {
-    match bundle.get("return_type") {
-        Some(KObject::KTypeValue(_)) => match extract_ktype(bundle, "return_type") {
+    if bundle.get_type("return_type").is_some() {
+        match extract_ktype(bundle, "return_type") {
+            Some(KType::Unresolved(te)) => Ok(ReturnTypeRaw::TypeExprCarrier(te)),
             Some(t) => Ok(ReturnTypeRaw::Resolved(t)),
-            None => unreachable!("get(KTypeValue) then extract_ktype must succeed"),
-        },
-        Some(KObject::TypeNameRef(_)) => match extract_type_name_ref(bundle, "return_type") {
-            Some(te) => Ok(ReturnTypeRaw::TypeExprCarrier(te)),
-            None => unreachable!("get(TypeNameRef) then extract_type_name_ref must succeed"),
-        },
-        Some(KObject::KExpression(_)) => match extract_kexpression(bundle, "return_type") {
+            None => unreachable!("get_type(return_type) then extract_ktype must succeed"),
+        }
+    } else if matches!(bundle.get("return_type"), Some(KObject::KExpression(_))) {
+        match extract_kexpression(bundle, "return_type") {
             Some(e) => Ok(ReturnTypeRaw::ExprCarrier(e)),
             None => unreachable!("get(KExpression) then extract_kexpression must succeed"),
-        },
-        _ => Err(KError::new(KErrorKind::ShapeError(
+        }
+    } else {
+        Err(KError::new(KErrorKind::ShapeError(
             "FN return-type slot must be a type expression (e.g. `Number`, `:(LIST OF Str)`)"
                 .to_string(),
-        ))),
+        )))
     }
 }
 
@@ -246,7 +245,7 @@ pub(super) fn make_capture<'a>(te: TypeName) -> ReturnTypeCapture<'a> {
 pub(super) fn resolve_capture_at_finish<'a>(
     capture: ReturnTypeCapture<'a>,
     scope: &'a Scope<'a>,
-    results: &[&'a KObject<'a>],
+    results: &[Carried<'a>],
 ) -> Result<ReturnType<'a>, KError> {
     match capture {
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),
@@ -275,16 +274,13 @@ pub(super) fn resolve_capture_at_finish<'a>(
             ))),
         },
         ReturnTypeCapture::Deferred(d) => Ok(ReturnType::Deferred(d)),
-        ReturnTypeCapture::ReturnTypeExpr { results_pos } => {
-            let obj = results[results_pos];
-            match obj {
-                KObject::KTypeValue(kt) => Ok(ReturnType::Resolved(kt.clone())),
-                other => Err(KError::new(KErrorKind::ShapeError(format!(
-                    "FN return-type slot sub-Dispatch expected a type expression, \
-                     got a {} value",
-                    other.ktype().name(),
-                )))),
-            }
-        }
+        ReturnTypeCapture::ReturnTypeExpr { results_pos } => match results[results_pos] {
+            Carried::Type(kt) => Ok(ReturnType::Resolved(kt.clone())),
+            Carried::Object(other) => Err(KError::new(KErrorKind::ShapeError(format!(
+                "FN return-type slot sub-Dispatch expected a type expression, \
+                 got a {} value",
+                other.ktype().name(),
+            )))),
+        },
     }
 }

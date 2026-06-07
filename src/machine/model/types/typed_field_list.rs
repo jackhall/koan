@@ -6,7 +6,7 @@ use super::ktype::KType;
 use super::resolver::{elaborate_type_expr, ElabResult, Elaborator};
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::KObject;
+use crate::machine::model::values::Carried;
 use crate::machine::model::Parseable;
 use crate::machine::model::Record;
 use crate::machine::{NodeId, Scope};
@@ -33,17 +33,17 @@ pub enum FieldListOutcome<'a> {
 /// resolved carrier back in. A concrete cursor (rather than a `dyn Iterator`) so it
 /// reborrows cleanly when a nested record recurses through the shared walker.
 pub struct ResultFeed<'r, 'a> {
-    results: &'r [&'a KObject<'a>],
+    results: &'r [Carried<'a>],
     pos: usize,
 }
 
 impl<'r, 'a> ResultFeed<'r, 'a> {
-    pub fn new(results: &'r [&'a KObject<'a>]) -> Self {
+    pub fn new(results: &'r [Carried<'a>]) -> Self {
         ResultFeed { results, pos: 0 }
     }
 
     /// The next resolved carrier in walk order, or `None` once exhausted.
-    fn pop(&mut self) -> Option<&'a KObject<'a>> {
+    fn pop(&mut self) -> Option<Carried<'a>> {
         let next = self.results.get(self.pos).copied();
         if next.is_some() {
             self.pos += 1;
@@ -92,10 +92,10 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
             // (children :(LIST OF Tree))` must lower Tree to `RecursiveRef("Tree")`.
             ExpressionPart::SigiledTypeExpr(boxed) => {
                 match results.as_mut().and_then(|feed| feed.pop()) {
-                    // Re-walk: take the resolved carrier. The KTypeValue check is the
+                    // Re-walk: take the resolved carrier. The `Type`-arm check is the
                     // single guard that a sub returning a value-by-expression is rejected.
-                    Some(KObject::KTypeValue(kt)) => Ok(kt.clone()),
-                    Some(other) => Err(format!(
+                    Some(Carried::Type(kt)) => Ok(kt.clone()),
+                    Some(Carried::Object(other)) => Err(format!(
                         "{context} type for `{}` resolved to non-type value `{}`",
                         name,
                         other.summarize(),
@@ -144,8 +144,8 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
                     }
                 }
             }
-            ExpressionPart::Future(KObject::KTypeValue(kt)) => Ok(kt.clone()),
-            ExpressionPart::Future(other) => Err(format!(
+            ExpressionPart::Future(Carried::Type(kt)) => Ok((**kt).clone()),
+            ExpressionPart::Future(Carried::Object(other)) => Err(format!(
                 "{context} type for `{}` resolved to non-type value `{}`",
                 name,
                 other.summarize(),
@@ -191,10 +191,8 @@ fn rewrite_threaded_self_refs<'a>(
         .map(|p| {
             let value = match &p.value {
                 ExpressionPart::Type(t) if threaded.contains(t.as_str()) => {
-                    let obj = scope
-                        .arena
-                        .alloc_object(KObject::KTypeValue(KType::RecursiveRef(t.render())));
-                    ExpressionPart::Future(obj)
+                    let obj = scope.arena.alloc_ktype(KType::RecursiveRef(t.render()));
+                    ExpressionPart::Future(Carried::Type(obj))
                 }
                 ExpressionPart::SigiledTypeExpr(b) => ExpressionPart::SigiledTypeExpr(Box::new(
                     rewrite_threaded_self_refs(b, threaded, scope),

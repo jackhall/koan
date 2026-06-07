@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::KObject;
+use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::{CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, Scope};
 
 use super::dispatch::DispatchState;
@@ -11,8 +11,22 @@ use super::dispatch::DispatchState;
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
 /// no further write to that slot occurs until it is freed and reused.
 pub(super) enum NodeOutput<'a> {
-    Value(&'a KObject<'a>),
+    /// A produced value in the two-arm currency (a runtime [`KObject`] or a raw type).
+    /// Use [`NodeOutput::value`] to wrap an object.
+    Value(Carried<'a>),
     Err(KError),
+}
+
+impl<'a> NodeOutput<'a> {
+    /// Wrap a runtime object as the `Object` arm.
+    pub(super) fn value(o: &'a KObject<'a>) -> Self {
+        NodeOutput::Value(Carried::Object(o))
+    }
+
+    /// Wrap a type as the `Type` arm. Pair with `arena.alloc_ktype`.
+    pub(super) fn ktype(t: &'a KType<'a>) -> Self {
+        NodeOutput::Value(Carried::Type(t))
+    }
 }
 
 /// Outcome of a node's run. `Replace` is the tail-call path: rewrite the slot's work and

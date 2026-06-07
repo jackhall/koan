@@ -1,4 +1,4 @@
-use crate::machine::model::KObject;
+use crate::machine::model::{Carried, KObject};
 use crate::machine::{BodyResult, CatchFinish, CombineFinish, Frame, KError, NodeId, Scope};
 
 use super::super::dispatch::propagate_dep_error;
@@ -36,13 +36,15 @@ impl<'a> Scheduler<'a> {
                 return NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(make_frame()))));
             }
         }
-        // Pre-collect refs so `finish` (which takes `&mut self`) doesn't reborrow for reads.
-        let values: Vec<&'a KObject<'a>> = deps.iter().map(|d| self.read(*d)).collect();
+        // Pre-collect carriers so `finish` (which takes `&mut self`) doesn't reborrow for
+        // reads. A type-resolving dep arrives as `Carried::Type`; the finish closure
+        // narrows each arm it expects.
+        let values: Vec<Carried<'a>> = deps.iter().map(|d| self.read(*d)).collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
         let body = finish(scope, self, &values);
         self.reclaim_deps(idx, owned_indices);
         match body {
-            BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
+            BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
             BodyResult::Tail {
                 expr,
                 frame,
@@ -71,7 +73,7 @@ impl<'a> Scheduler<'a> {
         idx: usize,
     ) -> NodeStep<'a> {
         let result: Result<&'a KObject<'a>, KError> = match self.read_result(from) {
-            Ok(v) => Ok(v),
+            Ok(v) => Ok(v.object()),
             // Frameless: the recovery-site dispatch attaches its own frame; adding
             // one here would double-frame.
             Err(e) => Err(propagate_dep_error(e, None)),
@@ -79,7 +81,7 @@ impl<'a> Scheduler<'a> {
         let body = finish(scope, self, result);
         self.reclaim_deps(idx, vec![from.index()]);
         match body {
-            BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
+            BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
             BodyResult::Tail {
                 expr,
                 frame,

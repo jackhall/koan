@@ -8,8 +8,9 @@
 //! `BodyResult::DeferTo(combine_id)` so the parent binding lands at Combine-finish,
 //! not when MODULE's body returns to the dispatcher.
 
+use crate::machine::model::types::KKind;
 use crate::machine::model::values::Module;
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::KType;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind,
     SchedulerHandle, Scope,
@@ -61,11 +62,7 @@ pub fn body<'a>(
         // so the guard reads `types` (the carrier in `data` is gone).
         let bindings = parent_scope.bindings();
         if let Some(kt) = bindings.lookup_type(&name_for_finish, None) {
-            return BodyResult::Value(
-                parent_scope
-                    .arena
-                    .alloc_object(KObject::KTypeValue(kt.clone())),
-            );
+            return BodyResult::ktype(parent_scope.arena.alloc_ktype(kt.clone()));
         }
         let arena = parent_scope.arena;
         let module: &'a Module<'a> =
@@ -104,11 +101,7 @@ pub fn body<'a>(
             identity.clone(),
             bind_index,
         ) {
-            Ok(kt_ref) => BodyResult::Value(
-                parent_scope
-                    .arena
-                    .alloc_object(KObject::KTypeValue(kt_ref.clone())),
-            ),
+            Ok(kt_ref) => BodyResult::ktype(parent_scope.arena.alloc_ktype(kt_ref.clone())),
             Err(e) => BodyResult::Err(e.with_frame(Frame::bare(
                 "<module>",
                 format!("MODULE {} body", name_for_finish),
@@ -129,10 +122,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "MODULE",
         sig(
-            KType::AnyModule,
+            KType::OfKind(KKind::Module),
             vec![
                 kw("MODULE"),
-                arg("name", KType::TypeExprRef),
+                arg("name", KType::OfKind(KKind::Proper)),
                 kw("="),
                 arg("body", KType::KExpression),
             ],

@@ -2,7 +2,7 @@
 //! `RecursiveSet`, cross-references seal to `SetLocal` indices into that set, and the group
 //! name binds the set handle. Exiting the block guarantees every forward reference resolved.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
 use crate::machine::model::types::{NominalSchema, RecursiveSet};
 use crate::machine::model::KType;
 use crate::machine::{KErrorKind, RuntimeArena, Scope};
@@ -39,9 +39,9 @@ fn struct_set_and_fields<'a>(
 fn block_mutual_pair_seals_one_set_with_set_local_cross_refs() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run_one(
+    run(
         scope,
-        parse_one("RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :Aa}\n)"),
+        "RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :Aa}\n)",
     );
     let (a_set, a_fields) = struct_set_and_fields(scope, "Aa");
     let (b_set, b_fields) = struct_set_and_fields(scope, "Bb");
@@ -62,9 +62,9 @@ fn block_mutual_pair_seals_one_set_with_set_local_cross_refs() {
 fn block_group_name_binds_the_set_handle() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run_one(
+    run(
         scope,
-        parse_one("RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :Aa}\n)"),
+        "RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :Aa}\n)",
     );
     let (a_set, _) = struct_set_and_fields(scope, "Aa");
     match scope.resolve_type("Pair") {
@@ -81,11 +81,9 @@ fn block_group_name_binds_the_set_handle() {
 fn block_three_way_seals_one_set() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run_one(
+    run(
         scope,
-        parse_one(
-            "RECURSIVE TYPES Trio = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{c :Cc}\n  NEWTYPE Cc = :{a :Aa}\n)",
-        ),
+        "RECURSIVE TYPES Trio = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{c :Cc}\n  NEWTYPE Cc = :{a :Aa}\n)",
     );
     let (set, _) = struct_set_and_fields(scope, "Aa");
     assert_eq!(set.len(), 3);

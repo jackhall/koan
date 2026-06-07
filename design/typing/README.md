@@ -22,7 +22,7 @@ Type-system mechanics:
   `KType`: the scheduler-driven elaborator, recursion via threaded-set
   recognition, module-qualified names, the binding-map partition that
   separates type-name lookups from value-name lookups, the
-  `KObject::TypeNameRef` bare-leaf carrier, and the two-layer
+  `KType::Unresolved` bare-leaf transient, and the two-layer
   resolution memo that amortizes elaboration cost.
 - [user-types.md](user-types.md) — the `RecursiveSet` nominal model: a
   member's `KType::SetRef` is the per-declaration identity for STRUCT, named

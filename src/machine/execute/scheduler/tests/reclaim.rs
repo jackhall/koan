@@ -23,9 +23,9 @@ fn free_reclaims_owned_subtree() {
     for id in [s0, s1, s2, s3] {
         sched.store.clear_node(id);
     }
-    sched.store.set_result(s1, NodeOutput::Value(value));
-    sched.store.set_result(s2, NodeOutput::Value(value));
-    sched.store.set_result(s3, NodeOutput::Value(value));
+    sched.store.set_result(s1, NodeOutput::value(value));
+    sched.store.set_result(s2, NodeOutput::value(value));
+    sched.store.set_result(s3, NodeOutput::value(value));
     sched
         .deps
         .set_dep_edges(s0.index(), vec![DepEdge::Owned(s1)]);
@@ -84,7 +84,7 @@ fn free_skips_live_slot_and_is_idempotent() {
 
     sched.store.clear_node(s);
     let value: &KObject = arena.alloc_object(KObject::Number(1.0));
-    sched.store.set_result(s, NodeOutput::Value(value));
+    sched.store.set_result(s, NodeOutput::value(value));
     sched.free(s.index());
     assert_eq!(sched.store.free_list_snapshot(), vec![s]);
     sched.free(s.index());
@@ -110,9 +110,9 @@ fn free_does_not_recurse_through_notify_edges() {
     for id in [s_owner, s_owned, s_sibling] {
         sched.store.clear_node(id);
     }
-    sched.store.set_result(s_owner, NodeOutput::Value(value));
-    sched.store.set_result(s_owned, NodeOutput::Value(value));
-    sched.store.set_result(s_sibling, NodeOutput::Value(value));
+    sched.store.set_result(s_owner, NodeOutput::value(value));
+    sched.store.set_result(s_owned, NodeOutput::value(value));
+    sched.store.set_result(s_sibling, NodeOutput::value(value));
     // Sibling self-loop is synthetic: a real scheduler never installs one, but it
     // gives the bug-shape something to walk into so we can assert the walk stopped.
     sched.deps.set_dep_edges(

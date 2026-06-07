@@ -1,18 +1,28 @@
 use super::*;
 use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
+use std::rc::Rc;
 
+/// One slot holding a runtime object (the `Object` arm of [`ArgValue`]).
 fn one_slot_bundle<'a>(name: &str, obj: KObject<'a>) -> ArgumentBundle<'a> {
     let mut args = Record::new();
-    args.insert(name.to_string(), Rc::new(obj));
+    args.insert(name.to_string(), ArgValue::Object(Rc::new(obj)));
     ArgumentBundle { args }
 }
 
-fn type_name_ref<'a>(name: &str) -> KObject<'a> {
-    KObject::TypeNameRef(TypeName::leaf(name.into()))
+/// One slot holding a type (the `Type` arm of [`ArgValue`]).
+fn one_slot_type_bundle<'a>(name: &str, kt: KType<'a>) -> ArgumentBundle<'a> {
+    let mut args = Record::new();
+    args.insert(name.to_string(), ArgValue::Type(kt));
+    ArgumentBundle { args }
 }
 
-// ---------- shared-Rc clone paths on the extract_* helpers ----------
+/// A bare user type name rides the type channel as the [`KType::Unresolved`] transient.
+fn unresolved_type<'a>(name: &str) -> KType<'a> {
+    KType::Unresolved(TypeName::leaf(name.into()))
+}
+
+// ---------- shared-Rc clone paths on extract_kexpression ----------
 
 #[test]
 fn extract_kexpression_clones_when_rc_is_shared() {
@@ -22,7 +32,7 @@ fn extract_kexpression_clones_when_rc_is_shared() {
     let mut bundle = ArgumentBundle {
         args: Record::new(),
     };
-    bundle.args.insert("e".into(), shared);
+    bundle.args.insert("e".into(), ArgValue::Object(shared));
     let got = extract_kexpression(&mut bundle, "e").expect("clone path should return Some");
     assert!(
         matches!(got.parts.as_slice(), [Spanned { value: ExpressionPart::Identifier(n), .. }] if n == "k")
@@ -36,61 +46,40 @@ fn extract_kexpression_shared_non_matching_variant_returns_none() {
     let mut bundle = ArgumentBundle {
         args: Record::new(),
     };
-    bundle.args.insert("e".into(), shared);
+    bundle.args.insert("e".into(), ArgValue::Object(shared));
     assert!(extract_kexpression(&mut bundle, "e").is_none());
 }
 
+// ---------- extract_ktype reads the type arm ----------
+
 #[test]
-fn extract_ktype_clones_when_rc_is_shared() {
-    let shared = Rc::new(KObject::KTypeValue(KType::Number));
-    let _outside = Rc::clone(&shared);
-    let mut bundle = ArgumentBundle {
-        args: Record::new(),
-    };
-    bundle.args.insert("t".into(), shared);
+fn extract_ktype_returns_the_type_arm() {
+    let mut bundle = one_slot_type_bundle("t", KType::Number);
     assert_eq!(extract_ktype(&mut bundle, "t"), Some(KType::Number));
 }
 
+/// A bare user name surfaces as the [`KType::Unresolved`] transient; callers branch on it.
 #[test]
-fn extract_ktype_shared_non_matching_variant_returns_none() {
-    let shared = Rc::new(KObject::Number(2.0));
-    let _outside = Rc::clone(&shared);
-    let mut bundle = ArgumentBundle {
-        args: Record::new(),
-    };
-    bundle.args.insert("t".into(), shared);
+fn extract_ktype_returns_unresolved_for_bare_name() {
+    let mut bundle = one_slot_type_bundle("t", unresolved_type("Foo"));
+    assert_eq!(
+        extract_ktype(&mut bundle, "t"),
+        Some(unresolved_type("Foo"))
+    );
+}
+
+#[test]
+fn extract_ktype_object_arm_returns_none() {
+    let mut bundle = one_slot_bundle("t", KObject::Number(2.0));
     assert!(extract_ktype(&mut bundle, "t").is_none());
-}
-
-#[test]
-fn extract_type_name_ref_clones_when_rc_is_shared() {
-    let shared = Rc::new(type_name_ref("Foo"));
-    let _outside = Rc::clone(&shared);
-    let mut bundle = ArgumentBundle {
-        args: Record::new(),
-    };
-    bundle.args.insert("t".into(), shared);
-    let got = extract_type_name_ref(&mut bundle, "t").expect("clone path should return Some");
-    assert_eq!(got.as_str(), "Foo");
-}
-
-#[test]
-fn extract_type_name_ref_shared_non_matching_variant_returns_none() {
-    let shared = Rc::new(KObject::KTypeValue(KType::Number));
-    let _outside = Rc::clone(&shared);
-    let mut bundle = ArgumentBundle {
-        args: Record::new(),
-    };
-    bundle.args.insert("t".into(), shared);
-    assert!(extract_type_name_ref(&mut bundle, "t").is_none());
 }
 
 // ---------- extract_bare_type_name arms ----------
 
-/// A bare-leaf `TypeNameRef` carrier resolves to its name.
+/// A bare-name (`Unresolved`) type slot resolves to its name.
 #[test]
-fn extract_bare_type_name_accepts_type_name_ref_leaf() {
-    let bundle = one_slot_bundle("T", type_name_ref("Foo"));
+fn extract_bare_type_name_accepts_unresolved_leaf() {
+    let bundle = one_slot_type_bundle("T", unresolved_type("Foo"));
     let name = extract_bare_type_name(&bundle, "T", "STRUCT").expect("leaf should be accepted");
     assert_eq!(name, "Foo");
 }
@@ -98,16 +87,16 @@ fn extract_bare_type_name_accepts_type_name_ref_leaf() {
 /// `KType::Number` stands in for every leaf variant — the match arm shares one
 /// body across all of them.
 #[test]
-fn extract_bare_type_name_accepts_ktypevalue_leaf() {
-    let bundle = one_slot_bundle("T", KObject::KTypeValue(KType::Number));
+fn extract_bare_type_name_accepts_leaf_type() {
+    let bundle = one_slot_type_bundle("T", KType::Number);
     let name = extract_bare_type_name(&bundle, "T", "STRUCT").expect("leaf should be accepted");
     assert_eq!(name, "Number");
 }
 
 #[test]
-fn extract_bare_type_name_rejects_ktypevalue_structural() {
+fn extract_bare_type_name_rejects_structural_type() {
     let list = KType::List(Box::new(KType::Number));
-    let bundle = one_slot_bundle("T", KObject::KTypeValue(list));
+    let bundle = one_slot_type_bundle("T", list);
     let err = extract_bare_type_name(&bundle, "T", "STRUCT").expect_err("should reject");
     match err.kind {
         KErrorKind::ShapeError(msg) => {
@@ -215,22 +204,10 @@ fn require_missing_slot_returns_missing_arg() {
     }
 }
 
-// ---------- unique-Rc Ok(_) => None arms on the extract_* helpers ----------
+// ---------- unique-Rc Ok(_) => None arm on extract_kexpression ----------
 
 #[test]
 fn extract_kexpression_unique_non_matching_variant_returns_none() {
     let mut bundle = one_slot_bundle("e", KObject::Number(1.0));
     assert!(extract_kexpression(&mut bundle, "e").is_none());
-}
-
-#[test]
-fn extract_ktype_unique_non_matching_variant_returns_none() {
-    let mut bundle = one_slot_bundle("t", KObject::Number(1.0));
-    assert!(extract_ktype(&mut bundle, "t").is_none());
-}
-
-#[test]
-fn extract_type_name_ref_unique_non_matching_variant_returns_none() {
-    let mut bundle = one_slot_bundle("t", KObject::KTypeValue(KType::Number));
-    assert!(extract_type_name_ref(&mut bundle, "t").is_none());
 }

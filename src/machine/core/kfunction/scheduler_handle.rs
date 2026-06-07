@@ -8,7 +8,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use crate::machine::core::kerror::KError;
 use crate::machine::core::{CallArena, LexicalFrame, Scope, ScopeId};
-use crate::machine::model::values::KObject;
+use crate::machine::model::values::{Carried, KObject};
 
 use super::body::BodyResult;
 
@@ -116,11 +116,13 @@ pub trait SchedulerHandle<'a> {
     }
 }
 
-/// Host-side closure for `Combine` slots. Receives the dep values in submission order;
-/// static elements are captured in the closure.
+/// Host-side closure for `Combine` slots. Receives the dep terminals in submission order
+/// as [`Carried`] (an object or a type flowing in the type channel); static elements are
+/// captured in the closure. A value-consuming finish calls `.object()` on each; a
+/// type-resolving dep (a VAL type, an FN return type, a field type) arrives as
+/// [`Carried::Type`].
 pub type CombineFinish<'a> = Box<
-    dyn FnOnce(&'a Scope<'a>, &mut dyn SchedulerHandle<'a>, &[&'a KObject<'a>]) -> BodyResult<'a>
-        + 'a,
+    dyn FnOnce(&'a Scope<'a>, &mut dyn SchedulerHandle<'a>, &[Carried<'a>]) -> BodyResult<'a> + 'a,
 >;
 
 /// Host-side closure for `Catch` slots. Receives the watched slot's terminal as a

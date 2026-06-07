@@ -20,7 +20,8 @@
 //! which anchors the call-site frame, which keeps the rooted `Rc` alive.
 //! Top-level modules carry no `Rc` and need no rooting.
 
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::types::KKind;
+use crate::machine::model::KType;
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
 
 use super::{arg, err, kw, register_builtin, sig};
@@ -31,19 +32,30 @@ pub fn body<'a>(
     sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let (module, module_frame) = match bundle.get("m") {
-        Some(KObject::KTypeValue(KType::Module {
+    // A module identity rides the type channel as `KType::Module { module, frame }`; the
+    // carried frame anchors the call-site `Rc` so a per-call module's child scope stays live.
+    let (module, module_frame) = match bundle.get_type("m") {
+        Some(KType::Module {
             module: m,
             frame: anchor,
-        })) => (*m, anchor.clone()),
+        }) => (*m, anchor.clone()),
         Some(other) => {
             return err(KError::new(KErrorKind::TypeMismatch {
                 arg: "m".to_string(),
                 expected: "Module".to_string(),
-                got: other.ktype().name().to_string(),
+                got: other.name(),
             }));
         }
-        None => return err(KError::new(KErrorKind::MissingArg("m".to_string()))),
+        None => match bundle.get("m") {
+            Some(other) => {
+                return err(KError::new(KErrorKind::TypeMismatch {
+                    arg: "m".to_string(),
+                    expected: "Module".to_string(),
+                    got: other.ktype().name().to_string(),
+                }));
+            }
+            None => return err(KError::new(KErrorKind::MissingArg("m".to_string()))),
+        },
     };
     let body_expr = match extract_kexpression(&mut bundle, "body") {
         Some(e) => e,
@@ -57,10 +69,10 @@ pub fn body<'a>(
     // Root the frame `Rc` in the call-site arena so the borrowed window outlives
     // the eager `m` arg and any escaping closure. No-op for top-level modules.
     if module_frame.is_some() {
-        scope.arena.alloc_object(KObject::KTypeValue(KType::Module {
+        scope.arena.alloc_ktype(KType::Module {
             module,
             frame: module_frame,
-        }));
+        });
     }
 
     // Transparent scope lives in the call-site arena so forwarded binds and
@@ -81,7 +93,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("USING"),
-                arg("m", KType::AnyModule),
+                arg("m", KType::OfKind(KKind::Module)),
                 kw("SCOPE"),
                 arg("body", KType::KExpression),
             ],

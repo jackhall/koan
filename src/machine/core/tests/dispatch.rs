@@ -16,14 +16,14 @@ fn body_a<'a>(
     _h: &mut dyn SchedulerHandle<'a>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::Value(marker(s, "a"))
+    BodyResult::value(marker(s, "a"))
 }
 fn body_b<'a>(
     s: &'a Scope<'a>,
     _h: &mut dyn SchedulerHandle<'a>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::Value(marker(s, "b"))
+    BodyResult::value(marker(s, "b"))
 }
 
 fn two_slot_sig<'a>(a: KType<'a>, b: KType<'a>) -> ExpressionSignature<'a> {

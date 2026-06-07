@@ -1,3 +1,4 @@
+use crate::machine::model::types::KKind;
 use std::rc::Rc;
 
 use crate::machine::core::LexicalFrame;
@@ -116,7 +117,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("MATCH"),
                 arg("value", KType::Any),
                 kw("->"),
-                arg("return_type", KType::TypeExprRef),
+                arg("return_type", KType::OfKind(KKind::Proper)),
                 kw("WITH"),
                 arg("branches", KType::KExpression),
             ],

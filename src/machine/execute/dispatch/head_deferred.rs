@@ -25,7 +25,7 @@ use crate::machine::core::kfunction::SchedulerHandle;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::KType;
-use crate::machine::model::{KObject, Parseable};
+use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{KError, KErrorKind, NodeId, Scope};
 
 use super::super::nodes::{NodeOutput, NodeStep};
@@ -119,7 +119,7 @@ impl<'a> HeadDeferredState<'a> {
             head_sub,
             type_only,
         } = self;
-        let head_obj = match ctx.read_result(head_sub) {
+        let head = match ctx.read_result(head_sub) {
             Ok(v) => v,
             Err(e) => {
                 let err = e.clone_for_propagation();
@@ -130,7 +130,7 @@ impl<'a> HeadDeferredState<'a> {
         };
         ctx.clear_dep_edges(idx);
         ctx.free(head_sub.index());
-        let callable = match classify_head(head_obj, type_only) {
+        let callable = match classify_head(head, type_only) {
             Ok(c) => c,
             Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
         };
@@ -142,43 +142,47 @@ impl<'a> HeadDeferredState<'a> {
 /// `type_only` arm pruning. Returns the shape-appropriate `KError` for a
 /// non-admitted value (a type-shaped `TypeMismatch` under `type_only`, else a
 /// non-callable `DispatchFailed`).
-fn classify_head<'a>(
-    head_obj: &'a KObject<'a>,
-    type_only: bool,
-) -> Result<ResolvedCallable<'a>, KError> {
-    match head_obj {
-        // A functor reached directly as a value (`KFunction` with `is_functor`) is
-        // admitted in both modes — its result is a module, so it is the type-shaped
-        // head's only function arm.
-        KObject::KFunction(f, _) if f.is_functor => Ok(ResolvedCallable::Function(f)),
-        // A bound functor reached through the type table carries its callable on
-        // `KType::KFunctor { body: Some(f) }`; calling it yields a module, so it is
-        // the `Function` arm in both modes.
-        KObject::KTypeValue(KType::KFunctor { body: Some(f), .. }) => {
-            Ok(ResolvedCallable::Function(f))
-        }
-        // A bare `:(FUNCTOR …)` type annotation (`body: None`) is type-shaped but not
-        // invocable — surface a type-shaped `TypeMismatch` regardless of mode.
-        KObject::KTypeValue(kt @ KType::KFunctor { body: None, .. }) => {
-            Err(KError::new(KErrorKind::TypeMismatch {
+fn classify_head<'a>(head: Carried<'a>, type_only: bool) -> Result<ResolvedCallable<'a>, KError> {
+    match head {
+        // A runtime value head. A functor (`KFunction` with `is_functor`) is admitted in
+        // both modes — its result is a module, so it is the type-shaped head's only
+        // function arm. A plain function is admitted only in the non-type mode; under
+        // `TypeHeadDeferred` it is the pruned arm and falls through to the `TypeMismatch`.
+        Carried::Object(obj) => match obj {
+            KObject::KFunction(f, _) if f.is_functor => Ok(ResolvedCallable::Function(f)),
+            KObject::KFunction(f, _) if !type_only => Ok(ResolvedCallable::Function(f)),
+            other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
+                arg: "verb".to_string(),
+                expected: "Type".to_string(),
+                got: other.summarize(),
+            })),
+            other => Err(KError::new(KErrorKind::DispatchFailed {
+                expr: other.summarize(),
+                reason: "head evaluates to a non-callable value".to_string(),
+            })),
+        },
+        // A type-channel head. A bound functor carries its callable on
+        // `KType::KFunctor { body: Some(f) }`; calling it yields a module, so it is the
+        // `Function` arm in both modes. A bare `:(FUNCTOR …)` annotation (`body: None`) is
+        // type-shaped but not invocable; a `SetRef` is a constructor. Anything else is a
+        // type-shaped non-callable.
+        Carried::Type(kt) => match kt {
+            KType::KFunctor { body: Some(f), .. } => Ok(ResolvedCallable::Function(f)),
+            KType::KFunctor { body: None, .. } => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "constructible Type or bound functor".to_string(),
                 got: kt.name(),
-            }))
-        }
-        // A plain function is admitted only in the non-type mode. Under
-        // `TypeHeadDeferred` it is the pruned arm and falls through to the
-        // type-shaped `TypeMismatch`.
-        KObject::KFunction(f, _) if !type_only => Ok(ResolvedCallable::Function(f)),
-        KObject::KTypeValue(kt @ KType::SetRef { .. }) => Ok(ResolvedCallable::Constructor(kt)),
-        other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: "verb".to_string(),
-            expected: "Type".to_string(),
-            got: other.summarize(),
-        })),
-        other => Err(KError::new(KErrorKind::DispatchFailed {
-            expr: other.summarize(),
-            reason: "head evaluates to a non-callable value".to_string(),
-        })),
+            })),
+            KType::SetRef { .. } => Ok(ResolvedCallable::Constructor(kt)),
+            other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
+                arg: "verb".to_string(),
+                expected: "Type".to_string(),
+                got: other.name(),
+            })),
+            other => Err(KError::new(KErrorKind::DispatchFailed {
+                expr: other.name(),
+                reason: "head evaluates to a non-callable value".to_string(),
+            })),
+        },
     }
 }

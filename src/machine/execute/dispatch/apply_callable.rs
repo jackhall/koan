@@ -23,7 +23,6 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
-use crate::machine::model::KObject;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::super::nodes::{NodeOutput, NodeStep};
@@ -140,9 +139,7 @@ fn apply_constructor<'a>(
                     index: *index,
                     tag,
                 };
-                return NodeStep::Done(NodeOutput::Value(
-                    scope.arena.alloc_object(KObject::KTypeValue(variant)),
-                ));
+                return NodeStep::Done(NodeOutput::ktype(scope.arena.alloc_ktype(variant)));
             }
             // Positional construction: `Outcome (Error "x")` (paren-group body). Tagged
             // unions and higher-kinded `TypeConstructor`s both construct positionally.

@@ -1,9 +1,9 @@
 use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::KType;
 use crate::machine::{KErrorKind, RuntimeArena};
 
-/// Smoke: the VAL slot lives in `bindings.data` so `ascribe::shape_check` will
-/// require it of an ascribed module.
+/// Smoke: the VAL slot lives in `bindings.types` under its value-class name so
+/// `ascribe::shape_check` will require it of an ascribed module.
 #[test]
 fn val_inside_sig_binds_typeexpr_carrier() {
     let arena = RuntimeArena::new();
@@ -13,11 +13,8 @@ fn val_inside_sig_binds_typeexpr_carrier() {
         Some(KType::Signature { sig, .. }) => *sig,
         _ => panic!("OrderedSig must bind a Signature KType"),
     };
-    let zero = s.decl_scope().bindings().expect_value("zero");
-    match zero {
-        KObject::KTypeValue(kt) => assert_eq!(*kt, KType::Number),
-        other => panic!("expected KTypeValue(Number), got {:?}", other.ktype()),
-    }
+    let zero = s.decl_scope().bindings().expect_type("zero");
+    assert_eq!(*zero, KType::Number);
 }
 
 /// Pins the parking path: sibling statement order isn't guaranteed, so VAL parks
@@ -38,19 +35,16 @@ fn val_resolves_sig_local_type_shadow() {
         Some(KType::Signature { sig, .. }) => *sig,
         _ => panic!("WithZero must bind a Signature KType"),
     };
-    let zero = s.decl_scope().bindings().expect_value("zero");
+    let zero = s.decl_scope().bindings().expect_type("zero");
     match zero {
-        KObject::KTypeValue(KType::AbstractType {
+        KType::AbstractType {
             source: AbstractSource::Sig(_),
             name,
-        }) => assert_eq!(
+        } => assert_eq!(
             name, "Type",
             "VAL slot must record that it names the SIG-local abstract `Type`",
         ),
-        other => panic!(
-            "expected KTypeValue(AbstractType(Type)), got {:?}",
-            other.ktype()
-        ),
+        other => panic!("expected AbstractType(Type), got {other:?}"),
     }
 }
 
@@ -103,15 +97,15 @@ fn val_function_typed_slot() {
         Some(KType::Signature { sig, .. }) => *sig,
         _ => panic!("OrderedSig must bind a Signature KType"),
     };
-    let compare = s.decl_scope().bindings().expect_value("compare");
+    let compare = s.decl_scope().bindings().expect_type("compare");
     match compare {
-        KObject::KTypeValue(KType::KFunction { params, ret }) => {
+        KType::KFunction { params, ret } => {
             assert_eq!(params.len(), 2);
             assert_eq!(params.get("x"), Some(&KType::Number));
             assert_eq!(params.get("y"), Some(&KType::Number));
             assert_eq!(**ret, KType::Number);
         }
-        other => panic!("expected KFunction-typed slot, got {:?}", other.ktype()),
+        other => panic!("expected KFunction-typed slot, got {other:?}"),
     }
 }
 
@@ -188,12 +182,12 @@ fn val_with_abstract_type_member_declaration() {
             name,
         } if name == "Type"
     ));
-    let zero = s.decl_scope().bindings().expect_value("zero");
+    let zero = s.decl_scope().bindings().expect_type("zero");
     assert!(matches!(
         zero,
-        KObject::KTypeValue(KType::AbstractType {
+        KType::AbstractType {
             source: AbstractSource::Sig(_),
             name,
-        }) if name == "Type"
+        } if name == "Type"
     ));
 }

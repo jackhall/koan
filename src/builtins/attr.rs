@@ -6,13 +6,14 @@
 //! access.
 //!
 //! The slot types are disjoint (`KType::Identifier` only matches `ExpressionPart::Identifier`;
-//! the `AnyUserType { kind: Newtype }` slot admits a `KObject::Wrapped`, and `AnyModule`
+//! the `AnyUserType { kind: Newtype }` slot admits a `KObject::Wrapped`, and `OfKind(Module)`
 //! admits modules), so dispatch picks unambiguously without a specificity tiebreaker.
 
 use crate::machine::execute::{resolve_type_leaf_carrier, TypeLeafCarrier};
+use crate::machine::model::types::KKind;
 use crate::machine::model::types::{AbstractSource, NominalKind};
 use crate::machine::model::values::{Module, NonWrappedRef};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{
     ArgumentBundle, BodyResult, KError, KErrorKind, Resolution, SchedulerHandle, Scope,
 };
@@ -78,43 +79,43 @@ pub fn body_type_lhs<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let s_name = match bundle.get("s") {
-        Some(KObject::KTypeValue(t)) => t.name(),
-        Some(KObject::TypeNameRef(t)) => t.render(),
-        Some(other) => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "s".to_string(),
-                expected: "TypeExprRef".to_string(),
-                got: other.ktype().name().to_string(),
-            }));
+    let s_kt = match bundle.get_type("s") {
+        Some(kt) => kt,
+        None => {
+            return err(match bundle.get("s") {
+                Some(other) => KError::new(KErrorKind::TypeMismatch {
+                    arg: "s".to_string(),
+                    expected: "TypeExprRef".to_string(),
+                    got: other.ktype().name(),
+                }),
+                None => KError::new(KErrorKind::MissingArg("s".to_string())),
+            });
         }
-        None => return err(KError::new(KErrorKind::MissingArg("s".to_string()))),
     };
     let field_name = match read_field_name(&bundle) {
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    // The Type-classed lhs is a nominal type-side binding. A module / signature identity
-    // resolves to a `KTypeValue(Module/Signature)` carrier `access_field` projects a member
-    // off; a struct / union name resolves to a `KTypeValue(SetRef)` that `access_field`
-    // rejects with the same TypeMismatch a static struct field access produces. Dispatch
-    // resolves this ATTR type argument before the body runs, so a `Park` outcome is
-    // unreachable here and surfaces as a loud structured error rather than a silent stall.
-    let leaf = crate::machine::model::ast::TypeName::leaf(s_name);
-    let target = match resolve_type_leaf_carrier(scope, &leaf, None) {
-        TypeLeafCarrier::Resolved(obj) => obj,
-        TypeLeafCarrier::Unbound(name) => return err(KError::new(KErrorKind::UnboundName(name))),
-        TypeLeafCarrier::Park(producers) => {
-            return err(KError::new(KErrorKind::ShapeError(format!(
+    // The Type-classed lhs is a nominal type-side binding flowing in the type channel. A
+    // module / signature / opaque-abstract identity projects a member off directly; a struct
+    // / union name (`SetRef`) has no members and falls through to a TypeMismatch. A bare name
+    // that dispatch couldn't pre-resolve arrives `Unresolved`; resolve it through the
+    // memoized, park-capable bridge. Dispatch resolves this argument before the body runs, so
+    // a `Park` outcome is unreachable here and surfaces as a loud structured error.
+    match s_kt {
+        KType::Unresolved(te) => match resolve_type_leaf_carrier(scope, te, None) {
+            TypeLeafCarrier::Resolved(kt) => access_type_member(scope, kt, &field_name),
+            TypeLeafCarrier::Unbound(name) => err(KError::new(KErrorKind::UnboundName(name))),
+            TypeLeafCarrier::Park(producers) => err(KError::new(KErrorKind::ShapeError(format!(
                 "ATTR lhs type `{}` resolved to a still-finalizing type \
                  (parked on {} producer(s)); the type argument should already be sealed \
                  at body entry",
-                leaf.render(),
+                te.render(),
                 producers.len(),
-            ))))
-        }
-    };
-    access_field(scope, target, &field_name)
+            )))),
+        },
+        kt => access_type_member(scope, kt, &field_name),
+    }
 }
 
 pub fn body_newtype<'a>(
@@ -138,54 +139,54 @@ pub fn body_module<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let target = match bundle.require("s") {
-        Ok(obj) => obj,
+    // A module identity rides the type channel, so the lhs is the `Type` arm.
+    let m = match bundle.require_module("s") {
+        Ok(m) => m,
         Err(e) => return err(e),
     };
     let field_name = match read_field_name(&bundle) {
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    let m = match target.as_module() {
-        Some(m) => m,
-        None => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "s".to_string(),
-                expected: "Module".to_string(),
-                got: target.ktype().name(),
-            }))
-        }
-    };
     access_module_member(m, &field_name)
 }
 
 fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
-    match bundle.get("field") {
-        Some(KObject::KString(s)) => Ok(s.clone()),
-        Some(KObject::KTypeValue(t)) => Ok(t.name()),
-        Some(KObject::TypeNameRef(t)) => Ok(t.render()),
-        Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: "field".to_string(),
-            expected: "Identifier".to_string(),
-            got: other.ktype().name().to_string(),
-        })),
-        None => Err(KError::new(KErrorKind::MissingArg("field".to_string()))),
+    if let Some(obj) = bundle.get("field") {
+        return match obj {
+            KObject::KString(s) => Ok(s.clone()),
+            other => Err(KError::new(KErrorKind::TypeMismatch {
+                arg: "field".to_string(),
+                expected: "Identifier".to_string(),
+                got: other.ktype().name().to_string(),
+            })),
+        };
     }
+    // A Type-classed field token (the `Outer.Inner` step of a chained access) rides the
+    // type channel; the member name is the leaf token, resolved or not.
+    if let Some(kt) = bundle.get_type("field") {
+        return Ok(match kt {
+            KType::Unresolved(te) => te.render(),
+            other => other.name(),
+        });
+    }
+    Err(KError::new(KErrorKind::MissingArg("field".to_string())))
 }
 
-fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> BodyResult<'a> {
-    match target {
-        KObject::KTypeValue(KType::Module { module: m, .. }) => access_module_member(m, field),
+/// Project `field` off a Type-channel lhs: a module / signature / opaque-abstract identity.
+/// A `SetRef` (struct / union name) and every other type has no members and falls through to
+/// the same TypeMismatch a static struct field access produces.
+fn access_type_member<'a>(scope: &'a Scope<'a>, kt: &KType<'a>, field: &str) -> BodyResult<'a> {
+    match kt {
+        KType::Module { module: m, .. } => access_module_member(m, field),
         // ATTR over a first-class signature value — reverse-lookup against the decl scope.
-        KObject::KTypeValue(KType::Signature { sig: s, .. }) => {
-            let scope = s.decl_scope();
-            if let Some(Resolution::Value(obj)) = scope.bindings().lookup_value(field, None) {
-                return BodyResult::Value(obj);
+        KType::Signature { sig: s, .. } => {
+            let decl = s.decl_scope();
+            if let Some(Resolution::Value(obj)) = decl.bindings().lookup_value(field, None) {
+                return BodyResult::value(obj);
             }
-            if let Some(kt) = scope.resolve_type(field) {
-                return BodyResult::Value(
-                    scope.arena.alloc_object(KObject::KTypeValue(kt.clone())),
-                );
+            if let Some(kt) = decl.resolve_type(field) {
+                return BodyResult::ktype(scope.arena.alloc_ktype(kt.clone()));
             }
             err(KError::new(KErrorKind::ShapeError(format!(
                 "signature `{}` has no member `{}`",
@@ -193,12 +194,21 @@ fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> 
             ))))
         }
         // ATTR over an opaque-ascription abstract type — project against the source module.
-        // A `Sig`-rooted abstract type has no module to project off, so it falls through to
-        // the `other` TypeMismatch arm.
-        KObject::KTypeValue(KType::AbstractType {
+        // A `Sig`-rooted abstract type has no module to project off, so it falls through.
+        KType::AbstractType {
             source: AbstractSource::Module(m),
             ..
-        }) => access_module_member(m, field),
+        } => access_module_member(m, field),
+        other => err(KError::new(KErrorKind::TypeMismatch {
+            arg: "s".to_string(),
+            expected: "a type with members".to_string(),
+            got: other.name(),
+        })),
+    }
+}
+
+fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> BodyResult<'a> {
+    match target {
         // NEWTYPE fall-through. A record-repr newtype (an ex-struct) wraps a
         // `KObject::Record`; read the field straight off it, naming the nominal type in the
         // miss diagnostic so `b.z` on a `Point` still reports `Point`. `Wrapped.inner` is
@@ -207,7 +217,10 @@ fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> 
         // has no fields) falls to the `other` arm.
         KObject::Wrapped { inner, type_id } => match inner.get() {
             KObject::Record(values, _) => match values.get(field) {
-                Some(value) => BodyResult::Value(scope.arena.alloc_object(value.deep_clone())),
+                Some(Held::Object(value)) => {
+                    BodyResult::value(scope.arena.alloc_object(value.deep_clone()))
+                }
+                Some(Held::Type(kt)) => BodyResult::ktype(scope.arena.alloc_ktype(kt.clone())),
                 None => err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",
                     type_id.name(),
@@ -248,24 +261,20 @@ fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> 
 fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
     let module_scope = m.child_scope();
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
-        return BodyResult::Value(module_scope.arena.alloc_object(KObject::KTypeValue(kt)));
+        return BodyResult::ktype(module_scope.arena.alloc_ktype(kt));
     }
     if let Some(Resolution::Value(obj)) = module_scope.bindings().lookup_value(field, None) {
         if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
             let type_id = module_scope.arena.alloc_ktype(tag);
-            return BodyResult::Value(module_scope.arena.alloc_object(KObject::Wrapped {
+            return BodyResult::value(module_scope.arena.alloc_object(KObject::Wrapped {
                 inner: NonWrappedRef::peel(obj),
                 type_id,
             }));
         }
-        return BodyResult::Value(obj);
+        return BodyResult::value(obj);
     }
     if let Some(kt) = module_scope.resolve_type(field) {
-        return BodyResult::Value(
-            module_scope
-                .arena
-                .alloc_object(KObject::KTypeValue(kt.clone())),
-        );
+        return BodyResult::ktype(module_scope.arena.alloc_ktype(kt.clone()));
     }
     err(KError::new(KErrorKind::ShapeError(format!(
         "module `{}` has no member `{}`",
@@ -274,7 +283,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    let module_ty = KType::AnyModule;
+    let module_ty = KType::OfKind(KKind::Module);
     let newtype_ty = KType::AnyUserType {
         kind: NominalKind::Newtype,
     };
@@ -329,7 +338,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("ATTR"),
-                arg("s", KType::TypeExprRef),
+                arg("s", KType::OfKind(KKind::Proper)),
                 arg("field", KType::Identifier),
             ],
         ),
@@ -342,8 +351,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("ATTR"),
-                arg("s", KType::TypeExprRef),
-                arg("field", KType::TypeExprRef),
+                arg("s", KType::OfKind(KKind::Proper)),
+                arg("field", KType::OfKind(KKind::Proper)),
             ],
         ),
         body_type_lhs,
@@ -357,7 +366,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             vec![
                 kw("ATTR"),
                 arg("s", module_ty),
-                arg("field", KType::TypeExprRef),
+                arg("field", KType::OfKind(KKind::Proper)),
             ],
         ),
         body_module,

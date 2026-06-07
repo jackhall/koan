@@ -17,7 +17,7 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::{CallArena, LexicalFrame, Scope};
-use crate::machine::model::KObject;
+use crate::machine::model::Carried;
 use crate::machine::model::Parseable;
 use crate::machine::KError;
 use crate::machine::NodeId;
@@ -175,17 +175,17 @@ impl<'a> NodeStore<'a> {
 
     /// Only safe on IDs whose slot has been finalized; internal slots may
     /// have been eagerly freed by their parent.
-    pub(super) fn read_result(&self, id: NodeId) -> Result<&'a KObject<'a>, &KError> {
+    pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'a>, &KError> {
         match &self.slots[id] {
-            SlotState::Done(NodeOutput::Value(v)) => Ok(v),
+            &SlotState::Done(NodeOutput::Value(c)) => Ok(c),
             SlotState::Done(NodeOutput::Err(e)) => Err(e),
             _ => panic!("result must be ready by the time it's read"),
         }
     }
 
-    pub(super) fn read(&self, id: NodeId) -> &'a KObject<'a> {
+    pub(super) fn read(&self, id: NodeId) -> Carried<'a> {
         match self.read_result(id) {
-            Ok(v) => v,
+            Ok(c) => c,
             Err(e) => panic!("read called on errored node: {e}"),
         }
     }

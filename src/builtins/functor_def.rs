@@ -19,6 +19,7 @@
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::Elaborator;
+use crate::machine::model::types::KKind;
 use crate::machine::model::KType;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, SchedulerHandle, Scope,
@@ -184,7 +185,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("FUNCTOR"),
                 arg("signature", KType::KExpression),
                 kw("->"),
-                arg("return_type", KType::TypeExprRef),
+                arg("return_type", KType::OfKind(KKind::Proper)),
                 kw("="),
                 arg("body", KType::KExpression),
             ],

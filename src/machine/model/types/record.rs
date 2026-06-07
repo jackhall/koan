@@ -54,6 +54,12 @@ impl<V> Record<V> {
         self.fields.iter()
     }
 
+    /// Consume into owned `(name, value)` pairs in insertion order — the by-value dual of
+    /// [`iter`](Record::iter), for rebuilding a record over a different value type.
+    pub fn into_pairs(self) -> impl Iterator<Item = (String, V)> {
+        self.fields.into_iter()
+    }
+
     /// Field names in insertion order.
     pub fn keys(&self) -> impl Iterator<Item = &String> {
         self.fields.keys()

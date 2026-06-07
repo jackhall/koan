@@ -26,7 +26,7 @@ anchor:
   `KExpression` whose `Future(&KObject)` parts can independently
   borrow into per-call storage; the anchor pins the per-call arena
   alive when any of those borrows points there.
-- `KObject::KTypeValue(KType::Module { module, frame })` — a
+- `KType::Module { module, frame }` (in the value channel's `Type` arm) — a
   first-class module value. `frame` is the per-call `Rc<CallArena>`
   of the functor call that minted the module; `None` for top-level
   `MODULE` declarations.
@@ -52,8 +52,8 @@ referencing per-call state. Per carrier:
 - **`KFunction`.** Compare `f.captured_scope().arena` to the dying
   frame's arena pointer. Match → clone the dying frame's `Rc` onto the
   lifted value; mismatch → no `Rc`.
-- **`KTypeValue(Module)`.** Compare `m.child_scope().arena` to the
-  dying frame's arena pointer; same rule.
+- **`Type`-arm `KType::Module`** (lifted by `lift_ktype`, not `lift_kobject`).
+  Compare `m.child_scope().arena` to the dying frame's arena pointer; same rule.
 - **`KFuture`.** Run a targeted membership walk
   (`kfuture_borrows_dying_arena`) that asks the dying arena's
   `owns_object` side-table whether each embedded `Future(&KObject)`

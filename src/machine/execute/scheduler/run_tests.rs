@@ -29,7 +29,7 @@ fn single_identifier_short_circuit_returns_value_when_bound() {
     sched.execute().unwrap();
     let id = sched.add_dispatch(parse_one("(x)"), scope);
     sched.execute().unwrap();
-    assert!(matches!(sched.read(id), KObject::Number(n) if *n == 42.0));
+    assert!(matches!(sched.read(id).object(), KObject::Number(n) if *n == 42.0));
 }
 
 /// Index-gated LET visibility — see [design/execution-model.md § Dispatch-time

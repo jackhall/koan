@@ -1,5 +1,6 @@
 use crate::machine::core::kfunction::{BinderNameFn, Body, BodyResult, BuiltinFn, KFunction};
 use crate::machine::core::{BindingIndex, KError, Scope};
+use crate::machine::model::types::KKind;
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, NominalKind, ReturnType, SignatureElement,
 };
@@ -135,7 +136,11 @@ pub fn default_scope<'a>(
         KType::KExpression,
         BindingIndex::BUILTIN,
     );
-    scope.register_type("Type".into(), KType::Type, BindingIndex::BUILTIN);
+    scope.register_type(
+        "Type".into(),
+        KType::OfKind(KKind::Any),
+        BindingIndex::BUILTIN,
+    );
     // User-declared-type surface names lower to the wildcard `AnyUserType { kind }`
     // carrier so the resolver and the parser-side fast path agree.
     scope.register_type(
@@ -145,10 +150,14 @@ pub fn default_scope<'a>(
         },
         BindingIndex::BUILTIN,
     );
-    scope.register_type("Module".into(), KType::AnyModule, BindingIndex::BUILTIN);
+    scope.register_type(
+        "Module".into(),
+        KType::OfKind(KKind::Module),
+        BindingIndex::BUILTIN,
+    );
     scope.register_type(
         "Signature".into(),
-        KType::AnySignature,
+        KType::OfKind(KKind::Signature),
         BindingIndex::BUILTIN,
     );
     scope.register_type("Any".into(), KType::Any, BindingIndex::BUILTIN);

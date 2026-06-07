@@ -1,3 +1,4 @@
+use crate::machine::model::types::KKind;
 use std::collections::HashMap;
 
 use crate::machine::core::PendingTypeEntry;
@@ -7,7 +8,7 @@ use crate::machine::model::types::{
     Elaborator, FieldListOutcome, FieldNameKind, NominalKind, NominalSchema, SchemaSealResult,
     SealOutcome,
 };
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::KType;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, Frame, KError, KErrorKind, SchedulerHandle, Scope,
 };
@@ -141,11 +142,7 @@ fn finalize_union<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => BodyResult::Value(
-            scope
-                .arena
-                .alloc_object(KObject::KTypeValue(kt_ref.clone())),
-        ),
+        SealOutcome::Sealed(kt_ref) => BodyResult::ktype(scope.arena.alloc_ktype(kt_ref.clone())),
         SealOutcome::DanglingRef(missing) => err(KError::new(KErrorKind::ShapeError(format!(
             "UNION `{name}` schema references unsealed type `{missing}`",
         )))),
@@ -164,10 +161,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "UNION",
         sig(
-            KType::Type,
+            KType::OfKind(KKind::Any),
             vec![
                 kw("UNION"),
-                arg("name", KType::TypeExprRef),
+                arg("name", KType::OfKind(KKind::Proper)),
                 kw("="),
                 arg("schema", KType::KExpression),
             ],
@@ -179,9 +176,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, run_one, run_one_err, run_root_silent};
+    use crate::builtins::test_support::{parse_one, run_one_err, run_one_type, run_root_silent};
     use crate::machine::model::types::{NominalKind, ProjectedSchema, RecursiveSet};
-    use crate::machine::model::{KObject, KType};
+    use crate::machine::model::KType;
     use crate::machine::{BindingIndex, KErrorKind, RuntimeArena, Scope};
 
     /// The projected (`SetLocal`s resolved) variant schema of a UNION member, by name.
@@ -210,17 +207,14 @@ mod tests {
     fn union_named_registers_type_in_scope() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        // UNION is type-only: the declaration yields a `KTypeValue(SetRef)` whose Tagged
+        // UNION is type-only: the declaration yields a `SetRef` type whose Tagged
         // member carries the variant schema, registered into `types`.
-        let result = run_one(scope, parse_one("UNION Maybe = (Some :Number None :Null)"));
+        let result = run_one_type(scope, parse_one("UNION Maybe = (Some :Number None :Null)"));
         match result {
-            KObject::KTypeValue(KType::SetRef { set, index }) => {
+            KType::SetRef { set, index } => {
                 assert_eq!(set.member(*index).kind, NominalKind::Tagged);
             }
-            other => panic!(
-                "expected KTypeValue(SetRef) for Maybe, got {:?}",
-                other.ktype()
-            ),
+            other => panic!("expected SetRef type for Maybe, got {other:?}"),
         }
         let schema = tagged_schema(scope, "Maybe");
         assert_eq!(schema.get("Some"), Some(&KType::Number));
@@ -326,13 +320,12 @@ mod tests {
             BindingIndex::value(0),
         );
         match second {
-            crate::machine::BodyResult::Value(KObject::KTypeValue(KType::SetRef {
-                set,
-                index,
-            })) => {
+            crate::machine::BodyResult::Value(crate::machine::model::values::Carried::Type(
+                KType::SetRef { set, index },
+            )) => {
                 assert_eq!(set.member(*index).name, "Maybe");
             }
-            _ => panic!("expected short-circuit Value(KTypeValue(SetRef)) from finalize_union"),
+            _ => panic!("expected short-circuit Value(Type(SetRef)) from finalize_union"),
         }
         assert!(
             scope.bindings().data().get("Maybe").is_none(),

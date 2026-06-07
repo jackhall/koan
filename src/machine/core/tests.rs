@@ -23,5 +23,5 @@ pub(super) fn body_no_op<'a>(
     _sched: &mut dyn crate::machine::core::kfunction::SchedulerHandle<'a>,
     _bundle: crate::machine::core::kfunction::ArgumentBundle<'a>,
 ) -> crate::machine::core::kfunction::BodyResult<'a> {
-    crate::machine::core::kfunction::BodyResult::Value(_scope.arena.alloc_object(KObject::Null))
+    crate::machine::core::kfunction::BodyResult::value(_scope.arena.alloc_object(KObject::Null))
 }

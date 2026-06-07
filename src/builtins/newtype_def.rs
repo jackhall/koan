@@ -15,11 +15,12 @@
 //! ([`finalize_nominal_member`], [`seal_recursive_refs`]) `UNION` uses, and the path a
 //! `RECURSIVE TYPES` block routes its `NEWTYPE` members through.
 
+use crate::machine::model::types::KKind;
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::argument_bundle::{
-    extract_bare_type_name, extract_kexpression, extract_ktype, extract_type_name_ref,
+    extract_bare_type_name, extract_kexpression, extract_ktype,
 };
 use crate::machine::core::source::Spanned;
 use crate::machine::core::{ApplyOutcome, LexicalFrame, PendingTypeEntry};
@@ -30,7 +31,7 @@ use crate::machine::model::types::{
     Elaborator, FieldListOutcome, FieldNameKind, NominalKind, NominalMember, NominalSchema, Record,
     RecursiveSet, SchemaSealResult, SealOutcome,
 };
-use crate::machine::model::values::KObject;
+use crate::machine::model::values::{Carried, KObject};
 use crate::machine::model::KType;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, Resolution,
@@ -41,11 +42,12 @@ use super::{arg, err, kw, register_builtin_with_binder, sig};
 
 /// Body of `NEWTYPE <name> = <repr>`, shared by the scalar (`:TypeExprRef` repr) and
 /// non-record-sigil (`:SigiledTypeExpr` repr) overloads. Branches on the repr carrier: a
-/// resolved `KTypeValue` or a bare-leaf `TypeNameRef` (scalar path → [`finalize_newtype`]),
-/// or a raw `KExpression` from the `:SigiledTypeExpr` slot (a structural sigil like
-/// `:(LIST OF T)` → [`defer_resolved_sigil`]). The record repr `:{…}` is a distinct
-/// `RecordType` part routed to [`body_record_repr`]. Every path writes the sealed `SetRef`
-/// identity into `bindings.types` and yields it as a `KObject::KTypeValue`.
+/// `Type`-arm `KType` — either resolved (scalar path → [`finalize_newtype`]) or a bare-leaf
+/// [`KType::Unresolved`] name (scope-chain walk → finalize) — or an `Object`-arm
+/// `KExpression` from the `:SigiledTypeExpr` slot (a structural sigil like `:(LIST OF T)` →
+/// [`defer_resolved_sigil`]). The record repr `:{…}` is a distinct `RecordType` part routed
+/// to [`body_record_repr`]. Every path writes the sealed `SetRef` identity into
+/// `bindings.types` and yields it on the type channel.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
@@ -62,38 +64,28 @@ pub fn body<'a>(
         .as_ref()
         .map(|c| BindingIndex::value(c.index))
         .unwrap_or(BindingIndex::BUILTIN);
-    // `TypeExprRef` carriers split two ways: `KTypeValue` for resolved leaves /
-    // structural shapes, `TypeNameRef` for bare-leaf names. Peek before extracting
-    // so we route to the right helper — both consume the slot.
-    match bundle.get("repr") {
-        Some(KObject::KTypeValue(_)) => {
-            let repr = match extract_ktype(&mut bundle, "repr") {
-                Some(t) => t,
-                None => unreachable!("get(KTypeValue) then extract_ktype must succeed"),
-            };
-            finalize_newtype(scope, name, repr, bind_index)
-        }
-        Some(KObject::TypeNameRef(_)) => {
+    // A `Type`-arm carrier splits two ways: a resolved `KType` for builtin leaves /
+    // structural shapes, `KType::Unresolved` for bare-leaf names. An `Object`-arm
+    // `KExpression` is a raw-captured sigil. Peek before extracting so we route to the
+    // right helper — both consume the slot.
+    if bundle.get_type("repr").is_some() {
+        match extract_ktype(&mut bundle, "repr") {
             // Bare-leaf carrier (`NEWTYPE Bar = Foo` where `Foo` is user-declared):
             // walk the scope chain for the resolved identity.
-            let te = match extract_type_name_ref(&mut bundle, "repr") {
-                Some(te) => te,
-                None => unreachable!("get(TypeNameRef) then extract_type_name_ref must succeed"),
-            };
-            if let Some(kt) = scope.resolve_type_with_chain(te.as_str(), chain.as_deref()) {
-                return finalize_newtype(scope, name, kt.clone(), bind_index);
-            }
-            // The repr names a type that is still finalizing in this scheduler — e.g. a
-            // record-repr dependency whose `:{…}` defers its own finalize behind a
-            // sub-dispatch, so this dependent's body can run first. Park on the
-            // producer and re-resolve at Combine-finish, once its identity is in
-            // `types`. A name with no in-flight producer is a genuine forward/unknown
-            // reference — a position error.
-            if let Resolution::Placeholder(producer) =
-                scope.resolve_with_chain(te.as_str(), chain.as_deref())
-            {
-                let finish: CombineFinish<'a> =
-                    Box::new(move |scope, _sched, _results| {
+            Some(KType::Unresolved(te)) => {
+                if let Some(kt) = scope.resolve_type_with_chain(te.as_str(), chain.as_deref()) {
+                    return finalize_newtype(scope, name, kt.clone(), bind_index);
+                }
+                // The repr names a type that is still finalizing in this scheduler — e.g. a
+                // record-repr dependency whose `:{…}` defers its own finalize behind a
+                // sub-dispatch, so this dependent's body can run first. Park on the
+                // producer and re-resolve at Combine-finish, once its identity is in
+                // `types`. A name with no in-flight producer is a genuine forward/unknown
+                // reference — a position error.
+                if let Resolution::Placeholder(producer) =
+                    scope.resolve_with_chain(te.as_str(), chain.as_deref())
+                {
+                    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
                         match scope.resolve_type_with_chain(te.as_str(), chain.as_deref()) {
                             Some(kt) => finalize_newtype(scope, name, kt.clone(), bind_index),
                             None => err(KError::new(KErrorKind::ShapeError(format!(
@@ -102,28 +94,31 @@ pub fn body<'a>(
                             )))),
                         }
                     });
-                let combine_id = sched.add_combine(Vec::new(), vec![producer], scope, finish);
-                return BodyResult::DeferTo(combine_id);
+                    let combine_id = sched.add_combine(Vec::new(), vec![producer], scope, finish);
+                    return BodyResult::DeferTo(combine_id);
+                }
+                err(KError::new(KErrorKind::ShapeError(format!(
+                    "NEWTYPE repr slot = unknown type name `{}`",
+                    te.as_str(),
+                ))))
             }
-            err(KError::new(KErrorKind::ShapeError(format!(
-                "NEWTYPE repr slot = unknown type name `{}`",
-                te.as_str(),
-            ))))
+            Some(repr) => finalize_newtype(scope, name, repr, bind_index),
+            None => unreachable!("get_type(repr) then extract_ktype must succeed"),
         }
+    } else if matches!(bundle.get("repr"), Some(KObject::KExpression(_))) {
         // Raw-captured sigil repr from the `:SigiledTypeExpr` overload — a structural repr
         // (`:(LIST OF Number)`) with no self-reference to thread. Sub-dispatch it to a resolved
         // `KType` and seal a plain Newtype over it. A record repr `:{…}` is a distinct part
         // routed to its own overload ([`body_record_repr`]), so it never reaches here.
-        Some(KObject::KExpression(_)) => {
-            let inner = match extract_kexpression(&mut bundle, "repr") {
-                Some(e) => e,
-                None => unreachable!("get(KExpression) then extract_kexpression must succeed"),
-            };
-            defer_resolved_sigil(scope, sched, name, inner, bind_index)
-        }
-        _ => err(KError::new(KErrorKind::ShapeError(
+        let inner = match extract_kexpression(&mut bundle, "repr") {
+            Some(e) => e,
+            None => unreachable!("get(KExpression) then extract_kexpression must succeed"),
+        };
+        defer_resolved_sigil(scope, sched, name, inner, bind_index)
+    } else {
+        err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE repr slot must be a type expression (e.g. `Number`, `Foo`)".to_string(),
-        ))),
+        )))
     }
 }
 
@@ -147,11 +142,7 @@ fn finalize_newtype<'a>(
         .bindings()
         .try_register_type(&name, kt_ref, bind_index)
     {
-        Ok(ApplyOutcome::Applied) => BodyResult::Value(
-            scope
-                .arena
-                .alloc_object(KObject::KTypeValue(kt_ref.clone())),
-        ),
+        Ok(ApplyOutcome::Applied) => BodyResult::ktype(scope.arena.alloc_ktype(kt_ref.clone())),
         // Finalize sites run post-Combine outside the re-entrant hot path, so borrow
         // contention here is a programming error. Surface as a structured error rather
         // than panicking — a future re-entrant caller still gets a recoverable diag.
@@ -292,11 +283,7 @@ fn finalize_record_newtype<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => BodyResult::Value(
-            scope
-                .arena
-                .alloc_object(KObject::KTypeValue(kt_ref.clone())),
-        ),
+        SealOutcome::Sealed(kt_ref) => BodyResult::ktype(scope.arena.alloc_ktype(kt_ref.clone())),
         SealOutcome::DanglingRef(missing) => err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE `{name}` record repr references unsealed type `{missing}`",
         )))),
@@ -319,8 +306,8 @@ fn defer_resolved_sigil<'a>(
     ))]);
     let sub = sched.add_dispatch(wrapped, scope);
     let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| match results[0] {
-        KObject::KTypeValue(kt) => finalize_newtype(scope, name, kt.clone(), bind_index),
-        other => BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+        Carried::Type(kt) => finalize_newtype(scope, name, kt.clone(), bind_index),
+        Carried::Object(other) => BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE repr sigil resolved to a non-type value `{}`",
             other.ktype().name(),
         )))),
@@ -344,12 +331,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "NEWTYPE",
         sig(
-            KType::Type,
+            KType::OfKind(KKind::Any),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::TypeExprRef),
+                arg("name", KType::OfKind(KKind::Proper)),
                 kw("="),
-                arg("repr", KType::TypeExprRef),
+                arg("repr", KType::OfKind(KKind::Proper)),
             ],
         ),
         body,
@@ -362,10 +349,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "NEWTYPE",
         sig(
-            KType::Type,
+            KType::OfKind(KKind::Any),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::TypeExprRef),
+                arg("name", KType::OfKind(KKind::Proper)),
                 kw("="),
                 arg("repr", KType::SigiledTypeExpr),
             ],
@@ -380,10 +367,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "NEWTYPE",
         sig(
-            KType::Type,
+            KType::OfKind(KKind::Any),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::TypeExprRef),
+                arg("name", KType::OfKind(KKind::Proper)),
                 kw("="),
                 arg("repr", KType::RecordType),
             ],
@@ -435,7 +422,7 @@ mod tests {
     fn declare_mints_newtype_identity() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run_one(scope, parse_one("NEWTYPE Distance = Number"));
+        run(scope, "NEWTYPE Distance = Number");
         let types = scope.bindings().types();
         let (kt, _) = types
             .get("Distance")

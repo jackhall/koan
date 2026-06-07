@@ -27,18 +27,21 @@
   Width/depth subtyping orders record *values* in the dispatch lattice — see
   [Variance](#variance).
 - Other function-like: `KExpression` (a captured-but-unevaluated expression).
-- Meta-type for type-position slots: `TypeExprRef` — see
+- Meta-type for type-position slots: `OfKind(KKind)` — a type-accepting slot carries
+  a shallow [`KKind`](../../src/machine/model/types/kkind.rs) expectation, and a type value
+  flowing in the value channel's `Type` arm is classified by `KType::kind_of` and matched
+  against it. The kinds are `{ Proper, Module, Signature, Any }`: a parsed type-name slot
+  is `OfKind(Proper)`, the `:Type` surface is `OfKind(Any)`, and the `:Module` / `:Signature`
+  wildcards are `OfKind(Module)` / `OfKind(Signature)`. See
   [Type-position slot kinds](#type-position-slot-kinds).
-- First-class type values: `Type` (a tagged-union or struct schema, the meta-type
-  reported by `KObject::StructType` and `KObject::TaggedUnionType`). As a
-  parameter-slot annotation (`:Type`), it admits any type-denoting carrier:
-  bare builtin type tokens (`Number`, `Str`, `Bool`, `Null`) carried as
-  `KObject::KTypeValue(_)`, tagged-union and struct schema carriers, and any
-  other non-module / non-signature `KTypeValue`. Module and signature
-  carriers route through the dedicated `AnyModule` / `AnySignature` /
-  `Signature { .. }` slots so the `:Type` vs `:Module` overload
+- First-class type values: a type flows raw as a `&KType` in the value channel's `Type`
+  arm — there is no `KObject` box. As a parameter-slot annotation, `OfKind(Proper)` (`:Type`'s
+  `OfKind(Any)` likewise) admits any *proper* type value: bare builtin type tokens (`Number`,
+  `Str`, `Bool`, `Null`), tagged-union and struct nominal tokens, and any other non-module /
+  non-signature type. Modules and signatures route through the dedicated `OfKind(Module)` /
+  `OfKind(Signature)` / `Signature { .. }` slots so the `:Type` vs `:Module` overload
   distinction stays intact — see
-  [`KType::Type::accepts_part`](../../src/machine/model/types/ktype_predicates.rs)
+  [`KType::accepts_part`](../../src/machine/model/types/ktype_predicates.rs)
   and the pin test
   [`type_slot_admits_bare_builtin_tokens_and_user_type_carriers`](../../src/machine/model/types/ktype_predicates/tests.rs).
 - User-declared nominal types — three variants reference members of an
@@ -106,7 +109,7 @@
   `AbstractType` minting for the same slot name compares equal, and a
   per-call `Module`-rooted mint stays distinct from the `Sig`-rooted member it
   was threaded from.
-  Companion wildcards `AnyModule` and `AnySignature` admit any module
+  Companion wildcards `OfKind(Module)` and `OfKind(Signature)` admit any module
   or signature value respectively; the surface keywords `Module` and
   `Signature` lower to them in
   [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs).
@@ -115,8 +118,8 @@
   contains `sig.sig_id()` (the constraint role — what `Er :OrderedSig`
   lowers to in a FUNCTOR parameter slot, so `:OrderedSig` means "module
   satisfying OrderedSig," never "the signature value itself"), while a
-  signature *value* `KTypeValue(KType::Signature { .. })` is matched only
-  by the `AnySignature` wildcard. `pinned_slots` (empty for a bare
+  signature *value* (a `KType::Signature { .. }` flowing in the `Type` arm) is matched only
+  by the `OfKind(Signature)` wildcard. `pinned_slots` (empty for a bare
   signature) carries `WITH` abstract-type specializations; because the
   same variant rides a live `&Signature`, a `WITH` result is
   introspectable too.
@@ -164,7 +167,7 @@ sigil-and-dispatch contract.
 constructors — `LIST OF`, `MAP _ -> _`, `FN <sig> -> _`, and
 `FUNCTOR <sig> -> _` — register in
 [`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs)
-and produce `KObject::KTypeValue(KType::...)` carriers; they are the canonical
+and produce `KType::...` results in the value channel's `Type` arm; they are the canonical
 type-language surface, dispatched and assembled as ordinary sub-expressions
 through the type-language path. (A module type-member is named by the dotted
 `M.T` access and signature specialization by the infix `WITH {…}` — neither is
@@ -186,7 +189,7 @@ Three sites consume parameterized types, and each has its own behavior:
 | Site | What it does | Variance |
 | --- | --- | --- |
 | `matches_value` | Walks a runtime value against a declared type at an ascription boundary (FN return, FN argument, `LET`). | **Covariant** for `List` / `Dict`: `:(LIST OF Any)` accepts any list because `Any.matches_value(_)` is always true; `:(MAP Str -> Any)` accepts a `{a: 1, b: "x"}` value. **Invariant** for `Function`: delegates to `function_compat`. |
-| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. Concrete carrier types also outrank the unconstrained-name slot types `Identifier` and `TypeExprRef`, so an `ATTR <s:Struct>` overload beats an `ATTR <s:Identifier>` fallback when both admit. | **Covariant** for `List` / `Dict` (element, key, value): `:(LIST OF Number)` ≺ `:(LIST OF Any)`, `:(MAP Str -> Number)` ≺ `:(MAP Str -> Any)`. **Contravariant params (with width-subset) + covariant return** for `Function` / `Functor`, matching `function_compat`: `:(FN (x :Any) -> Str)` ≺ `:(FN (x :Number) -> Str)` (more-general param wins), `:(FN (x) -> Number)` ≺ `:(FN (x) -> Any)` (narrower return wins), and a nullary `:(FN () -> R)` ≺ a unary `:(FN (x) -> R)` (narrower width wins). |
+| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. Concrete carrier types also outrank the unconstrained-name slot types `Identifier` and `OfKind(Proper)`, so an `ATTR <s:Struct>` overload beats an `ATTR <s:Identifier>` fallback when both admit. | **Covariant** for `List` / `Dict` (element, key, value): `:(LIST OF Number)` ≺ `:(LIST OF Any)`, `:(MAP Str -> Number)` ≺ `:(MAP Str -> Any)`. **Contravariant params (with width-subset) + covariant return** for `Function` / `Functor`, matching `function_compat`: `:(FN (x :Any) -> Str)` ≺ `:(FN (x :Number) -> Str)` (more-general param wins), `:(FN (x) -> Number)` ≺ `:(FN (x) -> Any)` (narrower return wins), and a nullary `:(FN () -> R)` ≺ a unary `:(FN (x) -> R)` (narrower width wins). |
 | `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Function subtyping** — contravariant params (width + depth) + covariant return. A value `(x :Any) -> Str` fills a slot typed `:(FN (x :Number) -> Str)`; a value `(x :Number) -> Number` fills `:(FN (x :Number) -> Any)`; a unary value fills a binary slot (the extra slot param arrives unbound under call-by-name). A value requiring a param the slot doesn't promise is a non-match. |
 
 Admission (`function_compat`) and specificity (`is_more_specific_than`) share
@@ -356,28 +359,28 @@ constructed function's projected `ktype()` carries its real shape at runtime.
 
 ## Type-position slot kinds
 
-`TypeExprRef` is the meta-type for argument slots that capture a parsed type-name
-token (`ExpressionPart::Type(_)`). The slot resolves to a
-`KObject::KTypeValue(KType)` carrying the elaborated type — name, nested
+`OfKind(Proper)` is the meta-type for argument slots that capture a parsed type-name
+token (`ExpressionPart::Type(_)`). The slot resolves to a `&KType` flowing raw in the value
+channel's `Type` arm, carrying the elaborated type — name, nested
 parameters, and (for recursive types) the `SetRef` into a sealed `RecursiveSet` —
 so parameterized types like `:(LIST OF Number)` and recursive types like `Tree`
 survive the parser → dispatch boundary as a single canonical value. Used by
 FN's return-type slot, by STRUCT and UNION's name slots, and by `type_call`'s
 verb slot. Slots that want only a bare name (STRUCT/UNION) check the elaborated
-shape on the inner value; the validation lives at the consuming builtin rather
+shape on the inner type; the validation lives at the consuming builtin rather
 than at the slot kind.
 
-### `TypeNameRef` — surface form survives bind
+### `KType::Unresolved` — surface form survives bind
 
-A `TypeExprRef`-slot value whose surface `TypeName` doesn't resolve at
+A type-position value whose surface `TypeName` doesn't resolve at
 `ExpressionPart::resolve_for` time — a bare-leaf name outside
 [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)'s
 builtin table (`Point`, `IntOrd`, `MyList`, or an unknown name like
-`SomeWeirdName`) — rides through bind as
-[`KObject::TypeNameRef(TypeName)`](../../src/machine/model/values/kobject.rs)
-rather than `KTypeValue(_)`. See
+`SomeWeirdName`) — rides through bind as the
+[`KType::Unresolved(TypeName)`](../../src/machine/model/types/ktype.rs)
+transient in the `Type` arm rather than a resolved `&KType`. See
 [elaboration.md § Layers](elaboration.md#layers) § Layer 5 for where this
-carrier sits in the pipeline and the eventual scope-aware elaboration
+transient sits in the pipeline and the eventual scope-aware elaboration
 hop.
 
 The guarantee this gives consumers: diagnostics can quote the user's
@@ -456,12 +459,12 @@ admits accordingly. The forms:
   `Future`; admission runs `arg.matches(part)` and `accepts_part` for the
   carried-type check.
 - **Bare variable** (`DESCRIBE xs`) — the cache entry is
-  `NameOutcome::Resolved(obj)`. Admission tests
+  `NameOutcome::Resolved(Carried)`. Admission tests
   [`KType::accepts_part`](../../src/machine/model/types/ktype_predicates.rs)
-  against `ExpressionPart::Future(obj)` (the `Future` arm holds a reference,
-  no clone). A bare name whose value has the wrong carrier type
-  strict-rejects the overload; the call surfaces as `DispatchFailed` rather
-  than a bind-time `TypeMismatch`. Binder (`Identifier` / `TypeExprRef`) and
+  against `ExpressionPart::Future(Carried)` (the `Future` arm holds a `Carried`
+  reference — an object or a `Type` arm — no clone). A bare name whose value has the
+  wrong carrier type strict-rejects the overload; the call surfaces as `DispatchFailed`
+  rather than a bind-time `TypeMismatch`. Binder (`Identifier` / `OfKind(Proper)`) and
   lazy (`KExpression`) slots skip the cache and admit shape-only — the slot
   owns the name, so admission can't depend on whether `x` happens to be
   bound or parked.
@@ -502,7 +505,7 @@ unbound > pending overload > Unmatched — and surfaces the right
   unresolved bare name, not a generic dispatch miss.
 
 Specificity ranks `is_more_specific_than` so that concrete carrier types
-beat the unconstrained-name slot types (`Identifier` / `TypeExprRef`). A
+beat the unconstrained-name slot types (`Identifier` / `OfKind(Proper)`). A
 call like `ATTR p z` where `p` resolves to a `Struct` admits both a
 concrete `ATTR <s:Struct>` overload and an `ATTR <s:Identifier>` fallback;
 the concrete overload wins by specificity without tying.

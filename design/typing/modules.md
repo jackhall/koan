@@ -128,12 +128,12 @@ newtype-with-private-fields pattern that a trait system would need.
 ## First-class modules
 
 The type language is first-class; modules and signatures live there. A
-module value rides
-[`KObject::KTypeValue(KType::Module { module, frame })`](../../src/machine/model/values/kobject.rs)
-and a signature value rides `KObject::KTypeValue(KType::Signature { sig, pinned_slots })` —
-the same `KTypeValue` carrier that holds `Number`, `Str`, and builtin
-type values, with the identity-bearing module/signature variants living
-inside `KType` itself. A module value flows through `LET`, ATTR, and function
+module value rides the value channel's `Type` arm as
+[`KType::Module { module, frame }`](../../src/machine/model/types/ktype.rs)
+and a signature value as `KType::Signature { sig, pinned_slots }` —
+the same [`Carried::Type`](../../src/machine/model/values/carried.rs) arm that carries
+`Number`, `Str`, and builtin type values, with the identity-bearing module/signature
+variants living inside `KType` itself. A module value flows through `LET`, ATTR, and function
 calls like any other value: there is no separate pack/unpack form, no
 `(module M)` construction syntax, and no `(val m)` projection. A module
 named in expression position evaluates to its value, and `m.compare` is
@@ -148,8 +148,8 @@ value-side carrier — `bindings.data` carries zero type carriers. `LET M2 = M1`
 module aliases and `LET S2 = OrderedSig` signature aliases likewise route
 through `register_type` against the type entry. Value-position references — a
 module named as an ATTR receiver, a signature introspected by `:|` or `WITH`,
-or either surfaced by `USING … SCOPE` — synthesize the
-`KObject::KTypeValue(KType::Module { .. } | KType::Signature { .. })` carrier on
+or either surfaced by `USING … SCOPE` — surface the
+`KType::Module { .. } | KType::Signature { .. }` identity in the value channel's `Type` arm on
 demand from the type entry via
 [`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_expr.rs);
 ATTR's `body_type_lhs` routes its Type-classed receiver through that seam rather
@@ -163,7 +163,7 @@ either a SIG-declared member (`source: Sig(scope_id)`) or the per-call mint of a
 opaquely-ascribed module (`source: Module(view)`). Module identity is by
 `module.scope_id()`; signature identity by `sig.sig_id()` + `pinned_slots`;
 abstract-type identity by `(source.scope_id(), name)`. The
-type-position wildcards `KType::AnyModule` and `KType::AnySignature`
+type-position wildcards `KType::OfKind(KKind::Module)` and `KType::OfKind(KKind::Signature)`
 admit any first-class module or signature value — the surface keywords
 `Module` and `Signature` lower to them in
 [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs).
@@ -173,8 +173,8 @@ value role, disambiguated by **position** rather than by variant. A
 `Signature { .. }` *slot annotation* — `(PICK m :OrderedSig)` — matches a
 *module* whose `compatible_sigs` records `sig.sig_id()`, so `:OrderedSig`
 means "any module satisfying OrderedSig." A signature *value* —
-`KTypeValue(KType::Signature { .. })`, what `OrderedSig` evaluates to in
-expression position — is matched by the `:Signature` (`AnySignature`)
+`KType::Signature { .. }` in the `Type` arm, what `OrderedSig` evaluates to in
+expression position — is matched by the `:Signature` (`OfKind(Signature)`)
 wildcard. A slot typed `:OrderedSig` therefore never admits the signature
 value itself, and `:Signature` never admits a satisfying module.
 

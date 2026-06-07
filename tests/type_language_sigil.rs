@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::{KObject, KType, ProjectedSchema, RecursiveSet};
+use koan::machine::model::{KKind, KType, ProjectedSchema, RecursiveSet};
 use koan::machine::{RuntimeArena, Scheduler, Scope};
 use koan::parse::parse;
 
@@ -58,9 +58,10 @@ fn run_expect_err(arena: &RuntimeArena, src: &str) -> String {
     }
 }
 
-/// Read the SIG named `sig_name`'s decl_scope value-binding for `name` as a
-/// `KType` carrier. Reads the run-root scope's type side (`resolve_type`) to grab
-/// the Signature carrier, then walks the Signature's decl_scope's `iter_data` view.
+/// Read the SIG named `sig_name`'s decl_scope value-slot for `name` as its declared
+/// `KType`. Reads the run-root scope's type side (`resolve_type`) to grab the Signature
+/// carrier, then reads the Signature decl_scope's `bindings.types` — where VAL value slots
+/// record their declared type under their value-class name.
 fn lookup_sig_value_kt<'a>(scope: &'a Scope<'a>, sig_name: &str, name: &str) -> KType<'a> {
     let s = match scope.resolve_type(sig_name) {
         Some(KType::Signature { sig, .. }) => *sig,
@@ -69,18 +70,12 @@ fn lookup_sig_value_kt<'a>(scope: &'a Scope<'a>, sig_name: &str, name: &str) -> 
             other
         ),
     };
-    let entries = s.decl_scope().bindings().iter_data();
-    let (_, obj) = entries
+    let entries = s.decl_scope().bindings().iter_types();
+    entries
         .iter()
         .find(|(n, _)| n == name)
-        .unwrap_or_else(|| panic!("`{name}` should be bound"));
-    match obj {
-        KObject::KTypeValue(kt) => kt.clone(),
-        other => panic!(
-            "`{name}` must be a KTypeValue carrier, got {:?}",
-            other.ktype()
-        ),
-    }
+        .map(|(_, kt)| (*kt).clone())
+        .unwrap_or_else(|| panic!("`{name}` should be bound in the SIG decl_scope's types"))
 }
 
 // --- LIST OF ---
@@ -180,8 +175,8 @@ fn sigil_functor_lowers_to_kfunctor() {
     match mk {
         KType::KFunctor { params, ret, .. } => {
             assert_eq!(params.len(), 1);
-            assert_eq!(params.get("Ty"), Some(&KType::AnySignature));
-            assert_eq!(*ret, KType::AnyModule);
+            assert_eq!(params.get("Ty"), Some(&KType::OfKind(KKind::Signature)));
+            assert_eq!(*ret, KType::OfKind(KKind::Module));
         }
         other => panic!("mk must be KType::KFunctor, got {other:?}"),
     }
@@ -278,10 +273,10 @@ fn sigil_functor_forward_reference_defers_via_combine() {
             // forward reference resolved through the deferral path.
             let ty = params.get("Ty").expect("param `Ty` must be present");
             assert!(
-                ty.name().contains("OrderedSig") || *ty == KType::AnySignature,
+                ty.name().contains("OrderedSig") || *ty == KType::OfKind(KKind::Signature),
                 "param `Ty` should carry OrderedSig identity, got {ty:?}",
             );
-            assert_eq!(*ret, KType::AnyModule);
+            assert_eq!(*ret, KType::OfKind(KKind::Module));
         }
         other => panic!("mk must be KType::KFunctor, got {other:?}"),
     }

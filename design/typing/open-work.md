@@ -18,7 +18,7 @@ Future work on the type and module system. Each entry points at a
   policy, explicit-application disambiguation. The call-site witness-elision
   layer over the already-first-class module + signature substrate
   ([modules.md](modules.md)); also lands the signature-bound module-typed
-  dispatch the current `AnyModule` wildcard lacks, plus multi-abstract-type
+  dispatch the current `:Module` (`OfKind(Module)`) wildcard lacks, plus multi-abstract-type
   implicit resolution for signatures spanning multiple type slots, and generic
   functions as type-parameterized functors selected by implicit resolution
   ([generics.md](generics.md)), including dependent parameters that reference an

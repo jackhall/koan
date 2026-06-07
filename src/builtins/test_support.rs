@@ -12,7 +12,7 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
-use crate::machine::model::KObject;
+use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{KError, RuntimeArena, Scope};
 use crate::parse::parse;
 
@@ -63,7 +63,19 @@ pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KO
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().expect("scheduler should succeed");
-    sched.read(id)
+    sched.read(id).object()
+}
+
+/// Like [`run_one`] but for a type-producing expression: narrows the result's carrier to
+/// its [`Carried::Type`] arm. Panics if the expression produced a runtime value instead.
+pub(crate) fn run_one_type<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KType<'a> {
+    let mut sched = Scheduler::new();
+    let id = sched.add_dispatch(expr, scope);
+    sched.execute().expect("scheduler should succeed");
+    match sched.read(id) {
+        Carried::Type(kt) => kt,
+        Carried::Object(obj) => panic!("expected a type result, got value {}", obj.summarize()),
+    }
 }
 
 /// Like [`run_one`] but returns the `KError` produced by the dispatched node.

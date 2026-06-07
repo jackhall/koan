@@ -27,7 +27,7 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
 use crate::machine::core::{CallArena, ScopeId};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::KObject;
+use crate::machine::model::Carried;
 use crate::machine::{
     CatchFinish, CombineFinish, KError, KFuture, LexicalFrame, NameOutcome, NodeId,
     SchedulerHandle, Scope,
@@ -73,11 +73,11 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
         self.sched.is_result_ready(id)
     }
 
-    pub(super) fn read_result(&self, id: NodeId) -> Result<&'a KObject<'a>, &KError> {
+    pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'a>, &KError> {
         self.sched.read_result(id)
     }
 
-    pub(super) fn read(&self, id: NodeId) -> &'a KObject<'a> {
+    pub(super) fn read(&self, id: NodeId) -> Carried<'a> {
         self.sched.read(id)
     }
 
@@ -164,7 +164,7 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     ) -> NodeStep<'a> {
         use crate::machine::core::kfunction::BodyResult;
         match future.function.invoke(scope, self, future.bundle) {
-            BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
+            BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
             BodyResult::Tail {
                 expr,
                 frame,

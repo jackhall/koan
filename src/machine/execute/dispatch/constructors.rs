@@ -170,7 +170,7 @@ fn launch<'a>(
             let outcome = ctx.read_result(sub_id);
             match outcome {
                 Ok(v) => {
-                    staged_values[i] = Some(v);
+                    staged_values[i] = Some(v.object());
                     ctx.free(sub_id.index());
                 }
                 Err(e) => {
@@ -236,7 +236,7 @@ pub(in crate::machine::execute::dispatch) fn finish<'a>(
         }
     };
     match result {
-        Ok(obj) => NodeStep::Done(NodeOutput::Value(scope.arena.alloc_object(obj))),
+        Ok(obj) => NodeStep::Done(NodeOutput::value(scope.arena.alloc_object(obj))),
         Err(e) => NodeStep::Done(NodeOutput::Err(e)),
     }
 }

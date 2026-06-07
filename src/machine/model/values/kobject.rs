@@ -3,10 +3,12 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, KFuture};
-use crate::machine::model::ast::{KExpression, TypeName};
+use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     KType, NominalKind, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
 };
+
+use super::Held;
 
 #[cfg(test)]
 mod tests;
@@ -52,12 +54,13 @@ pub enum KObject<'a> {
     /// an annotated boundary re-stamped to the declared element type (coarsening
     /// included). Construct via [`KObject::list`] / [`KObject::list_with_type`]; never
     /// the tuple directly outside this module.
-    List(Rc<Vec<KObject<'a>>>, Box<KType<'a>>),
-    /// Dict value. The second/third fields are the memoized/ascribed key + value types,
-    /// computed as the join of the keys / values at fresh construction or re-stamped at
-    /// an annotated boundary.
+    List(Rc<Vec<Held<'a>>>, Box<KType<'a>>),
+    /// Dict value. Each value cell is a [`Held`] (an object or a first-class type); keys
+    /// stay scalar ([`Serializable`]). The second/third fields are the memoized/ascribed
+    /// key + value types, computed as the join of the keys / values at fresh construction
+    /// or re-stamped at an annotated boundary.
     Dict(
-        Rc<HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>>>,
+        Rc<HashMap<Box<dyn Serializable<'a> + 'a>, Held<'a>>>,
         Box<KType<'a>>,
         Box<KType<'a>>,
     ),
@@ -86,23 +89,8 @@ pub enum KObject<'a> {
     /// `KType::Record` at an annotated boundary (mirrors `List` / `Dict`). Construct via
     /// [`KObject::record`] / [`KObject::record_with_type`]. Distinct from the nominal
     /// `Struct`: a record carries no `(name, scope_id)` identity, only its structure.
-    Record(Rc<Record<KObject<'a>>>, Box<Record<KType<'a>>>),
-    /// First-class type value carrying the elaborated `KType` directly. The parser's
-    /// surface `TypeName` is lowered at the seam so downstream consumers never see
-    /// surface syntax again. Slot kind is still `KType::TypeExprRef`; the slot is the
-    /// dispatch-position marker, the variant is the runtime value.
-    ///
-    /// Also the value-side carrier for first-class modules and signatures: a module
-    /// value is `KTypeValue(KType::Module { module, frame })`, a signature value is
-    /// `KTypeValue(KType::Signature { sig, pinned_slots })`.
-    KTypeValue(KType<'a>),
-    /// Bind-time carrier for a `TypeExprRef`-slot value whose surface `TypeName` couldn't
-    /// be lowered to a concrete `KType` at `ExpressionPart::resolve_for` time — a
-    /// bare-leaf name not in [`KType::from_name`]'s builtin table (`Point`, `IntOrd`,
-    /// `MyList`). Preserves the parser-side `TypeName` for consumers that want the
-    /// surface name; scope-aware resolution + memoization lives on
-    /// [`crate::machine::core::Scope::resolve_type_expr`].
-    TypeNameRef(TypeName),
+    /// Each field value is a [`Held`] (an object or a first-class type).
+    Record(Rc<Record<Held<'a>>>, Box<Record<KType<'a>>>),
     /// NEWTYPE carrier (and the ATTR abstract-type re-tag carrier): tags a representation
     /// value with a type identity. `inner` is invariantly *not* a `Wrapped` — the
     /// [`NonWrappedRef`] field type enforces newtype-over-newtype collapse at the
@@ -126,6 +114,12 @@ impl<'a> KObject<'a> {
     /// Empty list memoizes `Any` (the join's identity); the empty-container *error*
     /// rule lives at the untyped-resolution boundary, not here.
     pub fn list(items: Vec<KObject<'a>>) -> KObject<'a> {
+        KObject::list_of_held(items.into_iter().map(Held::Object).collect())
+    }
+
+    /// Fresh `List` carrier over [`Held`] cells — the type-aware path (a list element may be
+    /// a first-class type). Memoizes the element type as the join (LUB) of the cells.
+    pub fn list_of_held(items: Vec<Held<'a>>) -> KObject<'a> {
         let elem = KType::join_iter(items.iter().map(|i| i.ktype()));
         KObject::List(Rc::new(items), Box::new(elem))
     }
@@ -133,12 +127,18 @@ impl<'a> KObject<'a> {
     /// `List` carrier with an explicitly supplied element type — for lift (preserve the
     /// memoized type across an arena-anchor rebuild) and ascription stamping (re-tag to
     /// the declared element type, coarsening included).
-    pub fn list_with_type(items: Rc<Vec<KObject<'a>>>, elem: KType<'a>) -> KObject<'a> {
+    pub fn list_with_type(items: Rc<Vec<Held<'a>>>, elem: KType<'a>) -> KObject<'a> {
         KObject::List(items, Box::new(elem))
     }
 
     /// Fresh `Dict` carrier: memoizes key + value types as the join of the keys / values.
     pub fn dict(map: HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>>) -> KObject<'a> {
+        KObject::dict_of_held(map.into_iter().map(|(k, v)| (k, Held::Object(v))).collect())
+    }
+
+    /// Fresh `Dict` carrier over [`Held`] value cells — the type-aware path (a dict value
+    /// may be a first-class type; keys stay scalar).
+    pub fn dict_of_held(map: HashMap<Box<dyn Serializable<'a> + 'a>, Held<'a>>) -> KObject<'a> {
         let k = KType::join_iter(map.keys().map(|k| k.ktype()));
         let v = KType::join_iter(map.values().map(|v| v.ktype()));
         KObject::Dict(Rc::new(map), Box::new(k), Box::new(v))
@@ -146,7 +146,7 @@ impl<'a> KObject<'a> {
 
     /// `Dict` carrier with explicitly supplied key + value types. See [`Self::list_with_type`].
     pub fn dict_with_type(
-        map: Rc<HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>>>,
+        map: Rc<HashMap<Box<dyn Serializable<'a> + 'a>, Held<'a>>>,
         key: KType<'a>,
         value: KType<'a>,
     ) -> KObject<'a> {
@@ -157,6 +157,14 @@ impl<'a> KObject<'a> {
     /// `ktype()`. Field order follows declaration; equality is order-blind per the
     /// `Record` substrate.
     pub fn record(fields: Record<KObject<'a>>) -> KObject<'a> {
+        KObject::record_of_held(Record::from_pairs(
+            fields.into_pairs().map(|(k, v)| (k, Held::Object(v))),
+        ))
+    }
+
+    /// Fresh `Record` carrier over [`Held`] field cells — the type-aware path (a field
+    /// value may be a first-class type).
+    pub fn record_of_held(fields: Record<Held<'a>>) -> KObject<'a> {
         let types = fields.map(|v| v.ktype());
         KObject::Record(Rc::new(fields), Box::new(types))
     }
@@ -164,10 +172,7 @@ impl<'a> KObject<'a> {
     /// `Record` carrier with an explicitly supplied per-field type record — for
     /// ascription stamping (re-tag to the declared field types, coarsening included).
     /// See [`Self::list_with_type`].
-    pub fn record_with_type(
-        fields: Rc<Record<KObject<'a>>>,
-        types: Record<KType<'a>>,
-    ) -> KObject<'a> {
+    pub fn record_with_type(fields: Rc<Record<Held<'a>>>, types: Record<KType<'a>>) -> KObject<'a> {
         KObject::Record(fields, Box::new(types))
     }
 
@@ -281,16 +286,6 @@ impl<'a> KObject<'a> {
             // O(1): read the memoized per-field type record rather than re-walking the
             // fields, mirroring `List` / `Dict`.
             KObject::Record(_, field_types) => KType::Record(field_types.clone()),
-            // Module/signature values carry the identity directly — report it rather
-            // than the meta-type marker, so dispatch sees the same shape as a
-            // type-position carrier. Other `KTypeValue` carriers fill the
-            // `TypeExprRef` dispatch-position marker.
-            KObject::KTypeValue(kt) => match kt {
-                KType::Module { .. } | KType::Signature { .. } => kt.clone(),
-                _ => KType::TypeExprRef,
-            },
-            // Dispatch-equivalent to `KTypeValue` — both fill a `TypeExprRef`-typed slot.
-            KObject::TypeNameRef(_) => KType::TypeExprRef,
             KObject::Wrapped { type_id, .. } => (*type_id).clone(),
         }
     }
@@ -325,8 +320,6 @@ impl<'a> KObject<'a> {
             KObject::Record(fields, field_types) => {
                 KObject::Record(Rc::clone(fields), field_types.clone())
             }
-            KObject::KTypeValue(t) => KObject::KTypeValue(t.clone()),
-            KObject::TypeNameRef(t) => KObject::TypeNameRef(t.clone()),
             KObject::Wrapped { inner, type_id } => KObject::Wrapped {
                 inner: inner.clone(),
                 type_id,
@@ -337,29 +330,6 @@ impl<'a> KObject<'a> {
     pub fn as_kexpression(&self) -> Option<&KExpression<'a>> {
         match self {
             KObject::KExpression(e) => Some(e),
-            _ => None,
-        }
-    }
-
-    /// Projects through the `KTypeValue(KType::Module { .. })` carrier.
-    pub fn as_module(&self) -> Option<&'a super::module::Module<'a>> {
-        match self {
-            KObject::KTypeValue(KType::Module { module, .. }) => Some(*module),
-            _ => None,
-        }
-    }
-
-    /// Projects through the `KTypeValue(KType::Signature { .. })` carrier.
-    pub fn as_signature(&self) -> Option<&'a super::module::Signature<'a>> {
-        match self {
-            KObject::KTypeValue(KType::Signature { sig, .. }) => Some(*sig),
-            _ => None,
-        }
-    }
-
-    pub fn as_ktype(&self) -> Option<&KType<'a>> {
-        match self {
-            KObject::KTypeValue(t) => Some(t),
             _ => None,
         }
     }
@@ -451,14 +421,6 @@ impl<'a> Parseable<'a> for KObject<'a> {
                 format!("{{{}}}", parts.join(", "))
             }
             KObject::Null => "null".to_string(),
-            // Module / signature carriers render as `module <path>` / `sig <path>`.
-            KObject::KTypeValue(KType::Module { module, .. }) => format!("module {}", module.path),
-            KObject::KTypeValue(KType::Signature { sig, .. }) => format!("sig {}", sig.path),
-            KObject::KTypeValue(t) => t.render(),
-            // Preserve the surface form the user wrote (`Point`, `Foo<Bar>`) — going
-            // through the scope-resolved `&KType` would route via `name()` and might
-            // normalize, which the "surface form survives bind" invariant forbids.
-            KObject::TypeNameRef(t) => t.render(),
             // Render as `Distance(<inner summary>)`; `type_id.name()` returns the bare
             // declared name (the SetRef member's name for a NEWTYPE).
             KObject::Wrapped { inner, type_id } => {

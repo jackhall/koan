@@ -7,7 +7,6 @@ use std::marker::PhantomData;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::KType;
 use crate::machine::model::KObject;
 use crate::machine::model::Parseable;
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
@@ -120,12 +119,11 @@ impl<'a> FnValueState<'a> {
     }
 
     /// Resolve the already-bound head value to a [`ResolvedCallable`] and hand
-    /// off to the shared apply-a-callable tail. A `KFunction` (functor or not)
-    /// is the `Function` arm; a `KTypeValue(SetRef)` alias of a constructible
-    /// type — `LET outcome = Outcome` then `(outcome (err "x"))` — is the
-    /// `Constructor` arm, reading the schema off the identity
-    /// `bindings.types[name]` holds. Anything else is a non-callable
-    /// `TypeMismatch`.
+    /// off to the shared apply-a-callable tail. The head is a value-bound
+    /// lowercase identifier, so only a `KFunction` (functor or not) is callable —
+    /// the partition invariant keeps a type out of `bindings.data`, so a
+    /// constructor-typed head reaches dispatch through the type channel
+    /// (`HeadDeferred`), never here. Anything else is a non-callable `TypeMismatch`.
     fn dispatch_callable_value(
         ctx: &mut DispatchCtx<'a, '_>,
         expr: KExpression<'a>,
@@ -135,7 +133,6 @@ impl<'a> FnValueState<'a> {
     ) -> Result<NodeStep<'a>, KError> {
         let callable = match head_obj {
             KObject::KFunction(f, _) => ResolvedCallable::Function(f),
-            KObject::KTypeValue(kt @ KType::SetRef { .. }) => ResolvedCallable::Constructor(kt),
             other => {
                 return Ok(NodeStep::Done(NodeOutput::Err(KError::new(
                     KErrorKind::TypeMismatch {

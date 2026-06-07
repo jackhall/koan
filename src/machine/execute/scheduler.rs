@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::KObject;
+use crate::machine::model::Carried;
 use crate::machine::{
     CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, SchedulerHandle, Scope,
 };
@@ -147,12 +147,12 @@ impl<'a> Scheduler<'a> {
 
     /// Only safe on IDs returned by `add_dispatch`; internal slots may have been eagerly
     /// freed by their parent.
-    pub fn read_result(&self, id: NodeId) -> Result<&'a KObject<'a>, &KError> {
+    pub fn read_result(&self, id: NodeId) -> Result<Carried<'a>, &KError> {
         self.store.read_result(id)
     }
 
     /// Panics on `Err`.
-    pub fn read(&self, id: NodeId) -> &'a KObject<'a> {
+    pub fn read(&self, id: NodeId) -> Carried<'a> {
         self.store.read(id)
     }
 

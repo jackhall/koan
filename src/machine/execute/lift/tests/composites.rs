@@ -3,6 +3,7 @@
 use super::*;
 use crate::builtins::default_scope;
 use crate::machine::model::types::{KType, NominalSchema, Record, RecursiveSet};
+use crate::machine::model::values::Held;
 use crate::machine::model::KObject;
 use crate::machine::{CallArena, ScopeId};
 
@@ -50,11 +51,11 @@ fn list_of_dict_with_kfunction_anchors_via_recursion() {
     let count_after = Rc::strong_count(&dying);
     match &lifted {
         KObject::List(items, _) => match &items[0] {
-            KObject::Dict(entries, _, _) => match entries.values().next().unwrap() {
-                KObject::KFunction(_, frame) => assert!(frame.is_some()),
-                other => panic!("expected nested KFunction, got {:?}", other.ktype()),
+            Held::Object(KObject::Dict(entries, _, _)) => match entries.values().next().unwrap() {
+                Held::Object(KObject::KFunction(_, frame)) => assert!(frame.is_some()),
+                other => panic!("expected nested KFunction, got {}", other.summarize()),
             },
-            other => panic!("expected nested Dict, got {:?}", other.ktype()),
+            other => panic!("expected nested Dict, got {}", other.summarize()),
         },
         other => panic!("expected List, got {:?}", other.ktype()),
     }
@@ -85,11 +86,11 @@ fn list_of_tagged_with_kfunction_anchors_via_recursion() {
     let count_after = Rc::strong_count(&dying);
     match &lifted {
         KObject::List(items, _) => match &items[0] {
-            KObject::Tagged { value, .. } => match &**value {
+            Held::Object(KObject::Tagged { value, .. }) => match &**value {
                 KObject::KFunction(_, frame) => assert!(frame.is_some()),
                 other => panic!("expected nested KFunction, got {:?}", other.ktype()),
             },
-            other => panic!("expected nested Tagged, got {:?}", other.ktype()),
+            other => panic!("expected nested Tagged, got {}", other.summarize()),
         },
         other => panic!("expected List, got {:?}", other.ktype()),
     }
@@ -120,9 +121,9 @@ fn list_with_pre_anchored_variants_skips_them() {
         },
     };
     let items = Rc::new(vec![
-        KObject::KFunction(kf_ref, Some(Rc::clone(&other))),
-        KObject::KFuture(future, Some(Rc::clone(&other))),
-        KObject::KTypeValue(KType::Module {
+        Held::Object(KObject::KFunction(kf_ref, Some(Rc::clone(&other)))),
+        Held::Object(KObject::KFuture(future, Some(Rc::clone(&other)))),
+        Held::Type(KType::Module {
             module: m_ref,
             frame: Some(Rc::clone(&other)),
         }),
@@ -168,7 +169,12 @@ fn list_with_unanchored_kfuture_anchors() {
     let lifted = lift_kobject(&list, &dying);
     let count_after = Rc::strong_count(&dying);
     match &lifted {
-        KObject::List(out, _) => assert!(matches!(&out[0], KObject::KFuture(_, Some(_)))),
+        KObject::List(out, _) => {
+            assert!(matches!(
+                &out[0],
+                Held::Object(KObject::KFuture(_, Some(_)))
+            ))
+        }
         other => panic!("expected List, got {:?}", other.ktype()),
     }
     assert_eq!(count_after, before + 1);
@@ -185,7 +191,7 @@ fn list_with_unanchored_kmodule_anchors() {
     let module = Module::new("LocalM".into(), dying.scope());
     let m_ref: &Module = dying.arena().alloc_module(module);
 
-    let list = KObject::list(vec![KObject::KTypeValue(KType::Module {
+    let list = KObject::list_of_held(vec![Held::Type(KType::Module {
         module: m_ref,
         frame: None,
     })]);
@@ -196,7 +202,7 @@ fn list_with_unanchored_kmodule_anchors() {
     match &lifted {
         KObject::List(out, _) => assert!(matches!(
             &out[0],
-            KObject::KTypeValue(KType::Module { frame: Some(_), .. }),
+            Held::Type(KType::Module { frame: Some(_), .. }),
         )),
         other => panic!("expected List, got {:?}", other.ktype()),
     }
@@ -224,7 +230,7 @@ fn list_with_wrapped_and_kexpression_descendants_clones_rc() {
         type_id,
     };
     let e = KObject::KExpression(KExpression::new(vec![]));
-    let items = Rc::new(vec![s, e]);
+    let items = Rc::new(vec![Held::Object(s), Held::Object(e)]);
     let list = KObject::list_with_type(Rc::clone(&items), KType::Any);
     let before = Rc::strong_count(&items);
 
@@ -246,7 +252,10 @@ fn list_no_descendants_clones_rc() {
     let dying = CallArena::new(scope, None);
     defeat_fast_path(&dying);
 
-    let items = Rc::new(vec![KObject::Number(1.0), KObject::Number(2.0)]);
+    let items = Rc::new(vec![
+        Held::Object(KObject::Number(1.0)),
+        Held::Object(KObject::Number(2.0)),
+    ]);
     let list = KObject::list_with_type(Rc::clone(&items), KType::Any);
     let before = Rc::strong_count(&items);
 
@@ -276,11 +285,11 @@ fn list_with_local_kfunction_rebuilds_and_anchors() {
     let count_after = Rc::strong_count(&dying);
     match lifted {
         KObject::List(out, _) => match &out[0] {
-            KObject::KFunction(_, frame) => assert!(
+            Held::Object(KObject::KFunction(_, frame)) => assert!(
                 frame.is_some(),
                 "nested KFunction must anchor on dying frame's Rc",
             ),
-            other => panic!("expected nested KFunction, got {:?}", other.ktype()),
+            other => panic!("expected nested KFunction, got {}", other.summarize()),
         },
         other => panic!("expected List, got {:?}", other.ktype()),
     }
@@ -297,8 +306,11 @@ fn dict_no_descendants_clones_rc() {
     let dying = CallArena::new(scope, None);
     defeat_fast_path(&dying);
 
-    let mut map: HashMap<Box<dyn Serializable<'_>>, KObject> = HashMap::new();
-    map.insert(Box::new(KKey::String("a".into())), KObject::Number(1.0));
+    let mut map: HashMap<Box<dyn Serializable<'_>>, Held> = HashMap::new();
+    map.insert(
+        Box::new(KKey::String("a".into())),
+        Held::Object(KObject::Number(1.0)),
+    );
     let entries = Rc::new(map);
     let dict = KObject::dict_with_type(Rc::clone(&entries), KType::Any, KType::Any);
     let before = Rc::strong_count(&entries);
@@ -339,8 +351,8 @@ fn dict_with_local_kfunction_rebuilds_and_anchors() {
         KObject::Dict(out, _, _) => {
             let v = out.values().next().expect("one entry");
             match v {
-                KObject::KFunction(_, frame) => assert!(frame.is_some()),
-                other => panic!("expected nested KFunction, got {:?}", other.ktype()),
+                Held::Object(KObject::KFunction(_, frame)) => assert!(frame.is_some()),
+                other => panic!("expected nested KFunction, got {}", other.summarize()),
             }
         }
         other => panic!("expected Dict, got {:?}", other.ktype()),
@@ -461,22 +473,22 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
         )]),
     )))));
     let set = Rc::new(RecursiveSet::new(vec![member]));
-    let type_value = KObject::KTypeValue(KType::SetRef {
+    let type_value = KType::SetRef {
         set: Rc::clone(&set),
         index: 0,
-    });
+    };
     let before = Rc::strong_count(&set);
 
-    let lifted = lift_kobject(&type_value, &dying);
+    let lifted = lift_ktype(&type_value, &dying);
 
     // Lift `Rc::clone`d the set — the strong count rose, and the lifted value's set is the
     // same allocation, so the recursive group travels as one unit.
     assert_eq!(Rc::strong_count(&set), before + 1);
     match &lifted {
-        KObject::KTypeValue(KType::SetRef {
+        KType::SetRef {
             set: lifted_set,
             index,
-        }) => {
+        } => {
             assert!(
                 Rc::ptr_eq(lifted_set, &set),
                 "lift must share the same RecursiveSet allocation",
@@ -494,10 +506,7 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
                 other => panic!("expected a navigable Newtype schema after lift, got {other:?}"),
             }
         }
-        other => panic!(
-            "expected a KTypeValue(SetRef) after lift, got {:?}",
-            other.ktype()
-        ),
+        other => panic!("expected a SetRef type after lift, got {other:?}"),
     }
 }
 

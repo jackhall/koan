@@ -16,11 +16,12 @@
 //! the sealed members into the enclosing scope and binds the group handle: exiting the block
 //! guarantees every forward reference resolved.
 
+use crate::machine::model::types::KKind;
 use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::machine::model::types::{NominalKind, NominalMember, RecursiveSet};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::KType;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind,
     SchedulerHandle, Scope,
@@ -125,11 +126,7 @@ pub fn body<'a>(
         }
         let handle = KType::RecursiveGroup(Rc::clone(&set));
         match parent_scope.register_type_upsert(group_name.clone(), handle, bind_index) {
-            Ok(kt_ref) => BodyResult::Value(
-                parent_scope
-                    .arena
-                    .alloc_object(KObject::KTypeValue(kt_ref.clone())),
-            ),
+            Ok(kt_ref) => BodyResult::ktype(parent_scope.arena.alloc_ktype(kt_ref.clone())),
             Err(e) => BodyResult::Err(e.with_frame(frame())),
         }
     });
@@ -209,11 +206,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "RECURSIVE TYPES",
         sig(
-            KType::Type,
+            KType::OfKind(KKind::Any),
             vec![
                 kw("RECURSIVE"),
                 kw("TYPES"),
-                arg("name", KType::TypeExprRef),
+                arg("name", KType::OfKind(KKind::Proper)),
                 kw("="),
                 arg("body", KType::KExpression),
             ],

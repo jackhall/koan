@@ -15,8 +15,9 @@
 use crate::machine::core::kfunction::{ClassifiedSlots, KFunction};
 use crate::machine::core::{FunctionLookup, KError, LexicalFrame, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::types::KKind;
 use crate::machine::model::types::{ExpressionSignature, KType, SignatureElement};
-use crate::machine::model::values::KObject;
+use crate::machine::model::Carried;
 use crate::machine::NodeId;
 
 /// Cached outcome of resolving a bare-name part (`Identifier` or leaf `Type`).
@@ -25,7 +26,7 @@ use crate::machine::NodeId;
 /// `Cycle` and `ProducerErrored` are short-circuited upfront and treated as
 /// defensive rejects here.
 pub enum NameOutcome<'a> {
-    Resolved(&'a KObject<'a>),
+    Resolved(Carried<'a>),
     Parked(NodeId),
     ProducerErrored(KError),
     Unbound(String),
@@ -401,7 +402,7 @@ fn slot_admits_strict<'a>(
             // is shape-only. SigiledTypeExpr / RecordType still admit speculatively
             // (they sub-dispatch to a type-side carrier — e.g. the FN record-schema
             // overload's `TypeExprRef` signature slot taking a `:{…}`).
-            if matches!(arg.ktype, KType::Identifier | KType::TypeExprRef) {
+            if matches!(arg.ktype, KType::Identifier | KType::OfKind(KKind::Proper)) {
                 if matches!(
                     part_value,
                     ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)
@@ -442,8 +443,8 @@ fn slot_admits_strict<'a>(
                 return true;
             }
             match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
-                Some(NameOutcome::Resolved(obj)) => {
-                    arg.ktype.accepts_part(&ExpressionPart::Future(obj))
+                Some(NameOutcome::Resolved(c)) => {
+                    arg.ktype.accepts_part(&ExpressionPart::Future(*c))
                 }
                 // Speculative admit so the splice/park walk can surface the
                 // precise per-slot diagnostic.

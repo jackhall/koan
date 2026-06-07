@@ -1,7 +1,7 @@
 //! `WITH` sharing constraints on functor parameters and return types.
 
 use crate::builtins::test_support::{lookup_fn, parse_one, run, run_root_silent};
-use crate::machine::model::KObject;
+use crate::machine::model::Carried;
 use crate::machine::RuntimeArena;
 
 /// Sharing-constraint admissibility: a `Signature { .. }` slot with a pinned
@@ -32,10 +32,10 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .borrow_mut()
         .insert("Type".into(), KType::Number);
     m_num.mark_satisfies(sig_id);
-    let m_num_obj = arena.alloc_object(KObject::KTypeValue(KType::Module {
+    let m_num_obj = arena.alloc_ktype(KType::Module {
         module: m_num,
         frame: None,
-    }));
+    });
 
     let child_b = arena.alloc_scope(crate::machine::Scope::child_under_module(
         scope,
@@ -47,10 +47,10 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .borrow_mut()
         .insert("Type".into(), KType::Str);
     m_str.mark_satisfies(sig_id);
-    let m_str_obj = arena.alloc_object(KObject::KTypeValue(KType::Module {
+    let m_str_obj = arena.alloc_ktype(KType::Module {
         module: m_str,
         frame: None,
-    }));
+    });
 
     let child_c = arena.alloc_scope(crate::machine::Scope::child_under_module(
         scope,
@@ -58,22 +58,22 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     ));
     let m_none: &Module<'_> = arena.alloc_module(Module::new("NoTypePin".into(), child_c));
     m_none.mark_satisfies(sig_id);
-    let m_none_obj = arena.alloc_object(KObject::KTypeValue(KType::Module {
+    let m_none_obj = arena.alloc_ktype(KType::Module {
         module: m_none,
         frame: None,
-    }));
+    });
 
     let slot = KType::Signature {
         sig,
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
 
-    assert!(slot.matches_value(m_num_obj));
-    assert!(slot.accepts_part(&ExpressionPart::Future(m_num_obj)));
-    assert!(!slot.matches_value(m_str_obj));
-    assert!(!slot.accepts_part(&ExpressionPart::Future(m_str_obj)));
-    assert!(!slot.matches_value(m_none_obj));
-    assert!(!slot.accepts_part(&ExpressionPart::Future(m_none_obj)));
+    // A module rides the type channel, so its satisfaction of a `Signature` slot is the
+    // `accepts_part(Carried::Type(Module))` path; `matches_value` is value-only and rejects
+    // modules outright.
+    assert!(slot.accepts_part(&ExpressionPart::Future(Carried::Type(m_num_obj))));
+    assert!(!slot.accepts_part(&ExpressionPart::Future(Carried::Type(m_str_obj))));
+    assert!(!slot.accepts_part(&ExpressionPart::Future(Carried::Type(m_none_obj))));
 
     let child_d = arena.alloc_scope(crate::machine::Scope::child_under_module(
         scope,
@@ -86,12 +86,11 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .insert("Type".into(), KType::Number);
     // No mark_satisfies: compatible_sigs stays empty, so the sig-membership gate trips
     // before the pin comparison.
-    let m_unascribed_obj = arena.alloc_object(KObject::KTypeValue(KType::Module {
+    let m_unascribed_obj = arena.alloc_ktype(KType::Module {
         module: m_unascribed,
         frame: None,
-    }));
-    assert!(!slot.matches_value(m_unascribed_obj));
-    assert!(!slot.accepts_part(&ExpressionPart::Future(m_unascribed_obj)));
+    });
+    assert!(!slot.accepts_part(&ExpressionPart::Future(Carried::Type(m_unascribed_obj))));
 }
 
 /// Pure-type pinned slots (no parameter references) resolve synchronously at

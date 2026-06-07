@@ -19,7 +19,7 @@ The mechanism:
 - **Type-returning builtins are ordinary builtins.** The keyworded type
   constructors (`LIST OF`, `MAP _ -> _`) and the like dispatch and
   execute on the value path; their result is the elaborated type carried
-  in `KObject::KTypeValue(KType)`. A `LET MyList = :(LIST OF Number)`
+  raw in the value channel's `Type` arm (`Carried::Type(&KType)`). A `LET MyList = :(LIST OF Number)`
   binding finalizes once and makes `MyList` available as a type name in
   subsequent FN signatures with no per-lookup re-elaboration.
 - **Type expressions in source position re-elaborate to a synthesized

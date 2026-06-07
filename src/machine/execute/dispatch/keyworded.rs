@@ -419,9 +419,9 @@ fn part_walk<'a>(
         }
         if wrap_set.contains(&i) {
             match &bare_outcomes[i] {
-                Some(NameOutcome::Resolved(obj)) => {
+                Some(NameOutcome::Resolved(c)) => {
                     new_parts.push(Spanned {
-                        value: ExpressionPart::Future(obj),
+                        value: ExpressionPart::Future(*c),
                         span,
                     });
                 }

@@ -3,7 +3,7 @@ use crate::machine::core::source::Spanned;
 use crate::machine::execute::dispatch::resolve_name_part;
 use crate::machine::execute::Scheduler;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::NameOutcome;
 use crate::machine::{BindingIndex, RuntimeArena};
 
@@ -18,7 +18,7 @@ fn resolve_name_part_identifier_resolved() {
     let part = ExpressionPart::Identifier("x".to_string());
     let sched = Scheduler::new();
     match resolve_name_part(scope, &part, &sched, None) {
-        NameOutcome::Resolved(KObject::Number(n)) => assert_eq!(*n, 7.0),
+        NameOutcome::Resolved(Carried::Object(KObject::Number(n))) => assert_eq!(*n, 7.0),
         _ => panic!("expected NameOutcome::Resolved(Number)"),
     }
 }
@@ -30,7 +30,7 @@ fn resolve_name_part_type_resolved() {
     let part = ExpressionPart::Type(TypeName::leaf("Number".to_string()));
     let sched = Scheduler::new();
     match resolve_name_part(scope, &part, &sched, None) {
-        NameOutcome::Resolved(KObject::KTypeValue(KType::Number)) => {}
+        NameOutcome::Resolved(Carried::Type(KType::Number)) => {}
         other => {
             let kind = match other {
                 NameOutcome::Resolved(_) => "Resolved(other)",
@@ -39,7 +39,7 @@ fn resolve_name_part_type_resolved() {
                 NameOutcome::Unbound(_) => "Unbound",
                 NameOutcome::Cycle(_) => "Cycle",
             };
-            panic!("expected Resolved(KTypeValue(Number)), got {kind}");
+            panic!("expected Resolved(Type(Number)), got {kind}");
         }
     }
 }

@@ -1,31 +1,32 @@
 //! `ArgumentBundle` — the resolved name-to-value map produced by `KFunction::bind` and
-//! consumed by a builtin or user-defined body.
+//! consumed by a builtin or user-defined body. Each argument is an [`ArgValue`]: a runtime
+//! object (`Object` arm) or a type flowing in the type channel (`Type` arm).
 
-use std::rc::Rc;
-
-use crate::machine::model::ast::{KExpression, TypeName};
+use crate::machine::model::ast::KExpression;
 
 use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::types::{KType, Record};
-use crate::machine::model::values::{KObject, Module, Signature};
+use crate::machine::model::values::{ArgValue, KObject, Module, Signature};
 
 pub struct ArgumentBundle<'a> {
-    pub args: Record<Rc<KObject<'a>>>,
+    pub args: Record<ArgValue<'a>>,
 }
 
 impl<'a> ArgumentBundle<'a> {
+    /// The `Object` arm of `name`, if present and a runtime object.
     pub fn get(&self, name: &str) -> Option<&KObject<'a>> {
-        self.args.get(name).map(|v| v.as_ref())
+        self.args.get(name).and_then(|v| v.as_object())
+    }
+
+    /// The `Type` arm of `name`, if present and a type.
+    pub fn get_type(&self, name: &str) -> Option<&KType<'a>> {
+        self.args.get(name).and_then(|v| v.as_type())
     }
 
     /// Independent copy; `Rc` sharing in the original is not preserved.
     pub fn deep_clone(&self) -> ArgumentBundle<'a> {
         ArgumentBundle {
-            args: Record::from_pairs(
-                self.args
-                    .iter()
-                    .map(|(k, v)| (k.clone(), Rc::new(v.deep_clone()))),
-            ),
+            args: Record::from_pairs(self.args.iter().map(|(k, v)| (k.clone(), v.deep_clone()))),
         }
     }
 
@@ -35,21 +36,27 @@ impl<'a> ArgumentBundle<'a> {
             .ok_or_else(|| mismatch(name, "KExpression", obj))
     }
 
+    /// The `Type`-arm type of `name`. Errors if the slot is missing or holds an object.
     pub fn require_ktype(&self, name: &str) -> Result<&KType<'a>, KError> {
-        let obj = self.get_or_missing(name)?;
-        obj.as_ktype()
-            .ok_or_else(|| mismatch(name, "TypeExprRef", obj))
+        match self.args.get(name) {
+            Some(ArgValue::Type(kt)) => Ok(kt),
+            Some(ArgValue::Object(rc)) => Err(mismatch(name, "TypeExprRef", rc)),
+            None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
+        }
     }
 
     pub fn require_module(&self, name: &str) -> Result<&'a Module<'a>, KError> {
-        let obj = self.get_or_missing(name)?;
-        obj.as_module().ok_or_else(|| mismatch(name, "Module", obj))
+        match self.get_type(name) {
+            Some(KType::Module { module, .. }) => Ok(module),
+            _ => Err(self.type_mismatch_or_missing(name, "Module")),
+        }
     }
 
     pub fn require_signature(&self, name: &str) -> Result<&'a Signature<'a>, KError> {
-        let obj = self.get_or_missing(name)?;
-        obj.as_signature()
-            .ok_or_else(|| mismatch(name, "Signature", obj))
+        match self.get_type(name) {
+            Some(KType::Signature { sig, .. }) => Ok(sig),
+            _ => Err(self.type_mismatch_or_missing(name, "Signature")),
+        }
     }
 
     /// Untyped variant of the `require_*` family; caller dispatches on `KObject` arms.
@@ -60,6 +67,24 @@ impl<'a> ArgumentBundle<'a> {
     fn get_or_missing(&self, name: &str) -> Result<&KObject<'a>, KError> {
         self.get(name)
             .ok_or_else(|| KError::new(KErrorKind::MissingArg(name.to_string())))
+    }
+
+    fn type_mismatch_or_missing(&self, name: &str, expected: &str) -> KError {
+        match self.args.get(name) {
+            Some(v) => KError::new(KErrorKind::TypeMismatch {
+                arg: name.to_string(),
+                expected: expected.to_string(),
+                got: arg_value_type_name(v),
+            }),
+            None => KError::new(KErrorKind::MissingArg(name.to_string())),
+        }
+    }
+}
+
+fn arg_value_type_name(v: &ArgValue<'_>) -> String {
+    match v {
+        ArgValue::Object(o) => o.ktype().name(),
+        ArgValue::Type(kt) => kt.name(),
     }
 }
 
@@ -72,13 +97,17 @@ fn mismatch(arg: &str, expected: &str, got: &KObject<'_>) -> KError {
 }
 
 /// Move the `KExpression` out of `bundle.args`, cloning only if the `Rc` is shared.
-/// `None` for missing slot or non-`KExpression` variant.
+/// `None` for missing slot or non-`KExpression` (the slot is an object whose `Rc` holds a
+/// `KExpression`).
 pub(crate) fn extract_kexpression<'a>(
     bundle: &mut ArgumentBundle<'a>,
     name: &str,
 ) -> Option<KExpression<'a>> {
-    let rc = bundle.args.remove(name)?;
-    match Rc::try_unwrap(rc) {
+    let rc = match bundle.args.remove(name)? {
+        ArgValue::Object(rc) => rc,
+        ArgValue::Type(_) => return None,
+    };
+    match std::rc::Rc::try_unwrap(rc) {
         Ok(KObject::KExpression(e)) => Some(e),
         Ok(_) => None,
         Err(rc) => match &*rc {
@@ -88,37 +117,26 @@ pub(crate) fn extract_kexpression<'a>(
     }
 }
 
-/// Move a `KObject::KTypeValue` out of `bundle.args`, cloning only if the `Rc` is shared.
-/// `None` for the sibling `KObject::TypeNameRef` carrier ([`extract_type_name_ref`]) and
-/// for missing slots.
-///
-/// Both extractors consume the slot via `remove`; callers that try both must peek with
-/// `bundle.get(...)` first.
+/// Move the `Type`-arm `KType` out of `bundle.args`. Returns any type — a resolved `KType` or
+/// the [`KType::Unresolved`] transient for a bare user name; callers branch on `Unresolved`.
+/// `None` for a missing slot or an object slot.
 pub(crate) fn extract_ktype<'a>(bundle: &mut ArgumentBundle<'a>, name: &str) -> Option<KType<'a>> {
-    let rc = bundle.args.remove(name)?;
-    match Rc::try_unwrap(rc) {
-        Ok(KObject::KTypeValue(t)) => Some(t),
-        Ok(_) => None,
-        Err(rc) => match &*rc {
-            KObject::KTypeValue(t) => Some(t.clone()),
-            _ => None,
-        },
+    match bundle.args.remove(name)? {
+        ArgValue::Type(kt) => Some(kt),
+        ArgValue::Object(_) => None,
     }
 }
 
-/// Resolve a `KType::TypeExprRef` slot to its bare type name. Either carrier may occupy
-/// the slot: a `KTypeValue` (parser `TypeName` resolved to a builtin) or a `TypeNameRef`
-/// (unresolved-leaf fallback). Structural / parameterized shapes from either carrier are
-/// rejected as `ShapeError`. `surface` is the keyword (`"STRUCT"`, `"UNION"`, …) embedded
-/// in the message.
+/// Resolve a type-name slot to its bare type name. A bare-leaf / wildcard / nominal type
+/// renders directly; structural / parameterized shapes are rejected as `ShapeError`.
+/// `surface` is the keyword (`"STRUCT"`, `"UNION"`, …) embedded in the message.
 pub(crate) fn extract_bare_type_name<'a>(
     bundle: &ArgumentBundle<'a>,
     name: &str,
     surface: &str,
 ) -> Result<String, KError> {
-    match bundle.get(name) {
-        Some(KObject::TypeNameRef(t)) => Ok(t.render()),
-        Some(KObject::KTypeValue(t)) => match t {
+    match bundle.get_type(name) {
+        Some(t) => match t {
             KType::Number
             | KType::Str
             | KType::Bool
@@ -127,10 +145,8 @@ pub(crate) fn extract_bare_type_name<'a>(
             | KType::KExpression
             | KType::SigiledTypeExpr
             | KType::RecordType
-            | KType::TypeExprRef
-            | KType::Type
-            | KType::AnyModule
-            | KType::AnySignature
+            | KType::OfKind(_)
+            | KType::Unresolved(_)
             | KType::Any
             | KType::SetRef { .. }
             | KType::AnyUserType { .. }
@@ -152,29 +168,16 @@ pub(crate) fn extract_bare_type_name<'a>(
                 t.render(),
             )))),
         },
-        Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: name.to_string(),
-            expected: "TypeExprRef".to_string(),
-            got: other.ktype().name(),
-        })),
-        None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
-    }
-}
-
-/// Move a `TypeNameRef` carrier's `TypeName` out of `bundle.args`, cloning only if the
-/// `Rc` is shared. `None` for missing slot or non-`TypeNameRef` variant — pair with
-/// [`extract_ktype`] for the resolved-leaf fallthrough.
-pub(crate) fn extract_type_name_ref<'a>(
-    bundle: &mut ArgumentBundle<'a>,
-    name: &str,
-) -> Option<TypeName> {
-    let rc = bundle.args.remove(name)?;
-    match Rc::try_unwrap(rc) {
-        Ok(KObject::TypeNameRef(t)) => Some(t),
-        Ok(_) => None,
-        Err(rc) => match &*rc {
-            KObject::TypeNameRef(t) => Some(t.clone()),
-            _ => None,
+        None => match bundle.args.get(name) {
+            Some(_) => Err(KError::new(KErrorKind::TypeMismatch {
+                arg: name.to_string(),
+                expected: "TypeExprRef".to_string(),
+                got: bundle
+                    .get(name)
+                    .map(|o| o.ktype().name())
+                    .unwrap_or_default(),
+            })),
+            None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
         },
     }
 }

@@ -12,13 +12,13 @@
 //! `pending_types`). The `Park` arm — a referenced type still in flight — never writes the
 //! cache, so a half-built identity cannot leak into a later memo hit.
 
+use crate::machine::model::types::KKind;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::NodeId;
 use crate::machine::core::{LexicalFrame, Scope, ScopeId};
 use crate::machine::model::ast::TypeName;
 use crate::machine::model::types::KType;
-use crate::machine::model::values::KObject;
 
 /// Outcome of [`Scope::resolve_type_expr`]. Mirrors
 /// [`crate::machine::model::types::ElabResult`] but `Done` carries an
@@ -65,12 +65,12 @@ impl<'a> Scope<'a> {
     }
 }
 
-/// Outcome of [`resolve_type_leaf_carrier`] — the value-side `KObject` adaptation of
+/// Outcome of [`resolve_type_leaf_carrier`] — the type-channel adaptation of
 /// [`ResolveTypeExprOutcome`] for the three bare-leaf token call sites.
 pub(crate) enum TypeLeafCarrier<'a> {
-    /// A `KObject::KTypeValue` wrapping the memoized `&KType`, ready to ride the same
+    /// The memoized `&KType`, ready to ride the type channel (`Carried::Type`) the same
     /// dispatch transport every other body consumes.
-    Resolved(&'a KObject<'a>),
+    Resolved(&'a KType<'a>),
     /// The bare leaf names a still-finalizing type; the producer `NodeId`s the caller
     /// parks on (single-producer in practice, see the module-level invariant).
     Park(Vec<NodeId>),
@@ -79,14 +79,13 @@ pub(crate) enum TypeLeafCarrier<'a> {
 }
 
 /// Resolve a bare leaf [`TypeName`] through the memoized, park-capable
-/// [`Scope::resolve_type_expr`] bridge and adapt the result into a value-side `KObject`
-/// carrier.
+/// [`Scope::resolve_type_expr`] bridge and adapt the result into a type-channel carrier.
 ///
-/// A resolved leaf is wrapped as `KObject::KTypeValue(kt.clone())` so a struct / union /
-/// module / Result / signature type token reaches a constructor or ATTR call site through
-/// the same transport every other body consumes. A leaf naming a not-yet-sealed type
-/// parks on the producers the bridge surfaces, so a bare leaf never observes a half-sealed
-/// identity. A miss surfaces `Unbound(name)`.
+/// A resolved leaf yields the memoized `&KType` so a struct / union / module / Result /
+/// signature type token reaches a constructor or ATTR call site through the same transport
+/// every other body consumes. A leaf naming a not-yet-sealed type parks on the producers
+/// the bridge surfaces, so a bare leaf never observes a half-sealed identity. A miss
+/// surfaces `Unbound(name)`.
 pub(crate) fn resolve_type_leaf_carrier<'a>(
     scope: &'a Scope<'a>,
     t: &TypeName,
@@ -94,7 +93,7 @@ pub(crate) fn resolve_type_leaf_carrier<'a>(
 ) -> TypeLeafCarrier<'a> {
     match scope.resolve_type_expr(t, chain) {
         ResolveTypeExprOutcome::Done(kt) => {
-            TypeLeafCarrier::Resolved(scope.arena.alloc_object(KObject::KTypeValue(kt.clone())))
+            TypeLeafCarrier::Resolved(scope.arena.alloc_ktype(kt.clone()))
         }
         ResolveTypeExprOutcome::Park(producers) => TypeLeafCarrier::Park(producers),
         ResolveTypeExprOutcome::Unbound(message) => TypeLeafCarrier::Unbound(message),
@@ -219,15 +218,16 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
                 | KType::KExpression
                 | KType::SigiledTypeExpr
                 | KType::RecordType
-                | KType::TypeExprRef
-                | KType::Type
-                | KType::AnyModule
-                | KType::AnySignature
+                | KType::OfKind(KKind::Proper)
+                | KType::OfKind(KKind::Any)
+                | KType::OfKind(KKind::Module)
+                | KType::OfKind(KKind::Signature)
                 | KType::Any
                 | KType::AnyUserType { .. }
                 | KType::DeferredReturn(_)
                 | KType::SetLocal(_)
                 | KType::RecursiveRef(_)
+                | KType::Unresolved(_)
                 | KType::RecursiveGroup(_) => {}
             }
         }
@@ -276,10 +276,10 @@ mod tests {
     /// finalize lands in the cache.
     #[test]
     fn resolve_type_expr_user_struct_caches_after_finalize() {
-        use crate::builtins::test_support::{parse_one, run_one};
+        use crate::builtins::test_support::run;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run_one(scope, parse_one("NEWTYPE Point = :{x :Number, y :Number}"));
+        run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
         let te = TypeName::leaf("Point".into());
         let kt = match scope.resolve_type_expr(&te, None) {
             ResolveTypeExprOutcome::Done(kt) => kt,
@@ -357,21 +357,18 @@ mod tests {
         use crate::builtins::test_support::run_root_bare;
         use crate::machine::core::BindingIndex;
         use crate::machine::model::ast::TypeName;
-        use crate::machine::model::{KObject, KType};
+        use crate::machine::model::KType;
         use crate::machine::RuntimeArena;
 
         #[test]
-        fn builtin_synthesizes_ktypevalue() {
+        fn builtin_synthesizes_type_carrier() {
             let arena = RuntimeArena::new();
             let scope = run_root_bare(&arena);
             scope.register_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
             let leaf = TypeName::leaf("Number".to_string());
             match resolve_type_leaf_carrier(scope, &leaf, None) {
-                TypeLeafCarrier::Resolved(KObject::KTypeValue(KType::Number)) => {}
-                other => panic!(
-                    "expected Resolved(KTypeValue(Number)), got {:?}",
-                    carrier_tag(&other)
-                ),
+                TypeLeafCarrier::Resolved(KType::Number) => {}
+                other => panic!("expected Resolved(Number), got {:?}", carrier_tag(&other)),
             }
         }
 
@@ -455,7 +452,7 @@ mod tests {
             drop(pending_guard);
 
             match resolve_type_leaf_carrier(scope, &leaf, None) {
-                TypeLeafCarrier::Resolved(KObject::KTypeValue(KType::SetRef { set: s, index })) => {
+                TypeLeafCarrier::Resolved(KType::SetRef { set: s, index }) => {
                     assert_eq!(s.member(*index).name, "Node");
                 }
                 other => {

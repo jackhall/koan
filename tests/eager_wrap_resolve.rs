@@ -142,7 +142,7 @@ fn dict_literal_backward_identifier_value_resolves_through_real_wake() {
 
 /// Lazy-candidate eager filter, exercised end-to-end through the fused walk.
 /// `USING (some_module_expr) SCOPE (body)` makes USING a lazy candidate (its
-/// `body:KExpression` slot binds the trailing parens-Expression), and the `m:AnyModule`
+/// `body:KExpression` slot binds the trailing parens-Expression), and the `m:Module`
 /// slot's parens-Expression hits the `eager_indices` filter. The fused walk in
 /// `run_dispatch` reads `resolved.slots.eager_indices` to gate the eager-sub
 /// schedule: the m-slot sub-Dispatches, the SCOPE-body slot rides through

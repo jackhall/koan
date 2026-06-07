@@ -14,8 +14,9 @@ generic functions are built this way — see [generics.md](generics.md).
   [tokens.md](tokens.md)) are value-language only and a hard error in any
   type-position slot.
 - *Machine semantics* — modules are **first-class values**.
-  `KObject::KTypeValue(KType::Module { module, frame })` flows through the
-  scheduler like any other value (the same `KTypeValue` carrier `Number`,
+  `KType::Module { module, frame }` flows through the
+  scheduler in the value channel's `Type` arm like any other type (the same
+  [`Carried::Type`](../../src/machine/model/values/carried.rs) arm `Number`,
   `Str`, and other type values ride), and a FUNCTOR is internally an
   ordinary `KFunctionValue` with an `is_functor` flag set at binder time.
   The flag drives two separable effects:
@@ -89,10 +90,10 @@ execution.
 ## Definition-time validation
 
 FUNCTOR's return-type slot must denote a module, signature, or functor
-kind. The admissible carriers are `KType::AnySignature`,
+kind. The admissible carriers are `KType::OfKind(KKind::Signature)`,
 `KType::Signature { .. }` (the unified constraint-and-value variant,
 covering both a bare `:OrderedSig` and a `(… WITH {…})` pin),
-`KType::AnyModule`, `KType::Module { .. }`, and `KType::KFunctor { … }`
+`KType::OfKind(KKind::Module)`, `KType::Module { .. }`, and `KType::KFunctor { … }`
 (recursively — the inner `ret` is validated the same way, so curried
 multi-module functors and any deeper nesting flow through one rule). Any
 other denotation — `Number`, a structural function type, a plain user
@@ -173,10 +174,10 @@ a type-language binder at the call site: at each call,
 writes the per-call argument into the child scope's `bindings.types` only
 (not `bindings.data`). The
 [`KType::is_type_denoting`](../../src/machine/model/types/ktype_predicates.rs)
-predicate gates the write — `Signature { .. }`, `Type`, `TypeExprRef`,
-`KType::AnyModule`, and `KType::AnySignature` all carry meaningful
-type-language identity at the binder, and the corresponding argument is
-admitted as a single carrier shape. Body-position references to the
+predicate gates the write — `Signature { .. }` and every `OfKind(_)` slot
+(`:Type`, a bare type-name slot, `:Module`, `:Signature`) carry meaningful
+type-language identity at the binder, and the corresponding argument arrives in the
+value channel's `Type` arm. Body-position references to the
 parameter (`Er.compare`, `Er.Type`) resolve through
 `Scope::resolve_type`'s outer-chain walk against the per-call scope, and
 [`attr.rs`](../../src/builtins/attr.rs)'s `body_identifier` arm falls
@@ -185,7 +186,7 @@ a signature-typed parameter projects through the type-side carrier.
 
 FUNCTOR parameters are otherwise **unrestricted ordinary FN parameters**.
 Because koan unifies the value and module languages — a module is a
-first-class `KObject::KTypeValue(KType::Module { .. })`, a FUNCTOR an
+first-class `KType::Module { .. }` in the value channel's `Type` arm, a FUNCTOR an
 `is_functor`-flagged `KFunctionValue` — a FUNCTOR parameter can be
 anything an FN parameter can be, including a bare value
 (`FUNCTOR (MAKETREE factor :Number) -> …`, with
@@ -203,10 +204,10 @@ parameterization, where the value *is* part of the type, is a different
 model koan does not adopt.
 
 The same no-stratum reasoning extends symmetrically to bare type tokens. A
-`:Type`-typed parameter slot admits any `KTypeValue`-carried type — bare
+`:Type`-typed parameter slot admits any type value in the `Type` arm — bare
 builtin tokens (`Number`, `Str`, `Bool`, `Null`) and the
-`KTypeValue(KType::SetRef { .. })` carrier a struct / union nominal token
-synthesizes on demand — so `(MAKETREE Number)` against
+`KType::SetRef { .. }` a struct / union nominal token
+resolves to — so `(MAKETREE Number)` against
 `FUNCTOR (MAKETREE Elt :Type) -> …` binds `Elt = KType::Number` per call
 with no call-site wrapping. The per-call type-side bind treats the
 builtin-keyed and nominal-keyed paths identically: a body-position `Elt`
@@ -214,7 +215,7 @@ resolves to `KType::Number` through `Scope::resolve_type`, and a deferred
 return like `-> :Elt` re-elaborates through the same Combine-finish slot
 check the nominal-keyed path uses. The wall on `KType::Module { .. }` /
 `KType::Signature { .. }` carriers stays in place — those route through
-`AnyModule` / `AnySignature` / `Signature { .. }` slots, keeping the
+`OfKind(Module)` / `OfKind(Signature)` / `Signature { .. }` slots, keeping the
 `:Type` vs `:Module` overload distinction. OCaml structurally cannot match
 this without modular implicits, because its module language is stratified
 above the value language.

@@ -99,8 +99,12 @@ fn matches_value_list_any_accepts_any_list() {
 /// even when contents would join to `Number`.
 #[test]
 fn list_with_type_carrier_is_authoritative_for_ktype() {
+    use crate::machine::model::values::Held;
     use std::rc::Rc;
-    let items = Rc::new(vec![KObject::Number(1.0), KObject::Number(2.0)]);
+    let items = Rc::new(vec![
+        Held::Object(KObject::Number(1.0)),
+        Held::Object(KObject::Number(2.0)),
+    ]);
     let stamped = KObject::list_with_type(items, KType::Any);
     assert_eq!(stamped.ktype(), KType::List(Box::new(KType::Any)));
 }
@@ -189,32 +193,6 @@ fn unstamped_empty_container_detection() {
     assert!(!hetero.is_unstamped_empty_container());
     let map: HashMap<Box<dyn Serializable<'static> + 'static>, KObject<'static>> = HashMap::new();
     assert!(KObject::dict(map).is_unstamped_empty_container());
-}
-
-/// Surface form must survive bind regardless of whether downstream scope-aware
-/// consumers have resolved the carrier.
-#[test]
-fn type_name_ref_summarize_renders_surface_form() {
-    use crate::machine::model::ast::TypeName;
-    let v = KObject::TypeNameRef(TypeName::leaf("MyT".into()));
-    use crate::machine::model::types::Parseable;
-    assert_eq!(v.summarize(), "MyT");
-}
-
-/// `TypeNameRef::ktype()` reports `TypeExprRef` so it fills the same dispatch slot as
-/// the fully-elaborated `KTypeValue` carrier.
-#[test]
-fn type_name_ref_ktype_is_type_expr_ref() {
-    use crate::machine::model::ast::TypeName;
-    let v = KObject::TypeNameRef(TypeName::leaf("MyT".into()));
-    assert_eq!(v.ktype(), KType::TypeExprRef);
-}
-
-#[test]
-fn ktype_value_round_trips_through_summarize() {
-    let v = KObject::KTypeValue(KType::List(Box::new(KType::Number)));
-    use crate::machine::model::types::Parseable;
-    assert_eq!(v.summarize(), ":(LIST OF Number)");
 }
 
 /// `Wrapped.ktype()` reports a clone of the `SetRef` identity the dispatcher reads for

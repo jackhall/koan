@@ -1,6 +1,6 @@
 //! Per-call type-side bind — functor bodies see the right `KType` for module-typed params at dispatch time.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{parse_one, run, run_one, run_one_type, run_root_silent};
 use crate::machine::model::{KObject, KType};
 use crate::machine::RuntimeArena;
 
@@ -63,24 +63,14 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
          LET IntOrdView = (IntOrd :| OrderedSig)",
     );
     run(scope, "FN (USE_TYPE Er :OrderedSig) -> Any = (Er.Type)");
-    let result = run_one(scope, parse_one("USE_TYPE IntOrdView"));
-    use crate::machine::model::KType;
+    let result = run_one_type(scope, parse_one("USE_TYPE IntOrdView"));
     // Opaque ascription mints a fresh abstract `Type` member; the body must return
     // that identity, not the underlying concrete `Number`.
     match result {
-        KObject::KTypeValue(kt) => match kt {
-            KType::AbstractType { name, .. } => {
-                assert_eq!(name, "Type", "abstract type member should be named Type");
-            }
-            other => panic!(
-                "expected AbstractType {{ name = \"Type\", .. }}, got {:?}",
-                other
-            ),
-        },
-        other => panic!(
-            "expected KTypeValue carrying the abstract Type identity, got {:?}",
-            other.ktype()
-        ),
+        KType::AbstractType { name, .. } => {
+            assert_eq!(name, "Type", "abstract type member should be named Type");
+        }
+        other => panic!("expected AbstractType {{ name = \"Type\", .. }}, got {other:?}"),
     }
 }
 
@@ -109,22 +99,13 @@ fn functor_closure_escape_pins_type_class_bind() {
     for _ in 0..5 {
         run_one(scope, parse_one("PRINT 1"));
     }
-    let result = run_one(scope, parse_one("LOOKUP"));
-    use crate::machine::model::KType;
+    let result = run_one_type(scope, parse_one("LOOKUP"));
     match result {
-        KObject::KTypeValue(kt) => match kt {
-            KType::AbstractType { name, .. } => {
-                assert_eq!(name, "Type");
-            }
-            other => panic!(
-                "expected AbstractType {{ name: \"Type\", .. }} \
-                 after closure escape, got {:?}",
-                other,
-            ),
-        },
+        KType::AbstractType { name, .. } => {
+            assert_eq!(name, "Type");
+        }
         other => panic!(
-            "expected KTypeValue carrying the abstract Type identity after closure escape, got {:?}",
-            other.ktype(),
+            "expected AbstractType {{ name: \"Type\", .. }} after closure escape, got {other:?}",
         ),
     }
 }
@@ -143,14 +124,13 @@ fn functor_returning_bare_signature_typed_param_does_not_panic() {
          LET OrdView = (IntOrd :! OrderedSig)\n\
          FN (MAKESET Er :OrderedSig) -> OrderedSig = (Er)",
     );
-    let result = run_one(scope, parse_one("MAKESET OrdView"));
+    let result = run_one_type(scope, parse_one("MAKESET OrdView"));
     match result {
-        KObject::KTypeValue(KType::Module { module, .. }) => {
+        KType::Module { module, .. } => {
             assert_eq!(module.path, "IntOrd :! OrderedSig");
         }
-        other => panic!(
-            "MAKESET OrdView must return the passed-through module carrier, got {:?}",
-            other.ktype(),
-        ),
+        other => {
+            panic!("MAKESET OrdView must return the passed-through module carrier, got {other:?}")
+        }
     }
 }
