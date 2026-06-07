@@ -37,16 +37,16 @@ What's shipped that the open items below build on:
   admits. It makes the [standard library](libraries/standard-library.md)'s
   higher-order combinators ergonomic to call with an inline function. See
   [design/functional-programming.md § Anonymous functions](../design/functional-programming.md#anonymous-functions).
-- *Duplication consolidation.* Five pre-located copy-paste clusters each collapsed to a
+- *Duplication consolidation.* Six pre-located copy-paste clusters each collapsed to a
   single owner: per-builtin typed-binder `binder_name` (one shared
   [`type_part_binder_name`](../src/builtins.rs)), the FN and FUNCTOR bodies (one shared
   [`build_fn_like`](../src/builtins/fn_def.rs) keyed on `FnKind`), the `finish.rs`
   `run_combine`/`run_catch` arms (one `dispatch_body_result`), the `dict_literal`
-  `accept_colon`/`accept_equals` pair (one `accept_separator`), and the slot-extract error
+  `accept_colon`/`accept_equals` pair (one `accept_separator`), the slot-extract error
   envelope (one [`ArgumentBundle::extract_kexpression_or_shape_error`](../src/machine/core/kfunction/argument_bundle.rs)
-  owning the parenthesized-slot error text). The sixth cluster — the scheduler
-  `Object`/`Type` finalize arms — stays open under
-  [consolidate identified code duplication](refactor/consolidate-identified-duplication.md).
+  owning the parenthesized-slot error text), and the scheduler `Object`/`Type` finalize
+  arms (one [`check_declared_return`](../src/machine/execute/scheduler/execute.rs)
+  parameterized over the lifted carrier's `matches_value`/`matches_type` predicate).
 - *Arena unsafe consolidation.* The scattered per-call frame re-anchor is funnelled
   behind one [`CallArena::anchored_parts`](../src/machine/core/arena.rs), and every
   captured/defining-scope re-attach behind one
@@ -136,13 +136,12 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
-- [Consolidate identified code duplication](refactor/consolidate-identified-duplication.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
-- [Type values as data carriers](type_language/type-values-as-data-carriers.md)
+- [Unfuse type-kind classification from representation dispatch](type_language/unfuse-type-kind-from-representation-dispatch.md)
 
 ## Open items
 
@@ -196,7 +195,7 @@ predicate-typing stages and the stdlib's functor-heavy collections both
 build on:
 
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
-- [Type values as data carriers](type_language/type-values-as-data-carriers.md)
+- [Unfuse type-kind classification from representation dispatch](type_language/unfuse-type-kind-from-representation-dispatch.md)
 - [Anonymous structural unions](type_language/anonymous-unions.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
@@ -217,9 +216,6 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Consolidate identified code duplication](refactor/consolidate-identified-duplication.md) —
-  the one remaining copy-paste cluster: the scheduler `Object`/`Type` finalize arms,
-  deferred behind the carrier work that dissolves the fork they mirror.
 - [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md) —
   separate the per-frame scope lifetime from the run `'a`; the prerequisite that makes a
   compile-time frame re-anchor brand expressible.

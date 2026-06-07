@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::{assemble_body_chain, ScopeId};
+use crate::machine::model::KType;
 use crate::machine::{Frame, KError, KErrorKind, LexicalFrame, NodeId};
 
 use super::super::lift::{lift_kobject, lift_ktype};
@@ -52,80 +53,45 @@ impl<'a> Scheduler<'a> {
                                 .expect("per-call scope must have an outer (its captured scope)")
                                 .arena;
                             let mut lifted_obj = lift_kobject(v, &frame);
-                            // The declared-return check + downstream re-tag. A `Function`
-                            // FN/builtin checks `signature.return_type` (`Deferred` returns
-                            // are checked later at the per-call Combine finish, not here);
-                            // an `Arm` is a MATCH/TRY arm's `-> :T`.
-                            let declared = match prev_function {
-                                Some(ReturnContract::Function(f)) => match &f.signature.return_type
-                                {
-                                    crate::machine::model::types::ReturnType::Resolved(d) => {
-                                        Some((d, f.summarize()))
-                                    }
-                                    _ => None,
-                                },
-                                Some(ReturnContract::Arm { ret, kind }) => {
-                                    Some((ret, kind.to_string()))
-                                }
-                                None => None,
-                            };
-                            if let Some((declared, label)) = declared {
-                                if !declared.matches_value(&lifted_obj) {
-                                    let err = KError::new(KErrorKind::TypeMismatch {
-                                        arg: "<return>".to_string(),
-                                        expected: declared.name(),
-                                        got: lifted_obj.ktype().name(),
-                                    })
-                                    .with_frame(Frame::bare(label.clone(), label));
+                            match check_declared_return(
+                                prev_function,
+                                |d| d.matches_value(&lifted_obj),
+                                || lifted_obj.ktype().name(),
+                            ) {
+                                // Re-tag to the declared return type so downstream dispatch
+                                // sees the contract (may coarsen, e.g. `List<Number>` through
+                                // `:(LIST OF Any)` -> `List<Any>`).
+                                Ok(Some(declared)) => lifted_obj = lifted_obj.stamp_type(declared),
+                                Ok(None) => {}
+                                Err(err) => {
                                     scope.clear_placeholders_for_producer(id);
                                     self.finalize(idx, NodeOutput::Err(err));
                                     continue;
                                 }
-                                // Re-tag to the declared return type so downstream dispatch
-                                // sees the contract (may coarsen, e.g. `List<Number>`
-                                // through `:(LIST OF Any)` -> `List<Any>`).
-                                lifted_obj = lifted_obj.stamp_type(declared);
                             }
                             let lifted = dest.alloc_object(lifted_obj);
                             self.finalize(idx, NodeOutput::Value(Carried::Object(lifted)));
                         }
                         // A type flowing the type channel re-anchors any `Module` frame and
-                        // re-allocs into the destination arena, after the declared-return
-                        // check — the type-channel analog of the `Object` arm above, via
-                        // `matches_type` (e.g. a body module returned through a `Signature`
-                        // return slot must satisfy that signature). `Deferred` returns are
-                        // checked at the per-call Combine finish, not here.
+                        // re-allocs into the destination arena, after the shared
+                        // declared-return check via `matches_type` (e.g. a body module
+                        // returned through a `Signature` return slot must satisfy that
+                        // signature). The type channel ignores the returned declared type —
+                        // unlike the `Object` arm, it does not re-tag.
                         (NodeOutput::Value(Carried::Type(t)), Some(frame)) => {
                             let dest = scope
                                 .outer
                                 .expect("per-call scope must have an outer (its captured scope)")
                                 .arena;
                             let lifted_t = lift_ktype(t, &frame);
-                            let declared = match prev_function {
-                                Some(ReturnContract::Function(f)) => match &f.signature.return_type
-                                {
-                                    crate::machine::model::types::ReturnType::Resolved(d) => {
-                                        Some((d, f.summarize()))
-                                    }
-                                    _ => None,
-                                },
-                                Some(ReturnContract::Arm { ret, kind }) => {
-                                    Some((ret, kind.to_string()))
-                                }
-                                None => None,
-                            };
-                            if let Some((declared, label)) = declared {
-                                if !declared.matches_type(&lifted_t) {
-                                    let err = KError::new(KErrorKind::TypeMismatch {
-                                        arg: "<return>".to_string(),
-                                        expected: declared.name(),
-                                        got: lifted_t.name(),
-                                    })
-                                    .with_frame(Frame::bare(label.clone(), label));
-                                    scope.clear_placeholders_for_producer(id);
-                                    self.finalize(idx, NodeOutput::Err(err));
-                                    continue;
-                                }
+                            if let Err(err) = check_declared_return(
+                                prev_function,
+                                |d| d.matches_type(&lifted_t),
+                                || lifted_t.name(),
+                            ) {
+                                scope.clear_placeholders_for_producer(id);
+                                self.finalize(idx, NodeOutput::Err(err));
+                                continue;
                             }
                             let lifted = dest.alloc_ktype(lifted_t);
                             self.finalize(idx, NodeOutput::Value(Carried::Type(lifted)));
@@ -289,6 +255,39 @@ impl<'a> Scheduler<'a> {
             body_index: 0,
         }
     }
+}
+
+/// The declared-return check shared by the `Object` and `Type` finalize arms: pull the
+/// declared return type off `contract` (a `Function`'s resolved `return_type`, or an
+/// `Arm`'s `-> :T`), and if there is one, verify the lifted carrier satisfies it.
+/// `satisfies` runs the channel-appropriate predicate (`matches_value` / `matches_type`)
+/// and `got_name` names the carrier for the mismatch error. Returns the declared type so
+/// the caller can re-tag against it (the `Object` arm coarsens; the `Type` arm discards
+/// it), `Ok(None)` when nothing is declared — a non-`Resolved` (e.g. `Deferred`) return is
+/// checked later at the per-call Combine finish, not here — or `Err` with the labelled
+/// `TypeMismatch`.
+fn check_declared_return<'a>(
+    contract: Option<ReturnContract<'a>>,
+    satisfies: impl FnOnce(&KType<'a>) -> bool,
+    got_name: impl FnOnce() -> String,
+) -> Result<Option<&'a KType<'a>>, KError> {
+    let (declared, label) = match contract {
+        Some(ReturnContract::Function(f)) => match &f.signature.return_type {
+            crate::machine::model::types::ReturnType::Resolved(d) => (d, f.summarize()),
+            _ => return Ok(None),
+        },
+        Some(ReturnContract::Arm { ret, kind }) => (ret, kind.to_string()),
+        None => return Ok(None),
+    };
+    if !satisfies(declared) {
+        return Err(KError::new(KErrorKind::TypeMismatch {
+            arg: "<return>".to_string(),
+            expected: declared.name(),
+            got: got_name(),
+        })
+        .with_frame(Frame::bare(label.clone(), label)));
+    }
+    Ok(Some(declared))
 }
 
 /// Cases by `block_entry` / `new_function`:

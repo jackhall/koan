@@ -617,7 +617,7 @@ uniformly.
 
 ## Open work
 
-- [Type values as data carriers](../../roadmap/type_language/type-values-as-data-carriers.md)
+- [Unfuse type-kind classification from representation dispatch](../../roadmap/type_language/unfuse-type-kind-from-representation-dispatch.md)
   — moves a user type used as a value onto a `KObject` data carrier instead of the
   `Carried::Type(&KType)` arm, unifying the `OfKind(KKind)` / `AnyUserType(NominalKind)`
   wildcard pair into one `ktype()`-keyed kind-matched slot.

@@ -45,7 +45,7 @@ Future work on the type and module system. Each entry points at a
   — module-declared operators, including paired/group forms like `+`/`-`. Algebraic
   structures over them (group laws, generic-over-groups) ride
   [modular implicits](../../roadmap/predicate_typing/modular-implicits.md).
-- [Type values as data carriers](../../roadmap/type_language/type-values-as-data-carriers.md)
+- [Unfuse type-kind classification from representation dispatch](../../roadmap/type_language/unfuse-type-kind-from-representation-dispatch.md)
   — a user type used as a value rides a `KObject` data carrier rather than the value
   channel's dedicated `Carried::Type(&KType)` arm, so a type-value and an instance value
   of that type share one channel and one `ktype()`-keyed classification. That collapses
