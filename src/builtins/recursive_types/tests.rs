@@ -36,7 +36,6 @@ fn struct_set_and_fields<'a>(
 /// cross-reference is a `SetLocal` into that set, and the members bind in the enclosing
 /// scope.
 #[test]
-#[ignore = "record-repr NEWTYPE recursion in a RECURSIVE TYPES block needs the NEWTYPE declarator to thread + seal its `:{...}` repr (the struct path is retired); pending the record-repr-recursion follow-up"]
 fn block_mutual_pair_seals_one_set_with_set_local_cross_refs() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
@@ -60,7 +59,6 @@ fn block_mutual_pair_seals_one_set_with_set_local_cross_refs() {
 
 /// The group name binds a `RecursiveGroup` handle over the members' shared set.
 #[test]
-#[ignore = "record-repr NEWTYPE recursion in a RECURSIVE TYPES block needs the NEWTYPE declarator to thread + seal its `:{...}` repr (the struct path is retired); pending the record-repr-recursion follow-up"]
 fn block_group_name_binds_the_set_handle() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
@@ -80,7 +78,6 @@ fn block_group_name_binds_the_set_handle() {
 
 /// Three-way mutual recursion: one shared set of 3; each field is a `SetLocal` to the next.
 #[test]
-#[ignore = "record-repr NEWTYPE recursion in a RECURSIVE TYPES block needs the NEWTYPE declarator to thread + seal its `:{...}` repr (the struct path is retired); pending the record-repr-recursion follow-up"]
 fn block_three_way_seals_one_set() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);

@@ -64,7 +64,7 @@ as `KType` variants, unable to express a type constructor's arity.
   the shallow kind enum and its extension point only.
 - *Scope — the type/value channel only, decided.* This item re-routes how types travel and
   dispatch; it does not touch the nominal-kind axis. The `NominalKind` collapse
-  ([struct → record-repr `NEWTYPE`](struct-newtype-collapse.md), [tagged-union
+  (the shipped struct → record-repr `NEWTYPE` collapse, [tagged-union
   variants](tagged-variant-types.md)) reduces kinds on the Object side and neither
   sequences nor is sequenced by this work.
 

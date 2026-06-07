@@ -30,8 +30,8 @@ construct a tagged value in every arm, or coarsen the slot to `Any`.
 - A tagged union is expressible as the anonymous-union join of per-variant
   `Newtype`s (with [tagged-union variants as dispatchable
   types](tagged-variant-types.md)), so `NominalKind::Tagged` dissolves into
-  `Newtype` — the sum-side counterpart of the [struct → record-repr `NEWTYPE`
-  collapse](struct-newtype-collapse.md).
+  `Newtype` — the sum-side counterpart of the shipped struct → record-repr
+  `NEWTYPE` collapse.
 
 **Directions.**
 

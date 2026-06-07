@@ -3,28 +3,44 @@
 //! schema carrier). Construction produces a [`KObject::Wrapped`] tagging the inner
 //! value with the NEWTYPE identity; the `Wrapped.inner` is invariantly non-`Wrapped`
 //! (newtype-over-newtype collapses to a single layer).
+//!
+//! Two registered overloads share [`body`], which branches on the repr carrier. A scalar /
+//! bare-leaf repr (`= Number`, `= Foo`) resolves eagerly through the `:TypeExprRef` slot. A
+//! sigil repr (`= :{…}`, `= :(LIST OF T)`) is captured *raw* through the `:SigiledTypeExpr`
+//! slot so the declarator owns its field-list elaboration: a record repr threads the binder
+//! name ([`Elaborator::with_threaded`]) so a self-reference (`:{next :Node}`) lowers to a
+//! `RecursiveRef` and seals to a `SetLocal` back-edge — the same shared seal path
+//! ([`finalize_nominal_member`], [`seal_recursive_refs`]) `UNION` uses, and the path a
+//! `RECURSIVE TYPES` block routes its `NEWTYPE` members through.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::argument_bundle::{
-    extract_bare_type_name, extract_ktype, extract_type_name_ref,
+    extract_bare_type_name, extract_kexpression, extract_ktype, extract_type_name_ref,
 };
-use crate::machine::core::ApplyOutcome;
-use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::{NominalKind, NominalMember, NominalSchema, RecursiveSet};
+use crate::machine::core::source::Spanned;
+use crate::machine::core::{ApplyOutcome, LexicalFrame, PendingBinderGuard, PendingTypeEntry};
+use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::types::{
+    finalize_nominal_member, parse_typed_field_list_via_elaborator, seal_recursive_refs, Elaborator,
+    FieldListOutcome, FieldNameKind, NominalKind, NominalMember, NominalSchema, Record,
+    RecursiveSet, SchemaSealResult, SealOutcome,
+};
 use crate::machine::model::values::KObject;
 use crate::machine::model::KType;
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, KError, KErrorKind, Resolution,
-    SchedulerHandle, Scope,
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
+    Resolution, SchedulerHandle, Scope,
 };
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
 
-/// Body of `NEWTYPE <name> = <repr>`. Seals a singleton [`RecursiveSet`] over one
-/// [`NominalKind::Newtype`] member (`repr` as its [`NominalSchema::Newtype`]), writes the
-/// `SetRef` identity into `bindings.types`, and returns it as a `KObject::KTypeValue` so the
-/// surface form evaluates to a Type value.
+/// Body of `NEWTYPE <name> = <repr>`, shared by both overloads. Branches on the repr carrier:
+/// a resolved `KTypeValue` or a bare-leaf `TypeNameRef` (scalar path → [`finalize_newtype`]), or
+/// a raw `KExpression` from the `:SigiledTypeExpr` slot (`:{…}` record path →
+/// [`elaborate_record_repr`]; other sigils → [`defer_resolved_sigil`]). Every path writes the
+/// sealed `SetRef` identity into `bindings.types` and yields it as a `KObject::KTypeValue`.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
@@ -88,6 +104,34 @@ pub fn body<'a>(
                 te.as_str(),
             ))))
         }
+        // Raw-captured sigil repr from the `:SigiledTypeExpr` overload. `:{…}` parses to
+        // `[Keyword("RECORD"), Expression(<fields>)]`; the declarator owns that field-list
+        // elaboration so it can thread its own name and seal a recursive `next :Node` back-edge.
+        // Any other sigil (`:(LIST OF Number)`) is a structural repr with no self-reference to
+        // thread — sub-dispatch it to a resolved `KType` and seal a plain Newtype over it.
+        Some(KObject::KExpression(_)) => {
+            let inner = match extract_kexpression(&mut bundle, "repr") {
+                Some(e) => e,
+                None => unreachable!("get(KExpression) then extract_kexpression must succeed"),
+            };
+            let is_record = matches!(
+                inner.parts.first().map(|p| &p.value),
+                Some(ExpressionPart::Keyword(k)) if k == "RECORD",
+            );
+            if is_record {
+                let fields = match inner.parts.get(1).map(|p| &p.value) {
+                    Some(ExpressionPart::Expression(f)) => (**f).clone(),
+                    _ => {
+                        return err(KError::new(KErrorKind::ShapeError(
+                            "NEWTYPE record repr `:{…}` is missing its field list".to_string(),
+                        )))
+                    }
+                };
+                elaborate_record_repr(scope, sched, name, fields, bind_index, chain)
+            } else {
+                defer_resolved_sigil(scope, sched, name, inner, bind_index)
+            }
+        }
         _ => err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE repr slot must be a type expression (e.g. `Number`, `Foo`)".to_string(),
         ))),
@@ -127,14 +171,215 @@ fn finalize_newtype<'a>(
     }
 }
 
+/// Elaborate + seal a record repr (`:{…}`), threading the binder name so a self-reference
+/// (`NEWTYPE Node = :{next :Node}`) lowers to a transient `RecursiveRef` and seals to a
+/// `SetLocal`. Mirrors the retired `STRUCT` declarator, sealing `NominalSchema::Newtype(Record)`
+/// rather than `Struct`. `fields` is the bare field list (`(name :Type, …)`) the parser nested
+/// under the desugared `RECORD` head.
+fn elaborate_record_repr<'a>(
+    scope: &'a Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
+    name: String,
+    fields: KExpression<'a>,
+    bind_index: BindingIndex,
+    chain: Option<Rc<LexicalFrame>>,
+) -> BodyResult<'a> {
+    // Mark this binder in-flight so a consumer referencing it (an earlier sibling still
+    // finalizing) can park on our producer node; the guard's Drop removes the entry, and the
+    // deferred path moves it into the Combine-finish closure.
+    let pending_guard = scope.bindings().insert_pending_type(
+        name.clone(),
+        PendingTypeEntry {
+            kind: NominalKind::Newtype,
+            scope_id: scope.id,
+            schema_expr: fields.clone(),
+        },
+    );
+    let mut elaborator = Elaborator::new(scope)
+        .with_threaded([name.clone()])
+        .with_chain(chain.clone());
+    let outcome = parse_typed_field_list_via_elaborator(
+        &fields,
+        "NEWTYPE record repr",
+        FieldNameKind::Identifier,
+        &mut elaborator,
+    );
+    match outcome {
+        FieldListOutcome::Done(sealed) => finalize_record_newtype(scope, name, sealed, bind_index),
+        FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
+        FieldListOutcome::Pending {
+            park_producers,
+            sub_dispatches,
+        } => defer_record_via_combine(
+            scope,
+            sched,
+            name,
+            fields,
+            park_producers,
+            sub_dispatches,
+            pending_guard,
+            bind_index,
+            chain,
+        ),
+    }
+}
+
+/// Seal the elaborated record fields into the NEWTYPE's [`RecursiveSet`] member as
+/// `NominalSchema::Newtype(KType::Record(sealed))`. Transient `RecursiveRef(name)` field leaves
+/// seal to `SetLocal(index)` against the member's set — the block's shared set when present (a
+/// `RECURSIVE TYPES` member), else a fresh singleton (standalone self-recursion). Shared by the
+/// synchronous and Combine-finish paths.
+fn finalize_record_newtype<'a>(
+    scope: &'a Scope<'a>,
+    name: String,
+    fields: Vec<(String, KType<'a>)>,
+    bind_index: BindingIndex,
+) -> BodyResult<'a> {
+    if fields.is_empty() {
+        return err(KError::new(KErrorKind::ShapeError(
+            "NEWTYPE record repr must have at least one field".to_string(),
+        )));
+    }
+    let scope_id = scope.id;
+    let outcome = finalize_nominal_member(
+        scope,
+        &name,
+        scope_id,
+        NominalKind::Newtype,
+        |set| {
+            let missing = RefCell::new(Vec::new());
+            let sealed_pairs: Vec<(String, KType<'a>)> = fields
+                .into_iter()
+                .map(|(field, kt)| (field, seal_recursive_refs(set, &kt, &missing)))
+                .collect();
+            let sealed = Record::from_pairs(sealed_pairs);
+            match missing.into_inner().into_iter().next() {
+                Some(m) => SchemaSealResult::Dangling(m),
+                None => {
+                    SchemaSealResult::Ok(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
+                        sealed,
+                    )))))
+                }
+            }
+        },
+        bind_index,
+    );
+    match outcome {
+        SealOutcome::Sealed(kt_ref) => {
+            BodyResult::Value(scope.arena.alloc_object(KObject::KTypeValue(kt_ref.clone())))
+        }
+        SealOutcome::DanglingRef(missing) => err(KError::new(KErrorKind::ShapeError(format!(
+            "NEWTYPE `{name}` record repr references unsealed type `{missing}`",
+        )))),
+        SealOutcome::Rebind(e) => err(e),
+    }
+}
+
+/// Schedule a `Combine` over `park_producers` plus owned sub-Dispatches for sigiled field
+/// types (`next :(LIST OF Node)`), then re-run the field-list elaboration in the finish closure.
+/// Mirrors the retired `STRUCT` declarator's `defer_struct_via_combine`. Combine layout:
+/// `[park_producers ++ owned_subs…]`; `splice_layout[k] = (slot_idx, results_pos)` splices
+/// `results[results_pos]` into `fields.parts[slot_idx]` as `Future(_)` before the re-walk. The
+/// `pending_guard` moves into the closure so its Drop fires on any finish arm.
+#[allow(clippy::too_many_arguments)]
+fn defer_record_via_combine<'a>(
+    scope: &'a Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
+    name: String,
+    fields: KExpression<'a>,
+    park_producers: Vec<NodeId>,
+    sub_dispatches: Vec<(usize, KExpression<'a>)>,
+    pending_guard: PendingBinderGuard<'a>,
+    bind_index: BindingIndex,
+    chain: Option<Rc<LexicalFrame>>,
+) -> BodyResult<'a> {
+    let name_for_finish = name.clone();
+    let park_count = park_producers.len();
+    let mut owned_subs: Vec<NodeId> = Vec::with_capacity(sub_dispatches.len());
+    let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
+    for (slot_idx, sub_expr) in sub_dispatches {
+        let id = sched.add_dispatch(sub_expr, scope);
+        splice_layout.push((slot_idx, park_count + owned_subs.len()));
+        owned_subs.push(id);
+    }
+    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
+        let _pending_guard = pending_guard;
+        let mut spliced_parts = fields.parts.clone();
+        for &(slot_idx, results_pos) in &splice_layout {
+            let obj = results[results_pos];
+            if !matches!(obj, KObject::KTypeValue(_)) {
+                return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                    "NEWTYPE record repr slot at part-index {slot_idx} expected a type \
+                     expression, got a {} value",
+                    obj.ktype().name(),
+                ))));
+            }
+            spliced_parts[slot_idx].value = ExpressionPart::Future(obj);
+        }
+        let spliced = KExpression::new(spliced_parts);
+        let mut elaborator = Elaborator::new(scope)
+            .with_threaded([name_for_finish.clone()])
+            .with_chain(chain.clone());
+        match parse_typed_field_list_via_elaborator(
+            &spliced,
+            "NEWTYPE record repr",
+            FieldNameKind::Identifier,
+            &mut elaborator,
+        ) {
+            FieldListOutcome::Done(sealed) => {
+                finalize_record_newtype(scope, name_for_finish.clone(), sealed, bind_index)
+            }
+            FieldListOutcome::Err(msg) => BodyResult::Err(
+                KError::new(KErrorKind::ShapeError(msg))
+                    .with_frame(Frame::bare("<newtype>", format!("NEWTYPE {name_for_finish}"))),
+            ),
+            FieldListOutcome::Pending { .. } => BodyResult::Err(KError::new(
+                KErrorKind::ShapeError(
+                    "NEWTYPE record repr elaboration parked again after Combine wake".to_string(),
+                ),
+            )),
+        }
+    });
+    let combine_id = sched.add_combine(owned_subs, park_producers, scope, finish);
+    BodyResult::DeferTo(combine_id)
+}
+
+/// A non-record sigil repr (`NEWTYPE Stream = :(LIST OF Number)`): no self-reference to thread, so
+/// re-wrap the captured sigil and sub-dispatch it to a resolved `KType`, then seal a plain Newtype
+/// over the result at Combine-finish.
+fn defer_resolved_sigil<'a>(
+    scope: &'a Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
+    name: String,
+    inner: KExpression<'a>,
+    bind_index: BindingIndex,
+) -> BodyResult<'a> {
+    let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(Box::new(
+        inner,
+    )))]);
+    let sub = sched.add_dispatch(wrapped, scope);
+    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| match results[0] {
+        KObject::KTypeValue(kt) => finalize_newtype(scope, name, kt.clone(), bind_index),
+        other => BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+            "NEWTYPE repr sigil resolved to a non-type value `{}`",
+            other.ktype().name(),
+        )))),
+    });
+    let combine_id = sched.add_combine(vec![sub], Vec::new(), scope, finish);
+    BodyResult::DeferTo(combine_id)
+}
+
 /// Dispatch-time placeholder extractor.
 pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     expr.binder_name_from_type_part()
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    // Only the declaration form is registered; construction lives in the `TypeCall` fast lane
-    // via `constructors::dispatch_construct_newtype`.
+    // Two overloads share `body`, which branches on the repr carrier. Construction lives in the
+    // `TypeCall` fast lane via `constructors::dispatch_construct_newtype`.
+    //
+    // Scalar / bare-leaf repr (`= Number`, `= Foo`): the `:TypeExprRef` slot resolves the leaf
+    // eagerly to a `KType`.
     register_builtin_with_binder(
         scope,
         "NEWTYPE",
@@ -150,15 +395,61 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         Some(binder_name),
     );
+    // Sigil repr (`= :{…}`, `= :(LIST OF T)`): a `SigiledTypeExpr` part. The `:SigiledTypeExpr`
+    // slot captures it *raw* (more specific than `:TypeExprRef`, so it wins) so the declarator owns
+    // the field-list elaboration and can thread its binder name through a recursive `:{next :Node}`.
+    register_builtin_with_binder(
+        scope,
+        "NEWTYPE",
+        sig(
+            KType::Type,
+            vec![
+                kw("NEWTYPE"),
+                arg("name", KType::TypeExprRef),
+                kw("="),
+                arg("repr", KType::SigiledTypeExpr),
+            ],
+        ),
+        body,
+        Some(binder_name),
+    );
 }
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
     use crate::machine::execute::Scheduler;
-    use crate::machine::model::types::{NominalKind, ProjectedSchema, RecursiveSet};
+    use crate::machine::model::types::{NominalKind, NominalSchema, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{KErrorKind, RuntimeArena};
+    use crate::machine::{KErrorKind, RuntimeArena, Scope};
+
+    /// `(set, record-fields)` of a sealed record-repr newtype, read raw off its `SetRef`
+    /// identity so assertions see `SetLocal` / `List(SetLocal)` back-edges before projection.
+    fn record_fields<'a>(
+        scope: &'a Scope<'a>,
+        name: &str,
+    ) -> (Rc<RecursiveSet<'a>>, Vec<(String, KType<'a>)>) {
+        match scope.resolve_type(name) {
+            Some(KType::SetRef { set, index }) => {
+                let member = set.member(*index);
+                let borrow = member.schema();
+                match borrow.as_ref() {
+                    Some(NominalSchema::Newtype(repr)) => match repr.as_ref() {
+                        KType::Record(record) => {
+                            let fields =
+                                record.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                            (Rc::clone(set), fields)
+                        }
+                        other => panic!("expected {name} to carry a record repr, got {other:?}"),
+                    },
+                    other => panic!("expected {name} to carry a Newtype schema, got {other:?}"),
+                }
+            }
+            other => panic!("expected {name} to be a SetRef identity, got {other:?}"),
+        }
+    }
 
     /// NEWTYPE writes the `SetRef` identity into `bindings.types` and nothing into
     /// `bindings.data` — the declaration has no payload value to bind.
@@ -273,6 +564,78 @@ mod tests {
             matches!(&err.kind, KErrorKind::UnboundName(n) if n == "Boxed"),
             "expected UnboundName(Boxed) after failed declaration, got {err}",
         );
+    }
+
+    /// A self-recursive record repr seals its self-reference to a `SetLocal` back-edge into the
+    /// declaring member's singleton set — the binder name is threaded through the field-list
+    /// elaboration. (`next :Node` has no base case, so the type is uninhabited by a finite value;
+    /// this pins the seal shape, not construction.)
+    #[test]
+    fn record_repr_self_recursion_seals_set_local() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(scope, "NEWTYPE Node = :{value :Number, next :Node}");
+        let (set, fields) = record_fields(scope, "Node");
+        let node_idx = set.index_of("Node").expect("Node is its own set member");
+        assert_eq!(
+            fields.iter().find(|(f, _)| f == "value").map(|(_, t)| t),
+            Some(&KType::Number),
+            "value stays a builtin leaf",
+        );
+        assert_eq!(
+            fields.iter().find(|(f, _)| f == "next").map(|(_, t)| t),
+            Some(&KType::SetLocal(node_idx)),
+            "next seals to a SetLocal self-reference",
+        );
+        assert!(scope.bindings().pending_types().is_empty());
+    }
+
+    /// A `:(LIST OF Self)` field threads the self-reference through the deferred sigil-field path:
+    /// `children` seals to `List(SetLocal(Tree))`. (Construction is the same seal-shape concern the
+    /// retired struct path pinned — a bare recursive record has no nullable base, and an empty list
+    /// literal types as `List(Str)`, both orthogonal to the recursion threading proven here.)
+    #[test]
+    fn record_repr_list_of_self_field_seals_set_local() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(scope, "NEWTYPE Tree = :{children :(LIST OF Tree)}");
+        let (set, fields) = record_fields(scope, "Tree");
+        let tree_idx = set.index_of("Tree").expect("Tree is its own set member");
+        assert_eq!(set.len(), 1, "a self-recursive type seals into a singleton set");
+        assert_eq!(
+            fields.iter().find(|(f, _)| f == "children").map(|(_, t)| t),
+            Some(&KType::List(Box::new(KType::SetLocal(tree_idx)))),
+            "children seals its self-reference to List(SetLocal(Tree))",
+        );
+        assert!(scope.bindings().pending_types().is_empty());
+    }
+
+    /// A non-record sigil repr (`= :(LIST OF Number)`) routes through the same
+    /// `:SigiledTypeExpr` overload but has no self-reference to thread: it sub-dispatches the
+    /// sigil to a resolved `KType` and seals a plain Newtype over it. Regression guard for the
+    /// overload split — this used to ride the `:TypeExprRef` overload's speculative sub-dispatch.
+    #[test]
+    fn sigil_repr_non_record_seals_newtype_over_resolved_type() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(scope, "NEWTYPE Nums = :(LIST OF Number)");
+        let result = run_one(scope, parse_one("(Nums [1.0, 2.0])"));
+        match result {
+            KObject::Wrapped { inner, type_id } => {
+                match **type_id {
+                    KType::SetRef { ref set, index } => {
+                        assert_eq!(set.member(index).name, "Nums")
+                    }
+                    ref other => panic!("expected Nums identity, got {other:?}"),
+                }
+                assert!(
+                    matches!(inner.get(), KObject::List(..)),
+                    "inner is the bare list, got {:?}",
+                    inner.get().ktype(),
+                );
+            }
+            other => panic!("expected Wrapped, got {:?}", other.ktype()),
+        }
     }
 
     /// `Bar(Foo(3.0))` produces a single-layer `Wrapped { type_id: Bar,

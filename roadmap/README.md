@@ -82,8 +82,9 @@ What's shipped that the open items below build on:
   `KObject::Struct` carrier, the `NominalSchema` / `ProjectedSchema` / `NominalKind` `Struct`
   triple, the `:Struct` wildcard, and `dispatch_construct_struct` are retired. The spelling is
   `NEWTYPE Name = :{fields}`; `.x` reads the field through ATTR's `Wrapped` fall-through over
-  the record repr. Recursion through a record repr is the remaining tail, tracked under
-  [record-repr NEWTYPE recursion](type_language/struct-newtype-collapse.md). See
+  the record repr. A record repr threads its binder name, so a self-reference
+  (`NEWTYPE Node = :{next :Node}`), a `:(LIST OF Self)` field, and `RECURSIVE TYPES` blocks of
+  record newtypes all seal to `SetLocal` back-edges. See
   [design/typing/user-types.md](../design/typing/user-types.md).
 
 ## Next items
@@ -101,8 +102,9 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
+- [First-class record-type sigil](type_language/first-class-record-type.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
-- [Record-repr NEWTYPE recursion](type_language/struct-newtype-collapse.md)
+- [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
 - [Carry types in the value-flow channel](type_language/types-in-value-channel.md)
 
 ## Open items
@@ -156,7 +158,7 @@ are represented in `KType` and routed through dispatch. The substrate the
 predicate-typing stages and the stdlib's functor-heavy collections both
 build on:
 
-- [Record-repr NEWTYPE recursion](type_language/struct-newtype-collapse.md)
+- [First-class record-type sigil](type_language/first-class-record-type.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Carry types in the value-flow channel](type_language/types-in-value-channel.md)
 - [Anonymous structural unions](type_language/anonymous-unions.md)
