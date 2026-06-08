@@ -8,7 +8,7 @@ use crate::machine::{
 };
 
 use super::super::dispatch::DispatchState;
-use super::super::nodes::{work_park_producers, Node, NodeWork};
+use super::super::nodes::{work_park_producers, Node, NodeScope, NodeWork};
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
@@ -237,9 +237,25 @@ impl<'a> Scheduler<'a> {
             .filter(|p| !self.is_result_ready(*p))
             .collect();
         let no_park = work_park_producers(&work).is_empty();
+        // Single-cart storage: when this submission runs inside a per-call frame whose own
+        // child is the very scope passed, store a payload-less `Yoked` and let the read
+        // boundary re-project from `frame` — no fabricated `&'a` persisted. Any other scope
+        // (a run-root scope, or a frame sub-scope the frame does not directly back) genuinely
+        // lives at `'a`, so it stays `Root`.
+        let node_scope = match &frame {
+            Some(f)
+                if std::ptr::eq(
+                    f.scope() as *const Scope<'_> as *const (),
+                    scope as *const Scope<'_> as *const (),
+                ) =>
+            {
+                NodeScope::Yoked
+            }
+            _ => NodeScope::Root(scope),
+        };
         let id = self.store.alloc_slot(Node {
             work,
-            scope,
+            scope: node_scope,
             frame,
             reserve_frame: None,
             function: None,

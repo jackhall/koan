@@ -18,7 +18,11 @@ impl<'a> Scheduler<'a> {
         while let Some(idx) = self.queues.pop_next() {
             let id = NodeId(idx);
             let node = self.store.take_for_run(id);
-            let scope = node.scope;
+            // Project the stored handle to the step's `&'a` scope, but keep the handle itself
+            // (`Root`/`Yoked`) so a same-frame `None`-branch reinstall below re-stores it
+            // honestly rather than persisting the projected `&'a`.
+            let node_scope = node.scope;
+            let scope = node_scope.project(node.frame.as_ref());
             let work = node.work;
             let prev_function = node.function;
             let prev_chain_carrier = node.chain;
@@ -155,7 +159,7 @@ impl<'a> Scheduler<'a> {
                                 id,
                                 Node {
                                     work: new_work,
-                                    scope,
+                                    scope: node_scope,
                                     frame: prev_frame,
                                     reserve_frame: post_step_reserve,
                                     function: next_function,

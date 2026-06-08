@@ -121,9 +121,39 @@ pub(super) enum LiftState<'a> {
     Ready(NodeOutput<'a>),
 }
 
+/// Slot-stored scope handle. `Root` holds a run-lifetime borrow directly; a per-call frame
+/// scope instead stores `Yoked` — no borrow at all — and is re-projected from the slot's own
+/// [`Node::frame`] cart at read time (single-cart: the frame `Rc` already on the slot is the
+/// sole liveness witness, so there is no second `Rc` clone and no contention with
+/// `try_reset_for_tail`'s uniqueness check). Storing the marker rather than a fabricated `&'a`
+/// is what keeps the borrow honest across a TCO `try_reset_for_tail`: nothing persisted points
+/// into the reset arena; the live frame is re-read each step.
+pub(super) enum NodeScope<'a> {
+    Root(&'a Scope<'a>),
+    Yoked,
+}
+
+impl<'a> NodeScope<'a> {
+    /// Materialize the step's scope. `Root` hands back its stored run-lifetime borrow; `Yoked`
+    /// projects from the `frame` cart and widens to the slot's `'a`. The `Yoked` widen is the
+    /// one transient read-boundary fabrication: sound because the frame `Rc` is held for the
+    /// whole step and any value produced lifts at the Done boundary before the frame can drop.
+    pub(super) fn project(&self, frame: Option<&Rc<CallArena>>) -> &'a Scope<'a> {
+        match self {
+            NodeScope::Root(scope) => scope,
+            NodeScope::Yoked => {
+                frame
+                    .expect("a Yoked slot carries its frame cart")
+                    .anchored_parts()
+                    .1
+            }
+        }
+    }
+}
+
 pub(super) struct Node<'a> {
     pub(super) work: NodeWork<'a>,
-    pub(super) scope: &'a Scope<'a>,
+    pub(super) scope: NodeScope<'a>,
     /// `Some` only for user-fn body slots. The Rc drops on Done or Replace; the arena
     /// itself drops then only if no escaped closure still holds the captured scope.
     /// Lexical scoping (`KFunction::captured`) makes each per-call child's `outer` the
