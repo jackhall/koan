@@ -6,7 +6,7 @@ use crate::machine::core::scope_id::ScopeId;
 use crate::machine::core::source::{self, FileId, SourceLoc, Span};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
-    KType, NominalKind, NominalMember, NominalSchema, Parseable, Record, RecursiveSet,
+    KType, KKind, NominalMember, NominalSchema, Parseable, Record, RecursiveSet,
 };
 use crate::machine::model::values::{KObject, NonWrappedRef};
 use crate::machine::RuntimeArena;
@@ -204,7 +204,7 @@ impl KError {
         pairs.push(("frames".to_string(), frames_list));
         let record = KObject::record(Record::from_pairs(pairs));
         let type_id: &'a KType<'a> = arena.alloc_ktype(KType::SetRef {
-            set: synthetic_singleton(name.clone(), NominalKind::Newtype),
+            set: synthetic_singleton(name.clone(), KKind::Newtype),
             index: 0,
         });
         let payload = KObject::Wrapped {
@@ -214,7 +214,7 @@ impl KError {
         KObject::Tagged {
             tag: name,
             value: Rc::new(payload),
-            set: synthetic_singleton("KError".to_string(), NominalKind::Tagged),
+            set: synthetic_singleton("KError".to_string(), KKind::Tagged),
             index: 0,
             type_args: Rc::new(vec![]),
         }
@@ -225,13 +225,24 @@ impl KError {
 /// to-tagged payload `type_id` and union `set`). Its one member carries an empty schema —
 /// these carriers are read directly by the TRY branch walker, never dispatched on, so the
 /// schema is never consulted.
-fn synthetic_singleton<'a>(name: String, kind: NominalKind) -> Rc<RecursiveSet<'a>> {
+fn synthetic_singleton<'a>(name: String, kind: KKind) -> Rc<RecursiveSet<'a>> {
     let member = NominalMember::pending(name, ScopeId::SENTINEL, kind);
     member.fill(match kind {
-        NominalKind::Newtype => NominalSchema::Newtype(Box::new(KType::Any)),
+        KKind::Newtype => NominalSchema::Newtype(Box::new(KType::Any)),
         _ => NominalSchema::Tagged(std::collections::HashMap::new()),
     });
     Rc::new(RecursiveSet::new(vec![member]))
+}
+
+/// The `KError` carrier type — the `Tagged`-kind `SetRef` a `to_tagged` value reports its
+/// family from. Used as the `Error` arm of `CATCH`'s declared `:(Result Any KError)` return
+/// (a documentary contract — `KError` is not a registered prelude type, and the synthetic set
+/// is identity-throwaway, but `CATCH`'s return is never validated against the runtime value).
+pub(crate) fn kerror_ktype<'a>() -> KType<'a> {
+    KType::SetRef {
+        set: synthetic_singleton("KError".to_string(), KKind::Tagged),
+        index: 0,
+    }
 }
 
 impl KErrorKind {

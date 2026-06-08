@@ -18,7 +18,7 @@ pub use ktraits::{Parseable, Serializable};
 pub use ktype::{AbstractSource, KType};
 pub use record::Record;
 pub use recursive_set::{
-    seal_recursive_refs, NominalKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet,
+    seal_recursive_refs, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet,
 };
 pub use resolver::{
     elaborate_type_expr, finalize_nominal_member, ElabResult, Elaborator, SchemaSealResult,

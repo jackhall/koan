@@ -12,7 +12,7 @@
 
 use super::kkind::KKind;
 use super::record::Record;
-use super::recursive_set::{NominalKind, RecursiveSet};
+use super::recursive_set::RecursiveSet;
 use super::signature::DeferredReturnSurface;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, ScopeId};
@@ -119,17 +119,17 @@ pub enum KType<'a> {
     /// instead; `kind_of` classifies a type into its `KKind`, matched against the slot's kind.
     OfKind(KKind),
     /// External reference to a member of a [`RecursiveSet`]. The `(set ptr, index)` pair
-    /// is the dispatch identity; the member's `kind` (read via `set.member(index).kind`)
-    /// drives the `AnyUserType { kind }` wildcard. The whole set rides every `SetRef`, so
-    /// lift shares it by `Rc::clone` — see [`crate::machine::execute::lift`].
+    /// is the dispatch identity; the member's `kind` (read via `set.member(index).kind`) is
+    /// what `kind_of` reports to classify this nominal into its family. The whole set rides
+    /// every `SetRef`, so lift shares it by `Rc::clone` — see [`crate::machine::execute::lift`].
     SetRef {
         set: Rc<RecursiveSet<'a>>,
         index: usize,
     },
     /// A single variant of a tagged-union member, reached *through* its union. `(set, index)`
-    /// names the `NominalKind::Tagged` member; `tag` selects one variant within it. A
+    /// names the `KKind::Tagged` member; `tag` selects one variant within it. A
     /// refinement of the union: `Variant` is strictly more specific than the union's
-    /// `SetRef` and than `AnyUserType { kind: Tagged }`, so a slot typed `:(Maybe Some)`
+    /// `SetRef` and than the `OfKind(Tagged)` kind, so a slot typed `:(Maybe Some)`
     /// admits only `Some` values while a `:Maybe` slot admits any variant. A Tagged-kind
     /// `KObject::Tagged` value reports its `Variant` from `ktype()`. Identity is
     /// `(set ptr, index, tag)`; the whole set rides every `Variant`, so lift shares it by
@@ -149,13 +149,6 @@ pub enum KType<'a> {
     /// through the derived `Clone`. Inert in value dispatch — it names a group of types, not
     /// a value type — and reserved for value-language cycle construction.
     RecursiveGroup(Rc<RecursiveSet<'a>>),
-    /// Wildcard tag matching any user-declared carrier of the given `kind`. Strictly more
-    /// specific than `Any`; specificity to a concrete `SetRef` member of the same kind is
-    /// one-direction only — `SetRef` is more specific than `AnyUserType` of the same kind,
-    /// not the reverse.
-    AnyUserType {
-        kind: NominalKind,
-    },
     /// A module signature: both the introspectable value (`decl_scope` via `sig`) and the
     /// dispatch constraint ("any module satisfying `sig`"). Disambiguated by position — as a
     /// parameter slot it matches a module whose `compatible_sigs` contains `sig.sig_id()`; as
@@ -240,12 +233,7 @@ impl<'a> KType<'a> {
             KType::KExpression => "KExpression".into(),
             KType::SigiledTypeExpr => "SigiledTypeExpr".into(),
             KType::RecordType => "RecordType".into(),
-            KType::OfKind(k) => match k {
-                KKind::Proper => "TypeExprRef".into(),
-                KKind::Any => "Type".into(),
-                KKind::Module => "Module".into(),
-                KKind::Signature => "Signature".into(),
-            },
+            KType::OfKind(k) => k.surface_keyword().into(),
             KType::SetRef { set, index } => set.member(*index).name.clone(),
             // `:(Maybe Some)` — the variant reached through its union. Round-trips through
             // the union-qualified type sigil.
@@ -259,7 +247,6 @@ impl<'a> KType<'a> {
                 let names: Vec<&str> = set.members().iter().map(|m| m.name.as_str()).collect();
                 format!("RECURSIVE TYPES ({})", names.join(" "))
             }
-            KType::AnyUserType { kind } => kind.surface_keyword().into(),
             KType::Signature { sig, pinned_slots } => {
                 if pinned_slots.is_empty() {
                     sig.path.clone()
@@ -290,13 +277,21 @@ impl<'a> KType<'a> {
     }
 
     /// Classify a *type* into its shallow dispatch [`KKind`] — the value-side direction of
-    /// `OfKind`. A module is `Module`, a signature is `Signature`, every other type is
-    /// `Proper`. Never returns `KKind::Any` (a slot-only expectation). Applied to the type a
-    /// type value carries, to match it against an `OfKind` slot.
+    /// `OfKind`. A module is `Module`, a signature is `Signature`, a user-declared nominal is
+    /// its family (`Tagged` / `Newtype` / `TypeConstructor`, read off the set member it
+    /// references), and every other type is `Proper`. Never returns `KKind::Any` (a slot-only
+    /// expectation). Applied to the type a type value carries — or a runtime value's
+    /// `ktype()` — to match it against an `OfKind` slot.
     pub fn kind_of(&self) -> KKind {
         match self {
             KType::Module { .. } => KKind::Module,
             KType::Signature { .. } => KKind::Signature,
+            // A nominal carries its family on the set member. A `Variant` is always a
+            // `Tagged` member; a `ConstructorApply` defers to its `ctor` (a
+            // `TypeConstructor`-kind `SetRef`).
+            KType::SetRef { set, index } => set.member(*index).kind,
+            KType::Variant { set, index, .. } => set.member(*index).kind,
+            KType::ConstructorApply { ctor, .. } => ctor.kind_of(),
             _ => KKind::Proper,
         }
     }
@@ -388,7 +383,6 @@ impl<'a> PartialEq for KType<'a> {
                 },
             ) => Rc::ptr_eq(s1, s2) && i1 == i2 && t1 == t2,
             (SetLocal(a), SetLocal(b)) => a == b,
-            (AnyUserType { kind: k1 }, AnyUserType { kind: k2 }) => k1 == k2,
             (
                 Signature {
                     sig: s1,
@@ -472,7 +466,6 @@ impl<'a> std::hash::Hash for KType<'a> {
                 tag.hash(state);
             }
             SetLocal(i) => i.hash(state),
-            AnyUserType { kind } => kind.hash(state),
             Signature { sig, pinned_slots } => {
                 sig.sig_id().hash(state);
                 pinned_slots.hash(state);
@@ -511,7 +504,7 @@ mod tests {
     /// A singleton `Rc<RecursiveSet>` over a record-repr newtype member named `name`, schema
     /// filled.
     fn record_newtype_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
-        let member = NominalMember::pending(name.into(), scope_id, NominalKind::Newtype);
+        let member = NominalMember::pending(name.into(), scope_id, KKind::Newtype);
         member.fill(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
             Record::new(),
         )))));
@@ -659,29 +652,21 @@ mod tests {
 
     #[test]
     fn nominal_kind_surface_keywords() {
-        assert_eq!(NominalKind::Tagged.surface_keyword(), "Tagged");
-        assert_eq!(NominalKind::Newtype.surface_keyword(), "Newtype");
+        assert_eq!(KKind::Tagged.surface_keyword(), "Tagged");
+        assert_eq!(KKind::Newtype.surface_keyword(), "Newtype");
         assert_eq!(
-            NominalKind::TypeConstructor.surface_keyword(),
+            KKind::TypeConstructor.surface_keyword(),
             "TypeConstructor",
         );
     }
 
     #[test]
-    fn any_user_type_name_renders_kind_keyword() {
+    fn nominal_of_kind_name_renders_family_keyword() {
+        assert_eq!(KType::OfKind(KKind::Newtype).name(), "Newtype");
+        assert_eq!(KType::OfKind(KKind::Tagged).name(), "Tagged");
         assert_eq!(
-            KType::AnyUserType {
-                kind: NominalKind::Newtype
-            }
-            .name(),
-            "Newtype"
-        );
-        assert_eq!(
-            KType::AnyUserType {
-                kind: NominalKind::Tagged
-            }
-            .name(),
-            "Tagged"
+            KType::OfKind(KKind::TypeConstructor).name(),
+            "TypeConstructor"
         );
     }
 
@@ -751,12 +736,8 @@ mod tests {
                 },
             ),
             (
-                KType::AnyUserType {
-                    kind: NominalKind::Tagged,
-                },
-                KType::AnyUserType {
-                    kind: NominalKind::Tagged,
-                },
+                KType::OfKind(KKind::Tagged),
+                KType::OfKind(KKind::Tagged),
             ),
             (
                 KType::RecursiveRef("Tree".into()),

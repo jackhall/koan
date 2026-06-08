@@ -136,7 +136,7 @@ pub fn body<'a>(
             &kt,
             KType::SetRef { set, index }
                 if set.member(*index).kind
-                    == crate::machine::model::types::NominalKind::TypeConstructor
+                    == crate::machine::model::types::KKind::TypeConstructor
         );
         let kt = if scope.is_in_sig_body() && !is_type_constructor {
             KType::AbstractType {

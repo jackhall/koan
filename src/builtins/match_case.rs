@@ -248,7 +248,7 @@ mod tests {
         // § MATCH frame lifetime under tail recursion.
         let bytes = run_program(
             "UNION Bit = (One :Null Zero :Null)\n\
-             FN (HOP b :Tagged) -> Any = (MATCH (b) -> :Str WITH (\
+             FN (HOP b :Any) -> Any = (MATCH (b) -> :Str WITH (\
                  One -> (HOP (Bit (Zero null)))\
                  Zero -> (PRINT \"done\")\
              ))\n\
@@ -290,7 +290,7 @@ mod tests {
     fn fn_recursion_with_multi_statement_body_via_match_terminates() {
         let bytes = run_program(
             "UNION Bit = (One :Null Zero :Null)\n\
-             FN (HOP b :Tagged) -> Any = (\
+             FN (HOP b :Any) -> Any = (\
                  (PRINT \"step\")\
                  (MATCH (b) -> :Str WITH (\
                      One -> (HOP (Bit (Zero null)))\

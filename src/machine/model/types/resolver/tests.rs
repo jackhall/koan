@@ -55,8 +55,8 @@ fn recursive_group_member_lowers_to_recursive_ref() {
     let arena = RuntimeArena::new();
     let parent = run_root_silent(&arena);
     let set = std::rc::Rc::new(RecursiveSet::new(vec![
-        NominalMember::pending("A".into(), parent.id, NominalKind::Newtype),
-        NominalMember::pending("B".into(), parent.id, NominalKind::Newtype),
+        NominalMember::pending("A".into(), parent.id, KKind::Newtype),
+        NominalMember::pending("B".into(), parent.id, KKind::Newtype),
     ]));
     let child = arena.alloc_scope(Scope::child_recursive_group(parent, set));
     let mut el = Elaborator::new(child);
@@ -80,7 +80,7 @@ fn constructor_apply_name_renders_surface_form() {
     let member = NominalMember::pending(
         "Wrap".into(),
         ScopeId::from_raw(0, 0xC0DE),
-        NominalKind::TypeConstructor,
+        KKind::TypeConstructor,
     );
     member.fill(NominalSchema::TypeConstructor {
         schema: std::collections::HashMap::new(),

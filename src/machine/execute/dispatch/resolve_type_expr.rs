@@ -12,7 +12,6 @@
 //! `pending_types`). The `Park` arm — a referenced type still in flight — never writes the
 //! cache, so a half-built identity cannot leak into a later memo hit.
 
-use crate::machine::model::types::KKind;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::NodeId;
@@ -218,12 +217,8 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
                 | KType::KExpression
                 | KType::SigiledTypeExpr
                 | KType::RecordType
-                | KType::OfKind(KKind::Proper)
-                | KType::OfKind(KKind::Any)
-                | KType::OfKind(KKind::Module)
-                | KType::OfKind(KKind::Signature)
+                | KType::OfKind(_)
                 | KType::Any
-                | KType::AnyUserType { .. }
                 | KType::DeferredReturn(_)
                 | KType::SetLocal(_)
                 | KType::RecursiveRef(_)
@@ -401,7 +396,7 @@ mod tests {
             use crate::machine::core::{Bindings, PendingTypeEntry};
             use crate::machine::model::ast::KExpression;
             use crate::machine::model::types::{
-                NominalKind, NominalMember, NominalSchema, RecursiveSet,
+                KKind, NominalMember, NominalSchema, RecursiveSet,
             };
             use crate::machine::model::Record;
 
@@ -410,7 +405,7 @@ mod tests {
             // Pre-install a singleton set whose one member is still `pending` (schema
             // unfilled) and bind its external `SetRef` into `bindings.types`, mirroring the
             // `RECURSIVE TYPES` pre-install window.
-            let member = NominalMember::pending("Node".into(), scope.id, NominalKind::Newtype);
+            let member = NominalMember::pending("Node".into(), scope.id, KKind::Newtype);
             let set = std::rc::Rc::new(RecursiveSet::new(vec![member]));
             scope.preinstall_identity(
                 "Node".into(),
@@ -426,7 +421,7 @@ mod tests {
             let pending_guard = bindings.insert_pending_type(
                 "Node".into(),
                 PendingTypeEntry {
-                    kind: NominalKind::Newtype,
+                    kind: KKind::Newtype,
                     scope_id: scope.id,
                     schema_expr: KExpression::new(Vec::new()),
                 },

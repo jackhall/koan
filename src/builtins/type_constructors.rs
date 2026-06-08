@@ -16,7 +16,7 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
-    NominalKind, ProjectedSchema, RecursiveSet,
+    ProjectedSchema, RecursiveSet,
 };
 use crate::machine::model::{KType, Record};
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
@@ -102,7 +102,7 @@ fn body_apply_as<'a>(
         Err(e) => return err(e),
     };
     let param_count = match &ctor {
-        KType::SetRef { set, index } if set.member(*index).kind == NominalKind::TypeConstructor => {
+        KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
             match RecursiveSet::projected_schema(set, *index) {
                 ProjectedSchema::TypeConstructor { param_names, .. } => param_names.len(),
                 _ => unreachable!("TypeConstructor-kind member projects a TypeConstructor schema"),
@@ -322,7 +322,7 @@ mod tests {
     // lowers to `ConstructorApply(Wrap, [Number])`.
     #[test]
     fn apply_as_lowers_to_constructor_apply() {
-        use crate::machine::model::types::{NominalKind, NominalSchema, RecursiveSet};
+        use crate::machine::model::types::{KKind, NominalSchema, RecursiveSet};
         use crate::machine::{BindingIndex, ScopeId};
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
@@ -347,7 +347,7 @@ mod tests {
             KType::ConstructorApply { ctor, args } => {
                 match ctor.as_ref() {
                     KType::SetRef { set, index } => {
-                        assert_eq!(set.member(*index).kind, NominalKind::TypeConstructor);
+                        assert_eq!(set.member(*index).kind, KKind::TypeConstructor);
                     }
                     other => panic!("expected SetRef ctor, got {other:?}"),
                 }

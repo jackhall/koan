@@ -5,7 +5,7 @@ use crate::machine::core::PendingTypeEntry;
 use crate::machine::execute::defer_field_list_via_combine;
 use crate::machine::model::types::{
     finalize_nominal_member, parse_typed_field_list_via_elaborator, seal_recursive_refs,
-    Elaborator, FieldListOutcome, FieldNameKind, NominalKind, NominalSchema, SchemaSealResult,
+    Elaborator, FieldListOutcome, FieldNameKind, NominalSchema, SchemaSealResult,
     SealOutcome,
 };
 use crate::machine::model::KType;
@@ -51,7 +51,7 @@ pub fn body<'a>(
     let pending_guard = scope.bindings().insert_pending_type(
         name.clone(),
         PendingTypeEntry {
-            kind: NominalKind::Tagged,
+            kind: KKind::Tagged,
             scope_id,
             schema_expr: schema_expr.clone(),
         },
@@ -124,7 +124,7 @@ fn finalize_union<'a>(
         scope,
         &name,
         scope_id,
-        NominalKind::Tagged,
+        KKind::Tagged,
         |set| {
             let missing = std::cell::RefCell::new(Vec::new());
             // UNION addresses by tag, not declaration order — flatten the ordered list
@@ -170,7 +170,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run_one_err, run_one_type, run_root_silent};
-    use crate::machine::model::types::{NominalKind, ProjectedSchema, RecursiveSet};
+    use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::KType;
     use crate::machine::{BindingIndex, KErrorKind, RuntimeArena, Scope};
 
@@ -205,7 +205,7 @@ mod tests {
         let result = run_one_type(scope, parse_one("UNION Maybe = (Some :Number None :Null)"));
         match result {
             KType::SetRef { set, index } => {
-                assert_eq!(set.member(*index).kind, NominalKind::Tagged);
+                assert_eq!(set.member(*index).kind, KKind::Tagged);
             }
             other => panic!("expected SetRef type for Maybe, got {other:?}"),
         }
@@ -287,7 +287,7 @@ mod tests {
         let pending_member = crate::machine::model::types::NominalMember::pending(
             "Maybe".into(),
             scope_id,
-            NominalKind::Tagged,
+            KKind::Tagged,
         );
         let pre_set = std::rc::Rc::new(RecursiveSet::new(vec![pending_member]));
         let pre_identity = KType::SetRef {

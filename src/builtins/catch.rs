@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::model::types::NominalKind;
+use crate::machine::core::kerror_ktype;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{ArgumentBundle, BodyResult, CatchFinish, SchedulerHandle, Scope};
 
@@ -51,13 +51,24 @@ pub fn body<'a>(
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
+    // CATCH yields `Result {Ok :Any, Error :KError}` — `Any` covers only the unpredictable
+    // `Ok` payload, the `Error` arm is the `KError` carrier. `result::register` runs first, so
+    // the `Result` `SetRef` resolves here. This is a documentary contract: the catch finish
+    // produces a `BodyResult::Value` (never a `ReturnContract`), so the declared return is not
+    // validated against the runtime value, and the throwaway `kerror_ktype()` identity is fine.
+    let result_ctor = match scope.resolve_type("Result") {
+        Some(kt @ KType::SetRef { .. }) => kt.clone(),
+        _ => panic!("Result must be registered before CATCH"),
+    };
+    let return_type = KType::ConstructorApply {
+        ctor: Box::new(result_ctor),
+        args: vec![KType::Any, kerror_ktype()],
+    };
     register_builtin(
         scope,
         "CATCH",
         sig(
-            KType::AnyUserType {
-                kind: NominalKind::Tagged,
-            },
+            return_type,
             vec![kw("CATCH"), arg("expr", KType::KExpression)],
         ),
         body,

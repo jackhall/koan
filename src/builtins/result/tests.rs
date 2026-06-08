@@ -1,5 +1,5 @@
 use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-use crate::machine::model::types::{NominalKind, ProjectedSchema, RecursiveSet};
+use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, RuntimeArena};
 
@@ -14,7 +14,7 @@ fn result_registers_type_constructor_with_schema() {
         .resolve_type("Result")
         .expect("Result type registered");
     match identity {
-        KType::SetRef { set, index } if set.member(*index).kind == NominalKind::TypeConstructor => {
+        KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
             assert_eq!(set.member(*index).name, "Result");
             match RecursiveSet::projected_schema(set, *index) {
                 ProjectedSchema::TypeConstructor {

@@ -5,13 +5,16 @@
 //! newtype's `.x` reads through to the wrapped record), [`body_module`] for chained module
 //! access.
 //!
-//! The slot types are disjoint (`KType::Identifier` only matches `ExpressionPart::Identifier`;
-//! the `AnyUserType { kind: Newtype }` slot admits a `KObject::Wrapped`, and `OfKind(Module)`
-//! admits modules), so dispatch picks unambiguously without a specificity tiebreaker.
+//! The lhs is matched by *type*, never by a kind: a type-channel lhs (a module / type token)
+//! picks `body_module` / `body_type_lhs` through its `OfKind` kind, while a value-channel lhs
+//! is caught by the least-specific `s: Any` slot and validated in [`access_field`]. Specificity
+//! (`Any` < `OfKind` < `Identifier`) resolves the overloads: an `Identifier` lhs wins
+//! `body_identifier`, a module / type-token lhs wins its `OfKind` overload, and only a bare
+//! runtime value falls through to [`body_newtype`].
 
 use crate::machine::execute::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::model::types::KKind;
-use crate::machine::model::types::{AbstractSource, NominalKind};
+use crate::machine::model::types::AbstractSource;
 use crate::machine::model::values::{Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{
@@ -284,9 +287,6 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let module_ty = KType::OfKind(KKind::Module);
-    let newtype_ty = KType::AnyUserType {
-        kind: NominalKind::Newtype,
-    };
 
     register_builtin(
         scope,
@@ -314,10 +314,14 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ),
         body_module,
     );
-    // NEWTYPE fall-through, including ex-structs. The `AnyUserType { kind: Newtype }` slot
-    // admits any `KObject::Wrapped` (the wildcard keys on `NominalKind`, never the repr).
-    // `access_field`'s `Wrapped` arm reads a record repr's field directly and recurses one
-    // level for any other inner.
+    // NEWTYPE fall-through, including ex-structs. A computed `Wrapped` lhs (e.g.
+    // `seg.finish.x`) arrives in the Object channel; the `s: Any` slot matches the *value* by
+    // a type (never by a kind — `OfKind` is type-channel-only), and `access_field`'s `Wrapped`
+    // arm validates the shape, reading a record repr's field directly and recursing one level
+    // for any other inner (a non-`Wrapped` value errors "a value with fields"). This stays
+    // unambiguous with the sibling overloads: `Any` is the least specific, so an `Identifier`
+    // lhs picks `body_identifier`, a module / type-token lhs picks `body_module` /
+    // `body_type_lhs`, and only a bare runtime value falls through to here.
     register_builtin(
         scope,
         "ATTR",
@@ -325,7 +329,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("ATTR"),
-                arg("s", newtype_ty),
+                arg("s", KType::Any),
                 arg("field", KType::Identifier),
             ],
         ),

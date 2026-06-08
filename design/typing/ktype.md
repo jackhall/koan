@@ -30,9 +30,15 @@
 - Meta-type for type-position slots: `OfKind(KKind)` — a type-accepting slot carries
   a shallow [`KKind`](../../src/machine/model/types/kkind.rs) expectation, and a type value
   flowing in the value channel's `Type` arm is classified by `KType::kind_of` and matched
-  against it. The kinds are `{ Proper, Module, Signature, Any }`: a parsed type-name slot
-  is `OfKind(Proper)`, the `:Type` surface is `OfKind(Any)`, and the `:Module` / `:Signature`
-  wildcards are `OfKind(Module)` / `OfKind(Signature)`. See
+  against it by subsumption. `OfKind` is **type-channel-only**: it admits a type value, never
+  a runtime instance — a value is matched by a type, never by a kind. The kinds form one
+  subsumption lattice, `Any > {Module, Signature, Proper > {Tagged, Newtype, TypeConstructor}}`:
+  a parsed type-name slot is `OfKind(Proper)`, the `:Type` surface is `OfKind(Any)`, the
+  `:Module` / `:Signature` wildcards are `OfKind(Module)` / `OfKind(Signature)`, and the three
+  nominal families sit strictly below `Proper`. `KKind::admits` is reflexive subsumption (a
+  `Proper` / `Any` slot admits any proper-subtree type value, while the module/signature wall
+  keeps each of those families to itself); `KKind::strictly_below` orders specificity, so an
+  `OfKind(Tagged)` slot out-specifies an `OfKind(Proper)` sibling. See
   [Type-position slot kinds](#type-position-slot-kinds).
 - First-class type values: a type flows raw as a `&KType` in the value channel's `Type`
   arm — there is no `KObject` box. As a parameter-slot annotation, `OfKind(Proper)` (`:Type`'s
@@ -55,8 +61,9 @@
     `(Rc::as_ptr(set), index)` — never the schema, which may be cyclic. Two
     distinct STRUCTs sit at distinct `(set ptr, index)` pairs, giving the
     per-declaration-distinctness dispatch keys on. The member's `kind` (read via
-    `set.member(index).kind`) is `NominalKind::{Struct, Tagged, Newtype,
-    TypeConstructor}`. Lift `Rc::clone`s the whole set, so the recursive group
+    `set.member(index).kind`) is one of the nominal families `KKind::{Tagged, Newtype,
+    TypeConstructor}` — `kind_of` reads it off the `SetRef` to classify the nominal type
+    value. Lift `Rc::clone`s the whole set, so the recursive group
     travels as one cycle-aware unit.
   - `SetLocal(index)` — the **intra-set sibling** reference inside a member's
     schema, a bare index resolved against the ambient set during deep traversal.
@@ -75,13 +82,16 @@
     tags are capitalized `Type` tokens, so a variant is type-classified
     everywhere. See [user-types.md § Tagged-union variants](user-types.md#tagged-union-variants).
 
-  The companion `AnyUserType { kind: NominalKind }` wildcard accepts any nominal
-  carrier of the matching kind, used for slot types that admit "any user-declared
-  X" — ATTR's `body_struct` slot, construction primitives' return types. The
-  surface keywords `Newtype` and `TypeConstructor` are pinned for diagnostic
-  rendering but not registered as writable surface names (no entry in
-  [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs); only
-  `Struct` / `Tagged` lower to a wildcard there).
+  A slot that wants "any user-declared type of family X" is an `OfKind(KKind)`
+  carrying the nominal family (`OfKind(Tagged)` / `OfKind(Newtype)` /
+  `OfKind(TypeConstructor)`). Because `OfKind` is type-channel-only, such a slot
+  admits the *type value* of that family, not a runtime instance — a builtin that
+  dispatches on a runtime representation (ATTR's newtype field access) takes the
+  least-specific `Any` slot and validates the `KObject::Wrapped` shape in its body
+  (`access_field`), never matching the value by a kind. The nominal-family surface
+  keywords (`Tagged` / `Newtype` / `TypeConstructor`) are pinned for diagnostic
+  rendering only — none is registered as a writable surface name (no entry in
+  [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)).
 - `RecursiveRef(String)` — a **definition-time transient only**: a self or
   forward-sibling reference lowers to it during elaboration and the member's
   finalize seals it to `SetLocal(index)`. It never appears in a sealed type and
@@ -617,7 +627,4 @@ uniformly.
 
 ## Open work
 
-- [Unfuse type-kind classification from representation dispatch](../../roadmap/type_language/unfuse-type-kind-from-representation-dispatch.md)
-  — moves a user type used as a value onto a `KObject` data carrier instead of the
-  `Carried::Type(&KType)` arm, unifying the `OfKind(KKind)` / `AnyUserType(NominalKind)`
-  wildcard pair into one `ktype()`-keyed kind-matched slot.
+None tracked.

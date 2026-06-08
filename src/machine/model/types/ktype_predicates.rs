@@ -7,7 +7,6 @@ use std::rc::Rc;
 use super::kkind::KKind;
 use super::ktype::KType;
 use super::record::Record;
-use super::recursive_set::NominalKind;
 use super::signature::{ExpressionSignature, SignatureElement};
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
 use crate::machine::model::values::{Carried, Held, KObject};
@@ -15,9 +14,19 @@ use crate::machine::model::values::{Carried, Held, KObject};
 impl<'a> KType<'a> {
     /// True iff a parameter declared with this `KType` carries a value whose nominal
     /// identity is meaningful as a *type* binding (not just a value binding), so the
-    /// per-call binding must be dual-written into the types-side scope.
+    /// per-call binding must be dual-written into the types-side scope. Only the
+    /// *type-value* `OfKind` kinds qualify — a nominal-family kind (`Tagged` / `Newtype` /
+    /// `TypeConstructor`) classifies a type value but is not itself used as a binding-side
+    /// slot, so it stays out (an `OfKind` is type-channel-only and never binds a runtime
+    /// instance).
     pub fn is_type_denoting(&self) -> bool {
-        matches!(self, KType::Signature { .. } | KType::OfKind(_))
+        matches!(
+            self,
+            KType::Signature { .. }
+                | KType::OfKind(
+                    KKind::Proper | KKind::Any | KKind::Module | KKind::Signature
+                )
+        )
     }
 
     /// Admissibility predicate for the FUNCTOR return-type slot. See
@@ -38,9 +47,11 @@ impl<'a> KType<'a> {
 
     /// Strict specificity ordering. Concrete types outrank `Any` and the
     /// unconstrained-name slot types (`Identifier`, `TypeExprRef`), so an overload
-    /// like `ATTR <s:AnyUserType{Struct}>` beats its `ATTR <s:Identifier>` sibling
-    /// when both admit. Parameterized containers are covariant in their inner slots.
-    /// Returns `false` for equal types.
+    /// like `ATTR <s:Newtype>` beats its `ATTR <s:Identifier>` sibling when both admit.
+    /// A nominal-family kind out-specifies `OfKind(Proper)` (`OfKind(Tagged) ≺
+    /// OfKind(Proper)`), and a sealed `SetRef` / `Variant` member out-specifies the
+    /// `OfKind(kind)` of its own family. Parameterized containers are covariant in their
+    /// inner slots. Returns `false` for equal types.
     pub fn is_more_specific_than(&self, other: &KType<'a>) -> bool {
         use KType::*;
         if matches!(other, Any) && !matches!(self, Any) {
@@ -123,24 +134,22 @@ impl<'a> KType<'a> {
                 }
                 true
             }
-            // A sealed nominal member is more specific than the `AnyUserType` wildcard of
-            // the same surface family — read the member's `kind` off its set, by index.
-            (SetRef { set, index }, AnyUserType { kind: b }) if set.member(*index).kind == *b => {
-                true
-            }
+            // A nominal-family kind out-specifies `OfKind(Proper)` — `OfKind(Tagged) ≺
+            // OfKind(Proper)`. (Against `Identifier` / `OfKind(Proper)` the generic rule
+            // above already fires; this covers a nominal-vs-nominal-supertype tie.)
+            (OfKind(a), OfKind(b)) if a.strictly_below(*b) => true,
+            // A sealed nominal member is more specific than the `OfKind` wildcard of the
+            // same surface family — read the member's `kind` off its set, by index.
+            (SetRef { set, index }, OfKind(b)) if set.member(*index).kind == *b => true,
             // A variant refines its union: `:(Maybe Some)` is strictly more specific than
-            // `:Maybe` and than `:Tagged`, so a variant-typed overload wins over a
-            // union-typed sibling that also admits the value.
+            // `:Maybe` and than the `OfKind(Tagged)` kind, so a variant-typed overload wins
+            // over a union-typed sibling that also admits the value.
             (Variant { set, index, .. }, SetRef { set: us, index: ui })
                 if Rc::ptr_eq(set, us) && index == ui =>
             {
                 true
             }
-            (Variant { set, index, .. }, AnyUserType { kind: b })
-                if set.member(*index).kind == *b =>
-            {
-                true
-            }
+            (Variant { set, index, .. }, OfKind(b)) if set.member(*index).kind == *b => true,
             (ConstructorApply { ctor: ca, args: aa }, ConstructorApply { ctor: cb, args: ab })
                 if ca == cb && aa.len() == ab.len() =>
             {
@@ -170,13 +179,16 @@ impl<'a> KType<'a> {
     /// runtime.
     /// Aggregate-cell satisfaction: an `Object` cell defers to [`matches_value`]; a `Type`
     /// cell (a first-class type stored in a list/dict/record) satisfies a type-accepting
-    /// slot — `Any`, a matching `OfKind` kind, or an exact type identity.
+    /// slot — `Any`, an `OfKind` kind that subsumes the type's `kind_of`, or an exact type
+    /// identity.
     pub fn matches_held(&self, cell: &Held<'a>) -> bool {
         match cell {
             Held::Object(o) => self.matches_value(o),
-            Held::Type(t) => {
-                matches!(self, KType::Any) || *self == KType::OfKind(t.kind_of()) || self == t
-            }
+            Held::Type(t) => match self {
+                KType::Any => true,
+                KType::OfKind(k) => k.admits(t.kind_of()),
+                _ => self == t,
+            },
         }
     }
 
@@ -230,19 +242,19 @@ impl<'a> KType<'a> {
             // rides the type channel — no runtime `KObject` value satisfies it (the
             // type-channel check lives in `accepts_part` / `matches_type`).
             KType::Signature { .. } => false,
-            // A type-accepting slot, by shallow kind. Modules / signatures ride the type
-            // channel, so no runtime value satisfies their kinds; `Proper` / `Any` admit a
-            // proper type value via the carried `ktype()` identity (`OfKind(Proper) ==
-            // ktype()`).
+            // A type-accepting slot is **type-channel-only**: no runtime `KObject` is a type
+            // value, so a value is never matched by a kind. `Proper` / `Any` keep a
+            // defensive identity check for the rare case of a type carried as a value
+            // (`OfKind(Proper) == ktype()`); every other kind — modules / signatures (which
+            // ride the type channel) and the nominal families — admits no runtime instance.
             KType::OfKind(k) => match k {
-                KKind::Module | KKind::Signature => false,
                 KKind::Proper | KKind::Any => *self == obj.ktype(),
+                KKind::Module
+                | KKind::Signature
+                | KKind::Tagged
+                | KKind::Newtype
+                | KKind::TypeConstructor => false,
             },
-            KType::AnyUserType { kind } => matches!(
-                (kind, obj),
-                (NominalKind::Tagged, KObject::Tagged { .. })
-                    | (NominalKind::Newtype, KObject::Wrapped { .. })
-            ),
             // A stamped `type_args` carrier (from ascription) takes precedence and is
             // checked structurally per-arg; an erased carrier falls back to checking the
             // inhabited tag's payload against the arg that field maps to (see
@@ -286,7 +298,7 @@ impl<'a> KType<'a> {
             KType::SetRef { set, index } => match obj {
                 KObject::Tagged {
                     set: s2, index: i2, ..
-                } if s2.member(*i2).kind == NominalKind::Tagged => {
+                } if s2.member(*i2).kind == KKind::Tagged => {
                     Rc::ptr_eq(set, s2) && index == i2
                 }
                 _ => *self == obj.ktype(),
@@ -299,13 +311,15 @@ impl<'a> KType<'a> {
 
     /// True iff a first-class type `t` (flowing in the type channel) satisfies this declared
     /// slot — the type-channel analog of [`matches_value`]. A `Signature` slot is satisfied by
-    /// a module satisfying it (sig membership + pinned-slot agreement); an `OfKind` slot by
-    /// shallow kind; `Any` by anything; a module/signature slot by structural identity. Other
-    /// proper-type slots compare against the `OfKind(Proper)` dispatch identity a type carrier
-    /// reports, so they admit no bare type value on their own.
+    /// a module satisfying it (sig membership + pinned-slot agreement); an `OfKind` slot when
+    /// its kind subsumes `t.kind_of()` (so `OfKind(Proper)` admits any proper type — including
+    /// a now-`Tagged`/`Newtype`-classified nominal — while the module/sig wall keeps `Proper`
+    /// from admitting a module); `Any` by anything; a module/signature *value* slot by
+    /// structural identity. Other concrete slots compare against the `OfKind(Proper)` dispatch
+    /// identity a non-module/sig type carrier reports, so they admit no bare type value.
     pub fn matches_type(&self, t: &KType<'a>) -> bool {
-        // The shallow dispatch identity a type carrier reports: a module / signature carries
-        // its identity directly; every other type fills the `OfKind(Proper)` marker.
+        // The shallow dispatch identity a concrete slot compares against: a module / signature
+        // carries its identity directly; every other type fills the `OfKind(Proper)` marker.
         let carrier_ktype = match t {
             KType::Module { .. } | KType::Signature { .. } => t.clone(),
             _ => KType::OfKind(KKind::Proper),
@@ -329,8 +343,7 @@ impl<'a> KType<'a> {
                 }
                 _ => false,
             },
-            KType::OfKind(KKind::Module) => matches!(t, KType::Module { .. }),
-            KType::OfKind(KKind::Signature) => matches!(t, KType::Signature { .. }),
+            KType::OfKind(k) => k.admits(t.kind_of()),
             _ => *self == carrier_ktype,
         }
     }
@@ -412,34 +425,19 @@ impl<'a> KType<'a> {
             KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
             KType::SigiledTypeExpr => matches!(part, ExpressionPart::SigiledTypeExpr(_)),
             KType::RecordType => matches!(part, ExpressionPart::RecordType(_)),
-            // Type-accepting slot, by shallow kind. `Proper` / `Any` admit a parser type
-            // token or a proper (non-module / non-signature) type value — the module/sig wall
-            // keeps an `[ATTR <m> <field>]` chained-attr call from tying between the
-            // `body_module` and `body_type_lhs` overloads; modules / signatures route through
-            // the `Module` / `Signature` kinds and the exact `Module { .. }` / `Signature { .. }`
-            // slots. `Module` / `Signature` admit only their boxed type values. Struct / union
-            // / Result type tokens flow as `KTypeValue(SetRef)`, admitted by `Proper` / `Any`.
-            KType::OfKind(k) => match k {
-                KKind::Proper | KKind::Any => match part {
-                    ExpressionPart::Type(_) => true,
-                    // Modules / signatures route through their own kinds, not `Proper` /
-                    // `Any` — the module/sig wall keeps a chained `[ATTR <m> <field>]` call
-                    // from tying between the `body_module` and `body_type_lhs` overloads.
-                    ExpressionPart::Future(Carried::Type(
-                        KType::Module { .. } | KType::Signature { .. },
-                    )) => false,
-                    // Any other proper type token (struct / union / Result `SetRef`, etc.).
-                    ExpressionPart::Future(Carried::Type(_)) => true,
-                    _ => false,
-                },
-                KKind::Module => matches!(
-                    part,
-                    ExpressionPart::Future(Carried::Type(KType::Module { .. }))
-                ),
-                KKind::Signature => matches!(
-                    part,
-                    ExpressionPart::Future(Carried::Type(KType::Signature { .. }))
-                ),
+            // Type-accepting slot, **type-channel-only**, by shallow kind via `kind_of`
+            // subsumption. A raw parser type token is a proper type name, admitted only for
+            // `Proper` / `Any`. A first-class type value is admitted iff the slot kind
+            // subsumes the value's `kind_of` — so `Proper` / `Any` take any non-module /
+            // non-signature type (incl. a `Tagged` / `Newtype` / `TypeConstructor` nominal),
+            // `Module` / `Signature` take only their own carriers, and a nominal-kind slot
+            // takes only its own family. `kind_of(Module) == Module` keeps the module/sig wall
+            // automatic — `OfKind(Proper)` never admits a module, so a chained `[ATTR <m>
+            // <field>]` call cannot tie between `body_module` and `body_type_lhs`.
+            KType::OfKind(k) => match part {
+                ExpressionPart::Type(_) => matches!(k, KKind::Proper | KKind::Any),
+                ExpressionPart::Future(Carried::Type(ty)) => k.admits(ty.kind_of()),
+                _ => false,
             },
             // Strict `(set ptr, index)` equality is the per-declaration identity check for a
             // sealed nominal type — `obj.ktype()` yields a `SetRef` whose `PartialEq` keys on
@@ -450,7 +448,7 @@ impl<'a> KType<'a> {
                     set: s2,
                     index: i2,
                     ..
-                })) if s2.member(*i2).kind == NominalKind::Tagged => {
+                })) if s2.member(*i2).kind == KKind::Tagged => {
                     Rc::ptr_eq(set, s2) && index == i2
                 }
                 ExpressionPart::Future(obj) => &obj.ktype() == self,
@@ -461,14 +459,6 @@ impl<'a> KType<'a> {
             KType::Variant { .. } => {
                 matches!(part, ExpressionPart::Future(obj) if &obj.ktype() == self)
             }
-            KType::AnyUserType { kind } => match part {
-                ExpressionPart::Future(Carried::Object(obj)) => matches!(
-                    (kind, obj),
-                    (NominalKind::Tagged, KObject::Tagged { .. })
-                        | (NominalKind::Newtype, KObject::Wrapped { .. })
-                ),
-                _ => false,
-            },
             KType::Module { .. } => matches!(
                 part,
                 ExpressionPart::Future(obj) if obj.ktype() == *self

@@ -103,7 +103,7 @@ What's shipped that the open items below build on:
   `KType::Variant { set, index, tag }` — a refinement reached through its union, keyed on
   `(set ptr, index, tag)` — so a variant value's `ktype()` reports the variant, a
   `:(Maybe Some)` slot dispatches on a single variant while `:Maybe` admits any, and a
-  variant ≺ its union ≺ `:Tagged`. Variant tags are now capitalized `Type` tokens (`Some`,
+  variant ≺ its union ≺ `OfKind(Tagged)`. Variant tags are now capitalized `Type` tokens (`Some`,
   `Ok` / `Error`), and the union-qualified `:(Maybe Some)` sigil names a variant type. The
   `Result` / `CATCH` / `TRY` error model keeps its `TypeConstructor` identity unchanged. The
   remaining `MATCH`-onto-type-dispatch lowering and recursive variant references are still open
@@ -123,6 +123,18 @@ What's shipped that the open items below build on:
   `Type` / `AnyModule` / `AnySignature` `KType` markers. See
   [design/typing/elaboration.md](../design/typing/elaboration.md) and
   [design/execution-model.md](../design/execution-model.md).
+- *Type-kind classification unfused from representation dispatch.* The two parallel kind
+  classifiers fold into one subsumption lattice on `KKind`
+  (`Any > {Module, Signature, Proper > {Tagged, Newtype, TypeConstructor}}`): the separate
+  `NominalKind` enum and the `AnyUserType` wildcard `KType` variant are gone, and `kind_of`
+  is the sole type→kind classifier, descending `SetRef` / `Variant` / `ConstructorApply` to
+  report the nominal family. `OfKind(KKind)` is the one type-accepting slot and is
+  **type-channel-only** — it admits a type value by `kind_of` subsumption, never a runtime
+  instance. `ATTR`'s newtype field access matches its value through the least-specific `Any`
+  slot and validates the `Wrapped` shape in `access_field`, and `CATCH`'s return is the
+  documentary `:(Result Any KError)` rather than a nominal-family wildcard. See
+  [design/typing/ktype.md](../design/typing/ktype.md) and
+  [design/typing/user-types.md](../design/typing/user-types.md).
 
 ## Next items
 
@@ -141,7 +153,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
-- [Unfuse type-kind classification from representation dispatch](type_language/unfuse-type-kind-from-representation-dispatch.md)
 
 ## Open items
 
@@ -195,7 +206,6 @@ predicate-typing stages and the stdlib's functor-heavy collections both
 build on:
 
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
-- [Unfuse type-kind classification from representation dispatch](type_language/unfuse-type-kind-from-representation-dispatch.md)
 - [Anonymous structural unions](type_language/anonymous-unions.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)

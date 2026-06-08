@@ -1,13 +1,13 @@
 use std::rc::Rc;
 
-use crate::machine::model::types::{NominalKind, NominalMember, NominalSchema, RecursiveSet};
+use crate::machine::model::types::{KKind, NominalMember, NominalSchema, RecursiveSet};
 use crate::machine::model::KType;
 use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, Scope, ScopeId};
 
 use crate::builtins::err;
 
 /// `TEMPLATE <param:TypeExprRef>` → `TypeExprRef` carrying a template singleton
-/// [`RecursiveSet`] of one [`NominalKind::TypeConstructor`] member with `ScopeId::SENTINEL`
+/// [`RecursiveSet`] of one [`KKind::TypeConstructor`] member with `ScopeId::SENTINEL`
 /// and a placeholder `name` (`"_typeconstructor"`). The surrounding opaque ascription
 /// (`ascribe.rs:body_opaque`) re-mints a fresh per-call singleton with the binding's slot
 /// name and a per-call `scope_id`. Arity-1 only.
@@ -26,7 +26,7 @@ pub fn body<'a>(
     let member = NominalMember::pending(
         "_typeconstructor".into(),
         ScopeId::SENTINEL,
-        NominalKind::TypeConstructor,
+        KKind::TypeConstructor,
     );
     member.fill(NominalSchema::TypeConstructor {
         schema: std::collections::HashMap::new(),
@@ -40,7 +40,7 @@ pub fn body<'a>(
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
     use crate::machine::execute::Scheduler;
-    use crate::machine::model::types::{NominalKind, ProjectedSchema, RecursiveSet};
+    use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
     use crate::machine::{BindingIndex, RuntimeArena, ScopeId};
 
@@ -49,7 +49,7 @@ mod tests {
     fn assert_type_constructor(kt: &KType<'_>, expected: &[&str]) -> String {
         match kt {
             KType::SetRef { set, index }
-                if set.member(*index).kind == NominalKind::TypeConstructor =>
+                if set.member(*index).kind == KKind::TypeConstructor =>
             {
                 match RecursiveSet::projected_schema(set, *index) {
                     ProjectedSchema::TypeConstructor { param_names, .. } => {

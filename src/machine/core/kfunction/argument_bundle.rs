@@ -166,7 +166,6 @@ pub(crate) fn extract_bare_type_name<'a>(
             | KType::Unresolved(_)
             | KType::Any
             | KType::SetRef { .. }
-            | KType::AnyUserType { .. }
             | KType::Signature { .. }
             | KType::Module { .. }
             | KType::AbstractType { .. } => Ok(t.name()),

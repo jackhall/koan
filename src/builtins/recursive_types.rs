@@ -20,7 +20,7 @@ use crate::machine::model::types::KKind;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use crate::machine::model::types::{NominalKind, NominalMember, RecursiveSet};
+use crate::machine::model::types::{NominalMember, RecursiveSet};
 use crate::machine::model::KType;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind,
@@ -131,7 +131,7 @@ pub fn body<'a>(
 /// Discover each member declaration's `(name, kind)` from the block body, using the same
 /// multi-statement split `enter_body_block` applies. Rejects a body with no declarations, a
 /// non-`STRUCT`/`UNION`/`NEWTYPE` statement, or a duplicate member name.
-fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, NominalKind)>, KError> {
+fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, KKind)>, KError> {
     let is_multi = !body.parts.is_empty()
         && body
             .parts
@@ -153,12 +153,12 @@ fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, NominalKind)>
             "RECURSIVE TYPES needs at least one UNION / NEWTYPE declaration".to_string(),
         )));
     }
-    let mut members: Vec<(String, NominalKind)> = Vec::with_capacity(decls.len());
+    let mut members: Vec<(String, KKind)> = Vec::with_capacity(decls.len());
     let mut seen: HashSet<String> = HashSet::new();
     for decl in decls {
         let kind = match leading_keyword(decl) {
-            Some("UNION") => NominalKind::Tagged,
-            Some("NEWTYPE") => NominalKind::Newtype,
+            Some("UNION") => KKind::Tagged,
+            Some("NEWTYPE") => KKind::Newtype,
             other => {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "RECURSIVE TYPES body admits only UNION / NEWTYPE declarations, \

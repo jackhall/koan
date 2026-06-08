@@ -22,6 +22,7 @@ pub use bindings::{
     Resolution,
 };
 pub use kerror::{Frame, KError, KErrorKind};
+pub(crate) use kerror::kerror_ktype;
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};
 pub use scope::{KFuture, Scope, ScopeKind};
 pub use scope_id::ScopeId;

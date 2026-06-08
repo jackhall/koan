@@ -5,7 +5,7 @@
 //! the inference scheduler.
 
 use crate::machine::model::types::{
-    AbstractSource, KKind, NominalKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet,
+    AbstractSource, KKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet,
 };
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
@@ -49,7 +49,7 @@ pub fn body_opaque<'a>(
             // barrier; every other slot collapses to the `AbstractType` arm.
             let kt = match sig_bindings.lookup_type(&name, None) {
                 Some(KType::SetRef { set, index })
-                    if set.member(*index).kind == NominalKind::TypeConstructor =>
+                    if set.member(*index).kind == KKind::TypeConstructor =>
                 {
                     let ProjectedSchema::TypeConstructor {
                         schema,
@@ -63,7 +63,7 @@ pub fn body_opaque<'a>(
                     let member = NominalMember::pending(
                         name.clone(),
                         new_module.scope_id(),
-                        NominalKind::TypeConstructor,
+                        KKind::TypeConstructor,
                     );
                     member.fill(NominalSchema::TypeConstructor {
                         schema,

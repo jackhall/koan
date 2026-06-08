@@ -2,7 +2,7 @@
 //! registered once at prelude build like `List`/`Dict`, not via `UNION`/`STRUCT`.
 //!
 //! Type-only: `bindings.types["Result"]` holds a `KType::SetRef` into a singleton
-//! [`RecursiveSet`] whose one [`NominalKind::TypeConstructor`] member carries the variant
+//! [`RecursiveSet`] whose one [`KKind::TypeConstructor`] member carries the variant
 //! schema (`{Ok: Any, Error: Any}`) and `param_names`. `:(Result Number MyErr)` drives the
 //! resolver's `ConstructorApply` arm; `(Result (Ok v))` constructs by reading the projected
 //! schema off the member. No value-side carrier.
@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use crate::machine::core::{BindingIndex, Scope};
 use crate::machine::model::types::{
-    KType, NominalKind, NominalMember, NominalSchema, RecursiveSet,
+    KType, KKind, NominalMember, NominalSchema, RecursiveSet,
 };
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
@@ -24,7 +24,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     let mut schema: HashMap<String, KType> = HashMap::with_capacity(2);
     schema.insert("Ok".into(), KType::Any);
     schema.insert("Error".into(), KType::Any);
-    let member = NominalMember::pending("Result".into(), scope_id, NominalKind::TypeConstructor);
+    let member = NominalMember::pending("Result".into(), scope_id, KKind::TypeConstructor);
     member.fill(NominalSchema::TypeConstructor {
         schema,
         param_names: vec!["T".into(), "E".into()],
