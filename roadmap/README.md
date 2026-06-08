@@ -56,11 +56,16 @@ What's shipped that the open items below build on:
   `alloc` engine, replacing the six per-type `T<'a> → T<'static>` transmute pairs with
   one. The branded `ScopePtr<'a>` makes `Module::child_scope`, `Signature::decl_scope`,
   and `KFunction::captured_scope` safe re-attaches, concentrating the irreducible
-  `'static → 'a` fabrication at the non-generic `CallArena` boundary. The remaining
-  hardening — making the `anchored_parts` frame re-anchor a compile-time guarantee — is
-  open work under [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md),
-  gated on the [scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md)
-  that gives per-call scopes a lifetime distinct from the run `'a` for a brand to bind to.
+  `'static → 'a` fabrication at the non-generic `CallArena` boundary.
+  Honest slot storage then landed for per-call frame scopes: a frame scope rides its slot as a
+  payload-less [`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the
+  slot's own `Node.frame` cart — no fabricated run-length `&'a` persists across a TCO reset — and
+  the scattered seed re-anchor is concentrated to one
+  [`CallArena::with_anchored_child`](../src/machine/core/arena.rs) core helper
+  (see [design/per-call-arena-protocol.md § Slot-table scope handle](../design/per-call-arena-protocol.md#slot-table-scope-handle)).
+  The remaining hardening — threading a within-step frame lifetime `'s` so the read boundary no
+  longer widens to the run `'a`, then making the re-anchor a compile-time guarantee — is open
+  work under [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md).
   See [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -150,7 +155,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md)
+- [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
@@ -228,9 +233,6 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md) —
-  separate the per-frame scope lifetime from the run `'a`; the prerequisite that makes a
-  compile-time frame re-anchor brand expressible.
 - [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md) —
   yokes `anchored_parts` to its frame `Rc` so a re-anchor outliving its frame fails to
   compile and the dispatch/scheduler Miri pins retire; rides on the lifetime split above.

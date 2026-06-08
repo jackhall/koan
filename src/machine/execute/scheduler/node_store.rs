@@ -128,9 +128,9 @@ impl<'a> NodeStore<'a> {
         self.slots[id] = SlotState::PreRun(node);
     }
 
-    /// Replace the node payload with a fresh per-call frame, re-anchoring the frame's
-    /// per-call [`Scope`] to `'a` so callers don't have to. See
-    /// [per-call-arena-protocol.md § Slot-table re-anchor](../../../../design/per-call-arena-protocol.md#slot-table-re-anchor).
+    /// Replace the node payload with a fresh per-call frame; the slot stores its scope as a
+    /// payload-less [`NodeScope::Yoked`] re-projected from the co-located `frame` cart. See
+    /// [per-call-arena-protocol.md § Slot-table scope handle](../../../../design/per-call-arena-protocol.md#slot-table-scope-handle).
     pub(super) fn reinstall_with_frame(
         &mut self,
         id: NodeId,

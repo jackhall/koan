@@ -136,10 +136,11 @@ parent-frame chain. Two invariants make the ownership unit coherent:
   outer storage they may reference, ruling out a dangling `outer` during
   drop.
 
-The scheduler-side slot-table re-anchor through
-[`NodeStore::reinstall_with_frame`](../src/machine/execute/scheduler/node_store.rs)
-is documented in
-[per-call-arena-protocol.md § Slot-table re-anchor](per-call-arena-protocol.md#slot-table-re-anchor).
+A scheduler slot stores a per-call frame scope as a payload-less
+[`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the slot's own
+`Node.frame` cart, not a fabricated run-length `&'a Scope<'a>`. The slot-storage scope handle
+and the seed-side `with_anchored_child` re-anchor are documented in
+[per-call-arena-protocol.md § Slot-table scope handle](per-call-arena-protocol.md#slot-table-scope-handle).
 
 ## Re-entrant scope writes
 
