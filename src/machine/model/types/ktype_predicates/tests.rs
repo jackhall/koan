@@ -230,85 +230,77 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Object(s))));
 }
 
-/// A `Wrapped` value with a NEWTYPE identity fills the wildcard
-/// `AnyUserType { kind: Newtype { repr: <sentinel> } }` slot — the manual
-/// `PartialEq` ignores `repr`.
+/// `OfKind` is type-channel-only: a nominal-kind slot classifies a *type value* by its
+/// `kind_of`, and never matches a runtime instance (a value is matched by a type, not a kind).
+/// `OfKind(Newtype)` admits a Newtype *type* value, declines a Tagged type value, and declines
+/// the runtime `Wrapped` *instance* entirely; `OfKind(Proper)` subsumes the Newtype type.
 #[test]
-fn any_user_type_newtype_accepts_wrapped_only() {
+fn of_kind_nominal_is_type_channel_only() {
     use crate::machine::core::RuntimeArena;
     let arena = RuntimeArena::new();
-    let t = KType::AnyUserType {
-        kind: NominalKind::Newtype,
+    let newtype_ty = KType::OfKind(KKind::Newtype);
+
+    // The Newtype *type value* — admitted in the type channel.
+    let newtype_tv = newtype_setref("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
+    assert!(newtype_ty.accepts_part(&ExpressionPart::Future(Carried::Type(&newtype_tv))));
+    assert!(KType::OfKind(KKind::Proper)
+        .accepts_part(&ExpressionPart::Future(Carried::Type(&newtype_tv))));
+
+    // A Tagged type value is the wrong family — declined.
+    let tagged_tv = KType::SetRef {
+        set: RecursiveSet::singleton(
+            "Maybe".into(),
+            ScopeId::SENTINEL,
+            NominalSchema::Tagged(std::collections::HashMap::new()),
+        ),
+        index: 0,
     };
+    assert!(!newtype_ty.accepts_part(&ExpressionPart::Future(Carried::Type(&tagged_tv))));
+
+    // The runtime `Wrapped` *instance* is never matched by a kind slot.
     let inner: &KObject<'_> = arena.alloc_object(KObject::Number(3.0));
-    let type_id: &KType = arena.alloc_ktype(newtype_setref(
-        "Distance",
-        ScopeId::from_raw(0, 0xAA),
-        KType::Number,
-    ));
+    let type_id: &KType = arena.alloc_ktype(newtype_tv.clone());
     let w: &KObject<'_> = arena.alloc_object(KObject::Wrapped {
         inner: crate::machine::model::values::NonWrappedRef::peel(inner),
         type_id,
     });
-    // A different-kind nominal carrier (Tagged) must not fill the Newtype wildcard.
-    let tagged_set = RecursiveSet::singleton(
-        "Maybe".into(),
-        ScopeId::SENTINEL,
-        NominalSchema::Tagged(std::collections::HashMap::new()),
-    );
-    let s: &KObject<'_> = arena.alloc_object(KObject::Tagged {
-        tag: "Some".into(),
-        value: std::rc::Rc::new(KObject::Number(1.0)),
-        set: tagged_set,
-        index: 0,
-        type_args: std::rc::Rc::new(vec![]),
-    });
-    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Object(w))));
-    assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Object(s))));
-    assert!(t.matches_value(w));
-    assert!(!t.matches_value(s));
+    assert!(!newtype_ty.accepts_part(&ExpressionPart::Future(Carried::Object(w))));
+    assert!(!newtype_ty.matches_value(w));
 }
 
-/// Pins the wildcard refinement: a `Newtype`-kind `SetRef` is strictly more specific than
-/// `AnyUserType { kind: Newtype }`, and incomparable with `AnyUserType { kind: Tagged }`.
+/// Pins the kind refinement: a `Newtype`-kind `SetRef` is strictly more specific than
+/// `OfKind(Newtype)`, and incomparable with `OfKind(Tagged)` (a sibling family).
 #[test]
 fn user_type_newtype_specificity_lattice() {
-    let any_newtype = KType::AnyUserType {
-        kind: NominalKind::Newtype,
-    };
-    let any_tagged = KType::AnyUserType {
-        kind: NominalKind::Tagged,
-    };
+    let newtype_kind = KType::OfKind(KKind::Newtype);
+    let tagged_kind = KType::OfKind(KKind::Tagged);
     let dist = newtype_setref("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
-    assert!(dist.is_more_specific_than(&any_newtype));
-    assert!(!any_newtype.is_more_specific_than(&dist));
-    assert!(!dist.is_more_specific_than(&any_tagged));
-    assert!(!any_tagged.is_more_specific_than(&dist));
+    assert!(dist.is_more_specific_than(&newtype_kind));
+    assert!(!newtype_kind.is_more_specific_than(&dist));
+    assert!(!dist.is_more_specific_than(&tagged_kind));
+    assert!(!tagged_kind.is_more_specific_than(&dist));
 }
 
-/// Specificity ordering for the `SetRef` / `AnyUserType` variants:
-/// - `AnyUserType` is strictly under `Any` (handled by the top-level `Any` short-circuit).
-/// - A `SetRef` member of kind `K` is strictly under `AnyUserType { kind: K }`.
-/// - A `SetRef` of one kind and `AnyUserType` of a different kind are incomparable
-///   (sibling families).
+/// Specificity ordering for `SetRef` against the `OfKind` kind lattice:
+/// - a nominal kind is strictly under `Any` and strictly under `OfKind(Proper)`;
+/// - a `SetRef` member of kind `K` is strictly under `OfKind(K)`;
+/// - a `SetRef` of one kind and `OfKind` of a different kind are incomparable.
 #[test]
 fn user_type_specificity_lattice() {
-    let any_newtype = KType::AnyUserType {
-        kind: NominalKind::Newtype,
-    };
-    let any_tagged = KType::AnyUserType {
-        kind: NominalKind::Tagged,
-    };
+    let newtype_kind = KType::OfKind(KKind::Newtype);
+    let tagged_kind = KType::OfKind(KKind::Tagged);
     let point = record_newtype_setref("Point", ScopeId::from_raw(0, 0xAA));
-    // `AnyUserType` strictly under `Any`.
-    assert!(any_newtype.is_more_specific_than(&KType::Any));
-    assert!(!KType::Any.is_more_specific_than(&any_newtype));
-    // A `Newtype`-kind `SetRef` strictly under `AnyUserType { kind: Newtype }`.
-    assert!(point.is_more_specific_than(&any_newtype));
-    assert!(!any_newtype.is_more_specific_than(&point));
+    // A nominal kind strictly under `Any` and under `OfKind(Proper)`.
+    assert!(newtype_kind.is_more_specific_than(&KType::Any));
+    assert!(!KType::Any.is_more_specific_than(&newtype_kind));
+    assert!(newtype_kind.is_more_specific_than(&KType::OfKind(KKind::Proper)));
+    assert!(!KType::OfKind(KKind::Proper).is_more_specific_than(&newtype_kind));
+    // A `Newtype`-kind `SetRef` strictly under `OfKind(Newtype)`.
+    assert!(point.is_more_specific_than(&newtype_kind));
+    assert!(!newtype_kind.is_more_specific_than(&point));
     // Different-kind pairs incomparable.
-    assert!(!point.is_more_specific_than(&any_tagged));
-    assert!(!any_tagged.is_more_specific_than(&point));
+    assert!(!point.is_more_specific_than(&tagged_kind));
+    assert!(!tagged_kind.is_more_specific_than(&point));
 }
 
 /// `is_type_denoting` admission table: variants whose declared `KType` makes
@@ -335,16 +327,11 @@ fn is_type_denoting_table() {
     assert!(KType::OfKind(KKind::Any).is_type_denoting());
     assert!(KType::OfKind(KKind::Proper).is_type_denoting());
     assert!(KType::OfKind(KKind::Module).is_type_denoting());
-    // Wildcard newtype/tagged slots don't make their parameter a type binder —
+    // Nominal-family `OfKind` slots are type-channel-only but never name a type binder —
     // the value carries no nominal identity the caller hasn't already named.
-    assert!(!KType::AnyUserType {
-        kind: NominalKind::Newtype
-    }
-    .is_type_denoting());
-    assert!(!KType::AnyUserType {
-        kind: NominalKind::Tagged
-    }
-    .is_type_denoting());
+    assert!(!KType::OfKind(KKind::Newtype).is_type_denoting());
+    assert!(!KType::OfKind(KKind::Tagged).is_type_denoting());
+    assert!(!KType::OfKind(KKind::TypeConstructor).is_type_denoting());
     // Per-declaration `SetRef`: nominal identity already lives in the declaring
     // scope's `bindings.types`; rebinding per-call would be a no-op or shadow.
     let ut = record_newtype_setref("Foo", ScopeId::from_raw(0, 1));

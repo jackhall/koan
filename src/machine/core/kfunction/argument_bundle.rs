@@ -64,6 +64,23 @@ impl<'a> ArgumentBundle<'a> {
         self.get_or_missing(name)
     }
 
+    /// Move the `KExpression` out of slot `name`, or produce the canonical
+    /// parenthesized-slot `ShapeError` (`"<BUILTIN> <slot> slot must be a
+    /// parenthesized expression"`) when the slot is missing or non-`KExpression`.
+    /// The single owner of that error text — builtins call this instead of
+    /// open-coding the `match extract_kexpression { … None => err(…) }` envelope.
+    pub(crate) fn extract_kexpression_or_shape_error(
+        &mut self,
+        builtin: &str,
+        slot: &str,
+    ) -> Result<KExpression<'a>, KError> {
+        extract_kexpression(self, slot).ok_or_else(|| {
+            KError::new(KErrorKind::ShapeError(format!(
+                "{builtin} {slot} slot must be a parenthesized expression"
+            )))
+        })
+    }
+
     fn get_or_missing(&self, name: &str) -> Result<&KObject<'a>, KError> {
         self.get(name)
             .ok_or_else(|| KError::new(KErrorKind::MissingArg(name.to_string())))
@@ -149,7 +166,6 @@ pub(crate) fn extract_bare_type_name<'a>(
             | KType::Unresolved(_)
             | KType::Any
             | KType::SetRef { .. }
-            | KType::AnyUserType { .. }
             | KType::Signature { .. }
             | KType::Module { .. }
             | KType::AbstractType { .. } => Ok(t.name()),

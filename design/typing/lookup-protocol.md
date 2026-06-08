@@ -131,8 +131,8 @@ check fires:
 - [`KType::is_more_specific_than`](../../src/machine/model/types/ktype_predicates.rs)
   — specificity ranking. Ranks two slot types when multiple overloads
   admit the same call, used by `ExpressionSignature::most_specific` to
-  break ties. Concrete carrier types outrank `KType::Any`; user-type
-  identities outrank their `AnyUserType` wildcards. The full ranking
+  break ties. Concrete carrier types outrank `KType::Any`; a user-type
+  identity outranks the `OfKind(KKind)` family kind of its own family. The full ranking
   rules and variance behavior live at
   [ktype.md § Variance](ktype.md#variance) and
   [user-types.md § Specificity stratification](user-types.md#specificity-stratification).
@@ -187,7 +187,7 @@ What each topic doc adds beyond this protocol:
 - [user-types.md](user-types.md) — the `RecursiveSet` nominal model
   (`SetRef` / `SetLocal` / `RecursiveGroup`), nominal-identity install
   through `Scope::register_type_upsert`, the specificity stratification
-  for a concrete `SetRef` vs `AnyUserType` vs `Any`, and the
+  for a concrete `SetRef` vs `OfKind(KKind)` vs `Any`, and the
   `RECURSIVE TYPES` block for mutually recursive nominals.
 - [execution-model.md § Dispatch-time name placeholders](../execution-model.md#dispatch-time-name-placeholders)
   — how forward references park through the `placeholders` /

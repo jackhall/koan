@@ -25,7 +25,6 @@ use crate::machine::{
 
 use super::branch_walk::{find_branch_body, resolve_arm_return_contract};
 use super::{arg, err, kw, register_builtin, sig};
-use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 use crate::machine::core::kfunction::body::split_body_statements;
 use crate::machine::core::kfunction::body::ReturnContract;
 
@@ -34,13 +33,9 @@ pub fn body<'a>(
     sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let expr_inner = match extract_kexpression(&mut bundle, "expr") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "TRY expr slot must be a parenthesized expression".to_string(),
-            )));
-        }
+    let expr_inner = match bundle.extract_kexpression_or_shape_error("TRY", "expr") {
+        Ok(e) => e,
+        Err(e) => return err(e),
     };
     let contract =
         match resolve_arm_return_contract(scope, &mut bundle, "TRY", sched.current_lexical_chain())
@@ -48,13 +43,9 @@ pub fn body<'a>(
             Ok(c) => c,
             Err(e) => return err(e),
         };
-    let branches_expr = match extract_kexpression(&mut bundle, "branches") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "TRY branches slot must be a parenthesized expression".to_string(),
-            )));
-        }
+    let branches_expr = match bundle.extract_kexpression_or_shape_error("TRY", "branches") {
+        Ok(e) => e,
+        Err(e) => return err(e),
     };
 
     // Body runs in a fresh `child_under` scope so a `LET` inside it stays local

@@ -28,7 +28,7 @@ Type-system mechanics:
   member's `KType::SetRef` is the per-declaration identity for STRUCT, named
   UNION, MODULE, opaque ascription, and NEWTYPE, with `SetLocal` siblings and
   the `RecursiveGroup` handle. Covers specificity stratification with the
-  `AnyUserType` wildcard, finalize-time type-only install through
+  `OfKind(KKind)` family-kind slot, finalize-time type-only install through
   `Scope::register_type_upsert`, the `RECURSIVE TYPES` block for mutually
   recursive nominals, and the `NEWTYPE` keyword's `Wrapped` carrier with its
   newtype-over-newtype collapse invariant encoded in the field type.

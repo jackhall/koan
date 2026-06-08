@@ -6,27 +6,20 @@
 
 use std::rc::Rc;
 
-use crate::machine::model::types::NominalKind;
+use crate::machine::core::kerror_ktype;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{
-    ArgumentBundle, BodyResult, CatchFinish, KError, KErrorKind, SchedulerHandle, Scope,
-};
+use crate::machine::{ArgumentBundle, BodyResult, CatchFinish, SchedulerHandle, Scope};
 
 use super::{arg, err, kw, register_builtin, sig};
-use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let expr_inner = match extract_kexpression(&mut bundle, "expr") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "CATCH expr slot must be a parenthesized expression".to_string(),
-            )));
-        }
+    let expr_inner = match bundle.extract_kexpression_or_shape_error("CATCH", "expr") {
+        Ok(e) => e,
+        Err(e) => return err(e),
     };
     // Capture the prelude `Result` member identity at body time (not in the finish
     // closure) so the CATCH-produced value shares the nominal identity of a
@@ -58,13 +51,24 @@ pub fn body<'a>(
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
+    // CATCH yields `Result {Ok :Any, Error :KError}` — `Any` covers only the unpredictable
+    // `Ok` payload, the `Error` arm is the `KError` carrier. `result::register` runs first, so
+    // the `Result` `SetRef` resolves here. This is a documentary contract: the catch finish
+    // produces a `BodyResult::Value` (never a `ReturnContract`), so the declared return is not
+    // validated against the runtime value, and the throwaway `kerror_ktype()` identity is fine.
+    let result_ctor = match scope.resolve_type("Result") {
+        Some(kt @ KType::SetRef { .. }) => kt.clone(),
+        _ => panic!("Result must be registered before CATCH"),
+    };
+    let return_type = KType::ConstructorApply {
+        ctor: Box::new(result_ctor),
+        args: vec![KType::Any, kerror_ktype()],
+    };
     register_builtin(
         scope,
         "CATCH",
         sig(
-            KType::AnyUserType {
-                kind: NominalKind::Tagged,
-            },
+            return_type,
             vec![kw("CATCH"), arg("expr", KType::KExpression)],
         ),
         body,

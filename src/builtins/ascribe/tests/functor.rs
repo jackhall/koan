@@ -284,7 +284,7 @@ fn functor_argument_bare_type_token_auto_wraps() {
 /// the higher-kinded analogue of `functor_application_is_generative`.
 #[test]
 fn opaque_ascription_mints_fresh_type_constructor_per_call() {
-    use crate::machine::model::types::NominalKind;
+    use crate::machine::model::types::KKind;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let src = "SIG MonadSig = ((LET Wrap = (TEMPLATE Type)))\n\
@@ -322,7 +322,7 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     let is_type_constructor = |kt: &Option<KType<'_>>| {
         matches!(
             kt,
-            Some(KType::SetRef { set, index }) if set.member(*index).kind == NominalKind::TypeConstructor
+            Some(KType::SetRef { set, index }) if set.member(*index).kind == KKind::TypeConstructor
         )
     };
     assert!(is_type_constructor(&a_wrap));

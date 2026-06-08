@@ -2,7 +2,7 @@ use crate::machine::core::kfunction::{BinderNameFn, Body, BodyResult, BuiltinFn,
 use crate::machine::core::{BindingIndex, KError, Scope};
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::{
-    Argument, ExpressionSignature, KType, NominalKind, ReturnType, SignatureElement,
+    Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
 use crate::machine::model::values::KObject;
 
@@ -69,6 +69,17 @@ pub fn register_builtin<'a>(
     body: BuiltinFn,
 ) {
     register_builtin_with_binder(scope, name, signature, body, None);
+}
+
+/// Shared [`BinderNameFn`] for typed-binder builtins (SIG / MODULE / UNION /
+/// RECURSIVE TYPES / NEWTYPE): the binder name is `parts[1]`'s `Type(t)` token.
+/// A free function (not the `KExpression::binder_name_from_type_part` method
+/// reference) so the signature is higher-ranked over the expression lifetime, as
+/// `BinderNameFn` requires.
+pub(crate) fn type_part_binder_name(
+    expr: &crate::machine::model::ast::KExpression<'_>,
+) -> Option<String> {
+    expr.binder_name_from_type_part()
 }
 
 /// Collisions from `register_function` are dropped: each builtin registers once at
@@ -139,15 +150,6 @@ pub fn default_scope<'a>(
     scope.register_type(
         "Type".into(),
         KType::OfKind(KKind::Any),
-        BindingIndex::BUILTIN,
-    );
-    // User-declared-type surface names lower to the wildcard `AnyUserType { kind }`
-    // carrier so the resolver and the parser-side fast path agree.
-    scope.register_type(
-        "Tagged".into(),
-        KType::AnyUserType {
-            kind: NominalKind::Tagged,
-        },
         BindingIndex::BUILTIN,
     );
     scope.register_type(

@@ -212,7 +212,7 @@ fn try_inside_tco_position_preserves_frame_chain() {
     // must keep the call-site frame Rc chained on the new frame.
     let bytes = run_program(
         "UNION Bit = (One :Null Zero :Null)\n\
-         FN (HOP b :Tagged) -> Any = (TRY (MATCH (b) -> :Str WITH (\
+         FN (HOP b :Any) -> Any = (TRY (MATCH (b) -> :Str WITH (\
             One -> (HOP (Bit (Zero null)))\
             Zero -> (PRINT \"done\")\
          )) -> :Str WITH (Ok -> it))\n\

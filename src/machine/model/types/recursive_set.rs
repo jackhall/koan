@@ -27,27 +27,8 @@ use std::rc::Rc;
 
 use crate::machine::core::ScopeId;
 
+use super::kkind::KKind;
 use super::ktype::KType;
-
-/// Surface family of a nominal type. Drives `AnyUserType { kind }` wildcard admission;
-/// payload-free, so it is `Copy` and cheap to compare.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum NominalKind {
-    Tagged,
-    Newtype,
-    TypeConstructor,
-}
-
-impl NominalKind {
-    /// Surface keyword rendered in diagnostics and `AnyUserType` names.
-    pub fn surface_keyword(self) -> &'static str {
-        match self {
-            NominalKind::Tagged => "Tagged",
-            NominalKind::Newtype => "Newtype",
-            NominalKind::TypeConstructor => "TypeConstructor",
-        }
-    }
-}
 
 /// A member's schema, owned by value inside the set. Sibling references inside these
 /// `KType`s are [`KType::SetLocal`] indices into the enclosing [`RecursiveSet`].
@@ -71,13 +52,15 @@ pub struct NominalMember<'a> {
     pub name: String,
     /// Origin scope, diagnostics only — never identity.
     pub scope_id: ScopeId,
-    pub kind: NominalKind,
+    /// Always one of the three nominal families `Tagged` / `Newtype` / `TypeConstructor`;
+    /// `kind_of` reads it off a `SetRef` / `Variant` to classify a nominal type value.
+    pub kind: KKind,
     schema: RefCell<Option<NominalSchema<'a>>>,
 }
 
 impl<'a> NominalMember<'a> {
     /// A member whose schema is not yet filled — created before its declaration finalizes.
-    pub fn pending(name: String, scope_id: ScopeId, kind: NominalKind) -> Self {
+    pub fn pending(name: String, scope_id: ScopeId, kind: KKind) -> Self {
         Self {
             name,
             scope_id,
@@ -249,11 +232,11 @@ pub fn resolve_set_locals<'a>(set: &Rc<RecursiveSet<'a>>, kt: &KType<'a>) -> KTy
 
 impl<'a> NominalSchema<'a> {
     /// Surface family of this schema.
-    pub fn kind(&self) -> NominalKind {
+    pub fn kind(&self) -> KKind {
         match self {
-            NominalSchema::Tagged(_) => NominalKind::Tagged,
-            NominalSchema::Newtype(_) => NominalKind::Newtype,
-            NominalSchema::TypeConstructor { .. } => NominalKind::TypeConstructor,
+            NominalSchema::Tagged(_) => KKind::Tagged,
+            NominalSchema::Newtype(_) => KKind::Newtype,
+            NominalSchema::TypeConstructor { .. } => KKind::TypeConstructor,
         }
     }
 }

@@ -10,7 +10,7 @@ use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::NominalKind;
+use crate::machine::model::types::KKind;
 
 use super::super::scope_id::ScopeId;
 
@@ -18,7 +18,7 @@ use super::super::scope_id::ScopeId;
 /// surface family. The entry's presence marks the binder as in-flight so a consumer can
 /// park on it.
 pub struct PendingTypeEntry<'a> {
-    pub kind: NominalKind,
+    pub kind: KKind,
     pub scope_id: ScopeId,
     pub schema_expr: KExpression<'a>,
 }

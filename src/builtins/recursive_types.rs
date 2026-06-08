@@ -20,7 +20,7 @@ use crate::machine::model::types::KKind;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use crate::machine::model::types::{NominalKind, NominalMember, RecursiveSet};
+use crate::machine::model::types::{NominalMember, RecursiveSet};
 use crate::machine::model::KType;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind,
@@ -30,9 +30,7 @@ use crate::machine::{
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
-use crate::machine::core::kfunction::argument_bundle::{
-    extract_bare_type_name, extract_kexpression,
-};
+use crate::machine::core::kfunction::argument_bundle::extract_bare_type_name;
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -43,13 +41,9 @@ pub fn body<'a>(
         Ok(n) => n,
         Err(e) => return err(e),
     };
-    let body_expr = match extract_kexpression(&mut bundle, "body") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "RECURSIVE TYPES body slot must be a parenthesized expression".to_string(),
-            )));
-        }
+    let body_expr = match bundle.extract_kexpression_or_shape_error("RECURSIVE TYPES", "body") {
+        Ok(e) => e,
+        Err(e) => return err(e),
     };
     // Discover the members (name + kind) before dispatching anything, so the shared set
     // exists when the declarations elaborate.
@@ -137,7 +131,7 @@ pub fn body<'a>(
 /// Discover each member declaration's `(name, kind)` from the block body, using the same
 /// multi-statement split `enter_body_block` applies. Rejects a body with no declarations, a
 /// non-`STRUCT`/`UNION`/`NEWTYPE` statement, or a duplicate member name.
-fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, NominalKind)>, KError> {
+fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, KKind)>, KError> {
     let is_multi = !body.parts.is_empty()
         && body
             .parts
@@ -159,12 +153,12 @@ fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, NominalKind)>
             "RECURSIVE TYPES needs at least one UNION / NEWTYPE declaration".to_string(),
         )));
     }
-    let mut members: Vec<(String, NominalKind)> = Vec::with_capacity(decls.len());
+    let mut members: Vec<(String, KKind)> = Vec::with_capacity(decls.len());
     let mut seen: HashSet<String> = HashSet::new();
     for decl in decls {
         let kind = match leading_keyword(decl) {
-            Some("UNION") => NominalKind::Tagged,
-            Some("NEWTYPE") => NominalKind::Newtype,
+            Some("UNION") => KKind::Tagged,
+            Some("NEWTYPE") => KKind::Newtype,
             other => {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "RECURSIVE TYPES body admits only UNION / NEWTYPE declarations, \
@@ -196,11 +190,6 @@ fn leading_keyword<'e>(decl: &'e KExpression<'_>) -> Option<&'e str> {
     })
 }
 
-/// Dispatch-time placeholder extractor: the group name at the first `Type` token.
-pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
-    expr.binder_name_from_type_part()
-}
-
 pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_binder(
         scope,
@@ -216,7 +205,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         body,
-        Some(binder_name),
+        Some(super::type_part_binder_name),
     );
 }
 

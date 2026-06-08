@@ -457,7 +457,7 @@ fn tagged_with_local_kfunction_rebuilds_and_anchors() {
 /// that built it without UAF.
 #[test]
 fn recursive_setref_type_value_lifts_by_rc_clone() {
-    use crate::machine::model::types::{NominalKind, NominalMember, NominalSchema};
+    use crate::machine::model::types::{KKind, NominalMember, NominalSchema};
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallArena::new(scope, None);
@@ -465,7 +465,7 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
 
     // A self-recursive `Tree` whose `children` field is `List(SetLocal(0))` — the shape a
     // `NEWTYPE Tree = :{children :(LIST OF Tree)}` seals into.
-    let member = NominalMember::pending("Tree".into(), ScopeId::next(), NominalKind::Newtype);
+    let member = NominalMember::pending("Tree".into(), ScopeId::next(), KKind::Newtype);
     member.fill(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
         Record::from_pairs(vec![(
             "children".into(),
@@ -521,14 +521,14 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
 /// navigability, not a refcount bump.
 #[test]
 fn recursive_newtype_value_lifts_and_navigates() {
-    use crate::machine::model::types::{NominalKind, NominalMember, NominalSchema};
+    use crate::machine::model::types::{KKind, NominalMember, NominalSchema};
     use crate::machine::model::values::NonWrappedRef;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallArena::new(scope, None);
     defeat_fast_path(&dying);
 
-    let member = NominalMember::pending("Tree".into(), ScopeId::next(), NominalKind::Newtype);
+    let member = NominalMember::pending("Tree".into(), ScopeId::next(), KKind::Newtype);
     member.fill(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
         Record::from_pairs(vec![(
             "children".into(),

@@ -18,7 +18,8 @@ use crate::machine::model::ast::TypeName;
 use crate::machine::NodeId;
 
 use super::ktype::KType;
-use super::recursive_set::{NominalKind, NominalMember, RecursiveSet};
+use super::kkind::KKind;
+use super::recursive_set::{NominalMember, RecursiveSet};
 
 #[cfg(test)]
 mod tests;
@@ -158,7 +159,7 @@ pub fn finalize_nominal_member<'a>(
     scope: &'a Scope<'a>,
     name: &str,
     scope_id: ScopeId,
-    kind: NominalKind,
+    kind: KKind,
     build_schema: impl FnOnce(&Rc<RecursiveSet<'a>>) -> SchemaSealResult<'a>,
     bind_index: crate::machine::core::BindingIndex,
 ) -> SealOutcome<'a> {

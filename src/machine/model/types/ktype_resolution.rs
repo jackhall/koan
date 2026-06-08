@@ -4,7 +4,6 @@
 use super::kkind::KKind;
 use super::ktype::KType;
 use super::record::Record;
-use super::recursive_set::NominalKind;
 use crate::machine::model::ast::TypeName;
 
 impl<'a> KType<'a> {
@@ -24,9 +23,6 @@ impl<'a> KType<'a> {
             "Dict" => Some(KType::Dict(Box::new(KType::Any), Box::new(KType::Any))),
             "KExpression" => Some(KType::KExpression),
             "Type" => Some(KType::OfKind(KKind::Any)),
-            "Tagged" => Some(KType::AnyUserType {
-                kind: NominalKind::Tagged,
-            }),
             "Module" => Some(KType::OfKind(KKind::Module)),
             "Signature" => Some(KType::OfKind(KKind::Signature)),
             "Any" => Some(KType::Any),

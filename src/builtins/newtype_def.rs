@@ -28,7 +28,7 @@ use crate::machine::execute::defer_field_list_via_combine;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
     finalize_nominal_member, parse_typed_field_list_via_elaborator, seal_recursive_refs,
-    Elaborator, FieldListOutcome, FieldNameKind, NominalKind, NominalMember, NominalSchema, Record,
+    Elaborator, FieldListOutcome, FieldNameKind, NominalMember, NominalSchema, Record,
     RecursiveSet, SchemaSealResult, SealOutcome,
 };
 use crate::machine::model::values::{Carried, KObject};
@@ -124,7 +124,7 @@ pub fn body<'a>(
 
 /// Seal a resolved `repr` into the NEWTYPE's identity and register it. A NEWTYPE is
 /// non-recursive (its `repr` is already resolved), so it seals into a singleton set of one
-/// member. The wildcard `AnyUserType { kind: Newtype }` admits any such member, since
+/// member whose `kind` (`Newtype`) is what `kind_of` reports for the sealed `SetRef`;
 /// identity never descends `repr`.
 fn finalize_newtype<'a>(
     scope: &'a Scope<'a>,
@@ -133,7 +133,7 @@ fn finalize_newtype<'a>(
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {
     let scope_id = scope.id;
-    let member = NominalMember::pending(name.clone(), scope_id, NominalKind::Newtype);
+    let member = NominalMember::pending(name.clone(), scope_id, KKind::Newtype);
     member.fill(NominalSchema::Newtype(Box::new(repr)));
     let set = Rc::new(RecursiveSet::new(vec![member]));
     let identity = KType::SetRef { set, index: 0 };
@@ -201,7 +201,7 @@ fn elaborate_record_repr<'a>(
     let pending_guard = scope.bindings().insert_pending_type(
         name.clone(),
         PendingTypeEntry {
-            kind: NominalKind::Newtype,
+            kind: KKind::Newtype,
             scope_id: scope.id,
             schema_expr: fields.clone(),
         },
@@ -265,7 +265,7 @@ fn finalize_record_newtype<'a>(
         scope,
         &name,
         scope_id,
-        NominalKind::Newtype,
+        KKind::Newtype,
         |set| {
             let missing = RefCell::new(Vec::new());
             let sealed_pairs: Vec<(String, KType<'a>)> = fields
@@ -316,11 +316,6 @@ fn defer_resolved_sigil<'a>(
     BodyResult::DeferTo(combine_id)
 }
 
-/// Dispatch-time placeholder extractor.
-pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
-    expr.binder_name_from_type_part()
-}
-
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Three overloads, selected by the repr part-kind. Construction lives in the `TypeCall`
     // fast lane via `constructors::dispatch_construct_newtype`.
@@ -340,7 +335,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         body,
-        Some(binder_name),
+        Some(super::type_part_binder_name),
     );
     // Non-record sigil repr (`= :(LIST OF T)`): a `SigiledTypeExpr` part. The `:SigiledTypeExpr`
     // slot captures it *raw* (more specific than `:TypeExprRef`, so it wins) and `body`
@@ -358,7 +353,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         body,
-        Some(binder_name),
+        Some(super::type_part_binder_name),
     );
     // Record repr (`= :{…}`): a `RecordType` part. The `:RecordType` slot captures the field
     // list raw (more specific than `:TypeExprRef`, so it wins) so `body_record_repr` owns the
@@ -376,7 +371,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         body_record_repr,
-        Some(binder_name),
+        Some(super::type_part_binder_name),
     );
 }
 
@@ -386,7 +381,7 @@ mod tests {
 
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
     use crate::machine::execute::Scheduler;
-    use crate::machine::model::types::{NominalKind, NominalSchema, ProjectedSchema, RecursiveSet};
+    use crate::machine::model::types::{KKind, NominalSchema, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
     use crate::machine::{KErrorKind, RuntimeArena, Scope};
 
@@ -430,7 +425,7 @@ mod tests {
         match **kt {
             KType::SetRef { ref set, index } => {
                 assert_eq!(set.member(index).name, "Distance");
-                assert_eq!(set.member(index).kind, NominalKind::Newtype);
+                assert_eq!(set.member(index).kind, KKind::Newtype);
                 match RecursiveSet::projected_schema(set, index) {
                     ProjectedSchema::Newtype(repr) => assert_eq!(repr, KType::Number),
                     _ => panic!("expected a Newtype schema"),
@@ -459,7 +454,7 @@ mod tests {
                 match **type_id {
                     KType::SetRef { ref set, index } => {
                         assert_eq!(set.member(index).name, "Distance");
-                        assert_eq!(set.member(index).kind, NominalKind::Newtype);
+                        assert_eq!(set.member(index).kind, KKind::Newtype);
                     }
                     ref other => panic!("expected Newtype SetRef type_id, got {other:?}"),
                 }

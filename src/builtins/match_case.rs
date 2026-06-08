@@ -10,7 +10,6 @@ use crate::machine::{
 
 use super::branch_walk::{find_branch_body, resolve_arm_return_contract};
 use super::{arg, err, kw, register_builtin, sig};
-use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 use crate::machine::core::kfunction::body::split_body_statements;
 
 /// `MATCH <value:Any> -> :<T> WITH <branches:KExpression>` — branch by tag.
@@ -58,13 +57,9 @@ pub fn body<'a>(
         Ok(c) => c,
         Err(e) => return err(e),
     };
-    let branches_expr = match extract_kexpression(&mut bundle, "branches") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "MATCH branches slot must be a parenthesized expression".to_string(),
-            )));
-        }
+    let branches_expr = match bundle.extract_kexpression_or_shape_error("MATCH", "branches") {
+        Ok(e) => e,
+        Err(e) => return err(e),
     };
     let branch_body = match find_branch_body(&branches_expr, &tag, false) {
         Ok(Some(body)) => body,
@@ -253,7 +248,7 @@ mod tests {
         // § MATCH frame lifetime under tail recursion.
         let bytes = run_program(
             "UNION Bit = (One :Null Zero :Null)\n\
-             FN (HOP b :Tagged) -> Any = (MATCH (b) -> :Str WITH (\
+             FN (HOP b :Any) -> Any = (MATCH (b) -> :Str WITH (\
                  One -> (HOP (Bit (Zero null)))\
                  Zero -> (PRINT \"done\")\
              ))\n\
@@ -295,7 +290,7 @@ mod tests {
     fn fn_recursion_with_multi_statement_body_via_match_terminates() {
         let bytes = run_program(
             "UNION Bit = (One :Null Zero :Null)\n\
-             FN (HOP b :Tagged) -> Any = (\
+             FN (HOP b :Any) -> Any = (\
                  (PRINT \"step\")\
                  (MATCH (b) -> :Str WITH (\
                      One -> (HOP (Bit (Zero null)))\

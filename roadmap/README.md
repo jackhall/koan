@@ -37,6 +37,16 @@ What's shipped that the open items below build on:
   admits. It makes the [standard library](libraries/standard-library.md)'s
   higher-order combinators ergonomic to call with an inline function. See
   [design/functional-programming.md § Anonymous functions](../design/functional-programming.md#anonymous-functions).
+- *Duplication consolidation.* Six pre-located copy-paste clusters each collapsed to a
+  single owner: per-builtin typed-binder `binder_name` (one shared
+  [`type_part_binder_name`](../src/builtins.rs)), the FN and FUNCTOR bodies (one shared
+  [`build_fn_like`](../src/builtins/fn_def.rs) keyed on `FnKind`), the `finish.rs`
+  `run_combine`/`run_catch` arms (one `dispatch_body_result`), the `dict_literal`
+  `accept_colon`/`accept_equals` pair (one `accept_separator`), the slot-extract error
+  envelope (one [`ArgumentBundle::extract_kexpression_or_shape_error`](../src/machine/core/kfunction/argument_bundle.rs)
+  owning the parenthesized-slot error text), and the scheduler `Object`/`Type` finalize
+  arms (one [`check_declared_return`](../src/machine/execute/scheduler/execute.rs)
+  parameterized over the lifted carrier's `matches_value`/`matches_type` predicate).
 - *Arena unsafe consolidation.* The scattered per-call frame re-anchor is funnelled
   behind one [`CallArena::anchored_parts`](../src/machine/core/arena.rs), and every
   captured/defining-scope re-attach behind one
@@ -93,7 +103,7 @@ What's shipped that the open items below build on:
   `KType::Variant { set, index, tag }` — a refinement reached through its union, keyed on
   `(set ptr, index, tag)` — so a variant value's `ktype()` reports the variant, a
   `:(Maybe Some)` slot dispatches on a single variant while `:Maybe` admits any, and a
-  variant ≺ its union ≺ `:Tagged`. Variant tags are now capitalized `Type` tokens (`Some`,
+  variant ≺ its union ≺ `OfKind(Tagged)`. Variant tags are now capitalized `Type` tokens (`Some`,
   `Ok` / `Error`), and the union-qualified `:(Maybe Some)` sigil names a variant type. The
   `Result` / `CATCH` / `TRY` error model keeps its `TypeConstructor` identity unchanged. The
   remaining `MATCH`-onto-type-dispatch lowering and recursive variant references are still open
@@ -113,6 +123,18 @@ What's shipped that the open items below build on:
   `Type` / `AnyModule` / `AnySignature` `KType` markers. See
   [design/typing/elaboration.md](../design/typing/elaboration.md) and
   [design/execution-model.md](../design/execution-model.md).
+- *Type-kind classification unfused from representation dispatch.* The two parallel kind
+  classifiers fold into one subsumption lattice on `KKind`
+  (`Any > {Module, Signature, Proper > {Tagged, Newtype, TypeConstructor}}`): the separate
+  `NominalKind` enum and the `AnyUserType` wildcard `KType` variant are gone, and `kind_of`
+  is the sole type→kind classifier, descending `SetRef` / `Variant` / `ConstructorApply` to
+  report the nominal family. `OfKind(KKind)` is the one type-accepting slot and is
+  **type-channel-only** — it admits a type value by `kind_of` subsumption, never a runtime
+  instance. `ATTR`'s newtype field access matches its value through the least-specific `Any`
+  slot and validates the `Wrapped` shape in `access_field`, and `CATCH`'s return is the
+  documentary `:(Result Any KError)` rather than a nominal-family wildcard. See
+  [design/typing/ktype.md](../design/typing/ktype.md) and
+  [design/typing/user-types.md](../design/typing/user-types.md).
 
 ## Next items
 
@@ -126,13 +148,13 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
-- [Consolidate identified code duplication](refactor/consolidate-identified-duplication.md)
+- [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md)
+- [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
-- [Type values as data carriers](type_language/type-values-as-data-carriers.md)
 
 ## Open items
 
@@ -186,7 +208,6 @@ predicate-typing stages and the stdlib's functor-heavy collections both
 build on:
 
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
-- [Type values as data carriers](type_language/type-values-as-data-carriers.md)
 - [Anonymous structural unions](type_language/anonymous-unions.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
@@ -207,10 +228,6 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Consolidate identified code duplication](refactor/consolidate-identified-duplication.md) —
-  six pre-located copy-paste clusters (per-builtin `binder_name`, FN/FUNCTOR bodies, the
-  scheduler `Object`/`Type` arms, `finish.rs` arms, `dict_literal` accept pair, the
-  slot-extract error envelope) each collapsed to one owner.
 - [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md) —
   separate the per-frame scope lifetime from the run `'a`; the prerequisite that makes a
   compile-time frame re-anchor brand expressible.
@@ -218,3 +235,9 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   yokes `anchored_parts` to its frame `Rc` so a re-anchor outliving its frame fails to
   compile and the dispatch/scheduler Miri pins retire; rides on the lifetime split above.
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
+- [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md) —
+  collapse `ElabResult` / `ResolveTypeExprOutcome` / `TypeLeafCarrier` into one generic
+  `ResolveOutcome<T>` with a `map_done` lift.
+- [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md) —
+  collapse the slot-only `KType::SigiledTypeExpr` / `RecordType` markers into one
+  `RawTypePart(TypePartKind)`; `KExpression` stays distinct.

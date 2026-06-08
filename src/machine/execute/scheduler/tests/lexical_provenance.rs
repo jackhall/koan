@@ -95,7 +95,7 @@ fn tail_recursive_fn_does_not_balloon_chain() {
     crate::builtins::test_support::run(
         scope,
         "UNION Counter = (more :Null done :Null)\n\
-         FN (LOOP n :Number c :Tagged) -> Number = (MATCH (c) -> :Number WITH (\
+         FN (LOOP n :Number c :Any) -> Number = (MATCH (c) -> :Number WITH (\
             more -> (LOOP (n) (Counter (more null)))\
             done -> (n)\
          ))\n\

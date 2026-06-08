@@ -29,15 +29,17 @@ Three `KType` variants reference set members:
   reports, and what a `:(Maybe Some)` slot carries — see
   [Tagged-union variants](#tagged-union-variants) below.
 
-The companion
-[`KType::AnyUserType { kind: NominalKind }`](../../src/machine/model/types/ktype.rs)
-wildcard accepts any nominal carrier of the matching kind. The surface family is
-[`enum NominalKind { Struct, Tagged, Newtype, TypeConstructor }`](../../src/machine/model/types/recursive_set.rs)
-— payload-free and `Copy`, with a `surface_keyword()` accessor. The names
-`"Struct"` / `"Tagged"` lower to `AnyUserType { kind }` in
-[`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs);
-[`scope.register_type`](../../src/builtins.rs) agrees so the type-resolver and the
-builtin registry produce the same wildcard carrier.
+A member's nominal family is one of
+[`KKind::{Tagged, Newtype, TypeConstructor}`](../../src/machine/model/types/kkind.rs)
+— the three families sitting strictly below `Proper` in the kind lattice
+(`Any > {Module, Signature, Proper > {Tagged, Newtype, TypeConstructor}}`). The family
+is stored on the set member (`set.member(index).kind`), payload-free and `Copy`, with a
+`surface_keyword()` accessor. A slot that wants "any user-declared type of family X" is an
+[`KType::OfKind(KKind)`](../../src/machine/model/types/ktype.rs) carrying that family;
+because `OfKind` is **type-channel-only** it admits the *type value* of the family,
+classified by `kind_of`, never a runtime instance. The nominal-family keywords are pinned
+for diagnostic rendering only and are not registered as writable surface names (no entry
+in [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)).
 
 Modules and signatures live in their own KType variants —
 [`KType::Module { module, frame }`](../../src/machine/model/types/ktype.rs)
@@ -73,11 +75,12 @@ resolve against the cloned set's pointer.
 
 Predicate arms
 ([`ktype_predicates.rs`](../../src/machine/model/types/ktype_predicates.rs))
-place a concrete `SetRef` strictly below `AnyUserType { kind: K }` strictly below
-`Any` in `is_more_specific_than`, and `AnyUserType { kind }` matches any
-`KObject::Struct` / `Tagged` whose member `kind` matches. The check reads the
-member's kind via `set.member(index).kind`, so each kind ranks alongside the
-others with no per-kind branching at the dispatcher. The module/signature
+place a concrete `SetRef` strictly below `OfKind(K)` of its own family, `OfKind(K)`
+strictly below `OfKind(Proper)`, and that below `Any` in `is_more_specific_than`. Because
+`OfKind` is type-channel-only, an `OfKind(K)` slot ranks against *type values* by
+`kind_of` subsumption (`KKind::admits` / `KKind::strictly_below`), reading the member's
+kind via `set.member(index).kind` — so each family ranks alongside the others with no
+per-kind branching at the dispatcher. The module/signature
 variants follow the parallel stratification: `KType::Module { .. }` ≺
 `KType::OfKind(KKind::Module)` ≺ `Any`, and `KType::Signature { .. }` ≺
 `KType::OfKind(KKind::Signature)` ≺ `Any`. This is the identity-and-wildcard slice of Layer 3 of the
@@ -105,7 +108,7 @@ value-side schema carrier exists for struct / union / module / Result.
 ## Tagged-union variants
 
 A declared `UNION` variant is its own dispatchable type. A user-`UNION`
-(`NominalKind::Tagged`) value's `ktype()` reports
+(`KKind::Tagged`) value's `ktype()` reports
 [`KType::Variant { set, index, tag }`](../../src/machine/model/types/ktype.rs) —
 a refinement of the union member at `(set, index)` selecting the inhabited `tag` —
 rather than the bare `SetRef`
@@ -124,12 +127,13 @@ union A never equals a variant of union B. The whole set rides every `Variant`,
 so lifting one is `Rc::clone` of the group, exactly as for `SetRef`.
 
 **Variants slot into the specificity stratification** below their union: a
-concrete `Variant` ≺ its union's `SetRef` ≺ `AnyUserType { kind: Tagged }` ≺
+concrete `Variant` ≺ its union's `SetRef` ≺ `OfKind(Tagged)` ≺
 `Any` ([ktype_predicates.rs](../../src/machine/model/types/ktype_predicates.rs)).
-So a slot typed `:(Maybe Some)` admits only `Some` values, a `:Maybe` slot admits
+So a slot typed `:(Maybe Some)` admits only `Some` values and a `:Maybe` slot admits
 *any* variant (the union `SetRef` arm explicitly matches any `Tagged`-kind value
-of that union), and a `:Tagged` wildcard admits any tagged value — and a
-variant-typed overload wins over a union-typed sibling that also admits the value.
+of that union) — and a variant-typed overload wins over a union-typed sibling that also
+admits the value. The `OfKind(Tagged)` family kind is type-channel-only, so it admits a
+Tagged *type value* by `kind_of`, never a runtime instance.
 
 **The variant-reference surface is the union-qualified sigil `:(Maybe Some)`** —
 a variant type reached through its union, with no global `:Some` name and no `.`
@@ -140,7 +144,7 @@ variant `KType` value, while a payload body (`Maybe (Some 42)`) constructs. An
 unknown tag at the reference surface is a schema error listing the union's
 variants. The variant renders back to `:(Maybe Some)` so it round-trips.
 
-The `TypeConstructor` carve-out: a `Result` value (`NominalKind::TypeConstructor`)
+The `TypeConstructor` carve-out: a `Result` value (`KKind::TypeConstructor`)
 keeps the bare/applied union identity (`SetRef` / `ConstructorApply`), so the
 `Result` / `CATCH` / `TRY` error machinery is untouched — only `Tagged`-kind
 values report a `Variant`. See [error-handling.md](../error-handling.md). Routing
@@ -317,16 +321,15 @@ rules apply to both. See
 [modules.md § VAL-slot reads carry the abstract member identity](modules.md#val-slot-reads-carry-the-abstract-member-identity).
 
 ATTR over a `KObject::Wrapped` falls through to `inner` via
-[`access_field`'s `Wrapped` arm](../../src/builtins/attr.rs): an ATTR overload
-typed `AnyUserType { kind: Newtype }` reuses `body_struct` because the lhs-shape
-dispatch lives inside `access_field`; the recursion descends exactly one level by
-the collapse invariant. The ATTR overload's slot is disjoint from the Struct /
-Module slots (the `AnyUserType` wildcards discriminate by `kind`), so dispatch
-picks without a specificity tiebreaker. Missing-field diagnostics name the inner
-struct (`b: Boxed = Point; b.z` reports `struct Point has no field z`) — the
-fall-through is transparent at the diagnostic level too. The wildcard surface name
-`Newtype` is intentionally *not* registered in
-[`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs) — it's
-reserved as the writable form once a builtin signature surfaces the need, and
-otherwise appears only synthesized inside ATTR's `AnyUserType { kind: Newtype }`
-slot.
+[`access_field`'s `Wrapped` arm](../../src/builtins/attr.rs). A runtime `Wrapped` lhs is
+matched by a *type*, never by a kind: it lands in the least-specific `s: Any` ATTR
+overload, and `access_field` validates the `Wrapped` shape in the body (a non-`Wrapped`
+value errors "a value with fields"), descending exactly one level by the collapse
+invariant. Specificity (`Any` ≺ `OfKind` ≺ `Identifier`) keeps this unambiguous with the
+sibling overloads: an `Identifier` lhs wins `body_identifier`, a module / type-token lhs
+wins its `OfKind` overload, and only a bare runtime value falls through here. Missing-field
+diagnostics name the inner record (`b: Boxed = Point; b.z` reports the field miss on
+`Point`) — the fall-through is transparent at the diagnostic level too. The nominal-family
+keyword `Newtype` is *not* registered in
+[`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs); the `OfKind(Newtype)`
+slot is type-channel-only and never matches a runtime value.

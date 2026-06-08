@@ -67,7 +67,7 @@ Type and module system ([typing/](typing/README.md)):
 - [typing/user-types.md](typing/user-types.md) — the `RecursiveSet`
   nominal model: a `KType::SetRef` member is the per-declaration identity
   for STRUCT, named UNION, MODULE, opaque ascription, and NEWTYPE; the
-  schema filled in the set member; the `AnyUserType` wildcard; the
+  schema filled in the set member; the `OfKind(KKind)` family-kind slot; the
   type-only finalize install through `Scope::register_type_upsert`; the
   `RECURSIVE TYPES` block for mutually recursive nominals.
 - [typing/lookup-protocol.md](typing/lookup-protocol.md) — the

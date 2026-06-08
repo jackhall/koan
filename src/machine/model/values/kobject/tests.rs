@@ -141,7 +141,7 @@ fn type_constructor_ktype_erased_vs_applied() {
     let member = crate::machine::model::types::NominalMember::pending(
         "Result".into(),
         sid,
-        crate::machine::model::types::NominalKind::TypeConstructor,
+        crate::machine::model::types::KKind::TypeConstructor,
     );
     member.fill(NominalSchema::TypeConstructor {
         schema: HashMap::new(),

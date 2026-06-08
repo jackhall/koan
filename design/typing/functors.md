@@ -305,7 +305,7 @@ SIG Monad = (
 
 `(TEMPLATE <param>)` is the declaration form: inside a SIG body it
 binds the slot name (`Wrap` above) to a template `KType::SetRef` whose
-member is a `NominalKind::TypeConstructor` carrying the parameter symbol
+member is a `KKind::TypeConstructor` carrying the parameter symbol
 list. The builtin lives in
 [`type_ops.rs`](../../src/builtins/type_ops.rs).
 

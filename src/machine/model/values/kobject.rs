@@ -5,7 +5,7 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, KFuture};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
-    KType, NominalKind, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
+    KType, KKind, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
 };
 
 use super::Held;
@@ -262,7 +262,7 @@ impl<'a> KObject<'a> {
                 type_args,
                 ..
             } => {
-                if set.member(*index).kind == NominalKind::Tagged {
+                if set.member(*index).kind == KKind::Tagged {
                     KType::Variant {
                         set: Rc::clone(set),
                         index: *index,
