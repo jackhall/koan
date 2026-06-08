@@ -46,7 +46,7 @@ fn sched_read_carried<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> Carrie
 /// using it only inspect routing, never the call outcome.
 fn body_identity<'a>(
     _scope: &'a Scope<'a>,
-    _sched: &mut dyn KfHandle<'a>,
+    _sched: &mut dyn KfHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     match bundle.get("n") {

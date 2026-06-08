@@ -50,7 +50,7 @@ use super::{arg, err, kw, register_builtin_with_binder, sig};
 /// `bindings.types` and yields it on the type channel.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let name = match extract_bare_type_name(&bundle, "name", "NEWTYPE") {
@@ -159,7 +159,7 @@ fn finalize_newtype<'a>(
 /// reason this is a distinct overload from the shared [`body`] rather than a peek inside it.
 pub fn body_record_repr<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let name = match extract_bare_type_name(&bundle, "name", "NEWTYPE") {
@@ -189,7 +189,7 @@ pub fn body_record_repr<'a>(
 /// `:{…}` `RecordType` part.
 fn elaborate_record_repr<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     name: String,
     fields: KExpression<'a>,
     bind_index: BindingIndex,
@@ -296,7 +296,7 @@ fn finalize_record_newtype<'a>(
 /// over the result at Combine-finish.
 fn defer_resolved_sigil<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     name: String,
     inner: KExpression<'a>,
     bind_index: BindingIndex,

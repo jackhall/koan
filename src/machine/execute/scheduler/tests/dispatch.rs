@@ -16,35 +16,35 @@ use crate::machine::{RuntimeArena, Scope};
 
 fn body_identifier<'a>(
     s: &'a Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a>,
+    _h: &mut dyn SchedulerHandle<'a, 'a>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     BodyResult::value(marker(s, "identifier"))
 }
 fn body_marker_any<'a>(
     s: &'a Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a>,
+    _h: &mut dyn SchedulerHandle<'a, 'a>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     BodyResult::value(marker(s, "any"))
 }
 fn body_inner_any<'a>(
     s: &'a Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a>,
+    _h: &mut dyn SchedulerHandle<'a, 'a>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     BodyResult::value(marker(s, "inner_any"))
 }
 fn body_outer_number<'a>(
     s: &'a Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a>,
+    _h: &mut dyn SchedulerHandle<'a, 'a>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     BodyResult::value(marker(s, "outer_number"))
 }
 fn body_lowercase<'a>(
     s: &'a Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a>,
+    _h: &mut dyn SchedulerHandle<'a, 'a>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     BodyResult::value(marker(s, "lowercase"))

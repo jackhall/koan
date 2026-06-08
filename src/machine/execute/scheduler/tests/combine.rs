@@ -108,7 +108,7 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
 
     fn body<'a>(
         scope: &'a Scope<'a>,
-        sched: &mut dyn crate::machine::SchedulerHandle<'a>,
+        sched: &mut dyn crate::machine::SchedulerHandle<'a, 'a>,
         _bundle: ArgumentBundle<'a>,
     ) -> BodyResult<'a> {
         let finish: CombineFinish<'a> = Box::new(|scope, _sched, _results| {

@@ -22,7 +22,7 @@ use crate::machine::core::kfunction::argument_bundle::extract_bare_type_name;
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let name = match extract_bare_type_name(&bundle, "name", "SIG") {

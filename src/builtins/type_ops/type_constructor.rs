@@ -13,7 +13,7 @@ use crate::builtins::err;
 /// name and a per-call `scope_id`. Arity-1 only.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let param_kt = match bundle.require_ktype("param") {

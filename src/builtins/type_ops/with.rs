@@ -17,7 +17,7 @@ use crate::builtins::err;
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let s = match bundle.require_signature("sig") {

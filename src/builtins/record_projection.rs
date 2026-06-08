@@ -28,7 +28,7 @@ use super::{arg, err, kw, register_builtin, sig};
 /// reads a guaranteed `KObject::Record` carrier.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let fields_expr = match bundle.require_kexpression("fields") {

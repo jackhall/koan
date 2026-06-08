@@ -22,7 +22,7 @@ impl NodeId {
     }
 }
 
-pub trait SchedulerHandle<'a> {
+pub trait SchedulerHandle<'a, 's> {
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId;
     /// Schedule a `Combine` slot: wait on `owned_subs` ++ `park_producers` to terminalize,
     /// then run `finish` over their resolved values. `owned_subs` are sub-Dispatches this
@@ -53,7 +53,7 @@ pub trait SchedulerHandle<'a> {
     fn with_active_frame(
         &mut self,
         frame: Rc<CallArena>,
-        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a>),
+        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a, 's>),
     );
 
     /// Take the active frame for reuse on a TCO Replace iff it is uniquely owned. See
@@ -148,7 +148,8 @@ pub trait SchedulerHandle<'a> {
 /// type-resolving dep (a VAL type, an FN return type, a field type) arrives as
 /// [`Carried::Type`].
 pub type CombineFinish<'a> = Box<
-    dyn FnOnce(&'a Scope<'a>, &mut dyn SchedulerHandle<'a>, &[Carried<'a>]) -> BodyResult<'a> + 'a,
+    dyn FnOnce(&'a Scope<'a>, &mut dyn SchedulerHandle<'a, 'a>, &[Carried<'a>]) -> BodyResult<'a>
+        + 'a,
 >;
 
 /// Host-side closure for `Catch` slots. Receives the watched slot's terminal as a
@@ -156,7 +157,7 @@ pub type CombineFinish<'a> = Box<
 pub type CatchFinish<'a> = Box<
     dyn FnOnce(
             &'a Scope<'a>,
-            &mut dyn SchedulerHandle<'a>,
+            &mut dyn SchedulerHandle<'a, 'a>,
             Result<&'a KObject<'a>, KError>,
         ) -> BodyResult<'a>
         + 'a,

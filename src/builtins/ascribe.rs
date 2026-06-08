@@ -16,7 +16,7 @@ use super::{arg, kw, register_builtin, sig};
 /// `<m:Module> :| <s:Signature>` — opaque ascription.
 pub fn body_opaque<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let (m, s) = match resolve_module_and_signature(&bundle) {
@@ -140,7 +140,7 @@ pub fn body_opaque<'a>(
 /// `<m:Module> :! <s:Signature>` — transparent ascription.
 pub fn body_transparent<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let (m, s) = match resolve_module_and_signature(&bundle) {

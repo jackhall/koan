@@ -14,7 +14,7 @@ use super::{arg, err, kw, register_builtin, sig};
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let expr_inner = match bundle.extract_kexpression_or_shape_error("CATCH", "expr") {

@@ -199,7 +199,7 @@ mod tests {
 
     fn body_any<'a>(
         s: &'a Scope<'a>,
-        _h: &mut dyn SchedulerHandle<'a>,
+        _h: &mut dyn SchedulerHandle<'a, 'a>,
         _a: ArgumentBundle<'a>,
     ) -> BodyResult<'a> {
         BodyResult::value(marker(s, "any"))

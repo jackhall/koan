@@ -25,7 +25,7 @@ use crate::machine::core::kfunction::body::split_body_statements;
 /// = no branch for `X`")`; malformed shape → `ShapeError`.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let (tag, value) = match bundle.get("value") {

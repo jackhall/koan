@@ -13,7 +13,7 @@ use super::{arg, err, kw, register_builtin_with_binder, sig};
 /// `name` slot's `KType`: `Identifier` and `TypeExprRef`.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     // Direct-body test fixtures bypass the scheduler and have no active chain;

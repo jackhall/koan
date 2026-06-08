@@ -23,7 +23,7 @@ use crate::machine::{
 use super::{arg, err, kw, register_builtin_with_binder, sig};
 
 fn schedule_type_resolve<'a>(
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     decl_scope: &'a Scope<'a>,
     te: &TypeName,
 ) -> crate::machine::NodeId {
@@ -60,7 +60,7 @@ enum CarrierForm<'a> {
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     if !scope.is_in_sig_body() {
@@ -145,7 +145,7 @@ fn finalize_val<'a>(
 /// Errored deps short-circuit via `run_combine` before the closure runs.
 fn defer_val_via_combine<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     name: String,
     te: TypeName,
     resolve_id: NodeId,

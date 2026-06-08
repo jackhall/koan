@@ -153,7 +153,7 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     /// `KFunction::invoke` shim that tail-rewrites the slot's work. See
     /// the historical `Scheduler::invoke_to_step` for the contract; the
     /// only change is that we now pass `self` (a `&mut dyn
-    /// SchedulerHandle<'a>` via the `SchedulerHandle for DispatchCtx`
+    /// SchedulerHandle<'a, 's>` via the `SchedulerHandle for DispatchCtx`
     /// impl) so sub-slots spawned by the body inherit the dispatcher's
     /// contextual chain/frame state.
     pub(super) fn invoke_to_step(
@@ -337,7 +337,7 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
 // the body of `with_active_frame` re-receives `&mut DispatchCtx`, so
 // further sub-builtins still see the dispatcher's contextual state.
 
-impl<'a, 'b> SchedulerHandle<'a> for DispatchCtx<'a, 'b> {
+impl<'a, 'b, 's> SchedulerHandle<'a, 's> for DispatchCtx<'a, 'b> {
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
         self.sched.add_dispatch(expr, scope)
     }
@@ -363,13 +363,13 @@ impl<'a, 'b> SchedulerHandle<'a> for DispatchCtx<'a, 'b> {
 
     /// Pin/swap the ambient `active_frame` around `body`. The closure
     /// receives `&mut DispatchCtx` (this same object as
-    /// `&mut dyn SchedulerHandle<'a>`), so nested builtin invokes also
+    /// `&mut dyn SchedulerHandle<'a, 's>`), so nested builtin invokes also
     /// route through the dispatcher's facade rather than re-borrowing
     /// the bare scheduler.
     fn with_active_frame(
         &mut self,
         frame: Rc<CallArena>,
-        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a>),
+        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a, 's>),
     ) {
         let prev = self.sched.active_frame_replace(Some(frame));
         body(self);

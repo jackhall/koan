@@ -11,7 +11,7 @@ use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 /// documented surface; user code goes through the `#` sigil.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let expr = match extract_kexpression(&mut bundle, "expr") {

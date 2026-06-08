@@ -203,8 +203,11 @@ pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpressio
 
 /// Builtin body. `Scope` is `&'a` (not `&mut`) — every node spawned during the body
 /// shares it; mutability is interior via `RefCell`.
-pub type BuiltinFn =
-    for<'a> fn(&'a Scope<'a>, &mut dyn SchedulerHandle<'a>, ArgumentBundle<'a>) -> BodyResult<'a>;
+pub type BuiltinFn = for<'a> fn(
+    &'a Scope<'a>,
+    &mut dyn SchedulerHandle<'a, 'a>,
+    ArgumentBundle<'a>,
+) -> BodyResult<'a>;
 
 /// Dispatch-time name extractor for a binder builtin. Returning `Some(name)` installs
 /// `placeholders[name] = NodeId(this_slot)` so a sibling looking up `name` while the

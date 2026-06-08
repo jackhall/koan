@@ -279,7 +279,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 /// `parse_fn_param_list` against the now-final scope.
 pub(crate) fn defer_via_combine<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     signature_expr: KExpression<'a>,
     inputs: CombineInputs<'a>,
     body_expr: KExpression<'a>,

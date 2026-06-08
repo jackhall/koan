@@ -36,7 +36,7 @@ impl<'a> KFunction<'a> {
     pub fn invoke(
         &'a self,
         scope: &'a Scope<'a>,
-        sched: &mut dyn SchedulerHandle<'a>,
+        sched: &mut dyn SchedulerHandle<'a, 'a>,
         bundle: ArgumentBundle<'a>,
     ) -> BodyResult<'a> {
         match &self.body {

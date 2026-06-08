@@ -30,7 +30,7 @@ use crate::machine::core::kfunction::body::ReturnContract;
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let expr_inner = match bundle.extract_kexpression_or_shape_error("TRY", "expr") {
@@ -65,7 +65,7 @@ pub fn body<'a>(
 /// arm")` on the success path without an `ok` or `_` arm.
 fn dispatch_branch<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     result: Result<&'a KObject<'a>, KError>,
     branches_expr: crate::machine::model::ast::KExpression<'a>,
     outer_frame: Option<Rc<CallArena>>,

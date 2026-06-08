@@ -25,7 +25,7 @@ use super::{arg, err, kw, register_builtin, sig};
 
 pub fn body_identifier<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let s_name = match bundle.get("s") {
@@ -79,7 +79,7 @@ pub fn body_identifier<'a>(
 /// a regular member.
 pub fn body_type_lhs<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let s_kt = match bundle.get_type("s") {
@@ -123,7 +123,7 @@ pub fn body_type_lhs<'a>(
 
 pub fn body_newtype<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let target = match bundle.require("s") {
@@ -139,7 +139,7 @@ pub fn body_newtype<'a>(
 
 pub fn body_module<'a>(
     _scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     // A module identity rides the type channel, so the lhs is the `Type` arm.

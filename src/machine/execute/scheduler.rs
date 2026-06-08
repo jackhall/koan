@@ -253,7 +253,7 @@ impl<'a> Default for Scheduler<'a> {
     }
 }
 
-impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
+impl<'a, 's> SchedulerHandle<'a, 's> for Scheduler<'a> {
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
         Scheduler::add_dispatch(self, expr, scope)
     }
@@ -281,7 +281,7 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
     fn with_active_frame(
         &mut self,
         frame: std::rc::Rc<crate::machine::core::CallArena>,
-        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a>),
+        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a, 's>),
     ) {
         let prev = self.active_frame.take();
         self.active_frame = Some(frame);

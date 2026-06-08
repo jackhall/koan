@@ -33,7 +33,7 @@ pub(crate) use signature::binder_name;
 /// [`body_record_schema`].
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     build_fn_like(scope, sched, bundle, "FN", FnKind::Function)
@@ -48,7 +48,7 @@ pub fn body<'a>(
 /// no-op. `builtin` (`"FN"` / `"FUNCTOR"`) names the surface in slot errors.
 pub(crate) fn build_fn_like<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     mut bundle: ArgumentBundle<'a>,
     builtin: &str,
     kind: FnKind,
@@ -178,7 +178,7 @@ fn collect_param_types<'a>(
 /// [`FnKind::Anonymous`]) and is reachable only through the value it returns.
 pub fn body_record_schema<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let schema = match extract_ktype(&mut bundle, "signature") {

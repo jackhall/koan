@@ -20,7 +20,7 @@ pub(super) fn unit_signature<'a>() -> ExpressionSignature<'a> {
 
 pub(super) fn body_no_op<'a>(
     _scope: &'a Scope<'a>,
-    _sched: &mut dyn crate::machine::core::kfunction::SchedulerHandle<'a>,
+    _sched: &mut dyn crate::machine::core::kfunction::SchedulerHandle<'a, 'a>,
     _bundle: crate::machine::core::kfunction::ArgumentBundle<'a>,
 ) -> crate::machine::core::kfunction::BodyResult<'a> {
     crate::machine::core::kfunction::BodyResult::value(_scope.arena.alloc_object(KObject::Null))

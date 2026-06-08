@@ -52,7 +52,7 @@ impl CarrierKind {
 
 fn body_list_of<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let elem = match bundle.require_ktype("elem") {
@@ -64,7 +64,7 @@ fn body_list_of<'a>(
 
 fn body_map<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let k = match bundle.require_ktype("k") {
@@ -90,7 +90,7 @@ fn body_map<'a>(
 /// [modular implicits](../../roadmap/predicate_typing/modular-implicits.md) follow-up.
 fn body_apply_as<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let applied = match bundle.require_ktype("applied") {
@@ -134,7 +134,7 @@ fn body_apply_as<'a>(
 /// [ktype.md § Record fields and KType hashing](../../design/typing/ktype.md#record-fields-and-ktype-hashing).
 fn body_fn<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let sig_expr = match bundle.require_kexpression("sig") {
@@ -150,7 +150,7 @@ fn body_fn<'a>(
 
 fn body_functor<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let sig_expr = match bundle.require_kexpression("sig") {
@@ -170,7 +170,7 @@ fn body_functor<'a>(
 /// has no self-reference binder, so the elaborator carries no nominal-binder bookkeeping.
 fn build_carrier<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     sig_expr: KExpression<'a>,
     ret: KType<'a>,
     kind: CarrierKind,

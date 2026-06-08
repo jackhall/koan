@@ -10,7 +10,7 @@ use super::{arg, err, kw, register_builtin, sig};
 /// first-class types, so it renders either arm of the carrier.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let rendered = match bundle.args.get("msg") {

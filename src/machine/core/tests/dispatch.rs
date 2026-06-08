@@ -13,14 +13,14 @@ use crate::machine::{BindingIndex, LexicalFrame, ResolveOutcome};
 
 fn body_a<'a>(
     s: &'a Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a>,
+    _h: &mut dyn SchedulerHandle<'a, 'a>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     BodyResult::value(marker(s, "a"))
 }
 fn body_b<'a>(
     s: &'a Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a>,
+    _h: &mut dyn SchedulerHandle<'a, 'a>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     BodyResult::value(marker(s, "b"))

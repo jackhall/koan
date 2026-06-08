@@ -32,7 +32,7 @@ use super::{arg, kw, register_builtin_full, sig};
 /// `is_functor: true` flag downstream.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     build_fn_like(scope, sched, bundle, "FUNCTOR", FnKind::Functor)

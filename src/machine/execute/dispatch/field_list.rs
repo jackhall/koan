@@ -32,7 +32,7 @@ pub(crate) type FieldListFinalize<'a> =
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn defer_field_list_via_combine<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     expr: KExpression<'a>,
     park_producers: Vec<NodeId>,
     sub_dispatches: Vec<KExpression<'a>>,
@@ -93,7 +93,7 @@ pub(crate) fn defer_field_list_via_combine<'a>(
 /// through one Combine (the field walker's own re-walk handles nested records).
 pub(crate) fn elaborate_record_value<'a>(
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 'a>,
     fields: KExpression<'a>,
     chain: Option<Rc<LexicalFrame>>,
 ) -> BodyResult<'a> {
