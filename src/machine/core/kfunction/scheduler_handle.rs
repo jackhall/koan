@@ -92,6 +92,21 @@ pub trait SchedulerHandle<'a> {
         chain: Rc<LexicalFrame>,
     ) -> NodeId;
 
+    /// Ambient-chain sibling of [`Self::add_dispatch_with_chain_in_frame`]: dispatch `expr`
+    /// in the active frame inheriting the ambient `active_chain`. Used by the FN deferred
+    /// return-type expression sub-Dispatch.
+    fn add_dispatch_in_frame(&mut self, expr: KExpression<'a>) -> NodeId;
+
+    /// Framed sibling of [`Self::add_combine`]: schedule a `Combine` whose scope is the
+    /// active frame's child, stored `Yoked` (re-projected from the frame cart) rather than a
+    /// fabricated `&'a`. Used by the FN deferred return-type Combine.
+    fn add_combine_in_frame(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId;
+
     /// Schedule each top-level statement in `body_expr` against `scope`. Routes through
     /// [`Self::enter_block`] with `scope.id` so body statements get fresh `(scope.id, i)`
     /// frames stacked over the call-site chain.

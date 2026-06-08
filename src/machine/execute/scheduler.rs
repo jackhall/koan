@@ -353,4 +353,41 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
         let scope = frame.scope_for_bind();
         self.submit_node(NodeWork::dispatch(expr), scope, NodeScope::Yoked, Some(chain))
     }
+
+    fn add_dispatch_in_frame(&mut self, expr: KExpression<'a>) -> NodeId {
+        let frame = self
+            .active_frame
+            .clone()
+            .expect("in-frame dispatch requires an active frame");
+        let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
+        let scope = frame.scope_for_bind();
+        self.submit_node(NodeWork::dispatch(expr), scope, NodeScope::Yoked, explicit_chain)
+    }
+
+    fn add_combine_in_frame(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId {
+        let park_count = park_producers.len();
+        let mut deps = park_producers;
+        deps.extend(owned_subs);
+        let frame = self
+            .active_frame
+            .clone()
+            .expect("in-frame combine requires an active frame");
+        let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
+        let scope = frame.scope_for_bind();
+        self.submit_node(
+            NodeWork::Combine {
+                deps,
+                park_count,
+                finish,
+            },
+            scope,
+            NodeScope::Yoked,
+            explicit_chain,
+        )
+    }
 }

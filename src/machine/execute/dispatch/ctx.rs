@@ -409,4 +409,18 @@ impl<'a, 'b> SchedulerHandle<'a> for DispatchCtx<'a, 'b> {
     ) -> NodeId {
         self.sched.add_dispatch_with_chain_in_frame(expr, chain)
     }
+
+    fn add_dispatch_in_frame(&mut self, expr: KExpression<'a>) -> NodeId {
+        self.sched.add_dispatch_in_frame(expr)
+    }
+
+    fn add_combine_in_frame(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId {
+        self.sched
+            .add_combine_in_frame(owned_subs, park_producers, finish)
+    }
 }

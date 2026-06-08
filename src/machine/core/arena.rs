@@ -488,11 +488,11 @@ impl CallArena {
             .expect("scope_ptr is set after construction")
     }
 
-    /// Re-anchor this frame's per-call arena and child scope to a free `'a` so the caller
-    /// may move the frame into a `BodyResult::Tail` / slot `Node` while the borrows stay
-    /// live. The single owner for the scattered `(inner_arena, child)` re-anchor performed
-    /// by the MATCH / TRY-WITH builtins, [`KFunction::invoke`], and
-    /// [`NodeStore::reinstall_with_frame`].
+    /// Re-anchor this frame's per-call arena and child scope to a free `'a`, unconstrained by
+    /// the `&Rc` receiver. The single primitive behind the two remaining re-anchor sites:
+    /// [`Self::with_anchored_child`] (the seed-side bind of `it` / FN parameters) and the
+    /// slot-table read boundary (`NodeScope::project`). Both hold this frame's `Rc` across
+    /// every read through the returned `'a`, which heap-pins the arena and child scope.
     ///
     /// SAFETY: the caller holds an `Rc<CallArena>` it is about to store in a payload whose
     /// lifetime is `'a`; that `Rc` heap-pins the arena (and its child scope) for as long as
