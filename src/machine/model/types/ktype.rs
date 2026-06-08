@@ -654,10 +654,7 @@ mod tests {
     fn nominal_kind_surface_keywords() {
         assert_eq!(KKind::Tagged.surface_keyword(), "Tagged");
         assert_eq!(KKind::Newtype.surface_keyword(), "Newtype");
-        assert_eq!(
-            KKind::TypeConstructor.surface_keyword(),
-            "TypeConstructor",
-        );
+        assert_eq!(KKind::TypeConstructor.surface_keyword(), "TypeConstructor",);
     }
 
     #[test]
@@ -735,10 +732,7 @@ mod tests {
                     body: None,
                 },
             ),
-            (
-                KType::OfKind(KKind::Tagged),
-                KType::OfKind(KKind::Tagged),
-            ),
+            (KType::OfKind(KKind::Tagged), KType::OfKind(KKind::Tagged)),
             (
                 KType::RecursiveRef("Tree".into()),
                 KType::RecursiveRef("Tree".into()),

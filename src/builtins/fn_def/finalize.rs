@@ -187,7 +187,6 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
     }
 }
 
-
 /// Variant used by the keyworded FN (`FnKind::Function`), the FUNCTOR builtin
 /// (`FnKind::Functor`), and the anonymous record-schema binder
 /// (`FnKind::Anonymous`).

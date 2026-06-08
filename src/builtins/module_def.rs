@@ -15,7 +15,6 @@ use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, SchedulerHandle, Scope,
 };
 
-
 use super::{arg, err, kw, register_builtin_with_binder, sig};
 use crate::machine::core::kfunction::argument_bundle::extract_bare_type_name;
 

@@ -4,8 +4,7 @@ use std::rc::Rc;
 use crate::machine::core::LexicalFrame;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CallArena, KError, KErrorKind,
-    SchedulerHandle, Scope,
+    ArgumentBundle, BindingIndex, BodyResult, CallArena, KError, KErrorKind, SchedulerHandle, Scope,
 };
 
 use super::branch_walk::{find_branch_body, resolve_arm_return_contract};

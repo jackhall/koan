@@ -13,8 +13,8 @@
 //! runtime value falls through to [`body_newtype`].
 
 use crate::machine::execute::{resolve_type_leaf_carrier, TypeLeafCarrier};
-use crate::machine::model::types::KKind;
 use crate::machine::model::types::AbstractSource;
+use crate::machine::model::types::KKind;
 use crate::machine::model::values::{Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{

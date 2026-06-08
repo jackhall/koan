@@ -121,9 +121,15 @@ pub(crate) fn build_fn_like<'a>(
             elements,
             return_type,
         } => finalize_fn_with_kind(scope, elements, return_type, body_expr, kind, bind_index),
-        FnPlan::Combine(inputs) => {
-            defer_via_combine(scope, sched, signature_expr, inputs, body_expr, kind, bind_index)
-        }
+        FnPlan::Combine(inputs) => defer_via_combine(
+            scope,
+            sched,
+            signature_expr,
+            inputs,
+            body_expr,
+            kind,
+            bind_index,
+        ),
     }
 }
 

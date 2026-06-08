@@ -1,8 +1,8 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena.rs: 15
-src/machine/core/scope_ptr.rs: 3
+src/machine/core/arena.rs: 16
+src/machine/core/scope_ptr.rs: 4
 src/machine/model/values/module.rs: 1
 -->
 
@@ -35,7 +35,7 @@ unsafe and fingerprint-drift checks still fire.
 
 ## The slate
 
-21 tests, grouped by the unsafe site each pins down. Names below are the exact
+22 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **Singleton transmutes** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the `'static`→`'a`
@@ -48,10 +48,14 @@ child-scope `Option<ScopePtr<'static>>` (shortened to an `&self`-bounded lifetim
 `unsafe` `ScopePtr::reattach_unbounded`) plus the `Rc<CallArena>` chain that keeps per-call
 arenas pinned across re-borrow. One test pins the re-attach surviving a sibling alloc; the
 other pins the `Rc<CallArena>` chain keeping an outer arena alive after its local handle
-drops.
+drops. A third pins the witness-bounded sibling `ScopePtr::reattach_bounded` (via
+`CallArena::scope_bounded`), which splits the stored `'static` into a `&self`-bounded borrow
+and a free content lifetime — re-read alongside the unbounded `scope` / `scope_for_bind`
+accessors over the same child scope.
 
 - `call_arena_scope_survives_subsequent_alloc`
 - `call_arena_chained_outer_frame_walkable`
+- `scope_bounded_reanchors_within_witness_borrow`
 
 **`RuntimeArena` interior mutation under live borrows** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)).
 

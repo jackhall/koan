@@ -351,7 +351,12 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
         // slot stores `Yoked` and re-projects the scope from the frame cart at the read
         // boundary, so this short borrow only needs to outlive the `submit_node` call.
         let scope = frame.scope_for_bind();
-        self.submit_node(NodeWork::dispatch(expr), scope, NodeScope::Yoked, Some(chain))
+        self.submit_node(
+            NodeWork::dispatch(expr),
+            scope,
+            NodeScope::Yoked,
+            Some(chain),
+        )
     }
 
     fn add_dispatch_in_frame(&mut self, expr: KExpression<'a>) -> NodeId {
@@ -361,7 +366,12 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
             .expect("in-frame dispatch requires an active frame");
         let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
         let scope = frame.scope_for_bind();
-        self.submit_node(NodeWork::dispatch(expr), scope, NodeScope::Yoked, explicit_chain)
+        self.submit_node(
+            NodeWork::dispatch(expr),
+            scope,
+            NodeScope::Yoked,
+            explicit_chain,
+        )
     }
 
     fn add_combine_in_frame(

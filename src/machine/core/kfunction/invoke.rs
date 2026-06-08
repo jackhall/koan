@@ -3,8 +3,7 @@ use std::rc::Rc;
 
 use super::body::split_body_statements;
 use crate::machine::core::{
-    assemble_body_chain, BindingIndex, CallArena, KError, KErrorKind, LexicalFrame,
-    Scope,
+    assemble_body_chain, BindingIndex, CallArena, KError, KErrorKind, LexicalFrame, Scope,
 };
 use crate::machine::model::types::{
     elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, ReturnType,
@@ -57,8 +56,8 @@ impl<'a> KFunction<'a> {
                 // (values whose type carries the caller's `'a`) allocate into the frame arena
                 // and bind into the frame's child scope inside the closure, so the seed itself
                 // fabricates no `&'a`.
-                let bind_params = frame.with_anchored_child(
-                    |inner_arena, child| -> Result<(), KError> {
+                let bind_params =
+                    frame.with_anchored_child(|inner_arena, child| -> Result<(), KError> {
                         for (name, arg_val) in bundle.args.iter() {
                             // FN parameters bind at idx 0; the body's statements sit at idx >= 1,
                             // so the strict `idx < cutoff` rule makes the parameters visible to
@@ -76,11 +75,13 @@ impl<'a> KFunction<'a> {
                                     if let Some(arg) = signature_argument_by_name(self, name) {
                                         if is_parameterized_carrier(&arg.ktype) {
                                             if !arg.ktype.matches_value(&cloned) {
-                                                return Err(KError::new(KErrorKind::TypeMismatch {
-                                                    arg: name.clone(),
-                                                    expected: arg.ktype.name(),
-                                                    got: cloned.ktype().name(),
-                                                })
+                                                return Err(KError::new(
+                                                    KErrorKind::TypeMismatch {
+                                                        arg: name.clone(),
+                                                        expected: arg.ktype.name(),
+                                                        got: cloned.ktype().name(),
+                                                    },
+                                                )
                                                 .with_frame(crate::machine::Frame::bare(
                                                     self.summarize(),
                                                     self.summarize(),
@@ -106,8 +107,7 @@ impl<'a> KFunction<'a> {
                             }
                         }
                         Ok(())
-                    },
-                );
+                    });
                 if let Err(e) = bind_params {
                     return BodyResult::Err(e);
                 }
@@ -125,10 +125,13 @@ impl<'a> KFunction<'a> {
                                 .current_lexical_chain()
                                 .expect("FN invoke runs inside an enter_block / active_chain");
                             let body_scope_id = frame.scope_for_bind().id;
-                            let body_chain_parent =
-                                assemble_body_chain(frame.scope_for_bind(), call_site_chain.clone(), 0)
-                                    .parent
-                                    .clone();
+                            let body_chain_parent = assemble_body_chain(
+                                frame.scope_for_bind(),
+                                call_site_chain.clone(),
+                                0,
+                            )
+                            .parent
+                            .clone();
                             let mut stmts = body_statements;
                             let last = stmts.pop().expect("n >= 2");
                             for (i, stmt) in stmts.into_iter().enumerate() {

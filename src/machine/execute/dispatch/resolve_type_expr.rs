@@ -395,9 +395,7 @@ mod tests {
             use crate::machine::core::BindingIndex;
             use crate::machine::core::{Bindings, PendingTypeEntry};
             use crate::machine::model::ast::KExpression;
-            use crate::machine::model::types::{
-                KKind, NominalMember, NominalSchema, RecursiveSet,
-            };
+            use crate::machine::model::types::{KKind, NominalMember, NominalSchema, RecursiveSet};
             use crate::machine::model::Record;
 
             let arena = RuntimeArena::new();

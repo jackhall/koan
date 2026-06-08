@@ -48,9 +48,7 @@ mod tests {
     /// `expected`; returns the member's name.
     fn assert_type_constructor(kt: &KType<'_>, expected: &[&str]) -> String {
         match kt {
-            KType::SetRef { set, index }
-                if set.member(*index).kind == KKind::TypeConstructor =>
-            {
+            KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
                 match RecursiveSet::projected_schema(set, *index) {
                     ProjectedSchema::TypeConstructor { param_names, .. } => {
                         let want: Vec<String> = expected.iter().map(|s| s.to_string()).collect();

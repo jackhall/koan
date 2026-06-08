@@ -5,14 +5,12 @@ use crate::machine::core::PendingTypeEntry;
 use crate::machine::execute::defer_field_list_via_combine;
 use crate::machine::model::types::{
     finalize_nominal_member, parse_typed_field_list_via_elaborator, seal_recursive_refs,
-    Elaborator, FieldListOutcome, FieldNameKind, NominalSchema, SchemaSealResult,
-    SealOutcome,
+    Elaborator, FieldListOutcome, FieldNameKind, NominalSchema, SchemaSealResult, SealOutcome,
 };
 use crate::machine::model::KType;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, Frame, KError, KErrorKind, SchedulerHandle, Scope,
 };
-
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
 use crate::machine::core::kfunction::argument_bundle::{

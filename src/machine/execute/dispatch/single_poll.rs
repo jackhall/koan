@@ -95,9 +95,7 @@ pub(in crate::machine::execute) enum CtorKind<'a> {
 }
 
 impl<'a> BareTypeState<'a> {
-    pub(in crate::machine::execute) fn with_park(
-        park: BareTypeParkTrack,
-    ) -> Self {
+    pub(in crate::machine::execute) fn with_park(park: BareTypeParkTrack) -> Self {
         Self {
             park: Some(park),
             _ph: PhantomData,

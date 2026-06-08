@@ -479,6 +479,23 @@ impl CallArena {
         scope
     }
 
+    /// The child scope re-anchored with a **witness-bounded** borrow: the borrow `'p` is
+    /// bounded by the `&'p Rc<Self>` receiver (the frame `Rc` witness), while the scope
+    /// content `'a` is free (`'a: 'p`). This is the read-boundary brand the `'s` split needs:
+    /// where [`Self::anchored_parts`] fabricates a *free* `&'a` that can be stored past the
+    /// frame, `scope_bounded` hands back a reference that cannot outlive the `Rc` it borrows
+    /// from — so re-anchoring longer than the frame's witness fails to compile. Invariance in
+    /// `'a` rides structurally on the returned `Scope<'a>` (`Scope` is invariant), so this
+    /// ephemeral form needs no separate brand struct. Not yet wired — the read boundary
+    /// (`NodeScope::project`) and the seed bind (`with_anchored_child`) route through
+    /// `anchored_parts` until the `'s` split flips them.
+    ///
+    /// SAFETY: delegates to [`ScopePtr::reattach_bounded`]; the `&'p Rc<Self>` receiver pins
+    /// the arena and child scope for all of `'p`, so the `'p`-bounded borrow cannot dangle.
+    pub fn scope_bounded<'p, 'a: 'p>(self: &'p Rc<Self>) -> &'p Scope<'a> {
+        unsafe { self.scope_ptr_set().reattach_bounded() }
+    }
+
     /// The child scope's `ScopePtr<'static>`, which is `Some` for the whole life of a
     /// constructed frame (`None` only transiently inside `new` / `try_reset_for_tail` before
     /// the child scope is allocated).
@@ -574,6 +591,22 @@ mod tests {
     fn null_singleton_returns_null_kobject() {
         let n = null_singleton();
         assert!(matches!(n, KObject::Null));
+    }
+
+    /// `scope_bounded` re-anchors the child scope with a borrow bounded by the `&Rc` witness.
+    /// The good path: read it within the witness borrow. The over-anchor and covariance
+    /// compile-error properties were confirmed by the C0 spike (see
+    /// scratch/type-enforced-frame-reanchor-plan.md § C0 verdict); they are structural —
+    /// `scope_bounded`'s `'p` borrow cannot widen to a free `'a`, and `Scope<'a>` is invariant.
+    #[test]
+    fn scope_bounded_reanchors_within_witness_borrow() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let frame: Rc<CallArena> = CallArena::new(scope, None);
+        let bounded: &Scope<'_> = frame.scope_bounded();
+        // Same underlying child scope as the unbounded accessors, just a shorter borrow.
+        assert_eq!(bounded.id, frame.scope().id);
+        assert_eq!(bounded.id, frame.scope_for_bind().id);
     }
 
     #[test]

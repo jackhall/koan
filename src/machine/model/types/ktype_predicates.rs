@@ -23,9 +23,7 @@ impl<'a> KType<'a> {
         matches!(
             self,
             KType::Signature { .. }
-                | KType::OfKind(
-                    KKind::Proper | KKind::Any | KKind::Module | KKind::Signature
-                )
+                | KType::OfKind(KKind::Proper | KKind::Any | KKind::Module | KKind::Signature)
         )
     }
 
@@ -298,9 +296,7 @@ impl<'a> KType<'a> {
             KType::SetRef { set, index } => match obj {
                 KObject::Tagged {
                     set: s2, index: i2, ..
-                } if s2.member(*i2).kind == KKind::Tagged => {
-                    Rc::ptr_eq(set, s2) && index == i2
-                }
+                } if s2.member(*i2).kind == KKind::Tagged => Rc::ptr_eq(set, s2) && index == i2,
                 _ => *self == obj.ktype(),
             },
             // A variant slot admits exactly the tagged values of that one variant.
@@ -448,9 +444,7 @@ impl<'a> KType<'a> {
                     set: s2,
                     index: i2,
                     ..
-                })) if s2.member(*i2).kind == KKind::Tagged => {
-                    Rc::ptr_eq(set, s2) && index == i2
-                }
+                })) if s2.member(*i2).kind == KKind::Tagged => Rc::ptr_eq(set, s2) && index == i2,
                 ExpressionPart::Future(obj) => &obj.ktype() == self,
                 _ => false,
             },

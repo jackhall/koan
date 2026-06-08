@@ -17,8 +17,8 @@ use crate::machine::core::{LexicalFrame, Resolution, Scope, ScopeId};
 use crate::machine::model::ast::TypeName;
 use crate::machine::NodeId;
 
-use super::ktype::KType;
 use super::kkind::KKind;
+use super::ktype::KType;
 use super::recursive_set::{NominalMember, RecursiveSet};
 
 #[cfg(test)]

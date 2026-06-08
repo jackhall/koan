@@ -80,4 +80,19 @@ impl<'a> ScopePtr<'a> {
     pub unsafe fn reattach_unbounded<'b>(&self) -> &'b Scope<'b> {
         std::mem::transmute::<&Scope<'static>, &'b Scope<'b>>(self.ptr.as_ref())
     }
+
+    /// Re-attach with the borrow `'p` *bounded* by the `&'p self` receiver and the scope
+    /// content `'a` left free (`'a: 'p`, implied by `&'p Scope<'a>` well-formedness). Unlike
+    /// [`Self::reattach_unbounded`], which collapses borrow and content into one `'b`, this
+    /// hands back a reference that **cannot outlive the receiver borrow** — re-anchoring it
+    /// longer than the pointer's witness is a compile error, not a fabrication. The free `'a`
+    /// is the residual, frame-`Rc`-pinned content claim (the same erasure
+    /// [`Self::reattach_unbounded`] already carries), reachable only behind the `'p` borrow.
+    ///
+    /// SAFETY: `self.ptr` points at a live `Scope` the caller's `Rc<CallArena>` witness pins
+    /// for all of `'p`; the returned borrow is bounded to `'p`, so it cannot escape that pin.
+    /// `'p` is driven by the receiver, `'a` by the return-type annotation.
+    pub unsafe fn reattach_bounded<'p, 'c: 'p>(&'p self) -> &'p Scope<'c> {
+        std::mem::transmute::<&'p Scope<'static>, &'p Scope<'c>>(self.ptr.as_ref())
+    }
 }

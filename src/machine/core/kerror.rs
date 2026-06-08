@@ -6,7 +6,7 @@ use crate::machine::core::scope_id::ScopeId;
 use crate::machine::core::source::{self, FileId, SourceLoc, Span};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
-    KType, KKind, NominalMember, NominalSchema, Parseable, Record, RecursiveSet,
+    KKind, KType, NominalMember, NominalSchema, Parseable, Record, RecursiveSet,
 };
 use crate::machine::model::values::{KObject, NonWrappedRef};
 use crate::machine::RuntimeArena;
