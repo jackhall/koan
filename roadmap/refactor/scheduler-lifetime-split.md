@@ -1,115 +1,92 @@
 # Scheduler run/frame lifetime split
 
-Give per-call frame scopes a lifetime distinct from the run lifetime, so the per-frame
-borrows the scheduler stores carry their honest (shorter) extent instead of a fabricated
-run-length one.
+Store per-call frame scopes at their honest (frame-bounded) extent instead of a fabricated
+run-length one, so the borrow the scheduler keeps for a frame scope no longer claims a
+lifetime the borrow checker is never shown.
 
 **Problem.** The scheduler threads a single run lifetime `'a` as the universal currency for
-everything it touches. [`run_dispatch<'a>`](../../src/machine/execute/dispatch.rs) takes
-`scope: &'a Scope<'a>` alongside `expr: KExpression<'a>`, `state: DispatchState<'a>`, and a
-`DispatchCtx<'a, '_>`, and returns `NodeStep<'a>`; the
-[`BuiltinFn`](../../src/machine/core/kfunction/body.rs) type is
-`for<'a> fn(&'a Scope<'a>, &mut dyn SchedulerHandle<'a>, ArgumentBundle<'a>) -> BodyResult<'a>`;
-[`SchedulerHandle<'a>`](../../src/machine/core/kfunction/scheduler_handle.rs) and
-[`Node<'a>`](../../src/machine/execute/nodes.rs) carry the same `'a`. But a per-call frame's
-child scope lives only as long as its [`CallArena`](../../src/machine/core/arena.rs) `Rc` is
-held — its arena drops per-frame, the TCO/Done reclamation that keeps loops O(1) memory. The
-scheduler papers over the gap by fabricating `'a` for that shorter-lived scope: the unsafe
-`anchored_parts` re-anchor and the `Node.scope: &'a` store both stand in for a lifetime the
-borrow checker is never shown. One such `Node.scope` capture is unavoidable and surface-independent:
-a deferred computed return type (`-> Er.Type`, `-> :(Set WITH {…})`) that references a parameter
-spawns a per-call sub-Dispatch bound to the per-call `child`
-([`invoke.rs`](../../src/machine/core/kfunction/invoke.rs)) — inherent to the deferral mechanism
-(every `:(…)`/dotted computed return rides it; made memory-safe by the Combine's per-call-frame Rc),
-so the split carries it like every other per-call scope rather than retiring it. The single `'a` is
-itself load-bearing — nodes store work
+everything it touches, including per-call frame scopes that live only as long as their
+[`CallArena`](../../src/machine/core/arena.rs) `Rc` is held — the arena drops per-frame, the
+TCO/Done reclamation that keeps loops O(1) memory. The scheduler papers over the gap by
+fabricating `'a` for that shorter-lived scope at two places: the unsafe
+`CallArena::anchored_parts` re-anchor mints a fresh `&'a Scope<'a>` at each per-call seed, and
+[`Node<'a>`](../../src/machine/execute/nodes.rs) stores that scope as `scope: &'a Scope<'a>`,
+held across scheduler steps. Both stand in for the frame's true, shorter extent. The
+fabrication is scattered: four production sites birth or re-derive a frame-bounded scope via
+`anchored_parts` — the FN-body, MATCH-arm, and TRY-arm seeds
+([`invoke.rs`](../../src/machine/core/kfunction/invoke.rs),
+[`match_case.rs`](../../src/builtins/match_case.rs),
+[`try_with.rs`](../../src/builtins/try_with.rs)), and the tail sink
+[`reinstall_with_frame`](../../src/machine/execute/scheduler/node_store.rs) every
+`BodyResult::Tail` funnels through. The run `'a` is itself load-bearing — nodes store work
 built in an earlier step and read each other's outputs across steps
 (`read_result -> &'a KObject<'a>`), so it genuinely must span the whole run; per-call scopes
 are the one thing nested strictly inside it, and the only thing that needs a shorter one.
 
 **Acceptance criteria.**
 
-- Per-call frame scopes carry a frame lifetime `'s` distinct from the run `'a`, so the
-  borrow the scheduler stores for a frame scope has its true (shorter) extent tracked by the
-  borrow checker.
-- The dispatch chain (`run_dispatch` → `DispatchCtx` → `BuiltinFn` → `BodyResult` →
-  `SchedulerHandle`) is `'s`-polymorphic with `'a: 's`, so a frame-bounded scope feeds into
-  dispatch and lifts to `'a` only at the `lift_kobject` Done boundary — supplying the distinct
-  frame lifetime that [Type-enforced frame re-anchor](type-enforced-frame-reanchor.md) binds
-  its brand to.
-- The dispatch/builtin surface states the scope↦output lifetime relationship in its types
-  rather than carrying it through the arena-drop-order convention.
-- The `recursive_eval_no_uaf` test runs green under `MIRIFLAGS=-Zmiri-tree-borrows` and is
-  admitted to [`observe/miri_slate.md`](../../observe/miri_slate.md).
+- A per-call frame scope is stored on its slot as a handle bounded by the frame's
+  `Rc<CallArena>`, not as a `&'a Scope<'a>`; `Node.scope` no longer claims the run lifetime
+  for a frame scope.
+- The unsafe `CallArena::anchored_parts` re-anchor is removed — the three seeds and the
+  [`reinstall_with_frame`](../../src/machine/execute/scheduler/node_store.rs) sink derive the
+  frame scope from the frame cart instead.
+- The handle adds no `Rc<CallArena>` clone beyond the slot's existing `Node.frame` and no
+  per-read indirection beyond today's single deref, so TCO frame reuse
+  (`try_reset_for_tail`'s `strong_count == 1` check) is unaffected.
+- `recursive_eval_no_uaf` runs green under `MIRIFLAGS=-Zmiri-tree-borrows` and is admitted to
+  [`observe/miri_slate.md`](../../observe/miri_slate.md) — with the stored borrow carrying its
+  honest frame extent, the over-wide borrow tree borrows rejects is no longer expressible.
 
 **Directions.**
 
-- *Mechanism — open.* Two routes. (a) *Split the lifetime:* introduce a second parameter
-  `'s` (frame) with `'a: 's`, threaded through `run_dispatch` → `DispatchCtx` →
-  `DispatchState`/resume arms → `BuiltinFn` → `BodyResult` → `SchedulerHandle`; outputs that
-  borrow from the per-call arena type as `'s`, lifted to `'a` only at the existing Done
-  boundary (`lift_kobject`). (b) *De-borrow the graph:* store the dataflow graph as owned
-  data (owned/`Rc` work payloads and results) so no run-spanning `'a` is needed and every
-  scope borrow is a short reborrow at use — removes the fabrication by removing the long
-  lifetime, at the cost of reworking the arena-`&'a` value representation (`KObject<'a>` and
-  friends). Recommended: prototype (a) on the dispatch hot path first; (b) reaches further
-  into the value model. A home-rolled yoke spike confirmed the abstraction compiles but that
-  adoption founders precisely on this weld — feeding a frame-bounded scope into
-  `run_dispatch` collapses the whole cascade into a single "scope must outlive `'a`" error,
-  which isolated this split as the prerequisite.
+- *Mechanism — decided.* Store the frame scope as a `NodeScope<'a>` handle on the slot: a
+  `Yoked` arm (a yoke over the frame's own `Rc<CallArena>`, with an `&self`-bounded `get`) and
+  a `Root(&'a Scope<'a>)` arm for run-root scopes. **Single-cart:** a yoked scope exists iff
+  the slot's [`Node.frame`](../../src/machine/execute/nodes.rs) is `Some`, so the `Yoked` arm
+  carries no payload of its own and projects the scope through `Node.frame` — no duplicate
+  `Rc`, no refcount traffic, no contention with `try_reset_for_tail`'s uniqueness check. The
+  projection (`CallArena::scope`, an existing `&self`-bounded re-attach) replaces the
+  `anchored_parts` fabrication at all four sites.
+- *Handle migration — decided.* The storing [`SchedulerHandle`](../../src/machine/core/kfunction/scheduler_handle.rs)
+  methods the seeds use (`add_dispatch_with_chain`, `add_combine`) gain `NodeScope`-taking
+  siblings; the existing `&'a Scope` methods become `Root`-wrapping default delegates, so the
+  ~55 run-scope call sites are untouched and the trait stays object-safe (an `impl Into<…>`
+  parameter would break `dyn SchedulerHandle`).
 - *Scope-handle invariance — decided.* `Scope<'a>` is invariant in `'a`, so a live
-  `&'a Scope<'a>` cannot be coerced to a shorter `&'s Scope<'s>` — the obstacle that blocks a
-  uniform scope accessor mixing a run-`'a` root scope with a frame-bounded per-call one (a
-  `NodeScope::Root(&'a Scope)` arm and a `NodeScope::Yoked(..)` arm fail to share a return
-  lifetime). Overcome it with one minimal change, independent of the Mechanism choice above:
-  carry the run-root scope through the *same* yoked handle the per-call scopes use, with the
-  existing `&'a Scope<'a>` as its cart — a shared reference is already a stable-deref owner, so
-  this needs no new allocation. Then every scope is produced by the handle's `get`, which is a
-  layout-identity reprojection from the erased `'static` form that the co-located cart proves
-  sound — not a coercion of a live reference — so invariance never enters and both accessor
-  arms share one frame lifetime. This clears the invariance wall on its own; the run-`'a` weld
-  on dispatch and output (the Mechanism bullet) stays the separate, larger half.
-- *Phasing — decided.* The split lands incrementally, not big-bang, because `'s` is
-  *step-local*: the yoke erases the frame scope into its cart, so stored types (`Node<'a>`,
-  `Scheduler<'a>`, the dep graph) never carry `'s` — it materializes only transiently at each
-  `.get()` inside a running step, confining the blast radius to the per-step call chain rather
-  than the whole crate. **Movement 1 (widen):** thread a `'s` parameter (`where 'a: 's`) through
-  the chain `execute → run_dispatch → DispatchCtx → BuiltinFn → BodyResult` while keeping `'s`
-  instantiable as `'a` at every seam — a no-op generalization landed one layer at a time, each
-  step green and Miri-clean with no behavior change. **Movement 2 (flip seeds):** once the chain
-  is `'s`-polymorphic it accepts any `'s ≤ 'a`, so shorten the three genuine frame-scope
-  sources one at a time — the FN-body per-call frame
-  ([`invoke.rs`](../../src/machine/core/kfunction/invoke.rs)), the MATCH/TRY arm frames
-  ([`match_case.rs`](../../src/builtins/match_case.rs) +
-  [`try_with.rs`](../../src/builtins/try_with.rs), one shape), and the MODULE continuation
-  capture ([`module_def.rs`](../../src/builtins/module_def.rs)) — each flip localized and green,
-  since the polymorphic surface tolerates a short `'s` from one seed while the others still pass
-  `'s = 'a`. **Flip the highest-risk / most-uncertain seeds first** to
-  surface integration problems early rather than after the easy seeds lull: the MODULE `Combine`
-  continuation (captures a scope *across* a park, so it must store the *yoke* and `.get()`
-  inside — where "store the yoke, not the borrow" actually bites) and any `DispatchState` resume
-  arm holding a frame scope across a poll lead; the straight-line per-call dispatch seed (lowest
-  uncertainty) goes last. The shared sink is the scheduler tail-replace re-anchor,
-  [`reinstall_with_frame`](../../src/machine/execute/scheduler/node_store.rs), which every
-  `BodyResult::Tail` funnels through (FN tails, arm tails, EVAL, CONS tails) — it is not a
-  separate seed, just the one `anchored_parts → yoke` conversion that flips alongside the first
-  tail path to need it. Ordering constraints: the root-yoke above lands before widening, and
-  each seed needs the widening to reach its `lift_kobject` boundary before it can flip.
-- *Tree-borrows UB witness — open.* The `recursive_eval_no_uaf` test (EVAL re-dispatched
-  under TCO) trips a tree-borrows Undefined Behavior under
-  `MIRIFLAGS=-Zmiri-tree-borrows` — a forbidden read through a per-call frame-scope borrow,
-  the fabricated run-length `'a` over-stating the frame's true extent. Stacked borrows
-  misses it, so the test is absent from [`observe/miri_slate.md`](../../observe/miri_slate.md).
-  Treat clearing this UB — and admitting the test to the slate once green — as an acceptance
-  check for the split: with per-call scopes carrying their honest frame lifetime, the
-  over-wide borrow tree-borrows rejects should no longer be expressible.
+  `&'a Scope<'a>` cannot coerce to a shorter borrow. The `NodeScope` handle stays invariant in
+  `'a` via its `Root` arm, and the run-root scope rides the *same* handle (its live
+  `&'a Scope<'a>` as cart — a shared reference is already a stable-deref owner, no allocation),
+  so one accessor serves both arms: each `get` is a layout-identity reprojection from the
+  erased `'static` form the co-located cart proves sound, never a coercion of a live reference,
+  so invariance never enters.
+- *Seed set — decided.* The frame-bounded-scope births are exactly the three `anchored_parts`
+  seeds plus the tail sink. [`module_def.rs`](../../src/builtins/module_def.rs) is **not** one:
+  its `child_scope` is allocated in the parent/run arena (lifetime `'a`), and its only frame
+  capture is an `Rc<CallArena>` *anchor* stamped into a `KType::Module` identity — a re-anchor
+  the [Type-enforced frame re-anchor](type-enforced-frame-reanchor.md) brand owns, not a frame
+  scope this item stores.
+- *Phasing — decided.* One small commit per site, each green and Miri-clean, never more than
+  one site at a time: (1) substrate — add `NodeScope` and switch `Node.scope` to it, all arms
+  `Root`, a provable no-op; (2) the `*_ns` handle siblings, no call-site change; (3) flip the
+  `reinstall_with_frame` sink to `Yoked`; (4–6) flip the MATCH, TRY, then FN seeds (simplest to
+  most complex); (7) delete `anchored_parts` once unused. Never flip a seed before the
+  substrate lands.
+- *Within-step read / `'s` on the dispatch surface — deferred.* This item keeps
+  `run_dispatch` / `BuiltinFn` at `&'a`, so the read boundary still transiently widens the
+  frame-bounded projection to `&'a` to feed them — one concentrated, synchronous-step-scoped
+  overstatement, kept sound by the existing `lift_kobject` Done-boundary re-anchor. Threading a
+  real `'s` (`'a: 's`) through `run_dispatch → DispatchCtx → BuiltinFn → BodyResult →
+  SchedulerHandle` so the borrow checker tracks the frame lifetime *within* a step — the
+  ~100-site `BuiltinFn`/trait weld — is deferred to a later item; pursue only if the
+  concentrated transient widen proves insufficient.
 
 ## Dependencies
 
-**Requires:** none — the per-call deferred-return scope capture this would otherwise wait on is
-inherent to the deferral mechanism (see Problem), not a surface that another item can retire.
+**Requires:** none — the frame-bounded scope this stores honestly is born and reclaimed
+entirely inside the scheduler's per-call machinery; no other item gates it.
 
 **Unblocks:**
 
-- [Type-enforced frame re-anchor](type-enforced-frame-reanchor.md) — supplies the distinct
-  frame lifetime that a compile-time re-anchor brand binds to.
+- [Type-enforced frame re-anchor](type-enforced-frame-reanchor.md) — supplies the
+  frame-bounded scope handle a compile-time re-anchor brand binds to.

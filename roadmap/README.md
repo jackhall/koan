@@ -148,8 +148,10 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
+- [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md)
+- [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
@@ -233,3 +235,9 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   yokes `anchored_parts` to its frame `Rc` so a re-anchor outliving its frame fails to
   compile and the dispatch/scheduler Miri pins retire; rides on the lifetime split above.
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
+- [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md) —
+  collapse `ElabResult` / `ResolveTypeExprOutcome` / `TypeLeafCarrier` into one generic
+  `ResolveOutcome<T>` with a `map_done` lift.
+- [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md) —
+  collapse the slot-only `KType::SigiledTypeExpr` / `RecordType` markers into one
+  `RawTypePart(TypePartKind)`; `KExpression` stays distinct.
