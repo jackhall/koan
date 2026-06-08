@@ -7,7 +7,7 @@ use crate::machine::{
     CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, SchedulerHandle, Scope,
 };
 
-use super::nodes::NodeWork;
+use super::nodes::{NodeScope, NodeWork};
 use dep_graph::DepGraph;
 use node_store::NodeStore;
 use work_queues::WorkQueues;
@@ -336,5 +336,21 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
         chain: Rc<LexicalFrame>,
     ) -> NodeId {
         Scheduler::add_with_chain(self, NodeWork::dispatch(expr), scope, Some(chain))
+    }
+
+    fn add_dispatch_with_chain_in_frame(
+        &mut self,
+        expr: KExpression<'a>,
+        chain: Rc<LexicalFrame>,
+    ) -> NodeId {
+        let frame = self
+            .active_frame
+            .clone()
+            .expect("in-frame dispatch requires an active frame");
+        // `scope_for_bind` is `Rc`-bounded — not the `anchored_parts` `'a`-fabrication. The
+        // slot stores `Yoked` and re-projects the scope from the frame cart at the read
+        // boundary, so this short borrow only needs to outlive the `submit_node` call.
+        let scope = frame.scope_for_bind();
+        self.submit_node(NodeWork::dispatch(expr), scope, NodeScope::Yoked, Some(chain))
     }
 }

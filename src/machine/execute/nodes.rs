@@ -128,6 +128,10 @@ pub(super) enum LiftState<'a> {
 /// `try_reset_for_tail`'s uniqueness check). Storing the marker rather than a fabricated `&'a`
 /// is what keeps the borrow honest across a TCO `try_reset_for_tail`: nothing persisted points
 /// into the reset arena; the live frame is re-read each step.
+///
+/// `Copy` because both arms are trivially copyable (a shared ref / a unit) and submission
+/// threads the handle through `pre_subs` recursion without re-deriving it.
+#[derive(Clone, Copy)]
 pub(super) enum NodeScope<'a> {
     Root(&'a Scope<'a>),
     Yoked,

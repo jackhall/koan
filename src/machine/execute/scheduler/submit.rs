@@ -26,9 +26,9 @@ enum BinderKey {
     Bucket(crate::machine::model::types::UntypedKey),
 }
 
-fn extract_binder_install<'a>(
-    expr: &KExpression<'a>,
-    scope: &'a Scope<'a>,
+fn extract_binder_install<'e, 's>(
+    expr: &KExpression<'e>,
+    scope: &'s Scope<'s>,
 ) -> Option<BinderInstall> {
     let key = expr.untyped_key();
     // Visibility-unfiltered lookup: this runs before the dispatch's chain is
@@ -39,7 +39,7 @@ fn extract_binder_install<'a>(
             continue;
         }
         let bucket_fns = overloads;
-        let picked: Option<(&KFunction<'a>, BinderKey)> = bucket_fns.iter().find_map(|f| {
+        let picked: Option<(&KFunction<'s>, BinderKey)> = bucket_fns.iter().find_map(|f| {
             if let Some(name) = f.binder_name.and_then(|extractor| extractor(expr)) {
                 Some((*f, BinderKey::Name(name)))
             } else {
@@ -144,14 +144,47 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Single funnel for node creation. `explicit_chain` is `Some` for
+    /// Run-lifetime submission funnel. `explicit_chain` is `Some` for
     /// `enter_block`-routed submissions (top-level, MODULE / SIG body, TRY body
     /// success-as-block, FN body invoke), `None` otherwise (inherits
-    /// `self.active_chain`).
+    /// `self.active_chain`). Decides the slot's [`NodeScope`] handle — `Yoked` when this
+    /// runs inside the per-call frame whose own child is `scope` (re-projected from the
+    /// cart), else `Root` — then hands off to [`Self::submit_node`].
     pub(super) fn add_with_chain(
         &mut self,
         work: NodeWork<'a>,
         scope: &'a Scope<'a>,
+        explicit_chain: Option<Rc<LexicalFrame>>,
+    ) -> NodeId {
+        // Single-cart storage: when this submission runs inside a per-call frame whose own
+        // child is the very scope passed, store a payload-less `Yoked` and let the read
+        // boundary re-project from the frame cart — no fabricated `&'a` persisted. Any other
+        // scope (a run-root scope, or a frame sub-scope the frame does not directly back)
+        // genuinely lives at `'a`, so it stays `Root`.
+        let node_scope = match &self.active_frame {
+            Some(f)
+                if std::ptr::eq(
+                    f.scope() as *const Scope<'_> as *const (),
+                    scope as *const Scope<'_> as *const (),
+                ) =>
+            {
+                NodeScope::Yoked
+            }
+            _ => NodeScope::Root(scope),
+        };
+        self.submit_node(work, scope, node_scope, explicit_chain)
+    }
+
+    /// Node-creation core, shared by the run-lifetime [`Self::add_with_chain`] and the framed
+    /// [`Self::add_dispatch_with_chain_in_frame`]. `scope` is used only transiently
+    /// (binder-install, placeholder install, `pre_subs` recursion), so it carries a free `'s`
+    /// rather than the run `'a`; `node_scope` is the pre-decided slot handle the caller built
+    /// (`Root` at `'a` for a run scope, `Yoked` for a framed one).
+    pub(super) fn submit_node<'s>(
+        &mut self,
+        work: NodeWork<'a>,
+        scope: &'s Scope<'s>,
+        node_scope: NodeScope<'a>,
         explicit_chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
         // Compute the chain FIRST so recursive sub-submissions inherit the
@@ -183,9 +216,10 @@ impl<'a> Scheduler<'a> {
                     // submission with no ambient `active_chain` would assign a
                     // detached chain, bypassing index-gated visibility and letting
                     // a forward sibling resolve.
-                    let sub_id = self.add_with_chain(
+                    let sub_id = self.submit_node(
                         NodeWork::dispatch(sub_expr),
                         scope,
+                        node_scope,
                         Some(chain.clone()),
                     );
                     subs.push((i, sub_id));
@@ -237,22 +271,6 @@ impl<'a> Scheduler<'a> {
             .filter(|p| !self.is_result_ready(*p))
             .collect();
         let no_park = work_park_producers(&work).is_empty();
-        // Single-cart storage: when this submission runs inside a per-call frame whose own
-        // child is the very scope passed, store a payload-less `Yoked` and let the read
-        // boundary re-project from `frame` — no fabricated `&'a` persisted. Any other scope
-        // (a run-root scope, or a frame sub-scope the frame does not directly back) genuinely
-        // lives at `'a`, so it stays `Root`.
-        let node_scope = match &frame {
-            Some(f)
-                if std::ptr::eq(
-                    f.scope() as *const Scope<'_> as *const (),
-                    scope as *const Scope<'_> as *const (),
-                ) =>
-            {
-                NodeScope::Yoked
-            }
-            _ => NodeScope::Root(scope),
-        };
         let id = self.store.alloc_slot(Node {
             work,
             scope: node_scope,

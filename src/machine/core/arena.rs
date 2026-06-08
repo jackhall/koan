@@ -508,6 +508,21 @@ impl CallArena {
         }
     }
 
+    /// Run `f` with this frame's per-call arena and child scope re-anchored to a free `'a`.
+    /// The single audited home for the *seed-side* re-anchor: the MATCH / TRY arm and
+    /// `KFunction::invoke` body seeds bind their `it` / parameters (values whose type carries
+    /// the caller's `'a`, allocated into this frame's arena) inside `f`, without each one
+    /// restating the [`Self::anchored_parts`] fabrication. Sound on the same contract: the
+    /// caller holds this frame's `Rc`, which heap-pins the arena and child scope for `'a`, and
+    /// `f` only allocates into the arena / binds into the scope — work the frame outlives.
+    pub fn with_anchored_child<'a, R>(
+        self: &Rc<Self>,
+        f: impl FnOnce(&'a RuntimeArena, &'a Scope<'a>) -> R,
+    ) -> R {
+        let (arena, child): (&'a RuntimeArena, &'a Scope<'a>) = self.anchored_parts();
+        f(arena, child)
+    }
+
     pub fn arena(&self) -> &RuntimeArena {
         &self.arena
     }

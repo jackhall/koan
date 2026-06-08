@@ -81,6 +81,17 @@ pub trait SchedulerHandle<'a> {
         chain: Rc<LexicalFrame>,
     ) -> NodeId;
 
+    /// Dispatch `expr` as a sub-slot of the currently-active per-call frame, storing the
+    /// slot's scope as a `Yoked` handle re-projected from the frame cart rather than a
+    /// fabricated `&'a`. The caller must be inside [`Self::with_active_frame`]; the scope
+    /// is taken from that frame, so none is passed. Used by the MATCH/TRY arm and FN body
+    /// seeds to avoid an `anchored_parts` `'a`-fabrication at the seed.
+    fn add_dispatch_with_chain_in_frame(
+        &mut self,
+        expr: KExpression<'a>,
+        chain: Rc<LexicalFrame>,
+    ) -> NodeId;
+
     /// Schedule each top-level statement in `body_expr` against `scope`. Routes through
     /// [`Self::enter_block`] with `scope.id` so body statements get fresh `(scope.id, i)`
     /// frames stacked over the call-site chain.

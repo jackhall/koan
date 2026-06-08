@@ -401,4 +401,12 @@ impl<'a, 'b> SchedulerHandle<'a> for DispatchCtx<'a, 'b> {
     ) -> NodeId {
         self.sched.add_dispatch_with_chain(expr, scope, chain)
     }
+
+    fn add_dispatch_with_chain_in_frame(
+        &mut self,
+        expr: KExpression<'a>,
+        chain: Rc<LexicalFrame>,
+    ) -> NodeId {
+        self.sched.add_dispatch_with_chain_in_frame(expr, chain)
+    }
 }

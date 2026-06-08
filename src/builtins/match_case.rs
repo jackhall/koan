@@ -4,7 +4,7 @@ use std::rc::Rc;
 use crate::machine::core::LexicalFrame;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CallArena, KError, KErrorKind, RuntimeArena,
+    ArgumentBundle, BindingIndex, BodyResult, CallArena, KError, KErrorKind,
     SchedulerHandle, Scope,
 };
 
@@ -73,14 +73,18 @@ pub fn body<'a>(
     };
     // Chain the call-site frame per per-call-arena-protocol.md § Outer-frame chain.
     let frame: Rc<CallArena> = CallArena::new(scope, sched.current_frame());
-    let (inner_arena, child): (&'a RuntimeArena, &'a Scope<'a>) = frame.anchored_parts();
-    let it_obj: &'a KObject<'a> = inner_arena.alloc_object(value.deep_clone());
     // `it` binds at idx 0; the arm body's statements sit at idx >= 1, so the strict
-    // `idx < cutoff` rule lets the body see it — same path the FN parameter uses.
-    let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
+    // `idx < cutoff` rule lets the body see it — same path the FN parameter uses. The
+    // per-call re-anchor is concentrated in `with_anchored_child`; arm statements dispatch
+    // via `add_dispatch_with_chain_in_frame`, which stores `Yoked` and re-projects the scope
+    // from the frame cart at the read boundary — so the seed itself fabricates no `&'a`.
+    frame.with_anchored_child(|arena, child| {
+        let it_obj = arena.alloc_object(value.deep_clone());
+        let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
+    });
     // Multi-statement arms (`tag -> ((s_0) ... (s_{N-1}))`) submit the first N-1 as
     // siblings at chain indices `1..N-1` and tail-replace into the last at `N`.
-    let arm_scope_id = child.id;
+    let arm_scope_id = frame.scope_for_bind().id;
     let statements = split_body_statements(branch_body);
     let n = statements.len();
     if n >= 2 {
@@ -92,7 +96,7 @@ pub fn body<'a>(
         for (i, stmt) in stmts.into_iter().enumerate() {
             let chain = LexicalFrame::push(Some(call_site_chain.clone()), arm_scope_id, i + 1);
             sched.with_active_frame(frame.clone(), &mut |s| {
-                s.add_dispatch_with_chain(stmt.clone(), child, chain.clone());
+                s.add_dispatch_with_chain_in_frame(stmt.clone(), chain.clone());
             });
         }
         BodyResult::tail_with_block_at_index(last, Some(frame), arm_scope_id, n, Some(contract))
