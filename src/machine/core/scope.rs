@@ -94,8 +94,14 @@ impl<'a> ScopeBindings<'a> {
 /// pivots on the first non-`Anonymous` variant: `Sig` admits VAL declarators and
 /// rejects LET-by-example; `Module` is the opposite. The per-variant `name` field
 /// is the surface label for diagnostics.
+///
+/// `Root` marks the immutable run-global scope holding the builtins. It is
+/// transparent to the SIG-body gate (like `Anonymous`); its distinct typing is the
+/// lever for routing builtin lookups and the no-shadow consult through a genuinely
+/// run-lived scope.
 #[derive(Debug, Clone)]
 pub enum ScopeKind {
+    Root,
     Anonymous,
     Sig { name: String },
     Module { name: String },
@@ -114,7 +120,7 @@ impl<'a> Scope<'a> {
             arena,
             id: ScopeId::next(),
             pending: PendingQueue::new(),
-            kind: ScopeKind::Anonymous,
+            kind: ScopeKind::Root,
             recursive_set: None,
         }
     }
@@ -267,7 +273,7 @@ impl<'a> Scope<'a> {
             .find_map(|s| match &s.kind {
                 ScopeKind::Sig { .. } => Some(true),
                 ScopeKind::Module { .. } => Some(false),
-                ScopeKind::Anonymous => None,
+                ScopeKind::Root | ScopeKind::Anonymous => None,
             })
             .unwrap_or(false)
     }
