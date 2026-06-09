@@ -85,7 +85,7 @@ pub trait SchedulerHandle<'a, 's> {
     /// slot's scope as a `Yoked` handle re-projected from the frame cart rather than a
     /// fabricated `&'a`. The caller must be inside [`Self::with_active_frame`]; the scope
     /// is taken from that frame, so none is passed. Used by the MATCH/TRY arm and FN body
-    /// seeds to avoid an `anchored_parts` `'a`-fabrication at the seed.
+    /// seeds to avoid a free `'a`-fabrication at the seed.
     fn add_dispatch_with_chain_in_frame(
         &mut self,
         expr: KExpression<'a>,

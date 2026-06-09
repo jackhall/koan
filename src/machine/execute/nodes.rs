@@ -139,24 +139,6 @@ pub(super) enum NodeScope<'a> {
     Yoked,
 }
 
-impl<'a> NodeScope<'a> {
-    /// Materialize the step's scope. `Anchored` hands back its stored run-lifetime borrow;
-    /// `Yoked` projects from the `frame` cart and widens to the slot's `'a`. The `Yoked` widen is
-    /// the one transient read-boundary fabrication: sound because the frame `Rc` is held for the
-    /// whole step and any value produced lifts at the Done boundary before the frame can drop.
-    pub(super) fn project(&self, frame: Option<&Rc<CallArena>>) -> &'a Scope<'a> {
-        match self {
-            NodeScope::Anchored(scope) => scope,
-            NodeScope::Yoked => {
-                frame
-                    .expect("a Yoked slot carries its frame cart")
-                    .anchored_parts()
-                    .1
-            }
-        }
-    }
-}
-
 pub(super) struct Node<'a> {
     pub(super) work: NodeWork<'a>,
     pub(super) scope: NodeScope<'a>,

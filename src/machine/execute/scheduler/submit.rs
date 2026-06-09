@@ -206,6 +206,31 @@ impl<'a> Scheduler<'a> {
         }
     }
 
+    /// Dispatch `expr` against the executing slot's own scope handle. Inherent sibling of
+    /// the `SchedulerHandle::add_dispatch_here` trait method, callable from inherent
+    /// scheduler code.
+    pub(in crate::machine::execute) fn dispatch_here(&mut self, expr: KExpression<'a>) -> NodeId {
+        self.submit_here(NodeWork::dispatch(expr))
+    }
+
+    /// Schedule a `Combine` against the executing slot's own scope handle. Inherent sibling
+    /// of `SchedulerHandle::add_combine_here`.
+    pub(in crate::machine::execute) fn combine_here(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId {
+        let park_count = park_producers.len();
+        let mut deps = park_producers;
+        deps.extend(owned_subs);
+        self.submit_here(NodeWork::Combine {
+            deps,
+            park_count,
+            finish,
+        })
+    }
+
     /// Node-creation core, shared by the run-lifetime [`Self::add_with_chain`] and the framed
     /// [`Self::add_dispatch_with_chain_in_frame`]. `scope` is used only transiently
     /// (binder-install, placeholder install, `pre_subs` recursion), so it carries a free `'s`

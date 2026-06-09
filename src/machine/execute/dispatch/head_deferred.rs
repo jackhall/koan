@@ -26,7 +26,7 @@ use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::KType;
 use crate::machine::model::{Carried, KObject, Parseable};
-use crate::machine::{KError, KErrorKind, NodeId, Scope};
+use crate::machine::{KError, KErrorKind, NodeId};
 
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::apply_callable::{apply_callable, ResolvedCallable};
@@ -48,15 +48,14 @@ impl<'a> HeadDeferredState<'a> {
     pub(in crate::machine::execute) fn initial_expr(
         ctx: &mut DispatchCtx<'a, '_>,
         expr: KExpression<'a>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> NodeStep<'a> {
         let head = match &expr.parts[0].value {
             ExpressionPart::Expression(boxed) => (**boxed).clone(),
             _ => unreachable!("HeadDeferred shape implies nested Expression head"),
         };
-        let head_sub = ctx.add_dispatch(head, scope);
-        Self::park_or_resume(ctx, expr, head_sub, false, scope, idx)
+        let head_sub = ctx.add_dispatch_here(head);
+        Self::park_or_resume(ctx, expr, head_sub, false, idx)
     }
 
     /// `TypeHeadDeferred` entry: head is a `:(...)` sigil. Wrap it as a one-part
@@ -65,7 +64,6 @@ impl<'a> HeadDeferredState<'a> {
     pub(in crate::machine::execute) fn initial_type(
         ctx: &mut DispatchCtx<'a, '_>,
         expr: KExpression<'a>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> NodeStep<'a> {
         let head = match &expr.parts[0].value {
@@ -74,8 +72,8 @@ impl<'a> HeadDeferredState<'a> {
             )]),
             _ => unreachable!("TypeHeadDeferred shape implies SigiledTypeExpr head"),
         };
-        let head_sub = ctx.add_dispatch(head, scope);
-        Self::park_or_resume(ctx, expr, head_sub, true, scope, idx)
+        let head_sub = ctx.add_dispatch_here(head);
+        Self::park_or_resume(ctx, expr, head_sub, true, idx)
     }
 
     /// Read the head sub inline if it is already ready, else install the Owned
@@ -85,7 +83,6 @@ impl<'a> HeadDeferredState<'a> {
         expr: KExpression<'a>,
         head_sub: NodeId,
         type_only: bool,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> NodeStep<'a> {
         if ctx.is_result_ready(head_sub) {
@@ -94,7 +91,7 @@ impl<'a> HeadDeferredState<'a> {
                 head_sub,
                 type_only,
             }
-            .resume(ctx, scope, idx);
+            .resume(ctx, idx);
         }
         ctx.add_owned_edge(head_sub, NodeId(idx));
         let state = HeadDeferredState {
@@ -111,7 +108,6 @@ impl<'a> HeadDeferredState<'a> {
     pub(in crate::machine::execute) fn resume(
         self,
         ctx: &mut DispatchCtx<'a, '_>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> NodeStep<'a> {
         let HeadDeferredState {
@@ -134,7 +130,7 @@ impl<'a> HeadDeferredState<'a> {
             Ok(c) => c,
             Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
         };
-        apply_callable(ctx, callable, &expr, scope, idx)
+        apply_callable(ctx, callable, &expr, idx)
     }
 }
 

@@ -33,7 +33,6 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     identity: &'a KType<'a>,
     mut value_parts: Vec<Spanned<ExpressionPart<'a>>>,
-    scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
     if let [Spanned {
@@ -57,13 +56,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'a>(
     } else {
         ExpressionPart::Expression(Box::new(KExpression::new(value_parts)))
     };
-    launch(
-        ctx,
-        vec![value_cell],
-        CtorKind::Newtype { identity },
-        scope,
-        idx,
-    )
+    launch(ctx, vec![value_cell], CtorKind::Newtype { identity }, idx)
 }
 
 /// Direct-construct a record-repr newtype from a named record-literal body. Launches one
@@ -74,7 +67,6 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     identity: &'a KType<'a>,
     record_fields: Vec<(String, ExpressionPart<'a>)>,
-    scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
     let field_names: Vec<String> = record_fields.iter().map(|(n, _)| n.clone()).collect();
@@ -86,7 +78,6 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'a>(
             identity,
             field_names,
         },
-        scope,
         idx,
     )
 }
@@ -128,7 +119,6 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'a>(
     index: usize,
     schema: Rc<HashMap<String, KType<'a>>>,
     args_parts: Vec<Spanned<ExpressionPart<'a>>>,
-    scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
     let (tag, value_part) = match tagged_union::prepare_args(args_parts) {
@@ -144,7 +134,6 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'a>(
             index,
             tag,
         },
-        scope,
         idx,
     )
 }
@@ -157,7 +146,6 @@ fn launch<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     value_parts: Vec<ExpressionPart<'a>>,
     kind: CtorKind<'a>,
-    scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
     let n = value_parts.len();
@@ -165,7 +153,7 @@ fn launch<'a>(
     let mut subs: Vec<(usize, NodeId)> = Vec::new();
     for (i, part) in value_parts.into_iter().enumerate() {
         let sub_expr = KExpression::new(vec![Spanned::bare(part)]);
-        let sub_id = ctx.add_dispatch(sub_expr, scope);
+        let sub_id = ctx.add_dispatch_here(sub_expr);
         if ctx.is_result_ready(sub_id) {
             let outcome = ctx.read_result(sub_id);
             match outcome {
@@ -186,7 +174,7 @@ fn launch<'a>(
     }
     if subs.is_empty() {
         let values: Vec<&'a KObject<'a>> = staged_values.into_iter().map(|o| o.unwrap()).collect();
-        return finish(scope, &kind, &values);
+        return finish(ctx.current_scope(), &kind, &values);
     }
     let track = CtorTrack {
         subs,
@@ -204,7 +192,7 @@ fn launch<'a>(
 /// All value subs have completed. Read each, materialize the kind-keyed
 /// payload, and arena-allocate the produced `KObject`.
 pub(in crate::machine::execute::dispatch) fn finish<'a>(
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     kind: &CtorKind<'a>,
     values: &[&'a KObject<'a>],
 ) -> NodeStep<'a> {

@@ -514,16 +514,14 @@ impl CallArena {
         scope
     }
 
-    /// The child scope re-anchored with a **witness-bounded** borrow: the borrow `'p` is
-    /// bounded by the `&'p Rc<Self>` receiver (the frame `Rc` witness), while the scope
-    /// content `'a` is free (`'a: 'p`). This is the read-boundary brand the `'s` split needs:
-    /// where [`Self::anchored_parts`] fabricates a *free* `&'a` that can be stored past the
-    /// frame, `scope_bounded` hands back a reference that cannot outlive the `Rc` it borrows
-    /// from — so re-anchoring longer than the frame's witness fails to compile. Invariance in
-    /// `'a` rides structurally on the returned `Scope<'a>` (`Scope` is invariant), so this
-    /// ephemeral form needs no separate brand struct. Not yet wired — the read boundary
-    /// (`NodeScope::project`) and the seed bind (`with_anchored_child`) route through
-    /// `anchored_parts` until the `'s` split flips them.
+    /// The child scope re-handed with a **witness-bounded** borrow: the borrow `'p` is bounded by
+    /// the `&'p Rc<Self>` receiver (the frame `Rc` witness), while the scope content `'a` is free
+    /// (`'a: 'p`). This is the read boundary: it hands back a reference that *cannot outlive the
+    /// `Rc` it borrows from*, so storing it past the frame is a compile error rather than a
+    /// fabrication. Invariance in `'a` rides structurally on the returned `Scope<'a>` (`Scope` is
+    /// invariant), so this ephemeral form needs no separate brand struct. Reached through
+    /// [`Scheduler::current_scope`](crate::machine::execute::scheduler::Scheduler) (`Yoked` slots)
+    /// and [`Self::with_anchored_child`] (the seed binds).
     ///
     /// SAFETY: delegates to [`ScopePtr::reattach_bounded`]; the `&'p Rc<Self>` receiver pins
     /// the arena and child scope for all of `'p`, so the `'p`-bounded borrow cannot dangle.
@@ -540,39 +538,28 @@ impl CallArena {
             .expect("scope_ptr is set after construction")
     }
 
-    /// Re-anchor this frame's per-call arena and child scope to a free `'a`, unconstrained by
-    /// the `&Rc` receiver. The single primitive behind the two remaining re-anchor sites:
-    /// [`Self::with_anchored_child`] (the seed-side bind of `it` / FN parameters) and the
-    /// slot-table read boundary (`NodeScope::project`). Both hold this frame's `Rc` across
-    /// every read through the returned `'a`, which heap-pins the arena and child scope.
+    /// Run `f` with this frame's per-call arena re-exposed at a free `'a` and its child scope
+    /// re-handed at a bounded borrow. The single audited home for the *seed-side* re-anchor: the
+    /// MATCH / TRY arm and `KFunction::invoke` body seeds bind their `it` / parameters — values
+    /// whose type carries the caller's `'a`, deep-cloned into this frame's arena — into the child
+    /// scope inside `f`.
     ///
-    /// SAFETY: the caller holds an `Rc<CallArena>` it is about to store in a payload whose
-    /// lifetime is `'a`; that `Rc` heap-pins the arena (and its child scope) for as long as
-    /// the payload lives, so claiming `'a` — unconstrained by the `&Rc` receiver — is the
-    /// receiver-bound-borrow → storage-lifetime re-anchor. Caller obligation: an `Rc` clone
-    /// of this frame survives in that payload for all of `'a`.
-    pub fn anchored_parts<'a>(self: &Rc<Self>) -> (&'a RuntimeArena, &'a Scope<'a>) {
-        unsafe {
-            (
-                std::mem::transmute::<&RuntimeArena, &'a RuntimeArena>(self.arena()),
-                std::mem::transmute::<&Scope<'_>, &'a Scope<'a>>(self.scope()),
-            )
-        }
-    }
-
-    /// Run `f` with this frame's per-call arena and child scope re-anchored to a free `'a`.
-    /// The single audited home for the *seed-side* re-anchor: the MATCH / TRY arm and
-    /// `KFunction::invoke` body seeds bind their `it` / parameters (values whose type carries
-    /// the caller's `'a`, allocated into this frame's arena) inside `f`, without each one
-    /// restating the [`Self::anchored_parts`] fabrication. Sound on the same contract: the
-    /// caller holds this frame's `Rc`, which heap-pins the arena and child scope for `'a`, and
-    /// `f` only allocates into the arena / binds into the scope — work the frame outlives.
+    /// The **arena** is re-exposed at a free `'a`: this is the inherent arena re-exposure the C0
+    /// verdict keeps (an `'a`-typed value must land in an `'a`-typed arena, and no lifetime scheme
+    /// closes that — the frame `Rc` the caller holds heap-pins the arena, so the seed's binds
+    /// outlive `f`). The **child scope** rides the bounded `scope_bounded` brand — borrow capped at
+    /// the `&Rc` receiver, content `'a` — so it is *not* fabricated free; `bind_value` matches on
+    /// the `'a` content.
+    ///
+    /// SAFETY (arena transmute): the caller holds this frame's `Rc`, which heap-pins the arena for
+    /// as long as any value `f` binds into the scope lives.
     pub fn with_anchored_child<'a, R>(
         self: &Rc<Self>,
-        f: impl FnOnce(&'a RuntimeArena, &'a Scope<'a>) -> R,
+        f: impl FnOnce(&'a RuntimeArena, &Scope<'a>) -> R,
     ) -> R {
-        let (arena, child): (&'a RuntimeArena, &'a Scope<'a>) = self.anchored_parts();
-        f(arena, child)
+        let arena: &'a RuntimeArena =
+            unsafe { std::mem::transmute::<&RuntimeArena, &'a RuntimeArena>(self.arena()) };
+        f(arena, self.scope_bounded())
     }
 
     pub fn arena(&self) -> &RuntimeArena {

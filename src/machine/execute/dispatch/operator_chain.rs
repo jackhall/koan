@@ -15,9 +15,10 @@
 //! lands, so every chain misses and errors cleanly; the hit path is exercised only by
 //! test fixtures that register an `OperatorGroup`.
 
+use crate::machine::core::kfunction::SchedulerHandle;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Parseable;
-use crate::machine::{KError, KErrorKind, Scope};
+use crate::machine::{KError, KErrorKind};
 
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::DispatchCtx;
@@ -28,13 +29,15 @@ use super::DispatchCtx;
 pub(in crate::machine::execute) fn run<'a>(
     ctx: &DispatchCtx<'a, '_>,
     expr: &KExpression<'a>,
-    scope: &'a Scope<'a>,
 ) -> NodeStep<'a> {
     let probe = expr
         .operator_probe()
         .expect("OperatorChain shape guarantees a cached operator probe");
     let chain = ctx.chain_deref();
-    match scope.resolve_operator_group_with_chain(probe, chain) {
+    match ctx
+        .current_scope()
+        .resolve_operator_group_with_chain(probe, chain)
+    {
         None => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
             expr: expr.summarize(),
             reason: undeclared_operator_reason(probe),

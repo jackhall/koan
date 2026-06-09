@@ -270,6 +270,28 @@ impl<'a> Scheduler<'a> {
         self.active_reserve.take()
     }
 
+    /// The executing slot's scope, materialized on demand: an `Anchored` slot hands back its
+    /// stored run-lived `&Scope`; a `Yoked` slot re-projects from the live `active_frame` cart via
+    /// the bounded brand. A short borrow bounded by `&self` — fetched per use, never held across a
+    /// `&mut self` call — so it holds nothing across the in-step TCO frame reset. See
+    /// [`SchedulerHandle::current_scope`](crate::machine::SchedulerHandle::current_scope).
+    pub(in crate::machine::execute) fn current_scope(&self) -> &Scope<'a> {
+        self.current_scope_opt()
+            .expect("a slot step installs active_node_scope (and a Yoked slot keeps its frame)")
+    }
+
+    /// Like [`Self::current_scope`] but `None` when a `Yoked` slot's frame has been taken — e.g.
+    /// a tail-call `try_take_reusable_frame_for_tail` mid-step empties `active_frame`. The
+    /// post-step loop uses this to skip scope work that a taken-frame (tail/Replace) step does not
+    /// need: its `drain` is moot (the frame is being reset) and lift / placeholder-clear are
+    /// Done-only (a Done step never takes its frame).
+    pub(in crate::machine::execute) fn current_scope_opt(&self) -> Option<&Scope<'a>> {
+        match self.active_node_scope? {
+            NodeScope::Anchored(scope) => Some(scope),
+            NodeScope::Yoked => self.active_frame.as_ref().map(|f| f.scope_bounded()),
+        }
+    }
+
     /// Replace the ambient `active_frame` with `new`, returning the prior
     /// value. The `with_active_frame` body bracket and the
     /// `invoke_to_step_pinned` pin/swap both go through this.
@@ -381,7 +403,7 @@ impl<'a, 's> SchedulerHandle<'a, 's> for Scheduler<'a> {
             .active_frame
             .clone()
             .expect("in-frame dispatch requires an active frame");
-        // `scope_for_bind` is `Rc`-bounded — not the `anchored_parts` `'a`-fabrication. The
+        // `scope_for_bind` is `Rc`-bounded — not a free `'a`-fabrication. The
         // slot stores `Yoked` and re-projects the scope from the frame cart at the read
         // boundary, so this short borrow only needs to outlive the `submit_node` call.
         let scope = frame.scope_for_bind();
@@ -451,17 +473,7 @@ impl<'a, 's> SchedulerHandle<'a, 's> for Scheduler<'a> {
     }
 
     fn current_scope(&self) -> &Scope<'a> {
-        match self
-            .active_node_scope
-            .expect("a slot step installs active_node_scope before the body reads it")
-        {
-            NodeScope::Anchored(scope) => scope,
-            NodeScope::Yoked => self
-                .active_frame
-                .as_ref()
-                .expect("a Yoked slot step has an active frame")
-                .scope_bounded(),
-        }
+        Scheduler::current_scope(self)
     }
 
     fn add_dispatch_here(&mut self, expr: KExpression<'a>) -> NodeId {

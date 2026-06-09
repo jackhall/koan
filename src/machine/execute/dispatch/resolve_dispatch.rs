@@ -96,7 +96,7 @@ impl<'a> Scope<'a> {
     /// and surfaced post-walk only if no scope terminated, so an outer scope can
     /// still strict-Pick the bare name as an `:Identifier` / `:Any` slot.
     pub fn resolve_dispatch(
-        &'a self,
+        &self,
         expr: &KExpression<'a>,
         chain: Option<&LexicalFrame>,
         bare_outcomes: &[Option<NameOutcome<'a>>],
