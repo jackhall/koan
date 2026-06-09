@@ -105,9 +105,12 @@ producer — so the lookup is a single map read gated by `visible`.
 
 The visibility predicate is one line —
 [`visible(b: BindingIndex, chain_cutoff: Option<usize>)`](../../src/machine/core/bindings.rs)
-— shared across all of them. `b.idx < c` is the strict gate, and it is the *only*
-rule: every binder — value and type alike — gates its references against its own
+— shared across all of them. `b.idx < c` is the strict gate governing the chain walk:
+every binder — value and type alike — gates its references against its own
 lexical position, so a forward reference is a position error in both languages.
+(The one lookup that precedes the gated walk is the root-first builtin short-circuit —
+see [The immutable root and unshadowable builtins](#the-immutable-root-and-unshadowable-builtins);
+it applies only to `idx == 0` builtins, which a forward reference can never name.)
 Mutual recursion of two or more nominal types is expressed with a `RECURSIVE TYPES`
 block, which scopes its threaded group within strict lexical order rather than
 bypassing the cutoff (see
@@ -151,6 +154,46 @@ spells out which `NameOutcome` arms admit via `accepts_part`, which
 admit shape-only, and which strict-reject. [`OverloadBucket::pick_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
 wraps the filter-then-`most_specific` dance over a single scope's
 visibility-pre-filtered bucket.
+
+## The immutable root and unshadowable builtins
+
+The builtins live once, in a distinctly-typed run-global root
+([`ScopeKind::Root`](../../src/machine/core/scope.rs)) that holds them and accepts no
+user bindings. [`default_scope`](../../src/builtins.rs) registers the builtins into that
+root and returns a mutable `RunScope` child of it, so top-level Koan bindings land in the
+`RunScope` and the root stays builtin-only. Every [`Scope`](../../src/machine/core/scope.rs)
+carries a direct `root` handle (`None` iff it *is* the root), so any frame, however deeply
+nested, reaches the builtins in one hop through
+[`Scope::root_scope`](../../src/machine/core/scope.rs) rather than walking `outer` to the
+chain's tail. A builtin is tagged [`BindingIndex::BUILTIN`](../../src/machine/core/bindings.rs)
+(`idx == 0`); it stays visible from any depth because the root is off the lexical chain (its
+`chain_cutoff` is `None`, so every entry in it is visible), not through any `idx == 0`
+visibility exemption.
+
+**Builtins are immutable and unshadowable.** A user binding that collides with a builtin is
+a `Rebind` at any scope depth — never a shadow, never a merge:
+
+- A user *type* (nominal `STRUCT` / `UNION` / `MODULE` / `SIG` / `NEWTYPE` / `RECURSIVE`
+  declaration, or a `LET <TypeName> = …` / `VAL` abstract member) naming a builtin type is
+  rejected — [`register_type_upsert`](../../src/machine/core/scope.rs) and
+  [`register_user_type`](../../src/machine/core/scope.rs) consult
+  [`Bindings::has_builtin_type`](../../src/machine/core/bindings.rs) on the root.
+- A user *FN / FUNCTOR* overload whose untyped signature key collides with a builtin
+  dispatch bucket is rejected rather than joining it —
+  [`Scope::register_function`](../../src/machine/core/scope.rs) consults
+  [`Bindings::has_builtin_function`](../../src/machine/core/bindings.rs). A user operator over
+  a builtin probe is rejected the same way via
+  [`Bindings::has_builtin_operator`](../../src/machine/core/bindings.rs). User-vs-user
+  overloads and cross-scope shadowing are unaffected — only an `idx == 0` builtin entry gates.
+
+Because a builtin can never be shadowed, a builtin entry is authoritative: a Name-keyed
+builtin lookup is resolved root-first. [`Scope::resolve_type_with_chain`](../../src/machine/core/scope.rs)
+and [`Scope::resolve_operator_group_with_chain`](../../src/machine/core/scope.rs) consult the
+root through the direct reference and return a builtin hit in one hop, before the ancestor
+walk — the constant-time path for the hottest names. A non-builtin name finds nothing in the
+root and falls through to the Layer-1 chain walk with its innermost-wins precedence intact.
+Function dispatch reaches the root's builtin buckets as the chain terminus of the Layer-1
+walk.
 
 ## Why this is a foundation, not a seam
 

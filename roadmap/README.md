@@ -30,6 +30,12 @@ What's shipped that the open items below build on:
   [user-definable n-ary operators](operator_chaining/n-ary-operators.md) and
   [user-defined operator modules](operator_chaining/user-defined-operator-modules.md).
   See [design/expressions-and-parsing.md § Structural cache and dispatch shape](../design/expressions-and-parsing.md#structural-cache-and-dispatch-shape).
+- *Immutable run-global root.* The builtins live once in a distinctly-typed
+  (`ScopeKind::Root`) immutable root; a `RunScope` child takes top-level binds, and every
+  scope carries a direct `root` reference. Builtins are unshadowable — a user type, FN/
+  FUNCTOR overload, or operator colliding with a builtin is a `Rebind` at any depth — so a
+  Name-keyed builtin (type, operator) resolves root-first in one hop, ahead of the chain
+  walk. See [design/typing/lookup-protocol.md § The immutable root and unshadowable builtins](../design/typing/lookup-protocol.md#the-immutable-root-and-unshadowable-builtins).
 - *Anonymous functions.* A keyword-less `FN :{<field schema>} -> T = (body)`
   literal evaluates to a plain function value with no dispatch keyword, bound by
   `LET` or dropped into a function-typed slot — the record-schema sigil resolves
@@ -152,9 +158,9 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
-- [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
+- [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
@@ -235,7 +241,6 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md) —
   yokes `anchored_parts` to its frame `Rc` so a re-anchor outliving its frame fails to
   compile and the dispatch/scheduler Miri pins retire; rides on the lifetime split above.
-- [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md) —
   collapse `ElabResult` / `ResolveTypeExprOutcome` / `TypeLeafCarrier` into one generic
   `ResolveOutcome<T>` with a `map_done` lift.
