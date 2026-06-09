@@ -48,9 +48,9 @@ use super::{arg, err, kw, register_builtin_with_binder, sig};
 /// [`defer_resolved_sigil`]). The record repr `:{…}` is a distinct `RecordType` part routed
 /// to [`body_record_repr`]. Every path writes the sealed `SetRef` identity into
 /// `bindings.types` and yields it on the type channel.
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let name = match extract_bare_type_name(&bundle, "name", "NEWTYPE") {
@@ -94,7 +94,7 @@ pub fn body<'a>(
                             )))),
                         }
                     });
-                    let combine_id = sched.add_combine(Vec::new(), vec![producer], scope, finish);
+                    let combine_id = sched.add_combine_here(Vec::new(), vec![producer], finish);
                     return BodyResult::DeferTo(combine_id);
                 }
                 err(KError::new(KErrorKind::ShapeError(format!(
@@ -127,7 +127,7 @@ pub fn body<'a>(
 /// member whose `kind` (`Newtype`) is what `kind_of` reports for the sealed `SetRef`;
 /// identity never descends `repr`.
 fn finalize_newtype<'a>(
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     name: String,
     repr: KType<'a>,
     bind_index: BindingIndex,
@@ -157,9 +157,9 @@ fn finalize_newtype<'a>(
 /// captures the field list raw (as a `KObject::KExpression`), so the declarator owns its
 /// elaboration and threads its own binder name through a recursive `:{next :Node}` — the
 /// reason this is a distinct overload from the shared [`body`] rather than a peek inside it.
-pub fn body_record_repr<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body_record_repr<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let name = match extract_bare_type_name(&bundle, "name", "NEWTYPE") {
@@ -187,9 +187,9 @@ pub fn body_record_repr<'a>(
 /// `SetLocal`. Mirrors the retired `STRUCT` declarator, sealing `NominalSchema::Newtype(Record)`
 /// rather than `Struct`. `fields` is the bare field list (`(name :Type, …)`) carried by the
 /// `:{…}` `RecordType` part.
-fn elaborate_record_repr<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+fn elaborate_record_repr<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     name: String,
     fields: KExpression<'a>,
     bind_index: BindingIndex,
@@ -250,7 +250,7 @@ fn elaborate_record_repr<'a>(
 /// `RECURSIVE TYPES` member), else a fresh singleton (standalone self-recursion). Shared by the
 /// synchronous and Combine-finish paths.
 fn finalize_record_newtype<'a>(
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
@@ -294,9 +294,9 @@ fn finalize_record_newtype<'a>(
 /// A non-record sigil repr (`NEWTYPE Stream = :(LIST OF Number)`): no self-reference to thread, so
 /// re-wrap the captured sigil and sub-dispatch it to a resolved `KType`, then seal a plain Newtype
 /// over the result at Combine-finish.
-fn defer_resolved_sigil<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+fn defer_resolved_sigil<'a, 's>(
+    _scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     name: String,
     inner: KExpression<'a>,
     bind_index: BindingIndex,
@@ -304,7 +304,7 @@ fn defer_resolved_sigil<'a>(
     let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
         Box::new(inner),
     ))]);
-    let sub = sched.add_dispatch(wrapped, scope);
+    let sub = sched.add_dispatch_here(wrapped);
     let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| match results[0] {
         Carried::Type(kt) => finalize_newtype(scope, name, kt.clone(), bind_index),
         Carried::Object(other) => BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
@@ -312,7 +312,7 @@ fn defer_resolved_sigil<'a>(
             other.ktype().name(),
         )))),
     });
-    let combine_id = sched.add_combine(vec![sub], Vec::new(), scope, finish);
+    let combine_id = sched.add_combine_here(vec![sub], Vec::new(), finish);
     BodyResult::DeferTo(combine_id)
 }
 

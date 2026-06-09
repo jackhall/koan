@@ -50,9 +50,9 @@ impl CarrierKind {
     }
 }
 
-fn body_list_of<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 'a>,
+fn body_list_of<'a, 's>(
+    scope: &'s Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let elem = match bundle.require_ktype("elem") {
@@ -62,9 +62,9 @@ fn body_list_of<'a>(
     BodyResult::ktype(scope.arena.alloc_ktype(KType::List(Box::new(elem))))
 }
 
-fn body_map<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 'a>,
+fn body_map<'a, 's>(
+    scope: &'s Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let k = match bundle.require_ktype("k") {
@@ -88,9 +88,9 @@ fn body_map<'a>(
 /// other parameterized type — no value-construction (`TypeCall`) lane involved.
 /// Binary form, so arity-1 only; multi-parameter application is the
 /// [modular implicits](../../roadmap/predicate_typing/modular-implicits.md) follow-up.
-fn body_apply_as<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 'a>,
+fn body_apply_as<'a, 's>(
+    scope: &'s Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let applied = match bundle.require_ktype("applied") {
@@ -132,9 +132,9 @@ fn body_apply_as<'a>(
 /// `(x :Number, y :Str)` arrives unevaluated. The parameter names round-trip into
 /// `KType::KFunction`'s parameter record — see
 /// [ktype.md § Record fields and KType hashing](../../design/typing/ktype.md#record-fields-and-ktype-hashing).
-fn body_fn<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+fn body_fn<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let sig_expr = match bundle.require_kexpression("sig") {
@@ -148,9 +148,9 @@ fn body_fn<'a>(
     build_carrier(scope, sched, sig_expr, ret, CarrierKind::Function)
 }
 
-fn body_functor<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+fn body_functor<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let sig_expr = match bundle.require_kexpression("sig") {
@@ -168,9 +168,9 @@ fn body_functor<'a>(
 /// UNION use), so nested parameterized param types like `xs :(LIST OF Number)` sub-Dispatch
 /// and capitalized FUNCTOR param names like `Ty` are accepted. An anonymous function type
 /// has no self-reference binder, so the elaborator carries no nominal-binder bookkeeping.
-fn build_carrier<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+fn build_carrier<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     sig_expr: KExpression<'a>,
     ret: KType<'a>,
     kind: CarrierKind,
@@ -215,7 +215,7 @@ fn build_carrier<'a>(
 /// `KFunction` / `KFunctor` identity in a `KTypeValue`. Shared by the synchronous and
 /// Combine-finish paths.
 fn finalize_carrier<'a>(
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     fields: Vec<(String, KType<'a>)>,
     ret: KType<'a>,
     kind: CarrierKind,

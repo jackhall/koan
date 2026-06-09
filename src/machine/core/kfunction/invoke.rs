@@ -33,10 +33,10 @@ impl<'a> KFunction<'a> {
     /// allocate a per-call child scope, bind parameters into it, and return a tail-call
     /// so the caller's slot is rewritten in place. The per-call child scope is the
     /// substrate for closure capture.
-    pub fn invoke(
+    pub fn invoke<'s>(
         &'a self,
-        scope: &'a Scope<'a>,
-        sched: &mut dyn SchedulerHandle<'a, 'a>,
+        scope: &'s Scope<'a>,
+        sched: &mut dyn SchedulerHandle<'a, 's>,
         bundle: ArgumentBundle<'a>,
     ) -> BodyResult<'a> {
         match &self.body {

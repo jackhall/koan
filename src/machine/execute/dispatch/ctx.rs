@@ -423,4 +423,26 @@ impl<'a, 'b, 's> SchedulerHandle<'a, 's> for DispatchCtx<'a, 'b> {
         self.sched
             .add_combine_in_frame(owned_subs, park_producers, finish)
     }
+
+    fn add_catch_in_frame(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId {
+        self.sched.add_catch_in_frame(from, finish)
+    }
+
+    fn add_dispatch_here(&mut self, expr: KExpression<'a>) -> NodeId {
+        self.sched.add_dispatch_here(expr)
+    }
+
+    fn add_combine_here(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId {
+        self.sched
+            .add_combine_here(owned_subs, park_producers, finish)
+    }
+
+    fn add_catch_here(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId {
+        self.sched.add_catch_here(from, finish)
+    }
 }

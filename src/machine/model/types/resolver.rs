@@ -156,7 +156,7 @@ pub enum SealOutcome<'a> {
 /// `SetLocal(index)` against the (singleton or shared) set before the member is filled.
 #[allow(clippy::result_large_err)]
 pub fn finalize_nominal_member<'a>(
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     name: &str,
     scope_id: ScopeId,
     kind: KKind,

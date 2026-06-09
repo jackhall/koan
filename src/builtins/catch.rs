@@ -12,9 +12,9 @@ use crate::machine::{ArgumentBundle, BodyResult, CatchFinish, SchedulerHandle, S
 
 use super::{arg, err, kw, register_builtin, sig};
 
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let expr_inner = match bundle.extract_kexpression_or_shape_error("CATCH", "expr") {
@@ -28,7 +28,7 @@ pub fn body<'a>(
         Some(KType::SetRef { set, index }) => (Rc::clone(set), *index),
         _ => panic!("Result must be registered before CATCH"),
     };
-    let sub_id = sched.add_dispatch(expr_inner, scope);
+    let sub_id = sched.add_dispatch_here(expr_inner);
     let finish: CatchFinish<'a> = Box::new(move |scope, _sched, result| {
         let (tag, payload): (&str, KObject<'a>) = match result {
             Ok(v) => ("Ok", v.deep_clone()),
@@ -46,7 +46,7 @@ pub fn body<'a>(
         };
         BodyResult::value(scope.arena.alloc_object(tagged))
     });
-    let catch_id = sched.add_catch(sub_id, scope, finish);
+    let catch_id = sched.add_catch_here(sub_id, finish);
     BodyResult::DeferTo(catch_id)
 }
 

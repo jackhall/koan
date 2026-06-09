@@ -11,9 +11,9 @@ use crate::builtins::err;
 /// and a placeholder `name` (`"_typeconstructor"`). The surrounding opaque ascription
 /// (`ascribe.rs:body_opaque`) re-mints a fresh per-call singleton with the binding's slot
 /// name and a per-call `scope_id`. Arity-1 only.
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body<'a, 's>(
+    scope: &'s Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let param_kt = match bundle.require_ktype("param") {

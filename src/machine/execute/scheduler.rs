@@ -57,6 +57,12 @@ pub struct Scheduler<'a> {
     /// Per-slot reserve frame for the running step. `None` between slot steps. See
     /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
     pub(in crate::machine::execute::scheduler) active_reserve: Option<Rc<CallArena>>,
+    /// The executing slot's own [`NodeScope`] handle, installed per step. A body that
+    /// re-dispatches *against its own scope* reads this through the `*_here` handle methods, so
+    /// the sub-slot inherits the slot's honest handle — `Anchored(&'a)` for a genuinely run-lived
+    /// scope (a binder's decl-scope), `Yoked` for a per-call frame child — rather than the body
+    /// trying (and failing) to widen its `&'frame` borrow back to `&'a`.
+    pub(in crate::machine::execute::scheduler) active_node_scope: Option<NodeScope<'a>>,
     #[cfg(test)]
     pub(in crate::machine::execute::scheduler) tail_reuse_count: usize,
 }
@@ -65,12 +71,13 @@ pub struct Scheduler<'a> {
 /// and `active_reserve` swap that brackets each iteration of [`Scheduler::execute`].
 /// Bookkeeping spine for the ping-pong reserve-frame rotation; see
 /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
-pub(in crate::machine::execute::scheduler) struct SlotStepGuard {
+pub(in crate::machine::execute::scheduler) struct SlotStepGuard<'a> {
     prev_frame: Option<Rc<CallArena>>,
     prev_chain: Option<Rc<LexicalFrame>>,
     /// Saved so nested slot runs (combinator finish closures) don't inherit the
     /// outer slot's reserve frame.
     prev_reserve: Option<Rc<CallArena>>,
+    prev_node_scope: Option<NodeScope<'a>>,
 }
 
 impl<'a> Scheduler<'a> {
@@ -83,14 +90,17 @@ impl<'a> Scheduler<'a> {
         node_frame: Option<Rc<CallArena>>,
         node_reserve: Option<Rc<CallArena>>,
         node_chain: Rc<LexicalFrame>,
-    ) -> SlotStepGuard {
+        node_scope: NodeScope<'a>,
+    ) -> SlotStepGuard<'a> {
         let prev_frame = std::mem::replace(&mut self.active_frame, node_frame);
         let prev_chain = self.active_chain.replace(node_chain);
         let prev_reserve = std::mem::replace(&mut self.active_reserve, node_reserve);
+        let prev_node_scope = self.active_node_scope.replace(node_scope);
         SlotStepGuard {
             prev_frame,
             prev_chain,
             prev_reserve,
+            prev_node_scope,
         }
     }
 
@@ -105,11 +115,12 @@ impl<'a> Scheduler<'a> {
     /// and gets dropped; without one, it rides along on the reinstalled node.
     pub(in crate::machine::execute::scheduler) fn exit_slot_step(
         &mut self,
-        guard: SlotStepGuard,
+        guard: SlotStepGuard<'a>,
     ) -> (Option<Rc<CallArena>>, Option<Rc<CallArena>>) {
         let post_step_frame = std::mem::replace(&mut self.active_frame, guard.prev_frame);
         self.active_chain = guard.prev_chain;
         let post_step_reserve = std::mem::replace(&mut self.active_reserve, guard.prev_reserve);
+        self.active_node_scope = guard.prev_node_scope;
         (post_step_frame, post_step_reserve)
     }
 
@@ -120,6 +131,7 @@ impl<'a> Scheduler<'a> {
             store: NodeStore::new(),
             active_frame: None,
             run_frame: None,
+            active_node_scope: None,
             active_chain: None,
             active_reserve: None,
             #[cfg(test)]
@@ -405,5 +417,44 @@ impl<'a, 's> SchedulerHandle<'a, 's> for Scheduler<'a> {
             NodeScope::Yoked,
             explicit_chain,
         )
+    }
+
+    fn add_catch_in_frame(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId {
+        let frame = self
+            .active_frame
+            .clone()
+            .expect("in-frame catch requires an active frame");
+        let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
+        let scope = frame.scope_for_bind();
+        self.submit_node(
+            NodeWork::Catch { from, finish },
+            scope,
+            NodeScope::Yoked,
+            explicit_chain,
+        )
+    }
+
+    fn add_dispatch_here(&mut self, expr: KExpression<'a>) -> NodeId {
+        self.submit_here(NodeWork::dispatch(expr))
+    }
+
+    fn add_combine_here(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId {
+        let park_count = park_producers.len();
+        let mut deps = park_producers;
+        deps.extend(owned_subs);
+        self.submit_here(NodeWork::Combine {
+            deps,
+            park_count,
+            finish,
+        })
+    }
+
+    fn add_catch_here(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId {
+        self.submit_here(NodeWork::Catch { from, finish })
     }
 }

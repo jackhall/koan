@@ -396,7 +396,7 @@ impl<'a> Bindings<'a> {
     }
 
     pub fn insert_pending_type(
-        &'a self,
+        &self,
         name: String,
         entry: PendingTypeEntry<'a>,
     ) -> PendingBinderGuard<'a> {

@@ -201,11 +201,17 @@ pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpressio
     }
 }
 
-/// Builtin body. `Scope` is `&'a` (not `&mut`) — every node spawned during the body
-/// shares it; mutability is interior via `RefCell`.
-pub type BuiltinFn = for<'a> fn(
-    &'a Scope<'a>,
-    &mut dyn SchedulerHandle<'a, 'a>,
+/// Builtin body. The scope borrow `'s` is frame-bounded — it may be a per-call frame's child,
+/// re-projected from the live frame cart at the read boundary — and is distinct from the run
+/// lifetime `'a` of the values it carries (`'a: 's`). A body therefore cannot widen its scope
+/// back to `'a` to persist it in a run-lived slot: it routes re-dispatch against its own scope
+/// through the framed `*_in_frame` handle methods (stored `Yoked`), and only a genuinely
+/// `'a`-lived scope it allocates itself (a fresh child in `scope.arena`) flows to the run-lifetime
+/// `add_dispatch` / `enter_body_block`. Not `&mut` — every node spawned during the body shares
+/// the scope; mutability is interior via `RefCell`.
+pub type BuiltinFn = for<'a, 's> fn(
+    &'s Scope<'a>,
+    &mut dyn SchedulerHandle<'a, 's>,
     ArgumentBundle<'a>,
 ) -> BodyResult<'a>;
 

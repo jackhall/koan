@@ -8,6 +8,7 @@
 
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::KKind;
@@ -23,14 +24,20 @@ pub struct PendingTypeEntry<'a> {
     pub schema_expr: KExpression<'a>,
 }
 
+/// The in-flight binder map, `Rc`-shared so a [`PendingBinderGuard`] can hold an *owning* stake
+/// in it rather than a borrow: the guard outlives the `&Scope` borrow it was minted from (it rides
+/// into the binder's combine finish and drops there), so refcounting — not a lifetime — is what
+/// keeps the map alive for the guard's Drop. Interior mutation stays sound via the inner `RefCell`.
+type PendingMap<'a> = Rc<RefCell<HashMap<String, PendingTypeEntry<'a>>>>;
+
 pub struct PendingTypes<'a> {
-    map: RefCell<HashMap<String, PendingTypeEntry<'a>>>,
+    map: PendingMap<'a>,
 }
 
 impl<'a> PendingTypes<'a> {
     pub fn new() -> Self {
         Self {
-            map: RefCell::new(HashMap::new()),
+            map: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -39,12 +46,13 @@ impl<'a> PendingTypes<'a> {
     }
 
     /// Install a new in-flight binder entry and return an RAII guard whose Drop
-    /// removes the entry.
+    /// removes the entry. The guard holds an `Rc` clone of the map, so it stays valid for the
+    /// guard's whole life regardless of how long the originating `&self` borrow lasts.
     ///
     /// Panics on borrow conflict — pending-type writes happen at body-entry,
     /// outside the re-entrant `try_apply` hot path. Panics on duplicate name —
     /// placeholders should block a second dispatch from reaching body-entry.
-    pub fn insert(&'a self, name: String, entry: PendingTypeEntry<'a>) -> PendingBinderGuard<'a> {
+    pub fn insert(&self, name: String, entry: PendingTypeEntry<'a>) -> PendingBinderGuard<'a> {
         let mut map = self.map.borrow_mut();
         if map.contains_key(&name) {
             panic!(
@@ -53,8 +61,9 @@ impl<'a> PendingTypes<'a> {
             );
         }
         map.insert(name.clone(), entry);
+        drop(map);
         PendingBinderGuard {
-            pending: self,
+            map: Rc::clone(&self.map),
             name,
         }
     }
@@ -81,13 +90,13 @@ impl<'a> Default for PendingTypes<'a> {
 #[must_use = "PendingBinderGuard removes the pending-types entry on drop; \
               bind it for the elaboration's lifetime"]
 pub struct PendingBinderGuard<'a> {
-    pending: &'a PendingTypes<'a>,
+    map: PendingMap<'a>,
     name: String,
 }
 
 impl<'a> Drop for PendingBinderGuard<'a> {
     fn drop(&mut self) {
-        if let Ok(mut map) = self.pending.map.try_borrow_mut() {
+        if let Ok(mut map) = self.map.try_borrow_mut() {
             map.remove(&self.name);
         }
     }

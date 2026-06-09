@@ -26,9 +26,9 @@ use super::{arg, err, kw, register_builtin, sig};
 /// must be a bare `Identifier` naming a field (never name-resolved). The `record`
 /// operand is typed `:{}`, so dispatch shape-gates the slot to records and the body
 /// reads a guaranteed `KObject::Record` carrier.
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body<'a, 's>(
+    scope: &'s Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let fields_expr = match bundle.require_kexpression("fields") {

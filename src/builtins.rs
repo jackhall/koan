@@ -219,5 +219,5 @@ pub fn default_scope<'a>(
     type_ops::register(scope);
     type_constructors::register(scope);
 
-    arena.alloc_scope(Scope::child_under(scope))
+    arena.alloc_scope(Scope::run_child(scope))
 }

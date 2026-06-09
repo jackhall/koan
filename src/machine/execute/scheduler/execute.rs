@@ -26,8 +26,12 @@ impl<'a> Scheduler<'a> {
             let work = node.work;
             let prev_function = node.function;
             let prev_chain_carrier = node.chain;
-            let guard =
-                self.enter_slot_step(node.frame, node.reserve_frame, prev_chain_carrier.clone());
+            let guard = self.enter_slot_step(
+                node.frame,
+                node.reserve_frame,
+                prev_chain_carrier.clone(),
+                node_scope,
+            );
             let step = match work {
                 NodeWork::Dispatch { expr, state } => {
                     let mut ctx = crate::machine::execute::dispatch::DispatchCtx::new(self);

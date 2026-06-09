@@ -32,9 +32,9 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use super::{arg, err, kw, register_builtin_with_binder, sig};
 use crate::machine::core::kfunction::argument_bundle::extract_bare_type_name;
 
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let group_name = match extract_bare_type_name(&bundle, "name", "RECURSIVE TYPES") {
@@ -124,7 +124,7 @@ pub fn body<'a>(
             Err(e) => BodyResult::Err(e.with_frame(frame())),
         }
     });
-    let combine_id = sched.add_combine(deps, vec![], scope, finish);
+    let combine_id = sched.add_combine_here(deps, vec![], finish);
     BodyResult::DeferTo(combine_id)
 }
 

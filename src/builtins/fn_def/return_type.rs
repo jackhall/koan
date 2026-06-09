@@ -100,7 +100,7 @@ pub(crate) enum AdmissibleVerdict {
 pub(crate) fn classify_return_type<'a>(
     raw: ReturnTypeRaw<'a>,
     param_names: &[String],
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     chain: Option<Rc<LexicalFrame>>,
     functor_param_types: Option<&HashMap<String, KType<'a>>>,
 ) -> Result<(ReturnTypeState<'a>, AdmissibleVerdict), KError> {
@@ -241,7 +241,7 @@ pub(super) fn make_capture<'a>(te: TypeName) -> ReturnTypeCapture<'a> {
 /// loop forever and is surfaced as a structured error.
 pub(super) fn resolve_capture_at_finish<'a>(
     capture: ReturnTypeCapture<'a>,
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     results: &[Carried<'a>],
 ) -> Result<ReturnType<'a>, KError> {
     match capture {

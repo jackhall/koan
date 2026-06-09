@@ -23,9 +23,9 @@ use crate::machine::{
 
 use super::{arg, err, kw, register_builtin, sig};
 
-pub fn body_identifier<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body_identifier<'a, 's>(
+    scope: &'s Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let s_name = match bundle.get("s") {
@@ -77,9 +77,9 @@ pub fn body_identifier<'a>(
 /// path uses. The Type-Type overload shares this body so chained module access
 /// (`Outer.Inner.x`) works regardless of whether each step's field is a module name or
 /// a regular member.
-pub fn body_type_lhs<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body_type_lhs<'a, 's>(
+    scope: &'s Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let s_kt = match bundle.get_type("s") {
@@ -121,9 +121,9 @@ pub fn body_type_lhs<'a>(
     }
 }
 
-pub fn body_newtype<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body_newtype<'a, 's>(
+    scope: &'s Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let target = match bundle.require("s") {
@@ -137,9 +137,9 @@ pub fn body_newtype<'a>(
     access_field(scope, target, &field_name)
 }
 
-pub fn body_module<'a>(
-    _scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body_module<'a, 's>(
+    _scope: &'s Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     // A module identity rides the type channel, so the lhs is the `Type` arm.
@@ -179,7 +179,7 @@ fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
 /// Project `field` off a Type-channel lhs: a module / signature / opaque-abstract identity.
 /// A `SetRef` (struct / union name) and every other type has no members and falls through to
 /// the same TypeMismatch a static struct field access produces.
-fn access_type_member<'a>(scope: &'a Scope<'a>, kt: &KType<'a>, field: &str) -> BodyResult<'a> {
+fn access_type_member<'a>(scope: &Scope<'a>, kt: &KType<'a>, field: &str) -> BodyResult<'a> {
     match kt {
         KType::Module { module: m, .. } => access_module_member(m, field),
         // ATTR over a first-class signature value — reverse-lookup against the decl scope.
@@ -210,7 +210,7 @@ fn access_type_member<'a>(scope: &'a Scope<'a>, kt: &KType<'a>, field: &str) -> 
     }
 }
 
-fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> BodyResult<'a> {
+fn access_field<'a>(scope: &Scope<'a>, target: &KObject<'a>, field: &str) -> BodyResult<'a> {
     match target {
         // NEWTYPE fall-through. A record-repr newtype (an ex-struct) wraps a
         // `KObject::Record`; read the field straight off it, naming the nominal type in the

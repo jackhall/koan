@@ -430,7 +430,7 @@ impl CallArena {
     /// Build a fresh per-call frame whose child `Scope` uses `outer` as its `outer` link.
     /// `outer_frame` must hold the parent's Rc when the parent is per-call; `None` when
     /// the parent is run-root.
-    pub fn new<'p>(outer: &'p Scope<'p>, outer_frame: Option<Rc<CallArena>>) -> Rc<CallArena> {
+    pub fn new(outer: &Scope<'_>, outer_frame: Option<Rc<CallArena>>) -> Rc<CallArena> {
         let escape = NonNull::from(outer.arena);
         let mut rc = Rc::new(CallArena {
             arena: RuntimeArena::with_escape(escape),
@@ -584,7 +584,7 @@ impl CallArena {
     /// child `Scope` under `new_outer`. Returns `false` (untouched) when `Rc::get_mut`
     /// fails — any other live `Rc` foreclosing in-place reuse. See
     /// [per-call-arena-protocol.md § TCO frame reuse](../../../design/per-call-arena-protocol.md#tco-frame-reuse).
-    pub fn try_reset_for_tail<'p>(self: &mut Rc<Self>, new_outer: &'p Scope<'p>) -> bool {
+    pub fn try_reset_for_tail(self: &mut Rc<Self>, new_outer: &Scope<'_>) -> bool {
         if Rc::get_mut(self).is_none() {
             return false;
         }

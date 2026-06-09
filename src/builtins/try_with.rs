@@ -28,9 +28,9 @@ use super::{arg, err, kw, register_builtin, sig};
 use crate::machine::core::kfunction::body::split_body_statements;
 use crate::machine::core::kfunction::body::ReturnContract;
 
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let expr_inner = match bundle.extract_kexpression_or_shape_error("TRY", "expr") {
@@ -57,15 +57,15 @@ pub fn body<'a>(
     let finish: CatchFinish<'a> = Box::new(move |scope, sched, result| {
         dispatch_branch(scope, sched, result, branches_expr, outer_frame, contract)
     });
-    let catch_id = sched.add_catch(sub_id, scope, finish);
+    let catch_id = sched.add_catch_here(sub_id, finish);
     BodyResult::DeferTo(catch_id)
 }
 
 /// On no match: re-raise the original `KError`, or `ShapeError("TRY missing ok
 /// arm")` on the success path without an `ok` or `_` arm.
-fn dispatch_branch<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+fn dispatch_branch<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     result: Result<&'a KObject<'a>, KError>,
     branches_expr: crate::machine::model::ast::KExpression<'a>,
     outer_frame: Option<Rc<CallArena>>,

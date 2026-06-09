@@ -26,9 +26,9 @@ use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHa
 
 use super::{arg, err, kw, register_builtin, sig};
 
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     // A module identity rides the type channel as `KType::Module { module, frame }`; the

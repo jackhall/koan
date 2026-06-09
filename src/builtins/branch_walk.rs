@@ -20,7 +20,7 @@ use std::rc::Rc;
 /// forward-referenced or non-type slot raises `ShapeError`. `kind` (`"MATCH"` / `"TRY"`)
 /// labels both the diagnostic and the error-frame appended on a return mismatch.
 pub(crate) fn resolve_arm_return_contract<'a>(
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     bundle: &mut ArgumentBundle<'a>,
     kind: &'static str,
     chain: Option<Rc<LexicalFrame>>,

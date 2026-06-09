@@ -22,13 +22,13 @@ use crate::machine::{
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
 
-fn schedule_type_resolve<'a>(
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
-    decl_scope: &'a Scope<'a>,
+fn schedule_type_resolve<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
+    _decl_scope: &'s Scope<'a>,
     te: &TypeName,
 ) -> crate::machine::NodeId {
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Type(te.clone()))]);
-    sched.add_dispatch(expr, decl_scope)
+    sched.add_dispatch_here(expr)
 }
 
 fn typeexpr_from_carrier<'a>(kt: &KType<'a>) -> CarrierForm<'a> {
@@ -58,9 +58,9 @@ enum CarrierForm<'a> {
     Direct(KType<'a>),
 }
 
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     if !scope.is_in_sig_body() {
@@ -132,7 +132,7 @@ pub fn body<'a>(
 /// the type table the single home for everything ascription enumerates. Uses the same
 /// infallible `register_type` path as a SIG-local `LET <TypeName> = …` abstract member.
 fn finalize_val<'a>(
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     name: String,
     declared_kt: KType<'a>,
     bind_index: BindingIndex,
@@ -145,9 +145,9 @@ fn finalize_val<'a>(
 }
 
 /// Errored deps short-circuit via `run_combine` before the closure runs.
-fn defer_val_via_combine<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+fn defer_val_via_combine<'a, 's>(
+    _scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     name: String,
     te: TypeName,
     resolve_id: NodeId,
@@ -170,7 +170,7 @@ fn defer_val_via_combine<'a>(
         };
         finalize_val(scope, name_for_finish.clone(), kt, bind_index)
     });
-    let combine_id = sched.add_combine(vec![resolve_id], vec![], scope, finish);
+    let combine_id = sched.add_combine_here(vec![resolve_id], vec![], finish);
     BodyResult::DeferTo(combine_id)
 }
 

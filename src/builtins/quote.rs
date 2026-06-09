@@ -9,9 +9,9 @@ use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 /// `KObject::KExpression` with no evaluation, so raw ASTs can thread through
 /// eager-evaluating contexts. The `QUOTE` head-keyword is not part of the
 /// documented surface; user code goes through the `#` sigil.
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body<'a, 's>(
+    scope: &'s Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let expr = match extract_kexpression(&mut bundle, "expr") {

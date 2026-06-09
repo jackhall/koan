@@ -144,12 +144,23 @@ impl<'a> Scope<'a> {
         Self::child_under(self)
     }
 
+    /// The mutable run scope: the direct child of the immutable run-global root. Unlike the
+    /// generic [`Self::child_under`] — which copies the parent's *own* `root` handle — this stamps
+    /// `root` to `run_root` itself, because the run-global root carries no `root` of its own
+    /// (`root: None` marks "I am the root"). The only caller is `default_scope`, which holds the
+    /// root as a genuine `&'a`.
+    pub fn run_child(run_root: &'a Scope<'a>) -> Scope<'a> {
+        let mut child = Self::child_under(run_root);
+        child.root = Some(run_root);
+        child
+    }
+
     /// `outer` is the lexical parent — for FN bodies the captured definition scope,
     /// not the call site.
-    pub fn child_under(outer: &'a Scope<'a>) -> Scope<'a> {
+    pub fn child_under(outer: &Scope<'a>) -> Scope<'a> {
         Scope {
             outer: Some(BoundedScopePtr::erase(outer)),
-            root: Some(outer.root_scope()),
+            root: outer.root,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -161,10 +172,10 @@ impl<'a> Scope<'a> {
     }
 
     /// `child_under`, stamped as a SIG decl_scope.
-    pub fn child_under_sig(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
+    pub fn child_under_sig(outer: &Scope<'a>, name: String) -> Scope<'a> {
         Scope {
             outer: Some(BoundedScopePtr::erase(outer)),
-            root: Some(outer.root_scope()),
+            root: outer.root,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -177,10 +188,10 @@ impl<'a> Scope<'a> {
 
     /// `child_under`, stamped as a MODULE body (also used for the per-ascription view
     /// minted by `:|`).
-    pub fn child_under_module(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
+    pub fn child_under_module(outer: &Scope<'a>, name: String) -> Scope<'a> {
         Scope {
             outer: Some(BoundedScopePtr::erase(outer)),
-            root: Some(outer.root_scope()),
+            root: outer.root,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -195,10 +206,10 @@ impl<'a> Scope<'a> {
     /// whose members are co-declared. Members dispatch against this scope, so the elaborator
     /// threads the group (a member name lowers to `RecursiveRef`). `outer` is the lexical
     /// parent; the sealed members are mirrored up into it at the block's Combine-finish.
-    pub fn child_recursive_group(outer: &'a Scope<'a>, set: Rc<RecursiveSet<'a>>) -> Scope<'a> {
+    pub fn child_recursive_group(outer: &Scope<'a>, set: Rc<RecursiveSet<'a>>) -> Scope<'a> {
         Scope {
             outer: Some(BoundedScopePtr::erase(outer)),
-            root: Some(outer.root_scope()),
+            root: outer.root,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -223,10 +234,10 @@ impl<'a> Scope<'a> {
     /// `module_bindings`. Reads consult the window first then walk `outer`; writes
     /// forward to `outer`. `arena` is `outer.arena` so block-body allocations outlive
     /// the block (forwarded binds are sound).
-    pub fn child_transparent(outer: &'a Scope<'a>, module_bindings: &'a Bindings<'a>) -> Scope<'a> {
+    pub fn child_transparent(outer: &Scope<'a>, module_bindings: &'a Bindings<'a>) -> Scope<'a> {
         Scope {
             outer: Some(BoundedScopePtr::erase(outer)),
-            root: Some(outer.root_scope()),
+            root: outer.root,
             bindings: ScopeBindings::Borrowed(module_bindings),
             out: RefCell::new(None),
             arena: outer.arena,

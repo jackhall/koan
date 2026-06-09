@@ -11,9 +11,9 @@ use super::{arg, err, kw, register_builtin_with_binder, sig};
 /// `LET <name> = <value:Any>` — deep-clones the bound value into the arena and
 /// inserts it under `name`. Two overloads share this body, differing only in the
 /// `name` slot's `KType`: `Identifier` and `TypeExprRef`.
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     // Direct-body test fixtures bypass the scheduler and have no active chain;

@@ -23,9 +23,9 @@ use crate::machine::core::kfunction::body::split_body_statements;
 /// expression with `it` bound to the inner value in a per-MATCH child scope (so
 /// the binding can't leak). No matching branch → `ShapeError("inexhaustive match
 /// = no branch for `X`")`; malformed shape → `ShapeError`.
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let (tag, value) = match bundle.get("value") {

@@ -181,6 +181,31 @@ impl<'a> Scheduler<'a> {
         self.submit_node(work, scope, node_scope, explicit_chain)
     }
 
+    /// Submit `work` against the executing slot's own [`NodeScope`] handle (`active_node_scope`):
+    /// `Anchored(&'a)` re-uses the genuine run-lived borrow the slot already holds; `Yoked`
+    /// re-projects from the active frame cart. The transient `scope` for binder-install is the
+    /// same handle materialized. Backs the `*_here` methods — the honest
+    /// re-dispatch-against-my-own-scope path.
+    pub(super) fn submit_here(&mut self, work: NodeWork<'a>) -> NodeId {
+        let node_scope = self
+            .active_node_scope
+            .expect("a slot step installs active_node_scope before the body submits");
+        let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
+        match node_scope {
+            NodeScope::Anchored(scope) => {
+                self.submit_node(work, scope, NodeScope::Anchored(scope), explicit_chain)
+            }
+            NodeScope::Yoked => {
+                let frame = self
+                    .active_frame
+                    .clone()
+                    .expect("a Yoked slot step has an active frame");
+                let scope = frame.scope_for_bind();
+                self.submit_node(work, scope, NodeScope::Yoked, explicit_chain)
+            }
+        }
+    }
+
     /// Node-creation core, shared by the run-lifetime [`Self::add_with_chain`] and the framed
     /// [`Self::add_dispatch_with_chain_in_frame`]. `scope` is used only transiently
     /// (binder-install, placeholder install, `pre_subs` recursion), so it carries a free `'s`

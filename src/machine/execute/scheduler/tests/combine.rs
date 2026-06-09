@@ -106,9 +106,9 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
     use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
     use crate::machine::{ArgumentBundle, BodyResult, CombineFinish, Scope};
 
-    fn body<'a>(
-        scope: &'a Scope<'a>,
-        sched: &mut dyn crate::machine::SchedulerHandle<'a, 'a>,
+    fn body<'a, 's>(
+        _scope: &'s Scope<'a>,
+        sched: &mut dyn crate::machine::SchedulerHandle<'a, 's>,
         _bundle: ArgumentBundle<'a>,
     ) -> BodyResult<'a> {
         let finish: CombineFinish<'a> = Box::new(|scope, _sched, _results| {
@@ -117,7 +117,7 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
                 .alloc_object(KObject::KString("from-combine".into()));
             BodyResult::value(v)
         });
-        let combine_id = sched.add_combine(Vec::new(), Vec::new(), scope, finish);
+        let combine_id = sched.add_combine_in_frame(Vec::new(), Vec::new(), finish);
         BodyResult::DeferTo(combine_id)
     }
 

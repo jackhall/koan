@@ -8,9 +8,9 @@ use super::{arg, err, kw, register_builtin, sig};
 /// newline, and returns the rendered string (without the trailing newline) so the call
 /// composes with enclosing expressions. The `Any` slot admits both runtime values and
 /// first-class types, so it renders either arm of the carrier.
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body<'a, 's>(
+    scope: &'s Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let rendered = match bundle.args.get("msg") {

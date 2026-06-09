@@ -31,9 +31,9 @@ pub(crate) use signature::binder_name;
 /// `TypeCall` / `FunctionValueCall` / `SigiledTypeExpr`), so the dispatcher needs
 /// a fixed token. The keyword-less `FN :{…}` record-schema form is
 /// [`body_record_schema`].
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     build_fn_like(scope, sched, bundle, "FN", FnKind::Function)
@@ -46,9 +46,9 @@ pub fn body<'a>(
 /// param-type map and acts on the return-admissibility verdict; FN passes `None`
 /// and [`classify_return_type`] returns `Admissible`, so the `Rejected` check is a
 /// no-op. `builtin` (`"FN"` / `"FUNCTOR"`) names the surface in slot errors.
-pub(crate) fn build_fn_like<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub(crate) fn build_fn_like<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
     builtin: &str,
     kind: FnKind,
@@ -138,7 +138,7 @@ pub(crate) fn build_fn_like<'a>(
 /// resolved validator catches the slack.
 fn collect_param_types<'a>(
     signature: &KExpression<'a>,
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
 ) -> std::collections::HashMap<String, KType<'a>> {
     use crate::machine::model::types::{elaborate_type_expr, ElabResult};
     let mut map = std::collections::HashMap::new();
@@ -176,9 +176,9 @@ fn collect_param_types<'a>(
 /// record. Each field becomes a keyword-less
 /// `Argument`; the function registers no dispatch keyword (see
 /// [`FnKind::Anonymous`]) and is reachable only through the value it returns.
-pub fn body_record_schema<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body_record_schema<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let schema = match extract_ktype(&mut bundle, "signature") {

@@ -107,6 +107,29 @@ pub trait SchedulerHandle<'a, 's> {
         finish: CombineFinish<'a>,
     ) -> NodeId;
 
+    /// Framed sibling of [`Self::add_catch`]: schedule a `Catch` whose scope is the active
+    /// frame's child, stored `Yoked` (re-projected from the frame cart) rather than a fabricated
+    /// `&'a`. Used by CATCH / TRY, which watch a sub-slot dispatched against their own (framed)
+    /// scope.
+    fn add_catch_in_frame(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId;
+
+    /// Schedule against the **executing slot's own scope handle** — the honest
+    /// re-dispatch-against-my-own-scope path. The sub-slot inherits the running slot's
+    /// [`NodeScope`]: a binder's genuinely run-lived decl-scope stays `Anchored(&'a)`, a per-call
+    /// frame child stays `Yoked`. The body passes no scope (it holds only a `&'frame` borrow it
+    /// cannot widen back to `&'a`). Distinct from `*_in_frame`, which forces the *active frame's*
+    /// scope — wrong for a binder whose decl-scope is not that frame's child.
+    fn add_dispatch_here(&mut self, expr: KExpression<'a>) -> NodeId;
+    /// `Combine` sibling of [`Self::add_dispatch_here`].
+    fn add_combine_here(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId;
+    /// `Catch` sibling of [`Self::add_dispatch_here`].
+    fn add_catch_here(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId;
+
     /// Schedule each top-level statement in `body_expr` against `scope`. Routes through
     /// [`Self::enter_block`] with `scope.id` so body statements get fresh `(scope.id, i)`
     /// frames stacked over the call-site chain.
@@ -148,16 +171,20 @@ pub trait SchedulerHandle<'a, 's> {
 /// type-resolving dep (a VAL type, an FN return type, a field type) arrives as
 /// [`Carried::Type`].
 pub type CombineFinish<'a> = Box<
-    dyn FnOnce(&'a Scope<'a>, &mut dyn SchedulerHandle<'a, 'a>, &[Carried<'a>]) -> BodyResult<'a>
+    dyn for<'s> FnOnce(
+            &'s Scope<'a>,
+            &mut dyn SchedulerHandle<'a, 's>,
+            &[Carried<'a>],
+        ) -> BodyResult<'a>
         + 'a,
 >;
 
 /// Host-side closure for `Catch` slots. Receives the watched slot's terminal as a
 /// `Result` so the closure can branch on either outcome.
 pub type CatchFinish<'a> = Box<
-    dyn FnOnce(
-            &'a Scope<'a>,
-            &mut dyn SchedulerHandle<'a, 'a>,
+    dyn for<'s> FnOnce(
+            &'s Scope<'a>,
+            &mut dyn SchedulerHandle<'a, 's>,
             Result<&'a KObject<'a>, KError>,
         ) -> BodyResult<'a>
         + 'a,

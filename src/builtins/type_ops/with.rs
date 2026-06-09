@@ -15,9 +15,9 @@ use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHa
 use crate::builtins::ascribe::abstract_type_names_of;
 use crate::builtins::err;
 
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body<'a, 's>(
+    scope: &'s Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let s = match bundle.require_signature("sig") {

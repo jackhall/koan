@@ -198,7 +198,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
 /// deferred carrier that resolves non-admissibly later. `Anonymous` skips
 /// registration entirely — the value it returns is the function's only handle.
 pub(crate) fn finalize_fn_with_kind<'a>(
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     elements: Vec<SignatureElement<'a>>,
     return_type: ReturnType<'a>,
     body_expr: KExpression<'a>,
@@ -277,9 +277,9 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 /// `deps` after the park producers. The finish closure splices each result
 /// into `signature_expr.parts[slot_idx]` as `Future(obj)` before re-running
 /// `parse_fn_param_list` against the now-final scope.
-pub(crate) fn defer_via_combine<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub(crate) fn defer_via_combine<'a, 's>(
+    _scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     signature_expr: KExpression<'a>,
     inputs: CombineInputs<'a>,
     body_expr: KExpression<'a>,
@@ -302,11 +302,11 @@ pub(crate) fn defer_via_combine<'a>(
     let mut owned_subs: Vec<NodeId> =
         Vec::with_capacity(return_type_sub.is_some() as usize + sub_dispatches.len());
     if let Some(rt_expr) = return_type_sub {
-        owned_subs.push(sched.add_dispatch(rt_expr, scope));
+        owned_subs.push(sched.add_dispatch_here(rt_expr));
     }
     let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
     for (slot_idx, sub_expr) in sub_dispatches {
-        let id = sched.add_dispatch(sub_expr, scope);
+        let id = sched.add_dispatch_here(sub_expr);
         splice_layout.push((slot_idx, park_count + owned_subs.len()));
         owned_subs.push(id);
     }
@@ -365,6 +365,6 @@ pub(crate) fn defer_via_combine<'a>(
             bind_index,
         )
     });
-    let combine_id = sched.add_combine(owned_subs, park_producers, scope, finish);
+    let combine_id = sched.add_combine_here(owned_subs, park_producers, finish);
     BodyResult::DeferTo(combine_id)
 }

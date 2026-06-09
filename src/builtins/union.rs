@@ -25,9 +25,9 @@ use crate::machine::core::kfunction::argument_bundle::{
 /// directly. Type-only: the variant schema rides
 /// the sealed `RecursiveSet` member in `bindings.types`, and the declaration yields a
 /// `KTypeValue(SetRef)` first-class type value — no value-side carrier.
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a, 'a>,
+pub fn body<'a, 's>(
+    scope: &'s Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let name = match extract_bare_type_name(&bundle, "name", "UNION") {
@@ -107,7 +107,7 @@ pub fn body<'a>(
 /// Transient `RecursiveRef(name)` variant leaves seal to `SetLocal(index)`. Mirror of
 /// [`super::struct_def::finalize_struct`].
 fn finalize_union<'a>(
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
