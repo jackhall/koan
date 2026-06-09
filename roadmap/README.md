@@ -53,25 +53,26 @@ What's shipped that the open items below build on:
   owning the parenthesized-slot error text), and the scheduler `Object`/`Type` finalize
   arms (one [`check_declared_return`](../src/machine/execute/scheduler/execute.rs)
   parameterized over the lifted carrier's `matches_value`/`matches_type` predicate).
-- *Arena unsafe consolidation.* The scattered per-call frame re-anchor is funnelled
-  behind one [`CallArena::anchored_parts`](../src/machine/core/arena.rs), and every
-  captured/defining-scope re-attach behind one
+- *Arena unsafe consolidation.* Every captured/defining-scope re-attach is funnelled behind one
   [`ScopePtr`](../src/machine/core/scope_ptr.rs); `RuntimeArena::escape` is `NonNull`.
-  The store-side erasure now lives behind one sealed `ArenaStored` trait: all six
+  The store-side erasure lives behind one sealed `ArenaStored` trait: all six
   arena-stored families route a single audited union-move `erase_store` and one gated
   `alloc` engine, replacing the six per-type `T<'a> → T<'static>` transmute pairs with
-  one. The branded `ScopePtr<'a>` makes `Module::child_scope`, `Signature::decl_scope`,
-  and `KFunction::captured_scope` safe re-attaches, concentrating the irreducible
+  one. The branded `ScopePtr<'a>` makes `Module::child_scope` and `Signature::decl_scope`
+  safe re-attaches, concentrating the irreducible
   `'static → 'a` fabrication at the non-generic `CallArena` boundary.
-  Honest slot storage then landed for per-call frame scopes: a frame scope rides its slot as a
+  Honest slot storage landed for per-call frame scopes: a frame scope rides its slot as a
   payload-less [`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the
-  slot's own `Node.frame` cart — no fabricated run-length `&'a` persists across a TCO reset — and
-  the scattered seed re-anchor is concentrated to one
-  [`CallArena::with_anchored_child`](../src/machine/core/arena.rs) core helper
+  slot's own `Node.frame` cart — no fabricated run-length `&'a` persists across a TCO reset.
+  The frame re-anchor then landed in full: the free `&'run` scope fabrication at the read
+  boundary is deleted, a within-step frame lifetime `'s` (`'a: 's`) threads
+  `run_dispatch`/`BuiltinFn`/`SchedulerHandle`, and a slot's scope is now read on demand via
+  [`Scheduler::current_scope`](../src/machine/execute/scheduler.rs) through the witness-bounded
+  [`CallArena::scope_bounded`](../src/machine/core/arena.rs) brand (the post-step loop reads it
+  through a `PostStep` token off the slot's returned frame). The sole surviving free re-exposure
+  is the arena half of [`CallArena::with_anchored_child`](../src/machine/core/arena.rs), the
+  C0-irreducible seed bind, and `KFunction::captured` now rides a `BoundedScopePtr`
   (see [design/per-call-arena-protocol.md § Slot-table scope handle](../design/per-call-arena-protocol.md#slot-table-scope-handle)).
-  The remaining hardening — threading a within-step frame lifetime `'s` so the read boundary no
-  longer widens to the run `'a`, then making the re-anchor a compile-time guarantee — is open
-  work under [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md).
   See [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -160,7 +161,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
@@ -238,9 +238,6 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md) —
-  yokes `anchored_parts` to its frame `Rc` so a re-anchor outliving its frame fails to
-  compile and the dispatch/scheduler Miri pins retire; rides on the lifetime split above.
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md) —
   collapse `ElabResult` / `ResolveTypeExprOutcome` / `TypeLeafCarrier` into one generic
   `ResolveOutcome<T>` with a `map_done` lift.

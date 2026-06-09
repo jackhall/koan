@@ -98,19 +98,28 @@ share, so there is one store-side erasure to reason about. It is sound because:
   drop together at `RuntimeArena` drop, so any cross-sub-arena `&` is dead
   by the time anyone could observe it.
 
-The scope-pointer case — `CallArena`, `Module`, `Signature`, and `KFunction`
-each holding a pointer to a captured or defining `Scope` — is centralized in
-the branded [`ScopePtr<'a>`](../src/machine/core/scope_ptr.rs). `erase(&'a Scope<'a>)`
-records the input's `'a` in the brand, so the three carriers that own a real `'a` —
-`Module::child_scope`, `Signature::decl_scope`, `KFunction::captured_scope` — re-attach
+The scope-pointer case — `CallArena`, `Module`, `Signature`, `KFunction`, and a `Scope`'s
+own lexical parent each holding a pointer to a captured, defining, or parent `Scope` — is
+centralized in two branded handles in
+[`scope_ptr.rs`](../src/machine/core/scope_ptr.rs). The branded
+[`ScopePtr<'a>`](../src/machine/core/scope_ptr.rs) backs the carriers that re-hand at an
+unbounded `'a`: `erase(&'a Scope<'a>)` records the input's `'a` in the brand, so the carriers
+that own a real `'a` — `Module::child_scope` and `Signature::decl_scope` — re-attach
 through a **safe** `reattach(&self) -> &'a Scope<'a>`, the brand carrying both the
 lifetime bound and (because `Scope<'a>` is invariant) the carrier's invariance in `'a`
 structurally. `CallArena` is non-generic — it backs `Rc<CallArena>` and carries no
-lifetime — so it stores a `ScopePtr<'static>` and is the single `unsafe` re-attach
-boundary: its `scope` / `scope_for_bind` accessors fabricate an `&self`-bounded lifetime
-through `reattach_unbounded`, the one transmute the brand cannot supply by safe coercion.
+lifetime — so it stores a `ScopePtr<'static>` and is the `unsafe` re-attach
+boundary for that handle: its `scope` / `scope_for_bind` accessors fabricate an `&self`-bounded
+lifetime through `reattach_unbounded`, the one transmute the brand cannot supply by safe coercion.
 The single irreducible `'static → 'a` cast lives in `scope_ptr.rs`; the carriers no
 longer restate it.
+
+The constraint-free twin [`BoundedScopePtr<'a>`](../src/machine/core/scope_ptr.rs) backs the
+handles that re-hand *only* behind a reader-bounded borrow: `KFunction::captured` and a
+`Scope`'s `outer` lexical parent. Its `get(&'p self) -> &'p Scope<'a>` caps the borrow at the
+reader, so the free content `'a` is never cashed unbounded — no borrow==content coupling is
+needed, and a frame-bounded child can hold a (possibly frame-bounded) parent without
+fabrication. It carries `Scope<'a>`'s invariance structurally for the same reason as `ScopePtr`.
 
 All six families implement the sealed `ArenaStored` trait and route the one gated
 [`alloc`](../src/machine/core/arena.rs) engine. `anchors_to` is a required trait
