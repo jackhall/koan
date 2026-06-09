@@ -16,8 +16,8 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
-         MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
+        "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
+         MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
          LET IntOrdView = (IntOrd :! OrderedSig)",
     );
     run(scope, "FN (USE_ID Er :OrderedSig) -> Er = (Er)");
@@ -48,8 +48,8 @@ fn functor_return_dotted_type_member_parameter_resolves_per_call() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG WithZero = ((LET Type = Number) (VAL zero :Type))\n\
-         MODULE IntOrd = ((LET Type = Number) (LET zero = 0))\n\
+        "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))\n\
+         MODULE IntOrd = ((LET Carrier = Number) (LET zero = 0))\n\
          LET IntOrdView = (IntOrd :| WithZero)",
     );
     assert!(
@@ -75,9 +75,9 @@ fn functor_return_dotted_type_member_parameter_resolves_per_call() {
 /// End-to-end functor-on-VAL-slot call: `(GET_ZERO IntOrdView)` succeeds where
 /// `IntOrdView` is an opaque (`:|`) view. The body `(Er.zero)` reads the VAL slot,
 /// which ATTR re-tags with the per-call abstract identity `:|` minted for
-/// `IntOrdView.Type`, so the body value satisfies the per-call return type
-/// `Er.Type`. The result carries the abstract `Type` identity
-/// (`ktype().name()` is "Type", a `KType::AbstractType`); unwrapping the `Wrapped`
+/// `IntOrdView.Carrier`, so the body value satisfies the per-call return type
+/// `Er.Carrier`. The result carries the abstract `Carrier` identity
+/// (`ktype().name()` is "Carrier", a `KType::AbstractType`); unwrapping the `Wrapped`
 /// carrier yields the underlying `Number(0)`.
 #[test]
 fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
@@ -85,11 +85,14 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG WithZero = ((LET Type = Number) (VAL zero :Type))\n\
-         MODULE IntOrd = ((LET Type = Number) (LET zero = 0))\n\
+        "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))\n\
+         MODULE IntOrd = ((LET Carrier = Number) (LET zero = 0))\n\
          LET IntOrdView = (IntOrd :| WithZero)",
     );
-    run(scope, "FN (GET_ZERO Er :WithZero) -> Er.Type = (Er.zero)");
+    run(
+        scope,
+        "FN (GET_ZERO Er :WithZero) -> Er.Carrier = (Er.zero)",
+    );
     let result = run_one(scope, parse_one("GET_ZERO IntOrdView"));
     match result {
         KObject::Wrapped { inner, type_id } => {
@@ -100,8 +103,8 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
             );
             assert_eq!(
                 type_id.name(),
-                "Type",
-                "the abstract identity is the SIG-named member `Type`",
+                "Carrier",
+                "the abstract identity is the SIG-named member `Carrier`",
             );
             assert!(
                 matches!(inner.get(), KObject::Number(n) if *n == 0.0),
@@ -129,9 +132,9 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
+        "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
          SIG Set = ((LET Elt = Number) (VAL insert :Number))\n\
-         MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
+         MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
          LET IntOrdView = (IntOrd :! OrderedSig)",
     );
     run(
@@ -159,8 +162,8 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
-         MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
+        "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
+         MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
          LET IntOrdView = (IntOrd :| OrderedSig)",
     );
     run(scope, "FN (BAD Er :OrderedSig) -> Er.Type = (1)");

@@ -398,6 +398,25 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// User-facing type registration (`LET <TypeName> = …`, `VAL`): rejects a collision
+    /// with a builtin type before delegating to the infallible [`Self::register_type`].
+    /// Builtins are immutable and unshadowable, so a user type that names one is a
+    /// `Rebind` at any depth — including a SIG/MODULE-local abstract member — and the
+    /// [`Self::shadows_builtin_type`] consult reads the root directly. Builtin
+    /// registration itself stays on the infallible `register_type`.
+    pub fn register_user_type(
+        &self,
+        name: String,
+        ktype: crate::machine::model::types::KType<'a>,
+        index: BindingIndex,
+    ) -> Result<(), KError> {
+        if self.shadows_builtin_type(&name) {
+            return Err(KError::new(KErrorKind::Rebind { name }));
+        }
+        self.register_type(name, ktype, index);
+        Ok(())
+    }
+
     /// Upsert install for a type-only nominal finalize (STRUCT / named UNION / Result /
     /// MODULE). Writes the sealed `SetRef` identity into [`Bindings::types`], overwriting
     /// a `PartialEq`-equal `SetRef` a `RECURSIVE TYPES` block pre-installed (same set + index).

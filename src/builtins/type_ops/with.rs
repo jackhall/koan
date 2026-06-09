@@ -73,19 +73,19 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))",
+            "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
         );
         let sig_id = match scope.resolve_type("OrderedSig") {
             Some(KType::Signature { sig, .. }) => sig.sig_id(),
             _ => panic!("OrderedSig must bind a Signature KType"),
         };
-        let result = run_one_type(scope, parse_one("OrderedSig WITH {Type = Number}"));
+        let result = run_one_type(scope, parse_one("OrderedSig WITH {Carrier = Number}"));
         match result {
             KType::Signature { sig, pinned_slots } => {
                 assert_eq!(sig.sig_id(), sig_id);
                 assert_eq!(sig.path, "OrderedSig");
                 assert_eq!(pinned_slots.len(), 1);
-                assert_eq!(pinned_slots[0].0, "Type");
+                assert_eq!(pinned_slots[0].0, "Carrier");
                 assert_eq!(pinned_slots[0].1, KType::Number);
             }
             other => panic!("expected Signature type, got {other:?}"),
@@ -114,8 +114,8 @@ mod tests {
         }
     }
 
-    /// A dotted `Elem.Type` pin value sub-dispatches in value context to the abstract
-    /// `Type` and surfaces in `pinned_slots` — a dotted pin value the keyworded record-literal
+    /// A dotted `Elem.Carrier` pin value sub-dispatches in value context to the abstract
+    /// `Carrier` and surfaces in `pinned_slots` — a dotted pin value the keyworded record-literal
     /// handler could not take (was `#[ignore]`d there).
     #[test]
     fn with_inner_module_attr_path_pins_abstract_type() {
@@ -123,19 +123,22 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "MODULE IntOrd = ((LET Type = Number) (LET compare = 0))\n\
-             SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
+            "MODULE IntOrd = ((LET Carrier = Number) (LET compare = 0))\n\
+             SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
              SIG SetSig = ((LET Elt = Number) (VAL insert :Number))\n\
              LET Elem = (IntOrd :| OrderedSig)",
         );
-        let result = run_one_type(scope, parse_one("SetSig WITH {Elt = Elem.Type}"));
+        let result = run_one_type(scope, parse_one("SetSig WITH {Elt = Elem.Carrier}"));
         match result {
             KType::Signature { pinned_slots, .. } => {
                 assert_eq!(pinned_slots.len(), 1);
                 assert_eq!(pinned_slots[0].0, "Elt");
                 match &pinned_slots[0].1 {
-                    KType::AbstractType { name, .. } => assert_eq!(name, "Type"),
-                    other => panic!("expected pinned Elt = AbstractType(Type), got {:?}", other),
+                    KType::AbstractType { name, .. } => assert_eq!(name, "Carrier"),
+                    other => panic!(
+                        "expected pinned Elt = AbstractType(Carrier), got {:?}",
+                        other
+                    ),
                 }
             }
             other => panic!("expected Signature type, got {other:?}"),
@@ -148,7 +151,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))",
+            "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
         );
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(parse_one("OrderedSig WITH {Bogus = Number}"), scope);
@@ -170,7 +173,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))",
+            "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
         );
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(parse_one("OrderedSig WITH {type = Number}"), scope);

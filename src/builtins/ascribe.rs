@@ -91,9 +91,9 @@ pub fn body_opaque<'a>(
     }
 
     // Thread per-call slot tags: a VAL slot whose SIG-declared type is a `Sig`-rooted
-    // abstract member (`VAL zero :Type` where `Type` is a SIG-local `LET Type = ...`) is
+    // abstract member (`VAL zero :Carrier` where `Carrier` is a SIG-local `LET Carrier = ...`) is
     // tagged with the per-call `type_members[member]` identity. ATTR re-tags the slot read
-    // with this identity so `(int_ord.zero)` reads as the abstract `Type`, not the
+    // with this identity so `(int_ord.zero)` reads as the abstract `Carrier`, not the
     // underlying value. Structural-form slot types (`:(FN (Type, Type) -> Number)`) are
     // out of scope — only a bare `Sig`-rooted member naming a minted type is tagged.
     {

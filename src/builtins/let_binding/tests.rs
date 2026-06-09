@@ -232,7 +232,7 @@ fn let_aliases_struct_preserves_type_identity() {
 
 /// A lowercase-name `LET` inside a SIG body surfaces a `ShapeError` directing
 /// the user to `VAL`. The check fires only for the value-route, so
-/// `LET Type = Number` and module-alias forms keep working inside SIG bodies.
+/// `LET Carrier = Number` and module-alias forms keep working inside SIG bodies.
 #[test]
 fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};
@@ -353,10 +353,10 @@ fn let_value_class_with_functor_rejects() {
 }
 
 /// SIG-body `LET <Type-class> = ...` keeps working — the SIG-body reject only
-/// fires for the value-route, and `LET Type = Number` routes through
+/// fires for the value-route, and `LET Carrier = Number` routes through
 /// `register_type`. Inside a SIG body the bound `KType` is the name-bearing
 /// `AbstractType { source: Sig(decl_scope), name }` rather than the collapsed
-/// underlying type, so a later `VAL :Type` records that the slot *names* the
+/// underlying type, so a later `VAL :Carrier` records that the slot *names* the
 /// abstract member.
 #[test]
 fn let_type_class_in_sig_body_still_works() {
@@ -367,7 +367,7 @@ fn let_type_class_in_sig_body_still_works() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG WithType = ((LET Type = Number) (VAL zero :Number))",
+        "SIG WithType = ((LET Carrier = Number) (VAL zero :Number))",
     );
     let s = match scope.resolve_type("WithType") {
         Some(KType::Signature { sig, .. }) => *sig,
@@ -375,21 +375,21 @@ fn let_type_class_in_sig_body_still_works() {
     };
     let decl_scope = s.decl_scope();
     let bound = decl_scope
-        .resolve_type("Type")
-        .expect("Type binding should survive in SIG types map after Type-class LET");
+        .resolve_type("Carrier")
+        .expect("Carrier binding should survive in SIG types map after Type-class LET");
     match bound {
         KType::AbstractType {
             source: AbstractSource::Sig(id),
             name,
         } => {
-            assert_eq!(name, "Type");
+            assert_eq!(name, "Carrier");
             assert_eq!(
                 *id, decl_scope.id,
                 "Sig source must key on the decl_scope id"
             );
         }
         other => panic!(
-            "SIG-local `LET Type = Number` should bind a Sig-rooted AbstractType, got {:?}",
+            "SIG-local `LET Carrier = Number` should bind a Sig-rooted AbstractType, got {:?}",
             other
         ),
     }

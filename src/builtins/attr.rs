@@ -524,23 +524,23 @@ mod tests {
     }
 
     /// An opaque (`:|`) view re-tags a VAL-slot read with the per-call abstract identity:
-    /// `IntOrdView.zero` reads as the abstract `Type` (`ktype().name() == "Type"`), not the
-    /// underlying `Number`, so a deferred return `Er.Type` accepts the body.
+    /// `IntOrdView.zero` reads as the abstract `Carrier` (`ktype().name() == "Carrier"`), not the
+    /// underlying `Number`, so a deferred return `Er.Carrier` accepts the body.
     #[test]
     fn opaque_view_slot_read_re_tags_with_abstract_type() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG WithZero = ((LET Type = Number) (VAL zero :Type))\n\
-             MODULE IntOrd = ((LET Type = Number) (LET zero = 0))\n\
+            "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))\n\
+             MODULE IntOrd = ((LET Carrier = Number) (LET zero = 0))\n\
              LET IntOrdView = (IntOrd :| WithZero)",
         );
         let result = run_one(scope, parse_one("IntOrdView.zero"));
         assert_eq!(
             result.ktype().name(),
-            "Type",
-            "opaque-view slot read must carry the abstract `Type` identity, got {:?}",
+            "Carrier",
+            "opaque-view slot read must carry the abstract `Carrier` identity, got {:?}",
             result.ktype(),
         );
     }
@@ -553,8 +553,8 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG WithZero = ((LET Type = Number) (VAL zero :Type))\n\
-             MODULE IntOrd = ((LET Type = Number) (LET zero = 0))\n\
+            "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))\n\
+             MODULE IntOrd = ((LET Carrier = Number) (LET zero = 0))\n\
              LET IntOrdView = (IntOrd :! WithZero)",
         );
         let result = run_one(scope, parse_one("IntOrdView.zero"));

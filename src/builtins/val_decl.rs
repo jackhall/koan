@@ -138,7 +138,9 @@ fn finalize_val<'a>(
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {
     let kt_ref: &'a KType<'a> = scope.arena.alloc_ktype(declared_kt.clone());
-    scope.register_type(name, declared_kt, bind_index);
+    if let Err(e) = scope.register_user_type(name, declared_kt, bind_index) {
+        return err(e);
+    }
     BodyResult::ktype(kt_ref)
 }
 

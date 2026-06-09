@@ -106,7 +106,7 @@ pub fn body<'a>(
         (None, None) => return err(KError::new(KErrorKind::MissingArg("name".to_string()))),
     };
     // Value slots inside a SIG body must use `(VAL <name>: <Type>)`. The check
-    // fires only for the value-route so `LET Type = Number` and
+    // fires only for the value-route so `LET Carrier = Number` and
     // `LET MyAlias = (some_module :| Sig)` keep working.
     if type_for_types_map.is_none() && scope.is_in_sig_body() {
         return err(KError::new(KErrorKind::ShapeError(format!(
@@ -121,9 +121,9 @@ pub fn body<'a>(
         // `(PICK x: OrderedSig)` dispatch to the same overload. The alias binds at its
         // own lexical position, like every other binder.
         //
-        // A SIG-local type binding (`LET Type = Number` inside a SIG body) binds the
+        // A SIG-local type binding (`LET Carrier = Number` inside a SIG body) binds the
         // name-bearing `AbstractType { source: Sig(decl_scope) }` rather than the collapsed
-        // underlying type, so a later `VAL zero :Type` records that `zero` *names* the
+        // underlying type, so a later `VAL zero :Carrier` records that `zero` *names* the
         // abstract member. Opaque ascription threads this into the per-call module's
         // `slot_type_tags` and ATTR re-tags the slot read (see ascribe.rs / attr.rs). Only
         // a bare type LET inside a SIG is wrapped; outer aliases stay concrete.
@@ -147,7 +147,9 @@ pub fn body<'a>(
             kt
         };
         let kt_ref: &'a KType<'a> = arena.alloc_ktype(kt.clone());
-        scope.register_type(name, kt, bind_index);
+        if let Err(e) = scope.register_user_type(name, kt, bind_index) {
+            return err(e);
+        }
         BodyResult::ktype(kt_ref)
     } else {
         // The value route reaches here only for a value-classified binder name with an

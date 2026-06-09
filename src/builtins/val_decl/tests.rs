@@ -29,7 +29,7 @@ fn val_resolves_sig_local_type_shadow() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG WithZero = ((LET Type = Number) (VAL zero :Type))",
+        "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))",
     );
     let s = match scope.resolve_type("WithZero") {
         Some(KType::Signature { sig, .. }) => *sig,
@@ -41,10 +41,10 @@ fn val_resolves_sig_local_type_shadow() {
             source: AbstractSource::Sig(_),
             name,
         } => assert_eq!(
-            name, "Type",
-            "VAL slot must record that it names the SIG-local abstract `Type`",
+            name, "Carrier",
+            "VAL slot must record that it names the SIG-local abstract `Carrier`",
         ),
-        other => panic!("expected AbstractType(Type), got {other:?}"),
+        other => panic!("expected AbstractType(Carrier), got {other:?}"),
     }
 }
 
@@ -156,8 +156,8 @@ fn val_slot_satisfied_by_module_let_member() {
     ));
 }
 
-/// Pins the canonical SIG form: abstract type via `LET Type = ...` plus a VAL
-/// slot whose declared type references it. `Type` lives in `bindings.types`,
+/// Pins the canonical SIG form: abstract type via `LET Carrier = ...` plus a VAL
+/// slot whose declared type references it. `Carrier` lives in `bindings.types`,
 /// `zero` in `bindings.data`; both carry the `Sig`-rooted `AbstractType` identity
 /// (so opacity threads to the per-call module's `slot_type_tags`), not the
 /// collapsed underlying `Number`.
@@ -168,19 +168,19 @@ fn val_with_abstract_type_member_declaration() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG WithZero = ((LET Type = Number) (VAL zero :Type))",
+        "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))",
     );
     let s = match scope.resolve_type("WithZero") {
         Some(KType::Signature { sig, .. }) => *sig,
         _ => panic!("WithZero must bind a Signature KType"),
     };
-    let type_kt = s.decl_scope().bindings().expect_type("Type");
+    let type_kt = s.decl_scope().bindings().expect_type("Carrier");
     assert!(matches!(
         type_kt,
         KType::AbstractType {
             source: AbstractSource::Sig(_),
             name,
-        } if name == "Type"
+        } if name == "Carrier"
     ));
     let zero = s.decl_scope().bindings().expect_type("zero");
     assert!(matches!(
@@ -188,6 +188,6 @@ fn val_with_abstract_type_member_declaration() {
         KType::AbstractType {
             source: AbstractSource::Sig(_),
             name,
-        } if name == "Type"
+        } if name == "Carrier"
     ));
 }
