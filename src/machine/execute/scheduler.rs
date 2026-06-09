@@ -78,6 +78,37 @@ pub(in crate::machine::execute::scheduler) struct SlotStepGuard<'a> {
     /// outer slot's reserve frame.
     prev_reserve: Option<Rc<CallArena>>,
     prev_node_scope: Option<NodeScope<'a>>,
+    /// The step's own handle, kept so [`Scheduler::exit_slot_step`] can hand it back inside the
+    /// [`PostStep`] token — the step scope is then re-derivable from the *returned* frame, never
+    /// the ambient (and possibly invoke-swapped) `active_frame`.
+    step_node_scope: NodeScope<'a>,
+}
+
+/// The frames and scope of a just-finished step, returned by [`Scheduler::exit_slot_step`]. Owns
+/// `prev_frame` (the slot's frame *at step end* — an in-step invoke may have swapped the ambient
+/// `active_frame`, so this returned value, not `self.active_frame`, is the authoritative source)
+/// and exposes the step scope only through [`Self::step_scope`], which derives it from that frame.
+/// Reading the step scope from ambient scheduler state post-step is thereby unspellable.
+pub(in crate::machine::execute::scheduler) struct PostStep<'a> {
+    /// The slot's frame at step end — `None` if a tail-call took it. The Replace arm reinstalls /
+    /// rotates with it.
+    pub(in crate::machine::execute::scheduler) prev_frame: Option<Rc<CallArena>>,
+    /// The slot's reserve frame at step end (see ping-pong reserve rotation).
+    pub(in crate::machine::execute::scheduler) post_step_reserve: Option<Rc<CallArena>>,
+    node_scope: NodeScope<'a>,
+}
+
+impl<'a> PostStep<'a> {
+    /// The step's scope, re-handed from the authoritative `prev_frame` via the bounded brand (an
+    /// `Anchored` slot carries its own run-lived borrow). `None` when a tail-call took the frame —
+    /// the post-step uses that need it (a Done step's lift / placeholder-clear; a moot drain) then
+    /// don't apply. Borrow bounded by `&self`, so it cannot outlive this token's `prev_frame`.
+    pub(in crate::machine::execute::scheduler) fn step_scope(&self) -> Option<&Scope<'a>> {
+        match (self.node_scope, self.prev_frame.as_ref()) {
+            (NodeScope::Anchored(scope), _) => Some(scope),
+            (NodeScope::Yoked, frame) => frame.map(|f| f.scope_bounded()),
+        }
+    }
 }
 
 impl<'a> Scheduler<'a> {
@@ -101,6 +132,7 @@ impl<'a> Scheduler<'a> {
             prev_chain,
             prev_reserve,
             prev_node_scope,
+            step_node_scope: node_scope,
         }
     }
 
@@ -116,12 +148,16 @@ impl<'a> Scheduler<'a> {
     pub(in crate::machine::execute::scheduler) fn exit_slot_step(
         &mut self,
         guard: SlotStepGuard<'a>,
-    ) -> (Option<Rc<CallArena>>, Option<Rc<CallArena>>) {
+    ) -> PostStep<'a> {
         let post_step_frame = std::mem::replace(&mut self.active_frame, guard.prev_frame);
         self.active_chain = guard.prev_chain;
         let post_step_reserve = std::mem::replace(&mut self.active_reserve, guard.prev_reserve);
         self.active_node_scope = guard.prev_node_scope;
-        (post_step_frame, post_step_reserve)
+        PostStep {
+            prev_frame: post_step_frame,
+            post_step_reserve,
+            node_scope: guard.step_node_scope,
+        }
     }
 
     pub fn new() -> Self {

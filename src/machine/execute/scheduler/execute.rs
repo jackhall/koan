@@ -3,10 +3,10 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::{assemble_body_chain, ScopeId};
 use crate::machine::model::KType;
-use crate::machine::{Frame, KError, KErrorKind, LexicalFrame, NodeId, Scope};
+use crate::machine::{Frame, KError, KErrorKind, LexicalFrame, NodeId};
 
 use super::super::lift::{lift_kobject, lift_ktype};
-use super::super::nodes::{LiftState, Node, NodeOutput, NodeScope, NodeStep, NodeWork};
+use super::super::nodes::{LiftState, Node, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 use crate::machine::model::Carried;
 
@@ -44,17 +44,13 @@ impl<'a> Scheduler<'a> {
                 NodeWork::Catch { from, finish } => self.run_catch(from, finish, idx),
                 NodeWork::Lift(state) => NodeStep::Done(Self::run_lift(state)),
             };
-            let (prev_frame, post_step_reserve) = self.exit_slot_step(guard);
-            // The step's scope, re-handed from the now-stable `prev_frame` (the slot's frame at
-            // step end — unlike the ambient `active_frame`, which an in-step invoke may have
-            // swapped) via the bounded brand; an `Anchored` slot carries its own run-lived borrow.
-            // `None` when a tail-call took the frame — a Replace whose scope is being reset, so the
-            // post-step uses below (all Done-only or a moot drain) simply don't apply.
-            let step_scope: Option<&Scope<'a>> = match (node_scope, prev_frame.as_ref()) {
-                (NodeScope::Anchored(scope), _) => Some(scope),
-                (NodeScope::Yoked, frame) => frame.map(|f| f.scope_bounded()),
-            };
-            if let Some(scope) = step_scope {
+            // The post-step token owns the slot's frame at step end and is the *only* source of
+            // the step scope (via `post.step_scope()`), so the wrong-frame read that ambient
+            // `active_frame` allowed is unspellable here.
+            let post = self.exit_slot_step(guard);
+            // Drain re-entrant writes. `step_scope()` is `None` when a tail-call took the frame —
+            // a Replace whose scope is being reset, so its pending is moot.
+            if let Some(scope) = post.step_scope() {
                 scope.drain_pending();
             }
             match step {
@@ -62,11 +58,11 @@ impl<'a> Scheduler<'a> {
                     // Lift the terminal out of the dying per-call frame into the surviving
                     // captured-scope arena (`dest_arena`, a genuine `&'a`). A non-dying run frame
                     // (empty arena; top-level values live in the run arena) reads as frameless.
-                    let dest_arena = step_scope.and_then(|s| s.outer().map(|o| o.arena));
-                    let frame = prev_frame.as_ref().filter(|f| !f.non_dying());
+                    let dest_arena = post.step_scope().and_then(|s| s.outer().map(|o| o.arena));
+                    let frame = post.prev_frame.as_ref().filter(|f| !f.non_dying());
                     let result = compute_done_output(output, frame, dest_arena, prev_function);
                     if matches!(result, NodeOutput::Err(_)) {
-                        if let Some(scope) = step_scope {
+                        if let Some(scope) = post.step_scope() {
                             scope.clear_placeholders_for_producer(id);
                         }
                     }
@@ -79,6 +75,8 @@ impl<'a> Scheduler<'a> {
                     block_entry,
                     body_index,
                 } => {
+                    let prev_frame = post.prev_frame;
+                    let post_step_reserve = post.post_step_reserve;
                     let next_function = new_function.or(prev_function);
                     let new_chain = compute_replace_chain(
                         prev_chain_carrier,
