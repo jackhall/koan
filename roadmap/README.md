@@ -155,7 +155,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)

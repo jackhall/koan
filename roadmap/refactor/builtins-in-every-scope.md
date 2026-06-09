@@ -23,24 +23,35 @@ for builtins is the root alone.
 
 **Acceptance criteria.**
 
-- The hottest names (operators, `PRINT`, dispatch primitives) resolve to a
-  binding at the current scope, so resolution cost is constant in call and
-  recursion depth rather than O(scope depth).
-- Builtins are present in every scope as ordinary bindings, and the
-  `idx == 0`-always-visible carve-out in
-  [`bindings.rs`](../../src/machine/core/bindings.rs) is gone.
+- The hottest names (operators, `PRINT`, dispatch primitives) resolve in constant
+  time via a scope's direct reference to the immutable root, rather than O(scope
+  depth) up the `ancestors()` walk.
+- Builtins live once in the immutable root and resolve from any scope through that
+  direct reference — not copied into each scope — and the `idx == 0`-always-visible
+  carve-out in [`bindings.rs`](../../src/machine/core/bindings.rs) is gone.
 - A user binding that collides with a Name-keyed builtin (a type) raises the
-  same `Rebind` error at any scope depth, enforced by the ordinary `try_apply`
-  machinery rather than a root-only collision.
+  same `Rebind` error at any scope depth, via a bind-path consult of the root
+  rather than a root-local collision only.
 - A user FN or operator over a builtin keyword accumulates as a dispatch
-  overload resolved against the locally-present seeded bucket, and dispatch
-  still picks the builtin overload by specificity when no user overload matches.
+  overload resolved against the root's builtin bucket, and dispatch still picks
+  the builtin overload by specificity when no user overload matches.
 
 **Directions.**
 
 - *Seed every scope with the builtins — decided.* Each scope exposes the builtin
   `types` / `functions` / `operators` entries, shared rather than copied so per-call
   scope creation stays cheap.
+- *Immutable, distinctly-typed root — decided.* The run-global root holds builtins
+  only and accepts no user bindings — it is immutable, and a distinct type from the
+  mutable scopes below it. The distinct typing is load-bearing beyond lookup: it makes
+  the root genuinely run-lived, so a frame-bounded scope can still reach a run-lived
+  root by reference (the enabler the frame re-anchor consumes — see Unblocks).
+- *Insert a `RunScope` for top-level binds — decided.* A new mutable scope between the
+  immutable root and user code receives top-level Koan bindings, so the root itself
+  stays binding-free.
+- *Leaf-aware root consult — decided.* A resolve consults the shared root once, via the
+  direct reference, rather than re-checking it at each layer of the `ancestors()` walk;
+  scopes track whether they are the resolution leaf so only the leaf does the consult.
 - *Realization — open; decide by benchmark.* Two shapes to prototype and measure
   against today's HashMap-plus-walk:
   - *Shared builtin layer.* Each scope keeps its mutable local HashMaps plus a
@@ -74,4 +85,8 @@ update that doc when it lands.
 
 **Requires:** none — engine-internal.
 
-**Unblocks:** none tracked yet.
+**Unblocks:**
+
+- [Type-enforced frame re-anchor](type-enforced-frame-reanchor.md) — the immutable, distinctly-typed
+  root gives a frame-bounded `&'s` scope a reachable run-lived `&'a` anchor, dissolving the
+  Root-storage bind that blocks the `'s` split.

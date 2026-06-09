@@ -84,9 +84,14 @@ Done-boundary lift reached through that retained `&'a` widen.
 
 ## Dependencies
 
-**Requires:** none — builds on the shipped honest `NodeScope` slot storage (see
-[design/per-call-arena-protocol.md § Slot-table scope handle](../../design/per-call-arena-protocol.md#slot-table-scope-handle));
-the frame lifetime this threads is born and reclaimed inside the scheduler's per-call
-machinery, so no other item gates it.
+Builds on the shipped honest `NodeScope` slot storage (see
+[design/per-call-arena-protocol.md § Slot-table scope handle](../../design/per-call-arena-protocol.md#slot-table-scope-handle)).
+
+**Requires:**
+
+- [Seed every scope with builtins to skip the root walk](builtins-in-every-scope.md) — its
+  immutable, distinctly-typed root supplies the genuinely-`&'a` anchor a builtin holding only a
+  frame-bounded `&'s` scope needs to store a `Root` sub-dispatch, dissolving the otherwise-circular
+  frame-scope-stored-as-run-lived bind.
 
 **Unblocks:** none tracked yet.
