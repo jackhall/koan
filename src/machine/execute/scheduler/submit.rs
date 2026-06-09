@@ -166,7 +166,7 @@ impl<'a> Scheduler<'a> {
         // child is the very scope passed, store a payload-less `Yoked` and let the read
         // boundary re-project from the frame cart — no fabricated `&'a` persisted. Any other
         // scope (a run-root scope, or a frame sub-scope the frame does not directly back)
-        // genuinely lives at `'a`, so it stays `Root`.
+        // genuinely lives at `'a`, so it stays `Anchored`.
         let node_scope = match &self.active_frame {
             Some(f)
                 if std::ptr::eq(
@@ -176,7 +176,7 @@ impl<'a> Scheduler<'a> {
             {
                 NodeScope::Yoked
             }
-            _ => NodeScope::Root(scope),
+            _ => NodeScope::Anchored(scope),
         };
         self.submit_node(work, scope, node_scope, explicit_chain)
     }
