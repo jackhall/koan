@@ -104,6 +104,20 @@ impl<'a> Scope<'a> {
         #[cfg(test)]
         RESOLVE_DISPATCH_ENTRIES.with(|c| c.set(c.get() + 1));
         let key = expr.untyped_key();
+        // Builtin dispatch buckets are unshadowable — no user overload may join them — so a
+        // builtin bucket is authoritative. Consult the immutable root directly and return its
+        // terminal decision, skipping the user-chain walk for the hottest names. Only a
+        // `Terminal` decision short-circuits; a non-terminal root falls through to the full
+        // walk below unchanged, so precedence is preserved. The `idx == 0` gate keeps a
+        // synthetic root-position user bucket on the ordinary walk.
+        let root = self.root_scope();
+        if root.bindings().has_builtin_function(&key) {
+            let cutoff = chain.and_then(|c| c.index_for(root.id));
+            let lookup = root.bindings().lookup_function(&key, cutoff);
+            if let ScopeDecision::Terminal(outcome) = decide_scope(&lookup, expr, bare_outcomes) {
+                return outcome;
+            }
+        }
         // Innermost dead unbound bare-name lean, surfaced post-walk only if no
         // scope reached a terminal decision.
         let mut dead_lean: Option<String> = None;

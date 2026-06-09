@@ -186,14 +186,17 @@ a `Rebind` at any scope depth — never a shadow, never a merge:
   [`Bindings::has_builtin_operator`](../../src/machine/core/bindings.rs). User-vs-user
   overloads and cross-scope shadowing are unaffected — only an `idx == 0` builtin entry gates.
 
-Because a builtin can never be shadowed, a builtin entry is authoritative: a Name-keyed
-builtin lookup is resolved root-first. [`Scope::resolve_type_with_chain`](../../src/machine/core/scope.rs)
-and [`Scope::resolve_operator_group_with_chain`](../../src/machine/core/scope.rs) consult the
-root through the direct reference and return a builtin hit in one hop, before the ancestor
-walk — the constant-time path for the hottest names. A non-builtin name finds nothing in the
-root and falls through to the Layer-1 chain walk with its innermost-wins precedence intact.
-Function dispatch reaches the root's builtin buckets as the chain terminus of the Layer-1
-walk.
+Because a builtin can never be shadowed, a builtin entry is authoritative: it is resolved
+root-first, in one hop through the direct reference, before the Layer-1 ancestor walk — the
+constant-time path for the hottest names (operators, `PRINT`, dispatch primitives).
+[`Scope::resolve_type_with_chain`](../../src/machine/core/scope.rs) and
+[`Scope::resolve_operator_group_with_chain`](../../src/machine/core/scope.rs) return a builtin
+hit directly; [`Scope::resolve_dispatch`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
+consults the root's builtin bucket first and returns its decision when terminal. Each is gated
+on the `idx == 0` [`has_builtin_*`](../../src/machine/core/bindings.rs) predicate, so a
+non-builtin name finds nothing in the root and falls through to the Layer-1 chain walk with its
+innermost-wins precedence intact — for dispatch, a non-terminal root decision likewise falls
+through unchanged, so the short-circuit never overrides an inner scope.
 
 ## Why this is a foundation, not a seam
 

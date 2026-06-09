@@ -34,8 +34,8 @@ What's shipped that the open items below build on:
   (`ScopeKind::Root`) immutable root; a `RunScope` child takes top-level binds, and every
   scope carries a direct `root` reference. Builtins are unshadowable — a user type, FN/
   FUNCTOR overload, or operator colliding with a builtin is a `Rebind` at any depth — so a
-  Name-keyed builtin (type, operator) resolves root-first in one hop, ahead of the chain
-  walk. See [design/typing/lookup-protocol.md § The immutable root and unshadowable builtins](../design/typing/lookup-protocol.md#the-immutable-root-and-unshadowable-builtins).
+  builtin (type, operator, or dispatch bucket) resolves root-first in one hop, ahead of the
+  chain walk. See [design/typing/lookup-protocol.md § The immutable root and unshadowable builtins](../design/typing/lookup-protocol.md#the-immutable-root-and-unshadowable-builtins).
 - *Anonymous functions.* A keyword-less `FN :{<field schema>} -> T = (body)`
   literal evaluates to a plain function value with no dispatch keyword, bound by
   `LET` or dropped into a function-typed slot — the record-schema sigil resolves

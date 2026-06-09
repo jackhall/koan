@@ -3,10 +3,11 @@
 //! Counterpart `resolve_dispatch`-only assertions live in `machine::core::tests::dispatch`.
 
 use super::super::Scheduler;
-use crate::builtins::register_builtin;
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
+use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::machine::core::source::Spanned;
+use crate::machine::core::BindingIndex;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
@@ -77,7 +78,15 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
             }),
         ],
     };
-    register_builtin(outer, "outer_specific", outer_sig, body_outer_number);
+    // User-position so the builtin root-first short-circuit doesn't claim it; the inner
+    // looser overload must shadow this outer more-specific one on the ordinary walk.
+    register_overload_at(
+        outer,
+        "outer_specific",
+        outer_sig,
+        body_outer_number,
+        BindingIndex::value(1),
+    );
 
     let inner = arena.alloc_scope(outer.child_for_call());
     let inner_sig = ExpressionSignature {

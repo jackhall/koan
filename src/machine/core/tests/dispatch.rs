@@ -1,8 +1,8 @@
 //! `dispatch` arm of `machine::core` tests.
 
 use super::super::{RuntimeArena, Scope};
-use crate::builtins::register_builtin;
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
+use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
@@ -87,11 +87,14 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
 fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     let arena = RuntimeArena::new();
     let outer = run_root_bare(&arena);
-    register_builtin(
+    // User-position (not BUILTIN) so the builtin root-first short-circuit doesn't fire —
+    // this exercises the inner-ambiguity-doesn't-descend walk, not builtin authority.
+    register_overload_at(
         outer,
         "OUTER",
         two_slot_sig(KType::Number, KType::Number),
         body_a,
+        BindingIndex::value(1),
     );
     let inner = arena.alloc_scope(outer.child_for_call());
     register_builtin(inner, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
@@ -268,7 +271,15 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
             }),
         ],
     };
-    register_builtin(outer, "outer_mark", outer_sig, body_a);
+    // User-position so the builtin root-first short-circuit doesn't claim it; the inner
+    // pending sibling must shadow this outer strict Pick on the ordinary walk.
+    register_overload_at(
+        outer,
+        "outer_mark",
+        outer_sig,
+        body_a,
+        BindingIndex::value(1),
+    );
 
     let inner = arena.alloc_scope(outer.child_for_call());
     let expr = KExpression::new(vec![

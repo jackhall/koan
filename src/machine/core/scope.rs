@@ -279,7 +279,7 @@ impl<'a> Scope<'a> {
 
     /// The run-global [`ScopeKind::Root`] (builtins only). `self` if it is the root,
     /// else the direct `root` handle every scope carries — one hop, no `outer` walk.
-    fn root_scope(&self) -> &Scope<'a> {
+    pub(crate) fn root_scope(&self) -> &Scope<'a> {
         self.root.unwrap_or(self)
     }
 

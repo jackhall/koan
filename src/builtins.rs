@@ -119,6 +119,33 @@ pub(crate) fn register_builtin_full<'a>(
     let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
 }
 
+/// Test-only: register one overload at an explicit [`BindingIndex`]. A test uses this to
+/// place a *user*-position (non-`BUILTIN`) overload in a root-position scope, so dispatch
+/// exercises the ordinary innermost-wins walk rather than the builtin root-first
+/// short-circuit (which a `BUILTIN`-index entry in the root would trigger).
+#[cfg(test)]
+pub(crate) fn register_overload_at<'a>(
+    scope: &'a Scope<'a>,
+    name: &str,
+    signature: ExpressionSignature<'a>,
+    body: BuiltinFn,
+    index: BindingIndex,
+) {
+    let arena = scope.arena;
+    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
+        signature,
+        Body::Builtin(body),
+        scope,
+        None,
+        None,
+        false,
+    ));
+    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
+    scope
+        .register_function(name.into(), f, obj, index)
+        .expect("register_overload_at: user-index overload should not collide with a builtin");
+}
+
 /// Build the run-global root populated with the language's builtin `KFunction`s, then
 /// return a mutable `RunScope` child of it for top-level Koan bindings. The root stays
 /// builtin-only and immutable; a top-level bind lands in the `RunScope`, leaving the
