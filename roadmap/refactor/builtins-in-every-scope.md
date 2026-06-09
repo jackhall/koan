@@ -38,34 +38,26 @@ for builtins is the root alone.
 
 **Directions.**
 
-- *Seed every scope with the builtins — decided.* Each scope exposes the builtin
-  `types` / `functions` / `operators` entries, shared rather than copied so per-call
-  scope creation stays cheap.
+- *Direct root reference, not per-scope copies — decided.* Each scope carries a direct
+  handle to the one immutable root (`Scope::root`, `None` iff the scope is the root) and
+  reaches the builtins through it in one hop, rather than copying or seeding the builtin
+  entries into every scope's maps. Per-call scope creation stays cheap (one extra pointer).
 - *Immutable, distinctly-typed root — decided.* The run-global root holds builtins
-  only and accepts no user bindings — it is immutable, and a distinct type from the
-  mutable scopes below it. The distinct typing is load-bearing beyond lookup: it makes
-  the root genuinely run-lived, so a frame-bounded scope can still reach a run-lived
-  root by reference (the enabler the frame re-anchor consumes — see Unblocks).
+  only and accepts no user bindings — it is immutable, and a distinct type
+  (`ScopeKind::Root`) from the mutable scopes below it. The distinct typing is
+  load-bearing beyond lookup: it makes the root genuinely run-lived, so a frame-bounded
+  scope can still reach a run-lived root by reference (the enabler the frame re-anchor
+  consumes — see Unblocks).
 - *Insert a `RunScope` for top-level binds — decided.* A new mutable scope between the
   immutable root and user code receives top-level Koan bindings, so the root itself
   stays binding-free.
-- *Leaf-aware root consult — decided.* A resolve consults the shared root once, via the
-  direct reference, rather than re-checking it at each layer of the `ancestors()` walk;
-  scopes track whether they are the resolution leaf so only the leaf does the consult.
-- *Realization — open; decide by benchmark.* Two shapes to prototype and measure
-  against today's HashMap-plus-walk:
-  - *Shared builtin layer.* Each scope keeps its mutable local HashMaps plus a
-    pointer to one shared immutable builtin `Bindings`, consulted on a local miss.
-    Keeps O(1) lookups and adds no dependency; the bind path gains an explicit
-    consult of the layer so Name-keyed collisions still `Rebind`.
-  - *Persistent maps in `Bindings`.* The maps become persistent/immutable; every
-    scope is a shared builtin base plus a local overlay, so builtins are ordinary
-    local entries and the `Rebind` / no-shadow behaviour needs no extra check. Costs
-    a persistent-map dependency, changes all eight map types, and needs structural
-    merge for the overload buckets.
-
-  Benchmark the walk-elimination speedup against the persistent-map lookup cost
-  before committing.
+- *No-shadow consult hits the root directly — decided.* The nominal-seal path
+  (`register_type_upsert`) asks the root whether a name is a builtin type and `Rebind`s
+  the collision; because the consult reads the single root rather than each layer of the
+  `outer` chain, it is depth-agnostic — shadowing a builtin type is illegal at any depth.
+- *Leaf-aware lookup routing — open.* Builtin *resolution* still walks `outer` to the
+  root; route it through the direct reference instead, consulting the root once (only the
+  resolution leaf consults it) rather than re-checking at each `ancestors()` layer.
 - *Bind semantics stay split by key kind — decided.* Name-keyed builtins (types)
   rebind-error on a user collision — the no-shadow win. Bucket-keyed builtins
   (`FN` / `FUNCTOR` / operators, via `BinderKey::Bucket`,
