@@ -2,7 +2,7 @@
 
 <!-- slate-fingerprint
 src/machine/core/arena.rs: 16
-src/machine/core/scope_ptr.rs: 4
+src/machine/core/scope_ptr.rs: 6
 src/machine/model/values/module.rs: 1
 -->
 
@@ -149,6 +149,15 @@ accessors. `Signature::decl_scope` calls the identical `reattach` (its line-for-
 equivalent runs under plain `cargo test`).
 
 - `module_child_scope_transmute_does_not_dangle`
+
+`BoundedScopePtr::{erase, get}` ([src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs))
+are the constraint-free bounded twin used for `Scope::outer`: `erase` is the same raw-ptr cast as
+`ScopePtr::erase` (trivially sound, from a reference), and `get` is the **identical**
+`transmute::<&'p Scope<'static>, &'p Scope<'a>>` as `ScopePtr::reattach_bounded` — only with a
+constraint-free constructor, sound because the free content `'a` is reachable only behind the
+`&'p`-bounded re-hand. `get` is exercised by every `Scope::outer()` / `ancestors()` walk, so the
+scope-walking shapes already in the slate (and `scope_bounded_reanchors_within_witness_borrow`,
+which pins the line-for-line equivalent) cover it; no separate minimal test is added.
 
 **`Module` interior mutation under a live `&'a Module`** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — `Module`
 mutates a `RefCell<HashMap>` (`type_members` / `slot_type_tags`) while a `&'a Module<'a>` is

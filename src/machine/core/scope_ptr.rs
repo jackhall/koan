@@ -96,3 +96,47 @@ impl<'a> ScopePtr<'a> {
         std::mem::transmute::<&'p Scope<'static>, &'p Scope<'c>>(self.ptr.as_ref())
     }
 }
+
+/// A scope handle that can **only** be re-handed with a borrow bounded by the reader — never at
+/// a free/unbounded lifetime. This is the [`Scope::outer`](super::scope::Scope) handle: a
+/// frame-bounded child re-hands its (possibly frame-bounded) parent, content `'a`, borrow capped
+/// at the reader (`get`). Distinct from [`ScopePtr`] precisely because it omits the unbounded
+/// `reattach`: with no way to cash the free content `'a` except behind a reader-bounded borrow,
+/// the constructor needs **no** borrow==content coupling. [`ScopePtr::erase`]'s coupling exists
+/// only to keep its unbounded `reattach()` sound — which `CallArena` still needs — so the two
+/// handle types stay separate rather than relaxing one and reintroducing the fabrication hazard.
+///
+/// Invariant in `'a` for the same reason as [`ScopePtr`] (the `Scope<'a>` brand); do not weaken.
+#[derive(Clone, Copy)]
+pub struct BoundedScopePtr<'a> {
+    ptr: NonNull<Scope<'static>>,
+    _brand: PhantomData<&'a Scope<'a>>,
+}
+
+impl<'a> BoundedScopePtr<'a> {
+    /// Erase a scope of content `'a` to a bounded handle. **No** borrow==content coupling: the
+    /// witness borrow `'w` may be shorter than the content `'a`, because [`Self::get`] only ever
+    /// re-hands behind a reader-bounded borrow — the free `'a` is never cashed unbounded, so a
+    /// shorter witness cannot fabricate a longer-lived reference. Safe by construction.
+    pub fn erase<'w>(scope: &'w Scope<'a>) -> Self {
+        #[allow(clippy::unnecessary_cast)]
+        let ptr = scope as *const Scope<'_> as *const Scope<'static>;
+        BoundedScopePtr {
+            // Non-null: derived from a reference.
+            ptr: unsafe { NonNull::new_unchecked(ptr as *mut Scope<'static>) },
+            _brand: PhantomData,
+        }
+    }
+
+    /// Re-hand the scope with the borrow **bounded** to the `&'p self` receiver, content `'a`
+    /// left free (`'a: 'p`). Re-anchoring longer than the receiver borrow is a compile error,
+    /// not a fabrication.
+    ///
+    /// SAFETY: `self.ptr` points at a live `Scope` the owning scope chain's frame-`Rc` witness
+    /// pins for all of `'p` (a parent outlives the frame-bounded child whose `outer` holds this);
+    /// the returned borrow is capped at `'p`, so it cannot escape that pin. `'p` is driven by the
+    /// receiver, `'a` by the return-type annotation.
+    pub fn get<'p>(&'p self) -> &'p Scope<'a> {
+        unsafe { std::mem::transmute::<&'p Scope<'static>, &'p Scope<'a>>(self.ptr.as_ref()) }
+    }
+}
