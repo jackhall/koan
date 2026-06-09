@@ -47,7 +47,7 @@ fn makeset_bare_type_token_resolves_eagerly() {
     let out = run_capturing(
         "SIG OrderedSig = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET inner = 1))\n\
+         FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1))\n\
          LET MySet = (MAKESET (IntOrd :! OrderedSig))\n\
          PRINT MySet.inner",
     )
@@ -103,7 +103,7 @@ fn wrap_slot_parens_expression_still_sub_dispatches() {
     let out = run_capturing(
         "SIG OrderedSig = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET inner = 2))\n\
+         FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET inner = 2))\n\
          LET MySet = (MAKESET (IntOrd :| OrderedSig))\n\
          PRINT MySet.inner",
     )

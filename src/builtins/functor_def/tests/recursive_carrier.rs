@@ -15,7 +15,7 @@ fn functor_return_slot_curried_functor_admits() {
         // `OrderedSig` to dodge forward resolution across sub-Dispatches.
         "SIG OrderedSig = (VAL compare :Number)\n\
          FUNCTOR (CURRIED Er :OrderedSig) -> :(FUNCTOR (Ty :Signature) -> Module) = \
-            (FUNCTOR (INNER y :OrderedSig) -> Module = (MODULE Result = (LET inner = 1)))",
+            (FUNCTOR (INNER y :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1)))",
     );
     let f = lookup_fn(scope, "CURRIED");
     assert!(

@@ -44,6 +44,11 @@ impl<'a> KFuture<'a> {
 /// `drain_pending` replays them between dispatch nodes.
 pub struct Scope<'a> {
     pub outer: Option<&'a Scope<'a>>,
+    /// Direct handle to the run-global [`ScopeKind::Root`] (builtins only, immutable).
+    /// `None` iff `self` is the root. Every other scope points straight at it, so a
+    /// builtin lookup or the no-shadow consult reaches the root in one hop instead of
+    /// walking `outer` — the root holds the builtins and never changes for a run.
+    root: Option<&'a Scope<'a>>,
     bindings: ScopeBindings<'a>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
     pub arena: &'a RuntimeArena,
@@ -115,6 +120,7 @@ impl<'a> Scope<'a> {
     ) -> Self {
         Self {
             outer,
+            root: None,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(Some(out)),
             arena,
@@ -134,6 +140,7 @@ impl<'a> Scope<'a> {
     pub fn child_under(outer: &'a Scope<'a>) -> Scope<'a> {
         Scope {
             outer: Some(outer),
+            root: Some(outer.root.unwrap_or(outer)),
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -148,6 +155,7 @@ impl<'a> Scope<'a> {
     pub fn child_under_sig(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Scope {
             outer: Some(outer),
+            root: Some(outer.root.unwrap_or(outer)),
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -163,6 +171,7 @@ impl<'a> Scope<'a> {
     pub fn child_under_module(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Scope {
             outer: Some(outer),
+            root: Some(outer.root.unwrap_or(outer)),
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -180,6 +189,7 @@ impl<'a> Scope<'a> {
     pub fn child_recursive_group(outer: &'a Scope<'a>, set: Rc<RecursiveSet<'a>>) -> Scope<'a> {
         Scope {
             outer: Some(outer),
+            root: Some(outer.root.unwrap_or(outer)),
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -207,6 +217,7 @@ impl<'a> Scope<'a> {
     pub fn child_transparent(outer: &'a Scope<'a>, module_bindings: &'a Bindings<'a>) -> Scope<'a> {
         Scope {
             outer: Some(outer),
+            root: Some(outer.root.unwrap_or(outer)),
             bindings: ScopeBindings::Borrowed(module_bindings),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -264,6 +275,24 @@ impl<'a> Scope<'a> {
     /// accumulates live read borrows.
     pub fn ancestors(&self) -> impl Iterator<Item = &Scope<'a>> {
         std::iter::once(self).chain(std::iter::successors(self.outer, |s| s.outer))
+    }
+
+    /// The run-global [`ScopeKind::Root`] (builtins only). `self` if it is the root,
+    /// else the direct `root` handle every scope carries — one hop, no `outer` walk.
+    fn root_scope(&self) -> &Scope<'a> {
+        self.root.unwrap_or(self)
+    }
+
+    /// True iff `name` is a builtin type. The builtins live once in the immutable
+    /// run-global root, so a user type declaration colliding with one is a `Rebind` at
+    /// any depth — the consult hits the root directly rather than each layer of the
+    /// `outer` chain. Frame-local bindings (FN parameters, MATCH/TRY `it`) live below
+    /// the root, so ordinary user-vs-user cross-scope shadowing is unaffected.
+    fn shadows_builtin_type(&self, name: &str) -> bool {
+        self.root_scope()
+            .bindings()
+            .lookup_type(name, None)
+            .is_some()
     }
 
     /// True iff the nearest non-`Anonymous` enclosing scope is a SIG decl_scope. A
@@ -387,6 +416,9 @@ impl<'a> Scope<'a> {
     ) -> Result<&'a crate::machine::model::types::KType<'a>, KError> {
         if self.bindings.is_borrowed() {
             return self.write_target().register_type_upsert(name, ktype, index);
+        }
+        if self.shadows_builtin_type(&name) {
+            return Err(KError::new(KErrorKind::Rebind { name }));
         }
         let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc_ktype(ktype);
         match self

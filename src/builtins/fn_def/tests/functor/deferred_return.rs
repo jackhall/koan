@@ -119,7 +119,7 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
 /// `(Set WITH {Elt = Er.Type})` — the sharing-constraint
 /// surface canonical for `module Make (E : ORDERED) : SET with type elt = E.t`.
 /// Pins that FN-def registers `Deferred(_)` without erroring `Unbound` on `Er`;
-/// the body's `MODULE Result` isn't sig-ascribed to `Set`, so end-to-end
+/// the body's `MODULE Generated` isn't sig-ascribed to `Set`, so end-to-end
 /// invocation would reject at `Signature { .. }` membership before reaching
 /// the pin check.
 #[test]
@@ -137,7 +137,7 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     run(
         scope,
         "FN (MK Er :OrderedSig) -> :(Set WITH {Elt = Er.Type}) = \
-         (MODULE Result = ((LET Elt = Number) (LET insert = 0)))",
+         (MODULE Generated = ((LET Elt = Number) (LET insert = 0)))",
     );
     let f = lookup_fn(scope, "MK");
     assert!(

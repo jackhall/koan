@@ -19,7 +19,7 @@ fn functor_body_module_dispatch_does_not_dangle() {
     run(scope, "LET IntOrdA = (IntOrd :! OrderedSig)");
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET inner = 1))",
+        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1))",
     );
     run(scope, "LET HeldSet = (MAKESET (IntOrdA))");
 

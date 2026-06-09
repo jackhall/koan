@@ -119,7 +119,12 @@ pub(crate) fn register_builtin_full<'a>(
     let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
 }
 
-/// Build a run-root scope populated with the language's builtin `KFunction`s.
+/// Build the run-global root populated with the language's builtin `KFunction`s, then
+/// return a mutable `RunScope` child of it for top-level Koan bindings. The root stays
+/// builtin-only and immutable; a top-level bind lands in the `RunScope`, leaving the
+/// root binding-free. Builtins resolve from any scope by walking `outer` to the root
+/// (the [`Scope::shadows_builtin_value`] no-shadow consult does the same).
+///
 /// Registration order does not affect dispatch — [`Scope::resolve_dispatch`] buckets by
 /// untyped signature shape and picks overloads by `KType` specificity.
 pub fn default_scope<'a>(
@@ -187,5 +192,5 @@ pub fn default_scope<'a>(
     type_ops::register(scope);
     type_constructors::register(scope);
 
-    scope
+    arena.alloc_scope(Scope::child_under(scope))
 }

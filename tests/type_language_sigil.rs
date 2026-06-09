@@ -300,7 +300,7 @@ fn sigil_user_functor_application_through_dispatch() {
          MODULE IntOrdBase = ((LET compare = 7))\n\
          LET IntOrd = (IntOrdBase :! OrderedSig)\n\
          FUNCTOR (MAKESET Er :OrderedSig) -> Module = \
-            (MODULE Result = ((LET tag = 0)))\n\
+            (MODULE Generated = ((LET tag = 0)))\n\
          LET MySet = (MAKESET IntOrd)",
     );
     // `MySet` is a module bound under a Type-classed name — type-only, so its identity

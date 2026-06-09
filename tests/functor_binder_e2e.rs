@@ -2,12 +2,12 @@
 //! shape from [design/typing/functors.md](../design/typing/functors.md).
 //!
 //! The test exercises the full shipped FUNCTOR pipeline:
-//! 1. **Define** — `FUNCTOR (MAKESET Er :OrderedSig) -> SetSig = (MODULE Result
+//! 1. **Define** — `FUNCTOR (MAKESET Er :OrderedSig) -> SetSig = (MODULE Generated
 //!    = ...)` registers a KFunction with `is_functor: true`.
 //! 2. **Apply** — `LET IntSet = (MAKESET IntOrd)` invokes the functor with a
 //!    signature-typed module argument; per-call type-side install registers
 //!    `Er`'s type-language identity into the body's child scope.
-//! 3. **Produce** — the body's `MODULE Result = (...)` returns a module value
+//! 3. **Produce** — the body's `MODULE Generated = (...)` returns a module value
 //!    that the LET RHS binds as `IntSet`. The Stage-5 allowlist routes the
 //!    `KTypeValue(Module)` carrier to a single type-side `register_type` install,
 //!    so `IntSet` lands only in `bindings.types`.
@@ -101,7 +101,7 @@ fn functor_binder_e2e_makeset_produces_module() {
          MODULE IntOrdBase = ((LET compare = 7))\n\
          LET IntOrd = (IntOrdBase :! OrderedSig)\n\
          FUNCTOR (MAKESET Er :OrderedSig) -> Module = \
-            (MODULE Result = ((LET tag = 0)))\n\
+            (MODULE Generated = ((LET tag = 0)))\n\
          LET IntSet = (MAKESET IntOrd)",
     );
     // `MAKESET` registered as a FUNCTOR-flagged KFunction in the dispatch

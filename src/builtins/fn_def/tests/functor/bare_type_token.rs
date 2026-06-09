@@ -35,7 +35,7 @@ fn functor_admits_bare_number_token_at_type_slot() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "FUNCTOR (MAKETREE Elt :Type) -> Module = (MODULE Result = (LET inner = 1))",
+        "FUNCTOR (MAKETREE Elt :Type) -> Module = (MODULE Generated = (LET inner = 1))",
     );
     let result = run_one_type(scope, parse_one("MAKETREE Number"));
     match result {
@@ -52,7 +52,7 @@ fn functor_admits_bare_str_bool_null_tokens_at_type_slot() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "FUNCTOR (MAKETREE Elt :Type) -> Module = (MODULE Result = (LET inner = 1))",
+        "FUNCTOR (MAKETREE Elt :Type) -> Module = (MODULE Generated = (LET inner = 1))",
     );
     for token in ["Str", "Bool", "Null"] {
         let src = format!("MAKETREE {token}");
@@ -73,7 +73,7 @@ fn functor_per_call_type_side_bind_is_observable_via_module_type_members() {
     run(
         scope,
         "FUNCTOR (MAKETREE Elt :Type) -> Module = \
-         (MODULE Result = ((LET ElemType = Elt) (LET inner = 1)))",
+         (MODULE Generated = ((LET ElemType = Elt) (LET inner = 1)))",
     );
     let result = run_one_type(scope, parse_one("MAKETREE Number"));
     let module = match result {
@@ -99,7 +99,7 @@ fn functor_bare_value_carrier_is_dispatch_no_match_not_typemismatch() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "FUNCTOR (MAKETREE Elt :Type) -> Module = (MODULE Result = (LET inner = 1))",
+        "FUNCTOR (MAKETREE Elt :Type) -> Module = (MODULE Generated = (LET inner = 1))",
     );
     let err = run_expecting_dispatch_error(scope, parse_one("MAKETREE 7"));
     match &err.kind {
@@ -119,7 +119,7 @@ fn functor_module_carrier_does_not_fill_type_slot() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "FUNCTOR (MAKETREE Elt :Type) -> Module = (MODULE Result = (LET inner = 1))\n\
+        "FUNCTOR (MAKETREE Elt :Type) -> Module = (MODULE Generated = (LET inner = 1))\n\
          MODULE IntMod = (LET inner = 1)",
     );
     let _ = run_expecting_dispatch_error(scope, parse_one("MAKETREE IntMod"));

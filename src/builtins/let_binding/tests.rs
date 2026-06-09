@@ -300,7 +300,7 @@ fn let_type_class_with_functor_admits() {
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
-         LET MyF = (FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Result = (LET inner = 1)))",
+         LET MyF = (FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1)))",
     );
     assert!(
         scope.lookup("MyF").is_none(),
@@ -331,7 +331,7 @@ fn let_value_class_with_functor_rejects() {
     run(scope, "SIG OrderedSig = (VAL compare :Number)");
     let err = run_one_err(
         scope,
-        parse_one("LET f = (FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Result = (LET inner = 1)))"),
+        parse_one("LET f = (FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1)))"),
     );
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
