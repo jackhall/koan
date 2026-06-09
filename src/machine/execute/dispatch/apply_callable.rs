@@ -224,7 +224,7 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'a>(
     match ctx.install_eager_subs(working_expr, staged_subs, Some(picked), scope, idx) {
         EagerSubsInstall::DepError(step) => Ok(step),
         EagerSubsInstall::AllInline(working_expr) => match picked.bind(working_expr) {
-            Ok(future) => Ok(ctx.invoke_to_step_pinned(future, scope, idx)),
+            Ok(future) => Ok(ctx.invoke_to_step_pinned(future, idx)),
             Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
         },
         EagerSubsInstall::Parked(track) => {

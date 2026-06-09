@@ -24,8 +24,7 @@ use crate::machine::{
 use super::{arg, err, kw, register_builtin, sig};
 
 pub fn body_identifier<'a, 's>(
-    scope: &'s Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 's>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let s_name = match bundle.get("s") {
@@ -47,10 +46,10 @@ pub fn body_identifier<'a, 's>(
     // Value-side first, then type-side: a FUNCTOR's signature-typed parameter is bound
     // only into `bindings.types`, so `Er.pure(x)` inside the functor body must reach the
     // carried `&Module` through `resolve_type`.
-    if let Some(target) = scope.lookup(&s_name) {
-        return access_field(scope, target, &field_name);
+    if let Some(target) = sched.current_scope().lookup(&s_name) {
+        return access_field(sched.current_scope(), target, &field_name);
     }
-    if let Some(kt) = scope.resolve_type(&s_name) {
+    if let Some(kt) = sched.current_scope().resolve_type(&s_name) {
         match kt {
             KType::Module { module: m, .. } => return access_module_member(m, &field_name),
             KType::AbstractType {
@@ -78,8 +77,7 @@ pub fn body_identifier<'a, 's>(
 /// (`Outer.Inner.x`) works regardless of whether each step's field is a module name or
 /// a regular member.
 pub fn body_type_lhs<'a, 's>(
-    scope: &'s Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 's>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let s_kt = match bundle.get_type("s") {
@@ -106,8 +104,10 @@ pub fn body_type_lhs<'a, 's>(
     // memoized, park-capable bridge. Dispatch resolves this argument before the body runs, so
     // a `Park` outcome is unreachable here and surfaces as a loud structured error.
     match s_kt {
-        KType::Unresolved(te) => match resolve_type_leaf_carrier(scope, te, None) {
-            TypeLeafCarrier::Resolved(kt) => access_type_member(scope, kt, &field_name),
+        KType::Unresolved(te) => match resolve_type_leaf_carrier(sched.current_scope(), te, None) {
+            TypeLeafCarrier::Resolved(kt) => {
+                access_type_member(sched.current_scope(), kt, &field_name)
+            }
             TypeLeafCarrier::Unbound(name) => err(KError::new(KErrorKind::UnboundName(name))),
             TypeLeafCarrier::Park(producers) => err(KError::new(KErrorKind::ShapeError(format!(
                 "ATTR lhs type `{}` resolved to a still-finalizing type \
@@ -117,13 +117,12 @@ pub fn body_type_lhs<'a, 's>(
                 producers.len(),
             )))),
         },
-        kt => access_type_member(scope, kt, &field_name),
+        kt => access_type_member(sched.current_scope(), kt, &field_name),
     }
 }
 
 pub fn body_newtype<'a, 's>(
-    scope: &'s Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 's>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let target = match bundle.require("s") {
@@ -134,11 +133,10 @@ pub fn body_newtype<'a, 's>(
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    access_field(scope, target, &field_name)
+    access_field(sched.current_scope(), target, &field_name)
 }
 
 pub fn body_module<'a, 's>(
-    _scope: &'s Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {

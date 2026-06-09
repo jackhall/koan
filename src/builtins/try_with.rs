@@ -29,7 +29,6 @@ use crate::machine::core::kfunction::body::split_body_statements;
 use crate::machine::core::kfunction::body::ReturnContract;
 
 pub fn body<'a, 's>(
-    scope: &'s Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
@@ -37,25 +36,31 @@ pub fn body<'a, 's>(
         Ok(e) => e,
         Err(e) => return err(e),
     };
-    let contract =
-        match resolve_arm_return_contract(scope, &mut bundle, "TRY", sched.current_lexical_chain())
-        {
-            Ok(c) => c,
-            Err(e) => return err(e),
-        };
+    let contract = match resolve_arm_return_contract(
+        sched.current_scope(),
+        &mut bundle,
+        "TRY",
+        sched.current_lexical_chain(),
+    ) {
+        Ok(c) => c,
+        Err(e) => return err(e),
+    };
     let branches_expr = match bundle.extract_kexpression_or_shape_error("TRY", "branches") {
         Ok(e) => e,
         Err(e) => return err(e),
     };
 
     // Body runs in a fresh `child_under` scope so a `LET` inside it stays local
-    // and reads still chain out to `scope`.
-    let body_scope: &'a Scope<'a> = scope.arena.alloc_scope(Scope::child_under(scope));
+    // and reads still chain out to the call-site scope.
+    let body_scope: &'a Scope<'a> = sched
+        .current_scope()
+        .arena
+        .alloc_scope(Scope::child_under(sched.current_scope()));
     let sub_ids = sched.enter_block(body_scope.id, vec![expr_inner], body_scope);
     let sub_id = sub_ids[0];
     let outer_frame = sched.current_frame();
-    let finish: CatchFinish<'a> = Box::new(move |scope, sched, result| {
-        dispatch_branch(scope, sched, result, branches_expr, outer_frame, contract)
+    let finish: CatchFinish<'a> = Box::new(move |sched, result| {
+        dispatch_branch(sched, result, branches_expr, outer_frame, contract)
     });
     let catch_id = sched.add_catch_here(sub_id, finish);
     BodyResult::DeferTo(catch_id)
@@ -64,7 +69,6 @@ pub fn body<'a, 's>(
 /// On no match: re-raise the original `KError`, or `ShapeError("TRY missing ok
 /// arm")` on the success path without an `ok` or `_` arm.
 fn dispatch_branch<'a, 's>(
-    scope: &'s Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a, 's>,
     result: Result<&'a KObject<'a>, KError>,
     branches_expr: crate::machine::model::ast::KExpression<'a>,
@@ -76,7 +80,7 @@ fn dispatch_branch<'a, 's>(
     let (tag, it_value, original_err): (String, KObject<'a>, Option<KError>) = match result {
         Ok(v) => ("Ok".to_string(), v.deep_clone(), None),
         Err(e) => {
-            let tagged: KObject<'a> = e.to_tagged(scope.arena);
+            let tagged: KObject<'a> = e.to_tagged(sched.current_scope().arena);
             let (tag, payload) = match tagged {
                 KObject::Tagged { tag, value, .. } => (tag, (*value).deep_clone()),
                 _ => unreachable!("KError::to_tagged always returns Tagged"),
@@ -99,7 +103,7 @@ fn dispatch_branch<'a, 's>(
     };
 
     // Chain the call-site frame per per-call-arena-protocol.md § Outer-frame chain.
-    let frame: Rc<CallArena> = CallArena::new(scope, outer_frame);
+    let frame: Rc<CallArena> = CallArena::new(sched.current_scope(), outer_frame);
     // `it` binds at idx 0; the arm body's statements sit at idx >= 1, so the strict
     // `idx < cutoff` rule lets the body see it — same path MATCH's `it` uses. The per-call
     // re-anchor is concentrated in `with_anchored_child`; arm statements dispatch via

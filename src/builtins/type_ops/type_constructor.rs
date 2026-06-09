@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::machine::model::types::{KKind, NominalMember, NominalSchema, RecursiveSet};
 use crate::machine::model::KType;
-use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, Scope, ScopeId};
+use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, ScopeId};
 
 use crate::builtins::err;
 
@@ -12,8 +12,7 @@ use crate::builtins::err;
 /// (`ascribe.rs:body_opaque`) re-mints a fresh per-call singleton with the binding's slot
 /// name and a per-call `scope_id`. Arity-1 only.
 pub fn body<'a, 's>(
-    scope: &'s Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 's>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let param_kt = match bundle.require_ktype("param") {
@@ -33,7 +32,12 @@ pub fn body<'a, 's>(
         param_names: vec![param],
     });
     let set = Rc::new(RecursiveSet::new(vec![member]));
-    BodyResult::ktype(scope.arena.alloc_ktype(KType::SetRef { set, index: 0 }))
+    BodyResult::ktype(
+        sched
+            .current_scope()
+            .arena
+            .alloc_ktype(KType::SetRef { set, index: 0 }),
+    )
 }
 
 #[cfg(test)]

@@ -10,14 +10,13 @@
 use std::collections::HashSet;
 
 use crate::machine::model::{Held, KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
+use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle};
 
 use crate::builtins::ascribe::abstract_type_names_of;
 use crate::builtins::err;
 
 pub fn body<'a, 's>(
-    scope: &'s Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 's>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let s = match bundle.require_signature("sig") {
@@ -54,7 +53,7 @@ pub fn body<'a, 's>(
             }
         }
     }
-    BodyResult::ktype(scope.arena.alloc_ktype(KType::Signature {
+    BodyResult::ktype(sched.current_scope().arena.alloc_ktype(KType::Signature {
         sig: s,
         pinned_slots: pinned,
     }))

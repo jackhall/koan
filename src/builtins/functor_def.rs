@@ -31,11 +31,10 @@ use super::{arg, kw, register_builtin_full, sig};
 /// `FnKind::Functor` selects the return-admissibility verdict and the
 /// `is_functor: true` flag downstream.
 pub fn body<'a, 's>(
-    scope: &'s Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    build_fn_like(scope, sched, bundle, "FUNCTOR", FnKind::Functor)
+    build_fn_like(sched, bundle, "FUNCTOR", FnKind::Functor)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

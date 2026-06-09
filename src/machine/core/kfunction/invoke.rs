@@ -35,12 +35,11 @@ impl<'a> KFunction<'a> {
     /// substrate for closure capture.
     pub fn invoke<'s>(
         &'a self,
-        scope: &'s Scope<'a>,
         sched: &mut dyn SchedulerHandle<'a, 's>,
         bundle: ArgumentBundle<'a>,
     ) -> BodyResult<'a> {
         match &self.body {
-            Body::Builtin(f) => f(scope, sched, bundle),
+            Body::Builtin(f) => f(sched, bundle),
             Body::UserDefined(expr) => {
                 let outer = self.captured_scope();
                 // Tail-reuse: when this invoke is the body of a TCO Replace step and the
@@ -253,7 +252,7 @@ impl<'a> KFunction<'a> {
                             combine_slot = Some(s.add_combine_in_frame(
                                 deps,
                                 vec![],
-                                Box::new(move |_scope, _sched, results| {
+                                Box::new(move |_sched, results| {
                                     let body_carried = results[body_terminal_idx];
                                     let per_call_ret: KType<'_> = match per_call_ret {
                                         PerCallReturnType::Ready(kt) => kt,
@@ -299,7 +298,10 @@ impl<'a> KFunction<'a> {
                                                 return mismatch(body_type.name());
                                             }
                                             BodyResult::ktype(
-                                                _scope.arena.alloc_ktype(body_type.clone()),
+                                                _sched
+                                                    .current_scope()
+                                                    .arena
+                                                    .alloc_ktype(body_type.clone()),
                                             )
                                         }
                                         Carried::Object(body_value) => {
@@ -311,7 +313,9 @@ impl<'a> KFunction<'a> {
                                             // param-bind stamp above.
                                             let stamped =
                                                 body_value.deep_clone().stamp_type(&per_call_ret);
-                                            BodyResult::value(_scope.arena.alloc_object(stamped))
+                                            BodyResult::value(
+                                                _sched.current_scope().arena.alloc_object(stamped),
+                                            )
                                         }
                                     }
                                 }),

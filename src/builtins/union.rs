@@ -26,7 +26,6 @@ use crate::machine::core::kfunction::argument_bundle::{
 /// the sealed `RecursiveSet` member in `bindings.types`, and the declaration yields a
 /// `KTypeValue(SetRef)` first-class type value — no value-side carrier.
 pub fn body<'a, 's>(
-    scope: &'s Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
@@ -45,8 +44,8 @@ pub fn body<'a, 's>(
     // Mark this binder in-flight so a consumer referencing it (an earlier sibling still
     // finalizing) can park on our producer node. The guard's Drop removes the entry; the
     // Park path moves it into the Combine-finish closure.
-    let scope_id = scope.id;
-    let pending_guard = scope.bindings().insert_pending_type(
+    let scope_id = sched.current_scope().id;
+    let pending_guard = sched.current_scope().bindings().insert_pending_type(
         name.clone(),
         PendingTypeEntry {
             kind: KKind::Tagged,
@@ -59,7 +58,7 @@ pub fn body<'a, 's>(
     // rather than parking on its own placeholder. The chain gates variant type names to
     // this binder's lexical position.
     let chain = sched.current_lexical_chain();
-    let mut elaborator = Elaborator::new(scope)
+    let mut elaborator = Elaborator::new(sched.current_scope())
         .with_threaded([name.clone()])
         .with_chain(chain.clone());
     let outcome = parse_typed_field_list_via_elaborator(
@@ -75,7 +74,9 @@ pub fn body<'a, 's>(
         .map(|c| BindingIndex::value(c.index))
         .unwrap_or(BindingIndex::BUILTIN);
     match outcome {
-        FieldListOutcome::Done(fields) => finalize_union(scope, name, fields, bind_index),
+        FieldListOutcome::Done(fields) => {
+            finalize_union(sched.current_scope(), name, fields, bind_index)
+        }
         FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
         FieldListOutcome::Pending {
             park_producers,
@@ -83,7 +84,6 @@ pub fn body<'a, 's>(
         } => {
             let name_for_finish = name.clone();
             defer_field_list_via_combine(
-                scope,
                 sched,
                 schema_expr,
                 park_producers,

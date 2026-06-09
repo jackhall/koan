@@ -10,8 +10,7 @@ use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 /// eager-evaluating contexts. The `QUOTE` head-keyword is not part of the
 /// documented surface; user code goes through the `#` sigil.
 pub fn body<'a, 's>(
-    scope: &'s Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a, 's>,
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let expr = match extract_kexpression(&mut bundle, "expr") {
@@ -22,7 +21,7 @@ pub fn body<'a, 's>(
             )));
         }
     };
-    let arena = scope.arena;
+    let arena = sched.current_scope().arena;
     BodyResult::value(arena.alloc_object(KObject::KExpression(expr)))
 }
 

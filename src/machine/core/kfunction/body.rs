@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use crate::machine::core::{CallArena, KError, Scope, ScopeId};
+use crate::machine::core::{CallArena, KError, ScopeId};
 use crate::machine::model::types::UntypedKey;
 use crate::machine::model::values::{Carried, KObject};
 use crate::machine::model::KType;
@@ -201,19 +201,15 @@ pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpressio
     }
 }
 
-/// Builtin body. The scope borrow `'s` is frame-bounded — it may be a per-call frame's child,
-/// re-projected from the live frame cart at the read boundary — and is distinct from the run
-/// lifetime `'a` of the values it carries (`'a: 's`). A body therefore cannot widen its scope
-/// back to `'a` to persist it in a run-lived slot: it routes re-dispatch against its own scope
-/// through the framed `*_in_frame` handle methods (stored `Yoked`), and only a genuinely
-/// `'a`-lived scope it allocates itself (a fresh child in `scope.arena`) flows to the run-lifetime
-/// `add_dispatch` / `enter_body_block`. Not `&mut` — every node spawned during the body shares
-/// the scope; mutability is interior via `RefCell`.
-pub type BuiltinFn = for<'a, 's> fn(
-    &'s Scope<'a>,
-    &mut dyn SchedulerHandle<'a, 's>,
-    ArgumentBundle<'a>,
-) -> BodyResult<'a>;
+/// Builtin body. The body takes no scope argument: it reads the executing slot's scope on demand
+/// via [`SchedulerHandle::current_scope`], a **short** borrow re-fetched per use and never held
+/// across a `&mut` handle call. That on-demand access is what keeps the read boundary an honest
+/// bounded brand (no fabricated `&'run`): nothing holds a live scope borrow across the in-step TCO
+/// frame reset. A body re-dispatching against its own scope uses the `*_here` handle methods; a
+/// genuinely `'a`-lived scope it allocates itself (a fresh child) flows to `add_dispatch` /
+/// `enter_body_block`.
+pub type BuiltinFn =
+    for<'a, 's> fn(&mut dyn SchedulerHandle<'a, 's>, ArgumentBundle<'a>) -> BodyResult<'a>;
 
 /// Dispatch-time name extractor for a binder builtin. Returning `Some(name)` installs
 /// `placeholders[name] = NodeId(this_slot)` so a sibling looking up `name` while the

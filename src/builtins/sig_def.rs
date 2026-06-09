@@ -21,7 +21,6 @@ use super::{arg, err, kw, register_builtin_with_binder, sig};
 use crate::machine::core::kfunction::argument_bundle::extract_bare_type_name;
 
 pub fn body<'a, 's>(
-    scope: &'s Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
@@ -34,8 +33,8 @@ pub fn body<'a, 's>(
         Err(e) => return err(e),
     };
 
-    let arena = scope.arena;
-    let decl_scope = arena.alloc_scope(Scope::child_under_sig(scope, name.clone()));
+    let arena = sched.current_scope().arena;
+    let decl_scope = arena.alloc_scope(Scope::child_under_sig(sched.current_scope(), name.clone()));
 
     let deps = sched.enter_body_block(decl_scope, body_expr);
 
@@ -44,8 +43,8 @@ pub fn body<'a, 's>(
         .map(|chain| BindingIndex::value(chain.index))
         .unwrap_or(BindingIndex::BUILTIN);
     let name_for_finish = name.clone();
-    let finish: CombineFinish<'a> = Box::new(move |parent_scope, _sched, _results| {
-        let arena = parent_scope.arena;
+    let finish: CombineFinish<'a> = Box::new(move |_sched, _results| {
+        let arena = _sched.current_scope().arena;
         let sig: &'a Signature<'a> =
             arena.alloc_signature(Signature::new(name_for_finish.clone(), decl_scope));
         // One unified identity in `bindings.types`: `KType::Signature { sig, pinned_slots }`
@@ -59,7 +58,11 @@ pub fn body<'a, 's>(
             sig,
             pinned_slots: Vec::new(),
         };
-        match parent_scope.register_type_upsert(name_for_finish.clone(), identity, bind_index) {
+        match _sched.current_scope().register_type_upsert(
+            name_for_finish.clone(),
+            identity,
+            bind_index,
+        ) {
             Ok(kt_ref) => BodyResult::ktype(arena.alloc_ktype(kt_ref.clone())),
             Err(e) => BodyResult::Err(e.with_frame(Frame::bare(
                 "<signature>",

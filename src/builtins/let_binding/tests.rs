@@ -25,7 +25,9 @@ fn let_inserts_binding_into_scope() {
         ArgValue::Object(Rc::new(KObject::Number(42.0))),
     );
 
-    let value = body(scope, &mut sched, ArgumentBundle { args }).expect_value("LET");
+    let value = sched
+        .run_body_against(scope, |h| body(h, ArgumentBundle { args }))
+        .expect_value("LET");
     assert!(matches!(value, KObject::Number(n) if *n == 42.0));
     let data = scope.bindings().data();
     let (entry, _) = data.get("x").expect("expected binding 'x'");

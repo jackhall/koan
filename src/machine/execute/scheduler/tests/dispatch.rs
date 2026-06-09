@@ -13,42 +13,37 @@ use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
 use crate::machine::model::KObject;
-use crate::machine::{RuntimeArena, Scope};
+use crate::machine::RuntimeArena;
 
 fn body_identifier<'a, 's>(
-    s: &'s Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a, 's>,
+    h: &mut dyn SchedulerHandle<'a, 's>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::value(marker(s, "identifier"))
+    BodyResult::value(marker(h.current_scope(), "identifier"))
 }
 fn body_marker_any<'a, 's>(
-    s: &'s Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a, 's>,
+    h: &mut dyn SchedulerHandle<'a, 's>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::value(marker(s, "any"))
+    BodyResult::value(marker(h.current_scope(), "any"))
 }
 fn body_inner_any<'a, 's>(
-    s: &'s Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a, 's>,
+    h: &mut dyn SchedulerHandle<'a, 's>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::value(marker(s, "inner_any"))
+    BodyResult::value(marker(h.current_scope(), "inner_any"))
 }
 fn body_outer_number<'a, 's>(
-    s: &'s Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a, 's>,
+    h: &mut dyn SchedulerHandle<'a, 's>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::value(marker(s, "outer_number"))
+    BodyResult::value(marker(h.current_scope(), "outer_number"))
 }
 fn body_lowercase<'a, 's>(
-    s: &'s Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a, 's>,
+    h: &mut dyn SchedulerHandle<'a, 's>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::value(marker(s, "lowercase"))
+    BodyResult::value(marker(h.current_scope(), "lowercase"))
 }
 
 fn summarize_marker(obj: &KObject<'_>) -> String {

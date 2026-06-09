@@ -469,7 +469,7 @@ pub(in crate::machine::execute) fn run_dispatch<'a>(
         }
         DispatchShape::RecordType => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(single_poll::record_type(ctx, expr, scope, idx))
+            Ok(single_poll::record_type(ctx, expr, idx))
         }
         DispatchShape::LiteralPassThrough => {
             debug_assert!(init.pre_subs.is_empty());

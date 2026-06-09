@@ -11,19 +11,11 @@ use crate::machine::model::types::{
 };
 use crate::machine::{BindingIndex, LexicalFrame, ResolveOutcome};
 
-fn body_a<'a, 's>(
-    s: &'s Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a, 's>,
-    _a: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    BodyResult::value(marker(s, "a"))
+fn body_a<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, _a: ArgumentBundle<'a>) -> BodyResult<'a> {
+    BodyResult::value(marker(h.current_scope(), "a"))
 }
-fn body_b<'a, 's>(
-    s: &'s Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a, 's>,
-    _a: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    BodyResult::value(marker(s, "b"))
+fn body_b<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, _a: ArgumentBundle<'a>) -> BodyResult<'a> {
+    BodyResult::value(marker(h.current_scope(), "b"))
 }
 
 fn two_slot_sig<'a>(a: KType<'a>, b: KType<'a>) -> ExpressionSignature<'a> {

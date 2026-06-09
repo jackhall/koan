@@ -43,8 +43,8 @@ impl<'a> Scheduler<'a> {
                     deps,
                     park_count,
                     finish,
-                } => self.run_combine(deps, park_count, finish, scope, idx),
-                NodeWork::Catch { from, finish } => self.run_catch(from, finish, scope, idx),
+                } => self.run_combine(deps, park_count, finish, idx),
+                NodeWork::Catch { from, finish } => self.run_catch(from, finish, idx),
                 NodeWork::Lift(state) => NodeStep::Done(Self::run_lift(state)),
             };
             let (prev_frame, post_step_reserve) = self.exit_slot_step(guard);

@@ -151,6 +151,22 @@ impl<'a> Scheduler<'a> {
         self.store.chain_of(id)
     }
 
+    /// Run a builtin body directly against `scope` as the executing slot's scope. A body
+    /// reads its scope on demand via [`SchedulerHandle::current_scope`], so a direct-body
+    /// test installs `Anchored(scope)` for the duration of the call.
+    #[cfg(test)]
+    pub fn run_body_against<R>(
+        &mut self,
+        scope: &'a Scope<'a>,
+        body: impl FnOnce(&mut dyn SchedulerHandle<'a, 'a>) -> R,
+    ) -> R {
+        let chain = LexicalFrame::root(scope.id, 0);
+        let guard = self.enter_slot_step(None, None, chain, NodeScope::Anchored(scope));
+        let out = body(self);
+        let _ = self.exit_slot_step(guard);
+        out
+    }
+
     pub fn len(&self) -> usize {
         self.store.len()
     }
@@ -432,6 +448,20 @@ impl<'a, 's> SchedulerHandle<'a, 's> for Scheduler<'a> {
             NodeScope::Yoked,
             explicit_chain,
         )
+    }
+
+    fn current_scope(&self) -> &Scope<'a> {
+        match self
+            .active_node_scope
+            .expect("a slot step installs active_node_scope before the body reads it")
+        {
+            NodeScope::Anchored(scope) => scope,
+            NodeScope::Yoked => self
+                .active_frame
+                .as_ref()
+                .expect("a Yoked slot step has an active frame")
+                .scope_bounded(),
+        }
     }
 
     fn add_dispatch_here(&mut self, expr: KExpression<'a>) -> NodeId {

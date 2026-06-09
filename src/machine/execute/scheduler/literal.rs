@@ -49,12 +49,15 @@ impl<'a> Scheduler<'a> {
             layout.push(slot);
         }
         let park_count = park_producers.len();
-        let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
+        let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
             let items: Vec<Held<'a>> = layout
                 .into_iter()
                 .map(|slot| slot.materialize(results, park_count))
                 .collect();
-            let allocated: &'a KObject<'a> = scope.arena.alloc_object(KObject::list_of_held(items));
+            let allocated: &'a KObject<'a> = _sched
+                .current_scope()
+                .arena
+                .alloc_object(KObject::list_of_held(items));
             BodyResult::value(allocated)
         });
         self.add_combine(deps, park_producers, scope, finish)
@@ -80,7 +83,7 @@ impl<'a> Scheduler<'a> {
         }
         let frame_label = || Frame::bare("<dict>", "dict literal");
         let park_count = park_producers.len();
-        let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
+        let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
             let mut map: HashMap<Box<dyn Serializable<'a> + 'a>, Held<'a>> = HashMap::new();
             for (k_slot, v_slot) in layout {
                 let key_held = k_slot.materialize(results, park_count);
@@ -107,7 +110,10 @@ impl<'a> Scheduler<'a> {
                 };
                 map.insert(Box::new(kkey), value_held);
             }
-            let allocated: &'a KObject<'a> = scope.arena.alloc_object(KObject::dict_of_held(map));
+            let allocated: &'a KObject<'a> = _sched
+                .current_scope()
+                .arena
+                .alloc_object(KObject::dict_of_held(map));
             BodyResult::value(allocated)
         });
         self.add_combine(deps, park_producers, scope, finish)
@@ -132,14 +138,16 @@ impl<'a> Scheduler<'a> {
             layout.push(val_slot);
         }
         let park_count = park_producers.len();
-        let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
+        let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
             let record: Record<Held<'a>> = names
                 .into_iter()
                 .zip(layout)
                 .map(|(name, slot)| (name, slot.materialize(results, park_count)))
                 .collect();
-            let allocated: &'a KObject<'a> =
-                scope.arena.alloc_object(KObject::record_of_held(record));
+            let allocated: &'a KObject<'a> = _sched
+                .current_scope()
+                .arena
+                .alloc_object(KObject::record_of_held(record));
             BodyResult::value(allocated)
         });
         self.add_combine(deps, park_producers, scope, finish)

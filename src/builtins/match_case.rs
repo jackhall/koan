@@ -24,7 +24,6 @@ use crate::machine::core::kfunction::body::split_body_statements;
 /// the binding can't leak). No matching branch → `ShapeError("inexhaustive match
 /// = no branch for `X`")`; malformed shape → `ShapeError`.
 pub fn body<'a, 's>(
-    scope: &'s Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
@@ -48,7 +47,7 @@ pub fn body<'a, 's>(
         None => return err(KError::new(KErrorKind::MissingArg("value".to_string()))),
     };
     let contract = match resolve_arm_return_contract(
-        scope,
+        sched.current_scope(),
         &mut bundle,
         "MATCH",
         sched.current_lexical_chain(),
@@ -71,7 +70,7 @@ pub fn body<'a, 's>(
         Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
     };
     // Chain the call-site frame per per-call-arena-protocol.md § Outer-frame chain.
-    let frame: Rc<CallArena> = CallArena::new(scope, sched.current_frame());
+    let frame: Rc<CallArena> = CallArena::new(sched.current_scope(), sched.current_frame());
     // `it` binds at idx 0; the arm body's statements sit at idx >= 1, so the strict
     // `idx < cutoff` rule lets the body see it — same path the FN parameter uses. The
     // per-call re-anchor is concentrated in `with_anchored_child`; arm statements dispatch

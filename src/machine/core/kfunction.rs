@@ -200,11 +200,10 @@ mod tests {
     use crate::machine::model::{KKind, KObject};
 
     fn body_any<'a, 's>(
-        s: &'s Scope<'a>,
-        _h: &mut dyn SchedulerHandle<'a, 's>,
+        h: &mut dyn SchedulerHandle<'a, 's>,
         _a: ArgumentBundle<'a>,
     ) -> BodyResult<'a> {
-        BodyResult::value(marker(s, "any"))
+        BodyResult::value(marker(h.current_scope(), "any"))
     }
 
     /// Coarse bucket-key lookup over the scope chain. Returns the first strict-shape

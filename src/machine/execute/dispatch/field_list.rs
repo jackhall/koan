@@ -31,7 +31,6 @@ pub(crate) type FieldListFinalize<'a> =
 /// every finish arm; `error_frame` is attached to the user-facing `Err` arm.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn defer_field_list_via_combine<'a, 's>(
-    _scope: &'s Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a, 's>,
     expr: KExpression<'a>,
     park_producers: Vec<NodeId>,
@@ -49,13 +48,13 @@ pub(crate) fn defer_field_list_via_combine<'a, 's>(
         .into_iter()
         .map(|sub| sched.add_dispatch_here(sub))
         .collect();
-    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
+    let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
         // `results` = `[park results.. , owned-sub results..]`; the re-walk consumes only
         // the owned-sub carriers, in the DFS order they were scheduled above.
         let mut feed = ResultFeed::new(&results[park_count..]);
-        let mut elaborator = Elaborator::new(scope)
+        let mut elaborator = Elaborator::new(_sched.current_scope())
             .with_threaded(threaded.iter().cloned())
             .with_chain(chain.clone());
         match parse_typed_field_list_via_elaborator(
@@ -65,7 +64,7 @@ pub(crate) fn defer_field_list_via_combine<'a, 's>(
             &mut elaborator,
             Some(&mut feed),
         ) {
-            FieldListOutcome::Done(fields) => finalize(scope, fields),
+            FieldListOutcome::Done(fields) => finalize(_sched.current_scope(), fields),
             FieldListOutcome::Err(msg) => {
                 let error = KError::new(KErrorKind::ShapeError(msg));
                 BodyResult::Err(match error_frame {
@@ -92,7 +91,6 @@ pub(crate) fn defer_field_list_via_combine<'a, 's>(
 /// field naming a forward type parks and a sigil field type sub-dispatches, both deferred
 /// through one Combine (the field walker's own re-walk handles nested records).
 pub(crate) fn elaborate_record_value<'a, 's>(
-    scope: &'s Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a, 's>,
     fields: KExpression<'a>,
     chain: Option<Rc<LexicalFrame>>,
@@ -101,7 +99,7 @@ pub(crate) fn elaborate_record_value<'a, 's>(
         let record = Record::from_pairs(pairs);
         BodyResult::ktype(scope.arena.alloc_ktype(KType::Record(Box::new(record))))
     }
-    let mut elaborator = Elaborator::new(scope).with_chain(chain.clone());
+    let mut elaborator = Elaborator::new(sched.current_scope()).with_chain(chain.clone());
     match parse_typed_field_list_via_elaborator(
         &fields,
         "record fields",
@@ -109,13 +107,12 @@ pub(crate) fn elaborate_record_value<'a, 's>(
         &mut elaborator,
         None,
     ) {
-        FieldListOutcome::Done(pairs) => fold(scope, pairs),
+        FieldListOutcome::Done(pairs) => fold(sched.current_scope(), pairs),
         FieldListOutcome::Err(msg) => BodyResult::Err(KError::new(KErrorKind::ShapeError(msg))),
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,
         } => defer_field_list_via_combine(
-            scope,
             sched,
             fields,
             park_producers,

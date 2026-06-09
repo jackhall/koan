@@ -24,7 +24,6 @@ use super::{arg, err, kw, register_builtin_with_binder, sig};
 
 fn schedule_type_resolve<'a, 's>(
     sched: &mut dyn SchedulerHandle<'a, 's>,
-    _decl_scope: &'s Scope<'a>,
     te: &TypeName,
 ) -> crate::machine::NodeId {
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Type(te.clone()))]);
@@ -59,11 +58,10 @@ enum CarrierForm<'a> {
 }
 
 pub fn body<'a, 's>(
-    scope: &'s Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    if !scope.is_in_sig_body() {
+    if !sched.current_scope().is_in_sig_body() {
         return err(KError::new(KErrorKind::ShapeError(
             "VAL is only valid inside a SIG body — use LET for value bindings in \
              modules and run-root scope"
@@ -112,17 +110,17 @@ pub fn body<'a, 's>(
         .unwrap_or(BindingIndex::BUILTIN);
 
     match carrier {
-        CarrierForm::Direct(kt) => finalize_val(scope, name, kt, bind_index),
+        CarrierForm::Direct(kt) => finalize_val(sched.current_scope(), name, kt, bind_index),
         CarrierForm::Leaf(te) => {
-            let resolve_id = schedule_type_resolve(sched, scope, &te);
-            defer_val_via_combine(scope, sched, name, te, resolve_id, bind_index)
+            let resolve_id = schedule_type_resolve(sched, &te);
+            defer_val_via_combine(sched, name, te, resolve_id, bind_index)
         }
         // A `TypeNameRef` carrier always holds a bare-leaf `TypeName` now —
         // parameterized surface forms sub-Dispatch and never reach this slot — so the
         // leaf is the only shape and always re-dispatches against decl_scope.
         CarrierForm::Raw(te) => {
-            let resolve_id = schedule_type_resolve(sched, scope, &te);
-            defer_val_via_combine(scope, sched, name, te, resolve_id, bind_index)
+            let resolve_id = schedule_type_resolve(sched, &te);
+            defer_val_via_combine(sched, name, te, resolve_id, bind_index)
         }
     }
 }
@@ -146,7 +144,6 @@ fn finalize_val<'a>(
 
 /// Errored deps short-circuit via `run_combine` before the closure runs.
 fn defer_val_via_combine<'a, 's>(
-    _scope: &'s Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a, 's>,
     name: String,
     te: TypeName,
@@ -155,7 +152,7 @@ fn defer_val_via_combine<'a, 's>(
 ) -> BodyResult<'a> {
     let name_for_finish = name;
     let te_for_finish = te;
-    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
+    let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
         debug_assert_eq!(results.len(), 1, "VAL Combine has exactly one dep");
         let kt = match results[0] {
             Carried::Type(kt) => kt.clone(),
@@ -168,7 +165,12 @@ fn defer_val_via_combine<'a, 's>(
                 ))));
             }
         };
-        finalize_val(scope, name_for_finish.clone(), kt, bind_index)
+        finalize_val(
+            _sched.current_scope(),
+            name_for_finish.clone(),
+            kt,
+            bind_index,
+        )
     });
     let combine_id = sched.add_combine_here(vec![resolve_id], vec![], finish);
     BodyResult::DeferTo(combine_id)

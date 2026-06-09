@@ -156,14 +156,9 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     /// SchedulerHandle<'a, 's>` via the `SchedulerHandle for DispatchCtx`
     /// impl) so sub-slots spawned by the body inherit the dispatcher's
     /// contextual chain/frame state.
-    pub(super) fn invoke_to_step(
-        &mut self,
-        future: KFuture<'a>,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> NodeStep<'a> {
+    pub(super) fn invoke_to_step(&mut self, future: KFuture<'a>, idx: usize) -> NodeStep<'a> {
         use crate::machine::core::kfunction::BodyResult;
-        match future.function.invoke(scope, self, future.bundle) {
+        match future.function.invoke(self, future.bundle) {
             BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
             BodyResult::Tail {
                 expr,
@@ -191,17 +186,16 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     pub(super) fn invoke_to_step_pinned(
         &mut self,
         future: KFuture<'a>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> NodeStep<'a> {
         if let Some(reserve) = self.sched.active_reserve_take() {
             let local_pin = self.sched.active_frame_replace(Some(reserve));
-            let step = self.invoke_to_step(future, scope, idx);
+            let step = self.invoke_to_step(future, idx);
             let _ = self.sched.active_frame_replace(local_pin);
             step
         } else {
             let _frame_pin = self.sched.active_frame_clone();
-            self.invoke_to_step(future, scope, idx)
+            self.invoke_to_step(future, idx)
         }
     }
 
@@ -321,7 +315,7 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
         match picked {
             None => KeywordedState::finish(self, working_expr, scope, idx),
             Some(f) => match f.bind(working_expr) {
-                Ok(future) => Ok(self.invoke_to_step_pinned(future, scope, idx)),
+                Ok(future) => Ok(self.invoke_to_step_pinned(future, idx)),
                 Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
             },
         }
@@ -426,6 +420,10 @@ impl<'a, 'b, 's> SchedulerHandle<'a, 's> for DispatchCtx<'a, 'b> {
 
     fn add_catch_in_frame(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId {
         self.sched.add_catch_in_frame(from, finish)
+    }
+
+    fn current_scope(&self) -> &Scope<'a> {
+        self.sched.current_scope()
     }
 
     fn add_dispatch_here(&mut self, expr: KExpression<'a>) -> NodeId {

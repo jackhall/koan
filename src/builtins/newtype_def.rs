@@ -49,7 +49,6 @@ use super::{arg, err, kw, register_builtin_with_binder, sig};
 /// to [`body_record_repr`]. Every path writes the sealed `SetRef` identity into
 /// `bindings.types` and yields it on the type channel.
 pub fn body<'a, 's>(
-    scope: &'s Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
@@ -73,8 +72,11 @@ pub fn body<'a, 's>(
             // Bare-leaf carrier (`NEWTYPE Bar = Foo` where `Foo` is user-declared):
             // walk the scope chain for the resolved identity.
             Some(KType::Unresolved(te)) => {
-                if let Some(kt) = scope.resolve_type_with_chain(te.as_str(), chain.as_deref()) {
-                    return finalize_newtype(scope, name, kt.clone(), bind_index);
+                if let Some(kt) = sched
+                    .current_scope()
+                    .resolve_type_with_chain(te.as_str(), chain.as_deref())
+                {
+                    return finalize_newtype(sched.current_scope(), name, kt.clone(), bind_index);
                 }
                 // The repr names a type that is still finalizing in this scheduler — e.g. a
                 // record-repr dependency whose `:{…}` defers its own finalize behind a
@@ -82,17 +84,21 @@ pub fn body<'a, 's>(
                 // producer and re-resolve at Combine-finish, once its identity is in
                 // `types`. A name with no in-flight producer is a genuine forward/unknown
                 // reference — a position error.
-                if let Resolution::Placeholder(producer) =
-                    scope.resolve_with_chain(te.as_str(), chain.as_deref())
+                if let Resolution::Placeholder(producer) = sched
+                    .current_scope()
+                    .resolve_with_chain(te.as_str(), chain.as_deref())
                 {
-                    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
-                        match scope.resolve_type_with_chain(te.as_str(), chain.as_deref()) {
-                            Some(kt) => finalize_newtype(scope, name, kt.clone(), bind_index),
-                            None => err(KError::new(KErrorKind::ShapeError(format!(
-                                "NEWTYPE repr slot = unknown type name `{}`",
-                                te.as_str(),
-                            )))),
+                    let finish: CombineFinish<'a> = Box::new(move |_sched, _results| match _sched
+                        .current_scope()
+                        .resolve_type_with_chain(te.as_str(), chain.as_deref())
+                    {
+                        Some(kt) => {
+                            finalize_newtype(_sched.current_scope(), name, kt.clone(), bind_index)
                         }
+                        None => err(KError::new(KErrorKind::ShapeError(format!(
+                            "NEWTYPE repr slot = unknown type name `{}`",
+                            te.as_str(),
+                        )))),
                     });
                     let combine_id = sched.add_combine_here(Vec::new(), vec![producer], finish);
                     return BodyResult::DeferTo(combine_id);
@@ -102,7 +108,7 @@ pub fn body<'a, 's>(
                     te.as_str(),
                 ))))
             }
-            Some(repr) => finalize_newtype(scope, name, repr, bind_index),
+            Some(repr) => finalize_newtype(sched.current_scope(), name, repr, bind_index),
             None => unreachable!("get_type(repr) then extract_ktype must succeed"),
         }
     } else if matches!(bundle.get("repr"), Some(KObject::KExpression(_))) {
@@ -114,7 +120,7 @@ pub fn body<'a, 's>(
             Some(e) => e,
             None => unreachable!("get(KExpression) then extract_kexpression must succeed"),
         };
-        defer_resolved_sigil(scope, sched, name, inner, bind_index)
+        defer_resolved_sigil(sched, name, inner, bind_index)
     } else {
         err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE repr slot must be a type expression (e.g. `Number`, `Foo`)".to_string(),
@@ -158,7 +164,6 @@ fn finalize_newtype<'a>(
 /// elaboration and threads its own binder name through a recursive `:{next :Node}` — the
 /// reason this is a distinct overload from the shared [`body`] rather than a peek inside it.
 pub fn body_record_repr<'a, 's>(
-    scope: &'s Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
@@ -179,7 +184,7 @@ pub fn body_record_repr<'a, 's>(
             )))
         }
     };
-    elaborate_record_repr(scope, sched, name, fields, bind_index, chain)
+    elaborate_record_repr(sched, name, fields, bind_index, chain)
 }
 
 /// Elaborate + seal a record repr (`:{…}`), threading the binder name so a self-reference
@@ -188,7 +193,6 @@ pub fn body_record_repr<'a, 's>(
 /// rather than `Struct`. `fields` is the bare field list (`(name :Type, …)`) carried by the
 /// `:{…}` `RecordType` part.
 fn elaborate_record_repr<'a, 's>(
-    scope: &'s Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a, 's>,
     name: String,
     fields: KExpression<'a>,
@@ -198,15 +202,15 @@ fn elaborate_record_repr<'a, 's>(
     // Mark this binder in-flight so a consumer referencing it (an earlier sibling still
     // finalizing) can park on our producer node; the guard's Drop removes the entry, and the
     // deferred path moves it into the Combine-finish closure.
-    let pending_guard = scope.bindings().insert_pending_type(
+    let pending_guard = sched.current_scope().bindings().insert_pending_type(
         name.clone(),
         PendingTypeEntry {
             kind: KKind::Newtype,
-            scope_id: scope.id,
+            scope_id: sched.current_scope().id,
             schema_expr: fields.clone(),
         },
     );
-    let mut elaborator = Elaborator::new(scope)
+    let mut elaborator = Elaborator::new(sched.current_scope())
         .with_threaded([name.clone()])
         .with_chain(chain.clone());
     let outcome = parse_typed_field_list_via_elaborator(
@@ -217,7 +221,9 @@ fn elaborate_record_repr<'a, 's>(
         None,
     );
     match outcome {
-        FieldListOutcome::Done(sealed) => finalize_record_newtype(scope, name, sealed, bind_index),
+        FieldListOutcome::Done(sealed) => {
+            finalize_record_newtype(sched.current_scope(), name, sealed, bind_index)
+        }
         FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
         FieldListOutcome::Pending {
             park_producers,
@@ -225,7 +231,6 @@ fn elaborate_record_repr<'a, 's>(
         } => {
             let name_for_finish = name.clone();
             defer_field_list_via_combine(
-                scope,
                 sched,
                 fields,
                 park_producers,
@@ -295,7 +300,6 @@ fn finalize_record_newtype<'a>(
 /// re-wrap the captured sigil and sub-dispatch it to a resolved `KType`, then seal a plain Newtype
 /// over the result at Combine-finish.
 fn defer_resolved_sigil<'a, 's>(
-    _scope: &'s Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a, 's>,
     name: String,
     inner: KExpression<'a>,
@@ -305,8 +309,8 @@ fn defer_resolved_sigil<'a, 's>(
         Box::new(inner),
     ))]);
     let sub = sched.add_dispatch_here(wrapped);
-    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| match results[0] {
-        Carried::Type(kt) => finalize_newtype(scope, name, kt.clone(), bind_index),
+    let finish: CombineFinish<'a> = Box::new(move |_sched, results| match results[0] {
+        Carried::Type(kt) => finalize_newtype(_sched.current_scope(), name, kt.clone(), bind_index),
         Carried::Object(other) => BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE repr sigil resolved to a non-type value `{}`",
             other.ktype().name(),

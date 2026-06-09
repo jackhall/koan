@@ -290,7 +290,6 @@ pub(super) fn sigiled_type_expr<'a>(expr: KExpression<'a>) -> NodeStep<'a> {
 pub(super) fn record_type<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     expr: KExpression<'a>,
-    scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
     let fields = match expr.parts.into_iter().next() {
@@ -301,7 +300,7 @@ pub(super) fn record_type<'a>(
         _ => unreachable!("RecordType shape implies a single RecordType part"),
     };
     let chain = ctx.current_lexical_chain();
-    let body = super::field_list::elaborate_record_value(scope, ctx, fields, chain);
+    let body = super::field_list::elaborate_record_value(ctx, fields, chain);
     schedule_constructor_body(ctx, body, idx)
 }
 

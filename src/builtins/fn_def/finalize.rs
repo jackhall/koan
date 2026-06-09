@@ -278,7 +278,6 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 /// into `signature_expr.parts[slot_idx]` as `Future(obj)` before re-running
 /// `parse_fn_param_list` against the now-final scope.
 pub(crate) fn defer_via_combine<'a, 's>(
-    _scope: &'s Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a, 's>,
     signature_expr: KExpression<'a>,
     inputs: CombineInputs<'a>,
@@ -311,7 +310,7 @@ pub(crate) fn defer_via_combine<'a, 's>(
         owned_subs.push(id);
     }
 
-    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
+    let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
         let mut spliced_parts = signature_expr.parts.clone();
         for &(slot_idx, results_pos) in &splice_layout {
             let carrier = results[results_pos];
@@ -332,17 +331,18 @@ pub(crate) fn defer_via_combine<'a, 's>(
         // Park producers have finalized — resolve against the stable scope.
         // [`resolve_capture_at_finish`] surfaces a re-park as a structured error
         // (every parked producer is terminal by the Combine-finish invariant).
-        let return_type: ReturnType<'a> = match resolve_capture_at_finish(capture, scope, results) {
-            Ok(rt) => rt,
-            Err(e) => return BodyResult::Err(e),
-        };
+        let return_type: ReturnType<'a> =
+            match resolve_capture_at_finish(capture, _sched.current_scope(), results) {
+                Ok(rt) => rt,
+                Err(e) => return BodyResult::Err(e),
+            };
         // The anonymous (`FN :{…}`) path supplies its parameter list pre-built
         // from the resolved record schema; the keyworded FN / FUNCTOR path
         // re-elaborates the spliced signature.
         let elements = match prebuilt_elements {
             Some(es) => es,
             None => {
-                let mut elaborator = Elaborator::new(scope);
+                let mut elaborator = Elaborator::new(_sched.current_scope());
                 match parse_fn_param_list(&spliced_signature, &mut elaborator) {
                     ParamListOutcome::Done(es) => es,
                     ParamListOutcome::Err(msg) => {
@@ -357,7 +357,7 @@ pub(crate) fn defer_via_combine<'a, 's>(
             }
         };
         finalize_fn_with_kind(
-            scope,
+            _sched.current_scope(),
             elements,
             return_type,
             body_expr.clone(),

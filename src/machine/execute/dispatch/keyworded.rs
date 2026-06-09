@@ -217,7 +217,7 @@ impl<'a> KeywordedState<'a> {
         }
         if staged_subs.is_empty() {
             return match resolved.function.bind(new_expr) {
-                Ok(future) => Ok(ctx.invoke_to_step(future, scope, idx)),
+                Ok(future) => Ok(ctx.invoke_to_step(future, idx)),
                 Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
             };
         }
@@ -256,7 +256,7 @@ impl<'a> KeywordedState<'a> {
         match scope.resolve_dispatch(&working_expr, ctx.chain_deref(), &[]) {
             ResolveOutcome::Resolved(r) => {
                 let future = r.function.bind(working_expr)?;
-                Ok(ctx.invoke_to_step_pinned(future, scope, idx))
+                Ok(ctx.invoke_to_step_pinned(future, idx))
             }
             ResolveOutcome::Ambiguous(n) => Err(KError::new(KErrorKind::AmbiguousDispatch {
                 expr: working_expr.summarize(),
