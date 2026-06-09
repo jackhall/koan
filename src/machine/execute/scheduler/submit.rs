@@ -8,7 +8,7 @@ use crate::machine::{
 };
 
 use super::super::dispatch::DispatchState;
-use super::super::nodes::{work_park_producers, Node, NodeWork};
+use super::super::nodes::{work_park_producers, Node, NodeScope, NodeWork};
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
@@ -26,9 +26,9 @@ enum BinderKey {
     Bucket(crate::machine::model::types::UntypedKey),
 }
 
-fn extract_binder_install<'a>(
-    expr: &KExpression<'a>,
-    scope: &'a Scope<'a>,
+fn extract_binder_install<'e, 's>(
+    expr: &KExpression<'e>,
+    scope: &'s Scope<'s>,
 ) -> Option<BinderInstall> {
     let key = expr.untyped_key();
     // Visibility-unfiltered lookup: this runs before the dispatch's chain is
@@ -39,7 +39,7 @@ fn extract_binder_install<'a>(
             continue;
         }
         let bucket_fns = overloads;
-        let picked: Option<(&KFunction<'a>, BinderKey)> = bucket_fns.iter().find_map(|f| {
+        let picked: Option<(&KFunction<'s>, BinderKey)> = bucket_fns.iter().find_map(|f| {
             if let Some(name) = f.binder_name.and_then(|extractor| extractor(expr)) {
                 Some((*f, BinderKey::Name(name)))
             } else {
@@ -144,14 +144,103 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Single funnel for node creation. `explicit_chain` is `Some` for
+    /// Run-lifetime submission funnel. `explicit_chain` is `Some` for
     /// `enter_block`-routed submissions (top-level, MODULE / SIG body, TRY body
     /// success-as-block, FN body invoke), `None` otherwise (inherits
-    /// `self.active_chain`).
+    /// `self.active_chain`). Decides the slot's [`NodeScope`] handle — `Yoked` when this
+    /// runs inside the per-call frame whose own child is `scope` (re-projected from the
+    /// cart), else `Root` — then hands off to [`Self::submit_node`].
     pub(super) fn add_with_chain(
         &mut self,
         work: NodeWork<'a>,
         scope: &'a Scope<'a>,
+        explicit_chain: Option<Rc<LexicalFrame>>,
+    ) -> NodeId {
+        // Establish the run frame on the first run-lifetime submission (top-level run scope),
+        // so every top-level slot carries a frame cart and `active_frame` is never `None` during
+        // a top-level step. Adopts the passed scope without minting a child.
+        if self.run_frame.is_none() {
+            self.run_frame = Some(crate::machine::CallArena::adopting(scope));
+        }
+        // Single-cart storage: when this submission runs inside a per-call frame whose own
+        // child is the very scope passed, store a payload-less `Yoked` and let the read
+        // boundary re-project from the frame cart — no fabricated `&'a` persisted. Any other
+        // scope (a run-root scope, or a frame sub-scope the frame does not directly back)
+        // genuinely lives at `'a`, so it stays `Anchored`.
+        let node_scope = match &self.active_frame {
+            Some(f)
+                if std::ptr::eq(
+                    f.scope() as *const Scope<'_> as *const (),
+                    scope as *const Scope<'_> as *const (),
+                ) =>
+            {
+                NodeScope::Yoked
+            }
+            _ => NodeScope::Anchored(scope),
+        };
+        self.submit_node(work, scope, node_scope, explicit_chain)
+    }
+
+    /// Submit `work` against the executing slot's own [`NodeScope`] handle (`active_node_scope`):
+    /// `Anchored(&'a)` re-uses the genuine run-lived borrow the slot already holds; `Yoked`
+    /// re-projects from the active frame cart. The transient `scope` for binder-install is the
+    /// same handle materialized. Backs the `*_here` methods — the honest
+    /// re-dispatch-against-my-own-scope path.
+    pub(super) fn submit_here(&mut self, work: NodeWork<'a>) -> NodeId {
+        let node_scope = self
+            .active_node_scope
+            .expect("a slot step installs active_node_scope before the body submits");
+        let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
+        match node_scope {
+            NodeScope::Anchored(scope) => {
+                self.submit_node(work, scope, NodeScope::Anchored(scope), explicit_chain)
+            }
+            NodeScope::Yoked => {
+                let frame = self
+                    .active_frame
+                    .clone()
+                    .expect("a Yoked slot step has an active frame");
+                let scope = frame.scope_for_bind();
+                self.submit_node(work, scope, NodeScope::Yoked, explicit_chain)
+            }
+        }
+    }
+
+    /// Dispatch `expr` against the executing slot's own scope handle. Inherent sibling of
+    /// the `SchedulerHandle::add_dispatch_here` trait method, callable from inherent
+    /// scheduler code.
+    pub(in crate::machine::execute) fn dispatch_here(&mut self, expr: KExpression<'a>) -> NodeId {
+        self.submit_here(NodeWork::dispatch(expr))
+    }
+
+    /// Schedule a `Combine` against the executing slot's own scope handle. Inherent sibling
+    /// of `SchedulerHandle::add_combine_here`.
+    pub(in crate::machine::execute) fn combine_here(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId {
+        let park_count = park_producers.len();
+        let mut deps = park_producers;
+        deps.extend(owned_subs);
+        self.submit_here(NodeWork::Combine {
+            deps,
+            park_count,
+            finish,
+        })
+    }
+
+    /// Node-creation core, shared by the run-lifetime [`Self::add_with_chain`] and the framed
+    /// [`Self::add_dispatch_with_chain_in_frame`]. `scope` is used only transiently
+    /// (binder-install, placeholder install, `pre_subs` recursion), so it carries a free `'s`
+    /// rather than the run `'a`; `node_scope` is the pre-decided slot handle the caller built
+    /// (`Root` at `'a` for a run scope, `Yoked` for a framed one).
+    pub(super) fn submit_node<'s>(
+        &mut self,
+        work: NodeWork<'a>,
+        scope: &'s Scope<'s>,
+        node_scope: NodeScope<'a>,
         explicit_chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
         // Compute the chain FIRST so recursive sub-submissions inherit the
@@ -183,9 +272,10 @@ impl<'a> Scheduler<'a> {
                     // submission with no ambient `active_chain` would assign a
                     // detached chain, bypassing index-gated visibility and letting
                     // a forward sibling resolve.
-                    let sub_id = self.add_with_chain(
+                    let sub_id = self.submit_node(
                         NodeWork::dispatch(sub_expr),
                         scope,
+                        node_scope,
                         Some(chain.clone()),
                     );
                     subs.push((i, sub_id));
@@ -220,7 +310,9 @@ impl<'a> Scheduler<'a> {
         };
         let owned_edges = work_owned_edges(&work);
         let no_owned = owned_edges.is_empty();
-        let frame = self.active_frame.clone();
+        // Top-level submissions (no active frame) fall back to the run frame, so every slot
+        // carries a cart and `active_frame` is `Some` during its step.
+        let frame = self.active_frame.clone().or_else(|| self.run_frame.clone());
         // Stamp the placeholder at the binder's lexical position — the SAME `BindingIndex`
         // the eventual `register_*` call at finalize installs.
         let bind_index_for_placeholder = placeholder_install
@@ -239,7 +331,7 @@ impl<'a> Scheduler<'a> {
         let no_park = work_park_producers(&work).is_empty();
         let id = self.store.alloc_slot(Node {
             work,
-            scope,
+            scope: node_scope,
             frame,
             reserve_frame: None,
             function: None,

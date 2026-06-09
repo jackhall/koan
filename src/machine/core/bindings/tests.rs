@@ -4,7 +4,7 @@
 use super::*;
 use crate::machine::core::arena::RuntimeArena;
 use crate::machine::core::scope_id::ScopeId;
-use crate::machine::model::types::{KType, KKind};
+use crate::machine::model::types::{KKind, KType};
 
 #[test]
 fn try_register_type_inserts_into_types_map() {

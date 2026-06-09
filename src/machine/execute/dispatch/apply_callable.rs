@@ -19,11 +19,11 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::kfunction::{KFunction, SchedulerHandle};
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
-use crate::machine::{KError, KErrorKind, Scope};
+use crate::machine::{KError, KErrorKind};
 
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::{
@@ -48,7 +48,6 @@ pub(in crate::machine::execute) fn apply_callable<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     callable: ResolvedCallable<'a>,
     expr: &KExpression<'a>,
-    scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
     match callable {
@@ -56,15 +55,13 @@ pub(in crate::machine::execute) fn apply_callable<'a>(
         // admits; the newtype arm in particular takes the trailing parts directly (so
         // `(Point r)` works), so body extraction lives per-arm inside `apply_constructor`
         // rather than here.
-        ResolvedCallable::Constructor(identity) => {
-            apply_constructor(ctx, identity, expr, scope, idx)
-        }
+        ResolvedCallable::Constructor(identity) => apply_constructor(ctx, identity, expr, idx),
         ResolvedCallable::Function(f) => {
             let body = match extract_call_body(expr) {
                 Ok(b) => b,
                 Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
             };
-            apply_function(ctx, f, expr, body, scope, idx)
+            apply_function(ctx, f, expr, body, idx)
         }
     }
 }
@@ -80,7 +77,6 @@ fn apply_constructor<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     identity: &'a KType<'a>,
     expr: &KExpression<'a>,
-    scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
     let KType::SetRef { set, index } = identity else {
@@ -100,18 +96,13 @@ fn apply_constructor<'a>(
                     value: ExpressionPart::RecordLiteral(fields),
                     ..
                 }],
-            ) => constructors::dispatch_construct_record_newtype(
-                ctx,
-                identity,
-                fields.clone(),
-                scope,
-                idx,
-            ),
+            ) => {
+                constructors::dispatch_construct_record_newtype(ctx, identity, fields.clone(), idx)
+            }
             _ => constructors::dispatch_construct_newtype(
                 ctx,
                 identity,
                 expr.parts[1..].to_vec(),
-                scope,
                 idx,
             ),
         },
@@ -139,7 +130,9 @@ fn apply_constructor<'a>(
                     index: *index,
                     tag,
                 };
-                return NodeStep::Done(NodeOutput::ktype(scope.arena.alloc_ktype(variant)));
+                return NodeStep::Done(NodeOutput::ktype(
+                    ctx.current_scope().arena.alloc_ktype(variant),
+                ));
             }
             // Positional construction: `Outcome (Error "x")` (paren-group body). Tagged
             // unions and higher-kinded `TypeConstructor`s both construct positionally.
@@ -150,7 +143,6 @@ fn apply_constructor<'a>(
                     *index,
                     Rc::new(schema),
                     parts,
-                    scope,
                     idx,
                 ),
                 Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
@@ -164,7 +156,6 @@ fn apply_constructor<'a>(
                 *index,
                 Rc::new(schema),
                 parts,
-                scope,
                 idx,
             ),
             Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
@@ -189,12 +180,11 @@ fn apply_function<'a>(
     f: &'a KFunction<'a>,
     expr: &KExpression<'a>,
     body: CallBody<'a>,
-    scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
     match body {
         CallBody::Named(fields) => match f.reconstruct_positional(fields) {
-            Ok(rebuilt) => match install_eager_subs_track(ctx, rebuilt, f, scope, idx) {
+            Ok(rebuilt) => match install_eager_subs_track(ctx, rebuilt, f, idx) {
                 Ok(step) => step,
                 Err(e) => NodeStep::Done(NodeOutput::Err(e)),
             },
@@ -212,7 +202,6 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     expr: KExpression<'a>,
     picked: &'a KFunction<'a>,
-    scope: &'a Scope<'a>,
     idx: usize,
 ) -> Result<NodeStep<'a>, KError> {
     // `picked` is already committed (the head uniquely resolved to it), so bare-name
@@ -221,10 +210,10 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'a>(
     let wrap_indices = picked.classify_for_pick(&expr).wrap_indices;
     let (new_parts, staged_subs) = stage_all_eager_parts(expr.parts, &wrap_indices);
     let working_expr = KExpression::new(new_parts);
-    match ctx.install_eager_subs(working_expr, staged_subs, Some(picked), scope, idx) {
+    match ctx.install_eager_subs(working_expr, staged_subs, Some(picked), idx) {
         EagerSubsInstall::DepError(step) => Ok(step),
         EagerSubsInstall::AllInline(working_expr) => match picked.bind(working_expr) {
-            Ok(future) => Ok(ctx.invoke_to_step_pinned(future, scope, idx)),
+            Ok(future) => Ok(ctx.invoke_to_step_pinned(future, idx)),
             Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
         },
         EagerSubsInstall::Parked(track) => {

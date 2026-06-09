@@ -7,9 +7,17 @@
 //!
 //! Borrow discipline across the maps: `types → functions → data`.
 //!
-//! Every entry is tagged with a [`BindingIndex`]. `idx == 0` is reserved for builtins;
-//! otherwise the entry is gated by the strict-lexical cutoff `idx < c`, so a forward
-//! reference (a later-positioned binding) is invisible — type binders included.
+//! Every entry is tagged with a [`BindingIndex`] naming its installing statement's
+//! lexical position, gated by the strict cutoff `idx < c`, so a forward reference (a
+//! later-positioned binding) is invisible — type binders included. `idx == 0` is the
+//! first position: FN parameters and MATCH/TRY `it` sit there, and the builtins are
+//! registered there in the immutable run-global root. The builtins stay reachable
+//! because that root is off the lexical chain (its cutoff is `None`, so every entry in
+//! it is visible) and is consulted in one hop through each scope's direct root
+//! reference — not through an `idx == 0`-always-visible carve-out. The `idx == 0` tag
+//! is what [`Bindings::has_builtin_type`] / [`Bindings::has_builtin_function`] /
+//! [`Bindings::has_builtin_operator`] read to mark a genuine builtin for the no-shadow
+//! and root-first consults.
 //!
 //! Production reads use the visibility-aware [`Bindings::lookup_value`] /
 //! [`Bindings::lookup_type`] / [`Bindings::lookup_function`], passing a
@@ -63,8 +71,9 @@ pub struct FunctionLookup<'a> {
 /// Lexical position of a binding's installing statement: a binding at `idx` is visible to a
 /// consumer at cutoff `c` iff `idx < c`. Every binder — value and type alike — gates its
 /// references against its own position, so a forward reference is a position error and
-/// mutual recursion is expressed with a `RECURSIVE TYPES` block. `idx == 0` is reserved for
-/// builtins; per-block indices restart inside nested blocks (see
+/// mutual recursion is expressed with a `RECURSIVE TYPES` block. `idx == 0` is the first
+/// position (FN parameters, MATCH/TRY `it`) and also tags the builtins in the immutable
+/// root — [`BindingIndex::BUILTIN`]; per-block indices restart inside nested blocks (see
 /// [`crate::machine::core::scope::Scope::resolve`] for the predicate).
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct BindingIndex {
@@ -289,6 +298,34 @@ impl<'a> Bindings<'a> {
             .collect()
     }
 
+    /// True iff `types[name]` was registered at [`BindingIndex::BUILTIN`]. The
+    /// no-shadow consult gates on this — a genuine builtin, not a user type that a
+    /// synthetic test happens to have placed in a root-position scope.
+    pub fn has_builtin_type(&self, name: &str) -> bool {
+        self.types
+            .borrow()
+            .get(name)
+            .is_some_and(|(_, idx)| *idx == BindingIndex::BUILTIN)
+    }
+
+    /// True iff `functions[key]` holds an overload registered at
+    /// [`BindingIndex::BUILTIN`] — a genuine builtin dispatch bucket, distinct from a
+    /// user bucket the no-shadow consult must not gate.
+    pub fn has_builtin_function(&self, key: &UntypedKey) -> bool {
+        self.functions
+            .borrow()
+            .get(key)
+            .is_some_and(|bucket| bucket.iter().any(|(_, idx)| *idx == BindingIndex::BUILTIN))
+    }
+
+    /// True iff `operators[probe]` was registered at [`BindingIndex::BUILTIN`].
+    pub fn has_builtin_operator(&self, probe: &str) -> bool {
+        self.operators
+            .borrow()
+            .get(probe)
+            .is_some_and(|(_, idx)| *idx == BindingIndex::BUILTIN)
+    }
+
     /// Visibility predicate: `None` ⇒ everything visible; `Some(c)` ⇒ `b.idx < c`.
     /// Mirrors [`crate::machine::core::scope::visible`].
     fn visible(b: BindingIndex, chain_cutoff: Option<usize>) -> bool {
@@ -359,7 +396,7 @@ impl<'a> Bindings<'a> {
     }
 
     pub fn insert_pending_type(
-        &'a self,
+        &self,
         name: String,
         entry: PendingTypeEntry<'a>,
     ) -> PendingBinderGuard<'a> {

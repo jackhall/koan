@@ -8,9 +8,8 @@ use super::{arg, err, kw, register_builtin, sig};
 /// newline, and returns the rendered string (without the trailing newline) so the call
 /// composes with enclosing expressions. The `Any` slot admits both runtime values and
 /// first-class types, so it renders either arm of the carrier.
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+pub fn body<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let rendered = match bundle.args.get("msg") {
@@ -18,8 +17,13 @@ pub fn body<'a>(
         None => return err(KError::new(KErrorKind::MissingArg("msg".to_string()))),
     };
     let line = format!("{rendered}\n");
-    scope.write_out(line.as_bytes());
-    BodyResult::value(scope.arena.alloc_object(KObject::KString(rendered)))
+    sched.current_scope().write_out(line.as_bytes());
+    BodyResult::value(
+        sched
+            .current_scope()
+            .arena
+            .alloc_object(KObject::KString(rendered)),
+    )
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

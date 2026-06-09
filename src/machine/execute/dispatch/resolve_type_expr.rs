@@ -35,7 +35,7 @@ impl<'a> Scope<'a> {
     /// only when the gate admits. The Park arm — elaborator-parked or gate-rejected —
     /// never writes the cache: caching mid-SCC would observe pre-close opaque identity.
     pub fn resolve_type_expr(
-        &'a self,
+        &self,
         te: &TypeName,
         chain: Option<std::rc::Rc<LexicalFrame>>,
     ) -> ResolveTypeExprOutcome<'a> {
@@ -86,7 +86,7 @@ pub(crate) enum TypeLeafCarrier<'a> {
 /// the bridge surfaces, so a bare leaf never observes a half-sealed identity. A miss
 /// surfaces `Unbound(name)`.
 pub(crate) fn resolve_type_leaf_carrier<'a>(
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     t: &TypeName,
     chain: Option<Rc<LexicalFrame>>,
 ) -> TypeLeafCarrier<'a> {
@@ -105,11 +105,11 @@ pub(crate) fn resolve_type_leaf_carrier<'a>(
 /// Admits a `KType` iff every top-level user-type it references is finalized in
 /// its owning scope (absent from that scope's `pending_types`); otherwise returns
 /// the producer `NodeId`s the caller parks on.
-struct FinalizeGate<'a> {
-    scope: &'a Scope<'a>,
+struct FinalizeGate<'s, 'a> {
+    scope: &'s Scope<'a>,
 }
 
-impl<'a> FinalizeGate<'a> {
+impl<'s, 'a> FinalizeGate<'s, 'a> {
     /// Producer `NodeId`s the caller must park on; empty iff the gate admits.
     fn pending_producers(&self, kt: &KType<'_>) -> Vec<NodeId> {
         let mut pending: Vec<NodeId> = Vec::new();
@@ -395,9 +395,7 @@ mod tests {
             use crate::machine::core::BindingIndex;
             use crate::machine::core::{Bindings, PendingTypeEntry};
             use crate::machine::model::ast::KExpression;
-            use crate::machine::model::types::{
-                KKind, NominalMember, NominalSchema, RecursiveSet,
-            };
+            use crate::machine::model::types::{KKind, NominalMember, NominalSchema, RecursiveSet};
             use crate::machine::model::Record;
 
             let arena = RuntimeArena::new();

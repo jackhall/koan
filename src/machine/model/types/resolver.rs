@@ -17,8 +17,8 @@ use crate::machine::core::{LexicalFrame, Resolution, Scope, ScopeId};
 use crate::machine::model::ast::TypeName;
 use crate::machine::NodeId;
 
-use super::ktype::KType;
 use super::kkind::KKind;
+use super::ktype::KType;
 use super::recursive_set::{NominalMember, RecursiveSet};
 
 #[cfg(test)]
@@ -156,7 +156,7 @@ pub enum SealOutcome<'a> {
 /// `SetLocal(index)` against the (singleton or shared) set before the member is filled.
 #[allow(clippy::result_large_err)]
 pub fn finalize_nominal_member<'a>(
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     name: &str,
     scope_id: ScopeId,
     kind: KKind,

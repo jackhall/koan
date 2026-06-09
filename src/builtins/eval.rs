@@ -11,9 +11,8 @@ use super::{arg, err, kw, register_builtin, sig};
 /// scope. Non-`KExpression` values raise `TypeMismatch`.
 ///
 /// The `EVAL` head-keyword is not part of the surface; user code goes through the `$` sigil.
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+pub fn body<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let inner = match bundle.require_kexpression("expr") {
@@ -22,7 +21,7 @@ pub fn body<'a>(
     };
     // Chain the call-site's frame Rc onto the new frame so the parent's per-call arena
     // stays alive while the new frame's `outer`-scope pointer is in use.
-    let frame: Rc<CallArena> = CallArena::new(scope, sched.current_frame());
+    let frame: Rc<CallArena> = CallArena::new(sched.current_scope(), sched.current_frame());
     BodyResult::Tail {
         expr: inner,
         frame: Some(frame),

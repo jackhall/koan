@@ -15,13 +15,11 @@ use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, SchedulerHandle, Scope,
 };
 
-
 use super::{arg, err, kw, register_builtin_with_binder, sig};
 use crate::machine::core::kfunction::argument_bundle::extract_bare_type_name;
 
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+pub fn body<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     // Parameterized name forms are rejected — module names are bare leaves.
@@ -34,8 +32,11 @@ pub fn body<'a>(
         Err(e) => return err(e),
     };
 
-    let arena = scope.arena;
-    let child_scope = arena.alloc_scope(Scope::child_under_module(scope, name.clone()));
+    let arena = sched.current_scope().arena;
+    let child_scope = arena.alloc_scope(Scope::child_under_module(
+        sched.current_scope(),
+        name.clone(),
+    ));
 
     let deps = sched.enter_body_block(child_scope, body_expr);
 
@@ -48,15 +49,15 @@ pub fn body<'a>(
         .map(|chain| BindingIndex::value(chain.index))
         .unwrap_or(BindingIndex::BUILTIN);
     let name_for_finish = name.clone();
-    let finish: CombineFinish<'a> = Box::new(move |parent_scope, _sched, _results| {
+    let finish: CombineFinish<'a> = Box::new(move |_sched, _results| {
         // Idempotent-finalize guard: short-circuits if a future SCC-sweep extension
         // re-enters MODULE finalize against an already-bound name. MODULE is type-only,
         // so the guard reads `types` (the carrier in `data` is gone).
-        let bindings = parent_scope.bindings();
+        let bindings = _sched.current_scope().bindings();
         if let Some(kt) = bindings.lookup_type(&name_for_finish, None) {
-            return BodyResult::ktype(parent_scope.arena.alloc_ktype(kt.clone()));
+            return BodyResult::ktype(_sched.current_scope().arena.alloc_ktype(kt.clone()));
         }
-        let arena = parent_scope.arena;
+        let arena = _sched.current_scope().arena;
         let module: &'a Module<'a> =
             arena.alloc_module(Module::new(name_for_finish.clone(), child_scope));
         // Mirror pure type-side bindings (entries without a value-side counterpart) into
@@ -88,19 +89,21 @@ pub fn body<'a>(
         // never fires for a module — its insert-if-absent / non-equal-Rebind behaviour is
         // what carries here, sharing the one nominal-finalize primitive.
         let _ = arena;
-        match parent_scope.register_type_upsert(
+        match _sched.current_scope().register_type_upsert(
             name_for_finish.clone(),
             identity.clone(),
             bind_index,
         ) {
-            Ok(kt_ref) => BodyResult::ktype(parent_scope.arena.alloc_ktype(kt_ref.clone())),
+            Ok(kt_ref) => {
+                BodyResult::ktype(_sched.current_scope().arena.alloc_ktype(kt_ref.clone()))
+            }
             Err(e) => BodyResult::Err(e.with_frame(Frame::bare(
                 "<module>",
                 format!("MODULE {} body", name_for_finish),
             ))),
         }
     });
-    let combine_id = sched.add_combine(deps, vec![], scope, finish);
+    let combine_id = sched.add_combine_here(deps, vec![], finish);
     BodyResult::DeferTo(combine_id)
 }
 

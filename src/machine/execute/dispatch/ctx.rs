@@ -105,28 +105,22 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     // `add_dispatch` impl below — that path inherits `active_chain` /
     // `active_frame` correctly via `Scheduler::add_dispatch -> add`.
 
-    pub(super) fn schedule_list_literal(
-        &mut self,
-        items: Vec<ExpressionPart<'a>>,
-        scope: &'a Scope<'a>,
-    ) -> NodeId {
-        self.sched.schedule_list_literal(items, scope)
+    pub(super) fn schedule_list_literal(&mut self, items: Vec<ExpressionPart<'a>>) -> NodeId {
+        self.sched.schedule_list_literal(items)
     }
 
     pub(super) fn schedule_dict_literal(
         &mut self,
         pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
-        scope: &'a Scope<'a>,
     ) -> NodeId {
-        self.sched.schedule_dict_literal(pairs, scope)
+        self.sched.schedule_dict_literal(pairs)
     }
 
     pub(super) fn schedule_record_literal(
         &mut self,
         fields: Vec<(String, ExpressionPart<'a>)>,
-        scope: &'a Scope<'a>,
     ) -> NodeId {
-        self.sched.schedule_record_literal(fields, scope)
+        self.sched.schedule_record_literal(fields)
     }
 
     pub(super) fn free(&mut self, idx: usize) {
@@ -153,17 +147,12 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     /// `KFunction::invoke` shim that tail-rewrites the slot's work. See
     /// the historical `Scheduler::invoke_to_step` for the contract; the
     /// only change is that we now pass `self` (a `&mut dyn
-    /// SchedulerHandle<'a>` via the `SchedulerHandle for DispatchCtx`
+    /// SchedulerHandle<'a, 's>` via the `SchedulerHandle for DispatchCtx`
     /// impl) so sub-slots spawned by the body inherit the dispatcher's
     /// contextual chain/frame state.
-    pub(super) fn invoke_to_step(
-        &mut self,
-        future: KFuture<'a>,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> NodeStep<'a> {
+    pub(super) fn invoke_to_step(&mut self, future: KFuture<'a>, idx: usize) -> NodeStep<'a> {
         use crate::machine::core::kfunction::BodyResult;
-        match future.function.invoke(scope, self, future.bundle) {
+        match future.function.invoke(self, future.bundle) {
             BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
             BodyResult::Tail {
                 expr,
@@ -191,17 +180,16 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     pub(super) fn invoke_to_step_pinned(
         &mut self,
         future: KFuture<'a>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> NodeStep<'a> {
         if let Some(reserve) = self.sched.active_reserve_take() {
             let local_pin = self.sched.active_frame_replace(Some(reserve));
-            let step = self.invoke_to_step(future, scope, idx);
+            let step = self.invoke_to_step(future, idx);
             let _ = self.sched.active_frame_replace(local_pin);
             step
         } else {
             let _frame_pin = self.sched.active_frame_clone();
-            self.invoke_to_step(future, scope, idx)
+            self.invoke_to_step(future, idx)
         }
     }
 
@@ -211,14 +199,16 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     pub(super) fn build_bare_outcomes(
         &self,
         parts: &[Spanned<ExpressionPart<'a>>],
-        scope: &'a Scope<'a>,
     ) -> Vec<Option<NameOutcome<'a>>> {
         parts
             .iter()
             .map(|p| match &p.value {
-                ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => {
-                    Some(resolve_name_part(scope, &p.value, self.sched, None))
-                }
+                ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => Some(resolve_name_part(
+                    self.current_scope(),
+                    &p.value,
+                    self.sched,
+                    None,
+                )),
                 _ => None,
             })
             .collect()
@@ -233,17 +223,16 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
         mut working_expr: KExpression<'a>,
         staged_subs: Vec<(usize, PendingSub<'a>)>,
         picked: Option<&'a KFunction<'a>>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> EagerSubsInstall<'a> {
         let mut pending_subs: Vec<(usize, NodeId)> = Vec::with_capacity(staged_subs.len());
         for (i, pending) in staged_subs {
             let sub_id = match pending {
                 PendingSub::Reuse(id) => id,
-                PendingSub::Dispatch(sub_expr) => self.add_dispatch(sub_expr, scope),
-                PendingSub::ListLit(items) => self.schedule_list_literal(items, scope),
-                PendingSub::DictLit(pairs) => self.schedule_dict_literal(pairs, scope),
-                PendingSub::RecordLit(fields) => self.schedule_record_literal(fields, scope),
+                PendingSub::Dispatch(sub_expr) => self.add_dispatch_here(sub_expr),
+                PendingSub::ListLit(items) => self.schedule_list_literal(items),
+                PendingSub::DictLit(pairs) => self.schedule_dict_literal(pairs),
+                PendingSub::RecordLit(fields) => self.schedule_record_literal(fields),
             };
             if self.is_result_ready(sub_id) {
                 match self.read_result(sub_id) {
@@ -296,7 +285,6 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     pub(super) fn resume_eager_subs(
         &mut self,
         track: EagerSubsTrack<'a>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
         let EagerSubsTrack {
@@ -319,9 +307,9 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
             self.free(d);
         }
         match picked {
-            None => KeywordedState::finish(self, working_expr, scope, idx),
+            None => KeywordedState::finish(self, working_expr, idx),
             Some(f) => match f.bind(working_expr) {
-                Ok(future) => Ok(self.invoke_to_step_pinned(future, scope, idx)),
+                Ok(future) => Ok(self.invoke_to_step_pinned(future, idx)),
                 Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
             },
         }
@@ -337,7 +325,7 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
 // the body of `with_active_frame` re-receives `&mut DispatchCtx`, so
 // further sub-builtins still see the dispatcher's contextual state.
 
-impl<'a, 'b> SchedulerHandle<'a> for DispatchCtx<'a, 'b> {
+impl<'a, 'b, 's> SchedulerHandle<'a, 's> for DispatchCtx<'a, 'b> {
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
         self.sched.add_dispatch(expr, scope)
     }
@@ -363,13 +351,13 @@ impl<'a, 'b> SchedulerHandle<'a> for DispatchCtx<'a, 'b> {
 
     /// Pin/swap the ambient `active_frame` around `body`. The closure
     /// receives `&mut DispatchCtx` (this same object as
-    /// `&mut dyn SchedulerHandle<'a>`), so nested builtin invokes also
+    /// `&mut dyn SchedulerHandle<'a, 's>`), so nested builtin invokes also
     /// route through the dispatcher's facade rather than re-borrowing
     /// the bare scheduler.
     fn with_active_frame(
         &mut self,
         frame: Rc<CallArena>,
-        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a>),
+        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a, 's>),
     ) {
         let prev = self.sched.active_frame_replace(Some(frame));
         body(self);
@@ -400,5 +388,53 @@ impl<'a, 'b> SchedulerHandle<'a> for DispatchCtx<'a, 'b> {
         chain: Rc<LexicalFrame>,
     ) -> NodeId {
         self.sched.add_dispatch_with_chain(expr, scope, chain)
+    }
+
+    fn add_dispatch_with_chain_in_frame(
+        &mut self,
+        expr: KExpression<'a>,
+        chain: Rc<LexicalFrame>,
+    ) -> NodeId {
+        self.sched.add_dispatch_with_chain_in_frame(expr, chain)
+    }
+
+    fn add_dispatch_in_frame(&mut self, expr: KExpression<'a>) -> NodeId {
+        self.sched.add_dispatch_in_frame(expr)
+    }
+
+    fn add_combine_in_frame(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId {
+        self.sched
+            .add_combine_in_frame(owned_subs, park_producers, finish)
+    }
+
+    fn add_catch_in_frame(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId {
+        self.sched.add_catch_in_frame(from, finish)
+    }
+
+    fn current_scope(&self) -> &Scope<'a> {
+        self.sched.current_scope()
+    }
+
+    fn add_dispatch_here(&mut self, expr: KExpression<'a>) -> NodeId {
+        self.sched.add_dispatch_here(expr)
+    }
+
+    fn add_combine_here(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId {
+        self.sched
+            .add_combine_here(owned_subs, park_producers, finish)
+    }
+
+    fn add_catch_here(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId {
+        self.sched.add_catch_here(from, finish)
     }
 }

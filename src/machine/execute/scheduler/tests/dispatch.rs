@@ -3,51 +3,47 @@
 //! Counterpart `resolve_dispatch`-only assertions live in `machine::core::tests::dispatch`.
 
 use super::super::Scheduler;
-use crate::builtins::register_builtin;
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
+use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::machine::core::source::Spanned;
+use crate::machine::core::BindingIndex;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
 use crate::machine::model::KObject;
-use crate::machine::{RuntimeArena, Scope};
+use crate::machine::RuntimeArena;
 
-fn body_identifier<'a>(
-    s: &'a Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a>,
+fn body_identifier<'a, 's>(
+    h: &mut dyn SchedulerHandle<'a, 's>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::value(marker(s, "identifier"))
+    BodyResult::value(marker(h.current_scope(), "identifier"))
 }
-fn body_marker_any<'a>(
-    s: &'a Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a>,
+fn body_marker_any<'a, 's>(
+    h: &mut dyn SchedulerHandle<'a, 's>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::value(marker(s, "any"))
+    BodyResult::value(marker(h.current_scope(), "any"))
 }
-fn body_inner_any<'a>(
-    s: &'a Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a>,
+fn body_inner_any<'a, 's>(
+    h: &mut dyn SchedulerHandle<'a, 's>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::value(marker(s, "inner_any"))
+    BodyResult::value(marker(h.current_scope(), "inner_any"))
 }
-fn body_outer_number<'a>(
-    s: &'a Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a>,
+fn body_outer_number<'a, 's>(
+    h: &mut dyn SchedulerHandle<'a, 's>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::value(marker(s, "outer_number"))
+    BodyResult::value(marker(h.current_scope(), "outer_number"))
 }
-fn body_lowercase<'a>(
-    s: &'a Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a>,
+fn body_lowercase<'a, 's>(
+    h: &mut dyn SchedulerHandle<'a, 's>,
     _a: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    BodyResult::value(marker(s, "lowercase"))
+    BodyResult::value(marker(h.current_scope(), "lowercase"))
 }
 
 fn summarize_marker(obj: &KObject<'_>) -> String {
@@ -77,7 +73,15 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
             }),
         ],
     };
-    register_builtin(outer, "outer_specific", outer_sig, body_outer_number);
+    // User-position so the builtin root-first short-circuit doesn't claim it; the inner
+    // looser overload must shadow this outer more-specific one on the ordinary walk.
+    register_overload_at(
+        outer,
+        "outer_specific",
+        outer_sig,
+        body_outer_number,
+        BindingIndex::value(1),
+    );
 
     let inner = arena.alloc_scope(outer.child_for_call());
     let inner_sig = ExpressionSignature {

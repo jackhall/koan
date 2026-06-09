@@ -3,11 +3,11 @@
 
 use std::marker::PhantomData;
 
-use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::kfunction::{KFunction, SchedulerHandle};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Parseable;
 use crate::machine::{
-    BindingIndex, Frame, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, Scope,
+    BindingIndex, Frame, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome,
 };
 
 use super::super::nodes::{NodeOutput, NodeStep};
@@ -123,10 +123,9 @@ impl<'a> KeywordedState<'a> {
         ctx: &mut DispatchCtx<'a, '_>,
         expr: KExpression<'a>,
         pre_subs: Vec<(usize, NodeId)>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        let bare_outcomes = ctx.build_bare_outcomes(&expr.parts, scope);
+        let bare_outcomes = ctx.build_bare_outcomes(&expr.parts);
         // A bare-name arg whose producer already errored can never resolve.
         for outcome in bare_outcomes.iter().flatten() {
             if let NameOutcome::ProducerErrored(e) = outcome {
@@ -138,7 +137,9 @@ impl<'a> KeywordedState<'a> {
             }
         }
         let chain = ctx.chain_deref();
-        let outcome = scope.resolve_dispatch(&expr, chain, &bare_outcomes);
+        let outcome = ctx
+            .current_scope()
+            .resolve_dispatch(&expr, chain, &bare_outcomes);
         let resolved = match outcome {
             ResolveOutcome::Resolved(r) => r,
             ResolveOutcome::Ambiguous(n) => {
@@ -162,7 +163,7 @@ impl<'a> KeywordedState<'a> {
                     "Deferred resolve_dispatch implies no binder pick at submit time; \
                      `pre_subs` must be empty here",
                 );
-                return Self::install_eager_only(ctx, expr, scope, idx);
+                return Self::install_eager_only(ctx, expr, idx);
             }
             ResolveOutcome::ParkOnProducers(producers) => {
                 return Ok(Self::install_overload_park(
@@ -176,13 +177,19 @@ impl<'a> KeywordedState<'a> {
             .index;
         let bind_index = BindingIndex::value(lex_index);
         if let Some(name) = resolved.placeholder_name.as_ref() {
-            if let Err(e) = scope.install_placeholder(name.clone(), NodeId(idx), bind_index) {
+            if let Err(e) =
+                ctx.current_scope()
+                    .install_placeholder(name.clone(), NodeId(idx), bind_index)
+            {
                 return Ok(NodeStep::Done(NodeOutput::Err(e)));
             }
         }
         if let Some(bucket) = resolved.pending_overload_bucket.as_ref() {
-            if let Err(e) = scope.install_pending_overload(bucket.clone(), NodeId(idx), bind_index)
-            {
+            if let Err(e) = ctx.current_scope().install_pending_overload(
+                bucket.clone(),
+                NodeId(idx),
+                bind_index,
+            ) {
                 return Ok(NodeStep::Done(NodeOutput::Err(e)));
             }
         }
@@ -217,31 +224,30 @@ impl<'a> KeywordedState<'a> {
         }
         if staged_subs.is_empty() {
             return match resolved.function.bind(new_expr) {
-                Ok(future) => Ok(ctx.invoke_to_step(future, scope, idx)),
+                Ok(future) => Ok(ctx.invoke_to_step(future, idx)),
                 Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
             };
         }
         let _ = resolved; // discard the speculative pick.
-        Self::install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs, scope, idx)
+        Self::install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs, idx)
     }
 
     /// Resume entry, dispatched on the installed `ParkTrack` variant.
     pub(super) fn resume(
         self,
         ctx: &mut DispatchCtx<'a, '_>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
         let KeywordedState { init, track } = self;
         let track = track.expect("Keyworded resume is only entered after a track is installed");
         match track {
             ParkTrack::Overload(OverloadParkTrack { expr, .. }) => {
-                Self::initial(ctx, expr, init.pre_subs, scope, idx)
+                Self::initial(ctx, expr, init.pre_subs, idx)
             }
             ParkTrack::BareName(BareNameParkTrack { working_expr, .. }) => {
-                Self::initial(ctx, working_expr, init.pre_subs, scope, idx)
+                Self::initial(ctx, working_expr, init.pre_subs, idx)
             }
-            ParkTrack::EagerSubs(track) => ctx.resume_eager_subs(track, scope, idx),
+            ParkTrack::EagerSubs(track) => ctx.resume_eager_subs(track, idx),
         }
     }
 
@@ -250,13 +256,15 @@ impl<'a> KeywordedState<'a> {
     pub(super) fn finish(
         ctx: &mut DispatchCtx<'a, '_>,
         working_expr: KExpression<'a>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        match scope.resolve_dispatch(&working_expr, ctx.chain_deref(), &[]) {
+        match ctx
+            .current_scope()
+            .resolve_dispatch(&working_expr, ctx.chain_deref(), &[])
+        {
             ResolveOutcome::Resolved(r) => {
                 let future = r.function.bind(working_expr)?;
-                Ok(ctx.invoke_to_step_pinned(future, scope, idx))
+                Ok(ctx.invoke_to_step_pinned(future, idx))
             }
             ResolveOutcome::Ambiguous(n) => Err(KError::new(KErrorKind::AmbiguousDispatch {
                 expr: working_expr.summarize(),
@@ -322,7 +330,6 @@ impl<'a> KeywordedState<'a> {
     fn install_eager_only(
         ctx: &mut DispatchCtx<'a, '_>,
         expr: KExpression<'a>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
         // Deferred arm: no committed pick yet (resume re-resolves on finish), so no
@@ -334,7 +341,7 @@ impl<'a> KeywordedState<'a> {
              resolve_dispatch contract requires at least one eager part",
         );
         let new_expr = KExpression::new(new_parts);
-        Self::install_eager_subs_track(ctx, new_expr, staged_subs, Vec::new(), scope, idx)
+        Self::install_eager_subs_track(ctx, new_expr, staged_subs, Vec::new(), idx)
     }
 
     fn install_bare_name_park(
@@ -359,14 +366,11 @@ impl<'a> KeywordedState<'a> {
         working_expr: KExpression<'a>,
         staged_subs: Vec<(usize, PendingSub<'a>)>,
         pre_subs: Vec<(usize, NodeId)>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        match ctx.install_eager_subs(working_expr, staged_subs, None, scope, idx) {
+        match ctx.install_eager_subs(working_expr, staged_subs, None, idx) {
             EagerSubsInstall::DepError(step) => Ok(step),
-            EagerSubsInstall::AllInline(working_expr) => {
-                Self::finish(ctx, working_expr, scope, idx)
-            }
+            EagerSubsInstall::AllInline(working_expr) => Self::finish(ctx, working_expr, idx),
             EagerSubsInstall::Parked(track) => {
                 let init = Initialized { pre_subs };
                 Ok(

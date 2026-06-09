@@ -67,7 +67,7 @@ pub use crate::machine::model::ast::{classify_dispatch_shape, DispatchShape};
 /// against `scope`. `consumer = Some(idx)` enables the cycle check;
 /// `consumer = None` skips it.
 pub(super) fn resolve_name_part<'a>(
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     part: &ExpressionPart<'a>,
     scheduler: &Scheduler<'a>,
     consumer: Option<NodeId>,
@@ -397,17 +397,16 @@ pub(in crate::machine::execute) fn run_dispatch<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     expr: KExpression<'a>,
     state: DispatchState<'a>,
-    scope: &'a Scope<'a>,
     idx: usize,
 ) -> Result<NodeStep<'a>, KError> {
     let _wakes = ctx.take_recent_wakes(NodeId(idx));
     let init = match state {
         DispatchState::Initialized(i) => i,
-        DispatchState::Keyworded(ks) => return ks.resume(ctx, scope, idx),
-        DispatchState::FunctionValueCall(fs) => return fs.resume(ctx, scope, idx),
-        DispatchState::TypeCall(cs) => return (*cs).resume(ctx, scope, idx),
-        DispatchState::HeadDeferred(hd) => return Ok(hd.resume(ctx, scope, idx)),
-        DispatchState::BareTypeLeaf(bs) if bs.park.is_some() => return bs.resume(ctx, scope, idx),
+        DispatchState::Keyworded(ks) => return ks.resume(ctx, idx),
+        DispatchState::FunctionValueCall(fs) => return fs.resume(ctx, idx),
+        DispatchState::TypeCall(cs) => return (*cs).resume(ctx, idx),
+        DispatchState::HeadDeferred(hd) => return Ok(hd.resume(ctx, idx)),
+        DispatchState::BareTypeLeaf(bs) if bs.park.is_some() => return bs.resume(ctx, idx),
         _ => unreachable!(
             "remaining fast-lane stateful variants terminalize in one poll; \
              only Keyworded, FunctionValueCall, TypeCall, HeadDeferred, and a \
@@ -421,7 +420,7 @@ pub(in crate::machine::execute) fn run_dispatch<'a>(
                 ExpressionPart::Type(t) => t.clone(),
                 _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
             };
-            Ok(single_poll::bare_type_leaf(ctx, &t, scope, idx))
+            Ok(single_poll::bare_type_leaf(ctx, &t, idx))
         }
         DispatchShape::BareIdentifier => {
             debug_assert!(init.pre_subs.is_empty());
@@ -429,24 +428,24 @@ pub(in crate::machine::execute) fn run_dispatch<'a>(
                 ExpressionPart::Identifier(n) => n.clone(),
                 _ => unreachable!("BareIdentifier shape implies single Identifier part"),
             };
-            Ok(single_poll::bare_identifier(ctx, name, scope, idx))
+            Ok(single_poll::bare_identifier(ctx, name, idx))
         }
         DispatchShape::FunctionValueCall => {
             debug_assert!(init.pre_subs.is_empty());
             let _ = init;
-            FnValueState::initial(ctx, expr, scope, idx)
+            FnValueState::initial(ctx, expr, idx)
         }
         DispatchShape::TypeCall => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(single_poll::type_call(ctx, expr, scope, idx))
+            Ok(single_poll::type_call(ctx, expr, idx))
         }
         DispatchShape::HeadDeferred => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(HeadDeferredState::initial_expr(ctx, expr, scope, idx))
+            Ok(HeadDeferredState::initial_expr(ctx, expr, idx))
         }
         DispatchShape::TypeHeadDeferred => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(HeadDeferredState::initial_type(ctx, expr, scope, idx))
+            Ok(HeadDeferredState::initial_type(ctx, expr, idx))
         }
         DispatchShape::NonCallableHead => Err(KError::new(KErrorKind::DispatchFailed {
             expr: expr.summarize(),
@@ -460,20 +459,20 @@ pub(in crate::machine::execute) fn run_dispatch<'a>(
         })),
         DispatchShape::OperatorChain => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(operator_chain::run(ctx, &expr, scope))
+            Ok(operator_chain::run(ctx, &expr))
         }
-        DispatchShape::Keyworded => KeywordedState::initial(ctx, expr, init.pre_subs, scope, idx),
+        DispatchShape::Keyworded => KeywordedState::initial(ctx, expr, init.pre_subs, idx),
         DispatchShape::SigiledTypeExpr => {
             debug_assert!(init.pre_subs.is_empty());
             Ok(single_poll::sigiled_type_expr(expr))
         }
         DispatchShape::RecordType => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(single_poll::record_type(ctx, expr, scope, idx))
+            Ok(single_poll::record_type(ctx, expr, idx))
         }
         DispatchShape::LiteralPassThrough => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(single_poll::literal_pass_through(ctx, expr, scope, idx))
+            Ok(single_poll::literal_pass_through(ctx, expr, idx))
         }
     }
 }

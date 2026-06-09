@@ -30,6 +30,12 @@ What's shipped that the open items below build on:
   [user-definable n-ary operators](operator_chaining/n-ary-operators.md) and
   [user-defined operator modules](operator_chaining/user-defined-operator-modules.md).
   See [design/expressions-and-parsing.md § Structural cache and dispatch shape](../design/expressions-and-parsing.md#structural-cache-and-dispatch-shape).
+- *Immutable run-global root.* The builtins live once in a distinctly-typed
+  (`ScopeKind::Root`) immutable root; a `RunScope` child takes top-level binds, and every
+  scope carries a direct `root` reference. Builtins are unshadowable — a user type, FN/
+  FUNCTOR overload, or operator colliding with a builtin is a `Rebind` at any depth — so a
+  builtin (type, operator, or dispatch bucket) resolves root-first in one hop, ahead of the
+  chain walk. See [design/typing/lookup-protocol.md § The immutable root and unshadowable builtins](../design/typing/lookup-protocol.md#the-immutable-root-and-unshadowable-builtins).
 - *Anonymous functions.* A keyword-less `FN :{<field schema>} -> T = (body)`
   literal evaluates to a plain function value with no dispatch keyword, bound by
   `LET` or dropped into a function-typed slot — the record-schema sigil resolves
@@ -47,20 +53,26 @@ What's shipped that the open items below build on:
   owning the parenthesized-slot error text), and the scheduler `Object`/`Type` finalize
   arms (one [`check_declared_return`](../src/machine/execute/scheduler/execute.rs)
   parameterized over the lifted carrier's `matches_value`/`matches_type` predicate).
-- *Arena unsafe consolidation.* The scattered per-call frame re-anchor is funnelled
-  behind one [`CallArena::anchored_parts`](../src/machine/core/arena.rs), and every
-  captured/defining-scope re-attach behind one
+- *Arena unsafe consolidation.* Every captured/defining-scope re-attach is funnelled behind one
   [`ScopePtr`](../src/machine/core/scope_ptr.rs); `RuntimeArena::escape` is `NonNull`.
-  The store-side erasure now lives behind one sealed `ArenaStored` trait: all six
+  The store-side erasure lives behind one sealed `ArenaStored` trait: all six
   arena-stored families route a single audited union-move `erase_store` and one gated
   `alloc` engine, replacing the six per-type `T<'a> → T<'static>` transmute pairs with
-  one. The branded `ScopePtr<'a>` makes `Module::child_scope`, `Signature::decl_scope`,
-  and `KFunction::captured_scope` safe re-attaches, concentrating the irreducible
-  `'static → 'a` fabrication at the non-generic `CallArena` boundary. The remaining
-  hardening — making the `anchored_parts` frame re-anchor a compile-time guarantee — is
-  open work under [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md),
-  gated on the [scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md)
-  that gives per-call scopes a lifetime distinct from the run `'a` for a brand to bind to.
+  one. The branded `ScopePtr<'a>` makes `Module::child_scope` and `Signature::decl_scope`
+  safe re-attaches, concentrating the irreducible
+  `'static → 'a` fabrication at the non-generic `CallArena` boundary.
+  Honest slot storage landed for per-call frame scopes: a frame scope rides its slot as a
+  payload-less [`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the
+  slot's own `Node.frame` cart — no fabricated run-length `&'a` persists across a TCO reset.
+  The frame re-anchor then landed in full: the free `&'run` scope fabrication at the read
+  boundary is deleted, a within-step frame lifetime `'s` (`'a: 's`) threads
+  `run_dispatch`/`BuiltinFn`/`SchedulerHandle`, and a slot's scope is now read on demand via
+  [`Scheduler::current_scope`](../src/machine/execute/scheduler.rs) through the witness-bounded
+  [`CallArena::scope_bounded`](../src/machine/core/arena.rs) brand (the post-step loop reads it
+  through a `PostStep` token off the slot's returned frame). The sole surviving free re-exposure
+  is the arena half of [`CallArena::with_anchored_child`](../src/machine/core/arena.rs), the
+  C0-irreducible seed bind, and `KFunction::captured` now rides a `BoundedScopePtr`
+  (see [design/per-call-arena-protocol.md § Slot-table scope handle](../design/per-call-arena-protocol.md#slot-table-scope-handle)).
   See [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -147,10 +159,8 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
-- [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
@@ -228,13 +238,6 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Scheduler run/frame lifetime split](refactor/scheduler-lifetime-split.md) —
-  separate the per-frame scope lifetime from the run `'a`; the prerequisite that makes a
-  compile-time frame re-anchor brand expressible.
-- [Type-enforced frame re-anchor](refactor/type-enforced-frame-reanchor.md) —
-  yokes `anchored_parts` to its frame `Rc` so a re-anchor outliving its frame fails to
-  compile and the dispatch/scheduler Miri pins retire; rides on the lifetime split above.
-- [Seed every scope with builtins to skip the root walk](refactor/builtins-in-every-scope.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md) —
   collapse `ElabResult` / `ResolveTypeExprOutcome` / `TypeLeafCarrier` into one generic
   `ResolveOutcome<T>` with a `map_done` lift.

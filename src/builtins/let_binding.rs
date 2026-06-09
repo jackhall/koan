@@ -11,9 +11,8 @@ use super::{arg, err, kw, register_builtin_with_binder, sig};
 /// `LET <name> = <value:Any>` — deep-clones the bound value into the arena and
 /// inserts it under `name`. Two overloads share this body, differing only in the
 /// `name` slot's `KType`: `Identifier` and `TypeExprRef`.
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+pub fn body<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     // Direct-body test fixtures bypass the scheduler and have no active chain;
@@ -106,24 +105,24 @@ pub fn body<'a>(
         (None, None) => return err(KError::new(KErrorKind::MissingArg("name".to_string()))),
     };
     // Value slots inside a SIG body must use `(VAL <name>: <Type>)`. The check
-    // fires only for the value-route so `LET Type = Number` and
+    // fires only for the value-route so `LET Carrier = Number` and
     // `LET MyAlias = (some_module :| Sig)` keep working.
-    if type_for_types_map.is_none() && scope.is_in_sig_body() {
+    if type_for_types_map.is_none() && sched.current_scope().is_in_sig_body() {
         return err(KError::new(KErrorKind::ShapeError(format!(
             "inside a SIG body, value slots must use VAL — write \
              `(VAL {name}: <Type>)` instead of `(LET {name} = <example-value>)`",
         ))));
     }
-    let arena = scope.arena;
+    let arena = sched.current_scope().arena;
     if let Some(kt) = type_for_types_map {
         // Identity-preserving alias: `LET P2 = OrderedSig` writes `bindings.types[P2]`
         // carrying the aliased type's original identity so `(PICK x: P2)` and
         // `(PICK x: OrderedSig)` dispatch to the same overload. The alias binds at its
         // own lexical position, like every other binder.
         //
-        // A SIG-local type binding (`LET Type = Number` inside a SIG body) binds the
+        // A SIG-local type binding (`LET Carrier = Number` inside a SIG body) binds the
         // name-bearing `AbstractType { source: Sig(decl_scope) }` rather than the collapsed
-        // underlying type, so a later `VAL zero :Type` records that `zero` *names* the
+        // underlying type, so a later `VAL zero :Carrier` records that `zero` *names* the
         // abstract member. Opaque ascription threads this into the per-call module's
         // `slot_type_tags` and ATTR re-tags the slot read (see ascribe.rs / attr.rs). Only
         // a bare type LET inside a SIG is wrapped; outer aliases stay concrete.
@@ -138,16 +137,21 @@ pub fn body<'a>(
                 if set.member(*index).kind
                     == crate::machine::model::types::KKind::TypeConstructor
         );
-        let kt = if scope.is_in_sig_body() && !is_type_constructor {
+        let kt = if sched.current_scope().is_in_sig_body() && !is_type_constructor {
             KType::AbstractType {
-                source: AbstractSource::Sig(scope.id),
+                source: AbstractSource::Sig(sched.current_scope().id),
                 name: name.clone(),
             }
         } else {
             kt
         };
         let kt_ref: &'a KType<'a> = arena.alloc_ktype(kt.clone());
-        scope.register_type(name, kt, bind_index);
+        if let Err(e) = sched
+            .current_scope()
+            .register_user_type(name, kt, bind_index)
+        {
+            return err(e);
+        }
         BodyResult::ktype(kt_ref)
     } else {
         // The value route reaches here only for a value-classified binder name with an
@@ -178,7 +182,10 @@ pub fn body<'a>(
                  non-empty literal",
             ))));
         }
-        if let Err(e) = scope.bind_value(name, allocated, bind_index) {
+        if let Err(e) = sched
+            .current_scope()
+            .bind_value(name, allocated, bind_index)
+        {
             return err(e);
         }
         BodyResult::value(allocated)

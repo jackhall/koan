@@ -5,14 +5,12 @@ use crate::machine::core::PendingTypeEntry;
 use crate::machine::execute::defer_field_list_via_combine;
 use crate::machine::model::types::{
     finalize_nominal_member, parse_typed_field_list_via_elaborator, seal_recursive_refs,
-    Elaborator, FieldListOutcome, FieldNameKind, NominalSchema, SchemaSealResult,
-    SealOutcome,
+    Elaborator, FieldListOutcome, FieldNameKind, NominalSchema, SchemaSealResult, SealOutcome,
 };
 use crate::machine::model::KType;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, Frame, KError, KErrorKind, SchedulerHandle, Scope,
 };
-
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
 use crate::machine::core::kfunction::argument_bundle::{
@@ -27,9 +25,8 @@ use crate::machine::core::kfunction::argument_bundle::{
 /// directly. Type-only: the variant schema rides
 /// the sealed `RecursiveSet` member in `bindings.types`, and the declaration yields a
 /// `KTypeValue(SetRef)` first-class type value — no value-side carrier.
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+pub fn body<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let name = match extract_bare_type_name(&bundle, "name", "UNION") {
@@ -47,8 +44,8 @@ pub fn body<'a>(
     // Mark this binder in-flight so a consumer referencing it (an earlier sibling still
     // finalizing) can park on our producer node. The guard's Drop removes the entry; the
     // Park path moves it into the Combine-finish closure.
-    let scope_id = scope.id;
-    let pending_guard = scope.bindings().insert_pending_type(
+    let scope_id = sched.current_scope().id;
+    let pending_guard = sched.current_scope().bindings().insert_pending_type(
         name.clone(),
         PendingTypeEntry {
             kind: KKind::Tagged,
@@ -61,7 +58,7 @@ pub fn body<'a>(
     // rather than parking on its own placeholder. The chain gates variant type names to
     // this binder's lexical position.
     let chain = sched.current_lexical_chain();
-    let mut elaborator = Elaborator::new(scope)
+    let mut elaborator = Elaborator::new(sched.current_scope())
         .with_threaded([name.clone()])
         .with_chain(chain.clone());
     let outcome = parse_typed_field_list_via_elaborator(
@@ -77,7 +74,9 @@ pub fn body<'a>(
         .map(|c| BindingIndex::value(c.index))
         .unwrap_or(BindingIndex::BUILTIN);
     match outcome {
-        FieldListOutcome::Done(fields) => finalize_union(scope, name, fields, bind_index),
+        FieldListOutcome::Done(fields) => {
+            finalize_union(sched.current_scope(), name, fields, bind_index)
+        }
         FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
         FieldListOutcome::Pending {
             park_producers,
@@ -85,7 +84,6 @@ pub fn body<'a>(
         } => {
             let name_for_finish = name.clone();
             defer_field_list_via_combine(
-                scope,
                 sched,
                 schema_expr,
                 park_producers,
@@ -109,7 +107,7 @@ pub fn body<'a>(
 /// Transient `RecursiveRef(name)` variant leaves seal to `SetLocal(index)`. Mirror of
 /// [`super::struct_def::finalize_struct`].
 fn finalize_union<'a>(
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,

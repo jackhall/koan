@@ -20,7 +20,7 @@ use crate::machine::core::LexicalFrame;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CallArena, CatchFinish, KError, KErrorKind,
-    RuntimeArena, SchedulerHandle, Scope,
+    SchedulerHandle, Scope,
 };
 
 use super::branch_walk::{find_branch_body, resolve_arm_return_contract};
@@ -28,44 +28,48 @@ use super::{arg, err, kw, register_builtin, sig};
 use crate::machine::core::kfunction::body::split_body_statements;
 use crate::machine::core::kfunction::body::ReturnContract;
 
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+pub fn body<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let expr_inner = match bundle.extract_kexpression_or_shape_error("TRY", "expr") {
         Ok(e) => e,
         Err(e) => return err(e),
     };
-    let contract =
-        match resolve_arm_return_contract(scope, &mut bundle, "TRY", sched.current_lexical_chain())
-        {
-            Ok(c) => c,
-            Err(e) => return err(e),
-        };
+    let contract = match resolve_arm_return_contract(
+        sched.current_scope(),
+        &mut bundle,
+        "TRY",
+        sched.current_lexical_chain(),
+    ) {
+        Ok(c) => c,
+        Err(e) => return err(e),
+    };
     let branches_expr = match bundle.extract_kexpression_or_shape_error("TRY", "branches") {
         Ok(e) => e,
         Err(e) => return err(e),
     };
 
     // Body runs in a fresh `child_under` scope so a `LET` inside it stays local
-    // and reads still chain out to `scope`.
-    let body_scope: &'a Scope<'a> = scope.arena.alloc_scope(Scope::child_under(scope));
+    // and reads still chain out to the call-site scope.
+    let body_scope: &'a Scope<'a> = sched
+        .current_scope()
+        .arena
+        .alloc_scope(Scope::child_under(sched.current_scope()));
     let sub_ids = sched.enter_block(body_scope.id, vec![expr_inner], body_scope);
     let sub_id = sub_ids[0];
     let outer_frame = sched.current_frame();
-    let finish: CatchFinish<'a> = Box::new(move |scope, sched, result| {
-        dispatch_branch(scope, sched, result, branches_expr, outer_frame, contract)
+    let finish: CatchFinish<'a> = Box::new(move |sched, result| {
+        dispatch_branch(sched, result, branches_expr, outer_frame, contract)
     });
-    let catch_id = sched.add_catch(sub_id, scope, finish);
+    let catch_id = sched.add_catch_here(sub_id, finish);
     BodyResult::DeferTo(catch_id)
 }
 
 /// On no match: re-raise the original `KError`, or `ShapeError("TRY missing ok
 /// arm")` on the success path without an `ok` or `_` arm.
-fn dispatch_branch<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+fn dispatch_branch<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     result: Result<&'a KObject<'a>, KError>,
     branches_expr: crate::machine::model::ast::KExpression<'a>,
     outer_frame: Option<Rc<CallArena>>,
@@ -76,7 +80,7 @@ fn dispatch_branch<'a>(
     let (tag, it_value, original_err): (String, KObject<'a>, Option<KError>) = match result {
         Ok(v) => ("Ok".to_string(), v.deep_clone(), None),
         Err(e) => {
-            let tagged: KObject<'a> = e.to_tagged(scope.arena);
+            let tagged: KObject<'a> = e.to_tagged(sched.current_scope().arena);
             let (tag, payload) = match tagged {
                 KObject::Tagged { tag, value, .. } => (tag, (*value).deep_clone()),
                 _ => unreachable!("KError::to_tagged always returns Tagged"),
@@ -99,15 +103,19 @@ fn dispatch_branch<'a>(
     };
 
     // Chain the call-site frame per per-call-arena-protocol.md § Outer-frame chain.
-    let frame: Rc<CallArena> = CallArena::new(scope, outer_frame);
-    let (inner_arena, child): (&'a RuntimeArena, &'a Scope<'a>) = frame.anchored_parts();
-    let it_obj: &'a KObject<'a> = inner_arena.alloc_object(it_value);
+    let frame: Rc<CallArena> = CallArena::new(sched.current_scope(), outer_frame);
     // `it` binds at idx 0; the arm body's statements sit at idx >= 1, so the strict
-    // `idx < cutoff` rule lets the body see it — same path MATCH's `it` uses.
-    let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
+    // `idx < cutoff` rule lets the body see it — same path MATCH's `it` uses. The per-call
+    // re-anchor is concentrated in `with_anchored_child`; arm statements dispatch via
+    // `add_dispatch_with_chain_in_frame`, which stores `Yoked` and re-projects from the frame
+    // cart at the read boundary — so the seed itself fabricates no `&'a`.
+    frame.with_anchored_child(|arena, child| {
+        let it_obj = arena.alloc_object(it_value);
+        let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
+    });
     // Multi-statement arms (`tag -> ((s_0) ... (s_{N-1}))`) submit the first N-1 as
     // siblings at chain indices `1..N-1` and tail-replace into the last at `N`.
-    let arm_scope_id = child.id;
+    let arm_scope_id = frame.scope_for_bind().id;
     let statements = split_body_statements(body_expr);
     let n = statements.len();
     if n >= 2 {
@@ -119,7 +127,7 @@ fn dispatch_branch<'a>(
         for (i, stmt) in stmts.into_iter().enumerate() {
             let chain = LexicalFrame::push(Some(call_site_chain.clone()), arm_scope_id, i + 1);
             sched.with_active_frame(frame.clone(), &mut |s| {
-                s.add_dispatch_with_chain(stmt.clone(), child, chain.clone());
+                s.add_dispatch_with_chain_in_frame(stmt.clone(), chain.clone());
             });
         }
         BodyResult::tail_with_block_at_index(last, Some(frame), arm_scope_id, n, Some(contract))

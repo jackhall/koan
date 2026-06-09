@@ -18,105 +18,55 @@ impl<'a> Scheduler<'a> {
         while let Some(idx) = self.queues.pop_next() {
             let id = NodeId(idx);
             let node = self.store.take_for_run(id);
-            let scope = node.scope;
+            // The step reads its scope on demand (`current_scope`), and the post-step uses below
+            // re-acquire it per use, so nothing holds a scope borrow across the step's `&mut self`
+            // work or the in-step TCO frame reset.
+            let node_scope = node.scope;
             let work = node.work;
             let prev_function = node.function;
             let prev_chain_carrier = node.chain;
-            let guard =
-                self.enter_slot_step(node.frame, node.reserve_frame, prev_chain_carrier.clone());
+            let guard = self.enter_slot_step(
+                node.frame,
+                node.reserve_frame,
+                prev_chain_carrier.clone(),
+                node_scope,
+            );
             let step = match work {
                 NodeWork::Dispatch { expr, state } => {
                     let mut ctx = crate::machine::execute::dispatch::DispatchCtx::new(self);
-                    crate::machine::execute::dispatch::run_dispatch(
-                        &mut ctx, expr, state, scope, idx,
-                    )?
+                    crate::machine::execute::dispatch::run_dispatch(&mut ctx, expr, state, idx)?
                 }
                 NodeWork::Combine {
                     deps,
                     park_count,
                     finish,
-                } => self.run_combine(deps, park_count, finish, scope, idx),
-                NodeWork::Catch { from, finish } => self.run_catch(from, finish, scope, idx),
+                } => self.run_combine(deps, park_count, finish, idx),
+                NodeWork::Catch { from, finish } => self.run_catch(from, finish, idx),
                 NodeWork::Lift(state) => NodeStep::Done(Self::run_lift(state)),
             };
-            let (prev_frame, post_step_reserve) = self.exit_slot_step(guard);
-            let prev_chain = prev_chain_carrier;
-            // Drain re-entrant writes while `scope` is still live; match arms below may
-            // drop the frame it's anchored to. See design/memory-model.md.
-            scope.drain_pending();
+            // The post-step token owns the slot's frame at step end and is the *only* source of
+            // the step scope (via `post.step_scope()`), so the wrong-frame read that ambient
+            // `active_frame` allowed is unspellable here.
+            let post = self.exit_slot_step(guard);
+            // Drain re-entrant writes. `step_scope()` is `None` when a tail-call took the frame —
+            // a Replace whose scope is being reset, so its pending is moot.
+            if let Some(scope) = post.step_scope() {
+                scope.drain_pending();
+            }
             match step {
                 NodeStep::Done(output) => {
-                    match (output, prev_frame) {
-                        (NodeOutput::Value(Carried::Object(v)), Some(frame)) => {
-                            let dest = scope
-                                .outer
-                                .expect("per-call scope must have an outer (its captured scope)")
-                                .arena;
-                            let mut lifted_obj = lift_kobject(v, &frame);
-                            match check_declared_return(
-                                prev_function,
-                                |d| d.matches_value(&lifted_obj),
-                                || lifted_obj.ktype().name(),
-                            ) {
-                                // Re-tag to the declared return type so downstream dispatch
-                                // sees the contract (may coarsen, e.g. `List<Number>` through
-                                // `:(LIST OF Any)` -> `List<Any>`).
-                                Ok(Some(declared)) => lifted_obj = lifted_obj.stamp_type(declared),
-                                Ok(None) => {}
-                                Err(err) => {
-                                    scope.clear_placeholders_for_producer(id);
-                                    self.finalize(idx, NodeOutput::Err(err));
-                                    continue;
-                                }
-                            }
-                            let lifted = dest.alloc_object(lifted_obj);
-                            self.finalize(idx, NodeOutput::Value(Carried::Object(lifted)));
-                        }
-                        // A type flowing the type channel re-anchors any `Module` frame and
-                        // re-allocs into the destination arena, after the shared
-                        // declared-return check via `matches_type` (e.g. a body module
-                        // returned through a `Signature` return slot must satisfy that
-                        // signature). The type channel ignores the returned declared type —
-                        // unlike the `Object` arm, it does not re-tag.
-                        (NodeOutput::Value(Carried::Type(t)), Some(frame)) => {
-                            let dest = scope
-                                .outer
-                                .expect("per-call scope must have an outer (its captured scope)")
-                                .arena;
-                            let lifted_t = lift_ktype(t, &frame);
-                            if let Err(err) = check_declared_return(
-                                prev_function,
-                                |d| d.matches_type(&lifted_t),
-                                || lifted_t.name(),
-                            ) {
-                                scope.clear_placeholders_for_producer(id);
-                                self.finalize(idx, NodeOutput::Err(err));
-                                continue;
-                            }
-                            let lifted = dest.alloc_ktype(lifted_t);
-                            self.finalize(idx, NodeOutput::Value(Carried::Type(lifted)));
-                        }
-                        (NodeOutput::Err(e), Some(_frame)) => {
-                            let with_frame = match prev_function {
-                                Some(contract) => {
-                                    let label = match contract {
-                                        ReturnContract::Function(f) => f.summarize(),
-                                        ReturnContract::Arm { kind, .. } => kind.to_string(),
-                                    };
-                                    e.with_frame(Frame::bare(label.clone(), label))
-                                }
-                                None => e,
-                            };
+                    // Lift the terminal out of the dying per-call frame into the surviving
+                    // captured-scope arena (`dest_arena`, a genuine `&'a`). A non-dying run frame
+                    // (empty arena; top-level values live in the run arena) reads as frameless.
+                    let dest_arena = post.step_scope().and_then(|s| s.outer().map(|o| o.arena));
+                    let frame = post.prev_frame.as_ref().filter(|f| !f.non_dying());
+                    let result = compute_done_output(output, frame, dest_arena, prev_function);
+                    if matches!(result, NodeOutput::Err(_)) {
+                        if let Some(scope) = post.step_scope() {
                             scope.clear_placeholders_for_producer(id);
-                            self.finalize(idx, NodeOutput::Err(with_frame));
-                        }
-                        (other, None) => {
-                            if matches!(other, NodeOutput::Err(_)) {
-                                scope.clear_placeholders_for_producer(id);
-                            }
-                            self.finalize(idx, other);
                         }
                     }
+                    self.finalize(idx, result);
                 }
                 NodeStep::Replace {
                     work: new_work,
@@ -125,9 +75,11 @@ impl<'a> Scheduler<'a> {
                     block_entry,
                     body_index,
                 } => {
+                    let prev_frame = post.prev_frame;
+                    let post_step_reserve = post.post_step_reserve;
                     let next_function = new_function.or(prev_function);
                     let new_chain = compute_replace_chain(
-                        prev_chain.clone(),
+                        prev_chain_carrier,
                         block_entry,
                         new_function,
                         new_frame.as_deref(),
@@ -140,7 +92,11 @@ impl<'a> Scheduler<'a> {
                             // the new reserve). `'a`-anchoring lives in
                             // `reinstall_with_frame`'s SAFETY.
                             drop(post_step_reserve);
-                            let new_reserve = prev_frame;
+                            // The non-dying run frame is not a reusable per-call arena; parking
+                            // it as the ping-pong reserve would defer (and mis-time) a real
+                            // frame's drop. Treat it as no reserve — the run scope is re-reached
+                            // through the scheduler's `run_frame`, never a reset reserve.
+                            let new_reserve = prev_frame.filter(|f| !f.non_dying());
                             self.store.reinstall_with_frame(
                                 id,
                                 f,
@@ -155,7 +111,7 @@ impl<'a> Scheduler<'a> {
                                 id,
                                 Node {
                                     work: new_work,
-                                    scope,
+                                    scope: node_scope,
                                     frame: prev_frame,
                                     reserve_frame: post_step_reserve,
                                     function: next_function,
@@ -254,6 +210,67 @@ impl<'a> Scheduler<'a> {
             block_entry: None,
             body_index: 0,
         }
+    }
+}
+
+/// Lift a `Done` step's terminal out of the dying per-call `frame` into `dest_arena` (the
+/// surviving captured-scope arena) and enforce the declared return contract, returning the slot's
+/// final terminal. A `None` frame (a frameless slot or the non-dying run frame) passes the value
+/// through untouched. A failed return-type check becomes `Err` — the caller clears placeholders
+/// and finalizes. Pure: the scope-derived inputs were captured by the caller while the step's
+/// scope was still ambient, so this holds no scope borrow.
+fn compute_done_output<'a>(
+    output: NodeOutput<'a>,
+    frame: Option<&Rc<crate::machine::core::CallArena>>,
+    dest_arena: Option<&'a crate::machine::core::RuntimeArena>,
+    prev_function: Option<ReturnContract<'a>>,
+) -> NodeOutput<'a> {
+    match (output, frame) {
+        (NodeOutput::Value(Carried::Object(v)), Some(frame)) => {
+            let dest = dest_arena.expect("per-call scope must have an outer (its captured scope)");
+            let mut lifted_obj = lift_kobject(v, frame);
+            match check_declared_return(
+                prev_function,
+                |d| d.matches_value(&lifted_obj),
+                || lifted_obj.ktype().name(),
+            ) {
+                // Re-tag to the declared return type so downstream dispatch sees the contract
+                // (may coarsen, e.g. `List<Number>` through `:(LIST OF Any)` -> `List<Any>`).
+                Ok(Some(declared)) => lifted_obj = lifted_obj.stamp_type(declared),
+                Ok(None) => {}
+                Err(err) => return NodeOutput::Err(err),
+            }
+            NodeOutput::Value(Carried::Object(dest.alloc_object(lifted_obj)))
+        }
+        // A type flowing the type channel re-anchors any `Module` frame and re-allocs into the
+        // destination arena, after the shared declared-return check via `matches_type`. The type
+        // channel ignores the returned declared type — unlike the `Object` arm, it does not re-tag.
+        (NodeOutput::Value(Carried::Type(t)), Some(frame)) => {
+            let dest = dest_arena.expect("per-call scope must have an outer (its captured scope)");
+            let lifted_t = lift_ktype(t, frame);
+            if let Err(err) = check_declared_return(
+                prev_function,
+                |d| d.matches_type(&lifted_t),
+                || lifted_t.name(),
+            ) {
+                return NodeOutput::Err(err);
+            }
+            NodeOutput::Value(Carried::Type(dest.alloc_ktype(lifted_t)))
+        }
+        (NodeOutput::Err(e), Some(_frame)) => {
+            let with_frame = match prev_function {
+                Some(contract) => {
+                    let label = match contract {
+                        ReturnContract::Function(f) => f.summarize(),
+                        ReturnContract::Arm { kind, .. } => kind.to_string(),
+                    };
+                    e.with_frame(Frame::bare(label.clone(), label))
+                }
+                None => e,
+            };
+            NodeOutput::Err(with_frame)
+        }
+        (other, None) => other,
     }
 }
 

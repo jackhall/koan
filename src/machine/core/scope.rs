@@ -13,6 +13,7 @@ use super::kerror::{KError, KErrorKind};
 use super::lexical_frame::LexicalFrame;
 use super::pending::PendingQueue;
 use super::scope_id::ScopeId;
+use super::scope_ptr::BoundedScopePtr;
 use crate::machine::core::kfunction::{ArgumentBundle, KFunction, NodeId};
 use crate::machine::model::values::KObject;
 
@@ -43,7 +44,20 @@ impl<'a> KFuture<'a> {
 /// nodes. Writes that hit a borrow conflict route through [`PendingQueue`];
 /// `drain_pending` replays them between dispatch nodes.
 pub struct Scope<'a> {
-    pub outer: Option<&'a Scope<'a>>,
+    /// Lexical parent, stored as a content-branded bounded handle ([`BoundedScopePtr`]) rather
+    /// than a plain `&'a Scope<'a>`. Read through the [`Scope::outer`] accessor, which re-hands the
+    /// borrow. The erased representation is the seam the frame re-anchor needs: it lets the
+    /// re-handed parent borrow shorten to the reader's borrow (a frame-bounded child reaching a
+    /// frame-bounded parent) while the scope *content* stays `'a` — `Scope` is invariant in
+    /// `'a`, so only the borrow may shorten, never the content. The handle re-hands the parent
+    /// with a borrow capped at the reader (`BoundedScopePtr::get`), so a frame-bounded child can
+    /// never claim its (possibly frame-bounded) parent outlives the read.
+    outer: Option<BoundedScopePtr<'a>>,
+    /// Direct handle to the run-global [`ScopeKind::Root`] (builtins only, immutable).
+    /// `None` iff `self` is the root. Every other scope points straight at it, so a
+    /// builtin lookup or the no-shadow consult reaches the root in one hop instead of
+    /// walking `outer` — the root holds the builtins and never changes for a run.
+    root: Option<&'a Scope<'a>>,
     bindings: ScopeBindings<'a>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
     pub arena: &'a RuntimeArena,
@@ -94,8 +108,14 @@ impl<'a> ScopeBindings<'a> {
 /// pivots on the first non-`Anonymous` variant: `Sig` admits VAL declarators and
 /// rejects LET-by-example; `Module` is the opposite. The per-variant `name` field
 /// is the surface label for diagnostics.
+///
+/// `Root` marks the immutable run-global scope holding the builtins. It is
+/// transparent to the SIG-body gate (like `Anonymous`); its distinct typing is the
+/// lever for routing builtin lookups and the no-shadow consult through a genuinely
+/// run-lived scope.
 #[derive(Debug, Clone)]
 pub enum ScopeKind {
+    Root,
     Anonymous,
     Sig { name: String },
     Module { name: String },
@@ -108,13 +128,14 @@ impl<'a> Scope<'a> {
         out: Box<dyn Write + 'a>,
     ) -> Self {
         Self {
-            outer,
+            outer: outer.map(BoundedScopePtr::erase),
+            root: None,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(Some(out)),
             arena,
             id: ScopeId::next(),
             pending: PendingQueue::new(),
-            kind: ScopeKind::Anonymous,
+            kind: ScopeKind::Root,
             recursive_set: None,
         }
     }
@@ -123,11 +144,23 @@ impl<'a> Scope<'a> {
         Self::child_under(self)
     }
 
+    /// The mutable run scope: the direct child of the immutable run-global root. Unlike the
+    /// generic [`Self::child_under`] — which copies the parent's *own* `root` handle — this stamps
+    /// `root` to `run_root` itself, because the run-global root carries no `root` of its own
+    /// (`root: None` marks "I am the root"). The only caller is `default_scope`, which holds the
+    /// root as a genuine `&'a`.
+    pub fn run_child(run_root: &'a Scope<'a>) -> Scope<'a> {
+        let mut child = Self::child_under(run_root);
+        child.root = Some(run_root);
+        child
+    }
+
     /// `outer` is the lexical parent — for FN bodies the captured definition scope,
     /// not the call site.
-    pub fn child_under(outer: &'a Scope<'a>) -> Scope<'a> {
+    pub fn child_under(outer: &Scope<'a>) -> Scope<'a> {
         Scope {
-            outer: Some(outer),
+            outer: Some(BoundedScopePtr::erase(outer)),
+            root: outer.root,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -139,9 +172,10 @@ impl<'a> Scope<'a> {
     }
 
     /// `child_under`, stamped as a SIG decl_scope.
-    pub fn child_under_sig(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
+    pub fn child_under_sig(outer: &Scope<'a>, name: String) -> Scope<'a> {
         Scope {
-            outer: Some(outer),
+            outer: Some(BoundedScopePtr::erase(outer)),
+            root: outer.root,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -154,9 +188,10 @@ impl<'a> Scope<'a> {
 
     /// `child_under`, stamped as a MODULE body (also used for the per-ascription view
     /// minted by `:|`).
-    pub fn child_under_module(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
+    pub fn child_under_module(outer: &Scope<'a>, name: String) -> Scope<'a> {
         Scope {
-            outer: Some(outer),
+            outer: Some(BoundedScopePtr::erase(outer)),
+            root: outer.root,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -171,9 +206,10 @@ impl<'a> Scope<'a> {
     /// whose members are co-declared. Members dispatch against this scope, so the elaborator
     /// threads the group (a member name lowers to `RecursiveRef`). `outer` is the lexical
     /// parent; the sealed members are mirrored up into it at the block's Combine-finish.
-    pub fn child_recursive_group(outer: &'a Scope<'a>, set: Rc<RecursiveSet<'a>>) -> Scope<'a> {
+    pub fn child_recursive_group(outer: &Scope<'a>, set: Rc<RecursiveSet<'a>>) -> Scope<'a> {
         Scope {
-            outer: Some(outer),
+            outer: Some(BoundedScopePtr::erase(outer)),
+            root: outer.root,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -198,9 +234,10 @@ impl<'a> Scope<'a> {
     /// `module_bindings`. Reads consult the window first then walk `outer`; writes
     /// forward to `outer`. `arena` is `outer.arena` so block-body allocations outlive
     /// the block (forwarded binds are sound).
-    pub fn child_transparent(outer: &'a Scope<'a>, module_bindings: &'a Bindings<'a>) -> Scope<'a> {
+    pub fn child_transparent(outer: &Scope<'a>, module_bindings: &'a Bindings<'a>) -> Scope<'a> {
         Scope {
-            outer: Some(outer),
+            outer: Some(BoundedScopePtr::erase(outer)),
+            root: outer.root,
             bindings: ScopeBindings::Borrowed(module_bindings),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -247,17 +284,56 @@ impl<'a> Scope<'a> {
     /// but rootless — the transparent constructor always sets `outer`, so this would
     /// be a construction bug.
     fn write_target(&self) -> &Scope<'a> {
-        self.outer.expect(
+        self.outer().expect(
             "a Borrowed (USING transparent) scope must have an outer call-site to forward \
              writes to",
         )
+    }
+
+    /// The lexical parent, re-handed from the erased [`Scope::outer`] handle. Inert today: it
+    /// re-attaches at the full content `'a` via the safe brand path. The borrow-shortening flip
+    /// narrows the returned borrow to `&self`'s, so a frame-bounded child hands back a
+    /// frame-bounded parent.
+    pub fn outer(&self) -> Option<&Scope<'a>> {
+        self.outer.as_ref().map(|p| p.get())
     }
 
     /// Iterate `self` and its `outer` chain. Per-step `RefCell` guards taken inside a
     /// `find_map` / `find` closure drop at the closure boundary, so a deep walk never
     /// accumulates live read borrows.
     pub fn ancestors(&self) -> impl Iterator<Item = &Scope<'a>> {
-        std::iter::once(self).chain(std::iter::successors(self.outer, |s| s.outer))
+        std::iter::once(self).chain(std::iter::successors(self.outer(), |s| s.outer()))
+    }
+
+    /// The run-global [`ScopeKind::Root`] (builtins only). `self` if it is the root,
+    /// else the direct `root` handle every scope carries — one hop, no `outer` walk.
+    pub(crate) fn root_scope(&self) -> &Scope<'a> {
+        self.root.unwrap_or(self)
+    }
+
+    /// True iff `name` is a builtin type. The builtins live once in the immutable
+    /// run-global root, so a user type declaration colliding with one is a `Rebind` at
+    /// any depth — the consult hits the root directly rather than each layer of the
+    /// `outer` chain. Frame-local bindings (FN parameters, MATCH/TRY `it`) live below
+    /// the root, so ordinary user-vs-user cross-scope shadowing is unaffected.
+    fn shadows_builtin_type(&self, name: &str) -> bool {
+        self.root_scope().bindings().has_builtin_type(name)
+    }
+
+    /// True iff `key` names a builtin dispatch bucket — a finalized overload lives
+    /// under it in the run-global root. Builtins are immutable and unshadowable, so a
+    /// user FN/FUNCTOR whose untyped signature key collides with a builtin is a
+    /// `Rebind`; it must never merge into the builtin bucket. The consult reads the
+    /// root directly.
+    fn shadows_builtin_function(&self, key: &crate::machine::model::types::UntypedKey) -> bool {
+        self.root_scope().bindings().has_builtin_function(key)
+    }
+
+    /// True iff `probe` resolves a builtin operator group in the run-global root.
+    /// Operators are builtins too — a user operator over a builtin probe is rejected
+    /// rather than shadowing or extending it.
+    fn shadows_builtin_operator(&self, probe: &str) -> bool {
+        self.root_scope().bindings().has_builtin_operator(probe)
     }
 
     /// True iff the nearest non-`Anonymous` enclosing scope is a SIG decl_scope. A
@@ -267,7 +343,7 @@ impl<'a> Scope<'a> {
             .find_map(|s| match &s.kind {
                 ScopeKind::Sig { .. } => Some(true),
                 ScopeKind::Module { .. } => Some(false),
-                ScopeKind::Anonymous => None,
+                ScopeKind::Root | ScopeKind::Anonymous => None,
             })
             .unwrap_or(false)
     }
@@ -328,6 +404,14 @@ impl<'a> Scope<'a> {
                 .write_target()
                 .register_function(name, fn_ref, obj, index);
         }
+        // A user overload may not join a builtin's bucket — builtins are immutable and
+        // unshadowable. The root registers its own builtins at `BUILTIN`, so only a
+        // non-`BUILTIN` index is gated.
+        if index != BindingIndex::BUILTIN
+            && self.shadows_builtin_function(&fn_ref.signature.untyped_key())
+        {
+            return Err(KError::new(KErrorKind::Rebind { name }));
+        }
         match self
             .bindings
             .get()
@@ -363,6 +447,25 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// User-facing type registration (`LET <TypeName> = …`, `VAL`): rejects a collision
+    /// with a builtin type before delegating to the infallible [`Self::register_type`].
+    /// Builtins are immutable and unshadowable, so a user type that names one is a
+    /// `Rebind` at any depth — including a SIG/MODULE-local abstract member — and the
+    /// [`Self::shadows_builtin_type`] consult reads the root directly. Builtin
+    /// registration itself stays on the infallible `register_type`.
+    pub fn register_user_type(
+        &self,
+        name: String,
+        ktype: crate::machine::model::types::KType<'a>,
+        index: BindingIndex,
+    ) -> Result<(), KError> {
+        if self.shadows_builtin_type(&name) {
+            return Err(KError::new(KErrorKind::Rebind { name }));
+        }
+        self.register_type(name, ktype, index);
+        Ok(())
+    }
+
     /// Upsert install for a type-only nominal finalize (STRUCT / named UNION / Result /
     /// MODULE). Writes the sealed `SetRef` identity into [`Bindings::types`], overwriting
     /// a `PartialEq`-equal `SetRef` a `RECURSIVE TYPES` block pre-installed (same set + index).
@@ -381,6 +484,9 @@ impl<'a> Scope<'a> {
     ) -> Result<&'a crate::machine::model::types::KType<'a>, KError> {
         if self.bindings.is_borrowed() {
             return self.write_target().register_type_upsert(name, ktype, index);
+        }
+        if self.shadows_builtin_type(&name) {
+            return Err(KError::new(KErrorKind::Rebind { name }));
         }
         let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc_ktype(ktype);
         match self
@@ -557,6 +663,14 @@ impl<'a> Scope<'a> {
         name: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<&'a crate::machine::model::types::KType<'a>> {
+        // Builtins are unshadowable, so a builtin type is authoritative: consult the
+        // immutable root in one hop and return it without walking the user chain. The
+        // `idx == 0` gate keeps this to genuine builtins, so a synthetic root-position
+        // user type still resolves by innermost-wins precedence below.
+        let root = self.root_scope();
+        if root.bindings().has_builtin_type(name) {
+            return root.bindings().lookup_type(name, None);
+        }
         self.ancestors().find_map(|scope| {
             let cutoff = chain.and_then(|c| c.index_for(scope.id));
             scope.bindings().lookup_type(name, cutoff)
@@ -573,6 +687,13 @@ impl<'a> Scope<'a> {
         probe: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<&'a crate::machine::model::operators::OperatorGroup> {
+        // A builtin operator group is unshadowable and authoritative — consult the root
+        // in one hop. The `idx == 0` gate keeps synthetic root-position user operators on
+        // the innermost-wins walk below.
+        let root = self.root_scope();
+        if root.bindings().has_builtin_operator(probe) {
+            return root.bindings().lookup_operator_group(probe, None);
+        }
         self.ancestors().find_map(|scope| {
             let cutoff = chain.and_then(|c| c.index_for(scope.id));
             scope.bindings().lookup_operator_group(probe, cutoff)
@@ -594,6 +715,11 @@ impl<'a> Scope<'a> {
             return self
                 .write_target()
                 .register_operator_group(probe, group, index);
+        }
+        // Operators are builtins too: a user operator over a builtin probe is a
+        // `Rebind`, never a shadow. The root registers its own at `BUILTIN`.
+        if index != BindingIndex::BUILTIN && self.shadows_builtin_operator(&probe) {
+            return Err(KError::new(KErrorKind::Rebind { name: probe }));
         }
         match self
             .bindings

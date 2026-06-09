@@ -1,8 +1,8 @@
 //! `dispatch` arm of `machine::core` tests.
 
 use super::super::{RuntimeArena, Scope};
-use crate::builtins::register_builtin;
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
+use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
@@ -11,19 +11,11 @@ use crate::machine::model::types::{
 };
 use crate::machine::{BindingIndex, LexicalFrame, ResolveOutcome};
 
-fn body_a<'a>(
-    s: &'a Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a>,
-    _a: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    BodyResult::value(marker(s, "a"))
+fn body_a<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, _a: ArgumentBundle<'a>) -> BodyResult<'a> {
+    BodyResult::value(marker(h.current_scope(), "a"))
 }
-fn body_b<'a>(
-    s: &'a Scope<'a>,
-    _h: &mut dyn SchedulerHandle<'a>,
-    _a: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    BodyResult::value(marker(s, "b"))
+fn body_b<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, _a: ArgumentBundle<'a>) -> BodyResult<'a> {
+    BodyResult::value(marker(h.current_scope(), "b"))
 }
 
 fn two_slot_sig<'a>(a: KType<'a>, b: KType<'a>) -> ExpressionSignature<'a> {
@@ -87,11 +79,14 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
 fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     let arena = RuntimeArena::new();
     let outer = run_root_bare(&arena);
-    register_builtin(
+    // User-position (not BUILTIN) so the builtin root-first short-circuit doesn't fire —
+    // this exercises the inner-ambiguity-doesn't-descend walk, not builtin authority.
+    register_overload_at(
         outer,
         "OUTER",
         two_slot_sig(KType::Number, KType::Number),
         body_a,
+        BindingIndex::value(1),
     );
     let inner = arena.alloc_scope(outer.child_for_call());
     register_builtin(inner, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
@@ -268,7 +263,15 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
             }),
         ],
     };
-    register_builtin(outer, "outer_mark", outer_sig, body_a);
+    // User-position so the builtin root-first short-circuit doesn't claim it; the inner
+    // pending sibling must shadow this outer strict Pick on the ordinary walk.
+    register_overload_at(
+        outer,
+        "outer_mark",
+        outer_sig,
+        body_a,
+        BindingIndex::value(1),
+    );
 
     let inner = arena.alloc_scope(outer.child_for_call());
     let expr = KExpression::new(vec![
@@ -381,7 +384,9 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     use crate::machine::NodeId;
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    // Finalized `(PICK <number>)` overload that strictly Picks.
+    // Finalized `(PICK <number>)` user overload that strictly Picks. Registered at a
+    // user index (not BUILTIN) so the same-bucket sibling below is a legitimate
+    // user-vs-user overload — a builtin bucket admits no user siblings.
     let pick_num = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
@@ -392,7 +397,16 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             }),
         ],
     };
-    register_builtin(scope, "pick_num", pick_num, body_a);
+    let pick_num_fn = arena.alloc_function(KFunction::new(pick_num, Body::Builtin(body_a), scope));
+    let pick_num_obj = arena.alloc_object(KObject::KFunction(pick_num_fn, None));
+    scope
+        .register_function(
+            "pick_num".to_string(),
+            pick_num_fn,
+            pick_num_obj,
+            BindingIndex::value(1),
+        )
+        .expect("register pick_num overload");
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("PICK".into())),
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),

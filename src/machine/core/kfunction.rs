@@ -5,7 +5,8 @@
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use crate::machine::core::{KError, KErrorKind, KFuture, Scope, ScopePtr};
+use crate::machine::core::scope_ptr::BoundedScopePtr;
+use crate::machine::core::{KError, KErrorKind, KFuture, Scope};
 use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
 use crate::machine::model::values::{ArgValue, NamedPairs};
 
@@ -27,12 +28,17 @@ pub use scheduler_handle::{CatchFinish, CombineFinish, NodeId, SchedulerHandle};
 pub struct KFunction<'a> {
     pub signature: ExpressionSignature<'a>,
     pub body: Body<'a>,
-    /// **Variance-load-bearing.** The branded [`ScopePtr<'a>`] carries `'a` structurally
-    /// (`Scope<'a>` is invariant — it contains `RefCell`s), so `captured` is what keeps
-    /// `KFunction<'a>` invariant in `'a`. Do **not** simplify by dropping the brand to a
-    /// covariant carrier — that would make `KFunction` covariant in `'a` and silently
-    /// reintroduce a soundness bug.
-    captured: ScopePtr<'a>,
+    /// The captured definition scope, stored as a content-branded [`BoundedScopePtr<'a>`] (the
+    /// same reader-bounded handle [`Scope::outer`] uses): the FN may be defined inside a per-call
+    /// frame, so the capture borrow is frame-bounded while the scope *content* stays `'a`.
+    /// [`Self::captured_scope`] re-hands it behind a reader-bounded borrow; liveness past the
+    /// defining frame rides the `Rc<CallArena>` that lift attaches to an escaping closure.
+    ///
+    /// **Variance-load-bearing.** `BoundedScopePtr<'a>` carries `'a` structurally (`Scope<'a>` is
+    /// invariant — it contains `RefCell`s), so `captured` is what keeps `KFunction<'a>` invariant
+    /// in `'a`. Do **not** weaken the brand to a covariant carrier — that would make `KFunction`
+    /// covariant in `'a` and silently reintroduce a soundness bug.
+    captured: BoundedScopePtr<'a>,
     /// `Some(_)` for binder builtins (LET, FN, STRUCT, UNION, SIG, MODULE).
     pub binder_name: Option<BinderNameFn>,
     /// `Some(_)` for binder builtins whose body registers a callable function (`FN`,
@@ -49,18 +55,14 @@ pub struct KFunction<'a> {
 }
 
 impl<'a> KFunction<'a> {
-    pub fn new(
-        signature: ExpressionSignature<'a>,
-        body: Body<'a>,
-        captured: &'a Scope<'a>,
-    ) -> Self {
+    pub fn new(signature: ExpressionSignature<'a>, body: Body<'a>, captured: &Scope<'a>) -> Self {
         Self::with_binder_name(signature, body, captured, None)
     }
 
     pub fn with_binder_name(
         signature: ExpressionSignature<'a>,
         body: Body<'a>,
-        captured: &'a Scope<'a>,
+        captured: &Scope<'a>,
         binder_name: Option<BinderNameFn>,
     ) -> Self {
         Self::with_binder_and_functor(signature, body, captured, binder_name, None, false)
@@ -69,7 +71,7 @@ impl<'a> KFunction<'a> {
     pub fn with_binder_and_functor(
         mut signature: ExpressionSignature<'a>,
         body: Body<'a>,
-        captured: &'a Scope<'a>,
+        captured: &Scope<'a>,
         binder_name: Option<BinderNameFn>,
         binder_bucket: Option<BinderBucketFn>,
         is_functor: bool,
@@ -78,7 +80,7 @@ impl<'a> KFunction<'a> {
         Self {
             signature,
             body,
-            captured: ScopePtr::erase(captured),
+            captured: BoundedScopePtr::erase(captured),
             binder_name,
             binder_bucket,
             is_functor,
@@ -89,8 +91,8 @@ impl<'a> KFunction<'a> {
     /// re-attach: it was erased from a `&'a Scope<'a>` in [`Self::with_binder_and_functor`],
     /// and points at a scope that outlives this `KFunction<'a>` by the broader runtime-arena
     /// argument.
-    pub fn captured_scope(&self) -> &'a Scope<'a> {
-        self.captured.reattach()
+    pub fn captured_scope(&self) -> &Scope<'a> {
+        self.captured.get()
     }
 
     pub fn summarize(&self) -> String {
@@ -197,12 +199,11 @@ mod tests {
     use crate::machine::model::types::{Argument, ExpressionSignature, KType, ReturnType};
     use crate::machine::model::{KKind, KObject};
 
-    fn body_any<'a>(
-        s: &'a Scope<'a>,
-        _h: &mut dyn SchedulerHandle<'a>,
+    fn body_any<'a, 's>(
+        h: &mut dyn SchedulerHandle<'a, 's>,
         _a: ArgumentBundle<'a>,
     ) -> BodyResult<'a> {
-        BodyResult::value(marker(s, "any"))
+        BodyResult::value(marker(h.current_scope(), "any"))
     }
 
     /// Coarse bucket-key lookup over the scope chain. Returns the first strict-shape
@@ -221,7 +222,7 @@ mod tests {
                     return Some(*f);
                 }
             }
-            current = s.outer;
+            current = s.outer();
         }
         None
     }

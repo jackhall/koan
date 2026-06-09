@@ -26,9 +26,8 @@ use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHa
 
 use super::{arg, err, kw, register_builtin, sig};
 
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+pub fn body<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     // A module identity rides the type channel as `KType::Module { module, frame }`; the
@@ -64,7 +63,7 @@ pub fn body<'a>(
     // Root the frame `Rc` in the call-site arena so the borrowed window outlives
     // the eager `m` arg and any escaping closure. No-op for top-level modules.
     if module_frame.is_some() {
-        scope.arena.alloc_ktype(KType::Module {
+        sched.current_scope().arena.alloc_ktype(KType::Module {
             module,
             frame: module_frame,
         });
@@ -73,9 +72,13 @@ pub fn body<'a>(
     // Transparent scope lives in the call-site arena so forwarded binds and
     // block-defined functions outlive the block.
     let module_bindings = module.child_scope().bindings();
-    let child: &'a Scope<'a> = scope
+    let child: &'a Scope<'a> = sched
+        .current_scope()
         .arena
-        .alloc_scope(Scope::child_transparent(scope, module_bindings));
+        .alloc_scope(Scope::child_transparent(
+            sched.current_scope(),
+            module_bindings,
+        ));
     let sub_id = sched.add_dispatch(body_expr, child);
     BodyResult::DeferTo(sub_id)
 }

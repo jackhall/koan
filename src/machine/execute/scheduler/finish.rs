@@ -1,5 +1,5 @@
 use crate::machine::model::{Carried, KObject};
-use crate::machine::{BodyResult, CatchFinish, CombineFinish, Frame, KError, NodeId, Scope};
+use crate::machine::{BodyResult, CatchFinish, CombineFinish, Frame, KError, NodeId};
 
 use super::super::dispatch::propagate_dep_error;
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
@@ -25,7 +25,6 @@ impl<'a> Scheduler<'a> {
         deps: Vec<NodeId>,
         park_count: usize,
         finish: CombineFinish<'a>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> NodeStep<'a> {
         // The finish closure carries its own framing (e.g. "<list>", "<dict>");
@@ -41,7 +40,7 @@ impl<'a> Scheduler<'a> {
         // narrows each arm it expects.
         let values: Vec<Carried<'a>> = deps.iter().map(|d| self.read(*d)).collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
-        let body = finish(scope, self, &values);
+        let body = finish(self, &values);
         self.reclaim_deps(idx, owned_indices);
         self.dispatch_body_result(body, idx)
     }
@@ -76,7 +75,6 @@ impl<'a> Scheduler<'a> {
         &mut self,
         from: NodeId,
         finish: CatchFinish<'a>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> NodeStep<'a> {
         let result: Result<&'a KObject<'a>, KError> = match self.read_result(from) {
@@ -85,7 +83,7 @@ impl<'a> Scheduler<'a> {
             // one here would double-frame.
             Err(e) => Err(propagate_dep_error(e, None)),
         };
-        let body = finish(scope, self, result);
+        let body = finish(self, result);
         self.reclaim_deps(idx, vec![from.index()]);
         self.dispatch_body_result(body, idx)
     }

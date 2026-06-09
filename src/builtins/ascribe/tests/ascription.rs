@@ -49,7 +49,7 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let src = "MODULE IntOrd = (LET compare = 0)\n\
-         SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
+         SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
          LET FirstAbstract = (IntOrd :| OrderedSig)\n\
          LET SecondAbstract = (IntOrd :| OrderedSig)";
     let exprs = parse(src).expect("parse should succeed");
@@ -78,17 +78,17 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
         }) => *m,
         _ => panic!("SecondAbstract should be a module identity in types"),
     };
-    let a_t = a.type_members.borrow().get("Type").cloned();
-    let b_t = b.type_members.borrow().get("Type").cloned();
+    let a_t = a.type_members.borrow().get("Carrier").cloned();
+    let b_t = b.type_members.borrow().get("Carrier").cloned();
     // Post-collapse: opaque-ascription abstract-type members are minted as
     // `KType::AbstractType { source: Module(view), name }`.
     assert!(matches!(
         &a_t,
-        Some(KType::AbstractType { name, .. }) if name == "Type"
+        Some(KType::AbstractType { name, .. }) if name == "Carrier"
     ));
     assert!(matches!(
         &b_t,
-        Some(KType::AbstractType { name, .. }) if name == "Type"
+        Some(KType::AbstractType { name, .. }) if name == "Carrier"
     ));
     assert_ne!(
         a_t, b_t,
@@ -123,8 +123,8 @@ fn roadmap_example_int_ord_with_ordered_sig() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
-         SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
+        "MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
+         SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
          LET IntOrdAbstract = (IntOrd :| OrderedSig)",
     );
 
@@ -138,17 +138,17 @@ fn roadmap_example_int_ord_with_ordered_sig() {
     let minted = abstract_mod
         .type_members
         .borrow()
-        .get("Type")
+        .get("Carrier")
         .cloned()
-        .expect("opaque ascription should mint a Type member");
+        .expect("opaque ascription should mint a Carrier member");
     match &minted {
-        KType::AbstractType { name, .. } => assert_eq!(name, "Type"),
+        KType::AbstractType { name, .. } => assert_eq!(name, "Carrier"),
         other => panic!("minted abstract type must be AbstractType, got {:?}", other),
     }
     assert_ne!(
         minted,
         KType::Number,
-        "opaque IntOrdAbstract.Type must not equal Number"
+        "opaque IntOrdAbstract.Carrier must not equal Number"
     );
     let compare = abstract_mod
         .child_scope()

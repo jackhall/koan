@@ -187,7 +187,6 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
     }
 }
 
-
 /// Variant used by the keyworded FN (`FnKind::Function`), the FUNCTOR builtin
 /// (`FnKind::Functor`), and the anonymous record-schema binder
 /// (`FnKind::Anonymous`).
@@ -199,7 +198,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
 /// deferred carrier that resolves non-admissibly later. `Anonymous` skips
 /// registration entirely — the value it returns is the function's only handle.
 pub(crate) fn finalize_fn_with_kind<'a>(
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
     elements: Vec<SignatureElement<'a>>,
     return_type: ReturnType<'a>,
     body_expr: KExpression<'a>,
@@ -278,9 +277,8 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 /// `deps` after the park producers. The finish closure splices each result
 /// into `signature_expr.parts[slot_idx]` as `Future(obj)` before re-running
 /// `parse_fn_param_list` against the now-final scope.
-pub(crate) fn defer_via_combine<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+pub(crate) fn defer_via_combine<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     signature_expr: KExpression<'a>,
     inputs: CombineInputs<'a>,
     body_expr: KExpression<'a>,
@@ -303,16 +301,16 @@ pub(crate) fn defer_via_combine<'a>(
     let mut owned_subs: Vec<NodeId> =
         Vec::with_capacity(return_type_sub.is_some() as usize + sub_dispatches.len());
     if let Some(rt_expr) = return_type_sub {
-        owned_subs.push(sched.add_dispatch(rt_expr, scope));
+        owned_subs.push(sched.add_dispatch_here(rt_expr));
     }
     let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
     for (slot_idx, sub_expr) in sub_dispatches {
-        let id = sched.add_dispatch(sub_expr, scope);
+        let id = sched.add_dispatch_here(sub_expr);
         splice_layout.push((slot_idx, park_count + owned_subs.len()));
         owned_subs.push(id);
     }
 
-    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
+    let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
         let mut spliced_parts = signature_expr.parts.clone();
         for &(slot_idx, results_pos) in &splice_layout {
             let carrier = results[results_pos];
@@ -333,17 +331,18 @@ pub(crate) fn defer_via_combine<'a>(
         // Park producers have finalized — resolve against the stable scope.
         // [`resolve_capture_at_finish`] surfaces a re-park as a structured error
         // (every parked producer is terminal by the Combine-finish invariant).
-        let return_type: ReturnType<'a> = match resolve_capture_at_finish(capture, scope, results) {
-            Ok(rt) => rt,
-            Err(e) => return BodyResult::Err(e),
-        };
+        let return_type: ReturnType<'a> =
+            match resolve_capture_at_finish(capture, _sched.current_scope(), results) {
+                Ok(rt) => rt,
+                Err(e) => return BodyResult::Err(e),
+            };
         // The anonymous (`FN :{…}`) path supplies its parameter list pre-built
         // from the resolved record schema; the keyworded FN / FUNCTOR path
         // re-elaborates the spliced signature.
         let elements = match prebuilt_elements {
             Some(es) => es,
             None => {
-                let mut elaborator = Elaborator::new(scope);
+                let mut elaborator = Elaborator::new(_sched.current_scope());
                 match parse_fn_param_list(&spliced_signature, &mut elaborator) {
                     ParamListOutcome::Done(es) => es,
                     ParamListOutcome::Err(msg) => {
@@ -358,7 +357,7 @@ pub(crate) fn defer_via_combine<'a>(
             }
         };
         finalize_fn_with_kind(
-            scope,
+            _sched.current_scope(),
             elements,
             return_type,
             body_expr.clone(),
@@ -366,6 +365,6 @@ pub(crate) fn defer_via_combine<'a>(
             bind_index,
         )
     });
-    let combine_id = sched.add_combine(owned_subs, park_producers, scope, finish);
+    let combine_id = sched.add_combine_here(owned_subs, park_producers, finish);
     BodyResult::DeferTo(combine_id)
 }

@@ -63,7 +63,9 @@ fn kfunction_with_foreign_runtime_does_not_anchor() {
             return_type: ReturnType::Resolved(KType::Null),
             elements: vec![SignatureElement::Keyword("__FOREIGN__".into())],
         },
-        Body::Builtin(|s, _, _| BodyResult::value(s.arena.alloc_object(KObject::Null))),
+        Body::Builtin(|s, _| {
+            BodyResult::value(s.current_scope().arena.alloc_object(KObject::Null))
+        }),
         scope,
     );
     let foreign_ref: &KFunction = arena.alloc_function(foreign);

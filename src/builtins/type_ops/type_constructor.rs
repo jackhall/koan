@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::machine::model::types::{KKind, NominalMember, NominalSchema, RecursiveSet};
 use crate::machine::model::KType;
-use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, Scope, ScopeId};
+use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, ScopeId};
 
 use crate::builtins::err;
 
@@ -11,9 +11,8 @@ use crate::builtins::err;
 /// and a placeholder `name` (`"_typeconstructor"`). The surrounding opaque ascription
 /// (`ascribe.rs:body_opaque`) re-mints a fresh per-call singleton with the binding's slot
 /// name and a per-call `scope_id`. Arity-1 only.
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+pub fn body<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let param_kt = match bundle.require_ktype("param") {
@@ -33,7 +32,12 @@ pub fn body<'a>(
         param_names: vec![param],
     });
     let set = Rc::new(RecursiveSet::new(vec![member]));
-    BodyResult::ktype(scope.arena.alloc_ktype(KType::SetRef { set, index: 0 }))
+    BodyResult::ktype(
+        sched
+            .current_scope()
+            .arena
+            .alloc_ktype(KType::SetRef { set, index: 0 }),
+    )
 }
 
 #[cfg(test)]
@@ -48,9 +52,7 @@ mod tests {
     /// `expected`; returns the member's name.
     fn assert_type_constructor(kt: &KType<'_>, expected: &[&str]) -> String {
         match kt {
-            KType::SetRef { set, index }
-                if set.member(*index).kind == KKind::TypeConstructor =>
-            {
+            KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
                 match RecursiveSet::projected_schema(set, *index) {
                     ProjectedSchema::TypeConstructor { param_names, .. } => {
                         let want: Vec<String> = expected.iter().map(|s| s.to_string()).collect();

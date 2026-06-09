@@ -22,7 +22,7 @@ impl NodeId {
     }
 }
 
-pub trait SchedulerHandle<'a> {
+pub trait SchedulerHandle<'a, 's> {
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId;
     /// Schedule a `Combine` slot: wait on `owned_subs` ++ `park_producers` to terminalize,
     /// then run `finish` over their resolved values. `owned_subs` are sub-Dispatches this
@@ -53,7 +53,7 @@ pub trait SchedulerHandle<'a> {
     fn with_active_frame(
         &mut self,
         frame: Rc<CallArena>,
-        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a>),
+        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a, 's>),
     );
 
     /// Take the active frame for reuse on a TCO Replace iff it is uniquely owned. See
@@ -80,6 +80,63 @@ pub trait SchedulerHandle<'a> {
         scope: &'a Scope<'a>,
         chain: Rc<LexicalFrame>,
     ) -> NodeId;
+
+    /// Dispatch `expr` as a sub-slot of the currently-active per-call frame, storing the
+    /// slot's scope as a `Yoked` handle re-projected from the frame cart rather than a
+    /// fabricated `&'a`. The caller must be inside [`Self::with_active_frame`]; the scope
+    /// is taken from that frame, so none is passed. Used by the MATCH/TRY arm and FN body
+    /// seeds to avoid a free `'a`-fabrication at the seed.
+    fn add_dispatch_with_chain_in_frame(
+        &mut self,
+        expr: KExpression<'a>,
+        chain: Rc<LexicalFrame>,
+    ) -> NodeId;
+
+    /// Ambient-chain sibling of [`Self::add_dispatch_with_chain_in_frame`]: dispatch `expr`
+    /// in the active frame inheriting the ambient `active_chain`. Used by the FN deferred
+    /// return-type expression sub-Dispatch.
+    fn add_dispatch_in_frame(&mut self, expr: KExpression<'a>) -> NodeId;
+
+    /// Framed sibling of [`Self::add_combine`]: schedule a `Combine` whose scope is the
+    /// active frame's child, stored `Yoked` (re-projected from the frame cart) rather than a
+    /// fabricated `&'a`. Used by the FN deferred return-type Combine.
+    fn add_combine_in_frame(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId;
+
+    /// Framed sibling of [`Self::add_catch`]: schedule a `Catch` whose scope is the active
+    /// frame's child, stored `Yoked` (re-projected from the frame cart) rather than a fabricated
+    /// `&'a`. Used by CATCH / TRY, which watch a sub-slot dispatched against their own (framed)
+    /// scope.
+    fn add_catch_in_frame(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId;
+
+    /// The executing slot's scope, materialized on demand as a **short** borrow bounded by this
+    /// `&self` call — never held across a `&mut self` scheduler call. This is the read-boundary:
+    /// an `Anchored` slot hands back its genuinely run-lived `&Scope`, a `Yoked` slot re-projects
+    /// from the live frame cart via the bounded brand. A body fetches the scope per use rather than
+    /// receiving it as a step-long argument, so no live borrow blocks the in-step TCO frame reset —
+    /// which is what lets the read boundary be a bounded brand instead of a fabricated `&'run`.
+    fn current_scope(&self) -> &Scope<'a>;
+
+    /// Schedule against the **executing slot's own scope handle** — the honest
+    /// re-dispatch-against-my-own-scope path. The sub-slot inherits the running slot's
+    /// [`NodeScope`]: a binder's genuinely run-lived decl-scope stays `Anchored(&'a)`, a per-call
+    /// frame child stays `Yoked`. The body passes no scope (it holds only a `&'frame` borrow it
+    /// cannot widen back to `&'a`). Distinct from `*_in_frame`, which forces the *active frame's*
+    /// scope — wrong for a binder whose decl-scope is not that frame's child.
+    fn add_dispatch_here(&mut self, expr: KExpression<'a>) -> NodeId;
+    /// `Combine` sibling of [`Self::add_dispatch_here`].
+    fn add_combine_here(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId;
+    /// `Catch` sibling of [`Self::add_dispatch_here`].
+    fn add_catch_here(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId;
 
     /// Schedule each top-level statement in `body_expr` against `scope`. Routes through
     /// [`Self::enter_block`] with `scope.id` so body statements get fresh `(scope.id, i)`
@@ -122,15 +179,14 @@ pub trait SchedulerHandle<'a> {
 /// type-resolving dep (a VAL type, an FN return type, a field type) arrives as
 /// [`Carried::Type`].
 pub type CombineFinish<'a> = Box<
-    dyn FnOnce(&'a Scope<'a>, &mut dyn SchedulerHandle<'a>, &[Carried<'a>]) -> BodyResult<'a> + 'a,
+    dyn for<'s> FnOnce(&mut dyn SchedulerHandle<'a, 's>, &[Carried<'a>]) -> BodyResult<'a> + 'a,
 >;
 
 /// Host-side closure for `Catch` slots. Receives the watched slot's terminal as a
 /// `Result` so the closure can branch on either outcome.
 pub type CatchFinish<'a> = Box<
-    dyn FnOnce(
-            &'a Scope<'a>,
-            &mut dyn SchedulerHandle<'a>,
+    dyn for<'s> FnOnce(
+            &mut dyn SchedulerHandle<'a, 's>,
             Result<&'a KObject<'a>, KError>,
         ) -> BodyResult<'a>
         + 'a,

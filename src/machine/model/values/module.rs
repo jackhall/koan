@@ -244,9 +244,9 @@ mod tests {
                 return_type: ReturnType::Resolved(KType::Null),
                 elements: vec![SignatureElement::Keyword("__SLOW__".into())],
             },
-            Body::Builtin(|s, _, _| {
+            Body::Builtin(|s, _| {
                 crate::machine::core::kfunction::BodyResult::value(
-                    s.arena.alloc_object(KObject::Null),
+                    s.current_scope().arena.alloc_object(KObject::Null),
                 )
             }),
             frame.scope(),
@@ -254,7 +254,7 @@ mod tests {
         let _ = inner_arena.alloc_function(kf);
 
         // Module's `child_scope` lives in `inner_arena` — exactly the shape a functor
-        // body's `MODULE Result = (...)` produces. Lift must observe the arena match.
+        // body's `MODULE Generated = (...)` produces. Lift must observe the arena match.
         let inner_scope = inner_arena.alloc_scope(crate::machine::core::Scope::child_under_module(
             frame.scope(),
             "Inner".into(),

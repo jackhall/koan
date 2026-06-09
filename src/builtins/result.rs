@@ -15,9 +15,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::{BindingIndex, Scope};
-use crate::machine::model::types::{
-    KType, KKind, NominalMember, NominalSchema, RecursiveSet,
-};
+use crate::machine::model::types::{KKind, KType, NominalMember, NominalSchema, RecursiveSet};
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let scope_id = scope.id;

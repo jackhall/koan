@@ -119,7 +119,39 @@ pub(crate) fn register_builtin_full<'a>(
     let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
 }
 
-/// Build a run-root scope populated with the language's builtin `KFunction`s.
+/// Test-only: register one overload at an explicit [`BindingIndex`]. A test uses this to
+/// place a *user*-position (non-`BUILTIN`) overload in a root-position scope, so dispatch
+/// exercises the ordinary innermost-wins walk rather than the builtin root-first
+/// short-circuit (which a `BUILTIN`-index entry in the root would trigger).
+#[cfg(test)]
+pub(crate) fn register_overload_at<'a>(
+    scope: &'a Scope<'a>,
+    name: &str,
+    signature: ExpressionSignature<'a>,
+    body: BuiltinFn,
+    index: BindingIndex,
+) {
+    let arena = scope.arena;
+    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
+        signature,
+        Body::Builtin(body),
+        scope,
+        None,
+        None,
+        false,
+    ));
+    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
+    scope
+        .register_function(name.into(), f, obj, index)
+        .expect("register_overload_at: user-index overload should not collide with a builtin");
+}
+
+/// Build the run-global root populated with the language's builtin `KFunction`s, then
+/// return a mutable `RunScope` child of it for top-level Koan bindings. The root stays
+/// builtin-only and immutable; a top-level bind lands in the `RunScope`, leaving the
+/// root binding-free. Builtins resolve from any scope by walking `outer` to the root
+/// (the [`Scope::shadows_builtin_value`] no-shadow consult does the same).
+///
 /// Registration order does not affect dispatch — [`Scope::resolve_dispatch`] buckets by
 /// untyped signature shape and picks overloads by `KType` specificity.
 pub fn default_scope<'a>(
@@ -187,5 +219,5 @@ pub fn default_scope<'a>(
     type_ops::register(scope);
     type_constructors::register(scope);
 
-    scope
+    arena.alloc_scope(Scope::run_child(scope))
 }

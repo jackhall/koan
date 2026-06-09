@@ -26,9 +26,8 @@ use super::{arg, err, kw, register_builtin, sig};
 /// must be a bare `Identifier` naming a field (never name-resolved). The `record`
 /// operand is typed `:{}`, so dispatch shape-gates the slot to records and the body
 /// reads a guaranteed `KObject::Record` carrier.
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+pub fn body<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let fields_expr = match bundle.require_kexpression("fields") {
@@ -87,7 +86,7 @@ pub fn body<'a>(
 
     let narrowed = Record::from_pairs(narrowed_pairs);
     let result = KObject::record_with_type(Rc::clone(fields), narrowed);
-    BodyResult::value(scope.arena.alloc_object(result))
+    BodyResult::value(sched.current_scope().arena.alloc_object(result))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

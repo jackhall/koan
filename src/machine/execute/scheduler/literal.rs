@@ -3,12 +3,9 @@ use std::collections::HashMap;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
-use crate::machine::{
-    BodyResult, CombineFinish, Frame, KError, KErrorKind, NameOutcome, NodeId, Scope,
-};
+use crate::machine::{BodyResult, CombineFinish, Frame, KError, KErrorKind, NameOutcome, NodeId};
 
 use super::super::dispatch::resolve_name_part;
-use super::super::nodes::NodeWork;
 use super::Scheduler;
 
 /// One element of a list literal or one side of a dict-literal pair. Indices are into the
@@ -37,27 +34,28 @@ impl<'a> Scheduler<'a> {
     pub(in crate::machine::execute) fn schedule_list_literal(
         &mut self,
         items: Vec<ExpressionPart<'a>>,
-        scope: &'a Scope<'a>,
     ) -> NodeId {
         let mut layout: Vec<Slot<'a>> = Vec::with_capacity(items.len());
         let mut deps: Vec<NodeId> = Vec::new();
         let mut park_producers: Vec<NodeId> = Vec::new();
         for part in items {
             // List elements are not name-resolved; bare identifiers stay `Static`.
-            let slot =
-                self.classify_aggregate_part(part, scope, &mut deps, &mut park_producers, false);
+            let slot = self.classify_aggregate_part(part, &mut deps, &mut park_producers, false);
             layout.push(slot);
         }
         let park_count = park_producers.len();
-        let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
+        let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
             let items: Vec<Held<'a>> = layout
                 .into_iter()
                 .map(|slot| slot.materialize(results, park_count))
                 .collect();
-            let allocated: &'a KObject<'a> = scope.arena.alloc_object(KObject::list_of_held(items));
+            let allocated: &'a KObject<'a> = _sched
+                .current_scope()
+                .arena
+                .alloc_object(KObject::list_of_held(items));
             BodyResult::value(allocated)
         });
-        self.add_combine(deps, park_producers, scope, finish)
+        self.combine_here(deps, park_producers, finish)
     }
 
     /// Bare identifiers on either side are name-resolved (Python-like: keys are
@@ -66,21 +64,18 @@ impl<'a> Scheduler<'a> {
     pub(in crate::machine::execute) fn schedule_dict_literal(
         &mut self,
         pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
-        scope: &'a Scope<'a>,
     ) -> NodeId {
         let mut layout: Vec<(Slot<'a>, Slot<'a>)> = Vec::with_capacity(pairs.len());
         let mut deps: Vec<NodeId> = Vec::new();
         let mut park_producers: Vec<NodeId> = Vec::new();
         for (k, v) in pairs {
-            let key_slot =
-                self.classify_aggregate_part(k, scope, &mut deps, &mut park_producers, true);
-            let val_slot =
-                self.classify_aggregate_part(v, scope, &mut deps, &mut park_producers, true);
+            let key_slot = self.classify_aggregate_part(k, &mut deps, &mut park_producers, true);
+            let val_slot = self.classify_aggregate_part(v, &mut deps, &mut park_producers, true);
             layout.push((key_slot, val_slot));
         }
         let frame_label = || Frame::bare("<dict>", "dict literal");
         let park_count = park_producers.len();
-        let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
+        let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
             let mut map: HashMap<Box<dyn Serializable<'a> + 'a>, Held<'a>> = HashMap::new();
             for (k_slot, v_slot) in layout {
                 let key_held = k_slot.materialize(results, park_count);
@@ -107,10 +102,13 @@ impl<'a> Scheduler<'a> {
                 };
                 map.insert(Box::new(kkey), value_held);
             }
-            let allocated: &'a KObject<'a> = scope.arena.alloc_object(KObject::dict_of_held(map));
+            let allocated: &'a KObject<'a> = _sched
+                .current_scope()
+                .arena
+                .alloc_object(KObject::dict_of_held(map));
             BodyResult::value(allocated)
         });
-        self.add_combine(deps, park_producers, scope, finish)
+        self.combine_here(deps, park_producers, finish)
     }
 
     /// Record literal (`{x = 1, y = "a"}`). Field *names* are literal schema keys (never
@@ -119,7 +117,6 @@ impl<'a> Scheduler<'a> {
     pub(in crate::machine::execute) fn schedule_record_literal(
         &mut self,
         fields: Vec<(String, ExpressionPart<'a>)>,
-        scope: &'a Scope<'a>,
     ) -> NodeId {
         let mut names: Vec<String> = Vec::with_capacity(fields.len());
         let mut layout: Vec<Slot<'a>> = Vec::with_capacity(fields.len());
@@ -127,22 +124,24 @@ impl<'a> Scheduler<'a> {
         let mut park_producers: Vec<NodeId> = Vec::new();
         for (name, value) in fields {
             let val_slot =
-                self.classify_aggregate_part(value, scope, &mut deps, &mut park_producers, true);
+                self.classify_aggregate_part(value, &mut deps, &mut park_producers, true);
             names.push(name);
             layout.push(val_slot);
         }
         let park_count = park_producers.len();
-        let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
+        let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
             let record: Record<Held<'a>> = names
                 .into_iter()
                 .zip(layout)
                 .map(|(name, slot)| (name, slot.materialize(results, park_count)))
                 .collect();
-            let allocated: &'a KObject<'a> =
-                scope.arena.alloc_object(KObject::record_of_held(record));
+            let allocated: &'a KObject<'a> = _sched
+                .current_scope()
+                .arena
+                .alloc_object(KObject::record_of_held(record));
             BodyResult::value(allocated)
         });
-        self.add_combine(deps, park_producers, scope, finish)
+        self.combine_here(deps, park_producers, finish)
     }
 
     /// Plan one slot of a list / dict literal. The cycle check in the bare-name path is
@@ -151,32 +150,31 @@ impl<'a> Scheduler<'a> {
     fn classify_aggregate_part(
         &mut self,
         part: ExpressionPart<'a>,
-        scope: &'a Scope<'a>,
         deps: &mut Vec<NodeId>,
         park_producers: &mut Vec<NodeId>,
         wrap_identifiers: bool,
     ) -> Slot<'a> {
         match part {
             ExpressionPart::ListLiteral(inner) => {
-                let nested_id = self.schedule_list_literal(inner, scope);
+                let nested_id = self.schedule_list_literal(inner);
                 let pos = deps.len();
                 deps.push(nested_id);
                 Slot::Owned(pos)
             }
             ExpressionPart::DictLiteral(inner) => {
-                let nested_id = self.schedule_dict_literal(inner, scope);
+                let nested_id = self.schedule_dict_literal(inner);
                 let pos = deps.len();
                 deps.push(nested_id);
                 Slot::Owned(pos)
             }
             ExpressionPart::RecordLiteral(inner) => {
-                let nested_id = self.schedule_record_literal(inner, scope);
+                let nested_id = self.schedule_record_literal(inner);
                 let pos = deps.len();
                 deps.push(nested_id);
                 Slot::Owned(pos)
             }
             ExpressionPart::Expression(boxed) => {
-                let sub_id = self.add(NodeWork::dispatch(*boxed), scope);
+                let sub_id = self.dispatch_here(*boxed);
                 let pos = deps.len();
                 deps.push(sub_id);
                 Slot::Owned(pos)
@@ -186,16 +184,16 @@ impl<'a> Scheduler<'a> {
                 // `KTypeValue`, like the keyworded eager-subs path — it cannot `resolve()`.
                 let wrapped =
                     crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part)]);
-                let sub_id = self.add(NodeWork::dispatch(wrapped), scope);
+                let sub_id = self.dispatch_here(wrapped);
                 let pos = deps.len();
                 deps.push(sub_id);
                 Slot::Owned(pos)
             }
             ref p @ ExpressionPart::Identifier(_) if wrap_identifiers => {
-                self.resolve_aggregate_bare_name(p, scope, deps, park_producers)
+                self.resolve_aggregate_bare_name(p, deps, park_producers)
             }
             ref p @ ExpressionPart::Type(_) if wrap_identifiers => {
-                self.resolve_aggregate_bare_name(p, scope, deps, park_producers)
+                self.resolve_aggregate_bare_name(p, deps, park_producers)
             }
             other => Slot::Static(Held::Object(other.resolve())),
         }
@@ -208,11 +206,10 @@ impl<'a> Scheduler<'a> {
     fn resolve_aggregate_bare_name(
         &mut self,
         part: &ExpressionPart<'a>,
-        scope: &'a Scope<'a>,
         deps: &mut Vec<NodeId>,
         park_producers: &mut Vec<NodeId>,
     ) -> Slot<'a> {
-        match resolve_name_part(scope, part, self, None) {
+        match resolve_name_part(self.current_scope(), part, self, None) {
             // An aggregate literal element may resolve to a value or a first-class type;
             // both ride into the cell as a `Held`.
             NameOutcome::Resolved(c) => Slot::Static(Held::from_carried(c)),
@@ -224,7 +221,7 @@ impl<'a> Scheduler<'a> {
             NameOutcome::Unbound(_) | NameOutcome::ProducerErrored(_) | NameOutcome::Cycle(_) => {
                 let expr =
                     crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part.clone())]);
-                let sub_id = self.add(NodeWork::dispatch(expr), scope);
+                let sub_id = self.dispatch_here(expr);
                 let pos = deps.len();
                 deps.push(sub_id);
                 Slot::Owned(pos)

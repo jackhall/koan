@@ -14,9 +14,8 @@ use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHa
 use super::{arg, kw, register_builtin, sig};
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription.
-pub fn body_opaque<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+pub fn body_opaque<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let (m, s) = match resolve_module_and_signature(&bundle) {
@@ -24,9 +23,9 @@ pub fn body_opaque<'a>(
         Err(e) => return BodyResult::Err(e),
     };
 
-    let arena = scope.arena;
+    let arena = sched.current_scope().arena;
     let new_scope = arena.alloc_scope(Scope::child_under_module(
-        scope,
+        sched.current_scope(),
         format!("{} :| {}", m.path, s.path),
     ));
 
@@ -91,9 +90,9 @@ pub fn body_opaque<'a>(
     }
 
     // Thread per-call slot tags: a VAL slot whose SIG-declared type is a `Sig`-rooted
-    // abstract member (`VAL zero :Type` where `Type` is a SIG-local `LET Type = ...`) is
+    // abstract member (`VAL zero :Carrier` where `Carrier` is a SIG-local `LET Carrier = ...`) is
     // tagged with the per-call `type_members[member]` identity. ATTR re-tags the slot read
-    // with this identity so `(int_ord.zero)` reads as the abstract `Type`, not the
+    // with this identity so `(int_ord.zero)` reads as the abstract `Carrier`, not the
     // underlying value. Structural-form slot types (`:(FN (Type, Type) -> Number)`) are
     // out of scope — only a bare `Sig`-rooted member naming a minted type is tagged.
     {
@@ -138,9 +137,8 @@ pub fn body_opaque<'a>(
 }
 
 /// `<m:Module> :! <s:Signature>` — transparent ascription.
-pub fn body_transparent<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+pub fn body_transparent<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let (m, s) = match resolve_module_and_signature(&bundle) {
@@ -151,7 +149,7 @@ pub fn body_transparent<'a>(
         return BodyResult::Err(e);
     }
     // Reuse the source's child scope; the new Module just retags the path as a view.
-    let arena = scope.arena;
+    let arena = sched.current_scope().arena;
     let new_module: &'a Module<'a> = arena.alloc_module(Module::new(
         format!("{} :! {}", m.path, s.path),
         m.child_scope(),

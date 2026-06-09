@@ -5,7 +5,7 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, KFuture};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
-    KType, KKind, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
+    KKind, KType, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
 };
 
 use super::Held;

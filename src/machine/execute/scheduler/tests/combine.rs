@@ -20,7 +20,7 @@ fn combine_waits_on_deps_then_runs_finish() {
     let mut sched = Scheduler::new();
     let dep_a = sched.add_dispatch(let_expr("ca", 7.0), scope);
     let dep_b = sched.add_dispatch(let_expr("cb", 11.0), scope);
-    let finish: CombineFinish = Box::new(|scope, _sched, results| {
+    let finish: CombineFinish = Box::new(|_sched, results| {
         let a = match results[0] {
             Carried::Object(KObject::Number(n)) => *n,
             _ => {
@@ -37,7 +37,8 @@ fn combine_waits_on_deps_then_runs_finish() {
                 ))
             }
         };
-        let allocated = scope
+        let allocated = _sched
+            .current_scope()
             .arena
             .alloc_object(KObject::KString(format!("{a}+{b}")));
         BodyResult::value(allocated)
@@ -78,7 +79,7 @@ fn combine_short_circuits_on_dep_error() {
 
     let invoked: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let invoked_clone = Rc::clone(&invoked);
-    let finish: CombineFinish = Box::new(move |_scope, _sched, _results| {
+    let finish: CombineFinish = Box::new(move |_sched, _results| {
         invoked_clone.set(true);
         BodyResult::value(value)
     });
@@ -104,20 +105,22 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
     use crate::builtins::{default_scope, register_builtin};
     use crate::machine::model::ast::ExpressionPart;
     use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
-    use crate::machine::{ArgumentBundle, BodyResult, CombineFinish, Scope};
+    use crate::machine::{ArgumentBundle, BodyResult, CombineFinish};
 
-    fn body<'a>(
-        scope: &'a Scope<'a>,
-        sched: &mut dyn crate::machine::SchedulerHandle<'a>,
+    fn body<'a, 's>(
+        sched: &mut dyn crate::machine::SchedulerHandle<'a, 's>,
         _bundle: ArgumentBundle<'a>,
     ) -> BodyResult<'a> {
-        let finish: CombineFinish<'a> = Box::new(|scope, _sched, _results| {
-            let v = scope
-                .arena
-                .alloc_object(KObject::KString("from-combine".into()));
-            BodyResult::value(v)
-        });
-        let combine_id = sched.add_combine(Vec::new(), Vec::new(), scope, finish);
+        let finish: CombineFinish<'a> = Box::new(
+            |_sched: &mut dyn crate::machine::SchedulerHandle<'a, '_>, _results| {
+                let v = _sched
+                    .current_scope()
+                    .arena
+                    .alloc_object(KObject::KString("from-combine".into()));
+                BodyResult::value(v)
+            },
+        );
+        let combine_id = sched.add_combine_in_frame(Vec::new(), Vec::new(), finish);
         BodyResult::DeferTo(combine_id)
     }
 

@@ -7,7 +7,7 @@ use crate::machine::{
     CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, SchedulerHandle, Scope,
 };
 
-use super::nodes::NodeWork;
+use super::nodes::{NodeScope, NodeWork};
 use dep_graph::DepGraph;
 use node_store::NodeStore;
 use work_queues::WorkQueues;
@@ -45,6 +45,11 @@ pub struct Scheduler<'a> {
     /// Frame Rc of the slot currently being executed. See
     /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
     pub(in crate::machine::execute::scheduler) active_frame: Option<Rc<CallArena>>,
+    /// The run frame: a non-dying [`CallArena`] adopting the top-level run scope, lazily built on
+    /// the first run-lifetime submission. Top-level slots carry it as their `frame` cart, so
+    /// `active_frame` is never `None` during a top-level step and a body's re-dispatch against its
+    /// own scope is uniformly framed (Yoked) at every depth. See [`CallArena::adopting`].
+    pub(in crate::machine::execute::scheduler) run_frame: Option<Rc<CallArena>>,
     /// Lexical chain of the slot currently executing. `Scheduler::add` reads this to attach
     /// a chain to every sub-slot that doesn't carry an explicit `enter_block` chain, so
     /// internal binder sub-dispatches inherit the parent's chain implicitly.
@@ -52,6 +57,12 @@ pub struct Scheduler<'a> {
     /// Per-slot reserve frame for the running step. `None` between slot steps. See
     /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
     pub(in crate::machine::execute::scheduler) active_reserve: Option<Rc<CallArena>>,
+    /// The executing slot's own [`NodeScope`] handle, installed per step. A body that
+    /// re-dispatches *against its own scope* reads this through the `*_here` handle methods, so
+    /// the sub-slot inherits the slot's honest handle — `Anchored(&'a)` for a genuinely run-lived
+    /// scope (a binder's decl-scope), `Yoked` for a per-call frame child — rather than the body
+    /// trying (and failing) to widen its `&'frame` borrow back to `&'a`.
+    pub(in crate::machine::execute::scheduler) active_node_scope: Option<NodeScope<'a>>,
     #[cfg(test)]
     pub(in crate::machine::execute::scheduler) tail_reuse_count: usize,
 }
@@ -60,12 +71,44 @@ pub struct Scheduler<'a> {
 /// and `active_reserve` swap that brackets each iteration of [`Scheduler::execute`].
 /// Bookkeeping spine for the ping-pong reserve-frame rotation; see
 /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
-pub(in crate::machine::execute::scheduler) struct SlotStepGuard {
+pub(in crate::machine::execute::scheduler) struct SlotStepGuard<'a> {
     prev_frame: Option<Rc<CallArena>>,
     prev_chain: Option<Rc<LexicalFrame>>,
     /// Saved so nested slot runs (combinator finish closures) don't inherit the
     /// outer slot's reserve frame.
     prev_reserve: Option<Rc<CallArena>>,
+    prev_node_scope: Option<NodeScope<'a>>,
+    /// The step's own handle, kept so [`Scheduler::exit_slot_step`] can hand it back inside the
+    /// [`PostStep`] token — the step scope is then re-derivable from the *returned* frame, never
+    /// the ambient (and possibly invoke-swapped) `active_frame`.
+    step_node_scope: NodeScope<'a>,
+}
+
+/// The frames and scope of a just-finished step, returned by [`Scheduler::exit_slot_step`]. Owns
+/// `prev_frame` (the slot's frame *at step end* — an in-step invoke may have swapped the ambient
+/// `active_frame`, so this returned value, not `self.active_frame`, is the authoritative source)
+/// and exposes the step scope only through [`Self::step_scope`], which derives it from that frame.
+/// Reading the step scope from ambient scheduler state post-step is thereby unspellable.
+pub(in crate::machine::execute::scheduler) struct PostStep<'a> {
+    /// The slot's frame at step end — `None` if a tail-call took it. The Replace arm reinstalls /
+    /// rotates with it.
+    pub(in crate::machine::execute::scheduler) prev_frame: Option<Rc<CallArena>>,
+    /// The slot's reserve frame at step end (see ping-pong reserve rotation).
+    pub(in crate::machine::execute::scheduler) post_step_reserve: Option<Rc<CallArena>>,
+    node_scope: NodeScope<'a>,
+}
+
+impl<'a> PostStep<'a> {
+    /// The step's scope, re-handed from the authoritative `prev_frame` via the bounded brand (an
+    /// `Anchored` slot carries its own run-lived borrow). `None` when a tail-call took the frame —
+    /// the post-step uses that need it (a Done step's lift / placeholder-clear; a moot drain) then
+    /// don't apply. Borrow bounded by `&self`, so it cannot outlive this token's `prev_frame`.
+    pub(in crate::machine::execute::scheduler) fn step_scope(&self) -> Option<&Scope<'a>> {
+        match (self.node_scope, self.prev_frame.as_ref()) {
+            (NodeScope::Anchored(scope), _) => Some(scope),
+            (NodeScope::Yoked, frame) => frame.map(|f| f.scope_bounded()),
+        }
+    }
 }
 
 impl<'a> Scheduler<'a> {
@@ -78,14 +121,18 @@ impl<'a> Scheduler<'a> {
         node_frame: Option<Rc<CallArena>>,
         node_reserve: Option<Rc<CallArena>>,
         node_chain: Rc<LexicalFrame>,
-    ) -> SlotStepGuard {
+        node_scope: NodeScope<'a>,
+    ) -> SlotStepGuard<'a> {
         let prev_frame = std::mem::replace(&mut self.active_frame, node_frame);
         let prev_chain = self.active_chain.replace(node_chain);
         let prev_reserve = std::mem::replace(&mut self.active_reserve, node_reserve);
+        let prev_node_scope = self.active_node_scope.replace(node_scope);
         SlotStepGuard {
             prev_frame,
             prev_chain,
             prev_reserve,
+            prev_node_scope,
+            step_node_scope: node_scope,
         }
     }
 
@@ -100,12 +147,17 @@ impl<'a> Scheduler<'a> {
     /// and gets dropped; without one, it rides along on the reinstalled node.
     pub(in crate::machine::execute::scheduler) fn exit_slot_step(
         &mut self,
-        guard: SlotStepGuard,
-    ) -> (Option<Rc<CallArena>>, Option<Rc<CallArena>>) {
+        guard: SlotStepGuard<'a>,
+    ) -> PostStep<'a> {
         let post_step_frame = std::mem::replace(&mut self.active_frame, guard.prev_frame);
         self.active_chain = guard.prev_chain;
         let post_step_reserve = std::mem::replace(&mut self.active_reserve, guard.prev_reserve);
-        (post_step_frame, post_step_reserve)
+        self.active_node_scope = guard.prev_node_scope;
+        PostStep {
+            prev_frame: post_step_frame,
+            post_step_reserve,
+            node_scope: guard.step_node_scope,
+        }
     }
 
     pub fn new() -> Self {
@@ -114,6 +166,8 @@ impl<'a> Scheduler<'a> {
             deps: DepGraph::new(),
             store: NodeStore::new(),
             active_frame: None,
+            run_frame: None,
+            active_node_scope: None,
             active_chain: None,
             active_reserve: None,
             #[cfg(test)]
@@ -131,6 +185,22 @@ impl<'a> Scheduler<'a> {
     #[cfg(test)]
     pub fn chain_of(&self, id: NodeId) -> Option<Rc<LexicalFrame>> {
         self.store.chain_of(id)
+    }
+
+    /// Run a builtin body directly against `scope` as the executing slot's scope. A body
+    /// reads its scope on demand via [`SchedulerHandle::current_scope`], so a direct-body
+    /// test installs `Anchored(scope)` for the duration of the call.
+    #[cfg(test)]
+    pub fn run_body_against<R>(
+        &mut self,
+        scope: &'a Scope<'a>,
+        body: impl FnOnce(&mut dyn SchedulerHandle<'a, 'a>) -> R,
+    ) -> R {
+        let chain = LexicalFrame::root(scope.id, 0);
+        let guard = self.enter_slot_step(None, None, chain, NodeScope::Anchored(scope));
+        let out = body(self);
+        let _ = self.exit_slot_step(guard);
+        out
     }
 
     pub fn len(&self) -> usize {
@@ -236,6 +306,28 @@ impl<'a> Scheduler<'a> {
         self.active_reserve.take()
     }
 
+    /// The executing slot's scope, materialized on demand: an `Anchored` slot hands back its
+    /// stored run-lived `&Scope`; a `Yoked` slot re-projects from the live `active_frame` cart via
+    /// the bounded brand. A short borrow bounded by `&self` — fetched per use, never held across a
+    /// `&mut self` call — so it holds nothing across the in-step TCO frame reset. See
+    /// [`SchedulerHandle::current_scope`](crate::machine::SchedulerHandle::current_scope).
+    pub(in crate::machine::execute) fn current_scope(&self) -> &Scope<'a> {
+        self.current_scope_opt()
+            .expect("a slot step installs active_node_scope (and a Yoked slot keeps its frame)")
+    }
+
+    /// Like [`Self::current_scope`] but `None` when a `Yoked` slot's frame has been taken — e.g.
+    /// a tail-call `try_take_reusable_frame_for_tail` mid-step empties `active_frame`. The
+    /// post-step loop uses this to skip scope work that a taken-frame (tail/Replace) step does not
+    /// need: its `drain` is moot (the frame is being reset) and lift / placeholder-clear are
+    /// Done-only (a Done step never takes its frame).
+    pub(in crate::machine::execute) fn current_scope_opt(&self) -> Option<&Scope<'a>> {
+        match self.active_node_scope? {
+            NodeScope::Anchored(scope) => Some(scope),
+            NodeScope::Yoked => self.active_frame.as_ref().map(|f| f.scope_bounded()),
+        }
+    }
+
     /// Replace the ambient `active_frame` with `new`, returning the prior
     /// value. The `with_active_frame` body bracket and the
     /// `invoke_to_step_pinned` pin/swap both go through this.
@@ -253,7 +345,7 @@ impl<'a> Default for Scheduler<'a> {
     }
 }
 
-impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
+impl<'a, 's> SchedulerHandle<'a, 's> for Scheduler<'a> {
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
         Scheduler::add_dispatch(self, expr, scope)
     }
@@ -281,7 +373,7 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
     fn with_active_frame(
         &mut self,
         frame: std::rc::Rc<crate::machine::core::CallArena>,
-        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a>),
+        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a, 's>),
     ) {
         let prev = self.active_frame.take();
         self.active_frame = Some(frame);
@@ -336,5 +428,111 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
         chain: Rc<LexicalFrame>,
     ) -> NodeId {
         Scheduler::add_with_chain(self, NodeWork::dispatch(expr), scope, Some(chain))
+    }
+
+    fn add_dispatch_with_chain_in_frame(
+        &mut self,
+        expr: KExpression<'a>,
+        chain: Rc<LexicalFrame>,
+    ) -> NodeId {
+        let frame = self
+            .active_frame
+            .clone()
+            .expect("in-frame dispatch requires an active frame");
+        // `scope_for_bind` is `Rc`-bounded — not a free `'a`-fabrication. The
+        // slot stores `Yoked` and re-projects the scope from the frame cart at the read
+        // boundary, so this short borrow only needs to outlive the `submit_node` call.
+        let scope = frame.scope_for_bind();
+        self.submit_node(
+            NodeWork::dispatch(expr),
+            scope,
+            NodeScope::Yoked,
+            Some(chain),
+        )
+    }
+
+    fn add_dispatch_in_frame(&mut self, expr: KExpression<'a>) -> NodeId {
+        let frame = self
+            .active_frame
+            .clone()
+            .expect("in-frame dispatch requires an active frame");
+        let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
+        let scope = frame.scope_for_bind();
+        self.submit_node(
+            NodeWork::dispatch(expr),
+            scope,
+            NodeScope::Yoked,
+            explicit_chain,
+        )
+    }
+
+    fn add_combine_in_frame(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId {
+        let park_count = park_producers.len();
+        let mut deps = park_producers;
+        deps.extend(owned_subs);
+        let frame = self
+            .active_frame
+            .clone()
+            .expect("in-frame combine requires an active frame");
+        let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
+        let scope = frame.scope_for_bind();
+        self.submit_node(
+            NodeWork::Combine {
+                deps,
+                park_count,
+                finish,
+            },
+            scope,
+            NodeScope::Yoked,
+            explicit_chain,
+        )
+    }
+
+    fn add_catch_in_frame(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId {
+        let frame = self
+            .active_frame
+            .clone()
+            .expect("in-frame catch requires an active frame");
+        let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
+        let scope = frame.scope_for_bind();
+        self.submit_node(
+            NodeWork::Catch { from, finish },
+            scope,
+            NodeScope::Yoked,
+            explicit_chain,
+        )
+    }
+
+    fn current_scope(&self) -> &Scope<'a> {
+        Scheduler::current_scope(self)
+    }
+
+    fn add_dispatch_here(&mut self, expr: KExpression<'a>) -> NodeId {
+        self.submit_here(NodeWork::dispatch(expr))
+    }
+
+    fn add_combine_here(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId {
+        let park_count = park_producers.len();
+        let mut deps = park_producers;
+        deps.extend(owned_subs);
+        self.submit_here(NodeWork::Combine {
+            deps,
+            park_count,
+            finish,
+        })
+    }
+
+    fn add_catch_here(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId {
+        self.submit_here(NodeWork::Catch { from, finish })
     }
 }

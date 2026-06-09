@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use crate::machine::core::{CallArena, KError, Scope, ScopeId};
+use crate::machine::core::{CallArena, KError, ScopeId};
 use crate::machine::model::types::UntypedKey;
 use crate::machine::model::values::{Carried, KObject};
 use crate::machine::model::KType;
@@ -201,10 +201,15 @@ pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpressio
     }
 }
 
-/// Builtin body. `Scope` is `&'a` (not `&mut`) — every node spawned during the body
-/// shares it; mutability is interior via `RefCell`.
+/// Builtin body. The body takes no scope argument: it reads the executing slot's scope on demand
+/// via [`SchedulerHandle::current_scope`], a **short** borrow re-fetched per use and never held
+/// across a `&mut` handle call. That on-demand access is what keeps the read boundary an honest
+/// bounded brand (no fabricated `&'run`): nothing holds a live scope borrow across the in-step TCO
+/// frame reset. A body re-dispatching against its own scope uses the `*_here` handle methods; a
+/// genuinely `'a`-lived scope it allocates itself (a fresh child) flows to `add_dispatch` /
+/// `enter_body_block`.
 pub type BuiltinFn =
-    for<'a> fn(&'a Scope<'a>, &mut dyn SchedulerHandle<'a>, ArgumentBundle<'a>) -> BodyResult<'a>;
+    for<'a, 's> fn(&mut dyn SchedulerHandle<'a, 's>, ArgumentBundle<'a>) -> BodyResult<'a>;
 
 /// Dispatch-time name extractor for a binder builtin. Returning `Some(name)` installs
 /// `placeholders[name] = NodeId(this_slot)` so a sibling looking up `name` while the

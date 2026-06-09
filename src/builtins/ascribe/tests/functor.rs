@@ -19,7 +19,7 @@ fn functor_returns_a_module() {
     run(scope, "LET IntOrdA = (IntOrd :! OrderedSig)");
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET inner = 1))",
+        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1))",
     );
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
@@ -51,7 +51,7 @@ fn functor_body_reads_signature_typed_parameter() {
     run(scope, "LET IntOrdA = (IntOrd :! OrderedSig)");
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET sample = (elem.compare)))",
+        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET sample = (elem.compare)))",
     );
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
@@ -86,7 +86,7 @@ fn functor_application_is_generative() {
     run(scope, "LET IntOrdA = (IntOrd :! OrderedSig)");
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET inner = 1))",
+        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1))",
     );
     run(scope, "LET SetOne = (MAKESET (IntOrdA))");
     run(scope, "LET SetTwo = (MAKESET (IntOrdA))");
@@ -125,7 +125,7 @@ fn functor_rejects_unascribed_module_argument() {
     );
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET inner = 1))",
+        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1))",
     );
     // Type-classified binder so the auto-wrap pass triggers in the
     // `Signature { .. }` slot. The LET partition guard requires module carriers
@@ -163,11 +163,11 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
     );
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET tag = 1))",
+        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET tag = 1))",
     );
     run(
         scope,
-        "FN (MAKESET elem :HashedSig) -> Module = (MODULE Result = (LET tag = 2))",
+        "FN (MAKESET elem :HashedSig) -> Module = (MODULE Generated = (LET tag = 2))",
     );
     run(scope, "LET OrdSet = (MAKESET (IntOrdA))");
     run(scope, "LET HashSet = (MAKESET (IntHashA))");
@@ -224,7 +224,7 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
     run(scope, "LET IntView = (IntOrd :! OrderedSig)");
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET sample = (elem.compare)))",
+        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET sample = (elem.compare)))",
     );
     run(scope, "LET SetValue = (MAKESET IntView)");
 
@@ -259,7 +259,7 @@ fn functor_argument_bare_type_token_auto_wraps() {
     run(
         scope,
         "FN (MAKESET elem :OrderedSig) -> Module = \
-         (MODULE Result = (LET sample = (elem.compare)))",
+         (MODULE Generated = (LET sample = (elem.compare)))",
     );
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 

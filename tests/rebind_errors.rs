@@ -140,3 +140,22 @@ fn cross_scope_shadowing_succeeds() {
     let x = m.child_scope().lookup("x");
     assert!(matches!(x, Some(KObject::Number(n)) if *n == 99.0));
 }
+
+/// A user FN whose lead keyword + signature shape collides with a builtin's dispatch
+/// bucket is rejected with `Rebind` — builtins are immutable and unshadowable, so a user
+/// overload never merges into a builtin bucket. Routed through `interpret_with_writer` so
+/// the top-level statement carries a real lexical chain (a user index, not the chain-less
+/// `BUILTIN` fallback that bypasses the gate).
+#[test]
+fn user_fn_over_builtin_keyword_rejected() {
+    let sink = Rc::new(RefCell::new(Vec::new()));
+    let err = koan::machine::interpret_with_writer(
+        "FN (PRINT x :Number) -> Null = (x)",
+        Box::new(SharedBuf(sink)),
+    )
+    .expect_err("a user FN over the builtin PRINT bucket should error");
+    assert!(
+        matches!(&err.kind, KErrorKind::Rebind { name } if name == "PRINT"),
+        "expected Rebind on PRINT, got {err}",
+    );
+}

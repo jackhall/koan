@@ -31,12 +31,11 @@ pub(crate) use signature::binder_name;
 /// `TypeCall` / `FunctionValueCall` / `SigiledTypeExpr`), so the dispatcher needs
 /// a fixed token. The keyword-less `FN :{…}` record-schema form is
 /// [`body_record_schema`].
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+pub fn body<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    build_fn_like(scope, sched, bundle, "FN", FnKind::Function)
+    build_fn_like(sched, bundle, "FN", FnKind::Function)
 }
 
 /// Shared FN / FUNCTOR elaboration: extract the `signature` / return / `body`
@@ -46,9 +45,8 @@ pub fn body<'a>(
 /// param-type map and acts on the return-admissibility verdict; FN passes `None`
 /// and [`classify_return_type`] returns `Admissible`, so the `Rejected` check is a
 /// no-op. `builtin` (`"FN"` / `"FUNCTOR"`) names the surface in slot errors.
-pub(crate) fn build_fn_like<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+pub(crate) fn build_fn_like<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
     builtin: &str,
     kind: FnKind,
@@ -74,18 +72,19 @@ pub(crate) fn build_fn_like<'a>(
     // inspector's "is this bare-param ref type-denoting?" check (slots like `-> Er`).
     // `Some(&map)` activates the FUNCTOR-return verdict; FN passes `None`.
     let param_type_map = match kind {
-        FnKind::Functor => Some(collect_param_types(&signature_expr, scope)),
+        FnKind::Functor => Some(collect_param_types(&signature_expr, sched.current_scope())),
         FnKind::Function | FnKind::Anonymous => None,
     };
 
     // Gate param type names to the binder's lexical position — a parameter naming a
     // later type is a position error, like any other forward type reference.
-    let mut elaborator = Elaborator::new(scope).with_chain(sched.current_lexical_chain());
+    let mut elaborator =
+        Elaborator::new(sched.current_scope()).with_chain(sched.current_lexical_chain());
 
     let (return_type_state, verdict) = match classify_return_type(
         return_type_raw,
         &param_names,
-        scope,
+        sched.current_scope(),
         sched.current_lexical_chain(),
         param_type_map.as_ref(),
     ) {
@@ -120,9 +119,16 @@ pub(crate) fn build_fn_like<'a>(
         FnPlan::Synchronous {
             elements,
             return_type,
-        } => finalize_fn_with_kind(scope, elements, return_type, body_expr, kind, bind_index),
+        } => finalize_fn_with_kind(
+            sched.current_scope(),
+            elements,
+            return_type,
+            body_expr,
+            kind,
+            bind_index,
+        ),
         FnPlan::Combine(inputs) => {
-            defer_via_combine(scope, sched, signature_expr, inputs, body_expr, kind, bind_index)
+            defer_via_combine(sched, signature_expr, inputs, body_expr, kind, bind_index)
         }
     }
 }
@@ -132,7 +138,7 @@ pub(crate) fn build_fn_like<'a>(
 /// resolved validator catches the slack.
 fn collect_param_types<'a>(
     signature: &KExpression<'a>,
-    scope: &'a Scope<'a>,
+    scope: &Scope<'a>,
 ) -> std::collections::HashMap<String, KType<'a>> {
     use crate::machine::model::types::{elaborate_type_expr, ElabResult};
     let mut map = std::collections::HashMap::new();
@@ -170,9 +176,8 @@ fn collect_param_types<'a>(
 /// record. Each field becomes a keyword-less
 /// `Argument`; the function registers no dispatch keyword (see
 /// [`FnKind::Anonymous`]) and is reachable only through the value it returns.
-pub fn body_record_schema<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+pub fn body_record_schema<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let schema = match extract_ktype(&mut bundle, "signature") {
@@ -214,7 +219,7 @@ pub fn body_record_schema<'a>(
     let (return_type_state, _verdict) = match classify_return_type(
         return_type_raw,
         &param_names,
-        scope,
+        sched.current_scope(),
         sched.current_lexical_chain(),
         None,
     ) {
@@ -236,7 +241,7 @@ pub fn body_record_schema<'a>(
     // no keyword/arg signature expression to re-parse).
     match classify(return_type_state, ParamListResult::Done(Vec::new())) {
         FnPlan::Synchronous { return_type, .. } => finalize_fn_with_kind(
-            scope,
+            sched.current_scope(),
             elements,
             return_type,
             body_expr,
@@ -246,7 +251,6 @@ pub fn body_record_schema<'a>(
         FnPlan::Combine(mut inputs) => {
             inputs.prebuilt_elements = Some(elements);
             defer_via_combine(
-                scope,
                 sched,
                 crate::machine::model::ast::KExpression::new(Vec::new()),
                 inputs,

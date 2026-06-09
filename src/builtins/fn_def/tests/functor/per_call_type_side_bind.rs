@@ -19,7 +19,7 @@ fn functor_body_module_dispatch_does_not_dangle() {
     run(scope, "LET IntOrdA = (IntOrd :! OrderedSig)");
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET inner = 1))",
+        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1))",
     );
     run(scope, "LET HeldSet = (MAKESET (IntOrdA))");
 
@@ -51,26 +51,29 @@ fn functor_body_module_dispatch_does_not_dangle() {
 /// Functor body resolves a type-class parameter via the per-call type-side bind:
 /// without it the body's auto-wrapped `(Er)` would hit `UnboundName` against the
 /// FN's captured outer scope. Uses opaque ascription (`:|`) so the bound module
-/// carries an abstract `Type` member for the dotted `Er.Type` access to return.
+/// carries an abstract `Carrier` member for the dotted `Er.Carrier` access to return.
 #[test]
 fn functor_body_dotted_type_member_via_per_call_bind() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
-         MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
+        "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
+         MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
          LET IntOrdView = (IntOrd :| OrderedSig)",
     );
-    run(scope, "FN (USE_TYPE Er :OrderedSig) -> Any = (Er.Type)");
+    run(scope, "FN (USE_TYPE Er :OrderedSig) -> Any = (Er.Carrier)");
     let result = run_one_type(scope, parse_one("USE_TYPE IntOrdView"));
-    // Opaque ascription mints a fresh abstract `Type` member; the body must return
+    // Opaque ascription mints a fresh abstract `Carrier` member; the body must return
     // that identity, not the underlying concrete `Number`.
     match result {
         KType::AbstractType { name, .. } => {
-            assert_eq!(name, "Type", "abstract type member should be named Type");
+            assert_eq!(
+                name, "Carrier",
+                "abstract type member should be named Carrier"
+            );
         }
-        other => panic!("expected AbstractType {{ name = \"Type\", .. }}, got {other:?}"),
+        other => panic!("expected AbstractType {{ name = \"Carrier\", .. }}, got {other:?}"),
     }
 }
 
@@ -85,14 +88,14 @@ fn functor_closure_escape_pins_type_class_bind() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
-         MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
+        "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
+         MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
          LET IntOrdView = (IntOrd :| OrderedSig)",
     );
     run(
         scope,
         "FN (MAKE_LOOKUP Er :OrderedSig) -> Any = \
-            (FN (LOOKUP) -> Any = (Er.Type))",
+            (FN (LOOKUP) -> Any = (Er.Carrier))",
     );
     run(scope, "LET _maker = (MAKE_LOOKUP IntOrdView)");
     // Churn the per-call arena's drop discipline before invoking the inner FN.
@@ -102,10 +105,10 @@ fn functor_closure_escape_pins_type_class_bind() {
     let result = run_one_type(scope, parse_one("LOOKUP"));
     match result {
         KType::AbstractType { name, .. } => {
-            assert_eq!(name, "Type");
+            assert_eq!(name, "Carrier");
         }
         other => panic!(
-            "expected AbstractType {{ name: \"Type\", .. }} after closure escape, got {other:?}",
+            "expected AbstractType {{ name: \"Carrier\", .. }} after closure escape, got {other:?}",
         ),
     }
 }

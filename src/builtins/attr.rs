@@ -13,8 +13,8 @@
 //! runtime value falls through to [`body_newtype`].
 
 use crate::machine::execute::{resolve_type_leaf_carrier, TypeLeafCarrier};
-use crate::machine::model::types::KKind;
 use crate::machine::model::types::AbstractSource;
+use crate::machine::model::types::KKind;
 use crate::machine::model::values::{Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{
@@ -23,9 +23,8 @@ use crate::machine::{
 
 use super::{arg, err, kw, register_builtin, sig};
 
-pub fn body_identifier<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+pub fn body_identifier<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let s_name = match bundle.get("s") {
@@ -47,10 +46,10 @@ pub fn body_identifier<'a>(
     // Value-side first, then type-side: a FUNCTOR's signature-typed parameter is bound
     // only into `bindings.types`, so `Er.pure(x)` inside the functor body must reach the
     // carried `&Module` through `resolve_type`.
-    if let Some(target) = scope.lookup(&s_name) {
-        return access_field(scope, target, &field_name);
+    if let Some(target) = sched.current_scope().lookup(&s_name) {
+        return access_field(sched.current_scope(), target, &field_name);
     }
-    if let Some(kt) = scope.resolve_type(&s_name) {
+    if let Some(kt) = sched.current_scope().resolve_type(&s_name) {
         match kt {
             KType::Module { module: m, .. } => return access_module_member(m, &field_name),
             KType::AbstractType {
@@ -77,9 +76,8 @@ pub fn body_identifier<'a>(
 /// path uses. The Type-Type overload shares this body so chained module access
 /// (`Outer.Inner.x`) works regardless of whether each step's field is a module name or
 /// a regular member.
-pub fn body_type_lhs<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+pub fn body_type_lhs<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let s_kt = match bundle.get_type("s") {
@@ -106,8 +104,10 @@ pub fn body_type_lhs<'a>(
     // memoized, park-capable bridge. Dispatch resolves this argument before the body runs, so
     // a `Park` outcome is unreachable here and surfaces as a loud structured error.
     match s_kt {
-        KType::Unresolved(te) => match resolve_type_leaf_carrier(scope, te, None) {
-            TypeLeafCarrier::Resolved(kt) => access_type_member(scope, kt, &field_name),
+        KType::Unresolved(te) => match resolve_type_leaf_carrier(sched.current_scope(), te, None) {
+            TypeLeafCarrier::Resolved(kt) => {
+                access_type_member(sched.current_scope(), kt, &field_name)
+            }
             TypeLeafCarrier::Unbound(name) => err(KError::new(KErrorKind::UnboundName(name))),
             TypeLeafCarrier::Park(producers) => err(KError::new(KErrorKind::ShapeError(format!(
                 "ATTR lhs type `{}` resolved to a still-finalizing type \
@@ -117,13 +117,12 @@ pub fn body_type_lhs<'a>(
                 producers.len(),
             )))),
         },
-        kt => access_type_member(scope, kt, &field_name),
+        kt => access_type_member(sched.current_scope(), kt, &field_name),
     }
 }
 
-pub fn body_newtype<'a>(
-    scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+pub fn body_newtype<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let target = match bundle.require("s") {
@@ -134,12 +133,11 @@ pub fn body_newtype<'a>(
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    access_field(scope, target, &field_name)
+    access_field(sched.current_scope(), target, &field_name)
 }
 
-pub fn body_module<'a>(
-    _scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+pub fn body_module<'a, 's>(
+    _sched: &mut dyn SchedulerHandle<'a, 's>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     // A module identity rides the type channel, so the lhs is the `Type` arm.
@@ -179,7 +177,7 @@ fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
 /// Project `field` off a Type-channel lhs: a module / signature / opaque-abstract identity.
 /// A `SetRef` (struct / union name) and every other type has no members and falls through to
 /// the same TypeMismatch a static struct field access produces.
-fn access_type_member<'a>(scope: &'a Scope<'a>, kt: &KType<'a>, field: &str) -> BodyResult<'a> {
+fn access_type_member<'a>(scope: &Scope<'a>, kt: &KType<'a>, field: &str) -> BodyResult<'a> {
     match kt {
         KType::Module { module: m, .. } => access_module_member(m, field),
         // ATTR over a first-class signature value — reverse-lookup against the decl scope.
@@ -210,7 +208,7 @@ fn access_type_member<'a>(scope: &'a Scope<'a>, kt: &KType<'a>, field: &str) -> 
     }
 }
 
-fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> BodyResult<'a> {
+fn access_field<'a>(scope: &Scope<'a>, target: &KObject<'a>, field: &str) -> BodyResult<'a> {
     match target {
         // NEWTYPE fall-through. A record-repr newtype (an ex-struct) wraps a
         // `KObject::Record`; read the field straight off it, naming the nominal type in the
@@ -524,23 +522,23 @@ mod tests {
     }
 
     /// An opaque (`:|`) view re-tags a VAL-slot read with the per-call abstract identity:
-    /// `IntOrdView.zero` reads as the abstract `Type` (`ktype().name() == "Type"`), not the
-    /// underlying `Number`, so a deferred return `Er.Type` accepts the body.
+    /// `IntOrdView.zero` reads as the abstract `Carrier` (`ktype().name() == "Carrier"`), not the
+    /// underlying `Number`, so a deferred return `Er.Carrier` accepts the body.
     #[test]
     fn opaque_view_slot_read_re_tags_with_abstract_type() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG WithZero = ((LET Type = Number) (VAL zero :Type))\n\
-             MODULE IntOrd = ((LET Type = Number) (LET zero = 0))\n\
+            "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))\n\
+             MODULE IntOrd = ((LET Carrier = Number) (LET zero = 0))\n\
              LET IntOrdView = (IntOrd :| WithZero)",
         );
         let result = run_one(scope, parse_one("IntOrdView.zero"));
         assert_eq!(
             result.ktype().name(),
-            "Type",
-            "opaque-view slot read must carry the abstract `Type` identity, got {:?}",
+            "Carrier",
+            "opaque-view slot read must carry the abstract `Carrier` identity, got {:?}",
             result.ktype(),
         );
     }
@@ -553,8 +551,8 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG WithZero = ((LET Type = Number) (VAL zero :Type))\n\
-             MODULE IntOrd = ((LET Type = Number) (LET zero = 0))\n\
+            "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))\n\
+             MODULE IntOrd = ((LET Carrier = Number) (LET zero = 0))\n\
              LET IntOrdView = (IntOrd :! WithZero)",
         );
         let result = run_one(scope, parse_one("IntOrdView.zero"));

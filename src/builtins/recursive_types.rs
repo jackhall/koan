@@ -32,9 +32,8 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use super::{arg, err, kw, register_builtin_with_binder, sig};
 use crate::machine::core::kfunction::argument_bundle::extract_bare_type_name;
 
-pub fn body<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+pub fn body<'a, 's>(
+    sched: &mut dyn SchedulerHandle<'a, 's>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let group_name = match extract_bare_type_name(&bundle, "name", "RECURSIVE TYPES") {
@@ -55,7 +54,7 @@ pub fn body<'a>(
     // One shared set; members are `pending` until each declaration's finalize fills it.
     // `scope_id` is diagnostics-only; each member finalizes exactly once on the block path
     // (cross-references lower to `RecursiveRef`, so no declaration parks and re-finalizes).
-    let scope_id = scope.id;
+    let scope_id = sched.current_scope().id;
     let set = Rc::new(RecursiveSet::new(
         members
             .iter()
@@ -64,9 +63,13 @@ pub fn body<'a>(
     ));
     // The child scope carries the set: declarations dispatch against it, so the elaborator
     // threads the group (a member name lowers to `RecursiveRef`).
-    let child = scope
+    let child = sched
+        .current_scope()
         .arena
-        .alloc_scope(Scope::child_recursive_group(scope, Rc::clone(&set)));
+        .alloc_scope(Scope::child_recursive_group(
+            sched.current_scope(),
+            Rc::clone(&set),
+        ));
     // Pre-install each member's external `SetRef` into the child so its own finalize fills
     // the shared set rather than minting a singleton (the same routing the reactive SCC seal
     // uses). The members co-declare at one lexical position, so index 0 is fine.
@@ -90,7 +93,7 @@ pub fn body<'a>(
         .current_lexical_chain()
         .map(|chain| BindingIndex::value(chain.index))
         .unwrap_or(BindingIndex::BUILTIN);
-    let finish: CombineFinish<'a> = Box::new(move |parent_scope, _sched, _results| {
+    let finish: CombineFinish<'a> = Box::new(move |_sched, _results| {
         let frame = || Frame::bare("<recursive-types>", format!("RECURSIVE TYPES {group_name}"));
         // Exit guarantees resolution: every member must have sealed. A declaration that
         // errored short-circuits the Combine before this runs, so an unfilled member here
@@ -113,18 +116,26 @@ pub fn body<'a>(
                 set: Rc::clone(&set),
                 index,
             };
-            if let Err(e) = parent_scope.register_type_upsert(name.clone(), member_ref, bind_index)
+            if let Err(e) =
+                _sched
+                    .current_scope()
+                    .register_type_upsert(name.clone(), member_ref, bind_index)
             {
                 return BodyResult::Err(e.with_frame(frame()));
             }
         }
         let handle = KType::RecursiveGroup(Rc::clone(&set));
-        match parent_scope.register_type_upsert(group_name.clone(), handle, bind_index) {
-            Ok(kt_ref) => BodyResult::ktype(parent_scope.arena.alloc_ktype(kt_ref.clone())),
+        match _sched
+            .current_scope()
+            .register_type_upsert(group_name.clone(), handle, bind_index)
+        {
+            Ok(kt_ref) => {
+                BodyResult::ktype(_sched.current_scope().arena.alloc_ktype(kt_ref.clone()))
+            }
             Err(e) => BodyResult::Err(e.with_frame(frame())),
         }
     });
-    let combine_id = sched.add_combine(deps, vec![], scope, finish);
+    let combine_id = sched.add_combine_here(deps, vec![], finish);
     BodyResult::DeferTo(combine_id)
 }
 

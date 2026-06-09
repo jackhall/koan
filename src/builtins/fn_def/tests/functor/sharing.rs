@@ -111,7 +111,7 @@ fn functor_with_two_pinned_slots_round_trips() {
     run(
         scope,
         "FN (TWOPIN p :OrderedSig) -> :(Set WITH {Elt = Number, Ord = Number}) = \
-         (MODULE Result = ((LET Elt = Number) (LET Ord = Number) (LET tag = 0)))",
+         (MODULE Generated = ((LET Elt = Number) (LET Ord = Number) (LET tag = 0)))",
     );
     let f = lookup_fn(scope, "TWOPIN");
     use crate::machine::model::ReturnType;
@@ -148,7 +148,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
     run(
         scope,
         "FN (MAKESETN p :OrderedSig) -> :(SetSig WITH {Elt = Number}) = \
-         (MODULE Result = ((LET Elt = Number) (LET insert = 0)))",
+         (MODULE Generated = ((LET Elt = Number) (LET insert = 0)))",
     );
     let f = lookup_fn(scope, "MAKESETN");
     use crate::machine::model::ReturnType;
@@ -183,7 +183,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
     run(
         scope,
         "FN (MAKEBAD p :OrderedSig) -> :(SetSig WITH {Elt = Number}) = \
-         (MODULE Result = ((LET Elt = Str) (LET insert = 0)))",
+         (MODULE Generated = ((LET Elt = Str) (LET insert = 0)))",
     );
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("MAKEBAD IntOrdView"), scope);

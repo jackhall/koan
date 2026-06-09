@@ -15,7 +15,7 @@ use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{KObject, KType, RecursiveSet};
-use crate::machine::{KError, KErrorKind, NodeId, Resolution, SchedulerHandle, Scope};
+use crate::machine::{KError, KErrorKind, NodeId, Resolution, SchedulerHandle};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::apply_callable::{apply_callable, ResolvedCallable};
@@ -95,9 +95,7 @@ pub(in crate::machine::execute) enum CtorKind<'a> {
 }
 
 impl<'a> BareTypeState<'a> {
-    pub(in crate::machine::execute) fn with_park(
-        park: BareTypeParkTrack,
-    ) -> Self {
+    pub(in crate::machine::execute) fn with_park(park: BareTypeParkTrack) -> Self {
         Self {
             park: Some(park),
             _ph: PhantomData,
@@ -111,7 +109,6 @@ impl<'a> BareTypeState<'a> {
     pub(in crate::machine::execute) fn resume(
         self,
         ctx: &mut DispatchCtx<'a, '_>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
         let BareTypeState { park, .. } = self;
@@ -121,7 +118,7 @@ impl<'a> BareTypeState<'a> {
         // the now-sealed memo rather than reading the producer's value.
         let _ = producer;
         ctx.clear_dep_edges(idx);
-        Ok(bare_type_leaf(ctx, &leaf, scope, idx))
+        Ok(bare_type_leaf(ctx, &leaf, idx))
     }
 }
 
@@ -152,7 +149,6 @@ impl<'a> CtorState<'a> {
     pub(in crate::machine::execute) fn resume(
         self,
         ctx: &mut DispatchCtx<'a, '_>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
         let CtorState {
@@ -168,7 +164,7 @@ impl<'a> CtorState<'a> {
             );
             let _ = producer;
             ctx.clear_dep_edges(idx);
-            return Ok(type_call(ctx, expr, scope, idx));
+            return Ok(type_call(ctx, expr, idx));
         }
         let CtorTrack {
             subs,
@@ -193,7 +189,7 @@ impl<'a> CtorState<'a> {
             ctx.free(dep_id.index());
         }
         let values: Vec<&'a KObject<'a>> = staged_values.into_iter().map(|o| o.unwrap()).collect();
-        Ok(constructors::finish(scope, &kind, &values))
+        Ok(constructors::finish(ctx.current_scope(), &kind, &values))
     }
 }
 
@@ -202,10 +198,12 @@ impl<'a> CtorState<'a> {
 pub(super) fn bare_identifier<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     name: String,
-    scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
-    match scope.resolve_with_chain(&name, ctx.chain_deref()) {
+    match ctx
+        .current_scope()
+        .resolve_with_chain(&name, ctx.chain_deref())
+    {
         Resolution::Value(obj) => NodeStep::Done(NodeOutput::value(obj)),
         Resolution::Placeholder(producer) => {
             // Notify edge, not Owned: producer is a sibling slot, we
@@ -228,10 +226,9 @@ pub(super) fn bare_identifier<'a>(
 pub(super) fn bare_type_leaf<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     t: &TypeName,
-    scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
-    match resolve_type_leaf_carrier(scope, t, ctx.active_chain()) {
+    match resolve_type_leaf_carrier(ctx.current_scope(), t, ctx.active_chain()) {
         TypeLeafCarrier::Resolved(kt) => NodeStep::Done(NodeOutput::ktype(kt)),
         TypeLeafCarrier::Unbound(n) => {
             NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))))
@@ -254,7 +251,7 @@ pub(super) fn bare_type_leaf<'a>(
                 }
                 // Ready-and-bound: the referent finalized between resolve and this check, so
                 // re-resolve directly — the memoized bridge now admits.
-                return bare_type_leaf(ctx, t, scope, idx);
+                return bare_type_leaf(ctx, t, idx);
             }
             ctx.add_park_edge(producer, NodeId(idx));
             let track = BareTypeParkTrack {
@@ -292,7 +289,6 @@ pub(super) fn sigiled_type_expr<'a>(expr: KExpression<'a>) -> NodeStep<'a> {
 pub(super) fn record_type<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     expr: KExpression<'a>,
-    scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
     let fields = match expr.parts.into_iter().next() {
@@ -303,7 +299,7 @@ pub(super) fn record_type<'a>(
         _ => unreachable!("RecordType shape implies a single RecordType part"),
     };
     let chain = ctx.current_lexical_chain();
-    let body = super::field_list::elaborate_record_value(scope, ctx, fields, chain);
+    let body = super::field_list::elaborate_record_value(ctx, fields, chain);
     schedule_constructor_body(ctx, body, idx)
 }
 
@@ -313,7 +309,6 @@ pub(super) fn record_type<'a>(
 pub(super) fn literal_pass_through<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     expr: KExpression<'a>,
-    scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
     let only = expr
@@ -323,7 +318,7 @@ pub(super) fn literal_pass_through<'a>(
         .expect("LiteralPassThrough shape implies one part");
     match only.value {
         ExpressionPart::Literal(_) => {
-            let allocated = scope.arena.alloc_object(only.value.resolve());
+            let allocated = ctx.current_scope().arena.alloc_object(only.value.resolve());
             NodeStep::Done(NodeOutput::value(allocated))
         }
         ExpressionPart::Future(c) => NodeStep::Done(NodeOutput::Value(c)),
@@ -335,15 +330,15 @@ pub(super) fn literal_pass_through<'a>(
             body_index: 0,
         },
         ExpressionPart::ListLiteral(items) => {
-            let producer = ctx.schedule_list_literal(items, scope);
+            let producer = ctx.schedule_list_literal(items);
             park_on_literal_producer(ctx, producer, idx)
         }
         ExpressionPart::DictLiteral(pairs) => {
-            let producer = ctx.schedule_dict_literal(pairs, scope);
+            let producer = ctx.schedule_dict_literal(pairs);
             park_on_literal_producer(ctx, producer, idx)
         }
         ExpressionPart::RecordLiteral(fields) => {
-            let producer = ctx.schedule_record_literal(fields, scope);
+            let producer = ctx.schedule_record_literal(fields);
             park_on_literal_producer(ctx, producer, idx)
         }
         _ => unreachable!("LiteralPassThrough classifier only routes Literal/Future/Expression/ListLiteral/DictLiteral/RecordLiteral"),
@@ -397,7 +392,6 @@ fn park_on_literal_producer<'a>(
 pub(super) fn type_call<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
     expr: KExpression<'a>,
-    scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
     let head_t = match &expr.parts[0].value {
@@ -412,7 +406,10 @@ pub(super) fn type_call<'a>(
     // or type alias), so a keyworded resume would wrongly fail. A producer that is
     // already terminal falls through — its placeholder is on its way out, so the
     // type-table read below is authoritative.
-    if let Resolution::Placeholder(producer) = scope.resolve_with_chain(head_t.as_str(), chain) {
+    if let Resolution::Placeholder(producer) = ctx
+        .current_scope()
+        .resolve_with_chain(head_t.as_str(), chain)
+    {
         if !ctx.is_result_ready(producer) {
             ctx.add_park_edge(producer, NodeId(idx));
             let init = Initialized {
@@ -428,7 +425,10 @@ pub(super) fn type_call<'a>(
     // a `SetRef` whose member carries the schema (filled at the member's finalize) — no
     // value-side carrier involved. A bound functor lives here too, carrying its callable
     // body on `KType::KFunctor { body: Some(f) }`.
-    let identity = match scope.resolve_type_with_chain(head_t.as_str(), chain) {
+    let identity = match ctx
+        .current_scope()
+        .resolve_type_with_chain(head_t.as_str(), chain)
+    {
         Some(kt) => kt,
         None => {
             return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(
@@ -439,7 +439,7 @@ pub(super) fn type_call<'a>(
     match identity {
         // A bound functor's result is a module — the `Function` arm calls it.
         KType::KFunctor { body: Some(f), .. } => {
-            apply_callable(ctx, ResolvedCallable::Function(f), &expr, scope, idx)
+            apply_callable(ctx, ResolvedCallable::Function(f), &expr, idx)
         }
         // A bare `:(FUNCTOR …)` type annotation has no callable to invoke.
         KType::KFunctor { body: None, .. } => {
@@ -449,13 +449,7 @@ pub(super) fn type_call<'a>(
                 got: identity.name(),
             })))
         }
-        _ => apply_callable(
-            ctx,
-            ResolvedCallable::Constructor(identity),
-            &expr,
-            scope,
-            idx,
-        ),
+        _ => apply_callable(ctx, ResolvedCallable::Constructor(identity), &expr, idx),
     }
 }
 

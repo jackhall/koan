@@ -16,13 +16,13 @@ use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::{CallArena, LexicalFrame, Scope};
+use crate::machine::core::{CallArena, LexicalFrame};
 use crate::machine::model::Carried;
 use crate::machine::model::Parseable;
 use crate::machine::KError;
 use crate::machine::NodeId;
 
-use super::super::nodes::{LiftState, Node, NodeOutput, NodeWork};
+use super::super::nodes::{LiftState, Node, NodeOutput, NodeScope, NodeWork};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -128,9 +128,9 @@ impl<'a> NodeStore<'a> {
         self.slots[id] = SlotState::PreRun(node);
     }
 
-    /// Replace the node payload with a fresh per-call frame, re-anchoring the frame's
-    /// per-call [`Scope`] to `'a` so callers don't have to. See
-    /// [per-call-arena-protocol.md § Slot-table re-anchor](../../../../design/per-call-arena-protocol.md#slot-table-re-anchor).
+    /// Replace the node payload with a fresh per-call frame; the slot stores its scope as a
+    /// payload-less [`NodeScope::Yoked`] re-projected from the co-located `frame` cart. See
+    /// [per-call-arena-protocol.md § Slot-table scope handle](../../../../design/per-call-arena-protocol.md#slot-table-scope-handle).
     pub(super) fn reinstall_with_frame(
         &mut self,
         id: NodeId,
@@ -140,13 +140,12 @@ impl<'a> NodeStore<'a> {
         function: Option<ReturnContract<'a>>,
         chain: Rc<LexicalFrame>,
     ) {
-        // `frame` (stored in the same node payload below) is the witness
-        // `anchored_parts` relies on: the co-located `Rc<CallArena>` outlives every read
-        // through this `'a` reference, and any prior frame was removed by `take_for_run`.
-        let scope: &'a Scope<'a> = frame.anchored_parts().1;
+        // The tail-replace slot's scope is always this `frame`'s own child, so store it as a
+        // payload-less `NodeScope::Yoked` and let the read boundary re-project it from the
+        // co-located `frame` cart each step — no persisted `&'a` to dangle across a TCO reset.
         self.slots[id] = SlotState::PreRun(Node {
             work,
-            scope,
+            scope: NodeScope::Yoked,
             frame: Some(frame),
             reserve_frame,
             function,

@@ -171,8 +171,8 @@ pub enum KType<'a> {
     },
     /// Abstract type member named by a SIG slot or minted by opaque ascription. `source`
     /// distinguishes the two roots: `Sig(scope_id)` is the SIG-decl-time member (bound when a
-    /// SIG-local `LET Type = ...` would otherwise collapse to the underlying type), `Module`
-    /// is the per-call mint `:|` produces (`Foo.Type`). Identity keys on
+    /// SIG-local `LET Carrier = ...` would otherwise collapse to the underlying type), `Module`
+    /// is the per-call mint `:|` produces (`Foo.Carrier`). Identity keys on
     /// `(source.scope_id(), name)`, so two opaque ascriptions of the same source module with
     /// the same abstract name compare equal, and a per-call module mint stays distinct from
     /// the SIG-decl-time member it was threaded from.
@@ -654,10 +654,7 @@ mod tests {
     fn nominal_kind_surface_keywords() {
         assert_eq!(KKind::Tagged.surface_keyword(), "Tagged");
         assert_eq!(KKind::Newtype.surface_keyword(), "Newtype");
-        assert_eq!(
-            KKind::TypeConstructor.surface_keyword(),
-            "TypeConstructor",
-        );
+        assert_eq!(KKind::TypeConstructor.surface_keyword(), "TypeConstructor",);
     }
 
     #[test]
@@ -735,10 +732,7 @@ mod tests {
                     body: None,
                 },
             ),
-            (
-                KType::OfKind(KKind::Tagged),
-                KType::OfKind(KKind::Tagged),
-            ),
+            (KType::OfKind(KKind::Tagged), KType::OfKind(KKind::Tagged)),
             (
                 KType::RecursiveRef("Tree".into()),
                 KType::RecursiveRef("Tree".into()),

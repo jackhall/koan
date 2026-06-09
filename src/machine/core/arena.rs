@@ -418,18 +418,25 @@ pub struct CallArena {
     arena: RuntimeArena,
     scope_ptr: Option<ScopePtr<'static>>,
     outer_frame: Option<Rc<CallArena>>,
+    /// True only for the scheduler-owned run frame, which carries the top-level run scope and
+    /// never drops mid-run. Its `arena` is empty (top-level values live in the externally-owned
+    /// run arena, reached via `scope.arena`), so there is nothing to lift out of it: the Done
+    /// boundary skips the lift for a non-dying frame (lift exists to rescue values from a *dying*
+    /// per-call arena). Every per-call frame is `false`.
+    non_dying: bool,
 }
 
 impl CallArena {
     /// Build a fresh per-call frame whose child `Scope` uses `outer` as its `outer` link.
     /// `outer_frame` must hold the parent's Rc when the parent is per-call; `None` when
     /// the parent is run-root.
-    pub fn new<'p>(outer: &'p Scope<'p>, outer_frame: Option<Rc<CallArena>>) -> Rc<CallArena> {
+    pub fn new(outer: &Scope<'_>, outer_frame: Option<Rc<CallArena>>) -> Rc<CallArena> {
         let escape = NonNull::from(outer.arena);
         let mut rc = Rc::new(CallArena {
             arena: RuntimeArena::with_escape(escape),
             scope_ptr: None,
             outer_frame,
+            non_dying: false,
         });
         let arena_ptr: *const RuntimeArena = &rc.arena;
         // SAFETY: heap-pinning keeps `arena_ptr` valid for the Rc's lifetime, which exceeds
@@ -451,6 +458,34 @@ impl CallArena {
             .expect("freshly-constructed Rc has unique ownership")
             .scope_ptr = Some(ScopePtr::erase(allocated));
         rc
+    }
+
+    /// The scheduler-owned **run frame**: a frame that *carries an already-built run scope*
+    /// rather than minting a child. Top-level execution runs against this frame so `active_frame`
+    /// is never `None`, which makes a body's re-dispatch-against-its-own-scope uniformly framed
+    /// (Yoked) at every depth — top level included. The run scope keeps its own (run) arena, so
+    /// this frame's `arena` stays empty and unused; `escape` is `None` (a non-dying top frame has
+    /// nothing to redirect into). Marked `non_dying` so the Done boundary skips the (pointless)
+    /// self-lift of top-level results.
+    ///
+    /// SAFETY: the adopted run scope lives in the externally-owned run arena, which outlives this
+    /// scheduler-owned frame; erasing its borrow to `'static` for storage in `scope_ptr` is the
+    /// same re-anchored-on-read erasure every [`ScopePtr`] carries.
+    pub fn adopting(scope: &Scope<'_>) -> Rc<CallArena> {
+        let scope_static: &'static Scope<'static> =
+            unsafe { std::mem::transmute::<&Scope<'_>, &Scope<'static>>(scope) };
+        Rc::new(CallArena {
+            arena: RuntimeArena::new(),
+            scope_ptr: Some(ScopePtr::erase(scope_static)),
+            outer_frame: None,
+            non_dying: true,
+        })
+    }
+
+    /// True only for the scheduler-owned run frame (see [`Self::adopting`]). The Done boundary
+    /// reads this to skip the self-lift that a never-dying frame would otherwise perform.
+    pub fn non_dying(&self) -> bool {
+        self.non_dying
     }
 
     pub fn scope<'a>(&'a self) -> &'a Scope<'a> {
@@ -479,6 +514,21 @@ impl CallArena {
         scope
     }
 
+    /// The child scope re-handed with a **witness-bounded** borrow: the borrow `'p` is bounded by
+    /// the `&'p Rc<Self>` receiver (the frame `Rc` witness), while the scope content `'a` is free
+    /// (`'a: 'p`). This is the read boundary: it hands back a reference that *cannot outlive the
+    /// `Rc` it borrows from*, so storing it past the frame is a compile error rather than a
+    /// fabrication. Invariance in `'a` rides structurally on the returned `Scope<'a>` (`Scope` is
+    /// invariant), so this ephemeral form needs no separate brand struct. Reached through
+    /// [`Scheduler::current_scope`](crate::machine::execute::scheduler::Scheduler) (`Yoked` slots)
+    /// and [`Self::with_anchored_child`] (the seed binds).
+    ///
+    /// SAFETY: delegates to [`ScopePtr::reattach_bounded`]; the `&'p Rc<Self>` receiver pins
+    /// the arena and child scope for all of `'p`, so the `'p`-bounded borrow cannot dangle.
+    pub fn scope_bounded<'p, 'a: 'p>(self: &'p Rc<Self>) -> &'p Scope<'a> {
+        unsafe { self.scope_ptr_set().reattach_bounded() }
+    }
+
     /// The child scope's `ScopePtr<'static>`, which is `Some` for the whole life of a
     /// constructed frame (`None` only transiently inside `new` / `try_reset_for_tail` before
     /// the child scope is allocated).
@@ -488,24 +538,28 @@ impl CallArena {
             .expect("scope_ptr is set after construction")
     }
 
-    /// Re-anchor this frame's per-call arena and child scope to a free `'a` so the caller
-    /// may move the frame into a `BodyResult::Tail` / slot `Node` while the borrows stay
-    /// live. The single owner for the scattered `(inner_arena, child)` re-anchor performed
-    /// by the MATCH / TRY-WITH builtins, [`KFunction::invoke`], and
-    /// [`NodeStore::reinstall_with_frame`].
+    /// Run `f` with this frame's per-call arena re-exposed at a free `'a` and its child scope
+    /// re-handed at a bounded borrow. The single audited home for the *seed-side* re-anchor: the
+    /// MATCH / TRY arm and `KFunction::invoke` body seeds bind their `it` / parameters — values
+    /// whose type carries the caller's `'a`, deep-cloned into this frame's arena — into the child
+    /// scope inside `f`.
     ///
-    /// SAFETY: the caller holds an `Rc<CallArena>` it is about to store in a payload whose
-    /// lifetime is `'a`; that `Rc` heap-pins the arena (and its child scope) for as long as
-    /// the payload lives, so claiming `'a` — unconstrained by the `&Rc` receiver — is the
-    /// receiver-bound-borrow → storage-lifetime re-anchor. Caller obligation: an `Rc` clone
-    /// of this frame survives in that payload for all of `'a`.
-    pub fn anchored_parts<'a>(self: &Rc<Self>) -> (&'a RuntimeArena, &'a Scope<'a>) {
-        unsafe {
-            (
-                std::mem::transmute::<&RuntimeArena, &'a RuntimeArena>(self.arena()),
-                std::mem::transmute::<&Scope<'_>, &'a Scope<'a>>(self.scope()),
-            )
-        }
+    /// The **arena** is re-exposed at a free `'a`: this is the inherent arena re-exposure the C0
+    /// verdict keeps (an `'a`-typed value must land in an `'a`-typed arena, and no lifetime scheme
+    /// closes that — the frame `Rc` the caller holds heap-pins the arena, so the seed's binds
+    /// outlive `f`). The **child scope** rides the bounded `scope_bounded` brand — borrow capped at
+    /// the `&Rc` receiver, content `'a` — so it is *not* fabricated free; `bind_value` matches on
+    /// the `'a` content.
+    ///
+    /// SAFETY (arena transmute): the caller holds this frame's `Rc`, which heap-pins the arena for
+    /// as long as any value `f` binds into the scope lives.
+    pub fn with_anchored_child<'a, R>(
+        self: &Rc<Self>,
+        f: impl FnOnce(&'a RuntimeArena, &Scope<'a>) -> R,
+    ) -> R {
+        let arena: &'a RuntimeArena =
+            unsafe { std::mem::transmute::<&RuntimeArena, &'a RuntimeArena>(self.arena()) };
+        f(arena, self.scope_bounded())
     }
 
     pub fn arena(&self) -> &RuntimeArena {
@@ -517,7 +571,7 @@ impl CallArena {
     /// child `Scope` under `new_outer`. Returns `false` (untouched) when `Rc::get_mut`
     /// fails — any other live `Rc` foreclosing in-place reuse. See
     /// [per-call-arena-protocol.md § TCO frame reuse](../../../design/per-call-arena-protocol.md#tco-frame-reuse).
-    pub fn try_reset_for_tail<'p>(self: &mut Rc<Self>, new_outer: &'p Scope<'p>) -> bool {
+    pub fn try_reset_for_tail(self: &mut Rc<Self>, new_outer: &Scope<'_>) -> bool {
         if Rc::get_mut(self).is_none() {
             return false;
         }
@@ -559,6 +613,22 @@ mod tests {
     fn null_singleton_returns_null_kobject() {
         let n = null_singleton();
         assert!(matches!(n, KObject::Null));
+    }
+
+    /// `scope_bounded` re-anchors the child scope with a borrow bounded by the `&Rc` witness.
+    /// The good path: read it within the witness borrow. The over-anchor and covariance
+    /// compile-error properties were confirmed by the C0 spike (see
+    /// scratch/type-enforced-frame-reanchor-plan.md § C0 verdict); they are structural —
+    /// `scope_bounded`'s `'p` borrow cannot widen to a free `'a`, and `Scope<'a>` is invariant.
+    #[test]
+    fn scope_bounded_reanchors_within_witness_borrow() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let frame: Rc<CallArena> = CallArena::new(scope, None);
+        let bounded: &Scope<'_> = frame.scope_bounded();
+        // Same underlying child scope as the unbounded accessors, just a shorter borrow.
+        assert_eq!(bounded.id, frame.scope().id);
+        assert_eq!(bounded.id, frame.scope_for_bind().id);
     }
 
     #[test]
@@ -631,7 +701,7 @@ mod tests {
         let s3 = frame.scope();
         assert!(std::ptr::eq(s1, s2));
         assert!(std::ptr::eq(s2, s3));
-        assert!(s1.outer.is_some());
+        assert!(s1.outer().is_some());
     }
 
     /// Two-deep chain: dropping the local `outer` handle leaves only `inner.outer_frame`
@@ -645,13 +715,13 @@ mod tests {
         drop(outer);
         let outer_scope = inner
             .scope()
-            .outer
+            .outer()
             .expect("inner.scope().outer must be Some");
         assert!(std::ptr::eq(
             outer_scope.arena,
-            inner.scope().outer.unwrap().arena
+            inner.scope().outer().unwrap().arena
         ));
-        assert!(outer_scope.outer.is_some());
+        assert!(outer_scope.outer().is_some());
     }
 
     /// In-struct Rc must keep the arena alive for a re-anchored `&Scope` stored alongside
@@ -670,7 +740,7 @@ mod tests {
             let s: &Scope<'_> = unsafe { std::mem::transmute::<&Scope<'_>, &Scope<'_>>(f.scope()) };
             Holder { s, _f: f }
         };
-        assert!(h.s.outer.is_some());
+        assert!(h.s.outer().is_some());
     }
 
     /// Allocating mutates `allocated_objects` via `RefCell::borrow_mut` while a prior
@@ -717,7 +787,7 @@ mod tests {
             .bind_value("k".to_string(), v, BindingIndex::BUILTIN)
             .unwrap();
         assert!(matches!(frame.scope().lookup("k"), Some(KObject::Number(n)) if *n == 42.0));
-        assert!(frame.scope().outer.is_some());
+        assert!(frame.scope().outer().is_some());
     }
 
     /// `try_reset_for_tail` must refuse when any other `Rc` to this frame
@@ -765,7 +835,7 @@ mod tests {
                         "DUMMY".into(),
                     )],
                 },
-                crate::machine::core::kfunction::Body::Builtin(|_, _, _| {
+                crate::machine::core::kfunction::Body::Builtin(|_, _| {
                     crate::machine::core::kfunction::BodyResult::value(null_singleton())
                 }),
                 scope,

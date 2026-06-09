@@ -303,21 +303,56 @@ Steady-state allocation on the stateful keyworded /
 shell and its `Rc` reuse across iterations after the first
 two-iteration warmup.
 
-## Slot-table re-anchor
+## Slot-table scope handle
 
-Storing the slot's per-call frame in the scheduler's slot table
-requires one re-anchor at install time: the slot-table type uses `'a`
-(the run lifetime), but `Rc<CallArena>::scope()` returns `&'p
-Scope<'p>` bounded by the local receiver.
-`NodeStore::reinstall_with_frame` performs that re-anchor through
-[`CallArena::anchored_parts`](../src/machine/core/arena.rs) — the single
-re-anchor method also used by the MATCH / TRY-WITH builtins and
-`KFunction::invoke` — under the witness "the `Rc<CallArena>` stays in the same
-`Node` payload as the `&'a Scope<'a>` it produced": as long as the slot owns the
-Rc, the arena heap-pinning that backs the child scope pointer outlives every read
-through the `'a` reference. Any previous frame in the slot must have been
-removed by a prior `take_for_run`, so there is no shadow alias being
-silently overwritten.
+A scheduler slot stores its scope as a
+[`NodeScope<'a>`](../src/machine/execute/nodes.rs), not a raw `&'a Scope<'a>`. The enum has two
+arms: `Anchored(&'a Scope<'a>)` carries a genuine run-lifetime borrow (a run-root scope, or a
+sub-scope the active frame does not directly back); `Yoked` carries no payload at all. A
+per-call frame scope rides `Yoked` — single-cart, because the slot's own `Node.frame`
+`Rc<CallArena>` is the sole liveness witness, so there is no second `Rc` clone and no
+contention with `try_reset_for_tail`'s `strong_count == 1` TCO reuse check.
+
+The funnel `submit::add_with_chain` decides the arm: a pointer test
+(`std::ptr::eq(active_frame.scope(), scope)`) routes a frame's-own-child slot to `Yoked`,
+everything else to `Anchored`. The tail sink `NodeStore::reinstall_with_frame` always stores
+`Yoked` — a tail-replace slot's scope is always its own frame's child. Storing the marker
+rather than a fabricated `&'a` keeps the borrow honest across a TCO `try_reset_for_tail`:
+nothing persisted points into the reset arena.
+
+The read boundary hands a slot's scope back on demand, not as a stored free `&'run`:
+[`Scheduler::current_scope`](../src/machine/execute/scheduler.rs) materializes it per use — an
+`Anchored` slot returns its stored run-lived borrow; a `Yoked` slot re-reads from the live
+`active_frame` cart via [`CallArena::scope_bounded`](../src/machine/core/arena.rs), a
+**witness-bounded** brand whose borrow is capped at the `&Rc<CallArena>` receiver (content `'a`
+free, `'a: 'p`). Because the borrow cannot outlive the frame `Rc` it reads from, storing it past
+the frame is a compile error rather than a fabrication; `Scope<'a>` invariance rides structurally
+on the returned `Scope<'a>`, so the brand needs no separate struct. Bodies / finishes / the
+dispatch engine no longer thread a `scope` parameter — they call `current_scope()`; the genuine
+run-scope methods (`add_dispatch` / `add_combine` / `add_catch` / `enter_block` /
+`enter_body_block` / `submit_node`) keep their `&'a Scope` argument.
+
+The post-step loop in `Scheduler::execute` reads the just-finished step's scope through a
+`PostStep` token returned by `exit_slot_step`, derived from the slot's *returned* frame
+(`prev_frame`) rather than the ambient `active_frame` — an in-step invoke can swap the ambient
+frame, so the returned value is the authoritative source. A within-step frame lifetime `'s`
+(`'a: 's`) threads `run_dispatch` → `DispatchCtx` → `BuiltinFn` → `SchedulerHandle`, lifting to
+the run `'a` only at the `lift_kobject` Done boundary.
+
+## Seed-side re-anchor
+
+The MATCH / TRY arm seeds and [`KFunction::invoke`](../src/machine/core/kfunction/invoke.rs)
+bind their `it` / parameters — values whose type carries the caller's `'a`, allocated into the
+frame arena — inside [`CallArena::with_anchored_child`](../src/machine/core/arena.rs), the
+single audited home for that re-anchor. The closure receives the frame's arena re-exposed at a
+free `'a` (the C0-irreducible re-exposure: an `'a`-typed value must land in an `'a`-typed arena,
+and the frame `Rc` the caller holds heap-pins it) and its child scope re-handed through the
+witness-bounded `scope_bounded` brand — so the scope half is *not* fabricated free, only the
+arena half is. This is the sole surviving free re-exposure in the protocol.
+Arm and body statements then dispatch through the framed `SchedulerHandle` methods
+(`add_dispatch_with_chain_in_frame`, `add_dispatch_in_frame`, `add_combine_in_frame`), which
+derive the scope from the active frame and store `Yoked`, so the seed itself persists no
+fabricated `&'a`.
 
 ## Cross-doc context
 

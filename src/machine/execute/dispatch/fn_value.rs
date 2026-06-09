@@ -5,11 +5,11 @@
 
 use std::marker::PhantomData;
 
-use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::kfunction::{KFunction, SchedulerHandle};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::KObject;
 use crate::machine::model::Parseable;
-use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
+use crate::machine::{KError, KErrorKind, NodeId, Resolution};
 
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::apply_callable::{apply_callable, ResolvedCallable};
@@ -65,7 +65,6 @@ impl<'a> FnValueState<'a> {
     pub(super) fn initial(
         ctx: &mut DispatchCtx<'a, '_>,
         expr: KExpression<'a>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
         let head = match &expr.parts[0].value {
@@ -73,8 +72,8 @@ impl<'a> FnValueState<'a> {
             _ => unreachable!("FunctionValueCall shape implies Identifier head"),
         };
         let chain = ctx.chain_deref();
-        match scope.resolve_with_chain(&head, chain) {
-            Resolution::Value(obj) => Self::dispatch_callable_value(ctx, expr, obj, scope, idx),
+        match ctx.current_scope().resolve_with_chain(&head, chain) {
+            Resolution::Value(obj) => Self::dispatch_callable_value(ctx, expr, obj, idx),
             Resolution::Placeholder(producer_id) => {
                 Ok(Self::install_head_park(ctx, producer_id, expr, idx))
             }
@@ -87,7 +86,6 @@ impl<'a> FnValueState<'a> {
     pub(super) fn resume(
         self,
         ctx: &mut DispatchCtx<'a, '_>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
         let FnValueState {
@@ -101,13 +99,13 @@ impl<'a> FnValueState<'a> {
                 head_placeholder.is_none(),
                 "eager_subs and head_placeholder are mutually exclusive",
             );
-            return ctx.resume_eager_subs(track, scope, idx);
+            return ctx.resume_eager_subs(track, idx);
         }
         let track = head_placeholder
             .expect("FunctionValueCall resume is only entered after a track is installed");
         let FnValueHeadPlaceholderTrack { expr, producer, .. } = track;
         let _ = producer;
-        Self::initial(ctx, expr, scope, idx)
+        Self::initial(ctx, expr, idx)
     }
 
     /// Resolve the already-bound head value to a [`ResolvedCallable`] and hand
@@ -120,7 +118,6 @@ impl<'a> FnValueState<'a> {
         ctx: &mut DispatchCtx<'a, '_>,
         expr: KExpression<'a>,
         head_obj: &'a KObject<'a>,
-        scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
         let callable = match head_obj {
@@ -135,7 +132,7 @@ impl<'a> FnValueState<'a> {
                 ))))
             }
         };
-        Ok(apply_callable(ctx, callable, &expr, scope, idx))
+        Ok(apply_callable(ctx, callable, &expr, idx))
     }
 
     fn install_head_park(

@@ -76,10 +76,7 @@ impl KKind {
     /// `OfKind(Tagged)` slot out-specifies an `OfKind(Proper)` sibling.
     pub fn strictly_below(self, other: KKind) -> bool {
         use KKind::*;
-        matches!(
-            (self, other),
-            (Tagged | Newtype | TypeConstructor, Proper)
-        )
+        matches!((self, other), (Tagged | Newtype | TypeConstructor, Proper))
     }
 
     /// Surface keyword rendered in diagnostics and type-name printing.
