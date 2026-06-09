@@ -221,7 +221,7 @@ mod tests {
                     return Some(*f);
                 }
             }
-            current = s.outer;
+            current = s.outer();
         }
         None
     }

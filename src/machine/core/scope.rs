@@ -13,6 +13,7 @@ use super::kerror::{KError, KErrorKind};
 use super::lexical_frame::LexicalFrame;
 use super::pending::PendingQueue;
 use super::scope_id::ScopeId;
+use super::scope_ptr::ScopePtr;
 use crate::machine::core::kfunction::{ArgumentBundle, KFunction, NodeId};
 use crate::machine::model::values::KObject;
 
@@ -43,7 +44,14 @@ impl<'a> KFuture<'a> {
 /// nodes. Writes that hit a borrow conflict route through [`PendingQueue`];
 /// `drain_pending` replays them between dispatch nodes.
 pub struct Scope<'a> {
-    pub outer: Option<&'a Scope<'a>>,
+    /// Lexical parent, stored as a content-branded erased handle ([`ScopePtr`]) rather than a
+    /// plain `&'a Scope<'a>`. Read through the [`Scope::outer`] accessor, which re-hands the
+    /// borrow. The erased representation is the seam the frame re-anchor needs: it lets the
+    /// re-handed parent borrow shorten to the reader's borrow (a frame-bounded child reaching a
+    /// frame-bounded parent) while the scope *content* stays `'a` — `Scope` is invariant in
+    /// `'a`, so only the borrow may shorten, never the content. Today the accessor re-hands at
+    /// the full `'a` (inert); the borrow-shortening flip routes it through `reattach_bounded`.
+    outer: Option<ScopePtr<'a>>,
     /// Direct handle to the run-global [`ScopeKind::Root`] (builtins only, immutable).
     /// `None` iff `self` is the root. Every other scope points straight at it, so a
     /// builtin lookup or the no-shadow consult reaches the root in one hop instead of
@@ -119,7 +127,7 @@ impl<'a> Scope<'a> {
         out: Box<dyn Write + 'a>,
     ) -> Self {
         Self {
-            outer,
+            outer: outer.map(ScopePtr::erase),
             root: None,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(Some(out)),
@@ -139,8 +147,8 @@ impl<'a> Scope<'a> {
     /// not the call site.
     pub fn child_under(outer: &'a Scope<'a>) -> Scope<'a> {
         Scope {
-            outer: Some(outer),
-            root: Some(outer.root.unwrap_or(outer)),
+            outer: Some(ScopePtr::erase(outer)),
+            root: Some(outer.root_scope()),
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -154,8 +162,8 @@ impl<'a> Scope<'a> {
     /// `child_under`, stamped as a SIG decl_scope.
     pub fn child_under_sig(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Scope {
-            outer: Some(outer),
-            root: Some(outer.root.unwrap_or(outer)),
+            outer: Some(ScopePtr::erase(outer)),
+            root: Some(outer.root_scope()),
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -170,8 +178,8 @@ impl<'a> Scope<'a> {
     /// minted by `:|`).
     pub fn child_under_module(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Scope {
-            outer: Some(outer),
-            root: Some(outer.root.unwrap_or(outer)),
+            outer: Some(ScopePtr::erase(outer)),
+            root: Some(outer.root_scope()),
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -188,8 +196,8 @@ impl<'a> Scope<'a> {
     /// parent; the sealed members are mirrored up into it at the block's Combine-finish.
     pub fn child_recursive_group(outer: &'a Scope<'a>, set: Rc<RecursiveSet<'a>>) -> Scope<'a> {
         Scope {
-            outer: Some(outer),
-            root: Some(outer.root.unwrap_or(outer)),
+            outer: Some(ScopePtr::erase(outer)),
+            root: Some(outer.root_scope()),
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -216,8 +224,8 @@ impl<'a> Scope<'a> {
     /// the block (forwarded binds are sound).
     pub fn child_transparent(outer: &'a Scope<'a>, module_bindings: &'a Bindings<'a>) -> Scope<'a> {
         Scope {
-            outer: Some(outer),
-            root: Some(outer.root.unwrap_or(outer)),
+            outer: Some(ScopePtr::erase(outer)),
+            root: Some(outer.root_scope()),
             bindings: ScopeBindings::Borrowed(module_bindings),
             out: RefCell::new(None),
             arena: outer.arena,
@@ -264,17 +272,25 @@ impl<'a> Scope<'a> {
     /// but rootless — the transparent constructor always sets `outer`, so this would
     /// be a construction bug.
     fn write_target(&self) -> &Scope<'a> {
-        self.outer.expect(
+        self.outer().expect(
             "a Borrowed (USING transparent) scope must have an outer call-site to forward \
              writes to",
         )
+    }
+
+    /// The lexical parent, re-handed from the erased [`Scope::outer`] handle. Inert today: it
+    /// re-attaches at the full content `'a` via the safe brand path. The borrow-shortening flip
+    /// narrows the returned borrow to `&self`'s, so a frame-bounded child hands back a
+    /// frame-bounded parent.
+    pub fn outer(&self) -> Option<&'a Scope<'a>> {
+        self.outer.map(|p| p.reattach())
     }
 
     /// Iterate `self` and its `outer` chain. Per-step `RefCell` guards taken inside a
     /// `find_map` / `find` closure drop at the closure boundary, so a deep walk never
     /// accumulates live read borrows.
     pub fn ancestors(&self) -> impl Iterator<Item = &Scope<'a>> {
-        std::iter::once(self).chain(std::iter::successors(self.outer, |s| s.outer))
+        std::iter::once(self).chain(std::iter::successors(self.outer(), |s| s.outer()))
     }
 
     /// The run-global [`ScopeKind::Root`] (builtins only). `self` if it is the root,

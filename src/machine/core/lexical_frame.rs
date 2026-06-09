@@ -94,12 +94,12 @@ pub fn assemble_body_chain<'a>(
     body_index: usize,
 ) -> Rc<LexicalFrame> {
     let mut hits: Vec<(ScopeId, usize)> = Vec::new();
-    let mut current = body_scope.outer;
+    let mut current = body_scope.outer();
     while let Some(s) = current {
         if let Some(index) = call_site_chain.index_for(s.id) {
             hits.push((s.id, index));
         }
-        current = s.outer;
+        current = s.outer();
     }
     // Reverse so the outermost scope ends up at the tail (`parent: None`).
     hits.reverse();

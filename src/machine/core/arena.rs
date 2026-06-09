@@ -679,7 +679,7 @@ mod tests {
         let s3 = frame.scope();
         assert!(std::ptr::eq(s1, s2));
         assert!(std::ptr::eq(s2, s3));
-        assert!(s1.outer.is_some());
+        assert!(s1.outer().is_some());
     }
 
     /// Two-deep chain: dropping the local `outer` handle leaves only `inner.outer_frame`
@@ -693,13 +693,13 @@ mod tests {
         drop(outer);
         let outer_scope = inner
             .scope()
-            .outer
+            .outer()
             .expect("inner.scope().outer must be Some");
         assert!(std::ptr::eq(
             outer_scope.arena,
-            inner.scope().outer.unwrap().arena
+            inner.scope().outer().unwrap().arena
         ));
-        assert!(outer_scope.outer.is_some());
+        assert!(outer_scope.outer().is_some());
     }
 
     /// In-struct Rc must keep the arena alive for a re-anchored `&Scope` stored alongside
@@ -718,7 +718,7 @@ mod tests {
             let s: &Scope<'_> = unsafe { std::mem::transmute::<&Scope<'_>, &Scope<'_>>(f.scope()) };
             Holder { s, _f: f }
         };
-        assert!(h.s.outer.is_some());
+        assert!(h.s.outer().is_some());
     }
 
     /// Allocating mutates `allocated_objects` via `RefCell::borrow_mut` while a prior
@@ -765,7 +765,7 @@ mod tests {
             .bind_value("k".to_string(), v, BindingIndex::BUILTIN)
             .unwrap();
         assert!(matches!(frame.scope().lookup("k"), Some(KObject::Number(n)) if *n == 42.0));
-        assert!(frame.scope().outer.is_some());
+        assert!(frame.scope().outer().is_some());
     }
 
     /// `try_reset_for_tail` must refuse when any other `Rc` to this frame

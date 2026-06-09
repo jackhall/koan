@@ -53,7 +53,7 @@ impl<'a> Scheduler<'a> {
                     match (output, prev_frame) {
                         (NodeOutput::Value(Carried::Object(v)), Some(frame)) => {
                             let dest = scope
-                                .outer
+                                .outer()
                                 .expect("per-call scope must have an outer (its captured scope)")
                                 .arena;
                             let mut lifted_obj = lift_kobject(v, &frame);
@@ -84,7 +84,7 @@ impl<'a> Scheduler<'a> {
                         // unlike the `Object` arm, it does not re-tag.
                         (NodeOutput::Value(Carried::Type(t)), Some(frame)) => {
                             let dest = scope
-                                .outer
+                                .outer()
                                 .expect("per-call scope must have an outer (its captured scope)")
                                 .arena;
                             let lifted_t = lift_ktype(t, &frame);
