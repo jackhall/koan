@@ -289,10 +289,23 @@ impl<'a> Scope<'a> {
     /// `outer` chain. Frame-local bindings (FN parameters, MATCH/TRY `it`) live below
     /// the root, so ordinary user-vs-user cross-scope shadowing is unaffected.
     fn shadows_builtin_type(&self, name: &str) -> bool {
-        self.root_scope()
-            .bindings()
-            .lookup_type(name, None)
-            .is_some()
+        self.root_scope().bindings().has_builtin_type(name)
+    }
+
+    /// True iff `key` names a builtin dispatch bucket — a finalized overload lives
+    /// under it in the run-global root. Builtins are immutable and unshadowable, so a
+    /// user FN/FUNCTOR whose untyped signature key collides with a builtin is a
+    /// `Rebind`; it must never merge into the builtin bucket. The consult reads the
+    /// root directly.
+    fn shadows_builtin_function(&self, key: &crate::machine::model::types::UntypedKey) -> bool {
+        self.root_scope().bindings().has_builtin_function(key)
+    }
+
+    /// True iff `probe` resolves a builtin operator group in the run-global root.
+    /// Operators are builtins too — a user operator over a builtin probe is rejected
+    /// rather than shadowing or extending it.
+    fn shadows_builtin_operator(&self, probe: &str) -> bool {
+        self.root_scope().bindings().has_builtin_operator(probe)
     }
 
     /// True iff the nearest non-`Anonymous` enclosing scope is a SIG decl_scope. A
@@ -362,6 +375,14 @@ impl<'a> Scope<'a> {
             return self
                 .write_target()
                 .register_function(name, fn_ref, obj, index);
+        }
+        // A user overload may not join a builtin's bucket — builtins are immutable and
+        // unshadowable. The root registers its own builtins at `BUILTIN`, so only a
+        // non-`BUILTIN` index is gated.
+        if index != BindingIndex::BUILTIN
+            && self.shadows_builtin_function(&fn_ref.signature.untyped_key())
+        {
+            return Err(KError::new(KErrorKind::Rebind { name }));
         }
         match self
             .bindings
@@ -651,6 +672,11 @@ impl<'a> Scope<'a> {
             return self
                 .write_target()
                 .register_operator_group(probe, group, index);
+        }
+        // Operators are builtins too: a user operator over a builtin probe is a
+        // `Rebind`, never a shadow. The root registers its own at `BUILTIN`.
+        if index != BindingIndex::BUILTIN && self.shadows_builtin_operator(&probe) {
+            return Err(KError::new(KErrorKind::Rebind { name: probe }));
         }
         match self
             .bindings

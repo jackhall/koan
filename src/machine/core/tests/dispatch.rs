@@ -381,7 +381,9 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     use crate::machine::NodeId;
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    // Finalized `(PICK <number>)` overload that strictly Picks.
+    // Finalized `(PICK <number>)` user overload that strictly Picks. Registered at a
+    // user index (not BUILTIN) so the same-bucket sibling below is a legitimate
+    // user-vs-user overload — a builtin bucket admits no user siblings.
     let pick_num = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
@@ -392,7 +394,16 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             }),
         ],
     };
-    register_builtin(scope, "pick_num", pick_num, body_a);
+    let pick_num_fn = arena.alloc_function(KFunction::new(pick_num, Body::Builtin(body_a), scope));
+    let pick_num_obj = arena.alloc_object(KObject::KFunction(pick_num_fn, None));
+    scope
+        .register_function(
+            "pick_num".to_string(),
+            pick_num_fn,
+            pick_num_obj,
+            BindingIndex::value(1),
+        )
+        .expect("register pick_num overload");
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("PICK".into())),
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),

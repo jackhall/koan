@@ -289,6 +289,34 @@ impl<'a> Bindings<'a> {
             .collect()
     }
 
+    /// True iff `types[name]` was registered at [`BindingIndex::BUILTIN`]. The
+    /// no-shadow consult gates on this — a genuine builtin, not a user type that a
+    /// synthetic test happens to have placed in a root-position scope.
+    pub fn has_builtin_type(&self, name: &str) -> bool {
+        self.types
+            .borrow()
+            .get(name)
+            .is_some_and(|(_, idx)| *idx == BindingIndex::BUILTIN)
+    }
+
+    /// True iff `functions[key]` holds an overload registered at
+    /// [`BindingIndex::BUILTIN`] — a genuine builtin dispatch bucket, distinct from a
+    /// user bucket the no-shadow consult must not gate.
+    pub fn has_builtin_function(&self, key: &UntypedKey) -> bool {
+        self.functions
+            .borrow()
+            .get(key)
+            .is_some_and(|bucket| bucket.iter().any(|(_, idx)| *idx == BindingIndex::BUILTIN))
+    }
+
+    /// True iff `operators[probe]` was registered at [`BindingIndex::BUILTIN`].
+    pub fn has_builtin_operator(&self, probe: &str) -> bool {
+        self.operators
+            .borrow()
+            .get(probe)
+            .is_some_and(|(_, idx)| *idx == BindingIndex::BUILTIN)
+    }
+
     /// Visibility predicate: `None` ⇒ everything visible; `Some(c)` ⇒ `b.idx < c`.
     /// Mirrors [`crate::machine::core::scope::visible`].
     fn visible(b: BindingIndex, chain_cutoff: Option<usize>) -> bool {
