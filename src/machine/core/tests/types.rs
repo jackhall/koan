@@ -35,9 +35,11 @@ fn resolve_type_walks_outer_chain_and_returns_none_past_root() {
 fn resolve_type_inner_scope_shadows_outer() {
     let arena = RuntimeArena::new();
     let root = run_root_bare(&arena);
-    root.register_type("Foo".into(), KType::Number, BindingIndex::BUILTIN);
+    // User (non-BUILTIN) types: a builtin is unshadowable and would resolve root-first,
+    // so this exercises the user-vs-user innermost-wins walk.
+    root.register_type("Foo".into(), KType::Number, BindingIndex::value(1));
     let child = arena.alloc_scope(Scope::child_under(root));
-    child.register_type("Foo".into(), KType::Str, BindingIndex::BUILTIN);
+    child.register_type("Foo".into(), KType::Str, BindingIndex::value(1));
     assert!(matches!(child.resolve_type("Foo"), Some(KType::Str)));
     assert!(matches!(root.resolve_type("Foo"), Some(KType::Number)));
 }

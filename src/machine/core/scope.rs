@@ -635,6 +635,14 @@ impl<'a> Scope<'a> {
         name: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<&'a crate::machine::model::types::KType<'a>> {
+        // Builtins are unshadowable, so a builtin type is authoritative: consult the
+        // immutable root in one hop and return it without walking the user chain. The
+        // `idx == 0` gate keeps this to genuine builtins, so a synthetic root-position
+        // user type still resolves by innermost-wins precedence below.
+        let root = self.root_scope();
+        if root.bindings().has_builtin_type(name) {
+            return root.bindings().lookup_type(name, None);
+        }
         self.ancestors().find_map(|scope| {
             let cutoff = chain.and_then(|c| c.index_for(scope.id));
             scope.bindings().lookup_type(name, cutoff)
@@ -651,6 +659,13 @@ impl<'a> Scope<'a> {
         probe: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<&'a crate::machine::model::operators::OperatorGroup> {
+        // A builtin operator group is unshadowable and authoritative — consult the root
+        // in one hop. The `idx == 0` gate keeps synthetic root-position user operators on
+        // the innermost-wins walk below.
+        let root = self.root_scope();
+        if root.bindings().has_builtin_operator(probe) {
+            return root.bindings().lookup_operator_group(probe, None);
+        }
         self.ancestors().find_map(|scope| {
             let cutoff = chain.and_then(|c| c.index_for(scope.id));
             scope.bindings().lookup_operator_group(probe, cutoff)
