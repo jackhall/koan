@@ -45,6 +45,11 @@ pub struct Scheduler<'a> {
     /// Frame Rc of the slot currently being executed. See
     /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
     pub(in crate::machine::execute::scheduler) active_frame: Option<Rc<CallArena>>,
+    /// The run frame: a non-dying [`CallArena`] adopting the top-level run scope, lazily built on
+    /// the first run-lifetime submission. Top-level slots carry it as their `frame` cart, so
+    /// `active_frame` is never `None` during a top-level step and a body's re-dispatch against its
+    /// own scope is uniformly framed (Yoked) at every depth. See [`CallArena::adopting`].
+    pub(in crate::machine::execute::scheduler) run_frame: Option<Rc<CallArena>>,
     /// Lexical chain of the slot currently executing. `Scheduler::add` reads this to attach
     /// a chain to every sub-slot that doesn't carry an explicit `enter_block` chain, so
     /// internal binder sub-dispatches inherit the parent's chain implicitly.
@@ -114,6 +119,7 @@ impl<'a> Scheduler<'a> {
             deps: DepGraph::new(),
             store: NodeStore::new(),
             active_frame: None,
+            run_frame: None,
             active_chain: None,
             active_reserve: None,
             #[cfg(test)]

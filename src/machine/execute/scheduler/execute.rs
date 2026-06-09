@@ -50,6 +50,10 @@ impl<'a> Scheduler<'a> {
             scope.drain_pending();
             match step {
                 NodeStep::Done(output) => {
+                    // A non-dying run frame has nothing to lift (its arena is empty; top-level
+                    // values live in the run arena), so treat it as frameless: the value
+                    // finalizes in place rather than self-cloning into the same arena.
+                    let prev_frame = prev_frame.filter(|f| !f.non_dying());
                     match (output, prev_frame) {
                         (NodeOutput::Value(Carried::Object(v)), Some(frame)) => {
                             let dest = scope
@@ -144,7 +148,11 @@ impl<'a> Scheduler<'a> {
                             // the new reserve). `'a`-anchoring lives in
                             // `reinstall_with_frame`'s SAFETY.
                             drop(post_step_reserve);
-                            let new_reserve = prev_frame;
+                            // The non-dying run frame is not a reusable per-call arena; parking
+                            // it as the ping-pong reserve would defer (and mis-time) a real
+                            // frame's drop. Treat it as no reserve — the run scope is re-reached
+                            // through the scheduler's `run_frame`, never a reset reserve.
+                            let new_reserve = prev_frame.filter(|f| !f.non_dying());
                             self.store.reinstall_with_frame(
                                 id,
                                 f,

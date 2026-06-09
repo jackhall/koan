@@ -1,7 +1,7 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena.rs: 16
+src/machine/core/arena.rs: 17
 src/machine/core/scope_ptr.rs: 6
 src/machine/model/values/module.rs: 1
 -->
@@ -51,7 +51,12 @@ other pins the `Rc<CallArena>` chain keeping an outer arena alive after its loca
 drops. A third pins the witness-bounded sibling `ScopePtr::reattach_bounded` (via
 `CallArena::scope_bounded`), which splits the stored `'static` into a `&self`-bounded borrow
 and a free content lifetime — re-read alongside the unbounded `scope` / `scope_for_bind`
-accessors over the same child scope.
+accessors over the same child scope. `CallArena::adopting` (the scheduler-owned run frame)
+carries the same `&Scope<'_> → &Scope<'static>` erasure as `new`, over the run scope it adopts
+rather than a freshly-minted child; it is built on the first run-lifetime submission, so every
+scheduler-driving slate test below (`module_body_dispatch_does_not_dangle`,
+`recursive_tagged_match_no_uaf`, `lift_park_minimal_program_for_miri`, …) exercises it
+end-to-end — the run scope outlives the frame, so no separate minimal test.
 
 - `call_arena_scope_survives_subsequent_alloc`
 - `call_arena_chained_outer_frame_walkable`
@@ -207,9 +212,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-09: 538.53s — 22 tests, 0 leaks, 0 UB
 - 2026-06-07: 512.75s — 21 tests, 0 leaks, 0 UB
 - 2026-06-07: 515.41s — 21 tests, 0 leaks, 0 UB
 - 2026-06-04: 553.29s — 21 tests, 0 leaks, 0 UB
 - 2026-06-04: 730.21s — 29 tests, 0 leaks, 0 UB
-- 2026-06-04: 729.77s — 29 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

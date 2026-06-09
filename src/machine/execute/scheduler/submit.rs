@@ -156,6 +156,12 @@ impl<'a> Scheduler<'a> {
         scope: &'a Scope<'a>,
         explicit_chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
+        // Establish the run frame on the first run-lifetime submission (top-level run scope),
+        // so every top-level slot carries a frame cart and `active_frame` is never `None` during
+        // a top-level step. Adopts the passed scope without minting a child.
+        if self.run_frame.is_none() {
+            self.run_frame = Some(crate::machine::CallArena::adopting(scope));
+        }
         // Single-cart storage: when this submission runs inside a per-call frame whose own
         // child is the very scope passed, store a payload-less `Yoked` and let the read
         // boundary re-project from the frame cart — no fabricated `&'a` persisted. Any other
@@ -254,7 +260,9 @@ impl<'a> Scheduler<'a> {
         };
         let owned_edges = work_owned_edges(&work);
         let no_owned = owned_edges.is_empty();
-        let frame = self.active_frame.clone();
+        // Top-level submissions (no active frame) fall back to the run frame, so every slot
+        // carries a cart and `active_frame` is `Some` during its step.
+        let frame = self.active_frame.clone().or_else(|| self.run_frame.clone());
         // Stamp the placeholder at the binder's lexical position — the SAME `BindingIndex`
         // the eventual `register_*` call at finalize installs.
         let bind_index_for_placeholder = placeholder_install

@@ -418,6 +418,12 @@ pub struct CallArena {
     arena: RuntimeArena,
     scope_ptr: Option<ScopePtr<'static>>,
     outer_frame: Option<Rc<CallArena>>,
+    /// True only for the scheduler-owned run frame, which carries the top-level run scope and
+    /// never drops mid-run. Its `arena` is empty (top-level values live in the externally-owned
+    /// run arena, reached via `scope.arena`), so there is nothing to lift out of it: the Done
+    /// boundary skips the lift for a non-dying frame (lift exists to rescue values from a *dying*
+    /// per-call arena). Every per-call frame is `false`.
+    non_dying: bool,
 }
 
 impl CallArena {
@@ -430,6 +436,7 @@ impl CallArena {
             arena: RuntimeArena::with_escape(escape),
             scope_ptr: None,
             outer_frame,
+            non_dying: false,
         });
         let arena_ptr: *const RuntimeArena = &rc.arena;
         // SAFETY: heap-pinning keeps `arena_ptr` valid for the Rc's lifetime, which exceeds
@@ -451,6 +458,34 @@ impl CallArena {
             .expect("freshly-constructed Rc has unique ownership")
             .scope_ptr = Some(ScopePtr::erase(allocated));
         rc
+    }
+
+    /// The scheduler-owned **run frame**: a frame that *carries an already-built run scope*
+    /// rather than minting a child. Top-level execution runs against this frame so `active_frame`
+    /// is never `None`, which makes a body's re-dispatch-against-its-own-scope uniformly framed
+    /// (Yoked) at every depth — top level included. The run scope keeps its own (run) arena, so
+    /// this frame's `arena` stays empty and unused; `escape` is `None` (a non-dying top frame has
+    /// nothing to redirect into). Marked `non_dying` so the Done boundary skips the (pointless)
+    /// self-lift of top-level results.
+    ///
+    /// SAFETY: the adopted run scope lives in the externally-owned run arena, which outlives this
+    /// scheduler-owned frame; erasing its borrow to `'static` for storage in `scope_ptr` is the
+    /// same re-anchored-on-read erasure every [`ScopePtr`] carries.
+    pub fn adopting(scope: &Scope<'_>) -> Rc<CallArena> {
+        let scope_static: &'static Scope<'static> =
+            unsafe { std::mem::transmute::<&Scope<'_>, &Scope<'static>>(scope) };
+        Rc::new(CallArena {
+            arena: RuntimeArena::new(),
+            scope_ptr: Some(ScopePtr::erase(scope_static)),
+            outer_frame: None,
+            non_dying: true,
+        })
+    }
+
+    /// True only for the scheduler-owned run frame (see [`Self::adopting`]). The Done boundary
+    /// reads this to skip the self-lift that a never-dying frame would otherwise perform.
+    pub fn non_dying(&self) -> bool {
+        self.non_dying
     }
 
     pub fn scope<'a>(&'a self) -> &'a Scope<'a> {
