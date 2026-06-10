@@ -90,8 +90,9 @@ pub(in crate::machine::execute::scheduler) struct SlotStepGuard<'a> {
 /// and exposes the step scope only through [`Self::step_scope`], which derives it from that frame.
 /// Reading the step scope from ambient scheduler state post-step is thereby unspellable.
 pub(in crate::machine::execute::scheduler) struct PostStep<'a> {
-    /// The slot's frame at step end — `None` if a tail-call took it. The Replace arm reinstalls /
-    /// rotates with it.
+    /// The slot's frame at step end — `None` if a tail-call took it (an unpinned keyworded invoke
+    /// at `keyworded.rs` takes the cart via `try_take_reusable_frame_for_tail` and does not restore
+    /// `active_frame`). The Replace arm reinstalls / rotates with it.
     pub(in crate::machine::execute::scheduler) prev_frame: Option<Rc<CallArena>>,
     /// The slot's reserve frame at step end (see ping-pong reserve rotation).
     pub(in crate::machine::execute::scheduler) post_step_reserve: Option<Rc<CallArena>>,
@@ -139,12 +140,16 @@ impl<'a> Scheduler<'a> {
     /// Restore the values saved by [`Scheduler::enter_slot_step`] and return
     /// `(post_step_frame, post_step_reserve)`.
     ///
-    /// `post_step_frame` is `None` if the step took the frame via
-    /// `try_take_reusable_frame_for_tail`, else the slot's frame.
     /// `post_step_reserve` is normally `None` (consumed by `invoke_to_step_pinned`) but
     /// carries through when the step didn't run an invoke. The Replace arm reads it to
     /// decide rotation: with a new frame, the post-step reserve is two iterations old
     /// and gets dropped; without one, it rides along on the reinstalled node.
+    ///
+    /// This is the single boundary where the "every step runs against a cart" invariant is
+    /// asserted: `active_frame` is `Some` for the whole step (`enter_slot_step` installs the
+    /// node's non-optional cart; the pin/swap in `invoke_to_step_pinned` restores it before any
+    /// step returns), so the `expect` cannot fire. `active_frame` itself stays `Option` because it
+    /// is legitimately `None` *between* steps.
     pub(in crate::machine::execute::scheduler) fn exit_slot_step(
         &mut self,
         guard: SlotStepGuard<'a>,

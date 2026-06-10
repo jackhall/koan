@@ -8,7 +8,7 @@ use crate::machine::{
 };
 
 use super::super::dispatch::DispatchState;
-use super::super::nodes::{work_park_producers, Node, NodeScope, NodeWork};
+use super::super::nodes::{work_park_producers, Frame, Node, NodeScope, NodeWork};
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
@@ -313,8 +313,14 @@ impl<'a> Scheduler<'a> {
         let owned_edges = work_owned_edges(&work);
         let no_owned = owned_edges.is_empty();
         // Top-level submissions (no active frame) fall back to the run frame, so every slot
-        // carries a cart and `active_frame` is `Some` during its step.
-        let frame = self.active_frame.clone().or_else(|| self.run_frame.clone());
+        // carries a cart and `active_frame` is `Some` during its step. `run_frame` is
+        // established by `add_with_chain` before the first submission, so the fallback is
+        // always `Some` — the cart is non-optional node state.
+        let cart = self.active_frame.clone().unwrap_or_else(|| {
+            self.run_frame
+                .clone()
+                .expect("run_frame established by add_with_chain before any submission")
+        });
         // Stamp the placeholder at the binder's lexical position — the SAME `BindingIndex`
         // the eventual `register_*` call at finalize installs.
         let bind_index_for_placeholder = placeholder_install
@@ -334,9 +340,13 @@ impl<'a> Scheduler<'a> {
         let id = self.store.alloc_slot(Node {
             work,
             scope: node_scope,
-            frame,
-            reserve_frame: None,
-            function: None,
+            // A freshly-submitted slot always has a cart (the fallback above); a slot only
+            // becomes frameless later, via a frame-taking reinstall.
+            frame: Some(Frame {
+                cart,
+                reserve: None,
+                contract: None,
+            }),
             chain,
         });
         self.deps.install_for_slot(id, owned_edges, &pending_owned);

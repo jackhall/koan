@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::body::ReturnContract;
+use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::{Carried, KObject, KType};
@@ -139,30 +139,44 @@ pub(super) enum NodeScope<'a> {
     Yoked,
 }
 
+/// A node's per-call frame state: the execution cart, its ping-pong reserve, and the erased
+/// return contract. Lifetime-free — the cart `Rc` pins everything its members point at, and the
+/// contract is erased ([`ErasedContract`]) and re-anchored at the Done read boundary witnessed
+/// by `cart`. A node holds `Some(Frame)` whenever it runs against a cart (the common case — the
+/// cart is the arena the slot's step runs against, falling back to the run frame at top level);
+/// `Node::frame` is `None` only for a genuinely frameless slot — a `Lift` left behind when a
+/// tail-call took the frame into a Combine (deferred-return path). `reserve` and `contract` are
+/// sparse even when a `Frame` is present.
+pub(super) struct Frame {
+    /// The cart this slot's step runs against. Cloned onto every sub-slot dispatched in the same
+    /// body, so it is uniquely owned only at a TCO collapse point (the gate
+    /// `CallArena::try_reset_for_tail` checks). The Rc drops on Done or Replace; its arena drops
+    /// then only if no escaped closure still holds the captured scope. Lexical scoping
+    /// (`KFunction::captured`) makes each per-call child's `outer` the FN's captured scope, so no
+    /// frame holds references a successor frame at the same slot needs — TCO drop is immediate
+    /// with no `prev` chain.
+    pub(super) cart: Rc<CallArena>,
+    /// Per-slot reserve cart for the ping-pong rotation that lets stateful eager-subs resumes
+    /// reuse a `CallArena` across iterations. See
+    /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
+    pub(super) reserve: Option<Rc<CallArena>>,
+    /// Return contract enforced on Done — an FN/builtin call (`Function`) or a MATCH/TRY arm's
+    /// `-> :T` (`Arm`) — erased for lifetime-free storage and re-anchored against `cart` at the
+    /// Done boundary, where it enforces the declared return type and supplies the error-frame
+    /// label. `None` for slots with no declared-return obligation. Set in lockstep with `cart`.
+    ///
+    /// TCO limitation: when A tail-calls B, this is rewritten to B's contract, so the runtime
+    /// return-type check only fires against the tail-most contract. Sound only when intermediate
+    /// frames' types agree — to be enforced statically by the future type-check pass.
+    pub(super) contract: Option<ErasedContract>,
+}
+
 pub(super) struct Node<'a> {
     pub(super) work: NodeWork<'a>,
     pub(super) scope: NodeScope<'a>,
-    /// `Some` only for user-fn body slots. The Rc drops on Done or Replace; the arena
-    /// itself drops then only if no escaped closure still holds the captured scope.
-    /// Lexical scoping (`KFunction::captured`) makes each per-call child's `outer` the
-    /// FN's captured scope, so no frame holds references a successor frame at the same
-    /// slot needs — TCO drop is immediate with no `prev` chain.
-    pub(super) frame: Option<Rc<CallArena>>,
-    /// Per-slot reserve frame for the ping-pong rotation that lets stateful
-    /// eager-subs resumes reuse a `CallArena` across iterations. See
-    /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
-    pub(super) reserve_frame: Option<Rc<CallArena>>,
-    /// Set in lockstep with `frame`. Read on Done to enforce the declared return type
-    /// and to append a `Frame` to errors for the call-stack trace.
-    ///
-    /// Return contract enforced on Done — an FN/builtin call (`Function`) or a
-    /// MATCH/TRY arm's `-> :T` (`Arm`). Also the source of the error-frame label.
-    ///
-    /// TCO limitation: when A tail-calls B, this is rewritten to B's contract, so the
-    /// runtime return-type check only fires against the tail-most contract. Sound only
-    /// when intermediate frames' types agree — to be enforced statically by the future
-    /// type-check pass.
-    pub(super) function: Option<ReturnContract<'a>>,
+    /// The slot's per-call frame state (cart + reserve + erased contract), or `None` for a
+    /// frameless slot — see [`Frame`].
+    pub(super) frame: Option<Frame>,
     /// Immutable cactus-chain naming this node's lexical position. Head frame is the
     /// innermost enclosing block; tail (`parent: None`) is top-level. See
     /// `core/lexical_frame.rs`.

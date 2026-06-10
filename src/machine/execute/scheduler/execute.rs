@@ -1,12 +1,12 @@
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::body::ReturnContract;
+use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::{assemble_body_chain, ScopeId};
 use crate::machine::model::KType;
-use crate::machine::{Frame, KError, KErrorKind, LexicalFrame, NodeId};
+use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 
 use super::super::lift::{lift_kobject, lift_ktype};
-use super::super::nodes::{LiftState, Node, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{Frame, LiftState, Node, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 use crate::machine::model::Carried;
 
@@ -23,14 +23,16 @@ impl<'a> Scheduler<'a> {
             // work or the in-step TCO frame reset.
             let node_scope = node.scope;
             let work = node.work;
-            let prev_function = node.function;
+            let (cart, reserve, prev_contract) = match node.frame {
+                Some(Frame {
+                    cart,
+                    reserve,
+                    contract,
+                }) => (Some(cart), reserve, contract),
+                None => (None, None, None),
+            };
             let prev_chain_carrier = node.chain;
-            let guard = self.enter_slot_step(
-                node.frame,
-                node.reserve_frame,
-                prev_chain_carrier.clone(),
-                node_scope,
-            );
+            let guard = self.enter_slot_step(cart, reserve, prev_chain_carrier.clone(), node_scope);
             let step = match work {
                 NodeWork::Dispatch { expr, state } => {
                     let mut ctx = crate::machine::execute::dispatch::DispatchCtx::new(self);
@@ -60,6 +62,14 @@ impl<'a> Scheduler<'a> {
                     // (empty arena; top-level values live in the run arena) reads as frameless.
                     let dest_arena = post.step_scope().and_then(|s| s.outer().map(|o| o.arena));
                     let frame = post.prev_frame.as_ref().filter(|f| !f.non_dying());
+                    // Re-anchor the erased contract against the step's cart, witnessed by `frame`.
+                    // `compute_done_output` consults the contract only when `frame` is `Some`, so
+                    // gating the re-anchor on the same `frame` keeps the witness present and the
+                    // taken-frame (frameless) case a clean `None`.
+                    let prev_function = match (prev_contract, frame) {
+                        (Some(c), Some(witness)) => Some(unsafe { c.reattach(witness) }),
+                        _ => None,
+                    };
                     let result = compute_done_output(output, frame, dest_arena, prev_function);
                     if matches!(result, NodeOutput::Err(_)) {
                         if let Some(scope) = post.step_scope() {
@@ -77,7 +87,12 @@ impl<'a> Scheduler<'a> {
                 } => {
                     let prev_frame = post.prev_frame;
                     let post_step_reserve = post.post_step_reserve;
-                    let next_function = new_function.or(prev_function);
+                    // Erase the new live contract (if any) for storage, falling back to the prior
+                    // erased contract — the tail-call rewrite that keeps the check pointed at the
+                    // tail-most callee. `compute_replace_chain` reads `new_function` (still live)
+                    // for the chain-shape decision before it is erased.
+                    let next_contract: Option<ErasedContract> =
+                        new_function.map(ErasedContract::erase).or(prev_contract);
                     let new_chain = compute_replace_chain(
                         prev_chain_carrier,
                         block_entry,
@@ -102,19 +117,27 @@ impl<'a> Scheduler<'a> {
                                 f,
                                 new_reserve,
                                 new_work,
-                                next_function,
+                                next_contract,
                                 new_chain,
                             );
                         }
                         None => {
+                            // A frameless Replace keeps the prior cart when there is one; a tail
+                            // that took the frame (e.g. an unpinned keyworded invoke deferring to a
+                            // Combine) leaves `prev_frame` `None`, so the slot becomes frameless.
+                            // When the cart is gone, any contract is moot — a deferred return is
+                            // checked by the Combine, and `compute_done_output` ignores a contract
+                            // on a frameless slot — so dropping it with the `Frame` is sound.
                             self.store.reinstall(
                                 id,
                                 Node {
                                     work: new_work,
                                     scope: node_scope,
-                                    frame: prev_frame,
-                                    reserve_frame: post_step_reserve,
-                                    function: next_function,
+                                    frame: prev_frame.map(|cart| Frame {
+                                        cart,
+                                        reserve: post_step_reserve,
+                                        contract: next_contract,
+                                    }),
                                     chain: new_chain,
                                 },
                             );
@@ -264,7 +287,7 @@ fn compute_done_output<'a>(
                         ReturnContract::Function(f) => f.summarize(),
                         ReturnContract::Arm { kind, .. } => kind.to_string(),
                     };
-                    e.with_frame(Frame::bare(label.clone(), label))
+                    e.with_frame(crate::machine::Frame::bare(label.clone(), label))
                 }
                 None => e,
             };
@@ -302,7 +325,7 @@ fn check_declared_return<'a>(
             expected: declared.name(),
             got: got_name(),
         })
-        .with_frame(Frame::bare(label.clone(), label)));
+        .with_frame(crate::machine::Frame::bare(label.clone(), label)));
     }
     Ok(Some(declared))
 }

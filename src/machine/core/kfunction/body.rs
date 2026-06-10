@@ -48,6 +48,58 @@ pub enum ReturnContract<'a> {
     },
 }
 
+/// A [`ReturnContract`] with its lifetime erased to `'static` for storage on a lifetime-free
+/// node `Frame`. The contract's `&KFunction` / `&KType` point into the cart's frame *outer*
+/// arena (a strict ancestor — see `branch_walk::resolve_arm_return_contract` and
+/// `invoke`'s `tail_with_frame`), which the co-stored `cart: Rc<CallArena>` keeps live via its
+/// `outer_frame` / escape chain. So the cart is the liveness witness: while it is held, the
+/// contract's home arena cannot drop.
+///
+/// This is the single audited owner of the contract erasure, mirroring
+/// [`ScopePtr`](crate::machine::core::scope_ptr::ScopePtr): the lifetime is forgotten for
+/// storage and re-anchored at the Done read boundary, witnessed by the cart. The `Function` /
+/// `Arm` discriminant is readable without a re-anchor ([`Self::is_function`]) for the chain-shape
+/// decision that needs the tag but not the pointee.
+#[derive(Clone, Copy)]
+pub struct ErasedContract {
+    inner: ReturnContract<'static>,
+}
+
+impl ErasedContract {
+    /// Erase a live contract to its storable `'static` form. Safe: forgetting a lifetime for
+    /// storage cannot fabricate one — the value is never *used* at `'static`, only stored, and
+    /// [`Self::reattach`] shortens it back to a cart-witnessed lifetime before any use.
+    pub fn erase(contract: ReturnContract<'_>) -> Self {
+        // SAFETY: `ReturnContract<'a>` and `ReturnContract<'static>` share layout (a lifetime
+        // never changes representation); the erased value is stored, not dereferenced, until
+        // `reattach` re-anchors it.
+        ErasedContract {
+            inner: unsafe {
+                std::mem::transmute::<ReturnContract<'_>, ReturnContract<'static>>(contract)
+            },
+        }
+    }
+
+    /// Re-anchor the contract to a caller-chosen `'a`, witnessed by the cart `Rc` co-stored with
+    /// it on the node's `Frame`. The single fabrication for this carrier — mirrors
+    /// [`CallArena::scope`](crate::machine::core::CallArena::scope)'s unbounded re-attach.
+    ///
+    /// SAFETY: `_witness` is the cart that pins the contract's home arena (a strict ancestor of
+    /// the cart's own frame) for as long as it is held. The caller re-anchors only at the Done
+    /// boundary, holding the cart across the use, so the returned `'a` borrow cannot outlive the
+    /// pointee. `'a` is driven by the return-type annotation (late-bound, like
+    /// `reattach_unbounded`), not a turbofish argument.
+    pub unsafe fn reattach<'a>(self, _witness: &Rc<CallArena>) -> ReturnContract<'a> {
+        std::mem::transmute::<ReturnContract<'static>, ReturnContract<'a>>(self.inner)
+    }
+
+    /// Whether this is a [`ReturnContract::Function`] (vs an `Arm`). Reads the discriminant only
+    /// — no pointer deref — so it needs no cart witness.
+    pub fn is_function(self) -> bool {
+        matches!(self.inner, ReturnContract::Function(_))
+    }
+}
+
 pub enum BodyResult<'a> {
     /// A produced value in the scheduler's two-arm currency: a runtime [`KObject`] or a
     /// type flowing raw. Use [`BodyResult::value`] to wrap an object.
@@ -241,6 +293,35 @@ mod tests {
     use super::*;
     use crate::machine::core::{KError, KErrorKind};
     use crate::machine::model::ast::KExpression;
+
+    /// Miri slate (tree borrows): the [`ErasedContract`] erase → reattach round-trip. `erase`
+    /// forgets the contract's lifetime for storage; `reattach` transmutes it back to a lifetime
+    /// witnessed by the cart `Rc` that pins the contract's home arena. Minimal-shape mirror of the
+    /// transmute pair (body.rs) and its unbounded call site (execute.rs); fails on UB, not values.
+    #[test]
+    fn erased_contract_reattach_roundtrip() {
+        use crate::builtins::default_scope;
+        use crate::machine::core::RuntimeArena;
+
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let cart = CallArena::new(scope, None);
+        // Stands in for a MATCH/TRY arm's `-> :T`, allocated in the cart's own arena.
+        let ret: &KType = cart.arena().alloc_ktype(KType::Str);
+        let erased = ErasedContract::erase(ReturnContract::Arm {
+            ret,
+            kind: "MATCH",
+        });
+        // Reattach witnessed by the cart `Rc`, then read through the re-anchored borrow.
+        let reattached: ReturnContract<'_> = unsafe { erased.reattach(&cart) };
+        match reattached {
+            ReturnContract::Arm { ret, kind } => {
+                assert!(matches!(ret, KType::Str));
+                assert_eq!(kind, "MATCH");
+            }
+            ReturnContract::Function(_) => panic!("expected Arm"),
+        }
+    }
 
     #[test]
     fn err_constructor_wraps_kerror() {

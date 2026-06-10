@@ -15,14 +15,14 @@
 use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::body::ReturnContract;
+use crate::machine::core::kfunction::body::ErasedContract;
 use crate::machine::core::{CallArena, LexicalFrame};
 use crate::machine::model::Carried;
 use crate::machine::model::Parseable;
 use crate::machine::KError;
 use crate::machine::NodeId;
 
-use super::super::nodes::{LiftState, Node, NodeOutput, NodeScope, NodeWork};
+use super::super::nodes::{Frame, LiftState, Node, NodeOutput, NodeScope, NodeWork};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -134,21 +134,23 @@ impl<'a> NodeStore<'a> {
     pub(super) fn reinstall_with_frame(
         &mut self,
         id: NodeId,
-        frame: Rc<CallArena>,
-        reserve_frame: Option<Rc<CallArena>>,
+        cart: Rc<CallArena>,
+        reserve: Option<Rc<CallArena>>,
         work: NodeWork<'a>,
-        function: Option<ReturnContract<'a>>,
+        contract: Option<ErasedContract>,
         chain: Rc<LexicalFrame>,
     ) {
-        // The tail-replace slot's scope is always this `frame`'s own child, so store it as a
+        // The tail-replace slot's scope is always this `cart`'s own child, so store it as a
         // payload-less `NodeScope::Yoked` and let the read boundary re-project it from the
-        // co-located `frame` cart each step — no persisted `&'a` to dangle across a TCO reset.
+        // co-located `cart` each step — no persisted `&'a` to dangle across a TCO reset.
         self.slots[id] = SlotState::PreRun(Node {
             work,
             scope: NodeScope::Yoked,
-            frame: Some(frame),
-            reserve_frame,
-            function,
+            frame: Some(Frame {
+                cart,
+                reserve,
+                contract,
+            }),
             chain,
         });
     }
