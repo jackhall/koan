@@ -26,8 +26,8 @@ enum BinderKey {
     Bucket(crate::machine::model::types::UntypedKey),
 }
 
-fn extract_binder_install<'a, 'step>(
-    expr: &KExpression<'a>,
+fn extract_binder_install<'run, 'step>(
+    expr: &KExpression<'run>,
     scope: &'step Scope<'step>,
 ) -> Option<BinderInstall> {
     let key = expr.untyped_key();
@@ -86,10 +86,10 @@ fn extract_binder_install<'a, 'step>(
     None
 }
 
-impl<'a> Scheduler<'a> {
+impl<'run> Scheduler<'run> {
     /// Submit an unresolved expression for the scheduler to dispatch + execute
     /// against `scope`. The only public way to add work.
-    pub fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
+    pub fn add_dispatch(&mut self, expr: KExpression<'run>, scope: &'run Scope<'run>) -> NodeId {
         self.add(NodeWork::dispatch(expr), scope)
     }
 
@@ -102,8 +102,8 @@ impl<'a> Scheduler<'a> {
         &mut self,
         owned_subs: Vec<NodeId>,
         park_producers: Vec<NodeId>,
-        scope: &'a Scope<'a>,
-        finish: CombineFinish<'a>,
+        scope: &'run Scope<'run>,
+        finish: CombineFinish<'run>,
     ) -> NodeId {
         let park_count = park_producers.len();
         let mut deps = park_producers;
@@ -122,8 +122,8 @@ impl<'a> Scheduler<'a> {
     pub fn add_catch(
         &mut self,
         from: NodeId,
-        scope: &'a Scope<'a>,
-        finish: CatchFinish<'a>,
+        scope: &'run Scope<'run>,
+        finish: CatchFinish<'run>,
     ) -> NodeId {
         self.add(NodeWork::Catch { from, finish }, scope)
     }
@@ -134,8 +134,8 @@ impl<'a> Scheduler<'a> {
     /// submission then reads through to every previously-bound name.
     pub(in crate::machine::execute::scheduler) fn add(
         &mut self,
-        work: NodeWork<'a>,
-        scope: &'a Scope<'a>,
+        work: NodeWork<'run>,
+        scope: &'run Scope<'run>,
     ) -> NodeId {
         if self.active_chain.is_some() {
             self.add_with_chain(work, scope, None)
@@ -152,8 +152,8 @@ impl<'a> Scheduler<'a> {
     /// cart), else `Root` — then hands off to [`Self::submit_node`].
     pub(super) fn add_with_chain(
         &mut self,
-        work: NodeWork<'a>,
-        scope: &'a Scope<'a>,
+        work: NodeWork<'run>,
+        scope: &'run Scope<'run>,
         explicit_chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
         // Establish the run frame on the first run-lifetime submission (top-level run scope),
@@ -164,9 +164,9 @@ impl<'a> Scheduler<'a> {
         }
         // Single-cart storage: when this submission runs inside a per-call frame whose own
         // child is the very scope passed, store a payload-less `Yoked` and let the read
-        // boundary re-project from the frame cart — no fabricated `&'a` persisted. Any other
+        // boundary re-project from the frame cart — no fabricated `&'run` persisted. Any other
         // scope (a run-root scope, or a frame sub-scope the frame does not directly back)
-        // genuinely lives at `'a`, so it stays `Anchored`.
+        // genuinely lives at `'run`, so it stays `Anchored`.
         let node_scope = match &self.active_frame {
             Some(f)
                 if std::ptr::eq(
@@ -182,11 +182,11 @@ impl<'a> Scheduler<'a> {
     }
 
     /// Submit `work` against the executing slot's own [`NodeScope`] handle (`active_node_scope`):
-    /// `Anchored(&'a)` re-uses the genuine run-lived borrow the slot already holds; `Yoked`
+    /// `Anchored(&'run)` re-uses the genuine run-lived borrow the slot already holds; `Yoked`
     /// re-projects from the active frame cart. The transient `scope` for binder-install is the
     /// same handle materialized. Backs the `*_here` methods — the honest
     /// re-dispatch-against-my-own-scope path.
-    pub(super) fn submit_here(&mut self, work: NodeWork<'a>) -> NodeId {
+    pub(super) fn submit_here(&mut self, work: NodeWork<'run>) -> NodeId {
         let node_scope = self
             .active_node_scope
             .expect("a slot step installs active_node_scope before the body submits");
@@ -209,7 +209,7 @@ impl<'a> Scheduler<'a> {
     /// Dispatch `expr` against the executing slot's own scope handle. Inherent sibling of
     /// the `SchedulerHandle::add_dispatch_here` trait method, callable from inherent
     /// scheduler code.
-    pub(in crate::machine::execute) fn dispatch_here(&mut self, expr: KExpression<'a>) -> NodeId {
+    pub(in crate::machine::execute) fn dispatch_here(&mut self, expr: KExpression<'run>) -> NodeId {
         self.submit_here(NodeWork::dispatch(expr))
     }
 
@@ -219,7 +219,7 @@ impl<'a> Scheduler<'a> {
         &mut self,
         owned_subs: Vec<NodeId>,
         park_producers: Vec<NodeId>,
-        finish: CombineFinish<'a>,
+        finish: CombineFinish<'run>,
     ) -> NodeId {
         let park_count = park_producers.len();
         let mut deps = park_producers;
@@ -234,15 +234,15 @@ impl<'a> Scheduler<'a> {
     /// Node-creation core, shared by the run-lifetime [`Self::add_with_chain`] and the framed
     /// [`Self::add_dispatch_with_chain_in_frame`]. `scope` is read only transiently
     /// (binder-install, placeholder install, `pre_subs` recursion) and never retained — the
-    /// node keeps a `NodeScope<'a>` handle, not this borrow — so it is clamped to a `'step`
+    /// node keeps a `NodeScope<'run>` handle, not this borrow — so it is clamped to a `'step`
     /// read: a run scope and a `scope_for_bind` re-projection both shorten into it.
-    /// `node_scope` is the pre-decided slot handle the caller built (`Root` at `'a` for a run
+    /// `node_scope` is the pre-decided slot handle the caller built (`Root` at `'run` for a run
     /// scope, `Yoked` for a framed one).
     pub(super) fn submit_node<'step>(
         &mut self,
-        work: NodeWork<'a>,
+        work: NodeWork<'run>,
         scope: &'step Scope<'step>,
-        node_scope: NodeScope<'a>,
+        node_scope: NodeScope<'run>,
         explicit_chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
         // Compute the chain FIRST so recursive sub-submissions inherit the

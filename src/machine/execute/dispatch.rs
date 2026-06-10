@@ -17,7 +17,7 @@
 //!
 //! State and transitions live with their shape; this file keeps the
 //! cross-shape glue. Every per-shape handler takes a
-//! [`DispatchCtx`] — the typed facade over `&mut Scheduler<'a>` — so the
+//! [`DispatchCtx`] — the typed facade over `&mut Scheduler<'run>` — so the
 //! shape modules never spell scheduler field names.
 
 use crate::machine::core::kfunction::KFunction;
@@ -66,12 +66,12 @@ pub use crate::machine::model::ast::{classify_dispatch_shape, DispatchShape};
 /// Resolve a bare-name `ExpressionPart` (Identifier or leaf Type)
 /// against `scope`. `consumer = Some(idx)` enables the cycle check;
 /// `consumer = None` skips it.
-pub(super) fn resolve_name_part<'a>(
-    scope: &Scope<'a>,
-    part: &ExpressionPart<'a>,
-    scheduler: &Scheduler<'a>,
+pub(super) fn resolve_name_part<'run>(
+    scope: &Scope<'run>,
+    part: &ExpressionPart<'run>,
+    scheduler: &Scheduler<'run>,
     consumer: Option<NodeId>,
-) -> NameOutcome<'a> {
+) -> NameOutcome<'run> {
     let (name, is_type) = match part {
         ExpressionPart::Identifier(n) => (n.as_str(), None),
         ExpressionPart::Type(t) => (t.as_str(), Some(t)),
@@ -108,12 +108,12 @@ pub(super) fn resolve_name_part<'a>(
 /// ready-but-errored producer surfaces its error, a ready-and-bound producer means the
 /// name finalized to a non-shadowing value (`Unbound`), a parking edge that would close a
 /// wake cycle is `Cycle`, and otherwise the name parks on the producer.
-fn disposition_for_producer<'a>(
-    scheduler: &Scheduler<'a>,
+fn disposition_for_producer<'run>(
+    scheduler: &Scheduler<'run>,
     name: &str,
     producer: NodeId,
     consumer: Option<NodeId>,
-) -> NameOutcome<'a> {
+) -> NameOutcome<'run> {
     if scheduler.is_result_ready(producer) {
         match scheduler.read_result(producer) {
             Err(e) => NameOutcome::ProducerErrored(e.clone_for_propagation()),
@@ -128,7 +128,7 @@ fn disposition_for_producer<'a>(
 
 /// Best-effort name extraction for a bare-name `ExpressionPart`,
 /// used to render the `cycle in type alias <name>` deadlock sample.
-pub(super) fn bare_name_of<'a>(part: &ExpressionPart<'a>) -> Option<String> {
+pub(super) fn bare_name_of<'run>(part: &ExpressionPart<'run>) -> Option<String> {
     match part {
         ExpressionPart::Identifier(n) => Some(n.clone()),
         ExpressionPart::Type(t) => Some(t.render()),
@@ -137,19 +137,19 @@ pub(super) fn bare_name_of<'a>(part: &ExpressionPart<'a>) -> Option<String> {
 }
 
 /// One staged submission queued by the keyworded part walk.
-pub(in crate::machine::execute) enum PendingSub<'a> {
+pub(in crate::machine::execute) enum PendingSub<'run> {
     Reuse(NodeId),
-    Dispatch(KExpression<'a>),
-    ListLit(Vec<ExpressionPart<'a>>),
-    DictLit(Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>),
-    RecordLit(Vec<(String, ExpressionPart<'a>)>),
+    Dispatch(KExpression<'run>),
+    ListLit(Vec<ExpressionPart<'run>>),
+    DictLit(Vec<(ExpressionPart<'run>, ExpressionPart<'run>)>),
+    RecordLit(Vec<(String, ExpressionPart<'run>)>),
 }
 
 /// Result of a successful keyworded part walk.
-pub(in crate::machine::execute) struct PartWalkResult<'a> {
-    pub new_parts: Vec<Spanned<ExpressionPart<'a>>>,
+pub(in crate::machine::execute) struct PartWalkResult<'run> {
+    pub new_parts: Vec<Spanned<ExpressionPart<'run>>>,
     pub producers_to_wait: Vec<NodeId>,
-    pub staged_subs: Vec<(usize, PendingSub<'a>)>,
+    pub staged_subs: Vec<(usize, PendingSub<'run>)>,
 }
 
 /// The argument body of a `head (...)` / `head {...}` call, classified by surface shape.
@@ -159,15 +159,15 @@ pub(in crate::machine::execute) struct PartWalkResult<'a> {
 /// - `Positional` — a `(err "x")` paren group: positional construction (tagged unions,
 ///   newtypes). The verb-carrier decides which shape it admits; the mismatched shape
 ///   surfaces a loud `DispatchFailed`.
-pub(super) enum CallBody<'a> {
-    Named(Vec<(String, ExpressionPart<'a>)>),
-    Positional(Vec<Spanned<ExpressionPart<'a>>>),
+pub(super) enum CallBody<'run> {
+    Named(Vec<(String, ExpressionPart<'run>)>),
+    Positional(Vec<Spanned<ExpressionPart<'run>>>),
 }
 
 /// Classify the single body part of a `head (...)` / `head {...}` call from
 /// `expr.parts[1..]`. The body must be exactly one nested-parens (`Positional`) or one
 /// record literal (`Named`); anything else is a non-match.
-pub(super) fn extract_call_body<'a>(expr: &KExpression<'a>) -> Result<CallBody<'a>, KError> {
+pub(super) fn extract_call_body<'run>(expr: &KExpression<'run>) -> Result<CallBody<'run>, KError> {
     match expr.parts[1..].as_ref() {
         [Spanned {
             value: ExpressionPart::RecordLiteral(fields),
@@ -192,7 +192,7 @@ pub(super) const POSITIONAL_ONLY: &str =
     "positional construction takes `(value)`, not a record literal `{name = value}`";
 
 /// Loud non-match for a call body whose surface shape the resolved carrier doesn't admit.
-pub(super) fn body_shape_err<'a>(expr: &KExpression<'a>, reason: &str) -> NodeStep<'a> {
+pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> NodeStep<'run> {
     NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
         expr: expr.summarize(),
         reason: reason.to_string(),
@@ -211,7 +211,7 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<Frame>) -> KError {
 
 /// Shape a dep-error terminal with the `<bind>` surface frame keyed
 /// off `working_expr`.
-pub(super) fn bind_frame_err<'a>(e: &KError, working_expr: &KExpression<'a>) -> NodeStep<'a> {
+pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>) -> NodeStep<'run> {
     let frame = Frame::from_expr("<bind>", working_expr);
     NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
 }
@@ -228,15 +228,15 @@ pub(super) fn bind_frame_err<'a>(e: &KError, working_expr: &KExpression<'a>) -> 
 /// callable, so it resolves them by sub-Dispatch through the same eager-subs
 /// parking/resume path as `Expression` parts. Callers with no committed pick
 /// (the keyworded `Deferred` arm, which re-resolves on finish) pass `&[]`.
-pub(super) fn stage_all_eager_parts<'a>(
-    parts: Vec<Spanned<ExpressionPart<'a>>>,
+pub(super) fn stage_all_eager_parts<'run>(
+    parts: Vec<Spanned<ExpressionPart<'run>>>,
     wrap_indices: &[usize],
 ) -> (
-    Vec<Spanned<ExpressionPart<'a>>>,
-    Vec<(usize, PendingSub<'a>)>,
+    Vec<Spanned<ExpressionPart<'run>>>,
+    Vec<(usize, PendingSub<'run>)>,
 ) {
-    let mut new_parts: Vec<Spanned<ExpressionPart<'a>>> = Vec::with_capacity(parts.len());
-    let mut staged: Vec<(usize, PendingSub<'a>)> = Vec::new();
+    let mut new_parts: Vec<Spanned<ExpressionPart<'run>>> = Vec::with_capacity(parts.len());
+    let mut staged: Vec<(usize, PendingSub<'run>)> = Vec::new();
     for (i, part) in parts.into_iter().enumerate() {
         let span = part.span;
         if wrap_indices.contains(&i) {
@@ -287,10 +287,10 @@ pub(super) fn stage_all_eager_parts<'a>(
 }
 
 /// Outcome of [`DispatchCtx::install_eager_subs`].
-pub(in crate::machine::execute::dispatch) enum EagerSubsInstall<'a> {
-    AllInline(KExpression<'a>),
-    Parked(EagerSubsTrack<'a>),
-    DepError(NodeStep<'a>),
+pub(in crate::machine::execute::dispatch) enum EagerSubsInstall<'run> {
+    AllInline(KExpression<'run>),
+    Parked(EagerSubsTrack<'run>),
+    DepError(NodeStep<'run>),
 }
 
 // ---------- State carrier ----------
@@ -311,8 +311,8 @@ pub(in crate::machine::execute) struct Initialized {
 /// the slot index in `working_expr.parts` to splice into at track
 /// completion plus the sub NodeId (the Owned dep this slot installed
 /// at park-install time).
-pub(in crate::machine::execute) struct EagerSubsTrack<'a> {
-    pub(in crate::machine::execute) working_expr: KExpression<'a>,
+pub(in crate::machine::execute) struct EagerSubsTrack<'run> {
+    pub(in crate::machine::execute) working_expr: KExpression<'run>,
     pub(in crate::machine::execute) subs: Vec<(usize, NodeId)>,
     /// `Some(f)` is the FunctionValueCall install; resume binds `f`
     /// directly. `None` is the Keyworded install; resume re-runs
@@ -320,12 +320,12 @@ pub(in crate::machine::execute) struct EagerSubsTrack<'a> {
     /// an element-typed `Future(_)` revealed by an eager sub surfaces
     /// as `DispatchFailed` (non-match) rather than a bind-time
     /// `TypeMismatch`.
-    pub(in crate::machine::execute) picked: Option<&'a KFunction<'a>>,
+    pub(in crate::machine::execute) picked: Option<&'run KFunction<'run>>,
 }
 
-impl<'a> EagerSubsTrack<'a> {
+impl<'run> EagerSubsTrack<'run> {
     pub(in crate::machine::execute) fn keyworded(
-        working_expr: KExpression<'a>,
+        working_expr: KExpression<'run>,
         subs: Vec<(usize, NodeId)>,
     ) -> Self {
         Self {
@@ -341,22 +341,22 @@ impl<'a> EagerSubsTrack<'a> {
 /// boxed because each carries multiple independent `Option<Track>`
 /// fields; inlining would push every `DispatchState`-carrying type
 /// past clippy's `large_enum_variant` threshold.
-pub(in crate::machine::execute) enum DispatchState<'a> {
+pub(in crate::machine::execute) enum DispatchState<'run> {
     Initialized(Initialized),
-    BareTypeLeaf(BareTypeState<'a>),
+    BareTypeLeaf(BareTypeState<'run>),
     /// Boxed for the same reason as `Keyworded` / `FunctionValueCall`: the
     /// `CtorState` carries an eager-subs `CtorTrack` (schemas, staged values) or a
     /// head-placeholder `KExpression`, either of which would push the by-value
     /// `DispatchState` past clippy's `large_enum_variant` threshold.
-    TypeCall(Box<CtorState<'a>>),
-    FunctionValueCall(Box<FnValueState<'a>>),
+    TypeCall(Box<CtorState<'run>>),
+    FunctionValueCall(Box<FnValueState<'run>>),
     /// Shared by the `HeadDeferred` and `TypeHeadDeferred` shapes; the state's
     /// `type_only` flag selects the admitted-arm set on resume.
-    HeadDeferred(Box<HeadDeferredState<'a>>),
-    Keyworded(Box<KeywordedState<'a>>),
+    HeadDeferred(Box<HeadDeferredState<'run>>),
+    Keyworded(Box<KeywordedState<'run>>),
 }
 
-impl<'a> DispatchState<'a> {
+impl<'run> DispatchState<'run> {
     /// Construct the universal birth state. Every submission and
     /// re-park site goes through this constructor so `pre_subs` is the
     /// only field any caller names.
@@ -369,7 +369,7 @@ impl<'a> DispatchState<'a> {
     /// `NodeWork::Dispatch.expr` to an empty placeholder on park, so
     /// the drain-end deadlock summary needs this fallback to render a
     /// parked sample.
-    pub(in crate::machine::execute) fn parked_carrier_expr(&self) -> Option<&KExpression<'a>> {
+    pub(in crate::machine::execute) fn parked_carrier_expr(&self) -> Option<&KExpression<'run>> {
         match self {
             DispatchState::Keyworded(ks) => ks.track.as_ref().map(|t| t.carrier_expr()),
             DispatchState::FunctionValueCall(fs) => {
@@ -393,12 +393,12 @@ impl<'a> DispatchState<'a> {
 /// single-producer-park) in one poll; only `Keyworded` and
 /// `FunctionValueCall` carry tracks that can re-enter via the resume
 /// arms.
-pub(in crate::machine::execute) fn run_dispatch<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
-    expr: KExpression<'a>,
-    state: DispatchState<'a>,
+pub(in crate::machine::execute) fn run_dispatch<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    expr: KExpression<'run>,
+    state: DispatchState<'run>,
     idx: usize,
-) -> Result<NodeStep<'a>, KError> {
+) -> Result<NodeStep<'run>, KError> {
     let _wakes = ctx.take_recent_wakes(NodeId(idx));
     let init = match state {
         DispatchState::Initialized(i) => i,

@@ -5,7 +5,7 @@ use super::super::dispatch::propagate_dep_error;
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 
-impl<'a> Scheduler<'a> {
+impl<'run> Scheduler<'run> {
     /// Success-path eager free; the error path leaves deps for chain-free
     /// at slot drop. Inv-B is what makes `dep_edges[idx].clear()` sound
     /// here — see [design/execution-model.md § Dependency graph invariants](../../../../design/execution-model.md#dependency-graph-invariants).
@@ -24,9 +24,9 @@ impl<'a> Scheduler<'a> {
         &mut self,
         deps: Vec<NodeId>,
         park_count: usize,
-        finish: CombineFinish<'a>,
+        finish: CombineFinish<'run>,
         idx: usize,
-    ) -> NodeStep<'a> {
+    ) -> NodeStep<'run> {
         // The finish closure carries its own framing (e.g. "<list>", "<dict>");
         // this generic frame is used only for dep-error propagation.
         let make_frame = || Frame::bare("<combine>", "combine");
@@ -38,7 +38,7 @@ impl<'a> Scheduler<'a> {
         // Pre-collect carriers so `finish` (which takes `&mut self`) doesn't reborrow for
         // reads. A type-resolving dep arrives as `Carried::Type`; the finish closure
         // narrows each arm it expects.
-        let values: Vec<Carried<'a>> = deps.iter().map(|d| self.read(*d)).collect();
+        let values: Vec<Carried<'run>> = deps.iter().map(|d| self.read(*d)).collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
         let body = finish(self, &values);
         self.reclaim_deps(idx, owned_indices);
@@ -48,7 +48,7 @@ impl<'a> Scheduler<'a> {
     /// Map a finished `BodyResult` to its `NodeStep`, shared by Combine and Catch:
     /// a value/error completes the node, a `Tail` replaces it with a fresh dispatch,
     /// and a `DeferTo` parks on the named lift. Callers free their deps first.
-    fn dispatch_body_result(&mut self, body: BodyResult<'a>, idx: usize) -> NodeStep<'a> {
+    fn dispatch_body_result(&mut self, body: BodyResult<'run>, idx: usize) -> NodeStep<'run> {
         match body {
             BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
             BodyResult::Tail {
@@ -74,10 +74,10 @@ impl<'a> Scheduler<'a> {
     pub(super) fn run_catch(
         &mut self,
         from: NodeId,
-        finish: CatchFinish<'a>,
+        finish: CatchFinish<'run>,
         idx: usize,
-    ) -> NodeStep<'a> {
-        let result: Result<&'a KObject<'a>, KError> = match self.read_result(from) {
+    ) -> NodeStep<'run> {
+        let result: Result<&'run KObject<'run>, KError> = match self.read_result(from) {
             Ok(v) => Ok(v.object()),
             // Frameless: the recovery-site dispatch attaches its own frame; adding
             // one here would double-frame.
@@ -92,7 +92,7 @@ impl<'a> Scheduler<'a> {
     /// transitioned `Pending → Ready`; the `Pending` arm is a wake-misfire
     /// panic. See [design/execution-model.md § Lift: push/notify single-producer
     /// model](../../../../design/execution-model.md#lift-pushnotify-single-producer-model).
-    pub(super) fn run_lift(state: LiftState<'a>) -> NodeOutput<'a> {
+    pub(super) fn run_lift(state: LiftState<'run>) -> NodeOutput<'run> {
         match state {
             LiftState::Ready(output) => output,
             LiftState::Pending(_) => {

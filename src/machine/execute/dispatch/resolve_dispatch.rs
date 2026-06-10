@@ -25,8 +25,8 @@ use crate::machine::NodeId;
 /// non-bare-name parts) and consumed by strict admission and the relaxed pass.
 /// `Cycle` and `ProducerErrored` are short-circuited upfront and treated as
 /// defensive rejects here.
-pub enum NameOutcome<'a> {
-    Resolved(Carried<'a>),
+pub enum NameOutcome<'run> {
+    Resolved(Carried<'run>),
     Parked(NodeId),
     ProducerErrored(KError),
     Unbound(String),
@@ -55,8 +55,8 @@ pub fn reset_resolve_dispatch_entry_count() {
 /// for auto-wrap, replay-park, and eager-sub scheduling. Sole carrier of the
 /// disjoint `(eager_indices | wrap_indices | ref_name_indices)` invariant from
 /// [`crate::machine::core::kfunction::ClassifiedSlots`].
-pub struct Resolved<'a> {
-    pub function: &'a KFunction<'a>,
+pub struct Resolved<'run> {
+    pub function: &'run KFunction<'run>,
     pub placeholder_name: Option<String>,
     /// `Some(_)` only for binder builtins whose body registers a callable
     /// function (FN, FUNCTOR): holds the inner-call bucket key so a sibling
@@ -65,8 +65,8 @@ pub struct Resolved<'a> {
     pub slots: ClassifiedSlots,
 }
 
-pub enum ResolveOutcome<'a> {
-    Resolved(Resolved<'a>),
+pub enum ResolveOutcome<'run> {
+    Resolved(Resolved<'run>),
     Ambiguous(usize),
     Deferred,
     /// Park on forward-reference placeholders (or an in-flight sibling
@@ -81,7 +81,7 @@ pub enum ResolveOutcome<'a> {
     Unmatched,
 }
 
-impl<'a> Scope<'a> {
+impl<'run> Scope<'run> {
     /// Chain-gated, cache-driven dispatch resolution.
     ///
     /// Each candidate is filtered against the visibility predicate before
@@ -97,10 +97,10 @@ impl<'a> Scope<'a> {
     /// still strict-Pick the bare name as an `:Identifier` / `:Any` slot.
     pub fn resolve_dispatch(
         &self,
-        expr: &KExpression<'a>,
+        expr: &KExpression<'run>,
         chain: Option<&LexicalFrame>,
-        bare_outcomes: &[Option<NameOutcome<'a>>],
-    ) -> ResolveOutcome<'a> {
+        bare_outcomes: &[Option<NameOutcome<'run>>],
+    ) -> ResolveOutcome<'run> {
         #[cfg(test)]
         RESOLVE_DISPATCH_ENTRIES.with(|c| c.set(c.get() + 1));
         let key = expr.untyped_key();
@@ -145,8 +145,8 @@ impl<'a> Scope<'a> {
 /// `DeadLean` records an unbound bare-name blocker without terminating (an
 /// outer scope may strict-Pick the bare name); `Continue` means this scope
 /// raised nothing.
-enum ScopeDecision<'a> {
-    Terminal(ResolveOutcome<'a>),
+enum ScopeDecision<'run> {
+    Terminal(ResolveOutcome<'run>),
     DeadLean(String),
     Continue,
 }
@@ -162,11 +162,11 @@ enum ScopeDecision<'a> {
 /// 3. A strict-Empty bucket runs the relaxed pass: leaned-parked ⇒ park,
 ///    else leaned-eager ⇒ defer, else leaned-dead ⇒ `DeadLean` (continue),
 ///    else `Continue`.
-fn decide_scope<'a>(
-    lookup: &FunctionLookup<'a>,
-    expr: &KExpression<'a>,
-    bare_outcomes: &[Option<NameOutcome<'a>>],
-) -> ScopeDecision<'a> {
+fn decide_scope<'run>(
+    lookup: &FunctionLookup<'run>,
+    expr: &KExpression<'run>,
+    bare_outcomes: &[Option<NameOutcome<'run>>],
+) -> ScopeDecision<'run> {
     let bucket = OverloadBucket {
         candidates: &lookup.overloads,
     };
@@ -206,11 +206,11 @@ fn decide_scope<'a>(
 /// it never parks, since an unbound name never arrives. A candidate that rejects
 /// on a hard already-resolved /
 /// literal / keyword slot does not admit even relaxed and contributes nothing.
-fn decide_relaxed<'a>(
-    bucket: &OverloadBucket<'a, '_>,
-    expr: &KExpression<'a>,
-    bare_outcomes: &[Option<NameOutcome<'a>>],
-) -> ScopeDecision<'a> {
+fn decide_relaxed<'run>(
+    bucket: &OverloadBucket<'run, '_>,
+    expr: &KExpression<'run>,
+    bare_outcomes: &[Option<NameOutcome<'run>>],
+) -> ScopeDecision<'run> {
     let mut parked: Vec<NodeId> = Vec::new();
     let mut any_eager_lean = false;
     let mut dead_name: Option<String> = None;
@@ -248,17 +248,17 @@ fn decide_relaxed<'a>(
 
 /// View over a single scope's visibility-pre-filtered overload bucket.
 /// Encapsulates the filter-then-[`ExpressionSignature::most_specific`] dance.
-struct OverloadBucket<'a, 'b> {
-    candidates: &'b [&'a KFunction<'a>],
+struct OverloadBucket<'run, 'b> {
+    candidates: &'b [&'run KFunction<'run>],
 }
 
-impl<'a> OverloadBucket<'a, '_> {
+impl<'run> OverloadBucket<'run, '_> {
     fn pick_strict(
         &self,
-        expr: &KExpression<'a>,
-        bare_outcomes: &[Option<NameOutcome<'a>>],
-    ) -> PickPass<'a> {
-        let survivors: Vec<&'a KFunction<'a>> = self
+        expr: &KExpression<'run>,
+        bare_outcomes: &[Option<NameOutcome<'run>>],
+    ) -> PickPass<'run> {
+        let survivors: Vec<&'run KFunction<'run>> = self
             .candidates
             .iter()
             .copied()
@@ -277,8 +277,8 @@ impl<'a> OverloadBucket<'a, '_> {
     /// full resolution.
     fn relaxed_parked_producers(
         &self,
-        expr: &KExpression<'a>,
-        bare_outcomes: &[Option<NameOutcome<'a>>],
+        expr: &KExpression<'run>,
+        bare_outcomes: &[Option<NameOutcome<'run>>],
     ) -> Vec<NodeId> {
         let mut producers: Vec<NodeId> = Vec::new();
         for f in self.candidates.iter() {
@@ -299,8 +299,8 @@ impl<'a> OverloadBucket<'a, '_> {
 
 /// Policy-free outcome of one filter→`most_specific` pass; the `Tie` →
 /// `Ambiguous` / `Deferred` translation lives at the call site.
-enum PickPass<'a> {
-    Picked(&'a KFunction<'a>),
+enum PickPass<'run> {
+    Picked(&'run KFunction<'run>),
     Tie(usize),
     Empty,
 }
@@ -317,10 +317,10 @@ enum Lean {
 
 /// Strict admission against the `bare_outcomes` cache. Rule table at
 /// [design/typing/elaboration.md § Strict admission rules](../../../../design/typing/elaboration.md#strict-admission-rules).
-fn signature_admits_strict<'a>(
-    sig: &ExpressionSignature<'a>,
-    expr: &KExpression<'a>,
-    bare_outcomes: &[Option<NameOutcome<'a>>],
+fn signature_admits_strict<'run>(
+    sig: &ExpressionSignature<'run>,
+    expr: &KExpression<'run>,
+    bare_outcomes: &[Option<NameOutcome<'run>>],
 ) -> bool {
     if sig.elements.len() != expr.parts.len() {
         return false;
@@ -349,10 +349,10 @@ fn signature_admits_strict<'a>(
 /// One per-candidate pass names every leaned-on kind — which arriving (`Eager` /
 /// `Parked`) slots, and any `Dead` blocker — so the caller decides park / defer /
 /// unbound at the scope rather than re-deriving it.
-fn relaxed_admits<'a>(
-    sig: &ExpressionSignature<'a>,
-    expr: &KExpression<'a>,
-    bare_outcomes: &[Option<NameOutcome<'a>>],
+fn relaxed_admits<'run>(
+    sig: &ExpressionSignature<'run>,
+    expr: &KExpression<'run>,
+    bare_outcomes: &[Option<NameOutcome<'run>>],
 ) -> Option<Vec<Lean>> {
     if sig.elements.len() != expr.parts.len() {
         return None;
@@ -401,12 +401,12 @@ fn has_lazy_kexpr_slot(sig: &ExpressionSignature<'_>, expr: &KExpression<'_>) ->
 /// Per-slot strict admission — the element walk body of
 /// [`signature_admits_strict`] and the per-slot gate the relaxed pass leans on
 /// when it rejects.
-fn slot_admits_strict<'a>(
-    el: &SignatureElement<'a>,
-    part_value: &ExpressionPart<'a>,
+fn slot_admits_strict<'run>(
+    el: &SignatureElement<'run>,
+    part_value: &ExpressionPart<'run>,
     i: usize,
     has_lazy_kexpr_slot: bool,
-    bare_outcomes: &[Option<NameOutcome<'a>>],
+    bare_outcomes: &[Option<NameOutcome<'run>>],
 ) -> bool {
     match (el, part_value) {
         (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
@@ -494,7 +494,7 @@ fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
 
 /// Sole producer of the embedded `slots`; disjointness lives in
 /// [`KFunction::classify_for_pick`].
-fn build_resolved<'a>(picked: &'a KFunction<'a>, expr: &KExpression<'a>) -> Resolved<'a> {
+fn build_resolved<'run>(picked: &'run KFunction<'run>, expr: &KExpression<'run>) -> Resolved<'run> {
     Resolved {
         function: picked,
         placeholder_name: picked.binder_name.and_then(|extractor| extractor(expr)),

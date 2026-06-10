@@ -13,7 +13,7 @@ use crate::machine::{RuntimeArena, SchedulerHandle};
 use super::super::Scheduler;
 use super::let_expr;
 
-fn lit<'a>(name: &str) -> KExpression<'a> {
+fn lit<'run>(name: &str) -> KExpression<'run> {
     KExpression::new(vec![Spanned::bare(ExpressionPart::Keyword(name.into()))])
 }
 

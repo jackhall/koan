@@ -16,10 +16,10 @@ use super::{
     EagerSubsTrack, Initialized, PartWalkResult, PendingSub,
 };
 
-pub(in crate::machine::execute) struct KeywordedState<'a> {
+pub(in crate::machine::execute) struct KeywordedState<'run> {
     pub(in crate::machine::execute) init: Initialized,
     /// `None` on initial entry; `Some` once the slot has parked.
-    pub(in crate::machine::execute) track: Option<ParkTrack<'a>>,
+    pub(in crate::machine::execute) track: Option<ParkTrack<'run>>,
 }
 
 /// Park reason for a `Keyworded` slot. Variants are mutually exclusive
@@ -28,16 +28,16 @@ pub(in crate::machine::execute) struct KeywordedState<'a> {
 /// producers (`BareName`) or stages eager subs (`EagerSubs`). The
 /// bare-name park must be installed *before* staging any subs — submitting
 /// would leak nodes on the re-Dispatch wake path.
-pub(in crate::machine::execute) enum ParkTrack<'a> {
-    Overload(OverloadParkTrack<'a>),
-    BareName(BareNameParkTrack<'a>),
-    EagerSubs(EagerSubsTrack<'a>),
+pub(in crate::machine::execute) enum ParkTrack<'run> {
+    Overload(OverloadParkTrack<'run>),
+    BareName(BareNameParkTrack<'run>),
+    EagerSubs(EagerSubsTrack<'run>),
 }
 
-impl<'a> ParkTrack<'a> {
+impl<'run> ParkTrack<'run> {
     /// Working expression carried by the track, for drain-end
     /// cycle-detection sample rendering.
-    pub(in crate::machine::execute) fn carrier_expr(&self) -> &KExpression<'a> {
+    pub(in crate::machine::execute) fn carrier_expr(&self) -> &KExpression<'run> {
         match self {
             ParkTrack::Overload(t) => &t.expr,
             ParkTrack::BareName(t) => &t.working_expr,
@@ -50,13 +50,13 @@ impl<'a> ParkTrack<'a> {
 /// partly spliced — Resolved wrap slots already substituted for
 /// `Future(obj)`; Parked wrap and ref-name slots keep their original
 /// bare-name token — so resume re-runs `initial` against it.
-pub(in crate::machine::execute) struct BareNameParkTrack<'a> {
-    pub(in crate::machine::execute) working_expr: KExpression<'a>,
-    _ph: PhantomData<&'a KFunction<'a>>,
+pub(in crate::machine::execute) struct BareNameParkTrack<'run> {
+    pub(in crate::machine::execute) working_expr: KExpression<'run>,
+    _ph: PhantomData<&'run KFunction<'run>>,
 }
 
-impl<'a> BareNameParkTrack<'a> {
-    pub(in crate::machine::execute) fn new(working_expr: KExpression<'a>) -> Self {
+impl<'run> BareNameParkTrack<'run> {
+    pub(in crate::machine::execute) fn new(working_expr: KExpression<'run>) -> Self {
         Self {
             working_expr,
             _ph: PhantomData,
@@ -67,13 +67,13 @@ impl<'a> BareNameParkTrack<'a> {
 /// Track for forward-reference overload-producer parks. Carries the
 /// *original* `expr` — no splice has happened yet — so resume hands it
 /// straight back to `initial`.
-pub(in crate::machine::execute) struct OverloadParkTrack<'a> {
-    pub(in crate::machine::execute) expr: KExpression<'a>,
-    _ph: PhantomData<&'a KFunction<'a>>,
+pub(in crate::machine::execute) struct OverloadParkTrack<'run> {
+    pub(in crate::machine::execute) expr: KExpression<'run>,
+    _ph: PhantomData<&'run KFunction<'run>>,
 }
 
-impl<'a> OverloadParkTrack<'a> {
-    pub(in crate::machine::execute) fn new(expr: KExpression<'a>) -> Self {
+impl<'run> OverloadParkTrack<'run> {
+    pub(in crate::machine::execute) fn new(expr: KExpression<'run>) -> Self {
         Self {
             expr,
             _ph: PhantomData,
@@ -81,14 +81,14 @@ impl<'a> OverloadParkTrack<'a> {
     }
 }
 
-impl<'a> KeywordedState<'a> {
+impl<'run> KeywordedState<'run> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
         Self { init, track: None }
     }
 
     pub(in crate::machine::execute) fn with_eager_subs(
         init: Initialized,
-        track: EagerSubsTrack<'a>,
+        track: EagerSubsTrack<'run>,
     ) -> Self {
         Self {
             init,
@@ -98,7 +98,7 @@ impl<'a> KeywordedState<'a> {
 
     pub(in crate::machine::execute) fn with_bare_name_park(
         init: Initialized,
-        track: BareNameParkTrack<'a>,
+        track: BareNameParkTrack<'run>,
     ) -> Self {
         Self {
             init,
@@ -108,7 +108,7 @@ impl<'a> KeywordedState<'a> {
 
     pub(in crate::machine::execute) fn with_overload_park(
         init: Initialized,
-        track: OverloadParkTrack<'a>,
+        track: OverloadParkTrack<'run>,
     ) -> Self {
         Self {
             init,
@@ -120,11 +120,11 @@ impl<'a> KeywordedState<'a> {
     /// terminates inline; all other outcomes install a `ParkTrack` and
     /// re-enter through [`Self::resume`].
     pub(super) fn initial(
-        ctx: &mut DispatchCtx<'a, '_>,
-        expr: KExpression<'a>,
+        ctx: &mut DispatchCtx<'run, '_>,
+        expr: KExpression<'run>,
         pre_subs: Vec<(usize, NodeId)>,
         idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
+    ) -> Result<NodeStep<'run>, KError> {
         let bare_outcomes = ctx.build_bare_outcomes(&expr.parts);
         // A bare-name arg whose producer already errored can never resolve.
         for outcome in bare_outcomes.iter().flatten() {
@@ -235,9 +235,9 @@ impl<'a> KeywordedState<'a> {
     /// Resume entry, dispatched on the installed `ParkTrack` variant.
     pub(super) fn resume(
         self,
-        ctx: &mut DispatchCtx<'a, '_>,
+        ctx: &mut DispatchCtx<'run, '_>,
         idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
+    ) -> Result<NodeStep<'run>, KError> {
         let KeywordedState { init, track } = self;
         let track = track.expect("Keyworded resume is only entered after a track is installed");
         match track {
@@ -254,10 +254,10 @@ impl<'a> KeywordedState<'a> {
     /// Re-resolve dispatch against the (now fully spliced) `working_expr`
     /// after eager subs complete.
     pub(super) fn finish(
-        ctx: &mut DispatchCtx<'a, '_>,
-        working_expr: KExpression<'a>,
+        ctx: &mut DispatchCtx<'run, '_>,
+        working_expr: KExpression<'run>,
         idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
+    ) -> Result<NodeStep<'run>, KError> {
         match ctx
             .current_scope()
             .resolve_dispatch(&working_expr, ctx.chain_deref(), &[])
@@ -292,12 +292,12 @@ impl<'a> KeywordedState<'a> {
     /// `single_poll::type_call`, which reuses this path for
     /// forward-reference type-binder parks.
     pub(in crate::machine::execute::dispatch) fn install_overload_park(
-        ctx: &mut DispatchCtx<'a, '_>,
+        ctx: &mut DispatchCtx<'run, '_>,
         producers: Vec<NodeId>,
-        expr: KExpression<'a>,
+        expr: KExpression<'run>,
         pre_subs: Vec<(usize, NodeId)>,
         idx: usize,
-    ) -> NodeStep<'a> {
+    ) -> NodeStep<'run> {
         let mut to_wait: Vec<NodeId> = Vec::new();
         for p in producers {
             if ctx.is_result_ready(p) {
@@ -328,10 +328,10 @@ impl<'a> KeywordedState<'a> {
     /// `ResolveOutcome::Deferred` arm: stage every eager part and park
     /// on them, with no speculative function pick captured.
     fn install_eager_only(
-        ctx: &mut DispatchCtx<'a, '_>,
-        expr: KExpression<'a>,
+        ctx: &mut DispatchCtx<'run, '_>,
+        expr: KExpression<'run>,
         idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
+    ) -> Result<NodeStep<'run>, KError> {
         // Deferred arm: no committed pick yet (resume re-resolves on finish), so no
         // bare-name slots to pre-resolve here.
         let (new_parts, staged_subs) = super::stage_all_eager_parts(expr.parts, &[]);
@@ -345,12 +345,12 @@ impl<'a> KeywordedState<'a> {
     }
 
     fn install_bare_name_park(
-        ctx: &mut DispatchCtx<'a, '_>,
+        ctx: &mut DispatchCtx<'run, '_>,
         producers: Vec<NodeId>,
-        working_expr: KExpression<'a>,
+        working_expr: KExpression<'run>,
         pre_subs: Vec<(usize, NodeId)>,
         idx: usize,
-    ) -> NodeStep<'a> {
+    ) -> NodeStep<'run> {
         for p in &producers {
             ctx.add_park_edge(*p, NodeId(idx));
         }
@@ -362,12 +362,12 @@ impl<'a> KeywordedState<'a> {
     }
 
     fn install_eager_subs_track(
-        ctx: &mut DispatchCtx<'a, '_>,
-        working_expr: KExpression<'a>,
-        staged_subs: Vec<(usize, PendingSub<'a>)>,
+        ctx: &mut DispatchCtx<'run, '_>,
+        working_expr: KExpression<'run>,
+        staged_subs: Vec<(usize, PendingSub<'run>)>,
         pre_subs: Vec<(usize, NodeId)>,
         idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
+    ) -> Result<NodeStep<'run>, KError> {
         match ctx.install_eager_subs(working_expr, staged_subs, None, idx) {
             EagerSubsInstall::DepError(step) => Ok(step),
             EagerSubsInstall::AllInline(working_expr) => Self::finish(ctx, working_expr, idx),
@@ -388,25 +388,25 @@ impl<'a> KeywordedState<'a> {
 /// decides whether to install a combined park or submit the staged
 /// subs. `Err(KError)` surfaces a *slot-terminal* error (cycle /
 /// unbound wrap), not a scheduler-level error.
-fn part_walk<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
+fn part_walk<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
     parts: Vec<
-        crate::machine::core::source::Spanned<crate::machine::model::ast::ExpressionPart<'a>>,
+        crate::machine::core::source::Spanned<crate::machine::model::ast::ExpressionPart<'run>>,
     >,
     pre_subs: &[(usize, NodeId)],
-    bare_outcomes: &[Option<NameOutcome<'a>>],
+    bare_outcomes: &[Option<NameOutcome<'run>>],
     slots: &crate::machine::core::kfunction::ClassifiedSlots,
     idx: usize,
-) -> Result<PartWalkResult<'a>, KError> {
+) -> Result<PartWalkResult<'run>, KError> {
     use crate::machine::core::source::Spanned;
     use crate::machine::model::ast::ExpressionPart;
 
     let wrap_set = &slots.wrap_indices;
     let ref_name_set = &slots.ref_name_indices;
     let eager_filter = slots.eager_indices.as_deref();
-    let mut new_parts: Vec<Spanned<ExpressionPart<'a>>> = Vec::with_capacity(parts.len());
+    let mut new_parts: Vec<Spanned<ExpressionPart<'run>>> = Vec::with_capacity(parts.len());
     let mut producers_to_wait: Vec<NodeId> = Vec::new();
-    let mut staged_subs: Vec<(usize, PendingSub<'a>)> = Vec::new();
+    let mut staged_subs: Vec<(usize, PendingSub<'run>)> = Vec::new();
     for (i, part) in parts.into_iter().enumerate() {
         let span = part.span;
         if let Some(&(_, sub_id)) = pre_subs.iter().find(|(j, _)| *j == i) {

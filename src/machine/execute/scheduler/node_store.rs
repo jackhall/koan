@@ -1,4 +1,4 @@
-//! Slot-table state pulled out of `Scheduler<'a>`. A single `slots` vector of
+//! Slot-table state pulled out of `Scheduler<'run>`. A single `slots` vector of
 //! [`SlotState`] enums encodes the per-slot lifecycle: every slot moves
 //! through `alloc_slot -> take_for_run -> reinstall* -> finalize -> free_one`.
 //!
@@ -62,19 +62,19 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
     }
 }
 
-enum SlotState<'a> {
-    PreRun(Node<'a>),
+enum SlotState<'run> {
+    PreRun(Node<'run>),
     /// Node payload has been moved out by `take_for_run`. A matching
     /// `reinstall*` / `finalize` / `free_one` exits this state.
     Running,
-    Done(NodeOutput<'a>),
+    Done(NodeOutput<'run>),
     /// Distinct from `Running` so the cascade-free walk's idempotency
     /// guard can be precise about "already freed".
     Free,
 }
 
-pub(in crate::machine::execute::scheduler) struct NodeStore<'a> {
-    slots: SlotVec<SlotState<'a>>,
+pub(in crate::machine::execute::scheduler) struct NodeStore<'run> {
+    slots: SlotVec<SlotState<'run>>,
     /// Reclaimed slot indices. `alloc_slot` pulls from here before
     /// extending `slots`, giving constant scheduler memory across
     /// tail-recursive bodies.
@@ -86,7 +86,7 @@ pub(in crate::machine::execute::scheduler) struct NodeStore<'a> {
     recent_wakes: SlotVec<Vec<NodeId>>,
 }
 
-impl<'a> NodeStore<'a> {
+impl<'run> NodeStore<'run> {
     pub(super) fn new() -> Self {
         Self {
             slots: SlotVec::new(),
@@ -98,7 +98,7 @@ impl<'a> NodeStore<'a> {
     /// The only path that picks an index. `DepGraph::install_for_slot`
     /// mirrors the recycle-vs.-extend choice via
     /// `consumer.index() < notify_list.len()`.
-    pub(super) fn alloc_slot(&mut self, node: Node<'a>) -> NodeId {
+    pub(super) fn alloc_slot(&mut self, node: Node<'run>) -> NodeId {
         match self.free_list.pop() {
             Some(id) => {
                 self.slots[id] = SlotState::PreRun(node);
@@ -116,7 +116,7 @@ impl<'a> NodeStore<'a> {
     }
 
     /// Panics if the slot wasn't `PreRun`.
-    pub(super) fn take_for_run(&mut self, id: NodeId) -> Node<'a> {
+    pub(super) fn take_for_run(&mut self, id: NodeId) -> Node<'run> {
         match std::mem::replace(&mut self.slots[id], SlotState::Running) {
             SlotState::PreRun(node) => node,
             _ => panic!("scheduler must not revisit a completed node"),
@@ -124,7 +124,7 @@ impl<'a> NodeStore<'a> {
     }
 
     /// Tail-call path: reuse the slot index for a new node payload.
-    pub(super) fn reinstall(&mut self, id: NodeId, node: Node<'a>) {
+    pub(super) fn reinstall(&mut self, id: NodeId, node: Node<'run>) {
         self.slots[id] = SlotState::PreRun(node);
     }
 
@@ -136,13 +136,13 @@ impl<'a> NodeStore<'a> {
         id: NodeId,
         cart: Rc<CallArena>,
         reserve: Option<Rc<CallArena>>,
-        work: NodeWork<'a>,
+        work: NodeWork<'run>,
         contract: Option<ErasedContract>,
         chain: Rc<LexicalFrame>,
     ) {
         // The tail-replace slot's scope is always this `cart`'s own child, so store it as a
         // payload-less `NodeScope::Yoked` and let the read boundary re-project it from the
-        // co-located `cart` each step — no persisted `&'a` to dangle across a TCO reset.
+        // co-located `cart` each step — no persisted `&'run` to dangle across a TCO reset.
         self.slots[id] = SlotState::PreRun(Node {
             work,
             scope: NodeScope::Yoked,
@@ -157,7 +157,7 @@ impl<'a> NodeStore<'a> {
 
     /// Callers must pair this with the dep-graph notify-walk so consumers
     /// wake atomically with the write.
-    pub(super) fn finalize(&mut self, id: NodeId, output: NodeOutput<'a>) {
+    pub(super) fn finalize(&mut self, id: NodeId, output: NodeOutput<'run>) {
         self.slots[id] = SlotState::Done(output);
     }
 
@@ -176,7 +176,7 @@ impl<'a> NodeStore<'a> {
 
     /// Only safe on IDs whose slot has been finalized; internal slots may
     /// have been eagerly freed by their parent.
-    pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'a>, &KError> {
+    pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
         match &self.slots[id] {
             &SlotState::Done(NodeOutput::Value(c)) => Ok(c),
             SlotState::Done(NodeOutput::Err(e)) => Err(e),
@@ -184,7 +184,7 @@ impl<'a> NodeStore<'a> {
         }
     }
 
-    pub(super) fn read(&self, id: NodeId) -> Carried<'a> {
+    pub(super) fn read(&self, id: NodeId) -> Carried<'run> {
         match self.read_result(id) {
             Ok(c) => c,
             Err(e) => panic!("read called on errored node: {e}"),
@@ -306,7 +306,7 @@ impl<'a> NodeStore<'a> {
     }
 
     #[cfg(test)]
-    pub(super) fn set_result(&mut self, id: NodeId, output: NodeOutput<'a>) {
+    pub(super) fn set_result(&mut self, id: NodeId, output: NodeOutput<'run>) {
         self.slots[id] = SlotState::Done(output);
     }
 

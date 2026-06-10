@@ -13,26 +13,26 @@ use super::run;
 
 /// Dict value cells are [`Held`]; these helpers narrow to the `Object` arm so the
 /// scalar-value assertions read unchanged.
-fn lookup_string_key<'a, 'b>(
-    d: &'b std::collections::HashMap<Box<dyn Serializable<'a> + 'a>, Held<'a>>,
+fn lookup_string_key<'run, 'b>(
+    d: &'b std::collections::HashMap<Box<dyn Serializable<'run> + 'run>, Held<'run>>,
     key: &str,
-) -> Option<&'b KObject<'a>> {
+) -> Option<&'b KObject<'run>> {
     let probe: Box<dyn Serializable<'_>> = Box::new(KKey::String(key.to_string()));
     d.get(&probe).and_then(|h| h.as_object())
 }
 
-fn lookup_number_key<'a, 'b>(
-    d: &'b std::collections::HashMap<Box<dyn Serializable<'a> + 'a>, Held<'a>>,
+fn lookup_number_key<'run, 'b>(
+    d: &'b std::collections::HashMap<Box<dyn Serializable<'run> + 'run>, Held<'run>>,
     key: f64,
-) -> Option<&'b KObject<'a>> {
+) -> Option<&'b KObject<'run>> {
     let probe: Box<dyn Serializable<'_>> = Box::new(KKey::Number(key));
     d.get(&probe).and_then(|h| h.as_object())
 }
 
-fn lookup_bool_key<'a, 'b>(
-    d: &'b std::collections::HashMap<Box<dyn Serializable<'a> + 'a>, Held<'a>>,
+fn lookup_bool_key<'run, 'b>(
+    d: &'b std::collections::HashMap<Box<dyn Serializable<'run> + 'run>, Held<'run>>,
     key: bool,
-) -> Option<&'b KObject<'a>> {
+) -> Option<&'b KObject<'run>> {
     let probe: Box<dyn Serializable<'_>> = Box::new(KKey::Bool(key));
     d.get(&probe).and_then(|h| h.as_object())
 }

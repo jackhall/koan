@@ -15,34 +15,34 @@ use crate::machine::model::types::{
 use crate::machine::model::KObject;
 use crate::machine::RuntimeArena;
 
-fn body_identifier<'a, 's>(
-    h: &mut dyn SchedulerHandle<'a, 's>,
-    _a: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
+fn body_identifier<'run, 's>(
+    h: &mut dyn SchedulerHandle<'run, 's>,
+    _a: ArgumentBundle<'run>,
+) -> BodyResult<'run> {
     BodyResult::value(marker(h.current_scope(), "identifier"))
 }
-fn body_marker_any<'a, 's>(
-    h: &mut dyn SchedulerHandle<'a, 's>,
-    _a: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
+fn body_marker_any<'run, 's>(
+    h: &mut dyn SchedulerHandle<'run, 's>,
+    _a: ArgumentBundle<'run>,
+) -> BodyResult<'run> {
     BodyResult::value(marker(h.current_scope(), "any"))
 }
-fn body_inner_any<'a, 's>(
-    h: &mut dyn SchedulerHandle<'a, 's>,
-    _a: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
+fn body_inner_any<'run, 's>(
+    h: &mut dyn SchedulerHandle<'run, 's>,
+    _a: ArgumentBundle<'run>,
+) -> BodyResult<'run> {
     BodyResult::value(marker(h.current_scope(), "inner_any"))
 }
-fn body_outer_number<'a, 's>(
-    h: &mut dyn SchedulerHandle<'a, 's>,
-    _a: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
+fn body_outer_number<'run, 's>(
+    h: &mut dyn SchedulerHandle<'run, 's>,
+    _a: ArgumentBundle<'run>,
+) -> BodyResult<'run> {
     BodyResult::value(marker(h.current_scope(), "outer_number"))
 }
-fn body_lowercase<'a, 's>(
-    h: &mut dyn SchedulerHandle<'a, 's>,
-    _a: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
+fn body_lowercase<'run, 's>(
+    h: &mut dyn SchedulerHandle<'run, 's>,
+    _a: ArgumentBundle<'run>,
+) -> BodyResult<'run> {
     BodyResult::value(marker(h.current_scope(), "lowercase"))
 }
 

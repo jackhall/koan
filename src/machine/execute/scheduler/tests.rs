@@ -23,7 +23,7 @@ mod unified_walk;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 
-pub(super) fn let_expr<'a>(name: &str, value: f64) -> KExpression<'a> {
+pub(super) fn let_expr<'run>(name: &str, value: f64) -> KExpression<'run> {
     KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("LET".into())),
         Spanned::bare(ExpressionPart::Identifier(name.into())),

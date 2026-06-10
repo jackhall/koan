@@ -1,4 +1,4 @@
-//! Dispatch-side facade over `&mut Scheduler<'a>`.
+//! Dispatch-side facade over `&mut Scheduler<'run>`.
 //!
 //! `DispatchCtx` is the typed surface every dispatch entry point sees.
 //! It names exactly the scheduler operations the dispatcher uses — slot
@@ -40,16 +40,16 @@ use super::{
     EagerSubsTrack, PendingSub,
 };
 
-/// Newtype wrapping `&'b mut Scheduler<'a>`, exposing exactly the
-/// scheduler operations the dispatcher uses. `'a` is the scheduler's
+/// Newtype wrapping `&'b mut Scheduler<'run>`, exposing exactly the
+/// scheduler operations the dispatcher uses. `'run` is the scheduler's
 /// arena lifetime; `'b` is the borrow lifetime of the scheduler the
 /// dispatcher holds for the duration of one Dispatch step.
-pub(in crate::machine::execute) struct DispatchCtx<'a, 'b> {
-    sched: &'b mut Scheduler<'a>,
+pub(in crate::machine::execute) struct DispatchCtx<'run, 'b> {
+    sched: &'b mut Scheduler<'run>,
 }
 
-impl<'a, 'b> DispatchCtx<'a, 'b> {
-    pub(in crate::machine::execute) fn new(sched: &'b mut Scheduler<'a>) -> Self {
+impl<'run, 'b> DispatchCtx<'run, 'b> {
+    pub(in crate::machine::execute) fn new(sched: &'b mut Scheduler<'run>) -> Self {
         Self { sched }
     }
 
@@ -73,11 +73,11 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
         self.sched.is_result_ready(id)
     }
 
-    pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'a>, &KError> {
+    pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
         self.sched.read_result(id)
     }
 
-    pub(super) fn read(&self, id: NodeId) -> Carried<'a> {
+    pub(super) fn read(&self, id: NodeId) -> Carried<'run> {
         self.sched.read(id)
     }
 
@@ -105,20 +105,20 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     // `add_dispatch` impl below — that path inherits `active_chain` /
     // `active_frame` correctly via `Scheduler::add_dispatch -> add`.
 
-    pub(super) fn schedule_list_literal(&mut self, items: Vec<ExpressionPart<'a>>) -> NodeId {
+    pub(super) fn schedule_list_literal(&mut self, items: Vec<ExpressionPart<'run>>) -> NodeId {
         self.sched.schedule_list_literal(items)
     }
 
     pub(super) fn schedule_dict_literal(
         &mut self,
-        pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
+        pairs: Vec<(ExpressionPart<'run>, ExpressionPart<'run>)>,
     ) -> NodeId {
         self.sched.schedule_dict_literal(pairs)
     }
 
     pub(super) fn schedule_record_literal(
         &mut self,
-        fields: Vec<(String, ExpressionPart<'a>)>,
+        fields: Vec<(String, ExpressionPart<'run>)>,
     ) -> NodeId {
         self.sched.schedule_record_literal(fields)
     }
@@ -138,7 +138,7 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     /// `Scheduler::defer_to_lift` is shared with `run_combine` /
     /// `run_catch`; the DispatchCtx wrapper keeps the dispatch-side
     /// surface uniform.
-    pub(super) fn defer_to_lift(&mut self, idx: usize, bind_id: NodeId) -> NodeStep<'a> {
+    pub(super) fn defer_to_lift(&mut self, idx: usize, bind_id: NodeId) -> NodeStep<'run> {
         self.sched.defer_to_lift(idx, bind_id)
     }
 
@@ -147,10 +147,10 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     /// `KFunction::invoke` shim that tail-rewrites the slot's work. See
     /// the historical `Scheduler::invoke_to_step` for the contract; the
     /// only change is that we now pass `self` (a `&mut dyn
-    /// SchedulerHandle<'a, 's>` via the `SchedulerHandle for DispatchCtx`
+    /// SchedulerHandle<'run, 's>` via the `SchedulerHandle for DispatchCtx`
     /// impl) so sub-slots spawned by the body inherit the dispatcher's
     /// contextual chain/frame state.
-    pub(super) fn invoke_to_step(&mut self, future: KFuture<'a>, idx: usize) -> NodeStep<'a> {
+    pub(super) fn invoke_to_step(&mut self, future: KFuture<'run>, idx: usize) -> NodeStep<'run> {
         use crate::machine::core::kfunction::BodyResult;
         match future.function.invoke(self, future.bundle) {
             BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
@@ -177,8 +177,8 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     /// cycle detection to the splice walk.
     pub(super) fn build_bare_outcomes(
         &self,
-        parts: &[Spanned<ExpressionPart<'a>>],
-    ) -> Vec<Option<NameOutcome<'a>>> {
+        parts: &[Spanned<ExpressionPart<'run>>],
+    ) -> Vec<Option<NameOutcome<'run>>> {
         parts
             .iter()
             .map(|p| match &p.value {
@@ -199,11 +199,11 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     /// the FunctionValueCall install; `None` is Keyworded.
     pub(super) fn install_eager_subs(
         &mut self,
-        mut working_expr: KExpression<'a>,
-        staged_subs: Vec<(usize, PendingSub<'a>)>,
-        picked: Option<&'a KFunction<'a>>,
+        mut working_expr: KExpression<'run>,
+        staged_subs: Vec<(usize, PendingSub<'run>)>,
+        picked: Option<&'run KFunction<'run>>,
         idx: usize,
-    ) -> EagerSubsInstall<'a> {
+    ) -> EagerSubsInstall<'run> {
         let mut pending_subs: Vec<(usize, NodeId)> = Vec::with_capacity(staged_subs.len());
         for (i, pending) in staged_subs {
             let sub_id = match pending {
@@ -240,7 +240,10 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     /// Standard `NodeStep::Replace` for parked-Dispatch install sites:
     /// drops the entry expression to an empty placeholder (the state
     /// carries the evolving `working_expr` from here on).
-    pub(super) fn replace_with_parked_dispatch(&self, state: DispatchState<'a>) -> NodeStep<'a> {
+    pub(super) fn replace_with_parked_dispatch(
+        &self,
+        state: DispatchState<'run>,
+    ) -> NodeStep<'run> {
         NodeStep::Replace {
             work: NodeWork::Dispatch {
                 expr: KExpression::new(Vec::new()),
@@ -263,9 +266,9 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     /// - `Some(f)` (FunctionValueCall install) — bind `f` directly.
     pub(super) fn resume_eager_subs(
         &mut self,
-        track: EagerSubsTrack<'a>,
+        track: EagerSubsTrack<'run>,
         idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
+    ) -> Result<NodeStep<'run>, KError> {
         let EagerSubsTrack {
             mut working_expr,
             subs,
@@ -304,8 +307,8 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
 // the body of `with_active_frame` re-receives `&mut DispatchCtx`, so
 // further sub-builtins still see the dispatcher's contextual state.
 
-impl<'a, 'b, 's> SchedulerHandle<'a, 's> for DispatchCtx<'a, 'b> {
-    fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
+impl<'run, 'b, 's> SchedulerHandle<'run, 's> for DispatchCtx<'run, 'b> {
+    fn add_dispatch(&mut self, expr: KExpression<'run>, scope: &'run Scope<'run>) -> NodeId {
         self.sched.add_dispatch(expr, scope)
     }
 
@@ -313,14 +316,19 @@ impl<'a, 'b, 's> SchedulerHandle<'a, 's> for DispatchCtx<'a, 'b> {
         &mut self,
         owned_subs: Vec<NodeId>,
         park_producers: Vec<NodeId>,
-        scope: &'a Scope<'a>,
-        finish: CombineFinish<'a>,
+        scope: &'run Scope<'run>,
+        finish: CombineFinish<'run>,
     ) -> NodeId {
         self.sched
             .add_combine(owned_subs, park_producers, scope, finish)
     }
 
-    fn add_catch(&mut self, from: NodeId, scope: &'a Scope<'a>, finish: CatchFinish<'a>) -> NodeId {
+    fn add_catch(
+        &mut self,
+        from: NodeId,
+        scope: &'run Scope<'run>,
+        finish: CatchFinish<'run>,
+    ) -> NodeId {
         self.sched.add_catch(from, scope, finish)
     }
 
@@ -330,13 +338,13 @@ impl<'a, 'b, 's> SchedulerHandle<'a, 's> for DispatchCtx<'a, 'b> {
 
     /// Pin/swap the ambient `active_frame` around `body`. The closure
     /// receives `&mut DispatchCtx` (this same object as
-    /// `&mut dyn SchedulerHandle<'a, 's>`), so nested builtin invokes also
+    /// `&mut dyn SchedulerHandle<'run, 's>`), so nested builtin invokes also
     /// route through the dispatcher's facade rather than re-borrowing
     /// the bare scheduler.
     fn with_active_frame(
         &mut self,
         frame: Rc<CallArena>,
-        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a, 's>),
+        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'run, 's>),
     ) {
         let prev = self.sched.active_frame_replace(Some(frame));
         body(self);
@@ -354,16 +362,16 @@ impl<'a, 'b, 's> SchedulerHandle<'a, 's> for DispatchCtx<'a, 'b> {
     fn enter_block(
         &mut self,
         scope_id: ScopeId,
-        statements: Vec<KExpression<'a>>,
-        scope: &'a Scope<'a>,
+        statements: Vec<KExpression<'run>>,
+        scope: &'run Scope<'run>,
     ) -> Vec<NodeId> {
         self.sched.enter_block(scope_id, statements, scope)
     }
 
     fn add_dispatch_with_chain(
         &mut self,
-        expr: KExpression<'a>,
-        scope: &'a Scope<'a>,
+        expr: KExpression<'run>,
+        scope: &'run Scope<'run>,
         chain: Rc<LexicalFrame>,
     ) -> NodeId {
         self.sched.add_dispatch_with_chain(expr, scope, chain)
@@ -371,13 +379,13 @@ impl<'a, 'b, 's> SchedulerHandle<'a, 's> for DispatchCtx<'a, 'b> {
 
     fn add_dispatch_with_chain_in_frame(
         &mut self,
-        expr: KExpression<'a>,
+        expr: KExpression<'run>,
         chain: Rc<LexicalFrame>,
     ) -> NodeId {
         self.sched.add_dispatch_with_chain_in_frame(expr, chain)
     }
 
-    fn add_dispatch_in_frame(&mut self, expr: KExpression<'a>) -> NodeId {
+    fn add_dispatch_in_frame(&mut self, expr: KExpression<'run>) -> NodeId {
         self.sched.add_dispatch_in_frame(expr)
     }
 
@@ -385,21 +393,21 @@ impl<'a, 'b, 's> SchedulerHandle<'a, 's> for DispatchCtx<'a, 'b> {
         &mut self,
         owned_subs: Vec<NodeId>,
         park_producers: Vec<NodeId>,
-        finish: CombineFinish<'a>,
+        finish: CombineFinish<'run>,
     ) -> NodeId {
         self.sched
             .add_combine_in_frame(owned_subs, park_producers, finish)
     }
 
-    fn add_catch_in_frame(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId {
+    fn add_catch_in_frame(&mut self, from: NodeId, finish: CatchFinish<'run>) -> NodeId {
         self.sched.add_catch_in_frame(from, finish)
     }
 
-    fn current_scope(&self) -> &Scope<'a> {
+    fn current_scope(&self) -> &Scope<'run> {
         self.sched.current_scope()
     }
 
-    fn add_dispatch_here(&mut self, expr: KExpression<'a>) -> NodeId {
+    fn add_dispatch_here(&mut self, expr: KExpression<'run>) -> NodeId {
         self.sched.add_dispatch_here(expr)
     }
 
@@ -407,13 +415,13 @@ impl<'a, 'b, 's> SchedulerHandle<'a, 's> for DispatchCtx<'a, 'b> {
         &mut self,
         owned_subs: Vec<NodeId>,
         park_producers: Vec<NodeId>,
-        finish: CombineFinish<'a>,
+        finish: CombineFinish<'run>,
     ) -> NodeId {
         self.sched
             .add_combine_here(owned_subs, park_producers, finish)
     }
 
-    fn add_catch_here(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId {
+    fn add_catch_here(&mut self, from: NodeId, finish: CatchFinish<'run>) -> NodeId {
         self.sched.add_catch_here(from, finish)
     }
 }

@@ -20,17 +20,20 @@ impl Write for SharedBuf {
     }
 }
 
-fn build_scope<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>) -> &'a Scope<'a> {
+fn build_scope<'run>(
+    arena: &'run RuntimeArena,
+    captured: Rc<RefCell<Vec<u8>>>,
+) -> &'run Scope<'run> {
     default_scope(arena, Box::new(SharedBuf(captured)))
 }
 
-fn parse_one<'a>(src: &str) -> KExpression<'a> {
+fn parse_one<'run>(src: &str) -> KExpression<'run> {
     let mut exprs = parse(src).expect("parse should succeed");
     assert_eq!(exprs.len(), 1, "test helper expects a single expression");
     exprs.remove(0)
 }
 
-fn run<'a>(scope: &'a Scope<'a>, source: &str) {
+fn run<'run>(scope: &'run Scope<'run>, source: &str) {
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = Scheduler::new();
     for expr in exprs {
@@ -39,14 +42,17 @@ fn run<'a>(scope: &'a Scope<'a>, source: &str) {
     sched.execute().expect("scheduler should succeed");
 }
 
-fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
+fn run_one<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> &'run KObject<'run> {
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().expect("scheduler should succeed");
     sched.read(id).object()
 }
 
-fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> crate::machine::core::KError {
+fn run_one_err<'run>(
+    scope: &'run Scope<'run>,
+    expr: KExpression<'run>,
+) -> crate::machine::core::KError {
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
     sched

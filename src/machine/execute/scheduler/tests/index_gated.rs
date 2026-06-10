@@ -36,7 +36,7 @@ impl Write for SharedBuf {
     }
 }
 
-fn run_scope<'a>(arena: &'a RuntimeArena, source: &str) -> &'a Scope<'a> {
+fn run_scope<'run>(arena: &'run RuntimeArena, source: &str) -> &'run Scope<'run> {
     let scope = default_scope(arena, Box::new(Sink));
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = Scheduler::new();

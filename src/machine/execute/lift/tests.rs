@@ -14,10 +14,10 @@ use crate::machine::{CallArena, KError, KErrorKind, ResolveOutcome, Scope};
 
 /// Test-only `(scope, expr) → KFuture` driver for one-shot bind without spinning a
 /// `Scheduler`.
-pub(super) fn dispatch_for_test<'a>(
-    scope: &'a Scope<'a>,
-    expr: KExpression<'a>,
-) -> Result<KFuture<'a>, KError> {
+pub(super) fn dispatch_for_test<'run>(
+    scope: &'run Scope<'run>,
+    expr: KExpression<'run>,
+) -> Result<KFuture<'run>, KError> {
     let chain = crate::machine::LexicalFrame::detached();
     match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
         ResolveOutcome::Resolved(r) => r.function.bind(expr),
@@ -56,7 +56,9 @@ pub(super) fn defeat_fast_path(dying: &Rc<CallArena>) {
 
 /// A KFunction whose `captured_scope` lives in the dying arena. Caller is responsible
 /// for not allocating a separate bait — this KFunction itself defeats `functions_is_empty`.
-pub(super) fn alloc_local_kf<'a>(dying: &'a Rc<CallArena>) -> &'a crate::machine::KFunction<'a> {
+pub(super) fn alloc_local_kf<'run>(
+    dying: &'run Rc<CallArena>,
+) -> &'run crate::machine::KFunction<'run> {
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
     use crate::machine::{Body, BodyResult, KFunction};
     let kf = KFunction::new(

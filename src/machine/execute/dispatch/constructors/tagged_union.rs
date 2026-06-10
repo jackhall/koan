@@ -18,9 +18,9 @@ use crate::machine::model::values::KObject;
 /// tag (tags are capitalized variant types). The value part rides through
 /// unchanged so the dispatcher can sub-Dispatch it before construction
 /// sees its resolved value.
-pub(in crate::machine::execute) fn prepare_args<'a>(
-    args_parts: Vec<Spanned<ExpressionPart<'a>>>,
-) -> Result<(String, ExpressionPart<'a>), KError> {
+pub(in crate::machine::execute) fn prepare_args<'run>(
+    args_parts: Vec<Spanned<ExpressionPart<'run>>>,
+) -> Result<(String, ExpressionPart<'run>), KError> {
     if args_parts.len() != 2 {
         return Err(KError::new(KErrorKind::ArityMismatch {
             expected: 2,
@@ -44,13 +44,13 @@ pub(in crate::machine::execute) fn prepare_args<'a>(
 
 /// Validate `tag` against `schema` and `value` against the schema's
 /// expected type for that tag, then emit the `KObject::Tagged`.
-pub(in crate::machine::execute) fn construct<'a>(
-    schema: &HashMap<String, KType<'a>>,
-    set: &Rc<RecursiveSet<'a>>,
+pub(in crate::machine::execute) fn construct<'run>(
+    schema: &HashMap<String, KType<'run>>,
+    set: &Rc<RecursiveSet<'run>>,
     index: usize,
     tag: String,
-    value: &KObject<'a>,
-) -> Result<KObject<'a>, KError> {
+    value: &KObject<'run>,
+) -> Result<KObject<'run>, KError> {
     let expected = match schema.get(&tag) {
         Some(t) => t.clone(),
         None => {

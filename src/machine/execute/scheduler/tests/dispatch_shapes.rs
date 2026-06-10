@@ -24,17 +24,17 @@ use crate::machine::model::values::Held;
 use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{BindingIndex, KFunction, RuntimeArena, Scope};
 
-fn dispatch_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
+fn dispatch_one<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> &'run KObject<'run> {
     sched_read_carried(scope, expr).object()
 }
 
 /// Like [`dispatch_one`] but yields the raw carrier, so a type-producing expression can be
 /// inspected on its [`Carried::Type`] arm instead of panicking through `.object()`.
-fn dispatch_one_carried<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> Carried<'a> {
+fn dispatch_one_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> Carried<'run> {
     sched_read_carried(scope, expr)
 }
 
-fn sched_read_carried<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> Carried<'a> {
+fn sched_read_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> Carried<'run> {
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().expect("scheduler should succeed");
@@ -44,10 +44,10 @@ fn sched_read_carried<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> Carrie
 /// Accepts one Number arg and returns it unchanged. The signature is `<n :Number>`
 /// (no keywords), which means no koan user surface can call it directly — tests
 /// using it only inspect routing, never the call outcome.
-fn body_identity<'a, 's>(
-    sched: &mut dyn KfHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
+fn body_identity<'run, 's>(
+    sched: &mut dyn KfHandle<'run, 's>,
+    bundle: ArgumentBundle<'run>,
+) -> BodyResult<'run> {
     match bundle.get("n") {
         Some(obj) => BodyResult::value(sched.current_scope().arena.alloc_object(obj.deep_clone())),
         None => BodyResult::Err(crate::machine::KError::new(
@@ -58,7 +58,7 @@ fn body_identity<'a, 's>(
 
 /// Bind a function value `f` with signature `<n :Number>` on `scope`, giving an
 /// Identifier head that resolves to a function value without going through FN/LET.
-fn bind_identity_fn<'a>(scope: &'a Scope<'a>) {
+fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Number),
         elements: vec![SignatureElement::Argument(Argument {
@@ -761,7 +761,7 @@ fn keyworded_parked_carrier_expr_reads_state() {
     };
     use crate::machine::execute::dispatch::{DispatchState, EagerSubsTrack, Initialized};
 
-    fn carrier_expr<'a>() -> KExpression<'a> {
+    fn carrier_expr<'run>() -> KExpression<'run> {
         // `(LIFT_BARE arg)` — a recognizable sample distinct from any other
         // test's expressions, so a regression that drops the carrier shows up
         // as a `""` summary, not a coincidentally-matching sibling expression.

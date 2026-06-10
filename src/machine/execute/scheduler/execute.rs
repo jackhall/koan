@@ -10,7 +10,7 @@ use super::super::nodes::{Frame, LiftState, Node, NodeOutput, NodeStep, NodeWork
 use super::Scheduler;
 use crate::machine::model::Carried;
 
-impl<'a> Scheduler<'a> {
+impl<'run> Scheduler<'run> {
     /// On `Done` with a frame, the return `Value` references the per-call arena that's
     /// about to drop, so it must be lifted into the captured scope's arena before the
     /// frame is released. See design/memory-model.md.
@@ -52,7 +52,7 @@ impl<'a> Scheduler<'a> {
             match step {
                 NodeStep::Done(output) => {
                     // Lift the terminal out of the dying per-call frame into the surviving
-                    // captured-scope arena (`dest_arena`, a genuine `&'a`). A non-dying run frame
+                    // captured-scope arena (`dest_arena`, a genuine `&'run`). A non-dying run frame
                     // (empty arena; top-level values live in the run arena) reads as frameless.
                     let dest_arena = post.step_scope().outer().map(|o| o.arena);
                     let frame = (!post.prev_frame.non_dying()).then_some(&post.prev_frame);
@@ -96,7 +96,7 @@ impl<'a> Scheduler<'a> {
                         Some(f) => {
                             // Rotate the ping-pong reserve: the post-step reserve is
                             // superseded by today's post-step frame (which we park as
-                            // the new reserve). `'a`-anchoring lives in
+                            // the new reserve). `'run`-anchoring lives in
                             // `reinstall_with_frame`'s SAFETY.
                             drop(post_step_reserve);
                             // The non-dying run frame is not a reusable per-call arena; parking
@@ -161,7 +161,7 @@ impl<'a> Scheduler<'a> {
     pub(in crate::machine::execute::scheduler) fn finalize(
         &mut self,
         idx: usize,
-        output: NodeOutput<'a>,
+        output: NodeOutput<'run>,
     ) {
         let id = NodeId(idx);
         self.store.finalize(id, output);
@@ -183,7 +183,7 @@ impl<'a> Scheduler<'a> {
     /// producers this slot merely parked on, and reclaiming a consumer must not reach
     /// across a park edge into the producer's subtree.
     ///
-    /// Idempotent and safe to call on a still-live slot. `&'a KObject` references
+    /// Idempotent and safe to call on a still-live slot. `&'run KObject` references
     /// handed out by `read` survive because the value lives in an arena.
     pub(in crate::machine::execute) fn free(&mut self, idx: usize) {
         let mut stack: Vec<NodeId> = vec![NodeId(idx)];
@@ -212,7 +212,7 @@ impl<'a> Scheduler<'a> {
         &mut self,
         idx: usize,
         bind_id: NodeId,
-    ) -> NodeStep<'a> {
+    ) -> NodeStep<'run> {
         self.deps.add_owned_edge(bind_id, NodeId(idx));
         NodeStep::Replace {
             work: NodeWork::Lift(LiftState::Pending(bind_id)),
@@ -230,12 +230,12 @@ impl<'a> Scheduler<'a> {
 /// through untouched. A failed return-type check becomes `Err` — the caller clears placeholders
 /// and finalizes. Pure: the scope-derived inputs were captured by the caller while the step's
 /// scope was still ambient, so this holds no scope borrow.
-fn compute_done_output<'a>(
-    output: NodeOutput<'a>,
+fn compute_done_output<'run>(
+    output: NodeOutput<'run>,
     frame: Option<&Rc<crate::machine::core::CallArena>>,
-    dest_arena: Option<&'a crate::machine::core::RuntimeArena>,
-    prev_function: Option<ReturnContract<'a>>,
-) -> NodeOutput<'a> {
+    dest_arena: Option<&'run crate::machine::core::RuntimeArena>,
+    prev_function: Option<ReturnContract<'run>>,
+) -> NodeOutput<'run> {
     match (output, frame) {
         (NodeOutput::Value(Carried::Object(v)), Some(frame)) => {
             let dest = dest_arena.expect("per-call scope must have an outer (its captured scope)");
@@ -294,11 +294,11 @@ fn compute_done_output<'a>(
 /// it), `Ok(None)` when nothing is declared — a non-`Resolved` (e.g. `Deferred`) return is
 /// checked later at the per-call Combine finish, not here — or `Err` with the labelled
 /// `TypeMismatch`.
-fn check_declared_return<'a>(
-    contract: Option<ReturnContract<'a>>,
-    satisfies: impl FnOnce(&KType<'a>) -> bool,
+fn check_declared_return<'run>(
+    contract: Option<ReturnContract<'run>>,
+    satisfies: impl FnOnce(&KType<'run>) -> bool,
     got_name: impl FnOnce() -> String,
-) -> Result<Option<&'a KType<'a>>, KError> {
+) -> Result<Option<&'run KType<'run>>, KError> {
     let (declared, label) = match contract {
         Some(ReturnContract::Function(f)) => match &f.signature.return_type {
             crate::machine::model::types::ReturnType::Resolved(d) => (d, f.summarize()),
@@ -325,10 +325,10 @@ fn check_declared_return<'a>(
 /// - `Some(_)` + `Function(fn)` — FN body invoke. Chain is assembled from the FN's
 ///   lexical `outer` walk so depth tracks lexical nesting, not call depth
 ///   (tail-recursive loops produce equal-depth chains each iteration).
-fn compute_replace_chain<'a>(
+fn compute_replace_chain<'run>(
     prev_chain: Rc<LexicalFrame>,
     block_entry: Option<ScopeId>,
-    new_function: Option<ReturnContract<'a>>,
+    new_function: Option<ReturnContract<'run>>,
     new_frame: Option<&crate::machine::core::CallArena>,
     body_index: usize,
 ) -> Rc<LexicalFrame> {

@@ -10,21 +10,21 @@ use super::dispatch::DispatchState;
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
 /// no further write to that slot occurs until it is freed and reused.
-pub(super) enum NodeOutput<'a> {
+pub(super) enum NodeOutput<'run> {
     /// A produced value in the two-arm currency (a runtime [`KObject`] or a raw type).
     /// Use [`NodeOutput::value`] to wrap an object.
-    Value(Carried<'a>),
+    Value(Carried<'run>),
     Err(KError),
 }
 
-impl<'a> NodeOutput<'a> {
+impl<'run> NodeOutput<'run> {
     /// Wrap a runtime object as the `Object` arm.
-    pub(super) fn value(o: &'a KObject<'a>) -> Self {
+    pub(super) fn value(o: &'run KObject<'run>) -> Self {
         NodeOutput::Value(Carried::Object(o))
     }
 
     /// Wrap a type as the `Type` arm. Pair with `arena.alloc_ktype`.
-    pub(super) fn ktype(t: &'a KType<'a>) -> Self {
+    pub(super) fn ktype(t: &'run KType<'run>) -> Self {
         NodeOutput::Value(Carried::Type(t))
     }
 }
@@ -46,12 +46,12 @@ impl<'a> NodeOutput<'a> {
 // `KExpression` it indirectly holds. Boxing a short-lived return value's hot tail-call
 // path to balance the variants is the wrong trade — the imbalance is inherent.
 #[allow(clippy::large_enum_variant)]
-pub(super) enum NodeStep<'a> {
-    Done(NodeOutput<'a>),
+pub(super) enum NodeStep<'run> {
+    Done(NodeOutput<'run>),
     Replace {
-        work: NodeWork<'a>,
+        work: NodeWork<'run>,
         frame: Option<Rc<CallArena>>,
-        function: Option<ReturnContract<'a>>,
+        function: Option<ReturnContract<'run>>,
         block_entry: Option<ScopeId>,
         /// Body-scope chain index for FN-body / MATCH-arm / TRY-arm tail-replace
         /// (mirrors [`crate::machine::core::kfunction::body::BodyResult::Tail::body_index`]).
@@ -66,7 +66,7 @@ pub(super) enum NodeStep<'a> {
 /// Lift: push/notify single-producer model](../../../design/execution-model.md#lift-pushnotify-single-producer-model).
 /// `Combine` is the dual of `Bind`: a host-side N→1 combinator that waits on a
 /// fixed set of dep slots and runs a host closure over their resolved values.
-pub(super) enum NodeWork<'a> {
+pub(super) enum NodeWork<'run> {
     /// Resolve and schedule a single expression. `state` carries the
     /// dispatch slot's per-variant cached state, with `Initialized` as the
     /// universal birth state and one variant per `DispatchShape` for the
@@ -78,8 +78,8 @@ pub(super) enum NodeWork<'a> {
     /// otherwise. Phase 4 of `run_dispatch` reuses these instead of
     /// allocating fresh sub-Dispatches for the named slots.
     Dispatch {
-        expr: KExpression<'a>,
-        state: DispatchState<'a>,
+        expr: KExpression<'run>,
+        state: DispatchState<'run>,
     },
     /// `deps` layout is `[park_producers..., owned_subs...]`. `park_count` is the
     /// size of the park-producer prefix — those slots are sibling producers this
@@ -89,23 +89,23 @@ pub(super) enum NodeWork<'a> {
     Combine {
         deps: Vec<NodeId>,
         park_count: usize,
-        finish: CombineFinish<'a>,
+        finish: CombineFinish<'run>,
     },
     /// Catching dual of a single-dep `Combine`: waits on `from` and hands its terminal
     /// (Value or Err) to `finish`. `Combine` short-circuits on dep-error before its
     /// finish runs; `Catch`'s finish always runs so the closure can decide to recover.
     Catch {
         from: NodeId,
-        finish: CatchFinish<'a>,
+        finish: CatchFinish<'run>,
     },
-    Lift(LiftState<'a>),
+    Lift(LiftState<'run>),
 }
 
-impl<'a> NodeWork<'a> {
+impl<'run> NodeWork<'run> {
     /// `Dispatch` in the `Initialized` birth state with empty `pre_subs`.
     /// Sites that need to carry pre-submitted sub-Dispatches across a
     /// re-Dispatch go through [`DispatchState::initialized`] directly.
-    pub(super) fn dispatch(expr: KExpression<'a>) -> Self {
+    pub(super) fn dispatch(expr: KExpression<'run>) -> Self {
         NodeWork::Dispatch {
             expr,
             state: DispatchState::initialized(Vec::new()),
@@ -116,26 +116,26 @@ impl<'a> NodeWork<'a> {
 /// `Pending(from)` parks on `from`'s terminal; `Ready(output)` holds the stamped
 /// producer terminal. The `Pending → Ready` transition is the sole responsibility
 /// of `Scheduler::finalize`; a queued Lift in `Pending` indicates a wake misfire.
-pub(super) enum LiftState<'a> {
+pub(super) enum LiftState<'run> {
     Pending(NodeId),
-    Ready(NodeOutput<'a>),
+    Ready(NodeOutput<'run>),
 }
 
 /// Slot-stored scope handle. `Anchored` holds a run-lifetime borrow directly — a genuinely
-/// run-lived scope (a fresh `&'a` child a binder body allocated in a real arena); NOT the
+/// run-lived scope (a fresh `&'run` child a binder body allocated in a real arena); NOT the
 /// builtins-only [`ScopeKind::Root`](crate::machine::core::ScopeKind). A per-call frame scope
 /// instead stores `Yoked` — no borrow at all — and is re-projected from the slot's own
 /// [`Node::frame`] cart at read time (single-cart: the frame `Rc` already on the slot is the
 /// sole liveness witness, so there is no second `Rc` clone and no contention with
-/// `try_reset_for_tail`'s uniqueness check). Storing the marker rather than a fabricated `&'a`
+/// `try_reset_for_tail`'s uniqueness check). Storing the marker rather than a fabricated `&'run`
 /// is what keeps the borrow honest across a TCO `try_reset_for_tail`: nothing persisted points
 /// into the reset arena; the live frame is re-read each step.
 ///
 /// `Copy` because both arms are trivially copyable (a shared ref / a unit) and submission
 /// threads the handle through `pre_subs` recursion without re-deriving it.
 #[derive(Clone, Copy)]
-pub(super) enum NodeScope<'a> {
-    Anchored(&'a Scope<'a>),
+pub(super) enum NodeScope<'run> {
+    Anchored(&'run Scope<'run>),
     Yoked,
 }
 
@@ -170,9 +170,9 @@ pub(super) struct Frame {
     pub(super) contract: Option<ErasedContract>,
 }
 
-pub(super) struct Node<'a> {
-    pub(super) work: NodeWork<'a>,
-    pub(super) scope: NodeScope<'a>,
+pub(super) struct Node<'run> {
+    pub(super) work: NodeWork<'run>,
+    pub(super) scope: NodeScope<'run>,
     /// The slot's per-call frame state (cart + reserve + erased contract) — never absent, see
     /// [`Frame`].
     pub(super) frame: Frame,
@@ -186,7 +186,7 @@ pub(super) struct Node<'a> {
 /// owned read-deps. `Dispatch` spawns rather than reads, so returns `None`. For
 /// `Combine`, only the `deps[park_count..]` suffix is owned; the park-producer
 /// prefix is installed separately as `Notify` edges by `Scheduler::add`.
-pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
+pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Option<Vec<NodeId>> {
     match work {
         // `pre_subs` ride along structurally on the slot's `DispatchState`; they are
         // not read-deps of the Dispatch itself.
@@ -203,7 +203,7 @@ pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
 /// Park-producer prefix for a `Combine` (sibling slots whose values it splices
 /// but does not own). Empty for every other work shape. The caller installs
 /// each entry as a `Notify` edge separately from the Owned-edge install path.
-pub(super) fn work_park_producers<'a, 'b>(work: &'b NodeWork<'a>) -> &'b [NodeId] {
+pub(super) fn work_park_producers<'run, 'b>(work: &'b NodeWork<'run>) -> &'b [NodeId] {
     match work {
         NodeWork::Combine {
             deps, park_count, ..

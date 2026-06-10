@@ -21,12 +21,12 @@ use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::{DispatchCtx, DispatchState, Initialized};
 
-pub(in crate::machine::execute) struct BareTypeState<'a> {
+pub(in crate::machine::execute) struct BareTypeState<'run> {
     /// Set when `bare_type_leaf` parked on a still-finalizing referent (a
     /// `RECURSIVE TYPES` member caught mid-seal). On resume the leaf re-resolves
     /// against the now-sealed binding through the same memoized bridge.
     pub(in crate::machine::execute) park: Option<BareTypeParkTrack>,
-    _ph: PhantomData<&'a ()>,
+    _ph: PhantomData<&'run ()>,
 }
 
 /// Parked resolution state for a `BareTypeLeaf` whose referent was still finalizing.
@@ -38,22 +38,22 @@ pub(in crate::machine::execute) struct BareTypeParkTrack {
     pub(in crate::machine::execute) producer: NodeId,
 }
 
-pub(in crate::machine::execute) struct CtorState<'a> {
+pub(in crate::machine::execute) struct CtorState<'run> {
     pub(in crate::machine::execute) init: Initialized,
-    pub(in crate::machine::execute) track: Option<CtorTrack<'a>>,
+    pub(in crate::machine::execute) track: Option<CtorTrack<'run>>,
     /// Set when `type_call` parked on a still-finalizing head binding (a
     /// `LET <Type-class> = …` placeholder, e.g. a forward functor). On resume
     /// the whole `type_call` re-runs against the now-finalized binding — the
     /// head may resolve type-side (a functor or type alias), so the keyworded
     /// resolve path is the wrong continuation. Mutually exclusive with `track`.
-    pub(in crate::machine::execute) head_placeholder: Option<TypeCallHeadPlaceholder<'a>>,
+    pub(in crate::machine::execute) head_placeholder: Option<TypeCallHeadPlaceholder<'run>>,
 }
 
 /// Parked head-resolution state for a `TypeCall` whose head name was a
 /// still-finalizing placeholder. Carries the original call expression so the
 /// resume re-runs the fast lane once the producer is bound.
-pub(in crate::machine::execute) struct TypeCallHeadPlaceholder<'a> {
-    pub(in crate::machine::execute) expr: KExpression<'a>,
+pub(in crate::machine::execute) struct TypeCallHeadPlaceholder<'run> {
+    pub(in crate::machine::execute) expr: KExpression<'run>,
     pub(in crate::machine::execute) producer: NodeId,
 }
 
@@ -63,38 +63,38 @@ pub(in crate::machine::execute) struct TypeCallHeadPlaceholder<'a> {
 /// sub_id)` for the remaining parked slots. The resume reads each
 /// sub's terminal, fills the slot, and tail-calls
 /// [`constructors::finish`].
-pub(in crate::machine::execute) struct CtorTrack<'a> {
+pub(in crate::machine::execute) struct CtorTrack<'run> {
     pub(in crate::machine::execute) subs: Vec<(usize, NodeId)>,
-    pub(in crate::machine::execute) staged_values: Vec<Option<&'a KObject<'a>>>,
-    pub(in crate::machine::execute) kind: CtorKind<'a>,
+    pub(in crate::machine::execute) staged_values: Vec<Option<&'run KObject<'run>>>,
+    pub(in crate::machine::execute) kind: CtorKind<'run>,
 }
 
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
 /// slot is resolved. `(set, index)` is the sealed-member identity stamped onto the produced
 /// `KObject`; `schema` is the projected (sibling-`SetLocal`-resolved) schema used for
 /// per-value type-checking.
-pub(in crate::machine::execute) enum CtorKind<'a> {
+pub(in crate::machine::execute) enum CtorKind<'run> {
     /// Newtype construction (record-repr or scalar) from a single positional value. One value
     /// cell carrying the whole value expression; the finish type-checks it against the
     /// member's `repr`, peels any `Wrapped` layer, and tags it with `identity`.
-    Newtype { identity: &'a KType<'a> },
+    Newtype { identity: &'run KType<'run> },
     /// Record-repr newtype construction from a named record-literal body (`Point {x = 1, y =
     /// 2}`). One value cell per field, so a literal field stages in place (synchronous bind,
     /// matching the retired struct path) instead of deferring the whole record literal; the
     /// finish builds the `KObject::Record` and wraps it with `identity`.
     RecordNewtype {
-        identity: &'a KType<'a>,
+        identity: &'run KType<'run>,
         field_names: Vec<String>,
     },
     Tagged {
-        schema: Rc<HashMap<String, KType<'a>>>,
-        set: Rc<RecursiveSet<'a>>,
+        schema: Rc<HashMap<String, KType<'run>>>,
+        set: Rc<RecursiveSet<'run>>,
         index: usize,
         tag: String,
     },
 }
 
-impl<'a> BareTypeState<'a> {
+impl<'run> BareTypeState<'run> {
     pub(in crate::machine::execute) fn with_park(park: BareTypeParkTrack) -> Self {
         Self {
             park: Some(park),
@@ -108,9 +108,9 @@ impl<'a> BareTypeState<'a> {
     /// lifting the producer's value.
     pub(in crate::machine::execute) fn resume(
         self,
-        ctx: &mut DispatchCtx<'a, '_>,
+        ctx: &mut DispatchCtx<'run, '_>,
         idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
+    ) -> Result<NodeStep<'run>, KError> {
         let BareTypeState { park, .. } = self;
         let BareTypeParkTrack { leaf, producer } =
             park.expect("BareTypeLeaf resume only entered after a park track is installed");
@@ -122,8 +122,11 @@ impl<'a> BareTypeState<'a> {
     }
 }
 
-impl<'a> CtorState<'a> {
-    pub(in crate::machine::execute) fn with_track(init: Initialized, track: CtorTrack<'a>) -> Self {
+impl<'run> CtorState<'run> {
+    pub(in crate::machine::execute) fn with_track(
+        init: Initialized,
+        track: CtorTrack<'run>,
+    ) -> Self {
         Self {
             init,
             track: Some(track),
@@ -133,7 +136,7 @@ impl<'a> CtorState<'a> {
 
     pub(in crate::machine::execute) fn with_head_placeholder(
         init: Initialized,
-        head_placeholder: TypeCallHeadPlaceholder<'a>,
+        head_placeholder: TypeCallHeadPlaceholder<'run>,
     ) -> Self {
         Self {
             init,
@@ -148,9 +151,9 @@ impl<'a> CtorState<'a> {
     /// instead re-runs `type_call` against the now-finalized head binding.
     pub(in crate::machine::execute) fn resume(
         self,
-        ctx: &mut DispatchCtx<'a, '_>,
+        ctx: &mut DispatchCtx<'run, '_>,
         idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
+    ) -> Result<NodeStep<'run>, KError> {
         let CtorState {
             init,
             track,
@@ -188,18 +191,19 @@ impl<'a> CtorState<'a> {
         for (_, dep_id) in &subs {
             ctx.free(dep_id.index());
         }
-        let values: Vec<&'a KObject<'a>> = staged_values.into_iter().map(|o| o.unwrap()).collect();
+        let values: Vec<&'run KObject<'run>> =
+            staged_values.into_iter().map(|o| o.unwrap()).collect();
         Ok(constructors::finish(ctx.current_scope(), &kind, &values))
     }
 }
 
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
-pub(super) fn bare_identifier<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
+pub(super) fn bare_identifier<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
     name: String,
     idx: usize,
-) -> NodeStep<'a> {
+) -> NodeStep<'run> {
     match ctx
         .current_scope()
         .resolve_with_chain(&name, ctx.chain_deref())
@@ -223,11 +227,11 @@ pub(super) fn bare_identifier<'a>(
     }
 }
 
-pub(super) fn bare_type_leaf<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
+pub(super) fn bare_type_leaf<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
     t: &TypeName,
     idx: usize,
-) -> NodeStep<'a> {
+) -> NodeStep<'run> {
     match resolve_type_leaf_carrier(ctx.current_scope(), t, ctx.active_chain()) {
         TypeLeafCarrier::Resolved(kt) => NodeStep::Done(NodeOutput::ktype(kt)),
         TypeLeafCarrier::Unbound(n) => {
@@ -265,7 +269,7 @@ pub(super) fn bare_type_leaf<'a>(
     }
 }
 
-pub(super) fn sigiled_type_expr<'a>(expr: KExpression<'a>) -> NodeStep<'a> {
+pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> NodeStep<'run> {
     let inner = match expr.parts.into_iter().next() {
         Some(Spanned {
             value: ExpressionPart::SigiledTypeExpr(boxed),
@@ -286,11 +290,11 @@ pub(super) fn sigiled_type_expr<'a>(expr: KExpression<'a>) -> NodeStep<'a> {
 /// to `KObject::KTypeValue(KType::Record(_))` via the shared field-list elaborator, deferring
 /// through a Combine when a field forward-references or sub-dispatches. No type-constructor
 /// builtin is involved — the record type is structural.
-pub(super) fn record_type<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
-    expr: KExpression<'a>,
+pub(super) fn record_type<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    expr: KExpression<'run>,
     idx: usize,
-) -> NodeStep<'a> {
+) -> NodeStep<'run> {
     let fields = match expr.parts.into_iter().next() {
         Some(Spanned {
             value: ExpressionPart::RecordType(boxed),
@@ -306,11 +310,11 @@ pub(super) fn record_type<'a>(
 /// `(99)`, `("x")`, `([1 2 3])`, `((inner))` etc. — single-part
 /// literal-shaped expressions. Skips the bucket lookup + builtin call
 /// the Keyworded path would otherwise route through.
-pub(super) fn literal_pass_through<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
-    expr: KExpression<'a>,
+pub(super) fn literal_pass_through<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    expr: KExpression<'run>,
     idx: usize,
-) -> NodeStep<'a> {
+) -> NodeStep<'run> {
     let only = expr
         .parts
         .into_iter()
@@ -347,11 +351,11 @@ pub(super) fn literal_pass_through<'a>(
 
 /// Either lift the producer's already-ready value, or park on it via a
 /// `Lift(Pending)`. Owned-edge install mirrors `install_eager_subs`.
-fn park_on_literal_producer<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
+fn park_on_literal_producer<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
     producer: NodeId,
     idx: usize,
-) -> NodeStep<'a> {
+) -> NodeStep<'run> {
     if ctx.is_result_ready(producer) {
         let outcome = match ctx.read_result(producer) {
             Ok(v) => NodeOutput::Value(v),
@@ -389,11 +393,11 @@ fn park_on_literal_producer<'a>(
 ///
 /// A name with no producer and no binding is `UnboundName` (genuine absence only —
 /// pending names are already parked in step 1).
-pub(super) fn type_call<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
-    expr: KExpression<'a>,
+pub(super) fn type_call<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    expr: KExpression<'run>,
     idx: usize,
-) -> NodeStep<'a> {
+) -> NodeStep<'run> {
     let head_t = match &expr.parts[0].value {
         ExpressionPart::Type(t) => t.clone(),
         _ => unreachable!("TypeCall shape implies leaf Type head"),
@@ -454,11 +458,11 @@ pub(super) fn type_call<'a>(
 }
 
 /// Decode a constructor `BodyResult` into a `NodeStep`.
-pub(super) fn schedule_constructor_body<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
-    body: BodyResult<'a>,
+pub(super) fn schedule_constructor_body<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    body: BodyResult<'run>,
     idx: usize,
-) -> NodeStep<'a> {
+) -> NodeStep<'run> {
     match body {
         BodyResult::Tail {
             expr,

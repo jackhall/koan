@@ -26,10 +26,10 @@ use super::DispatchCtx;
 /// Resolve the chain's operator group via the cached probe and route to the fold
 /// seam. The probe is `Some` for every `OperatorChain` (the classifier guarantees it),
 /// so a `None` probe is a classification bug.
-pub(in crate::machine::execute) fn run<'a>(
-    ctx: &DispatchCtx<'a, '_>,
-    expr: &KExpression<'a>,
-) -> NodeStep<'a> {
+pub(in crate::machine::execute) fn run<'run>(
+    ctx: &DispatchCtx<'run, '_>,
+    expr: &KExpression<'run>,
+) -> NodeStep<'run> {
     let probe = expr
         .operator_probe()
         .expect("OperatorChain shape guarantees a cached operator probe");

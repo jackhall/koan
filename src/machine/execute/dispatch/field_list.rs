@@ -22,33 +22,35 @@ use crate::machine::{
 
 /// Folds the elaborated `(name, KType)` pairs into the caller's carrier on the Combine's
 /// `Done` arm.
-pub(crate) type FieldListFinalize<'a> =
-    Box<dyn for<'step> FnOnce(&'step Scope<'a>, Vec<(String, KType<'a>)>) -> BodyResult<'a> + 'a>;
+pub(crate) type FieldListFinalize<'run> = Box<
+    dyn for<'step> FnOnce(&'step Scope<'run>, Vec<(String, KType<'run>)>) -> BodyResult<'run>
+        + 'run,
+>;
 
 /// Schedule the sigil sub-Dispatches (in DFS order) and the Combine that re-walks `expr`
 /// once they and `park_producers` resolve. `threaded` / `chain` rebuild the elaborator for
 /// the re-walk; `pending_guard` (when present) rides into the closure so its Drop fires on
 /// every finish arm; `error_frame` is attached to the user-facing `Err` arm.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn defer_field_list_via_combine<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    expr: KExpression<'a>,
+pub(crate) fn defer_field_list_via_combine<'run, 's>(
+    sched: &mut dyn SchedulerHandle<'run, 's>,
+    expr: KExpression<'run>,
     park_producers: Vec<NodeId>,
-    sub_dispatches: Vec<KExpression<'a>>,
+    sub_dispatches: Vec<KExpression<'run>>,
     context: &'static str,
     name_kind: FieldNameKind,
     threaded: Vec<String>,
     chain: Option<Rc<LexicalFrame>>,
-    pending_guard: Option<PendingBinderGuard<'a>>,
+    pending_guard: Option<PendingBinderGuard<'run>>,
     error_frame: Option<Frame>,
-    finalize: FieldListFinalize<'a>,
-) -> BodyResult<'a> {
+    finalize: FieldListFinalize<'run>,
+) -> BodyResult<'run> {
     let park_count = park_producers.len();
     let owned_subs: Vec<NodeId> = sub_dispatches
         .into_iter()
         .map(|sub| sched.add_dispatch_here(sub))
         .collect();
-    let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
+    let finish: CombineFinish<'run> = Box::new(move |_sched, results| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
         // `results` = `[park results.. , owned-sub results..]`; the re-walk consumes only
@@ -90,12 +92,12 @@ pub(crate) fn defer_field_list_via_combine<'a, 's>(
 /// value/type position declares no binder, so the elaborator threads no self-reference; a
 /// field naming a forward type parks and a sigil field type sub-dispatches, both deferred
 /// through one Combine (the field walker's own re-walk handles nested records).
-pub(crate) fn elaborate_record_value<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    fields: KExpression<'a>,
+pub(crate) fn elaborate_record_value<'run, 's>(
+    sched: &mut dyn SchedulerHandle<'run, 's>,
+    fields: KExpression<'run>,
     chain: Option<Rc<LexicalFrame>>,
-) -> BodyResult<'a> {
-    fn fold<'a>(scope: &Scope<'a>, pairs: Vec<(String, KType<'a>)>) -> BodyResult<'a> {
+) -> BodyResult<'run> {
+    fn fold<'run>(scope: &Scope<'run>, pairs: Vec<(String, KType<'run>)>) -> BodyResult<'run> {
         let record = Record::from_pairs(pairs);
         BodyResult::ktype(scope.arena.alloc_ktype(KType::Record(Box::new(record))))
     }

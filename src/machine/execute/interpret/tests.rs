@@ -31,11 +31,11 @@ impl Write for SharedBuf {
 
 /// Run `source` and return the root scope so callers can inspect post-run bindings;
 /// PRINT output lands in `captured`.
-pub(super) fn run<'a>(
+pub(super) fn run<'run>(
     source: &str,
-    arena: &'a RuntimeArena,
+    arena: &'run RuntimeArena,
     captured: Rc<RefCell<Vec<u8>>>,
-) -> &'a Scope<'a> {
+) -> &'run Scope<'run> {
     let exprs = parse(source).expect("parse should succeed");
     let root = default_scope(arena, Box::new(SharedBuf(captured)));
     let mut scheduler = Scheduler::new();
