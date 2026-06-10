@@ -146,11 +146,11 @@ impl<'a> NodeStore<'a> {
         self.slots[id] = SlotState::PreRun(Node {
             work,
             scope: NodeScope::Yoked,
-            frame: Some(Frame {
+            frame: Frame {
                 cart,
                 reserve,
                 contract,
-            }),
+            },
             chain,
         });
     }

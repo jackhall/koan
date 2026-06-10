@@ -340,13 +340,11 @@ impl<'a> Scheduler<'a> {
         let id = self.store.alloc_slot(Node {
             work,
             scope: node_scope,
-            // A freshly-submitted slot always has a cart (the fallback above); a slot only
-            // becomes frameless later, via a frame-taking reinstall.
-            frame: Some(Frame {
+            frame: Frame {
                 cart,
                 reserve: None,
                 contract: None,
-            }),
+            },
             chain,
         });
         self.deps.install_for_slot(id, owned_edges, &pending_owned);

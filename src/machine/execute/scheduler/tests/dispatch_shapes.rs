@@ -691,7 +691,7 @@ fn keyworded_unchanged_with_keyword_in_body() {
 /// value-cell parts need sub-Dispatch evaluation (the Resolved-with-eager-subs
 /// arm) must terminate correctly under the stateful driver. Pins that
 /// `KeywordedState::WaitingEagerSubs` resumes, re-resolves, and binds inline
-/// through `invoke_to_step_pinned`.
+/// through `invoke_to_step`.
 ///
 /// Program: `LET y = (FIRST [1 2 3])`. LET picks at initial resolve; the RHS
 /// is an eager sub-Dispatch. After the sub resolves to `1`, the resume handler

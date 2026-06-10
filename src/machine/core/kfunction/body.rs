@@ -29,14 +29,14 @@ use super::KFunction;
 /// (MODULE, SIG) that schedule a `Combine` to finalize their body statements: the
 /// binder's slot lifts its terminal off the Combine.
 /// Return-type contract a tail-replace carries to its Done arm, for both the
-/// declared-return check and the error-frame label. Generalizes what was a bare
-/// `&KFunction` carrier so a function-less return-typed tail (a MATCH / TRY arm with
-/// `-> :T`) rides the same channel as an FN call.
+/// declared-return check and the error-frame label. A function-less return-typed tail (a
+/// MATCH / TRY arm with `-> :T`) rides the same channel as an FN call: `Arm` carries the
+/// declared type directly, `Function` reads it off the callee's signature.
 ///
 /// `Arm`'s `ret` is arena-borrowed so the whole contract stays `Copy`, matching the
-/// `&KFunction` it sits beside. Same TCO limitation as the `function` carrier
-/// ([`crate::machine::execute`] `Node`): a nested tail-call rewrites the contract to
-/// the callee, so the check fires only against the tail-most contract.
+/// `&KFunction` it sits beside. Stored erased as [`ErasedContract`] on the node's `Frame`.
+/// TCO limitation: a nested tail-call rewrites the contract to the callee, so the check
+/// fires only against the tail-most contract.
 #[derive(Clone, Copy)]
 pub enum ReturnContract<'a> {
     /// An FN / builtin call: check against `signature.return_type`, label via `summarize()`.
@@ -308,10 +308,7 @@ mod tests {
         let cart = CallArena::new(scope, None);
         // Stands in for a MATCH/TRY arm's `-> :T`, allocated in the cart's own arena.
         let ret: &KType = cart.arena().alloc_ktype(KType::Str);
-        let erased = ErasedContract::erase(ReturnContract::Arm {
-            ret,
-            kind: "MATCH",
-        });
+        let erased = ErasedContract::erase(ReturnContract::Arm { ret, kind: "MATCH" });
         // Reattach witnessed by the cart `Rc`, then read through the re-anchored borrow.
         let reattached: ReturnContract<'_> = unsafe { erased.reattach(&cart) };
         match reattached {

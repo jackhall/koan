@@ -47,9 +47,14 @@ fn chained_tail_calls_reuse_frames() {
 
     assert_eq!(captured.borrow().as_slice(), b"ok\n");
     assert_eq!(sched.len(), 1, "tail chain should collapse to one slot");
+    // Reuse draws from the per-slot reserve, which is seeded by the *previous* per-call frame.
+    // The top-level→first-FN transition parks the non-dying run frame, which is never reusable,
+    // so the first FN frame allocates fresh and reuse kicks in from the third call onward —
+    // two reuses across AA -> BB -> CC -> DD. Steady-state tail recursion still ping-pongs two
+    // frames with no further allocation.
     assert!(
-        sched.tail_reuse_count() >= 3,
-        "expected at least 3 reuses across AA -> BB -> CC -> DD, got {}",
+        sched.tail_reuse_count() >= 2,
+        "expected at least 2 reuses across AA -> BB -> CC -> DD, got {}",
         sched.tail_reuse_count(),
     );
 }

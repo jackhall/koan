@@ -5,7 +5,7 @@
 //! queries, dep-graph mutations, sub-submission, the recent-wakes
 //! side-channel, and the dispatcher-only ops (`build_bare_outcomes`,
 //! `install_eager_subs`, `replace_with_parked_dispatch`,
-//! `resume_eager_subs`, `invoke_to_step{,_pinned}`) that used to live
+//! `resume_eager_subs`, `invoke_to_step`) that used to live
 //! on `impl Scheduler` solely so they could spell the scheduler's
 //! internal fields.
 //!
@@ -172,27 +172,6 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
         }
     }
 
-    /// `invoke_to_step` with the slot's reserve frame consumed when
-    /// available; see [per-call-arena-protocol.md § Ping-pong reserve
-    /// frame](../../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
-    /// All scheduler frame state is reached through the narrow
-    /// `active_*` accessors so the storage layout stays scheduler-side.
-    pub(super) fn invoke_to_step_pinned(
-        &mut self,
-        future: KFuture<'a>,
-        idx: usize,
-    ) -> NodeStep<'a> {
-        if let Some(reserve) = self.sched.active_reserve_take() {
-            let local_pin = self.sched.active_frame_replace(Some(reserve));
-            let step = self.invoke_to_step(future, idx);
-            let _ = self.sched.active_frame_replace(local_pin);
-            step
-        } else {
-            let _frame_pin = self.sched.active_frame_clone();
-            self.invoke_to_step(future, idx)
-        }
-    }
-
     /// Build the per-part `bare_outcomes` cache: one `resolve_name_part`
     /// per bare-name part, `None` otherwise. `consumer = None` defers
     /// cycle detection to the splice walk.
@@ -309,7 +288,7 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
         match picked {
             None => KeywordedState::finish(self, working_expr, idx),
             Some(f) => match f.bind(working_expr) {
-                Ok(future) => Ok(self.invoke_to_step_pinned(future, idx)),
+                Ok(future) => Ok(self.invoke_to_step(future, idx)),
                 Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
             },
         }
@@ -364,8 +343,8 @@ impl<'a, 'b, 's> SchedulerHandle<'a, 's> for DispatchCtx<'a, 'b> {
         let _ = self.sched.active_frame_replace(prev);
     }
 
-    fn try_take_reusable_frame_for_tail(&mut self) -> Option<Rc<CallArena>> {
-        self.sched.try_take_reusable_frame_for_tail()
+    fn acquire_tail_frame(&mut self, outer: &Scope<'_>) -> Rc<CallArena> {
+        self.sched.acquire_tail_frame(outer)
     }
 
     fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>> {

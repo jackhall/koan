@@ -142,11 +142,10 @@ pub(super) enum NodeScope<'a> {
 /// A node's per-call frame state: the execution cart, its ping-pong reserve, and the erased
 /// return contract. Lifetime-free — the cart `Rc` pins everything its members point at, and the
 /// contract is erased ([`ErasedContract`]) and re-anchored at the Done read boundary witnessed
-/// by `cart`. A node holds `Some(Frame)` whenever it runs against a cart (the common case — the
-/// cart is the arena the slot's step runs against, falling back to the run frame at top level);
-/// `Node::frame` is `None` only for a genuinely frameless slot — a `Lift` left behind when a
-/// tail-call took the frame into a Combine (deferred-return path). `reserve` and `contract` are
-/// sparse even when a `Frame` is present.
+/// by `cart`. Every node owns a `Frame`: the cart is the arena the slot's step runs against,
+/// falling back to the run frame at top level (see `Scheduler::submit_node`), and an invoke
+/// reuses the *reserve* rather than the active cart, so the slot's cart is never taken out from
+/// under it. `reserve` and `contract` are sparse.
 pub(super) struct Frame {
     /// The cart this slot's step runs against. Cloned onto every sub-slot dispatched in the same
     /// body, so it is uniquely owned only at a TCO collapse point (the gate
@@ -174,9 +173,9 @@ pub(super) struct Frame {
 pub(super) struct Node<'a> {
     pub(super) work: NodeWork<'a>,
     pub(super) scope: NodeScope<'a>,
-    /// The slot's per-call frame state (cart + reserve + erased contract), or `None` for a
-    /// frameless slot — see [`Frame`].
-    pub(super) frame: Option<Frame>,
+    /// The slot's per-call frame state (cart + reserve + erased contract) — never absent, see
+    /// [`Frame`].
+    pub(super) frame: Frame,
     /// Immutable cactus-chain naming this node's lexical position. Head frame is the
     /// innermost enclosing block; tail (`parent: None`) is top-level. See
     /// `core/lexical_frame.rs`.

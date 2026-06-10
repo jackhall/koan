@@ -56,9 +56,12 @@ pub trait SchedulerHandle<'a, 's> {
         body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a, 's>),
     );
 
-    /// Take the active frame for reuse on a TCO Replace iff it is uniquely owned. See
-    /// [per-call-arena-protocol.md § TCO frame reuse](../../../../design/per-call-arena-protocol.md#tco-frame-reuse).
-    fn try_take_reusable_frame_for_tail(&mut self) -> Option<Rc<CallArena>>;
+    /// Acquire the per-call frame for the body this invoke is entering: reuse the slot's
+    /// reserve cart (reset in place) when it is uniquely owned, else allocate a fresh frame
+    /// under `outer`. Reuse always draws from the *reserve*, never the live active cart, so an
+    /// invoke never empties `active_frame` — the slot's own cart rides through to the post-step.
+    /// See [per-call-arena-protocol.md § TCO frame reuse](../../../../design/per-call-arena-protocol.md#tco-frame-reuse).
+    fn acquire_tail_frame(&mut self, outer: &Scope<'_>) -> Rc<CallArena>;
 
     /// Active slot's lexical chain. Mirrors [`Self::current_frame`]. See `LexicalFrame`.
     fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>>;

@@ -135,12 +135,14 @@ state live on `Scheduler`:
   currently being executed. Read through
   [`SchedulerHandle::current_frame`](../src/machine/core/kfunction/scheduler_handle.rs);
   written only by `enter_slot_step` / `exit_slot_step` (the RAII
-  bracket around every iteration of `Scheduler::execute`) and by the
-  ping-pong reserve consumer.
+  bracket around every iteration of `Scheduler::execute`) and the
+  `with_active_frame` body bracket. An invoke never takes it (tail
+  reuse draws from the reserve, below), so within a step it is always
+  `Some` — `Node::frame` and `PostStep::prev_frame` are non-optional.
 - **`active_reserve: Option<Rc<CallArena>>`** — the slot's reserve
-  frame, drained from `Node::reserve_frame` through `enter_slot_step`
-  and consumed by `invoke_to_step_pinned` (see [§ Ping-pong reserve
-  frame](#ping-pong-reserve-frame)).
+  frame, drained from `Node`'s `Frame::reserve` through
+  `enter_slot_step` and consumed by `acquire_tail_frame` (see
+  [§ Ping-pong reserve frame](#ping-pong-reserve-frame)).
 - **`SchedulerHandle::with_active_frame(frame, f)`** — temporarily
   installs `frame` as `active_frame` for the duration of a closure
   call. Used by `KFunction::invoke` to spawn a deferred return-type
@@ -150,11 +152,14 @@ state live on `Scheduler`:
 
 `Scheduler::execute` *moves* `node.frame` into `self.active_frame`
 (no clone) for the duration of each step. That single-ownership
-discipline is what lets the tail-reuse path detect "nothing escaped"
-via `Rc::strong_count == 1`: a clone visible to `strong_count` is a
-real escape. Sub-Dispatch / sub-Bind / sub-Combine slots spawned via
-`add()` inherit `active_frame` so they see the right ancestor for
-their own chaining decisions.
+discipline is what lets the tail-reuse path detect "nothing escaped":
+when the just-finished active frame rotates into the slot's reserve and
+a later step tries to reuse it, `try_reset_for_tail`'s `Rc::get_mut`
+succeeds only at `strong_count == 1` — a clone visible to `strong_count`
+(an escaped closure, a sub-Dispatch that cloned `active_frame`) is a
+real escape and refuses the reset. Sub-Dispatch / sub-Bind / sub-Combine
+slots spawned via `add()` inherit `active_frame` so they see the right
+ancestor for their own chaining decisions.
 
 ## Outer-frame chain for builtin-built frames
 
@@ -219,75 +224,66 @@ Two structural invariants make the reset sound:
 Frame reuse is what makes deep tail recursion truly constant-memory —
 both in the scheduler's slot table (the `Tail` rewrite alone) and on
 the heap (the reset turns over arena storage in place rather than
-allocating per step). `SchedulerHandle::try_take_reusable_frame_for_tail`
-takes the active frame, refuses to hand it out if any clone exists,
-and otherwise lets `KFunction::invoke` reset the frame in place.
-Frames carrying an escaped closure (or any other clone of the `Rc`)
-fall through to a fresh `CallArena::new`, preserving snapshot
-semantics for the escaped value.
+allocating per step). `KFunction::invoke` acquires the body's frame
+through `SchedulerHandle::acquire_tail_frame(outer)`, which reuses the
+slot's **reserve** cart — resetting it in place when uniquely owned —
+and otherwise allocates a fresh `CallArena::new`. Reuse draws from the
+reserve, never the live active frame, so an invoke never empties the
+slot's own cart. A reserve carrying an escaped closure (or any other
+clone of its `Rc`) fails `try_reset_for_tail`'s `Rc::get_mut` and falls
+through to a fresh frame, preserving snapshot semantics for the escaped
+value.
 
 ### MATCH frame lifetime under tail recursion
 
 When a user-fn recurses through a `MATCH` arm, the recursive call sits
 inside the MATCH-built per-call frame, not the user-fn's own frame.
-MATCH clones the user-fn's frame Rc onto its own frame's
-`outer_frame`, so the user-fn frame's `strong_count` is `> 1` for the
-duration of the arm body. The TCO Replace at the recursive call
-therefore refuses in-place reset on that step and routes through
-`CallArena::new` — the chained `Rc` is a real alias. Cross-step reuse
-resumes one iteration later once the MATCH frame is itself replaced
-by the next tail step and its `outer_frame` Rc drops.
+MATCH clones the user-fn's frame Rc onto its own frame's `outer_frame`,
+so the user-fn frame stays alive for the duration of the arm body —
+without that chained Rc, the recursive arm body's `outer` pointer into
+the dying frame would dangle on TCO Replace. A reserve still holding a
+clone of that aliased frame fails `try_reset_for_tail`'s `Rc::get_mut`
+and falls through to a fresh frame; reuse resumes once the alias drops.
 
 The bound the `chained_user_fn_tail_calls_reuse_one_slot` and
-`match_driven_tail_recursion_completes` tests pin is: the user-fn
-frame is alive across exactly one MATCH-arm iteration at a time, and
-the call chain collapses to one scheduler slot via the `Tail` rewrite
-even when reset refuses on individual MATCH-arm steps. Without the
-chained Rc, the recursive arm body's `outer` pointer into the dying
-frame would dangle on TCO Replace.
+`match_driven_tail_recursion_completes` tests pin is: the user-fn frame
+is alive across exactly one MATCH-arm iteration at a time, and the call
+chain collapses to one scheduler slot via the `Tail` rewrite even when a
+reset refuses on individual MATCH-arm steps.
 
 ## Ping-pong reserve frame
 
-The stateful dispatch driver's eager-subs resume / install-time
-short-circuit sites — keyworded and `FunctionValueCall` invocations
-routed through `invoke_to_step_pinned` — hold the only `Rc<CallArena>`
-for the arena that the running `scope` borrows into. Pinning that
-frame across the synchronous invoke keeps `strong_count >= 2`, which
-forecloses tail-reuse on the slot's only frame Rc — without the pin,
-`try_reset_for_tail` would deallocate the arena while `scope`'s
-tree-borrows protector is still live. The cost is one
-`CallArena::new` per resume invoke that the legacy keyworded path
-could otherwise have skipped.
+An invoke runs synchronously while the slot's `scope` borrows into the
+**active** frame's arena, so that frame's tree-borrows protector is live
+across the invoke: resetting the active frame in place mid-step would
+deallocate the arena out from under a live borrow. Tail reuse therefore
+never touches the active frame — it draws from a **different** frame, two
+iterations old, that is past every live protector.
 
-To recover that allocation, the slot carries a per-iteration **reserve
-frame** in `Node::reserve_frame` that ping-pongs across
-`NodeStep::Replace`:
+To supply one, the slot carries a per-iteration **reserve frame** in
+`Frame::reserve` that ping-pongs across `NodeStep::Replace`:
 
 - **Replace arm in `execute.rs`.** On a new-frame Replace, drop the
   (now two-iterations-old) reserve, rotate the post-step frame into
-  `slot.reserve_frame`, install the new frame as `slot.frame`. First
-  iteration's reserve stays `None`; second iteration fills it;
+  the slot's `reserve`, install the new frame as the slot's `cart`.
+  First iteration's reserve stays `None`; second iteration fills it;
   iteration 3+ has a reserve to consume.
-- **Reserve-consuming arm in `invoke_to_step_pinned`.** When the
-  slot's reserve is `Some`, the helper pins `active_frame` (the
-  slot's current frame) via a local clone — still anchoring `scope` —
-  and swaps the reserve into `active_frame`. The reserve's
-  `strong_count` is 1 (only the slot's `reserve_frame` field held it,
-  drained through `enter_slot_step` into `Scheduler::active_reserve`),
-  so `try_take_reusable_frame_for_tail` succeeds, the reset lands,
-  and the body runs in the reset arena. After the invoke returns, the
-  local pin is swapped back into `active_frame` so the Replace arm
-  reads the slot's frame as today.
+- **Reserve-consuming `acquire_tail_frame`.** `enter_slot_step` drains
+  the slot's `reserve` into `Scheduler::active_reserve`; on the next
+  invoke, `acquire_tail_frame` takes it and calls `try_reset_for_tail`.
+  Its `strong_count` is 1 (only the reserve field held it), so the reset
+  lands and the body runs in the reset arena. If a clone escaped while
+  that frame was the active cart two iterations ago, `Rc::get_mut`
+  refuses and `acquire_tail_frame` allocates fresh instead.
 
 The dispatcher reaches the slot's reserve / active-frame state through
 the narrow [`DispatchCtx`](../src/machine/execute/dispatch/ctx.rs)
 facade (see [execution-model.md § The dispatcher / scheduler
 boundary](execution-model.md#the-dispatcher--scheduler-boundary)) —
-`sched.active_reserve_take()` drains the reserve, and
-`sched.active_frame_replace(...)` performs the local pin/swap. The
-`active_frame` / `active_reserve` fields themselves stay
-`pub(in execute::scheduler)`; the accessor surface is what dispatch
-sees.
+`KFunction::invoke` calls `acquire_tail_frame` through its
+`SchedulerHandle`. The `active_frame` / `active_reserve` fields
+themselves stay `pub(in execute::scheduler)`; the accessor surface is
+what dispatch sees.
 
 The two-iteration gap is the safety witness: when iteration N consumes
 the reserve, the reserve's scope was the active scope on iteration
@@ -309,7 +305,7 @@ A scheduler slot stores its scope as a
 [`NodeScope<'a>`](../src/machine/execute/nodes.rs), not a raw `&'a Scope<'a>`. The enum has two
 arms: `Anchored(&'a Scope<'a>)` carries a genuine run-lifetime borrow (a run-root scope, or a
 sub-scope the active frame does not directly back); `Yoked` carries no payload at all. A
-per-call frame scope rides `Yoked` — single-cart, because the slot's own `Node.frame`
+per-call frame scope rides `Yoked` — single-cart, because the slot's own `Frame::cart`
 `Rc<CallArena>` is the sole liveness witness, so there is no second `Rc` clone and no
 contention with `try_reset_for_tail`'s `strong_count == 1` TCO reuse check.
 

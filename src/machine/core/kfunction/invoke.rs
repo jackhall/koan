@@ -42,15 +42,12 @@ impl<'a> KFunction<'a> {
             Body::Builtin(f) => f(sched, bundle),
             Body::UserDefined(expr) => {
                 let outer = self.captured_scope();
-                // Tail-reuse: when this invoke is the body of a TCO Replace step and the
-                // previous slot's frame is uniquely owned, reset it in place and reuse
-                // the shell. `try_reset_for_tail` relinks the child scope's `outer` so
-                // this works across mutual tail calls between fns with different
-                // captured scopes.
-                let frame: Rc<CallArena> = sched
-                    .try_take_reusable_frame_for_tail()
-                    .and_then(|mut prev| prev.try_reset_for_tail(outer).then_some(prev))
-                    .unwrap_or_else(|| CallArena::new(outer, None));
+                // Tail-reuse: reuse the slot's reserve cart (reset in place under `outer`,
+                // which relinks the child scope's `outer` so this works across mutual tail
+                // calls between fns with different captured scopes) when uniquely owned, else
+                // a fresh frame. Reuse draws from the reserve, never the live active cart, so
+                // the slot's own cart is never emptied here.
+                let frame: Rc<CallArena> = sched.acquire_tail_frame(outer);
                 // The per-call re-anchor is concentrated in `with_anchored_child`: parameters
                 // (values whose type carries the caller's `'a`) allocate into the frame arena
                 // and bind into the frame's child scope inside the closure, so the seed itself

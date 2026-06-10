@@ -23,14 +23,11 @@ impl<'a> Scheduler<'a> {
             // work or the in-step TCO frame reset.
             let node_scope = node.scope;
             let work = node.work;
-            let (cart, reserve, prev_contract) = match node.frame {
-                Some(Frame {
-                    cart,
-                    reserve,
-                    contract,
-                }) => (Some(cart), reserve, contract),
-                None => (None, None, None),
-            };
+            let Frame {
+                cart,
+                reserve,
+                contract: prev_contract,
+            } = node.frame;
             let prev_chain_carrier = node.chain;
             let guard = self.enter_slot_step(cart, reserve, prev_chain_carrier.clone(), node_scope);
             let step = match work {
@@ -50,31 +47,26 @@ impl<'a> Scheduler<'a> {
             // the step scope (via `post.step_scope()`), so the wrong-frame read that ambient
             // `active_frame` allowed is unspellable here.
             let post = self.exit_slot_step(guard);
-            // Drain re-entrant writes. `step_scope()` is `None` when a tail-call took the frame —
-            // a Replace whose scope is being reset, so its pending is moot.
-            if let Some(scope) = post.step_scope() {
-                scope.drain_pending();
-            }
+            // Drain re-entrant writes against the step scope.
+            post.step_scope().drain_pending();
             match step {
                 NodeStep::Done(output) => {
                     // Lift the terminal out of the dying per-call frame into the surviving
                     // captured-scope arena (`dest_arena`, a genuine `&'a`). A non-dying run frame
                     // (empty arena; top-level values live in the run arena) reads as frameless.
-                    let dest_arena = post.step_scope().and_then(|s| s.outer().map(|o| o.arena));
-                    let frame = post.prev_frame.as_ref().filter(|f| !f.non_dying());
+                    let dest_arena = post.step_scope().outer().map(|o| o.arena);
+                    let frame = (!post.prev_frame.non_dying()).then_some(&post.prev_frame);
                     // Re-anchor the erased contract against the step's cart, witnessed by `frame`.
-                    // `compute_done_output` consults the contract only when `frame` is `Some`, so
-                    // gating the re-anchor on the same `frame` keeps the witness present and the
-                    // taken-frame (frameless) case a clean `None`.
+                    // `compute_done_output` consults the contract only when `frame` is `Some` (a
+                    // real per-call frame, which is exactly when a contract is set), so a contract
+                    // on the non-dying run frame is harmlessly skipped.
                     let prev_function = match (prev_contract, frame) {
                         (Some(c), Some(witness)) => Some(unsafe { c.reattach(witness) }),
                         _ => None,
                     };
                     let result = compute_done_output(output, frame, dest_arena, prev_function);
                     if matches!(result, NodeOutput::Err(_)) {
-                        if let Some(scope) = post.step_scope() {
-                            scope.clear_placeholders_for_producer(id);
-                        }
+                        post.step_scope().clear_placeholders_for_producer(id);
                     }
                     self.finalize(idx, result);
                 }
@@ -111,7 +103,7 @@ impl<'a> Scheduler<'a> {
                             // it as the ping-pong reserve would defer (and mis-time) a real
                             // frame's drop. Treat it as no reserve — the run scope is re-reached
                             // through the scheduler's `run_frame`, never a reset reserve.
-                            let new_reserve = prev_frame.filter(|f| !f.non_dying());
+                            let new_reserve = (!prev_frame.non_dying()).then_some(prev_frame);
                             self.store.reinstall_with_frame(
                                 id,
                                 f,
@@ -122,22 +114,18 @@ impl<'a> Scheduler<'a> {
                             );
                         }
                         None => {
-                            // A frameless Replace keeps the prior cart when there is one; a tail
-                            // that took the frame (e.g. an unpinned keyworded invoke deferring to a
-                            // Combine) leaves `prev_frame` `None`, so the slot becomes frameless.
-                            // When the cart is gone, any contract is moot — a deferred return is
-                            // checked by the Combine, and `compute_done_output` ignores a contract
-                            // on a frameless slot — so dropping it with the `Frame` is sound.
+                            // A frameless Replace keeps the prior cart — an invoke reuses the
+                            // reserve, never the active cart, so the slot's cart is always present.
                             self.store.reinstall(
                                 id,
                                 Node {
                                     work: new_work,
                                     scope: node_scope,
-                                    frame: prev_frame.map(|cart| Frame {
-                                        cart,
+                                    frame: Frame {
+                                        cart: prev_frame,
                                         reserve: post_step_reserve,
                                         contract: next_contract,
-                                    }),
+                                    },
                                     chain: new_chain,
                                 },
                             );

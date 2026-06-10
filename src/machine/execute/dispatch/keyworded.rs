@@ -264,7 +264,7 @@ impl<'a> KeywordedState<'a> {
         {
             ResolveOutcome::Resolved(r) => {
                 let future = r.function.bind(working_expr)?;
-                Ok(ctx.invoke_to_step_pinned(future, idx))
+                Ok(ctx.invoke_to_step(future, idx))
             }
             ResolveOutcome::Ambiguous(n) => Err(KError::new(KErrorKind::AmbiguousDispatch {
                 expr: working_expr.summarize(),
