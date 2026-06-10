@@ -143,18 +143,18 @@ impl<'s, 'a> FinalizeGate<'s, 'a> {
 /// referenced member's schema, whose identity is `(set ptr, index)` and which may be
 /// cyclic. The dependency a consumer parks on is the named binder itself; its schema's own
 /// references are that binder's concern, resolved when it finalizes.
-struct KTypeUserRefs<'k, 'a> {
-    stack: Vec<&'k KType<'a>>,
+struct KTypeUserRefs<'b, 'a> {
+    stack: Vec<&'b KType<'a>>,
 }
 
-impl<'k, 'a> KTypeUserRefs<'k, 'a> {
-    fn of(kt: &'k KType<'a>) -> Self {
+impl<'b, 'a> KTypeUserRefs<'b, 'a> {
+    fn of(kt: &'b KType<'a>) -> Self {
         Self { stack: vec![kt] }
     }
 }
 
-impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
-    type Item = (ScopeId, &'k str);
+impl<'b, 'a> Iterator for KTypeUserRefs<'b, 'a> {
+    type Item = (ScopeId, &'b str);
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(kt) = self.stack.pop() {

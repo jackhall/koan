@@ -201,7 +201,7 @@ trait ArenaStored: Sized + 'static + sealed::Sealed {
     /// the engine as `At<'a>`. Because the engine keys on the `'static` form, the live and
     /// stored forms are both projections of this one GAT and cannot name different
     /// constructors — a wrong binding fails to compile in the safe wrapper.
-    type At<'x>;
+    type At<'a>;
     /// The sub-arena this family stores into. This field type is the binding chokepoint:
     /// storing `At<'static>` into `Arena<Self::At<'static>>` only type-checks when the family
     /// is wired to the matching sub-arena.
@@ -244,7 +244,7 @@ impl sealed::Sealed for Module<'_> {}
 impl sealed::Sealed for Signature<'_> {}
 
 impl ArenaStored for KObject<'static> {
-    type At<'x> = KObject<'x>;
+    type At<'a> = KObject<'a>;
     fn sub_arena(a: &RuntimeArena) -> &Arena<KObject<'static>> {
         &a.objects
     }
@@ -259,7 +259,7 @@ impl ArenaStored for KObject<'static> {
 }
 
 impl ArenaStored for KType<'static> {
-    type At<'x> = KType<'x>;
+    type At<'a> = KType<'a>;
     fn sub_arena(a: &RuntimeArena) -> &Arena<KType<'static>> {
         &a.ktypes
     }
@@ -269,7 +269,7 @@ impl ArenaStored for KType<'static> {
 }
 
 impl ArenaStored for KFunction<'static> {
-    type At<'x> = KFunction<'x>;
+    type At<'a> = KFunction<'a>;
     fn sub_arena(a: &RuntimeArena) -> &Arena<KFunction<'static>> {
         &a.functions
     }
@@ -279,7 +279,7 @@ impl ArenaStored for KFunction<'static> {
 }
 
 impl ArenaStored for Scope<'static> {
-    type At<'x> = Scope<'x>;
+    type At<'a> = Scope<'a>;
     fn sub_arena(a: &RuntimeArena) -> &Arena<Scope<'static>> {
         &a.scopes
     }
@@ -289,7 +289,7 @@ impl ArenaStored for Scope<'static> {
 }
 
 impl ArenaStored for Module<'static> {
-    type At<'x> = Module<'x>;
+    type At<'a> = Module<'a>;
     fn sub_arena(a: &RuntimeArena) -> &Arena<Module<'static>> {
         &a.modules
     }
@@ -299,7 +299,7 @@ impl ArenaStored for Module<'static> {
 }
 
 impl ArenaStored for Signature<'static> {
-    type At<'x> = Signature<'x>;
+    type At<'a> = Signature<'a>;
     fn sub_arena(a: &RuntimeArena) -> &Arena<Signature<'static>> {
         &a.signatures
     }
@@ -499,33 +499,33 @@ impl CallArena {
         scope
     }
 
-    /// Scope handle bounded by `&'p Rc<Self>` — strictly shorter than the `&'a Scope<'a>`
+    /// Scope handle bounded by `&'step Rc<Self>` — strictly shorter than the `&'a Scope<'a>`
     /// claim of [`CallArena::scope`]. Use this for local-bind plumbing (e.g.
     /// [`Scope::bind_value`]) that does not need to escape the `Rc`'s borrow, so the caller
     /// avoids an `unsafe` `'a`-anchoring transmute on the receiving end.
     ///
-    /// SAFETY: `scope_ptr` stores a `ScopePtr<'static>`; the free-`'p` fabrication is
+    /// SAFETY: `scope_ptr` stores a `ScopePtr<'static>`; the free-`'step` fabrication is
     /// concentrated here at the non-generic `CallArena` boundary. The pointer is stable for
-    /// the `Rc`'s lifetime (heap-pinned by `Rc`), and the returned `'p` is bounded by the
-    /// receiver so the borrow cannot outlive it. `'p` is driven by the return-type annotation
+    /// the `Rc`'s lifetime (heap-pinned by `Rc`), and the returned `'step` is bounded by the
+    /// receiver so the borrow cannot outlive it. `'step` is driven by the return-type annotation
     /// — `reattach_unbounded`'s lifetime is late-bound, so it cannot be a turbofish argument.
-    pub fn scope_for_bind<'p>(self: &'p Rc<Self>) -> &'p Scope<'p> {
-        let scope: &'p Scope<'p> = unsafe { self.scope_ptr_set().reattach_unbounded() };
+    pub fn scope_for_bind<'step>(self: &'step Rc<Self>) -> &'step Scope<'step> {
+        let scope: &'step Scope<'step> = unsafe { self.scope_ptr_set().reattach_unbounded() };
         scope
     }
 
-    /// The child scope re-handed with a **witness-bounded** borrow: the borrow `'p` is bounded by
-    /// the `&'p Rc<Self>` receiver (the frame `Rc` witness), while the scope content `'a` is free
-    /// (`'a: 'p`). This is the read boundary: it hands back a reference that *cannot outlive the
+    /// The child scope re-handed with a **witness-bounded** borrow: the borrow `'step` is bounded by
+    /// the `&'step Rc<Self>` receiver (the frame `Rc` witness), while the scope content `'a` is free
+    /// (`'a: 'step`). This is the read boundary: it hands back a reference that *cannot outlive the
     /// `Rc` it borrows from*, so storing it past the frame is a compile error rather than a
     /// fabrication. Invariance in `'a` rides structurally on the returned `Scope<'a>` (`Scope` is
     /// invariant), so this ephemeral form needs no separate brand struct. Reached through
     /// [`Scheduler::current_scope`](crate::machine::execute::scheduler::Scheduler) (`Yoked` slots)
     /// and [`Self::with_anchored_child`] (the seed binds).
     ///
-    /// SAFETY: delegates to [`ScopePtr::reattach_bounded`]; the `&'p Rc<Self>` receiver pins
-    /// the arena and child scope for all of `'p`, so the `'p`-bounded borrow cannot dangle.
-    pub fn scope_bounded<'p, 'a: 'p>(self: &'p Rc<Self>) -> &'p Scope<'a> {
+    /// SAFETY: delegates to [`ScopePtr::reattach_bounded`]; the `&'step Rc<Self>` receiver pins
+    /// the arena and child scope for all of `'step`, so the `'step`-bounded borrow cannot dangle.
+    pub fn scope_bounded<'step, 'a: 'step>(self: &'step Rc<Self>) -> &'step Scope<'a> {
         unsafe { self.scope_ptr_set().reattach_bounded() }
     }
 
@@ -619,7 +619,7 @@ mod tests {
     /// The good path: read it within the witness borrow. The over-anchor and covariance
     /// compile-error properties were confirmed by the C0 spike (see
     /// scratch/type-enforced-frame-reanchor-plan.md § C0 verdict); they are structural —
-    /// `scope_bounded`'s `'p` borrow cannot widen to a free `'a`, and `Scope<'a>` is invariant.
+    /// `scope_bounded`'s `'step` borrow cannot widen to a free `'a`, and `Scope<'a>` is invariant.
     #[test]
     fn scope_bounded_reanchors_within_witness_borrow() {
         let arena = RuntimeArena::new();

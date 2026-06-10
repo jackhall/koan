@@ -253,7 +253,7 @@ pub(crate) fn binder_bucket(
     Some(key)
 }
 
-fn signature_expr_part<'a, 'e>(expr: &'e KExpression<'a>) -> Option<&'e KExpression<'a>> {
+fn signature_expr_part<'a, 'b>(expr: &'b KExpression<'a>) -> Option<&'b KExpression<'a>> {
     let sig_part = expr.parts.get(1)?;
     match &sig_part.value {
         ExpressionPart::Expression(boxed) => Some(boxed.as_ref()),

@@ -26,8 +26,8 @@ enum BinderKey {
     Bucket(crate::machine::model::types::UntypedKey),
 }
 
-fn extract_binder_install<'e, 's>(
-    expr: &KExpression<'e>,
+fn extract_binder_install<'a, 's>(
+    expr: &KExpression<'a>,
     scope: &'s Scope<'s>,
 ) -> Option<BinderInstall> {
     let key = expr.untyped_key();

@@ -63,7 +63,7 @@ pub(in crate::machine::execute) fn run<'a>(
 }
 
 /// The operator keywords of the chain, in source order (with repeats).
-fn chain_operators<'e>(expr: &'e KExpression<'_>) -> Vec<&'e str> {
+fn chain_operators<'b>(expr: &'b KExpression<'_>) -> Vec<&'b str> {
     expr.parts
         .iter()
         .filter_map(|part| match &part.value {

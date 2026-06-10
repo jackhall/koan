@@ -32,13 +32,13 @@ pub enum FieldListOutcome<'a> {
 /// records); the re-walk replays the same traversal and [`pop`](ResultFeed::pop)s each
 /// resolved carrier back in. A concrete cursor (rather than a `dyn Iterator`) so it
 /// reborrows cleanly when a nested record recurses through the shared walker.
-pub struct ResultFeed<'r, 'a> {
-    results: &'r [Carried<'a>],
+pub struct ResultFeed<'b, 'a> {
+    results: &'b [Carried<'a>],
     pos: usize,
 }
 
-impl<'r, 'a> ResultFeed<'r, 'a> {
-    pub fn new(results: &'r [Carried<'a>]) -> Self {
+impl<'b, 'a> ResultFeed<'b, 'a> {
+    pub fn new(results: &'b [Carried<'a>]) -> Self {
         ResultFeed { results, pos: 0 }
     }
 
