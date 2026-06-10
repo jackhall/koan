@@ -23,7 +23,7 @@ use crate::machine::{
 /// Folds the elaborated `(name, KType)` pairs into the caller's carrier on the Combine's
 /// `Done` arm.
 pub(crate) type FieldListFinalize<'a> =
-    Box<dyn for<'s> FnOnce(&'s Scope<'a>, Vec<(String, KType<'a>)>) -> BodyResult<'a> + 'a>;
+    Box<dyn for<'step> FnOnce(&'step Scope<'a>, Vec<(String, KType<'a>)>) -> BodyResult<'a> + 'a>;
 
 /// Schedule the sigil sub-Dispatches (in DFS order) and the Combine that re-walks `expr`
 /// once they and `park_producers` resolve. `threaded` / `chain` rebuild the elaborator for

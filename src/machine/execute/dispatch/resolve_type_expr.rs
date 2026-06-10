@@ -105,11 +105,11 @@ pub(crate) fn resolve_type_leaf_carrier<'a>(
 /// Admits a `KType` iff every top-level user-type it references is finalized in
 /// its owning scope (absent from that scope's `pending_types`); otherwise returns
 /// the producer `NodeId`s the caller parks on.
-struct FinalizeGate<'s, 'a> {
-    scope: &'s Scope<'a>,
+struct FinalizeGate<'step, 'a> {
+    scope: &'step Scope<'a>,
 }
 
-impl<'s, 'a> FinalizeGate<'s, 'a> {
+impl<'step, 'a> FinalizeGate<'step, 'a> {
     /// Producer `NodeId`s the caller must park on; empty iff the gate admits.
     fn pending_producers(&self, kt: &KType<'_>) -> Vec<NodeId> {
         let mut pending: Vec<NodeId> = Vec::new();

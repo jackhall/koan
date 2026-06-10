@@ -248,8 +248,8 @@ fn decide_relaxed<'a>(
 
 /// View over a single scope's visibility-pre-filtered overload bucket.
 /// Encapsulates the filter-then-[`ExpressionSignature::most_specific`] dance.
-struct OverloadBucket<'a, 's> {
-    candidates: &'s [&'a KFunction<'a>],
+struct OverloadBucket<'a, 'b> {
+    candidates: &'b [&'a KFunction<'a>],
 }
 
 impl<'a> OverloadBucket<'a, '_> {

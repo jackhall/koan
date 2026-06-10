@@ -26,9 +26,9 @@ enum BinderKey {
     Bucket(crate::machine::model::types::UntypedKey),
 }
 
-fn extract_binder_install<'a, 's>(
+fn extract_binder_install<'a, 'step>(
     expr: &KExpression<'a>,
-    scope: &'s Scope<'s>,
+    scope: &'step Scope<'step>,
 ) -> Option<BinderInstall> {
     let key = expr.untyped_key();
     // Visibility-unfiltered lookup: this runs before the dispatch's chain is
@@ -39,7 +39,7 @@ fn extract_binder_install<'a, 's>(
             continue;
         }
         let bucket_fns = overloads;
-        let picked: Option<(&KFunction<'s>, BinderKey)> = bucket_fns.iter().find_map(|f| {
+        let picked: Option<(&KFunction<'step>, BinderKey)> = bucket_fns.iter().find_map(|f| {
             if let Some(name) = f.binder_name.and_then(|extractor| extractor(expr)) {
                 Some((*f, BinderKey::Name(name)))
             } else {
@@ -232,14 +232,16 @@ impl<'a> Scheduler<'a> {
     }
 
     /// Node-creation core, shared by the run-lifetime [`Self::add_with_chain`] and the framed
-    /// [`Self::add_dispatch_with_chain_in_frame`]. `scope` is used only transiently
-    /// (binder-install, placeholder install, `pre_subs` recursion), so it carries a free `'s`
-    /// rather than the run `'a`; `node_scope` is the pre-decided slot handle the caller built
-    /// (`Root` at `'a` for a run scope, `Yoked` for a framed one).
-    pub(super) fn submit_node<'s>(
+    /// [`Self::add_dispatch_with_chain_in_frame`]. `scope` is read only transiently
+    /// (binder-install, placeholder install, `pre_subs` recursion) and never retained — the
+    /// node keeps a `NodeScope<'a>` handle, not this borrow — so it is clamped to a `'step`
+    /// read: a run scope and a `scope_for_bind` re-projection both shorten into it.
+    /// `node_scope` is the pre-decided slot handle the caller built (`Root` at `'a` for a run
+    /// scope, `Yoked` for a framed one).
+    pub(super) fn submit_node<'step>(
         &mut self,
         work: NodeWork<'a>,
-        scope: &'s Scope<'s>,
+        scope: &'step Scope<'step>,
         node_scope: NodeScope<'a>,
         explicit_chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
