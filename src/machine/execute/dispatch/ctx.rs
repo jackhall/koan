@@ -151,8 +151,19 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
     /// impl) so sub-slots spawned by the body inherit the dispatcher's
     /// contextual chain/frame state.
     pub(super) fn invoke_to_step(&mut self, future: KFuture<'run>, idx: usize) -> NodeStep<'run> {
+        let result = future.function.invoke(self, future.bundle);
+        self.body_result_to_step(result, idx)
+    }
+
+    /// Map a body's [`BodyResult`] onto the scheduler's [`NodeStep`]. Shared by the legacy
+    /// `invoke` path and the `exec-v2` body executor, so both land a body's outcome identically.
+    pub(super) fn body_result_to_step(
+        &mut self,
+        result: crate::machine::core::kfunction::BodyResult<'run>,
+        idx: usize,
+    ) -> NodeStep<'run> {
         use crate::machine::core::kfunction::BodyResult;
-        match future.function.invoke(self, future.bundle) {
+        match result {
             BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
             BodyResult::Tail {
                 expr,
@@ -170,6 +181,80 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
             BodyResult::DeferTo(id) => self.sched.defer_to_lift(idx, id),
             BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         }
+    }
+
+    /// **exec-v2 (gated).** Reuse the dispatcher's resolution, but run an eligible body through the
+    /// exec-v2 executor instead of `KFunction::invoke`. Returns `None` to fall through to the
+    /// legacy `bind` + `invoke` path. Eligible = a user-defined, single-statement, resolved-return
+    /// body whose value arguments are all already resolved `Carried` (literals fall through — they
+    /// need resolving into a `'run` arena, a later increment). Only the body executor and frame
+    /// acquisition are swapped; everything up to here is the live dispatcher.
+    #[cfg(feature = "exec-v2")]
+    pub(super) fn try_exec_v2_call(
+        &mut self,
+        picked: &'run KFunction<'run>,
+        working_expr: &KExpression<'run>,
+        idx: usize,
+    ) -> Option<NodeStep<'run>> {
+        use crate::machine::core::kfunction::bind_by_name::CallArgs;
+        use crate::machine::core::kfunction::exec::{run_user_fn, ExecOutcome, Frame as ExecFrame};
+        use crate::machine::core::kfunction::{Body, BodyResult, SchedulerHandle};
+        use crate::machine::model::ast::ExpressionPart;
+        use crate::machine::model::types::ReturnType;
+        use crate::machine::model::Carried;
+
+        let Body::UserDefined(body) = &picked.body else {
+            return None;
+        };
+        if !matches!(picked.signature.return_type, ReturnType::Resolved(_)) {
+            return None;
+        }
+        let multi_statement = body.parts.len() >= 2
+            && body
+                .parts
+                .iter()
+                .all(|p| matches!(p.value, ExpressionPart::Expression(_)));
+        if multi_statement {
+            return None;
+        }
+
+        let mut args: Vec<Carried<'run>> = Vec::new();
+        for part in &working_expr.parts {
+            match &part.value {
+                ExpressionPart::Keyword(_) => {}
+                ExpressionPart::Future(carried) => args.push(*carried),
+                _ => return None,
+            }
+        }
+
+        let bound = match picked.bind_by_name(CallArgs::Positional(args)) {
+            Ok(record) => record,
+            Err(e) => return Some(NodeStep::Done(NodeOutput::Err(e))),
+        };
+
+        let outer = picked.captured_scope();
+        let frame = self.acquire_tail_frame(outer);
+        let chain = self
+            .current_lexical_chain()
+            .expect("dispatch runs inside an active lexical chain");
+        let ctx = ExecFrame {
+            arena: frame.clone(),
+            chain,
+        };
+        let result = match run_user_fn(picked, bound, ctx) {
+            ExecOutcome::Tail { leading, tail } => {
+                debug_assert!(
+                    leading.is_empty(),
+                    "single-statement bodies have no leading"
+                );
+                BodyResult::tail_with_frame(tail.clone(), frame, picked)
+            }
+            ExecOutcome::Errored(e) => BodyResult::Err(e),
+            ExecOutcome::Value(_) | ExecOutcome::Suspend { .. } => {
+                unreachable!("a single-statement resolved-return body yields Tail or Errored")
+            }
+        };
+        Some(self.body_result_to_step(result, idx))
     }
 
     /// Build the per-part `bare_outcomes` cache: one `resolve_name_part`

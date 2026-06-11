@@ -4,7 +4,6 @@
 src/machine/core/arena.rs: 19
 src/machine/core/kfunction/body.rs: 3
 src/machine/core/scope_ptr.rs: 6
-src/machine/execute/exec_adapter.rs: 2
 src/machine/execute/scheduler/execute.rs: 1
 src/machine/model/values/module.rs: 1
 -->
@@ -206,17 +205,6 @@ terminalizes. Pins the same `ScopePtr` re-attach site as
 the scheduler path the binder follows.
 
 - `module_body_dispatch_does_not_dangle`
-
-**`exec-v2` value-lift relabel** ([src/machine/execute/exec_adapter.rs](../src/machine/execute/exec_adapter.rs),
-feature-gated `exec-v2`, inactive in the default build the slate runs) — `lift_value` relocates a
-produced value out of the dying frame into the consumer's `'run` arena: `lift_kobject` /
-`lift_ktype` (pinned by the `lift` group) deep-clone it into self-contained data, re-anchoring any
-frame-borrowing parts onto lifetime-free `Rc<CallArena>` handles, after which a `'frame` → `'run`
-`transmute` re-labels the now-self-contained *owned* value before it is alloc'd into the `'run`
-`dest`. The relabel is sound precisely because the lifted value borrows nothing from the `'frame`
-arena — the same lift+relabel the fused-`'run` `compute_done_output` performs implicitly. It carries
-no transmute the lift group doesn't already exercise in shape; a dedicated test joins the slate when
-`exec-v2` becomes the default path. No separate minimal test.
 
 **`NodeStore::reinstall_with_frame` slot re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
 the Replace arm stores the slot's scope as a payload-less `NodeScope::Yoked` marker re-projected

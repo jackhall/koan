@@ -212,10 +212,18 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
     let working_expr = KExpression::new(new_parts);
     match ctx.install_eager_subs(working_expr, staged_subs, Some(picked), idx) {
         EagerSubsInstall::DepError(step) => Ok(step),
-        EagerSubsInstall::AllInline(working_expr) => match picked.bind(working_expr) {
-            Ok(future) => Ok(ctx.invoke_to_step(future, idx)),
-            Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
-        },
+        EagerSubsInstall::AllInline(working_expr) => {
+            // exec-v2 (gated): run an eligible body through the exec-v2 executor, reusing the
+            // resolution above. Falls through to the legacy bind + invoke for everything else.
+            #[cfg(feature = "exec-v2")]
+            if let Some(step) = ctx.try_exec_v2_call(picked, &working_expr, idx) {
+                return Ok(step);
+            }
+            match picked.bind(working_expr) {
+                Ok(future) => Ok(ctx.invoke_to_step(future, idx)),
+                Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
+            }
+        }
         EagerSubsInstall::Parked(track) => {
             // The function arm is non-binder; `pre_subs` is always empty.
             let init = Initialized {

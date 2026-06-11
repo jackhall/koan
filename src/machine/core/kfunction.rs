@@ -19,8 +19,6 @@ pub mod exec;
 pub mod invoke;
 pub mod pick;
 pub mod scheduler_handle;
-#[cfg(feature = "exec-v2")]
-pub mod signature_match;
 
 pub use argument_bundle::ArgumentBundle;
 pub use body::{BinderBucketFn, BinderNameFn, Body, BodyResult, BuiltinFn};

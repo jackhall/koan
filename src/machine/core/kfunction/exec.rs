@@ -3,13 +3,15 @@
 //!
 //! `exec` runs a body in its per-call frame and describes — in its *native* terms
 //! ([`KExpression`], [`Carried`]) — what should happen next, as an [`ExecOutcome`]: it failed, it
-//! produced a (still-unlifted) value, it tail-calls after some fire-and-forget effects, or it
-//! suspends awaiting some sub-expressions. It names *expressions to dispatch* and a
-//! *continuation* — never a scheduler `Task`, never the scheduler itself.
+//! produced a (still-unlifted) value, it tail-calls after some leading statements, or it suspends
+//! awaiting some sub-expressions. It names *expressions to dispatch* and a *continuation* — never a
+//! scheduler step, never the scheduler itself.
 //!
-//! The lifetime-aware shell that turns an [`ExecOutcome`] into scheduler-formatted opaque tasks
-//! (and lifts the value) lives on the scheduler side — see `execute`'s exec adapter. Keeping that
-//! out of here is what lets `exec` stay scheduler-agnostic and `'run`-free.
+//! The scheduler-aware shell that maps an [`ExecOutcome`] onto the scheduler is the gated branch in
+//! `execute::dispatch` (`DispatchCtx::try_exec_v2_call`): it reuses the live dispatcher's
+//! resolution, turns the outcome into a `BodyResult` (`Tail → tail_with_frame`, …), and lets the
+//! scheduler lift any produced value at the done boundary. Keeping that out of here is what lets
+//! `exec` stay scheduler-agnostic and `'run`-free.
 //!
 //! ## Two lifetimes
 //!
@@ -17,7 +19,7 @@
 //! dispatchable expressions are **borrowed** from the long-lived, immutable AST (`'ast`, which
 //! outlives the run), while a produced value lives in the call frame (`'frame`, which dies with
 //! the call). `KExpression`'s invariance blocks collapsing them. `exec` holds no lift handle, so
-//! it cannot move the value out of the frame; the adapter lifts it to the consumer's arena.
+//! it cannot move the value out of the frame; the scheduler lifts it at the done boundary.
 
 use std::rc::Rc;
 
@@ -65,16 +67,16 @@ pub type DepResult = Result<(), KError>;
 pub type Resume<'ast> =
     Box<dyn for<'f> FnOnce(&'f Frame, &[DepResult]) -> ExecOutcome<'ast, 'f> + 'ast>;
 
-/// **exec → adapter.** What running a body describes next, in `exec`'s native currency. Two
+/// **exec → scheduler.** What running a body describes next, in `exec`'s native currency. Two
 /// lifetimes, because the AST and the produced value genuinely differ: the dispatchable
 /// expressions are **borrowed** from the long-lived, immutable AST (`'ast`), while a produced
-/// value lives in the call frame (`'frame`) until the adapter lifts it. `KExpression`'s
+/// value lives in the call frame (`'frame`) until the scheduler lifts it. `KExpression`'s
 /// invariance blocks collapsing the two.
 pub enum ExecOutcome<'ast, 'frame> {
     /// The body failed; propagate the error.
     Errored(KError),
-    /// The body produced its result — **still in the frame, unlifted.** The adapter lifts it out
-    /// to `'run`; `exec` holds no lift handle and cannot.
+    /// The body produced its result — **still in the frame, unlifted.** The scheduler lifts it out
+    /// to `'run` at the done boundary; `exec` holds no lift handle and cannot.
     Value(Carried<'frame>),
     /// Run the body as a flat sequence: dispatch each `leading` expression — the non-tail
     /// statements, whose results flow into the `Scope` as bindings and are otherwise discarded —

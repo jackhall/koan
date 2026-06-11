@@ -7,8 +7,6 @@
 //! [design/memory-model.md](../../design/memory-model.md).
 
 mod dispatch;
-#[cfg(feature = "exec-v2")]
-mod exec_adapter;
 mod interpret;
 mod lift;
 mod nodes;
