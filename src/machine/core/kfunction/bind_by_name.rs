@@ -1,6 +1,6 @@
-//! **Feature-gated (`exec-v2`).** Bind a call's already-resolved arguments to a function's
-//! parameters *by name* — the single binder that subsumes both call forms (named `f {x = a}` and
-//! positional `f a b`), replacing `reconstruct_positional` + the positional `bind`. The arguments
+//! Bind a user-defined call's already-resolved arguments to a function's parameters *by name* — the
+//! binder the `exec` body executor uses, subsuming both call forms (named `f {x = a}` and positional
+//! `f a b`). (Builtins keep the legacy `ArgumentBundle` `bind`.) The arguments
 //! arrive as [`Carried`] values (resolved into the arena by dispatch), so binding is a pure rename
 //! map into a `Record<Carried>`: no `ArgValue` wrapping, no `ArgumentBundle`, and no per-argument
 //! type-check — that is the picker's job, and the carried type is trusted here. Parallel to the

@@ -66,14 +66,6 @@ pub enum KErrorKind {
         name: String,
         got: String,
     },
-    /// A `TypeNameRef` carrier reached `type_identity_for` but its `TypeName`
-    /// couldn't elaborate because some referenced type-binding is still
-    /// pending finalization.
-    TypeIdentityPendingAtDispatch {
-        param: String,
-        surface: String,
-        pending_on: Vec<crate::machine::core::kfunction::NodeId>,
-    },
     /// Scheduler drained its work queues with nodes still parked on
     /// dependencies that can no longer fire (dependency cycle).
     SchedulerDeadlock {
@@ -347,15 +339,11 @@ impl KErrorKind {
             KErrorKind::Rebind { .. }
             | KErrorKind::DuplicateOverload { .. }
             | KErrorKind::TypeClassBindingExpectsType { .. }
-            | KErrorKind::TypeIdentityPendingAtDispatch { .. }
             | KErrorKind::SchedulerDeadlock { .. } => {
                 let name = match self {
                     KErrorKind::Rebind { .. } => "Rebind",
                     KErrorKind::DuplicateOverload { .. } => "DuplicateOverload",
                     KErrorKind::TypeClassBindingExpectsType { .. } => "TypeClassBindingExpectsType",
-                    KErrorKind::TypeIdentityPendingAtDispatch { .. } => {
-                        "TypeIdentityPendingAtDispatch"
-                    }
                     KErrorKind::SchedulerDeadlock { .. } => "SchedulerDeadlock",
                     _ => unreachable!(),
                 };
@@ -439,15 +427,6 @@ impl fmt::Display for KErrorKind {
             KErrorKind::TypeClassBindingExpectsType { name, got } => write!(
                 f,
                 "type-class binding `{name}` expects a type value, got `{got}`",
-            ),
-            KErrorKind::TypeIdentityPendingAtDispatch {
-                param,
-                surface,
-                pending_on,
-            } => write!(
-                f,
-                "per-call type identity for `{param}` (surface form `{surface}`) is \
-                 pending finalize on producer node(s) {pending_on:?}",
             ),
             KErrorKind::SchedulerDeadlock { pending, sample } => write!(
                 f,

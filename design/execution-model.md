@@ -54,8 +54,8 @@ exactly the scheduler operations the dispatcher uses (slot queries,
 `DepGraph` mutations, sub-submission, the recent-wakes side-channel,
 list/dict-literal scheduling, plus the dispatcher-only ops
 `build_bare_outcomes` / `install_eager_subs` /
-`replace_with_parked_dispatch` / `resume_eager_subs` /
-`invoke_to_step{,_pinned}`). The `DepGraph`, `NodeStore`, and
+`replace_with_parked_dispatch` / `resume_eager_subs`, plus the resolved-call
+entry `exec::invoke`). The `DepGraph`, `NodeStore`, and
 active-frame fields stay `pub(in execute::scheduler)`; the dispatch
 shape modules (`keyworded`, `fn_value`, `single_poll`) never name
 scheduler fields directly. Adding a fast-lane shape lists its
@@ -66,7 +66,8 @@ single-file change inside `scheduler/`.
 `DispatchCtx` also implements
 [`SchedulerHandle`](../src/machine/core/kfunction/scheduler_handle.rs)
 — the external builtin-body-facing surface — so closures the dispatcher
-hands off to `KFunction::invoke` (and any sub-slots they spawn) inherit
+hands off to the body executor (`run_user_fn` via `exec::invoke`, and any
+sub-slots they spawn) inherit
 the dispatcher's contextual `active_frame` and lexical chain. The
 `with_active_frame` body re-receives `&mut DispatchCtx`, so nested
 builtin invokes still route through the facade rather than re-borrowing
@@ -201,8 +202,8 @@ assembled `Future`-laden expression then goes through `resolve_dispatch`
 as if it had been written with literals.
 
 Source-of-truth ASTs are never mutated. The working copy is cloned from
-its source at slot-submission time — `KFunction::invoke` clones the FN
-body, `match_case::body` and `try_with` clone their picked arm, top-level
+its source at slot-submission time — the user-fn body executor clones each
+body statement onto its slot, `match_case::body` and `try_with` clone their picked arm, top-level
 expressions move into the slot at `add_dispatch`. The splice mutates the
 slot-owned copy and nothing else; the next call to the same FN clones the
 body fresh.
@@ -219,7 +220,7 @@ per nested `(...)` — and what it buys are detailed in
 [`BodyResult::Tail(KExpression)`](../src/machine/core/kfunction.rs) makes a tail
 return rewrite the **current scheduler slot's work** to a fresh
 `Dispatch(expr)` and re-run in place — no new node allocated. Both deferring
-builtins (`match_case`, `KFunction::invoke` for user-fns) are tail by
+builtins (`match_case`, and `run_user_fn` for user-fns) are tail by
 construction. A chain of tail calls (`A → B → PRINT`, or unbounded
 `LOOP → LOOP`) reuses one slot end-to-end. Verified by two slot-count
 assertions in the test suite.
@@ -805,14 +806,14 @@ The rails the dispatch driver feeds:
   sub-Dispatch](#submission-time-binder-install-and-recursive-sub-dispatch)),
   `Dispatch(sub_expr)` for a fresh sub-Dispatch, and `ListLit` / `DictLit`
   for the aggregate. With no subs to schedule the driver binds the picked
-  function directly via `DispatchCtx::invoke_to_step` (a wrap-slot-only
+  function directly via `dispatch::exec::invoke` (a wrap-slot-only
   call like `MAKESET IntOrd` resolves bare names in Step 4, leaves no
   eager parts, and binds in one step — no eager-subs-track detour).
   Otherwise it installs an `EagerSubsTrack` on the slot's
   `KeywordedState` and parks through
   `DispatchCtx::replace_with_parked_dispatch`; on track completion
   `DispatchCtx::resume_eager_subs` re-resolves the spliced
-  `working_expr` and binds via `DispatchCtx::invoke_to_step_pinned`.
+  `working_expr` and runs it through the same `dispatch::exec::invoke` entry.
 
   Dict and list literals (`classify_aggregate_part` in
   [`scheduler/literal.rs`](../src/machine/execute/scheduler/literal.rs))
@@ -1097,8 +1098,8 @@ recursive tree-walker can't get cheaply.
   push the woken consumer onto the run-set. Compared to a recursive
   function call on a `&KExpression`, this is roughly an order of
   magnitude more bookkeeping per node.
-- **Per user-fn call.** `KFunction::invoke` clones the body
-  (`expr.clone()` over the parts vector) so the slot has its own
+- **Per user-fn call.** The body executor clones each body statement onto
+  its own slot (over the parts vector) so the slot has its own
   working copy for [the splice mechanism](#working-copy-splice).
   Clone cost is O(body size). It also acquires a per-call frame —
   either reusing the prev-step's `CallArena` shell via
@@ -1205,7 +1206,7 @@ statements as dispatch nodes:
   or [`BodyResult::tail_with_block_at_index`](../src/machine/core/kfunction/body.rs).
   TCO is preserved on the last statement. Single-statement bodies pass
   through at index 0.
-- FN bodies route through `KFunction::invoke` (see below — the chain
+- FN bodies route through `run_user_fn` (see below — the chain
   shape is special because the call site's chain is not the body's
   lexical chain).
 
@@ -1220,7 +1221,8 @@ in the target scope).
 ### Multi-statement FN body split
 
 A user-fn body of the shape `((s_0) (s_1) ... (s_{N-1}))` is split at
-[`KFunction::invoke`](../src/machine/core/kfunction.rs) time. The first
+[`run_user_fn`](../src/machine/core/kfunction/exec.rs) time (via
+`body_statement_refs`). The first
 `N-1` statements submit as **sibling sub-slots** in the per-call body
 scope at chain indices `1..N-1`, and the FN's slot **tail-replaces into
 `s_{N-1}`** at index `N` — so TCO is preserved on the terminal statement.

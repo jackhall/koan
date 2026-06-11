@@ -11,12 +11,9 @@ use crate::machine::model::types::{ExpressionSignature, Parseable, Record, Signa
 use crate::machine::model::values::{ArgValue, NamedPairs};
 
 pub mod argument_bundle;
-#[cfg(feature = "exec-v2")]
 pub mod bind_by_name;
 pub mod body;
-#[cfg(feature = "exec-v2")]
 pub mod exec;
-pub mod invoke;
 pub mod pick;
 pub mod scheduler_handle;
 
@@ -112,18 +109,21 @@ impl<'a> KFunction<'a> {
         format!("fn({})", parts.join(" "))
     }
 
-    pub fn bind(&'a self, expr: KExpression<'a>) -> Result<KFuture<'a>, KError> {
+    /// Validate a positional call `expr` against this signature: arity, keyword spellings, and each
+    /// argument's type ([`Argument::matches`]). Shared by [`Self::bind`] and the `exec` executor —
+    /// the latter binds via `bind_by_name` (a pure rename that trusts the picker), so for a
+    /// uniquely-picked call (admitted shape-only by dispatch) this is where a non-satisfying typed
+    /// argument becomes a hard `TypeMismatch` rather than slipping through.
+    pub(crate) fn validate_call_args(&'a self, expr: &KExpression<'a>) -> Result<(), KError> {
         if self.signature.elements.len() != expr.parts.len() {
             return Err(KError::new(KErrorKind::ArityMismatch {
                 expected: self.signature.elements.len(),
                 got: expr.parts.len(),
             }));
         }
-        let mut args: Record<ArgValue<'a>> = Record::new();
         for (el, part) in self.signature.elements.iter().zip(expr.parts.iter()) {
-            let part_value = &part.value;
             match el {
-                SignatureElement::Keyword(s) => match part_value {
+                SignatureElement::Keyword(s) => match &part.value {
                     ExpressionPart::Keyword(t) if s == t => {}
                     ExpressionPart::Keyword(t) => {
                         return Err(KError::new(KErrorKind::DispatchFailed {
@@ -139,15 +139,25 @@ impl<'a> KFunction<'a> {
                     }
                 },
                 SignatureElement::Argument(arg) => {
-                    if !arg.matches(part_value) {
+                    if !arg.matches(&part.value) {
                         return Err(KError::new(KErrorKind::TypeMismatch {
                             arg: arg.name.clone(),
                             expected: arg.ktype.name(),
-                            got: part_value.summarize(),
+                            got: part.value.summarize(),
                         }));
                     }
-                    args.insert(arg.name.clone(), part_value.resolve_for(&arg.ktype));
                 }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn bind(&'a self, expr: KExpression<'a>) -> Result<KFuture<'a>, KError> {
+        self.validate_call_args(&expr)?;
+        let mut args: Record<ArgValue<'a>> = Record::new();
+        for (el, part) in self.signature.elements.iter().zip(expr.parts.iter()) {
+            if let SignatureElement::Argument(arg) = el {
+                args.insert(arg.name.clone(), part.value.resolve_for(&arg.ktype));
             }
         }
         Ok(KFuture {

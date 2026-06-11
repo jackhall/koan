@@ -1,7 +1,6 @@
 //! `Display`-rendering round-trip per `KErrorKind` variant. Pins format strings against
 //! accidental rewording — if you change a message, update the matching test here.
 use super::*;
-use crate::machine::core::kfunction::NodeId;
 
 fn render(kind: KErrorKind) -> String {
     format!("{}", KError::new(kind))
@@ -127,20 +126,6 @@ fn display_type_class_binding_expects_type() {
     assert_eq!(
         s,
         "type-class binding `T` expects a type value, got `Number`"
-    );
-}
-
-#[test]
-fn display_type_identity_pending_at_dispatch() {
-    let s = render(KErrorKind::TypeIdentityPendingAtDispatch {
-        param: "x".into(),
-        surface: "List<T>".into(),
-        pending_on: vec![NodeId(7)],
-    });
-    assert_eq!(
-        s,
-        "per-call type identity for `x` (surface form `List<T>`) is \
-         pending finalize on producer node(s) [NodeId(7)]",
     );
 }
 

@@ -213,18 +213,9 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
     match ctx.install_eager_subs(working_expr, staged_subs, Some(picked), idx) {
         EagerSubsInstall::DepError(step) => Ok(step),
         EagerSubsInstall::AllInline(working_expr) => {
-            // exec-v2 (gated): route the resolved call through the new invoke entry (builtins
-            // direct, eligible user-fns through the executor). An ineligible user-fn hands
-            // `working_expr` back for the legacy bind + invoke.
-            #[cfg(feature = "exec-v2")]
-            let working_expr = match super::exec::try_invoke(ctx, picked, working_expr, idx) {
-                Ok(step) => return Ok(step),
-                Err(working_expr) => working_expr,
-            };
-            match picked.bind(working_expr) {
-                Ok(future) => Ok(ctx.invoke_to_step(future, idx)),
-                Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
-            }
+            // All eager subs resolved inline → run the call (builtins direct, user-fns through the
+            // exec executor).
+            Ok(super::exec::invoke(ctx, picked, working_expr, idx))
         }
         EagerSubsInstall::Parked(track) => {
             // The function arm is non-binder; `pre_subs` is always empty.

@@ -5,9 +5,8 @@
 //! queries, dep-graph mutations, sub-submission, the recent-wakes
 //! side-channel, and the dispatcher-only ops (`build_bare_outcomes`,
 //! `install_eager_subs`, `replace_with_parked_dispatch`,
-//! `resume_eager_subs`, `invoke_to_step`) that used to live
-//! on `impl Scheduler` solely so they could spell the scheduler's
-//! internal fields.
+//! `resume_eager_subs`) that used to live on `impl Scheduler` solely
+//! so they could spell the scheduler's internal fields.
 //!
 //! Dispatch *shape* modules (`keyworded`, `fn_value`, `single_poll`)
 //! never name scheduler fields directly — only `ctx.foo(...)` — so a
@@ -29,8 +28,7 @@ use crate::machine::core::{CallArena, ScopeId};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
 use crate::machine::{
-    CatchFinish, CombineFinish, KError, KFuture, LexicalFrame, NameOutcome, NodeId,
-    SchedulerHandle, Scope,
+    CatchFinish, CombineFinish, KError, LexicalFrame, NameOutcome, NodeId, SchedulerHandle, Scope,
 };
 
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
@@ -144,19 +142,8 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
 
     // ----- relocated dispatcher-only ops (bodies were on `impl Scheduler`) -----
 
-    /// `KFunction::invoke` shim that tail-rewrites the slot's work. See
-    /// the historical `Scheduler::invoke_to_step` for the contract; the
-    /// only change is that we now pass `self` (a `&mut dyn
-    /// SchedulerHandle<'run, 's>` via the `SchedulerHandle for DispatchCtx`
-    /// impl) so sub-slots spawned by the body inherit the dispatcher's
-    /// contextual chain/frame state.
-    pub(super) fn invoke_to_step(&mut self, future: KFuture<'run>, idx: usize) -> NodeStep<'run> {
-        let result = future.function.invoke(self, future.bundle);
-        self.body_result_to_step(result, idx)
-    }
-
-    /// Map a body's [`BodyResult`] onto the scheduler's [`NodeStep`]. Shared by the legacy
-    /// `invoke` path and the `exec-v2` body executor, so both land a body's outcome identically.
+    /// Map a body's [`BodyResult`] onto the scheduler's [`NodeStep`]. Shared by the builtin-call and
+    /// user-fn `exec` paths in `dispatch::exec`, so both land a body's outcome identically.
     pub(super) fn body_result_to_step(
         &mut self,
         result: crate::machine::core::kfunction::BodyResult<'run>,
@@ -301,20 +288,8 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         }
         match picked {
             None => KeywordedState::finish(self, working_expr, idx),
-            Some(f) => {
-                // exec-v2 (gated): the parked subs are now all spliced, so `working_expr` is fully
-                // resolved — try the exec-v2 path before the legacy bind, same as the `AllInline`
-                // arm in `install_eager_subs_track`.
-                #[cfg(feature = "exec-v2")]
-                let working_expr = match super::exec::try_invoke(self, f, working_expr, idx) {
-                    Ok(step) => return Ok(step),
-                    Err(working_expr) => working_expr,
-                };
-                match f.bind(working_expr) {
-                    Ok(future) => Ok(self.invoke_to_step(future, idx)),
-                    Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
-                }
-            }
+            // The parked subs are now all spliced, so `working_expr` is fully resolved — run the call.
+            Some(f) => Ok(super::exec::invoke(self, f, working_expr, idx)),
         }
     }
 }

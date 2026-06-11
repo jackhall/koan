@@ -253,10 +253,9 @@ pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpressio
     }
 }
 
-/// Borrowing twin of [`split_body_statements`] for `exec-v2`: returns references to the body's
-/// top-level statements rather than owned clones, so the body AST is never duplicated on the call
-/// path. Same multi-statement detection.
-#[cfg(feature = "exec-v2")]
+/// Borrowing twin of [`split_body_statements`]: returns references to the body's top-level
+/// statements rather than owned clones, so the body AST is never duplicated on the call path. Same
+/// multi-statement detection.
 pub(crate) fn body_statement_refs<'ast>(
     body: &'ast KExpression<'ast>,
 ) -> Vec<&'ast KExpression<'ast>> {

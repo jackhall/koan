@@ -1,5 +1,5 @@
-//! **Under construction, feature-gated (`exec-v2`).** The innermost layer of the parallel
-//! body executor — pure koan semantics, no scheduler task format, no lifting.
+//! The innermost layer of the body executor — pure koan semantics, no scheduler task format, no
+//! lifting.
 //!
 //! `exec` runs a body in its per-call frame and describes — in its *native* terms
 //! ([`KExpression`], [`Carried`]) — what should happen next, as an [`ExecOutcome`]: it failed, it
@@ -7,11 +7,11 @@
 //! awaiting some sub-expressions. It names *expressions to dispatch* and a *continuation* — never a
 //! scheduler step, never the scheduler itself.
 //!
-//! The scheduler-aware shell that maps an [`ExecOutcome`] onto the scheduler is the gated branch in
-//! `execute::dispatch` (`DispatchCtx::try_exec_v2_call`): it reuses the live dispatcher's
-//! resolution, turns the outcome into a `BodyResult` (`Tail → tail_with_frame`, …), and lets the
-//! scheduler lift any produced value at the done boundary. Keeping that out of here is what lets
-//! `exec` stay scheduler-agnostic and `'run`-free.
+//! The scheduler-aware shell that maps an [`ExecOutcome`] onto the scheduler is
+//! `execute::dispatch::exec::invoke`: it reuses the live dispatcher's resolution, turns the outcome
+//! into a `BodyResult` (`Tail → tail_with_frame`, …), and lets the scheduler lift any produced
+//! value at the done boundary. Keeping that out of here is what lets `exec` stay scheduler-agnostic
+//! and `'run`-free.
 //!
 //! ## Two lifetimes
 //!

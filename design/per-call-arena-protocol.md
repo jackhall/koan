@@ -145,7 +145,7 @@ state live on `Scheduler`:
   [§ Ping-pong reserve frame](#ping-pong-reserve-frame)).
 - **`SchedulerHandle::with_active_frame(frame, f)`** — temporarily
   installs `frame` as `active_frame` for the duration of a closure
-  call. Used by `KFunction::invoke` to spawn a deferred return-type
+  call. Used by `dispatch::exec::invoke` to spawn a deferred return-type
   sub-Dispatch under the per-call frame so the sub-Dispatch's scope
   resolves against the per-call type-side bind (see
   [typing/functors.md § Deferred return-type elaboration](typing/functors.md#deferred-return-type-elaboration)).
@@ -224,7 +224,7 @@ Two structural invariants make the reset sound:
 Frame reuse is what makes deep tail recursion truly constant-memory —
 both in the scheduler's slot table (the `Tail` rewrite alone) and on
 the heap (the reset turns over arena storage in place rather than
-allocating per step). `KFunction::invoke` acquires the body's frame
+allocating per step). `dispatch::exec::invoke` acquires the body's frame
 through `SchedulerHandle::acquire_tail_frame(outer)`, which reuses the
 slot's **reserve** cart — resetting it in place when uniquely owned —
 and otherwise allocates a fresh `CallArena::new`. Reuse draws from the
@@ -280,7 +280,7 @@ The dispatcher reaches the slot's reserve / active-frame state through
 the narrow [`DispatchCtx`](../src/machine/execute/dispatch/ctx.rs)
 facade (see [execution-model.md § The dispatcher / scheduler
 boundary](execution-model.md#the-dispatcher--scheduler-boundary)) —
-`KFunction::invoke` calls `acquire_tail_frame` through its
+`dispatch::exec::invoke` calls `acquire_tail_frame` through its
 `SchedulerHandle`. The `active_frame` / `active_reserve` fields
 themselves stay `pub(in execute::scheduler)`; the accessor surface is
 what dispatch sees.
@@ -337,7 +337,7 @@ the run `'a` only at the `lift_kobject` Done boundary.
 
 ## Seed-side re-anchor
 
-The MATCH / TRY arm seeds and [`KFunction::invoke`](../src/machine/core/kfunction/invoke.rs)
+The MATCH / TRY arm seeds and [`run_user_fn`](../src/machine/core/kfunction/exec.rs)
 bind their `it` / parameters — values whose type carries the caller's `'a`, allocated into the
 frame arena — inside [`CallArena::with_anchored_child`](../src/machine/core/arena.rs), the
 single audited home for that re-anchor. The closure receives the frame's arena re-exposed at a

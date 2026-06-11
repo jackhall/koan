@@ -22,8 +22,8 @@ generic functions are built this way — see [generics.md](generics.md).
   The flag drives two separable effects:
   definition-time validation of the return-type slot, and a distinct
   `KType::KFunctor { params, ret, body }` surfaced by the value's `ktype()`. The
-  dispatch path, scheduler integration, per-call scope, and `KFunction::invoke`
-  are unchanged — FUNCTOR is a thin definition-time façade over FN mechanics.
+  dispatch path, scheduler integration, per-call scope, and body executor
+  (`run_user_fn`) are the same as a plain FN — FUNCTOR is a thin definition-time façade over FN mechanics.
   `is_functor` never touches the call path: head-position functor application
   reuses the ordinary function-call convention (see
   [Application and binding](#application-and-binding)).
@@ -170,9 +170,11 @@ bound outside the FUNCTOR) both work as pin values resolved eagerly.
 
 A Type-class FUNCTOR parameter (`Er: OrderedSig`) binds the parameter name as
 a type-language binder at the call site: at each call,
-[`KFunction::invoke`](../../src/machine/core/kfunction/invoke.rs)
-writes the per-call argument into the child scope's `bindings.types` only
-(not `bindings.data`). The
+[`run_user_fn`](../../src/machine/core/kfunction/exec.rs) writes the per-call
+argument into the child scope's `bindings.types` only (not `bindings.data`)
+via `register_type`. The argument arrives already resolved, so the write is a
+direct `register_type` — no per-call transient identity elaboration at the bind
+site. The
 [`KType::is_type_denoting`](../../src/machine/model/types/ktype_predicates.rs)
 predicate gates the write — `Signature { .. }` and every `OfKind(_)` slot
 (`:Type`, a bare type-name slot, `:Module`, `:Signature`) carry meaningful
@@ -238,15 +240,19 @@ parameter name and `Resolved(_)` otherwise. The parens-form overload
 registers its return-type slot as `KType::KExpression` so the expression
 survives binder definition without sub-dispatching against the outer scope.
 
-Per-call elaboration runs at the dispatch boundary in
-[`KFunction::invoke`](../../src/machine/core/kfunction/invoke.rs). The
-`Deferred(_)` arm spawns the body Dispatch and (for the `Expression`
-carrier) an optional return-type sub-Dispatch under the per-call frame
-via `SchedulerHandle::with_active_frame` (see
-[per-call-arena-protocol.md § Active-frame propagation](../per-call-arena-protocol.md#active-frame-propagation)),
-then joins them in a `Combine` whose finish closure runs
-`per_call_ret.matches_value(body_value)` and surfaces mismatches with
-`(per-call return type)` wording. The
+Per-call elaboration runs in the body executor
+[`run_user_fn`](../../src/machine/core/kfunction/exec.rs), which describes the
+`Deferred(_)` outcome as a `Suspend { join, resume }`: `join` names the body
+statements (plus, for the `Expression` carrier, the return-type expression as an
+extra dep), and `resume` checks the body's terminal value once the deps resolve.
+The dispatch-side [`invoke`](../../src/machine/execute/dispatch/exec.rs) lowers
+that `Suspend` onto the scheduler — spawning the join deps under the per-call
+frame via `SchedulerHandle::with_active_frame` (see
+[per-call-arena-protocol.md § Active-frame propagation](../per-call-arena-protocol.md#active-frame-propagation))
+and an `add_combine_in_frame` whose finish runs `resume`. The `resume` closure
+runs `per_call_ret.matches_value(body_value)` and surfaces mismatches with
+`(per-call return type)` wording — a passing value is returned as-is (no
+return-type stamp). The
 `TypeExpr` carrier elaborates inline against the per-call scope where
 the per-call type-side bind has installed the parameter-name
 identities; both carriers feed the same Combine. The inline elaboration
