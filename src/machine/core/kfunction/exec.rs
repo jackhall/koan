@@ -157,10 +157,10 @@ pub fn run_user_fn<'ast, 'frame>(
                 .expect("body_statement_refs always yields at least one");
             ExecOutcome::Tail { leading, tail }
         }
-        // Deferred return type referencing a parameter, in its surface `TypeExpr` form: elaborate it
-        // against the per-call (param-bound) child scope, then suspend on all body statements. On
-        // re-entry the resume checks the body's terminal value against the resolved return type.
-        // The `Expression` form needs a sub-dispatch and is excluded by the caller's eligibility.
+        // Deferred return referencing a parameter, in its surface `TypeExpr` form (a bare type name
+        // like `Er`): elaborate it inline against the per-call (param-bound) child scope, then
+        // suspend on all body statements; the resume checks the body's terminal value against the
+        // resolved return type.
         ReturnType::Deferred(DeferredReturn::TypeExpr(type_expr)) => {
             let return_type = ctx.arena.with_anchored_child(|_inner_arena, child| {
                 let mut elaborator = Elaborator::new(child);
@@ -175,41 +175,67 @@ pub fn run_user_fn<'ast, 'frame>(
             let body_terminal_idx = join.len() - 1;
             let summary = func.summarize();
             let resume: Resume<'ast, 'frame> = Box::new(move |results: &[DepResult<'frame>]| {
-                let body_value = results[body_terminal_idx];
-                let accepted = match body_value {
-                    Carried::Object(object) => return_type.matches_value(object),
-                    Carried::Type(kind) => return_type.matches_type(kind),
-                };
-                if accepted {
-                    // No return-type stamp yet: the value already satisfies the declared type (the
-                    // check passed), so it is at worst a subtype; the coarsening re-tag is a later
-                    // increment.
-                    ExecOutcome::Value(body_value)
-                } else {
-                    let got = match body_value {
-                        Carried::Object(object) => object.ktype().name(),
-                        Carried::Type(kind) => kind.name(),
-                    };
-                    ExecOutcome::Errored(
-                        KError::new(KErrorKind::TypeMismatch {
-                            arg: "<return>".to_string(),
-                            expected: format!("{} (per-call return type)", return_type.name()),
-                            got,
-                        })
-                        .with_frame(crate::machine::Frame::bare(
-                            summary.clone(),
-                            summary.clone(),
-                        )),
-                    )
-                }
+                check_deferred_return(results[body_terminal_idx], &return_type, &summary)
             });
             ExecOutcome::Suspend { join, resume }
         }
-        // The `Expression` form is excluded by the caller's eligibility (it needs a sub-dispatch).
-        ReturnType::Deferred(DeferredReturn::Expression(_)) => {
-            ExecOutcome::Errored(KError::new(KErrorKind::User(
-                "run_user_fn: deferred return-type expression is not yet supported".to_string(),
-            )))
+        // Deferred return whose type is an *expression* computing a `KType` per-call (a dotted
+        // member like `Er.Carrier`, or `sig WITH {…}`). It has no inline `TypeName` form, so
+        // dispatch it as an extra `join` dep — reusing normal type-expression elaboration, the same
+        // path a `:SigiledTypeExpr` value takes — and read its result as the per-call return type.
+        ReturnType::Deferred(DeferredReturn::Expression(return_expr)) => {
+            let mut join = body_statement_refs(body_expr);
+            let body_terminal_idx = join.len() - 1;
+            let type_idx = join.len();
+            join.push(return_expr);
+            let summary = func.summarize();
+            let resume: Resume<'ast, 'frame> = Box::new(move |results: &[DepResult<'frame>]| {
+                let per_call_ret = match results[type_idx] {
+                    Carried::Type(kind) => kind,
+                    Carried::Object(other) => {
+                        return ExecOutcome::Errored(KError::new(KErrorKind::ShapeError(format!(
+                            "FN deferred return-type expression produced a non-type {} value",
+                            other.ktype().name(),
+                        ))));
+                    }
+                };
+                check_deferred_return(results[body_terminal_idx], per_call_ret, &summary)
+            });
+            ExecOutcome::Suspend { join, resume }
         }
+    }
+}
+
+/// Check a deferred-return body value against the resolved per-call return type, yielding the
+/// (still-unframed) value or a `<return>` type-mismatch. Shared by both deferred-return arms. No
+/// return-type stamp yet: a passing value already satisfies the declared type (at worst a subtype),
+/// so the coarsening re-tag is a later increment.
+fn check_deferred_return<'ast, 'frame>(
+    body_value: Carried<'frame>,
+    per_call_ret: &KType<'frame>,
+    summary: &str,
+) -> ExecOutcome<'ast, 'frame> {
+    let accepted = match body_value {
+        Carried::Object(object) => per_call_ret.matches_value(object),
+        Carried::Type(kind) => per_call_ret.matches_type(kind),
+    };
+    if accepted {
+        ExecOutcome::Value(body_value)
+    } else {
+        let got = match body_value {
+            Carried::Object(object) => object.ktype().name(),
+            Carried::Type(kind) => kind.name(),
+        };
+        ExecOutcome::Errored(
+            KError::new(KErrorKind::TypeMismatch {
+                arg: "<return>".to_string(),
+                expected: format!("{} (per-call return type)", per_call_ret.name()),
+                got,
+            })
+            .with_frame(crate::machine::Frame::bare(
+                summary.to_string(),
+                summary.to_string(),
+            )),
+        )
     }
 }

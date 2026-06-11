@@ -18,7 +18,6 @@ use crate::machine::core::kfunction::{
 };
 use crate::machine::core::{assemble_body_chain, CallArena, LexicalFrame};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{DeferredReturn, ReturnType};
 use crate::machine::model::Carried;
 use crate::machine::NodeId;
 
@@ -46,11 +45,6 @@ pub(super) fn try_invoke<'run>(
         };
         let result = f(ctx, bundle);
         return Ok(ctx.body_result_to_step(result, idx));
-    }
-
-    match &picked.signature.return_type {
-        ReturnType::Resolved(_) | ReturnType::Deferred(DeferredReturn::TypeExpr(_)) => {}
-        ReturnType::Deferred(DeferredReturn::Expression(_)) => return Err(working_expr),
     }
 
     let args = match extract_carried_args(ctx, &working_expr) {
