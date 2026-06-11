@@ -1,7 +1,7 @@
 //! **Under construction, feature-gated (`exec-v2`).** The `'run`-aware shell between the pure
 //! [`exec`](crate::machine::core::kfunction::exec) layer and the scheduler.
 //!
-//! `exec` describes what to do next in its native currency — a [`Next`] of `KExpression`s,
+//! `exec` describes what to do next in its native currency — an [`ExecOutcome`] of `KExpression`s,
 //! a continuation, and an *unlifted* value. This adapter turns that into the scheduler's
 //! **opaque [`Task`]** format:
 //!
@@ -16,20 +16,32 @@
 //! deliberately general so other builtins that schedule body statements + a join (e.g. MODULE)
 //! can reuse them.
 
-use crate::machine::core::kfunction::exec::{DepResult, Frame, Resume as ExecResume, Next};
-use crate::machine::core::CallArena;
+use std::rc::Rc;
+
+use super::lift::{lift_kobject, lift_ktype};
+use crate::machine::core::kfunction::exec::{DepResult, ExecOutcome, Frame, Resume as ExecResume};
+use crate::machine::core::{CallArena, RuntimeArena};
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::values::Carried;
+use crate::machine::model::values::{Carried, KObject};
+use crate::machine::model::KType;
 use crate::machine::KError;
 
-/// Opaque, owned unit of dispatchable work — the scheduler's currency. Running it yields an
-/// [`Outcome`]; the scheduler never introspects it. Pure wrt the scheduler (no handle threaded).
+/// Opaque, owned unit of dispatchable work — the scheduler's currency. Running it yields a
+/// [`SchedOutcome`]; the scheduler never introspects it. Pure wrt the scheduler (no handle
+/// threaded).
+/// `dest` is the consumer's surviving arena — where a produced value is lifted to; the driver
+/// knows it from the dependency graph (who awaits this task's result).
 pub trait Task<'run> {
-    fn run(self: Box<Self>) -> Outcome<'run>;
+    fn run(self: Box<Self>, dest: &'run RuntimeArena) -> SchedOutcome<'run>;
 }
 
 /// A boxed task. Lifetime-free in `'frame` (any frame rides inside as an `Rc`).
 pub type BoxTask<'run> = Box<dyn Task<'run> + 'run>;
+
+/// The scheduler-side resume: re-entered with the (owned) frame, the consumer's surviving arena
+/// for the lift, and the join terminals; yields a terminal [`SchedOutcome`].
+pub type ResumeFn<'run> =
+    Box<dyn FnOnce(Frame, &'run RuntimeArena, &[DepResult]) -> SchedOutcome<'run> + 'run>;
 
 /// A parked computation the scheduler stashes: it owns its frame (`ctx`), names the deps to
 /// spawn+await (`join`), and re-enters `resume` with their results. Borrow-free — see
@@ -37,12 +49,12 @@ pub type BoxTask<'run> = Box<dyn Task<'run> + 'run>;
 pub struct Continuation<'run> {
     pub ctx: Frame,
     pub join: Vec<BoxTask<'run>>,
-    pub resume: Box<dyn FnOnce(Frame, &[DepResult<'run>]) -> Outcome<'run> + 'run>,
+    pub resume: ResumeFn<'run>,
 }
 
 /// **adapter → scheduler (terminal).** Opaque and `'frame`-free: the value is already lifted to
 /// `'run`, tails/suspensions carry their frames inside their tasks.
-pub enum Outcome<'run> {
+pub enum SchedOutcome<'run> {
     Errored(KError),
     /// Lifted out of the frame by the adapter.
     Value(Carried<'run>),
@@ -54,31 +66,43 @@ pub enum Outcome<'run> {
 }
 
 /// A task that dispatches one koan expression in its owned frame — the one place `KExpression`
-/// re-enters as a unit of scheduler work. `run` dispatches `expr`, gets a [`Next`] back from
-/// `exec`/dispatch, and routes it through [`next_to_outcome`].
-pub struct DispatchTask<'run> {
+/// re-enters as a unit of scheduler work. `run` dispatches `expr`, gets an [`ExecOutcome`] back from
+/// `exec`/dispatch, and routes it through [`to_sched_outcome`].
+pub struct DispatchTask<'ast> {
     pub ctx: Frame,
-    pub expr: KExpression<'run>,
+    pub expr: &'ast KExpression<'ast>,
 }
 
-impl<'run> Task<'run> for DispatchTask<'run> {
-    fn run(self: Box<Self>) -> Outcome<'run> {
-        todo!("dispatch self.expr in self.ctx, then next_to_outcome(step, ctx)")
+impl<'ast, 'run> Task<'run> for DispatchTask<'ast>
+where
+    'ast: 'run,
+{
+    fn run(self: Box<Self>, _dest: &'run RuntimeArena) -> SchedOutcome<'run> {
+        todo!("dispatch self.expr in self.ctx, then to_sched_outcome(exec_outcome, ctx, dest)")
     }
 }
 
-/// Wrap an expression to dispatch as an opaque scheduler task (factory (a)).
-pub fn task_from_expr<'run>(expr: KExpression<'run>, ctx: Frame) -> BoxTask<'run> {
+/// Wrap a borrowed AST expression to dispatch as an opaque scheduler task (factory (a)). The
+/// borrow (`'ast`) outlives the run (`'ast: 'run`), so the task is storable at `'run`.
+pub fn task_from_expr<'ast, 'run>(expr: &'ast KExpression<'ast>, ctx: Frame) -> BoxTask<'run>
+where
+    'ast: 'run,
+{
     Box::new(DispatchTask { ctx, expr })
 }
 
 /// Wrap an `exec` continuation as a scheduler [`Continuation`] (factory (b)): its `resume`
-/// composes the `exec` continuation with [`next_to_outcome`], so the scheduler stays opaque.
-pub fn continuation_from<'run>(
+/// composes the `exec` continuation with [`to_sched_outcome`], so the scheduler stays opaque. The
+/// frame is cloned (cheap — two `Rc`s) because both the `exec` resume and `to_sched_outcome` need
+/// it.
+pub fn continuation_from<'ast, 'run>(
     ctx: Frame,
-    join: Vec<KExpression<'run>>,
-    _exec_resume: ExecResume<'run>,
-) -> Continuation<'run> {
+    join: Vec<&'ast KExpression<'ast>>,
+    exec_resume: ExecResume<'ast>,
+) -> Continuation<'run>
+where
+    'ast: 'run,
+{
     let join = join
         .into_iter()
         .map(|e| task_from_expr(e, ctx.clone()))
@@ -86,28 +110,70 @@ pub fn continuation_from<'run>(
     Continuation {
         ctx,
         join,
-        resume: Box::new(|_ctx, _results| todo!("next_to_outcome(exec_resume(ctx, results), ctx)")),
+        resume: Box::new(move |ctx, dest, results| {
+            // The exec outcome may borrow `ctx` (its `Value` rides the frame), so clone the
+            // lifetime-free `Frame` for the lift/task-wrapping; both are shared reads of the `Rc`s.
+            let exec_outcome = exec_resume(&ctx, results);
+            to_sched_outcome(exec_outcome, ctx.clone(), dest)
+        }),
     }
 }
 
-/// Translate an `exec` [`Next`] into a scheduler [`Outcome`]: lift `Value`, wrap each expression
-/// as a [`DispatchTask`], wrap a continuation. `ctx` is the frame the step ran in.
-pub fn next_to_outcome<'run>(step: Next<'run>, ctx: Frame) -> Outcome<'run> {
-    match step {
-        Next::Errored(e) => Outcome::Errored(e),
-        Next::Value(_unlifted) => {
-            // TODO(rewrite): lift `_unlifted` out of `ctx.arena` into `ctx.arena.outer().arena`
-            // via `super::lift::lift_kobject` / `lift_ktype`, then `Outcome::Value(lifted)`.
-            let _dest: Option<&CallArena> = Some(&ctx.arena);
-            todo!("lift the unlifted value, then Outcome::Value")
+/// Lift a produced value out of the dying frame into the consumer's surviving arena (`dest`),
+/// re-typing `'frame` → `'run`. This is a **relocation**, not a subtype coercion: `lift_kobject` /
+/// `lift_ktype` deep-clone the value into self-contained data (frame-borrowing parts re-anchored
+/// onto lifetime-free `Rc<CallArena>` handles), so the result borrows nothing from the `'frame`
+/// arena, and it is allocated into the `'run`-lived `dest` for a stable `&'run`. The physical copy
+/// is what makes the longer `'run` truthful. Mirrors `compute_done_output`'s lift+alloc.
+fn lift_value<'frame, 'run>(
+    value: Carried<'frame>,
+    dying: &Rc<CallArena>,
+    dest: &'run RuntimeArena,
+) -> Carried<'run> {
+    match value {
+        Carried::Object(o) => {
+            let lifted = lift_kobject(o, dying);
+            // SAFETY: `lifted` is self-contained after `lift_kobject` (deep clone + frame-`Rc`
+            // re-anchor), so it borrows nothing from the `'frame` arena and re-labelling
+            // `'frame` → `'run` is sound; it is moved straight into the `'run` `dest`.
+            let lifted: KObject<'run> =
+                unsafe { core::mem::transmute::<KObject<'_>, KObject<'run>>(lifted) };
+            Carried::Object(dest.alloc_object(lifted))
         }
-        Next::Tail { effects, tail } => Outcome::Tail {
+        Carried::Type(t) => {
+            let lifted = lift_ktype(t, dying);
+            // SAFETY: as above — `lift_ktype` yields self-contained data (`RecursiveSet`/`Module`
+            // frames ride `Rc`), so the `'frame` → `'run` re-label is sound before `dest` alloc.
+            let lifted: KType<'run> =
+                unsafe { core::mem::transmute::<KType<'_>, KType<'run>>(lifted) };
+            Carried::Type(dest.alloc_ktype(lifted))
+        }
+    }
+}
+
+/// Translate an `exec` [`ExecOutcome`] into a scheduler [`SchedOutcome`]: lift `Value` into `dest`
+/// (`'frame` → `'run`), wrap each borrowed expression as a [`DispatchTask`], wrap a continuation.
+/// `ctx` is the frame the body ran in; `dest` is the consumer's surviving arena.
+pub fn to_sched_outcome<'ast, 'frame, 'run>(
+    exec_outcome: ExecOutcome<'ast, 'frame>,
+    ctx: Frame,
+    dest: &'run RuntimeArena,
+) -> SchedOutcome<'run>
+where
+    'ast: 'run,
+{
+    match exec_outcome {
+        ExecOutcome::Errored(e) => SchedOutcome::Errored(e),
+        ExecOutcome::Value(unlifted) => SchedOutcome::Value(lift_value(unlifted, &ctx.arena, dest)),
+        ExecOutcome::Tail { effects, tail } => SchedOutcome::Tail {
             effects: effects
                 .into_iter()
                 .map(|e| task_from_expr(e, ctx.clone()))
                 .collect(),
             tail: task_from_expr(tail, ctx),
         },
-        Next::Suspend { join, resume } => Outcome::Suspend(continuation_from(ctx, join, resume)),
+        ExecOutcome::Suspend { join, resume } => {
+            SchedOutcome::Suspend(continuation_from(ctx, join, resume))
+        }
     }
 }

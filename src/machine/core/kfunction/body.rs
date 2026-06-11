@@ -253,6 +253,31 @@ pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpressio
     }
 }
 
+/// Borrowing twin of [`split_body_statements`] for `exec-v2`: returns references to the body's
+/// top-level statements rather than owned clones, so the body AST is never duplicated on the call
+/// path. Same multi-statement detection.
+#[cfg(feature = "exec-v2")]
+pub(crate) fn body_statement_refs<'ast>(
+    body: &'ast KExpression<'ast>,
+) -> Vec<&'ast KExpression<'ast>> {
+    let is_multi = body.parts.len() >= 2
+        && body
+            .parts
+            .iter()
+            .all(|p| matches!(p.value, ExpressionPart::Expression(_)));
+    if is_multi {
+        body.parts
+            .iter()
+            .filter_map(|p| match &p.value {
+                ExpressionPart::Expression(e) => Some(e.as_ref()),
+                _ => None,
+            })
+            .collect()
+    } else {
+        vec![body]
+    }
+}
+
 /// Builtin body. The body takes no scope argument: it reads the executing slot's scope on demand
 /// via [`SchedulerHandle::current_scope`], a **short** borrow re-fetched per use and never held
 /// across a `&mut` handle call. That on-demand access is what keeps the read boundary an honest

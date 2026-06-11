@@ -2,30 +2,32 @@
 //! body executor — pure koan semantics, no scheduler task format, no lifting.
 //!
 //! `exec` runs a body in its per-call frame and describes — in its *native* terms
-//! ([`KExpression`], [`Carried`]) — what should happen next, as a [`Next`]: it failed, it
+//! ([`KExpression`], [`Carried`]) — what should happen next, as an [`ExecOutcome`]: it failed, it
 //! produced a (still-unlifted) value, it tail-calls after some fire-and-forget effects, or it
 //! suspends awaiting some sub-expressions. It names *expressions to dispatch* and a
 //! *continuation* — never a scheduler `Task`, never the scheduler itself.
 //!
-//! The lifetime-aware shell that turns a [`Next`] into scheduler-formatted opaque tasks (and
-//! lifts the value) lives on the scheduler side — see `execute`'s exec adapter. Keeping that
+//! The lifetime-aware shell that turns an [`ExecOutcome`] into scheduler-formatted opaque tasks
+//! (and lifts the value) lives on the scheduler side — see `execute`'s exec adapter. Keeping that
 //! out of here is what lets `exec` stay scheduler-agnostic and `'run`-free.
 //!
-//! ## One working lifetime
+//! ## Two lifetimes
 //!
-//! `exec` operates entirely in the frame: the `'a` on [`Next`] is the body's working (frame)
-//! lifetime — the unlifted value lives there, and the expressions it hands back are valid for
-//! it. The adapter re-anchors those expressions to the scheduler's longer-lived AST lifetime
-//! and lifts the value out of the frame; `exec` does neither (it holds no lift handle, so it
-//! *cannot* lift).
+//! [`ExecOutcome`] carries two, because the AST and the produced value genuinely differ: the
+//! dispatchable expressions are **borrowed** from the long-lived, immutable AST (`'ast`, which
+//! outlives the run), while a produced value lives in the call frame (`'frame`, which dies with
+//! the call). `KExpression`'s invariance blocks collapsing them. `exec` holds no lift handle, so
+//! it cannot move the value out of the frame; the adapter lifts it to the consumer's arena.
 
 use std::rc::Rc;
 
-use crate::machine::core::{CallArena, KError, LexicalFrame, Scope};
+use crate::machine::core::{BindingIndex, CallArena, KError, LexicalFrame, Scope};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::values::Carried;
+use crate::machine::model::ArgValue;
 
 use super::argument_bundle::ArgumentBundle;
+use super::body::{body_statement_refs, Body};
 use super::KFunction;
 
 /// A body's execution context: the per-call `arena` it runs in, plus its lexical `chain`. Owned
@@ -48,48 +50,96 @@ impl Frame {
     }
 }
 
-/// A joined dep's resolved terminal, handed to a continuation ([`Next::Suspend`]) on re-entry.
-pub type DepResult<'a> = Result<Carried<'a>, KError>;
+/// A joined dep's terminal status, handed to a continuation ([`ExecOutcome::Suspend`]) on re-entry —
+/// **success or error only, no value**. Non-tail statements deposit their results into the
+/// `Scope` (effects-through-scope), so the continuation re-reads `ctx.scope()` for any value it
+/// needs and only inspects this to propagate a dep error. Carrying no value also keeps `exec`
+/// free of the `'run` lift lifetime.
+pub type DepResult = Result<(), KError>;
 
-/// The continuation of a suspended body, in `exec`'s native terms: re-entered with its owned
-/// [`Frame`] (so it can re-thread the frame) and the resolved join results, yielding
-/// another [`Next`]. Borrow-free: frame-local state it needs is re-read by re-projecting
-/// `ctx.scope()`, not captured. The scheduler-side adapter wraps this into a stored, opaque
-/// scheduler continuation.
-pub type Resume<'a> = Box<dyn FnOnce(Frame, &[DepResult<'a>]) -> Next<'a> + 'a>;
+/// The continuation of a suspended body, in `exec`'s native terms: re-entered with a **borrow** of
+/// its frame and the join terminals, yielding another [`ExecOutcome`]. Higher-ranked over the frame
+/// borrow `'f`: a stored continuation outlives any single re-entry, so its produced-value lifetime
+/// must be the frame it is *handed* on re-entry (`ExecOutcome<'ast, 'f>`), not a `'frame` baked into the
+/// stored type (which would have to outlive the run — backwards). Borrow-free otherwise:
+/// frame-local state is re-read via `frame.scope()`, not captured.
+pub type Resume<'ast> =
+    Box<dyn for<'f> FnOnce(&'f Frame, &[DepResult]) -> ExecOutcome<'ast, 'f> + 'ast>;
 
-/// **exec → adapter.** What running a body describes next, in `exec`'s native currency
-/// (`KExpression` + `Carried`). The scheduler-side adapter translates it into opaque tasks.
-pub enum Next<'a> {
+/// **exec → adapter.** What running a body describes next, in `exec`'s native currency. Two
+/// lifetimes, because the AST and the produced value genuinely differ: the dispatchable
+/// expressions are **borrowed** from the long-lived, immutable AST (`'ast`), while a produced
+/// value lives in the call frame (`'frame`) until the adapter lifts it. `KExpression`'s
+/// invariance blocks collapsing the two.
+pub enum ExecOutcome<'ast, 'frame> {
     /// The body failed; propagate the error.
     Errored(KError),
-    /// The body produced its result — **still in the frame, unlifted.** The adapter/scheduler
-    /// lifts it out; `exec` cannot.
-    Value(Carried<'a>),
+    /// The body produced its result — **still in the frame, unlifted.** The adapter lifts it out
+    /// to `'run`; `exec` holds no lift handle and cannot.
+    Value(Carried<'frame>),
     /// Dispatch `effects` fire-and-forget (run for their `Scope` effects, results ignored), then
-    /// tail into `tail` in the same frame — the multi-statement-body case.
+    /// tail into `tail` in the same frame — the multi-statement-body case. Borrowed from the AST.
     Tail {
-        effects: Vec<KExpression<'a>>,
-        tail: KExpression<'a>,
+        effects: Vec<&'ast KExpression<'ast>>,
+        tail: &'ast KExpression<'ast>,
     },
-    /// Suspend: dispatch and await `join`, then re-enter `resume` with their results.
+    /// Suspend: dispatch and await `join`, then re-enter `resume` with their terminals. `resume`'s
+    /// produced-value lifetime is bound to the frame it is handed on re-entry, not this `'frame`.
     Suspend {
-        join: Vec<KExpression<'a>>,
-        resume: Resume<'a>,
+        join: Vec<&'ast KExpression<'ast>>,
+        resume: Resume<'ast>,
     },
 }
 
 /// The new `invoke` for a user-defined function: bind `bundle`'s parameters into `ctx`'s scope
-/// (a frame/scope operation), then describe the body as a [`Next`] — `Tail` of the non-tail
+/// (a frame/scope operation), then describe the body as an [`ExecOutcome`] — `Tail` of the non-tail
 /// statements + the last, or `Suspend` for a deferred return. `ctx` is owned; the carrier
 /// lifetime of `func` is free — only read.
 ///
-/// TODO(rewrite): bind params via `ctx.arena.with_anchored_child`, split via
-/// `super::body::split_body_statements`, return a `Next::Tail` of effects + last statement.
-pub fn run_user_fn<'a>(
-    _func: &KFunction<'_>,
-    _bundle: ArgumentBundle<'a>,
-    _ctx: Frame,
-) -> Next<'a> {
-    todo!("user-fn body entry — bind params, return a Tail of effects + last statement")
+/// Resolved-return path only (deferred return → `Suspend` is a later increment). Pure: it
+/// mutates only `ctx`'s own scope (param binds), then describes the body. The body statements are
+/// **borrowed** from `func` (`'ast`), never cloned; `'frame` is free here (no value produced).
+pub fn run_user_fn<'ast, 'frame>(
+    func: &'ast KFunction<'ast>,
+    bundle: ArgumentBundle<'frame>,
+    ctx: Frame,
+) -> ExecOutcome<'ast, 'frame> {
+    // Bind parameters into the frame's child scope — a frame/scope op, concentrated in
+    // `with_anchored_child` so the seed fabricates no `&'a`. Mirrors `invoke`'s param bind.
+    let bind = ctx
+        .arena
+        .with_anchored_child(|inner_arena, child| -> Result<(), KError> {
+            for (name, arg_val) in bundle.args.iter() {
+                match arg_val {
+                    ArgValue::Object(rc) => {
+                        let allocated = inner_arena.alloc_object(rc.deep_clone());
+                        let _ = child.bind_value(name.clone(), allocated, BindingIndex::value(0));
+                    }
+                    // Type-denoting params (`Er`-style) are a later increment.
+                    ArgValue::Type(_) => {}
+                }
+            }
+            Ok(())
+        });
+    if let Err(e) = bind {
+        return ExecOutcome::Errored(e);
+    }
+
+    let body_expr = match &func.body {
+        Body::UserDefined(expr) => expr,
+        // Builtin bodies are their own `BodyFn`s; this entry is user-defined only.
+        Body::Builtin(_) => {
+            return ExecOutcome::Errored(KError::new(crate::machine::KErrorKind::User(
+                "run_user_fn called on a builtin body".to_string(),
+            )))
+        }
+    };
+    let mut statements = body_statement_refs(body_expr);
+    let tail = statements
+        .pop()
+        .expect("body_statement_refs always yields at least one");
+    ExecOutcome::Tail {
+        effects: statements,
+        tail,
+    }
 }
