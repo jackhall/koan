@@ -223,6 +223,15 @@ impl<'run> KeywordedState<'run> {
             ));
         }
         if staged_subs.is_empty() {
+            // exec-v2 (gated): the synchronous (no-eager-subs) call is the common path —
+            // builtins and simple calls land here. Route it through the invoke hub too (builtins
+            // direct, eligible user-fns through the executor); an ineligible user-fn hands the
+            // expr back for the legacy bind below.
+            #[cfg(feature = "exec-v2")]
+            let new_expr = match super::exec::try_invoke(ctx, resolved.function, new_expr, idx) {
+                Ok(step) => return Ok(step),
+                Err(new_expr) => new_expr,
+            };
             return match resolved.function.bind(new_expr) {
                 Ok(future) => Ok(ctx.invoke_to_step(future, idx)),
                 Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
@@ -263,6 +272,13 @@ impl<'run> KeywordedState<'run> {
             .resolve_dispatch(&working_expr, ctx.chain_deref(), &[])
         {
             ResolveOutcome::Resolved(r) => {
+                // exec-v2 (gated): the post-eager-subs re-dispatch also lands resolved calls here.
+                #[cfg(feature = "exec-v2")]
+                let working_expr = match super::exec::try_invoke(ctx, r.function, working_expr, idx)
+                {
+                    Ok(step) => return Ok(step),
+                    Err(working_expr) => working_expr,
+                };
                 let future = r.function.bind(working_expr)?;
                 Ok(ctx.invoke_to_step(future, idx))
             }
