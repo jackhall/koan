@@ -216,7 +216,7 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
             // exec-v2 (gated): run an eligible body through the exec-v2 executor, reusing the
             // resolution above. Falls through to the legacy bind + invoke for everything else.
             #[cfg(feature = "exec-v2")]
-            if let Some(step) = ctx.try_exec_v2_call(picked, &working_expr, idx) {
+            if let Some(step) = super::exec::try_exec_v2_call(ctx, picked, &working_expr, idx) {
                 return Ok(step);
             }
             match picked.bind(working_expr) {

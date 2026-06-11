@@ -32,6 +32,8 @@ use super::scheduler::Scheduler;
 pub(in crate::machine::execute) mod apply_callable;
 mod constructors;
 mod ctx;
+#[cfg(feature = "exec-v2")]
+mod exec;
 pub(in crate::machine) mod field_list;
 pub(in crate::machine::execute) mod fn_value;
 pub(in crate::machine::execute) mod head_deferred;
