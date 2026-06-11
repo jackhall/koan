@@ -11,6 +11,11 @@ path = "src/lib.rs"
 name = "koan"
 path = "src/main.rs"
 
+[features]
+# Under-construction parallel body executor (`core/kfunction/exec`) wired into the
+# scheduler in place of `KFunction::invoke`. Off by default; the live path is `invoke.rs`.
+exec-v2 = []
+
 [dependencies]
 regex = "1.12.3"
 typed-arena = "2"

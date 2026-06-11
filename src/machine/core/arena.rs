@@ -460,6 +460,40 @@ impl CallArena {
         rc
     }
 
+    /// Like [`CallArena::new`], but the child scope is built by `make_child` instead of the
+    /// default [`Scope::child_under`] — lets a binder (e.g. MODULE under `exec-v2`) own a frame
+    /// whose own child *is* its (module-kind) scope. Gated and purely additive: `new` and every
+    /// non-feature caller are untouched. Body is verbatim `new` apart from the child constructor;
+    /// the two unify when `exec-v2` becomes the default path.
+    #[cfg(feature = "exec-v2")]
+    pub fn new_with_child(
+        outer: &Scope<'_>,
+        outer_frame: Option<Rc<CallArena>>,
+        make_child: impl FnOnce(&Scope<'static>) -> Scope<'static>,
+    ) -> Rc<CallArena> {
+        let escape = NonNull::from(outer.arena);
+        let mut rc = Rc::new(CallArena {
+            arena: RuntimeArena::with_escape(escape),
+            scope_ptr: None,
+            outer_frame,
+            non_dying: false,
+        });
+        let arena_ptr: *const RuntimeArena = &rc.arena;
+        // SAFETY: identical to `CallArena::new` — heap-pinning keeps `arena_ptr` valid for the
+        // `Rc`'s lifetime; `outer` outlives this frame by the lexical-scoping invariant, so erasing
+        // it to `'static` for the child's `outer` link is sound (re-anchored on read).
+        let arena_ref: &'static RuntimeArena = unsafe { &*arena_ptr };
+        let outer_static: &Scope<'static> =
+            unsafe { std::mem::transmute::<&Scope<'_>, &Scope<'static>>(outer) };
+        let mut child = make_child(outer_static);
+        child.arena = arena_ref;
+        let allocated: &'static Scope<'static> = arena_ref.alloc_scope(child);
+        Rc::get_mut(&mut rc)
+            .expect("freshly-constructed Rc has unique ownership")
+            .scope_ptr = Some(ScopePtr::erase(allocated));
+        rc
+    }
+
     /// The scheduler-owned **run frame**: a frame that *carries an already-built run scope*
     /// rather than minting a child. Top-level execution runs against this frame so `active_frame`
     /// is never `None`, which makes a body's re-dispatch-against-its-own-scope uniformly framed

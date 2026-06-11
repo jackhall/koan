@@ -12,6 +12,8 @@ use crate::machine::model::values::{ArgValue, NamedPairs};
 
 pub mod argument_bundle;
 pub mod body;
+#[cfg(feature = "exec-v2")]
+pub mod exec;
 pub mod invoke;
 pub mod pick;
 pub mod scheduler_handle;
