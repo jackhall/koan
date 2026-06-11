@@ -5,7 +5,7 @@
 //! a continuation, and an *unlifted* value. This adapter turns that into the scheduler's
 //! **opaque [`Task`]** format:
 //!
-//! - wraps each *expression to dispatch* (effects / tail / join) as a [`DispatchTask`];
+//! - wraps each *expression to dispatch* (leading / tail / join) as a [`DispatchTask`];
 //! - wraps an `exec` continuation into a scheduler [`Continuation`];
 //! - **lifts** the produced value out of the dying frame into the surviving arena — `exec`
 //!   holds no lift handle, so lifting happens here, on the scheduler side.
@@ -59,7 +59,7 @@ pub enum SchedOutcome<'run> {
     /// Lifted out of the frame by the adapter.
     Value(Carried<'run>),
     Tail {
-        effects: Vec<BoxTask<'run>>,
+        leading: Vec<BoxTask<'run>>,
         tail: BoxTask<'run>,
     },
     Suspend(Continuation<'run>),
@@ -165,8 +165,8 @@ where
     match exec_outcome {
         ExecOutcome::Errored(e) => SchedOutcome::Errored(e),
         ExecOutcome::Value(unlifted) => SchedOutcome::Value(lift_value(unlifted, &ctx.arena, dest)),
-        ExecOutcome::Tail { effects, tail } => SchedOutcome::Tail {
-            effects: effects
+        ExecOutcome::Tail { leading, tail } => SchedOutcome::Tail {
+            leading: leading
                 .into_iter()
                 .map(|e| task_from_expr(e, ctx.clone()))
                 .collect(),
@@ -174,6 +174,92 @@ where
         },
         ExecOutcome::Suspend { join, resume } => {
             SchedOutcome::Suspend(continuation_from(ctx, join, resume))
+        }
+    }
+}
+
+/// **Test harness only — not the real driver.** Runs `task` to its terminal value over an explicit
+/// work-stack (a trampoline: never Rust recursion, since Rust has no guaranteed TCO and the
+/// work-queue scheduler exists precisely to keep koan's depth off the Rust stack). A `Tail` expands
+/// in place: push `tail`, then `leading` in reverse, so a body's leading expressions run first (in
+/// order) for the `Scope` bindings they produce. A `Value` is the body's result iff the stack is
+/// now empty; otherwise it is a leading expression's discarded value.
+///
+/// **Only valid for placeholder-free bodies.** A name resolving to a scope *placeholder* is a
+/// cross-node dataflow dependency: the producer is another scheduler node, woken via `pending_deps`
+/// when it terminalizes. This loop owns only `task`'s own tree — no sibling work-queue, no wake — so
+/// it cannot run the producer; such a dispatch parks (`Suspend`, `todo!()` here) or, for an ambient
+/// placeholder, deadlocks. The real driver must *be* the scheduler's work-queue. This exists to
+/// exercise the leaf/tail seam end-to-end where no dispatch parks.
+pub fn run_to_value<'run>(
+    task: BoxTask<'run>,
+    dest: &'run RuntimeArena,
+) -> Result<Carried<'run>, KError> {
+    let mut stack: Vec<BoxTask<'run>> = vec![task];
+    while let Some(task) = stack.pop() {
+        match task.run(dest) {
+            SchedOutcome::Errored(e) => return Err(e),
+            SchedOutcome::Value(value) => {
+                if stack.is_empty() {
+                    return Ok(value);
+                }
+                // A leading expression's value — discarded; its `Scope` effects already landed.
+            }
+            SchedOutcome::Tail { mut leading, tail } => {
+                stack.push(tail);
+                while let Some(expr) = leading.pop() {
+                    stack.push(expr);
+                }
+            }
+            SchedOutcome::Suspend(_) => {
+                todo!("driver: park on Suspend (joins) — needs the scheduler integration")
+            }
+        }
+    }
+    unreachable!("stack starts non-empty and only empties by returning the final Value")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::machine::model::values::KObject;
+
+    /// Stub task: terminalizes straight to a fixed value.
+    struct ValueTask<'run> {
+        value: Carried<'run>,
+    }
+    impl<'run> Task<'run> for ValueTask<'run> {
+        fn run(self: Box<Self>, _dest: &'run RuntimeArena) -> SchedOutcome<'run> {
+            SchedOutcome::Value(self.value)
+        }
+    }
+
+    /// Stub task: runs `leading`, then tails into `tail`.
+    struct TailTask<'run> {
+        leading: Vec<BoxTask<'run>>,
+        tail: BoxTask<'run>,
+    }
+    impl<'run> Task<'run> for TailTask<'run> {
+        fn run(self: Box<Self>, _dest: &'run RuntimeArena) -> SchedOutcome<'run> {
+            SchedOutcome::Tail {
+                leading: self.leading,
+                tail: self.tail,
+            }
+        }
+    }
+
+    #[test]
+    fn driver_runs_leading_then_tail_to_value() {
+        let arena = RuntimeArena::new();
+        let discarded = Carried::Object(arena.alloc_object(KObject::Number(1.0)));
+        let result = Carried::Object(arena.alloc_object(KObject::Number(7.0)));
+        let tail_task: BoxTask<'_> = Box::new(TailTask {
+            leading: vec![Box::new(ValueTask { value: discarded })],
+            tail: Box::new(ValueTask { value: result }),
+        });
+        match run_to_value(tail_task, &arena).expect("drives to a value") {
+            Carried::Object(KObject::Number(n)) => assert_eq!(*n, 7.0),
+            _ => panic!("expected Number(7)"),
         }
     }
 }

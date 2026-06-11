@@ -77,10 +77,11 @@ pub enum ExecOutcome<'ast, 'frame> {
     /// The body produced its result — **still in the frame, unlifted.** The adapter lifts it out
     /// to `'run`; `exec` holds no lift handle and cannot.
     Value(Carried<'frame>),
-    /// Dispatch `effects` fire-and-forget (run for their `Scope` effects, results ignored), then
-    /// tail into `tail` in the same frame — the multi-statement-body case. Borrowed from the AST.
+    /// Run the body as a flat sequence: dispatch each `leading` expression — the non-tail
+    /// statements, whose results flow into the `Scope` as bindings and are otherwise discarded —
+    /// then `tail` in the same frame, whose value is the body's result. All borrowed from the AST.
     Tail {
-        effects: Vec<&'ast KExpression<'ast>>,
+        leading: Vec<&'ast KExpression<'ast>>,
         tail: &'ast KExpression<'ast>,
     },
     /// Suspend: dispatch and await `join`, then re-enter `resume` with their terminals. `resume`'s
@@ -134,12 +135,9 @@ pub fn run_user_fn<'ast, 'frame>(
             )))
         }
     };
-    let mut statements = body_statement_refs(body_expr);
-    let tail = statements
+    let mut leading = body_statement_refs(body_expr);
+    let tail = leading
         .pop()
         .expect("body_statement_refs always yields at least one");
-    ExecOutcome::Tail {
-        effects: statements,
-        tail,
-    }
+    ExecOutcome::Tail { leading, tail }
 }
