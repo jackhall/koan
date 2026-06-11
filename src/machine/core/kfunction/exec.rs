@@ -23,10 +23,9 @@ use std::rc::Rc;
 
 use crate::machine::core::{BindingIndex, CallArena, KError, LexicalFrame, Scope};
 use crate::machine::model::ast::KExpression;
+use crate::machine::model::types::Record;
 use crate::machine::model::values::Carried;
-use crate::machine::model::ArgValue;
 
-use super::argument_bundle::ArgumentBundle;
 use super::body::{body_statement_refs, Body};
 use super::KFunction;
 
@@ -92,17 +91,18 @@ pub enum ExecOutcome<'ast, 'frame> {
     },
 }
 
-/// The new `invoke` for a user-defined function: bind `bundle`'s parameters into `ctx`'s scope
-/// (a frame/scope operation), then describe the body as an [`ExecOutcome`] — `Tail` of the non-tail
-/// statements + the last, or `Suspend` for a deferred return. `ctx` is owned; the carrier
-/// lifetime of `func` is free — only read.
+/// The new `invoke` for a user-defined function: bind `args` into `ctx`'s scope (a frame/scope
+/// operation), then describe the body as an [`ExecOutcome`] — `Tail` of the non-tail statements +
+/// the last, or `Suspend` for a deferred return. `ctx` is owned; the carrier lifetime of `func` is
+/// free — only read. `args` is the argument record from [`super::bind_by_name`] (a `Record<Carried>`,
+/// resolved values keyed by parameter name).
 ///
 /// Resolved-return path only (deferred return → `Suspend` is a later increment). Pure: it
 /// mutates only `ctx`'s own scope (param binds), then describes the body. The body statements are
 /// **borrowed** from `func` (`'ast`), never cloned; `'frame` is free here (no value produced).
 pub fn run_user_fn<'ast, 'frame>(
     func: &'ast KFunction<'ast>,
-    bundle: ArgumentBundle<'frame>,
+    args: Record<Carried<'frame>>,
     ctx: Frame,
 ) -> ExecOutcome<'ast, 'frame> {
     // Bind parameters into the frame's child scope — a frame/scope op, concentrated in
@@ -110,14 +110,14 @@ pub fn run_user_fn<'ast, 'frame>(
     let bind = ctx
         .arena
         .with_anchored_child(|inner_arena, child| -> Result<(), KError> {
-            for (name, arg_val) in bundle.args.iter() {
-                match arg_val {
-                    ArgValue::Object(rc) => {
-                        let allocated = inner_arena.alloc_object(rc.deep_clone());
+            for (name, &value) in args.iter() {
+                match value {
+                    Carried::Object(object) => {
+                        let allocated = inner_arena.alloc_object(object.deep_clone());
                         let _ = child.bind_value(name.clone(), allocated, BindingIndex::value(0));
                     }
                     // Type-denoting params (`Er`-style) are a later increment.
-                    ArgValue::Type(_) => {}
+                    Carried::Type(_) => {}
                 }
             }
             Ok(())

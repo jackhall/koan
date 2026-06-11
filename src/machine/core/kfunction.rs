@@ -11,6 +11,8 @@ use crate::machine::model::types::{ExpressionSignature, Parseable, Record, Signa
 use crate::machine::model::values::{ArgValue, NamedPairs};
 
 pub mod argument_bundle;
+#[cfg(feature = "exec-v2")]
+pub mod bind_by_name;
 pub mod body;
 #[cfg(feature = "exec-v2")]
 pub mod exec;
