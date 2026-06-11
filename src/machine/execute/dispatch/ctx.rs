@@ -185,10 +185,12 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
 
     /// **exec-v2 (gated).** Reuse the dispatcher's resolution, but run an eligible body through the
     /// exec-v2 executor instead of `KFunction::invoke`. Returns `None` to fall through to the
-    /// legacy `bind` + `invoke` path. Eligible = a user-defined, single-statement, resolved-return
-    /// body whose value parts are all `Future`-resolved or literal (a literal resolves into the run
-    /// arena here). Any other part shape falls through. Only the body executor and frame
-    /// acquisition are swapped; everything up to here is the live dispatcher.
+    /// legacy `bind` + `invoke` path. Eligible = a user-defined, resolved-return body whose value
+    /// parts are all `Future`-resolved or literal (a literal resolves into the run arena here). Any
+    /// other part shape falls through. A multi-statement body dispatches its non-tail statements as
+    /// sibling sub-slots (positioned by the body chain assembled from `ctx.chain`) and tails into
+    /// the last. Only the body executor and frame acquisition are swapped; everything up to here is
+    /// the live dispatcher.
     #[cfg(feature = "exec-v2")]
     pub(super) fn try_exec_v2_call(
         &mut self,
@@ -196,6 +198,7 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         working_expr: &KExpression<'run>,
         idx: usize,
     ) -> Option<NodeStep<'run>> {
+        use crate::machine::core::assemble_body_chain;
         use crate::machine::core::kfunction::bind_by_name::CallArgs;
         use crate::machine::core::kfunction::exec::{run_user_fn, ExecOutcome, Frame as ExecFrame};
         use crate::machine::core::kfunction::{Body, BodyResult, SchedulerHandle};
@@ -203,18 +206,10 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         use crate::machine::model::types::ReturnType;
         use crate::machine::model::Carried;
 
-        let Body::UserDefined(body) = &picked.body else {
+        let Body::UserDefined(_) = &picked.body else {
             return None;
         };
         if !matches!(picked.signature.return_type, ReturnType::Resolved(_)) {
-            return None;
-        }
-        let multi_statement = body.parts.len() >= 2
-            && body
-                .parts
-                .iter()
-                .all(|p| matches!(p.value, ExpressionPart::Expression(_)));
-        if multi_statement {
             return None;
         }
 
@@ -250,17 +245,36 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
             arena: frame.clone(),
             chain,
         };
-        let result = match run_user_fn(picked, bound, ctx) {
-            ExecOutcome::Tail { leading, tail } => {
-                debug_assert!(
-                    leading.is_empty(),
-                    "single-statement bodies have no leading"
-                );
+        let result = match run_user_fn(picked, bound, &ctx) {
+            ExecOutcome::Tail { leading, tail } if leading.is_empty() => {
                 BodyResult::tail_with_frame(tail.clone(), frame, picked)
+            }
+            ExecOutcome::Tail { leading, tail } => {
+                // Multi-statement body: dispatch each non-tail statement as a sibling sub-slot in
+                // the frame, positioned by the body chain assembled from `ctx.chain`; the slot
+                // then tail-replaces into the last statement at body index N.
+                let body_index = leading.len() + 1;
+                let body_scope_id = frame.scope_for_bind().id;
+                let body_chain_parent =
+                    assemble_body_chain(frame.scope_for_bind(), ctx.chain.clone(), 0)
+                        .parent
+                        .clone();
+                for (i, statement) in leading.iter().enumerate() {
+                    let statement_chain =
+                        LexicalFrame::push(body_chain_parent.clone(), body_scope_id, i + 1);
+                    let statement = (*statement).clone();
+                    self.with_active_frame(frame.clone(), &mut |s| {
+                        s.add_dispatch_with_chain_in_frame(
+                            statement.clone(),
+                            statement_chain.clone(),
+                        );
+                    });
+                }
+                BodyResult::tail_with_frame_at_index(tail.clone(), frame, picked, body_index)
             }
             ExecOutcome::Errored(e) => BodyResult::Err(e),
             ExecOutcome::Value(_) | ExecOutcome::Suspend { .. } => {
-                unreachable!("a single-statement resolved-return body yields Tail or Errored")
+                unreachable!("a resolved-return user-fn body yields Tail or Errored")
             }
         };
         Some(self.body_result_to_step(result, idx))

@@ -95,9 +95,10 @@ pub enum ExecOutcome<'ast, 'frame> {
 
 /// The new `invoke` for a user-defined function: bind `args` into `ctx`'s scope (a frame/scope
 /// operation), then describe the body as an [`ExecOutcome`] — `Tail` of the non-tail statements +
-/// the last, or `Suspend` for a deferred return. `ctx` is owned; the carrier lifetime of `func` is
-/// free — only read. `args` is the argument record from [`super::bind_by_name`] (a `Record<Carried>`,
-/// resolved values keyed by parameter name).
+/// the last, or `Suspend` for a deferred return. `ctx` is **borrowed** so the caller retains it
+/// (its `chain` positions the body's `leading` statements when the scheduler dispatches them); the
+/// carrier lifetime of `func` is free — only read. `args` is the argument record from
+/// [`super::bind_by_name`] (a `Record<Carried>`, resolved values keyed by parameter name).
 ///
 /// Resolved-return path only (deferred return → `Suspend` is a later increment). Pure: it
 /// mutates only `ctx`'s own scope (param binds), then describes the body. The body statements are
@@ -105,7 +106,7 @@ pub enum ExecOutcome<'ast, 'frame> {
 pub fn run_user_fn<'ast, 'frame>(
     func: &'ast KFunction<'ast>,
     args: Record<Carried<'frame>>,
-    ctx: Frame,
+    ctx: &Frame,
 ) -> ExecOutcome<'ast, 'frame> {
     // Materialize the bound args as a record value **in the frame**, then bind each parameter to a
     // reference into the record's cell — one deep-clone per field (`Carried` → owned `Held`), and
