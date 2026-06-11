@@ -23,9 +23,11 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::{BindingIndex, CallArena, KError, LexicalFrame, Scope};
+use crate::machine::core::{BindingIndex, CallArena, KError, KErrorKind, LexicalFrame, Scope};
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::Record;
+use crate::machine::model::types::{
+    elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, Record, ReturnType,
+};
 use crate::machine::model::values::{Carried, Held, KObject};
 
 use super::body::{body_statement_refs, Body};
@@ -51,21 +53,17 @@ impl Frame {
     }
 }
 
-/// A joined dep's terminal status, handed to a continuation ([`ExecOutcome::Suspend`]) on re-entry —
-/// **success or error only, no value**. Non-tail statements deposit their results into the
-/// `Scope` (effects-through-scope), so the continuation re-reads `ctx.scope()` for any value it
-/// needs and only inspects this to propagate a dep error. Carrying no value also keeps `exec`
-/// free of the `'run` lift lifetime.
-pub type DepResult = Result<(), KError>;
+/// A joined dep's resolved value, handed to a continuation ([`ExecOutcome::Suspend`]) on re-entry.
+/// An errored dep short-circuits the scheduler's Combine before the resume runs, so this is always
+/// the success value.
+pub type DepResult<'frame> = Carried<'frame>;
 
-/// The continuation of a suspended body, in `exec`'s native terms: re-entered with a **borrow** of
-/// its frame and the join terminals, yielding another [`ExecOutcome`]. Higher-ranked over the frame
-/// borrow `'f`: a stored continuation outlives any single re-entry, so its produced-value lifetime
-/// must be the frame it is *handed* on re-entry (`ExecOutcome<'ast, 'f>`), not a `'frame` baked into the
-/// stored type (which would have to outlive the run — backwards). Borrow-free otherwise:
-/// frame-local state is re-read via `frame.scope()`, not captured.
-pub type Resume<'ast> =
-    Box<dyn for<'f> FnOnce(&'f Frame, &[DepResult]) -> ExecOutcome<'ast, 'f> + 'ast>;
+/// The continuation of a suspended body: re-entered with the resolved join values, yielding the
+/// body's terminal [`ExecOutcome`] (a `Value` — e.g. after a deferred-return type check — or an
+/// `Errored`). In the reuse path the scheduler-side lowering wraps this into a `CombineFinish`, so
+/// it mirrors that shape: dep values in, terminal outcome out (no frame re-read).
+pub type Resume<'ast, 'frame> =
+    Box<dyn FnOnce(&[DepResult<'frame>]) -> ExecOutcome<'ast, 'frame> + 'frame>;
 
 /// **exec → scheduler.** What running a body describes next, in `exec`'s native currency. Two
 /// lifetimes, because the AST and the produced value genuinely differ: the dispatchable
@@ -85,11 +83,12 @@ pub enum ExecOutcome<'ast, 'frame> {
         leading: Vec<&'ast KExpression<'ast>>,
         tail: &'ast KExpression<'ast>,
     },
-    /// Suspend: dispatch and await `join`, then re-enter `resume` with their terminals. `resume`'s
-    /// produced-value lifetime is bound to the frame it is handed on re-entry, not this `'frame`.
+    /// Suspend: dispatch and await `join`, then re-enter `resume` with their resolved values to
+    /// produce the body's terminal outcome (the deferred-return path: `join` = body statements,
+    /// `resume` checks the body value against the per-call return type).
     Suspend {
         join: Vec<&'ast KExpression<'ast>>,
-        resume: Resume<'ast>,
+        resume: Resume<'ast, 'frame>,
     },
 }
 
@@ -100,9 +99,11 @@ pub enum ExecOutcome<'ast, 'frame> {
 /// carrier lifetime of `func` is free — only read. `args` is the argument record from
 /// [`super::bind_by_name`] (a `Record<Carried>`, resolved values keyed by parameter name).
 ///
-/// Resolved-return path only (deferred return → `Suspend` is a later increment). Pure: it
-/// mutates only `ctx`'s own scope (param binds), then describes the body. The body statements are
-/// **borrowed** from `func` (`'ast`), never cloned; `'frame` is free here (no value produced).
+/// Pure wrt the scheduler: it mutates only `ctx`'s own scope (param binds) and, for a deferred
+/// `TypeExpr` return, elaborates the return type inline against that scope; then describes the body
+/// — `Tail` for a resolved return, `Suspend` (join = all statements, resume = the return-type
+/// check) for a deferred one. Body statements are **borrowed** from `func` (`'ast`), never cloned.
+/// (The deferred `Expression` return form needs a sub-dispatch and is excluded by the caller.)
 pub fn run_user_fn<'ast, 'frame>(
     func: &'ast KFunction<'ast>,
     args: Record<Carried<'frame>>,
@@ -148,9 +149,67 @@ pub fn run_user_fn<'ast, 'frame>(
             )))
         }
     };
-    let mut leading = body_statement_refs(body_expr);
-    let tail = leading
-        .pop()
-        .expect("body_statement_refs always yields at least one");
-    ExecOutcome::Tail { leading, tail }
+    match &func.signature.return_type {
+        ReturnType::Resolved(_) => {
+            let mut leading = body_statement_refs(body_expr);
+            let tail = leading
+                .pop()
+                .expect("body_statement_refs always yields at least one");
+            ExecOutcome::Tail { leading, tail }
+        }
+        // Deferred return type referencing a parameter, in its surface `TypeExpr` form: elaborate it
+        // against the per-call (param-bound) child scope, then suspend on all body statements. On
+        // re-entry the resume checks the body's terminal value against the resolved return type.
+        // The `Expression` form needs a sub-dispatch and is excluded by the caller's eligibility.
+        ReturnType::Deferred(DeferredReturn::TypeExpr(type_expr)) => {
+            let return_type = ctx.arena.with_anchored_child(|_inner_arena, child| {
+                let mut elaborator = Elaborator::new(child);
+                match elaborate_type_expr(&mut elaborator, type_expr) {
+                    ElabResult::Done(kt) => kt,
+                    // The param install + fn_def carrier scan jointly guarantee resolution; fall
+                    // back to Any so the body's own dispatch surfaces any real error.
+                    ElabResult::Park(_) | ElabResult::Unbound(_) => KType::Any,
+                }
+            });
+            let join = body_statement_refs(body_expr);
+            let body_terminal_idx = join.len() - 1;
+            let summary = func.summarize();
+            let resume: Resume<'ast, 'frame> = Box::new(move |results: &[DepResult<'frame>]| {
+                let body_value = results[body_terminal_idx];
+                let accepted = match body_value {
+                    Carried::Object(object) => return_type.matches_value(object),
+                    Carried::Type(kind) => return_type.matches_type(kind),
+                };
+                if accepted {
+                    // No return-type stamp yet: the value already satisfies the declared type (the
+                    // check passed), so it is at worst a subtype; the coarsening re-tag is a later
+                    // increment.
+                    ExecOutcome::Value(body_value)
+                } else {
+                    let got = match body_value {
+                        Carried::Object(object) => object.ktype().name(),
+                        Carried::Type(kind) => kind.name(),
+                    };
+                    ExecOutcome::Errored(
+                        KError::new(KErrorKind::TypeMismatch {
+                            arg: "<return>".to_string(),
+                            expected: format!("{} (per-call return type)", return_type.name()),
+                            got,
+                        })
+                        .with_frame(crate::machine::Frame::bare(
+                            summary.clone(),
+                            summary.clone(),
+                        )),
+                    )
+                }
+            });
+            ExecOutcome::Suspend { join, resume }
+        }
+        // The `Expression` form is excluded by the caller's eligibility (it needs a sub-dispatch).
+        ReturnType::Deferred(DeferredReturn::Expression(_)) => {
+            ExecOutcome::Errored(KError::new(KErrorKind::User(
+                "run_user_fn: deferred return-type expression is not yet supported".to_string(),
+            )))
+        }
+    }
 }

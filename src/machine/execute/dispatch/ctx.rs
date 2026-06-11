@@ -201,16 +201,18 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         use crate::machine::core::assemble_body_chain;
         use crate::machine::core::kfunction::bind_by_name::CallArgs;
         use crate::machine::core::kfunction::exec::{run_user_fn, ExecOutcome, Frame as ExecFrame};
-        use crate::machine::core::kfunction::{Body, BodyResult, SchedulerHandle};
+        use crate::machine::core::kfunction::{Body, BodyResult, CombineFinish, SchedulerHandle};
         use crate::machine::model::ast::ExpressionPart;
-        use crate::machine::model::types::ReturnType;
+        use crate::machine::model::types::{DeferredReturn, ReturnType};
         use crate::machine::model::Carried;
 
         let Body::UserDefined(_) = &picked.body else {
             return None;
         };
-        if !matches!(picked.signature.return_type, ReturnType::Resolved(_)) {
-            return None;
+        match &picked.signature.return_type {
+            ReturnType::Resolved(_) | ReturnType::Deferred(DeferredReturn::TypeExpr(_)) => {}
+            // A deferred return-type *expression* needs a sub-dispatch; not yet handled here.
+            ReturnType::Deferred(DeferredReturn::Expression(_)) => return None,
         }
 
         let mut args: Vec<Carried<'run>> = Vec::new();
@@ -272,9 +274,46 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
                 }
                 BodyResult::tail_with_frame_at_index(tail.clone(), frame, picked, body_index)
             }
+            ExecOutcome::Suspend { join, resume } => {
+                // Deferred return: dispatch every body statement as a Combine dep (positioned by the
+                // body chain), then a Combine whose finish runs `resume` (the return-type check)
+                // over their resolved values. The slot defers to the Combine.
+                let body_scope_id = frame.scope_for_bind().id;
+                let body_chain_parent =
+                    assemble_body_chain(frame.scope_for_bind(), ctx.chain.clone(), 0)
+                        .parent
+                        .clone();
+                let mut body_ids: Vec<NodeId> = Vec::with_capacity(join.len());
+                for (i, statement) in join.iter().enumerate() {
+                    let statement_chain =
+                        LexicalFrame::push(body_chain_parent.clone(), body_scope_id, i + 1);
+                    let statement = (*statement).clone();
+                    let mut bid = None;
+                    self.with_active_frame(frame.clone(), &mut |s| {
+                        bid = Some(s.add_dispatch_with_chain_in_frame(
+                            statement.clone(),
+                            statement_chain.clone(),
+                        ));
+                    });
+                    body_ids.push(bid.expect("body dispatch spawns"));
+                }
+                let finish: CombineFinish<'run> =
+                    Box::new(move |_s, results| match resume(results) {
+                        ExecOutcome::Value(c) => BodyResult::Value(c),
+                        ExecOutcome::Errored(e) => BodyResult::Err(e),
+                        _ => unreachable!("a deferred-return resume yields Value or Errored"),
+                    });
+                let mut pending = Some((body_ids, finish));
+                let mut combine_id = None;
+                self.with_active_frame(frame, &mut |s| {
+                    let (body_ids, finish) = pending.take().expect("body runs once");
+                    combine_id = Some(s.add_combine_in_frame(body_ids, vec![], finish));
+                });
+                BodyResult::DeferTo(combine_id.expect("combine spawns"))
+            }
             ExecOutcome::Errored(e) => BodyResult::Err(e),
-            ExecOutcome::Value(_) | ExecOutcome::Suspend { .. } => {
-                unreachable!("a resolved-return user-fn body yields Tail or Errored")
+            ExecOutcome::Value(_) => {
+                unreachable!("run_user_fn yields Tail or Suspend, not a bare Value")
             }
         };
         Some(self.body_result_to_step(result, idx))
