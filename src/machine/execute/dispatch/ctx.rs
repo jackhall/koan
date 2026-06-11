@@ -398,10 +398,19 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         }
         match picked {
             None => KeywordedState::finish(self, working_expr, idx),
-            Some(f) => match f.bind(working_expr) {
-                Ok(future) => Ok(self.invoke_to_step(future, idx)),
-                Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
-            },
+            Some(f) => {
+                // exec-v2 (gated): the parked subs are now all spliced, so `working_expr` is fully
+                // resolved — try the exec-v2 path before the legacy bind, same as the `AllInline`
+                // arm in `install_eager_subs_track`.
+                #[cfg(feature = "exec-v2")]
+                if let Some(step) = self.try_exec_v2_call(f, &working_expr, idx) {
+                    return Ok(step);
+                }
+                match f.bind(working_expr) {
+                    Ok(future) => Ok(self.invoke_to_step(future, idx)),
+                    Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
+                }
+            }
         }
     }
 }
