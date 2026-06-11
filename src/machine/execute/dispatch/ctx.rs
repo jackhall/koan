@@ -306,9 +306,10 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
                 // resolved — try the exec-v2 path before the legacy bind, same as the `AllInline`
                 // arm in `install_eager_subs_track`.
                 #[cfg(feature = "exec-v2")]
-                if let Some(step) = super::exec::try_exec_v2_call(self, f, &working_expr, idx) {
-                    return Ok(step);
-                }
+                let working_expr = match super::exec::try_invoke(self, f, working_expr, idx) {
+                    Ok(step) => return Ok(step),
+                    Err(working_expr) => working_expr,
+                };
                 match f.bind(working_expr) {
                     Ok(future) => Ok(self.invoke_to_step(future, idx)),
                     Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),

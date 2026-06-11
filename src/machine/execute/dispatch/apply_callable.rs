@@ -213,12 +213,14 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
     match ctx.install_eager_subs(working_expr, staged_subs, Some(picked), idx) {
         EagerSubsInstall::DepError(step) => Ok(step),
         EagerSubsInstall::AllInline(working_expr) => {
-            // exec-v2 (gated): run an eligible body through the exec-v2 executor, reusing the
-            // resolution above. Falls through to the legacy bind + invoke for everything else.
+            // exec-v2 (gated): route the resolved call through the new invoke entry (builtins
+            // direct, eligible user-fns through the executor). An ineligible user-fn hands
+            // `working_expr` back for the legacy bind + invoke.
             #[cfg(feature = "exec-v2")]
-            if let Some(step) = super::exec::try_exec_v2_call(ctx, picked, &working_expr, idx) {
-                return Ok(step);
-            }
+            let working_expr = match super::exec::try_invoke(ctx, picked, working_expr, idx) {
+                Ok(step) => return Ok(step),
+                Err(working_expr) => working_expr,
+            };
             match picked.bind(working_expr) {
                 Ok(future) => Ok(ctx.invoke_to_step(future, idx)),
                 Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),

@@ -22,43 +22,46 @@ use crate::machine::model::types::{DeferredReturn, ReturnType};
 use crate::machine::model::Carried;
 use crate::machine::NodeId;
 
-/// Reuse the dispatcher's resolution, but run an eligible body through the exec-v2 executor instead
-/// of `KFunction::invoke`. Returns `None` to fall through to the legacy `bind` + `invoke` path.
-/// Eligible = a user-defined, resolved- or deferred-`TypeExpr`-return body whose value parts are all
-/// `Future`-resolved or literal (a literal resolves into the run arena here). Any other part shape
-/// (or a deferred-`Expression` return, which needs a sub-dispatch) falls through.
-pub(super) fn try_exec_v2_call<'run>(
+/// The single invoke entry for the dispatcher's two bind sites. Routes a resolved call:
+/// - **builtin** → invoked directly with its legacy `ArgumentBundle` (quarantined from the exec-v2
+///   `Record<Carried>` machinery; builtins will be rewritten onto exec-v2 later);
+/// - **user-defined**, when eligible (resolved- or deferred-`TypeExpr`-return, value parts all
+///   `Future`-resolved or literal) → the exec-v2 executor.
+///
+/// Returns `Ok(step)` when handled. An ineligible user-fn hands `working_expr` *back* via `Err` so
+/// the caller can run the legacy `bind` + `invoke` path without re-cloning it.
+pub(super) fn try_invoke<'run>(
     ctx: &mut DispatchCtx<'run, '_>,
     picked: &'run KFunction<'run>,
-    working_expr: &KExpression<'run>,
+    working_expr: KExpression<'run>,
     idx: usize,
-) -> Option<NodeStep<'run>> {
-    let Body::UserDefined(_) = &picked.body else {
-        return None;
-    };
-    match &picked.signature.return_type {
-        ReturnType::Resolved(_) | ReturnType::Deferred(DeferredReturn::TypeExpr(_)) => {}
-        ReturnType::Deferred(DeferredReturn::Expression(_)) => return None,
+) -> Result<NodeStep<'run>, KExpression<'run>> {
+    // Builtins keep their legacy `ArgumentBundle` I/O and are called directly — the exec-v2
+    // executor (`run_user_fn`, `Record<Carried>`) never sees them.
+    if let Body::Builtin(f) = &picked.body {
+        let f = *f;
+        let bundle = match picked.bind(working_expr) {
+            Ok(future) => future.bundle,
+            Err(e) => return Ok(NodeStep::Done(NodeOutput::Err(e))),
+        };
+        let result = f(ctx, bundle);
+        return Ok(ctx.body_result_to_step(result, idx));
     }
 
-    let mut args: Vec<Carried<'run>> = Vec::new();
-    for part in &working_expr.parts {
-        match &part.value {
-            ExpressionPart::Keyword(_) => {}
-            ExpressionPart::Future(carried) => args.push(*carried),
-            // A literal value part isn't `Future`-spliced; resolve it into the run arena now
-            // (mirrors `literal_pass_through`) so it joins the args as a `'run` `Carried`.
-            ExpressionPart::Literal(_) => {
-                let object = ctx.current_scope().arena.alloc_object(part.value.resolve());
-                args.push(Carried::Object(object));
-            }
-            _ => return None,
-        }
+    match &picked.signature.return_type {
+        ReturnType::Resolved(_) | ReturnType::Deferred(DeferredReturn::TypeExpr(_)) => {}
+        ReturnType::Deferred(DeferredReturn::Expression(_)) => return Err(working_expr),
     }
+
+    let args = match extract_carried_args(ctx, &working_expr) {
+        Some(args) => args,
+        // A non-`Future`/`Literal` value part isn't a resolved `Carried` yet — fall through.
+        None => return Err(working_expr),
+    };
 
     let bound = match picked.bind_by_name(CallArgs::Positional(args)) {
         Ok(record) => record,
-        Err(e) => return Some(NodeStep::Done(NodeOutput::Err(e))),
+        Err(e) => return Ok(NodeStep::Done(NodeOutput::Err(e))),
     };
 
     let outer = picked.captured_scope();
@@ -104,7 +107,31 @@ pub(super) fn try_exec_v2_call<'run>(
             unreachable!("run_user_fn yields Tail or Suspend, not a bare Value")
         }
     };
-    Some(ctx.body_result_to_step(result, idx))
+    Ok(ctx.body_result_to_step(result, idx))
+}
+
+/// Extract the call's resolved value arguments from `working_expr`'s parts, in order. Returns
+/// `None` if any value part isn't a resolved `Carried` (a `Future`-splice or a literal) — the
+/// signal to fall through to the legacy binder. Keyword parts are the signature's own literals.
+fn extract_carried_args<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    working_expr: &KExpression<'run>,
+) -> Option<Vec<Carried<'run>>> {
+    let mut args = Vec::new();
+    for part in &working_expr.parts {
+        match &part.value {
+            ExpressionPart::Keyword(_) => {}
+            ExpressionPart::Future(carried) => args.push(*carried),
+            // A literal value part isn't `Future`-spliced; resolve it into the run arena now
+            // (mirrors `literal_pass_through`) so it joins the args as a `'run` `Carried`.
+            ExpressionPart::Literal(_) => {
+                let object = ctx.current_scope().arena.alloc_object(part.value.resolve());
+                args.push(Carried::Object(object));
+            }
+            _ => return None,
+        }
+    }
+    Some(args)
 }
 
 /// Dispatch a body's statements as sibling sub-slots in `frame`, each positioned by the body chain
