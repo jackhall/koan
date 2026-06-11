@@ -1,7 +1,7 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena.rs: 19
+src/machine/core/arena.rs: 17
 src/machine/core/kfunction/body.rs: 3
 src/machine/core/scope_ptr.rs: 6
 src/machine/execute/scheduler/execute.rs: 1
@@ -58,10 +58,7 @@ carries the same `&Scope<'_> → &Scope<'static>` erasure as `new`, over the run
 rather than a freshly-minted child; it is built on the first run-lifetime submission, so every
 scheduler-driving slate test below (`module_body_dispatch_does_not_dangle`,
 `recursive_tagged_match_no_uaf`, `lift_park_minimal_program_for_miri`, …) exercises it
-end-to-end — the run scope outlives the frame, so no separate minimal test. `CallArena::new_with_child`
-(feature-gated `exec-v2`, inactive in the default build the slate runs) is verbatim `new` apart from
-its `make_child` child constructor — the same two `unsafe` sites and the same heap-pinning argument
-— so the `new` tests pin its shape; a dedicated test joins the slate when `exec-v2` becomes default.
+end-to-end — the run scope outlives the frame, so no separate minimal test.
 
 - `call_arena_scope_survives_subsequent_alloc`
 - `call_arena_chained_outer_frame_walkable`

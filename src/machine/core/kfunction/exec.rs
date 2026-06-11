@@ -26,7 +26,7 @@ use std::rc::Rc;
 use crate::machine::core::{BindingIndex, CallArena, KError, LexicalFrame, Scope};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::Record;
-use crate::machine::model::values::Carried;
+use crate::machine::model::values::{Carried, Held, KObject};
 
 use super::body::{body_statement_refs, Body};
 use super::KFunction;
@@ -107,19 +107,29 @@ pub fn run_user_fn<'ast, 'frame>(
     args: Record<Carried<'frame>>,
     ctx: Frame,
 ) -> ExecOutcome<'ast, 'frame> {
-    // Bind parameters into the frame's child scope — a frame/scope op, concentrated in
-    // `with_anchored_child` so the seed fabricates no `&'a`. Mirrors `invoke`'s param bind.
+    // Materialize the bound args as a record value **in the frame**, then bind each parameter to a
+    // reference into the record's cell — one deep-clone per field (`Carried` → owned `Held`), and
+    // the record carries its per-field type record. The record's cells double as the parameter
+    // bindings (scope bindings store `&KObject`). Concentrated in `with_anchored_child` so the seed
+    // fabricates no `&'a`.
     let bind = ctx
         .arena
         .with_anchored_child(|inner_arena, child| -> Result<(), KError> {
-            for (name, &value) in args.iter() {
-                match value {
-                    Carried::Object(object) => {
-                        let allocated = inner_arena.alloc_object(object.deep_clone());
-                        let _ = child.bind_value(name.clone(), allocated, BindingIndex::value(0));
+            let cells: Record<Held> = args.map(|carried| Held::from_carried(*carried));
+            let args_record = inner_arena.alloc_object(KObject::record_of_held(cells));
+            if let KObject::Record(cells, _types) = args_record {
+                for (name, cell) in cells.iter() {
+                    match cell {
+                        Held::Object(object) => {
+                            let _ = child.bind_value(name.clone(), object, BindingIndex::value(0));
+                        }
+                        // Type-denoting params (`Er`-style) register a type, not a value binding.
+                        // The arg is an already-resolved type, so `type_identity_for` would just
+                        // pass it through — register it directly (avoids the def-scope lifetime).
+                        Held::Type(kt) => {
+                            child.register_type(name.clone(), kt.clone(), BindingIndex::value(0));
+                        }
                     }
-                    // Type-denoting params (`Er`-style) are a later increment.
-                    Carried::Type(_) => {}
                 }
             }
             Ok(())

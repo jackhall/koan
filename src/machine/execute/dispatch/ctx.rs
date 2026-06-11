@@ -186,8 +186,8 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
     /// **exec-v2 (gated).** Reuse the dispatcher's resolution, but run an eligible body through the
     /// exec-v2 executor instead of `KFunction::invoke`. Returns `None` to fall through to the
     /// legacy `bind` + `invoke` path. Eligible = a user-defined, single-statement, resolved-return
-    /// body whose value arguments are all already resolved `Carried` (literals fall through — they
-    /// need resolving into a `'run` arena, a later increment). Only the body executor and frame
+    /// body whose value parts are all `Future`-resolved or literal (a literal resolves into the run
+    /// arena here). Any other part shape falls through. Only the body executor and frame
     /// acquisition are swapped; everything up to here is the live dispatcher.
     #[cfg(feature = "exec-v2")]
     pub(super) fn try_exec_v2_call(
@@ -223,6 +223,15 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
             match &part.value {
                 ExpressionPart::Keyword(_) => {}
                 ExpressionPart::Future(carried) => args.push(*carried),
+                // A literal value part isn't `Future`-spliced; resolve it into the run arena now
+                // (mirrors `literal_pass_through`) so it joins the args as a `'run` `Carried`.
+                ExpressionPart::Literal(_) => {
+                    let object = self
+                        .current_scope()
+                        .arena
+                        .alloc_object(part.value.resolve());
+                    args.push(Carried::Object(object));
+                }
                 _ => return None,
             }
         }
