@@ -106,7 +106,6 @@ fn unanchored_kfuture_with_arena_borrow_does_anchor() {
 /// recursive borrow walk; the inner future borrows via its captured function.
 #[test]
 fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
-    use crate::machine::core::kfunction::ArgumentBundle;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallArena::new(scope, None);
@@ -115,15 +114,13 @@ fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
     let inner_future = KFuture {
         parsed: KExpression::new(vec![]),
         function: kf_ref,
-        bundle: ArgumentBundle {
-            args: Record::new(),
-        },
+        args: Record::new(),
     };
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut outer = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    outer.bundle.args.insert(
+    outer.args.insert(
         "f".into(),
         ArgValue::Object(Rc::new(KObject::KFuture(inner_future, None))),
     );
@@ -174,7 +171,6 @@ fn kfuture_bundle_arg_with_wrapped_field_anchors() {
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
     future
-        .bundle
         .args
         .insert("s".into(), ArgValue::Object(Rc::new(s)));
     let obj = KObject::KFuture(future, None);
@@ -241,7 +237,7 @@ fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
     let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Future(
         Carried::Object(inside),
     ))]);
-    future.bundle.args.insert(
+    future.args.insert(
         "e".into(),
         ArgValue::Object(Rc::new(KObject::KExpression(inner))),
     );
@@ -298,7 +294,7 @@ fn kfuture_bundle_arg_with_local_kfunction_anchors() {
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    future.bundle.args.insert(
+    future.args.insert(
         "borrower".into(),
         ArgValue::Object(Rc::new(KObject::KFunction(kf_ref, None))),
     );
@@ -320,7 +316,6 @@ fn kfuture_bundle_arg_with_local_kfunction_anchors() {
 /// without needing any borrowing payload in parts or bundle.
 #[test]
 fn kfuture_with_local_function_anchors() {
-    use crate::machine::core::kfunction::ArgumentBundle;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallArena::new(scope, None);
@@ -329,9 +324,7 @@ fn kfuture_with_local_function_anchors() {
     let future = KFuture {
         parsed: KExpression::new(vec![]),
         function: kf_ref,
-        bundle: ArgumentBundle {
-            args: Record::new(),
-        },
+        args: Record::new(),
     };
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying);
@@ -361,7 +354,6 @@ fn kfuture_bundle_arg_with_list_of_kfunction_anchors() {
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
     let nested = KObject::list(vec![KObject::KFunction(kf_ref, None)]);
     future
-        .bundle
         .args
         .insert("nested".into(), ArgValue::Object(Rc::new(nested)));
     let obj = KObject::KFuture(future, None);
@@ -394,7 +386,7 @@ fn kfuture_bundle_arg_with_local_kmodule_anchors() {
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    future.bundle.args.insert(
+    future.args.insert(
         "m".into(),
         ArgValue::Type(KType::Module {
             module: m_ref,

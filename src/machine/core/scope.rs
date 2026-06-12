@@ -14,24 +14,25 @@ use super::lexical_frame::LexicalFrame;
 use super::pending::PendingQueue;
 use super::scope_id::ScopeId;
 use super::scope_ptr::BoundedScopePtr;
-use crate::machine::core::kfunction::{ArgumentBundle, KFunction, NodeId};
-use crate::machine::model::values::KObject;
+use crate::machine::core::kfunction::{KFunction, NodeId};
+use crate::machine::model::types::Record;
+use crate::machine::model::values::{ArgValue, KObject};
 
 /// A resolved-but-not-yet-executed call: the original expression, the chosen `KFunction`,
-/// and the `ArgumentBundle` from `KFunction::bind`. Unit of deferred work in dispatch.
+/// and the resolved argument record from `KFunction::bind`. Unit of deferred work in dispatch.
 pub struct KFuture<'a> {
     pub parsed: KExpression<'a>,
     pub function: &'a KFunction<'a>,
-    pub bundle: ArgumentBundle<'a>,
+    pub args: Record<ArgValue<'a>>,
 }
 
 impl<'a> KFuture<'a> {
-    /// `function` is shared (arena-allocated, immutable); `parsed` and `bundle` clone deeply.
+    /// `function` is shared (arena-allocated, immutable); `parsed` and `args` clone deeply.
     pub fn deep_clone(&self) -> KFuture<'a> {
         KFuture {
             parsed: self.parsed.clone(),
             function: self.function,
-            bundle: self.bundle.deep_clone(),
+            args: Record::from_pairs(self.args.iter().map(|(k, v)| (k.clone(), v.deep_clone()))),
         }
     }
 }

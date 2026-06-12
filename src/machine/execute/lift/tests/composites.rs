@@ -102,7 +102,6 @@ fn list_of_tagged_with_kfunction_anchors_via_recursion() {
 /// untouched.
 #[test]
 fn list_with_pre_anchored_variants_skips_them() {
-    use crate::machine::core::kfunction::ArgumentBundle;
     use crate::machine::model::values::Module;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
@@ -116,9 +115,7 @@ fn list_with_pre_anchored_variants_skips_them() {
     let future = KFuture {
         parsed: KExpression::new(vec![]),
         function: kf_ref,
-        bundle: ArgumentBundle {
-            args: Record::new(),
-        },
+        args: Record::new(),
     };
     let items = Rc::new(vec![
         Held::Object(KObject::KFunction(kf_ref, Some(Rc::clone(&other)))),
@@ -150,7 +147,6 @@ fn list_with_pre_anchored_variants_skips_them() {
 /// drives the rebuild.
 #[test]
 fn list_with_unanchored_kfuture_anchors() {
-    use crate::machine::core::kfunction::ArgumentBundle;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallArena::new(scope, None);
@@ -159,9 +155,7 @@ fn list_with_unanchored_kfuture_anchors() {
     let future = KFuture {
         parsed: KExpression::new(vec![]),
         function: kf_ref,
-        bundle: ArgumentBundle {
-            args: Record::new(),
-        },
+        args: Record::new(),
     };
     let list = KObject::list(vec![KObject::KFuture(future, None)]);
     let before = Rc::strong_count(&dying);

@@ -253,9 +253,9 @@ Downstream consumers branch on the `Type` arm, handling the `Unresolved` transie
 a bare user name can still be pending:
 
 - the shared
-  [`extract_bare_type_name`](../../src/machine/core/kfunction/argument_bundle.rs)
-  helper (used by STRUCT/UNION declaration sites and the dispatcher's
-  `TypeCall` fast lane), which renders either an `Unresolved` name or a resolved type;
+  [`require_bare_type_name`](../../src/machine/core/kfunction/action.rs)
+  helper (used by the nominal binders that read their name from a `KObject::Record`
+  type cell), which renders either an `Unresolved` name or a resolved type;
 - [ATTR's `body_type_lhs` and `read_field_name`](../../src/builtins/attr.rs);
 - [`let_binding`'s name slot](../../src/builtins/let_binding.rs), which
   runs a primitive/container blocklist over the `Type` arm and
@@ -275,7 +275,7 @@ for every type-only nominal — struct / union / module / Result *and* signature
 earlier still-finalizing binder it parks; on a miss it surfaces `Unbound`.
 
 FN's deferred return-type slot is parsed at definition time via
-[`extract_ktype`](../../src/machine/core/kfunction/argument_bundle.rs), which yields any
+[`extract_return_type_raw`](../../src/builtins/fn_def/return_type.rs), which reads any
 `Type`-arm type — a resolved `&KType` or the `KType::Unresolved` transient for a bare leaf —
 and branches on `Unresolved` to pick the `TypeExpr` carrier (see
 [fn_def/return_type.rs](../../src/builtins/fn_def.rs)). At call time the body executor

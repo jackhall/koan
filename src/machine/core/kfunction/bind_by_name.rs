@@ -1,10 +1,9 @@
 //! Bind a user-defined call's already-resolved arguments to a function's parameters *by name* — the
 //! binder the `exec` body executor uses, subsuming both call forms (named `f {x = a}` and positional
-//! `f a b`). (Builtins keep the legacy `ArgumentBundle` `bind`.) The arguments
-//! arrive as [`Carried`] values (resolved into the arena by dispatch), so binding is a pure rename
-//! map into a `Record<Carried>`: no `ArgValue` wrapping, no `ArgumentBundle`, and no per-argument
-//! type-check — that is the picker's job, and the carried type is trusted here. Parallel to the
-//! live binder; the existing dispatcher is untouched.
+//! `f a b`). (Builtins bind via [`KFunction::bind`], which produces a `Record<ArgValue>`.) The
+//! arguments arrive as [`Carried`] values (resolved into the arena by dispatch), so binding is a
+//! pure rename map into a `Record<Carried>`: no `ArgValue` wrapping and no per-argument type-check —
+//! that is the picker's job, and the carried type is trusted here.
 
 use super::KFunction;
 use crate::machine::model::types::{Argument, ExpressionSignature, Record, SignatureElement};

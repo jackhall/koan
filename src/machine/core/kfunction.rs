@@ -10,7 +10,6 @@ use crate::machine::core::{KError, KErrorKind, KFuture, Scope};
 use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
 use crate::machine::model::values::{ArgValue, NamedPairs};
 
-pub mod argument_bundle;
 pub mod bind_by_name;
 pub mod body;
 pub mod exec;
@@ -20,7 +19,6 @@ pub mod scheduler_handle;
 /// `machine::execute::harness::run_action`.
 pub mod action;
 
-pub use argument_bundle::ArgumentBundle;
 pub use body::{BinderBucketFn, BinderNameFn, Body, BodyResult};
 pub use action::ActionFn;
 pub use pick::ClassifiedSlots;
@@ -167,7 +165,7 @@ impl<'a> KFunction<'a> {
         Ok(KFuture {
             parsed: expr,
             function: self,
-            bundle: ArgumentBundle { args },
+            args,
         })
     }
 

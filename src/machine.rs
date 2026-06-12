@@ -2,7 +2,7 @@
 //! `KFunction` whose signature matches its parts and running its `Body`. Submodules:
 //!
 //! - `core` — `Scope`, `RuntimeArena`, `KError`, `KFuture`, scheduler glue, and the
-//!   `kfunction` submodule (`KFunction`, `Body`, `BodyResult`, `ArgumentBundle`).
+//!   `kfunction` submodule (`KFunction`, `Body`, `BodyResult`).
 //! - `model` — `KType`, `KObject`, `Module`, `Signature`, signature traits.
 //! - `execute` — top-level interpret loop and scheduler driver.
 
@@ -11,8 +11,7 @@ pub(crate) mod execute;
 pub mod model;
 
 pub use core::kfunction::{
-    ArgumentBundle, Body, BodyResult, CatchFinish, CombineFinish, KFunction, NodeId,
-    SchedulerHandle,
+    Body, BodyResult, CatchFinish, CombineFinish, KFunction, NodeId, SchedulerHandle,
 };
 pub use core::{
     BindingIndex, Bindings, CallArena, Frame, FunctionLookup, KError, KErrorKind, KFuture,

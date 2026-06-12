@@ -59,9 +59,8 @@ pub fn arg_held<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c Held<'a
     }
 }
 
-/// Read a builtin argument's `KType` (a type-cell arg), or the canonical `require_ktype`
-/// diagnostic — `TypeMismatch{expected: "TypeExprRef"}` for an object cell, `MissingArg` when
-/// absent. The `Action`-side twin of [`ArgumentBundle::require_ktype`](super::argument_bundle::ArgumentBundle::require_ktype).
+/// Read a builtin argument's `KType` (a type-cell arg), or the canonical diagnostic —
+/// `TypeMismatch{expected: "TypeExprRef"}` for an object cell, `MissingArg` when absent.
 pub fn require_ktype<'a>(args: &KObject<'a>, name: &str) -> Result<KType<'a>, KError> {
     match arg_held(args, name) {
         Some(Held::Type(kt)) => Ok(kt.clone()),
@@ -85,8 +84,46 @@ pub fn require_bare_type_name<'a>(
     surface: &str,
 ) -> Result<String, KError> {
     match arg_type(args, slot) {
-        Some(t) => super::argument_bundle::bare_type_name(t, slot, surface),
+        Some(t) => bare_type_name(t, slot, surface),
         None => Err(KError::new(KErrorKind::MissingArg(slot.to_string()))),
+    }
+}
+
+/// Resolve a resolved `KType` to its bare type name, for the binders that read their name from a
+/// `KObject::Record` type cell. A simple / nominal leaf yields its `name()`; a structural type
+/// (List, Record, FN, …) is a `ShapeError`. `surface` is the keyword (`"STRUCT"`, `"UNION"`, …)
+/// embedded in the message.
+fn bare_type_name<'a>(t: &KType<'a>, name: &str, surface: &str) -> Result<String, KError> {
+    match t {
+        KType::Number
+        | KType::Str
+        | KType::Bool
+        | KType::Null
+        | KType::Identifier
+        | KType::KExpression
+        | KType::SigiledTypeExpr
+        | KType::RecordType
+        | KType::OfKind(_)
+        | KType::Unresolved(_)
+        | KType::Any
+        | KType::SetRef { .. }
+        | KType::Signature { .. }
+        | KType::Module { .. }
+        | KType::AbstractType { .. } => Ok(t.name()),
+        KType::List(_)
+        | KType::Dict(_, _)
+        | KType::Record(_)
+        | KType::KFunction { .. }
+        | KType::KFunctor { .. }
+        | KType::DeferredReturn(_)
+        | KType::SetLocal(_)
+        | KType::Variant { .. }
+        | KType::RecursiveRef(_)
+        | KType::RecursiveGroup(_)
+        | KType::ConstructorApply { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
+            "{surface} {name} must be a bare type name, got `{}`",
+            t.render(),
+        )))),
     }
 }
 
@@ -104,9 +141,8 @@ pub(crate) fn body_result_to_action<'a>(result: BodyResult<'a>) -> Action<'a> {
 }
 
 /// Extract a cloned `KExpression` from arg `slot`, or the canonical parenthesized-slot
-/// `ShapeError` (`"<builtin> <slot> slot must be a parenthesized expression"`). The `Action`-side
-/// twin of [`ArgumentBundle::extract_kexpression_or_shape_error`](super::argument_bundle::ArgumentBundle::extract_kexpression_or_shape_error),
-/// owning that error text so every `KExpression`-slot builtin reports it identically.
+/// `ShapeError` (`"<builtin> <slot> slot must be a parenthesized expression"`), owning that error
+/// text so every `KExpression`-slot builtin reports it identically.
 pub fn require_kexpression<'a>(
     args: &KObject<'a>,
     builtin: &str,

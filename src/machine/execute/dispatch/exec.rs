@@ -1,6 +1,6 @@
-//! The dispatch-side `invoke` — the single entry that runs a resolved call. A builtin is invoked
-//! directly with its [`ArgumentBundle`]; a user-defined body runs through
-//! [`crate::machine::core::kfunction::exec::run_user_fn`] and its [`ExecOutcome`] is lowered onto
+//! The dispatch-side `invoke` — the single entry that runs a resolved call. A builtin runs through
+//! the action harness (its bound args as a `KObject::Record` `BodyCtx`); a user-defined body runs
+//! through [`crate::machine::core::kfunction::exec::run_user_fn`] and its [`ExecOutcome`] is lowered onto
 //! the scheduler — mapped to a `BodyResult` (then a `NodeStep`) using the scheduler's own
 //! primitives (`acquire_tail_frame`, the body-chain dispatch, `add_combine_in_frame`). Kept out of
 //! `ctx.rs` (the dispatcher facade) so the dispatcher core stays thin; pure body semantics live one
@@ -37,11 +37,11 @@ pub(super) fn invoke<'run>(
     // through the shared `run_action` interpreter.
     if let Body::Builtin(f) = &picked.body {
         let f = *f;
-        let bundle = match picked.bind(working_expr) {
-            Ok(future) => future.bundle,
+        let args = match picked.bind(working_expr) {
+            Ok(future) => future.args,
             Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
         };
-        return run_action_builtin(ctx, f, bundle, idx);
+        return run_action_builtin(ctx, f, args, idx);
     }
 
     // Validate each argument against its declared parameter type before the (type-trusting)
@@ -158,21 +158,20 @@ pub(super) fn invoke<'run>(
     ctx.body_result_to_step(result, idx)
 }
 
-/// Lower an action-harness builtin: bind its args into a `KObject::Record`, build the read-only
-/// `BodyCtx`, call the `ActionFn`, then interpret the returned `Action` through the shared
-/// `run_action`. The args arrive as an `ArgumentBundle` (the call API) and are converted to the
-/// `KObject::Record` the `BodyCtx` exposes.
+/// Lower an action-harness builtin: convert its resolved `args` record into the `KObject::Record`
+/// the `BodyCtx` exposes, build the read-only `BodyCtx`, call the `ActionFn`, then interpret the
+/// returned `Action` through the shared `run_action`.
 fn run_action_builtin<'run>(
     ctx: &mut DispatchCtx<'run, '_>,
     f: crate::machine::core::kfunction::ActionFn,
-    bundle: crate::machine::core::kfunction::ArgumentBundle<'run>,
+    args: crate::machine::model::types::Record<crate::machine::model::values::ArgValue<'run>>,
     idx: usize,
 ) -> NodeStep<'run> {
     use crate::machine::core::kfunction::action::BodyCtx;
     use crate::machine::model::values::{ArgValue, Held};
     use crate::machine::model::KObject;
 
-    let cells = bundle.args.map(|av| match av {
+    let cells = args.map(|av| match av {
         ArgValue::Object(rc) => Held::Object(rc.deep_clone()),
         ArgValue::Type(t) => Held::Type(t.clone()),
     });
