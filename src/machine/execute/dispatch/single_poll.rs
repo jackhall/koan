@@ -374,6 +374,29 @@ fn park_on_literal_producer<'run>(
         return NodeStep::Done(outcome);
     }
     ctx.add_owned_edge(producer, NodeId(idx));
+    #[cfg(feature = "dispatch-combine")]
+    {
+        // Single-owned-dep [`NodeWork::DispatchCombine`]: the finish lifts the producer's
+        // resolved value straight through. A dep error short-circuits frameless in
+        // `run_dispatch_combine` (matching the `Lift` path's `clone_for_propagation`), so
+        // the finish only runs on a resolved producer.
+        use super::super::nodes::DispatchCombineFinish;
+        let finish: DispatchCombineFinish<'run> =
+            Box::new(|_ctx, results, _idx| NodeStep::Done(NodeOutput::Value(results[0])));
+        NodeStep::Replace {
+            work: NodeWork::DispatchCombine {
+                deps: vec![producer],
+                park_count: 0,
+                finish,
+                dep_error_frame: None,
+            },
+            frame: None,
+            function: None,
+            block_entry: None,
+            body_index: 0,
+        }
+    }
+    #[cfg(not(feature = "dispatch-combine"))]
     NodeStep::Replace {
         work: NodeWork::Lift(LiftState::Pending(producer)),
         frame: None,
