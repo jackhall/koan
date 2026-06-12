@@ -1,7 +1,8 @@
 //! FunctionValueCall dispatch shape.
 //!
-//! The two tracks on [`FnValueState`] are mutually exclusive: head
-//! resolution decides between them before any part walk runs.
+//! Head resolution runs before any part walk: a value-bound head dispatches the call
+//! immediately, an unbound name errors, and a still-finalizing head placeholder parks as a
+//! [`FnValueState`] that re-runs the fast lane on resume.
 
 use std::marker::PhantomData;
 
@@ -13,12 +14,14 @@ use crate::machine::{KError, KErrorKind, NodeId, Resolution};
 
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::apply_callable::{apply_callable, ResolvedCallable};
-use super::{DispatchCtx, DispatchState, EagerSubsTrack, Initialized};
+use super::{DispatchCtx, DispatchState, Initialized};
 
+/// Parked `FunctionValueCall` state. Eager subs park as a [`NodeWork::DispatchCombine`]
+/// (`apply_callable::install_eager_subs_track`), so the only thing a `FnValueState` carries is a
+/// still-finalizing *head* binding — a lowercase-identifier head that resolved to a placeholder.
 pub(in crate::machine::execute) struct FnValueState<'run> {
     pub(in crate::machine::execute) init: Initialized,
-    pub(in crate::machine::execute) eager_subs: Option<EagerSubsTrack<'run>>,
-    pub(in crate::machine::execute) head_placeholder: Option<FnValueHeadPlaceholderTrack<'run>>,
+    pub(in crate::machine::execute) head_placeholder: FnValueHeadPlaceholderTrack<'run>,
 }
 
 /// Carries the *original* (unspliced) call expression so the resume
@@ -40,29 +43,13 @@ impl<'run> FnValueHeadPlaceholderTrack<'run> {
 }
 
 impl<'run> FnValueState<'run> {
-    // Under `dispatch-combine` the apply-a-callable path parks committed-pick eager
-    // subs as a `DispatchCombine`, never a `FnValueState` eager-subs track, so this
-    // constructor (and the `eager_subs` resume branch) is reachable only on the legacy path.
-    #[cfg(not(feature = "dispatch-combine"))]
-    pub(in crate::machine::execute) fn with_eager_subs(
-        init: Initialized,
-        track: EagerSubsTrack<'run>,
-    ) -> Self {
-        Self {
-            init,
-            eager_subs: Some(track),
-            head_placeholder: None,
-        }
-    }
-
     pub(in crate::machine::execute) fn with_head_placeholder(
         init: Initialized,
         track: FnValueHeadPlaceholderTrack<'run>,
     ) -> Self {
         Self {
             init,
-            eager_subs: None,
-            head_placeholder: Some(track),
+            head_placeholder: track,
         }
     }
 
@@ -81,33 +68,19 @@ impl<'run> FnValueState<'run> {
             Resolution::Placeholder(producer_id) => {
                 Self::install_head_park(ctx, producer_id, expr, idx)
             }
-            Resolution::UnboundName => NodeStep::Done(NodeOutput::Err(KError::new(
-                KErrorKind::UnboundName(head),
-            ))),
+            Resolution::UnboundName => {
+                NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(head))))
+            }
         }
     }
 
-    pub(super) fn resume(
-        self,
-        ctx: &mut DispatchCtx<'run, '_>,
-        idx: usize,
-    ) -> NodeStep<'run> {
+    pub(super) fn resume(self, ctx: &mut DispatchCtx<'run, '_>, idx: usize) -> NodeStep<'run> {
         let FnValueState {
             init,
-            eager_subs,
             head_placeholder,
         } = self;
         let _ = init;
-        if let Some(track) = eager_subs {
-            debug_assert!(
-                head_placeholder.is_none(),
-                "eager_subs and head_placeholder are mutually exclusive",
-            );
-            return ctx.resume_eager_subs(track, idx);
-        }
-        let track = head_placeholder
-            .expect("FunctionValueCall resume is only entered after a track is installed");
-        let FnValueHeadPlaceholderTrack { expr, producer, .. } = track;
+        let FnValueHeadPlaceholderTrack { expr, producer, .. } = head_placeholder;
         let _ = producer;
         Self::initial(ctx, expr, idx)
     }
@@ -127,13 +100,11 @@ impl<'run> FnValueState<'run> {
         let callable = match head_obj {
             KObject::KFunction(f, _) => ResolvedCallable::Function(f),
             other => {
-                return NodeStep::Done(NodeOutput::Err(KError::new(
-                    KErrorKind::TypeMismatch {
-                        arg: "verb".to_string(),
-                        expected: "KFunction or Type".to_string(),
-                        got: other.summarize(),
-                    },
-                )))
+                return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+                    arg: "verb".to_string(),
+                    expected: "KFunction or Type".to_string(),
+                    got: other.summarize(),
+                })))
             }
         };
         apply_callable(ctx, callable, &expr, idx)

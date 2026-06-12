@@ -4,9 +4,12 @@
 //! It names exactly the scheduler operations the dispatcher uses — slot
 //! queries, dep-graph mutations, sub-submission, the recent-wakes
 //! side-channel, and the dispatcher-only ops (`build_bare_outcomes`,
-//! `install_eager_subs`, `replace_with_parked_dispatch`,
-//! `resume_eager_subs`) that used to live on `impl Scheduler` solely
-//! so they could spell the scheduler's internal fields.
+//! `install_eager_subs`, `replace_with_parked_dispatch`) that spell the
+//! scheduler's internal fields on the dispatcher's behalf.
+//!
+//! [`DispatchCx`] is the read-only peer used by a migrated handler's decide
+//! phase: it holds `&Scheduler` (never `&mut`) and returns a
+//! [`DispatchOutcome`](super::outcome::DispatchOutcome) the harness applies.
 //!
 //! Dispatch *shape* modules (`keyworded`, `fn_value`, `single_poll`)
 //! never name scheduler fields directly — only `ctx.foo(...)` — so a
@@ -34,8 +37,7 @@ use crate::machine::{
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
 use super::{
-    bind_frame_err, keyworded::KeywordedState, resolve_name_part, DispatchState, EagerSubsInstall,
-    EagerSubsTrack, PendingSub,
+    bind_frame_err, keyworded::KeywordedState, resolve_name_part, DispatchState, PendingSub,
 };
 
 /// Newtype wrapping `&'b mut Scheduler<'run>`, exposing exactly the
@@ -121,10 +123,6 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
 
     pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
         self.sched.read_result(id)
-    }
-
-    pub(super) fn read(&self, id: NodeId) -> Carried<'run> {
-        self.sched.read(id)
     }
 
     // ----- dep graph -----
@@ -239,70 +237,15 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
             .collect()
     }
 
-    /// Submit each `PendingSub`, splice already-terminal subs inline,
-    /// install an Owned dep_edge from each in-flight sub to this slot,
-    /// and return the routed [`EagerSubsInstall`]. `picked = Some(f)` is
-    /// the FunctionValueCall install; `None` is Keyworded.
+    /// Submit each `PendingSub` and park the slot on the in-flight ones as a
+    /// [`NodeWork::DispatchCombine`]. A `Reuse` of an already-resolved producer splices inline (a
+    /// freshly minted sub is never terminal in the same step); every in-flight sub becomes an
+    /// owned dep whose finish splices the resolved values into `working_expr` and routes on
+    /// `picked` — `Some(f)` calls `f`, `None` re-resolves through [`KeywordedState::finish`]. The
+    /// `<bind>` dep-error frame rides on `dep_error_frame`, attached by `run_dispatch_combine` at
+    /// the short-circuit (so the finish only ever sees resolved deps). `picked = Some(f)` is the
+    /// FunctionValueCall install; `None` is Keyworded.
     pub(super) fn install_eager_subs(
-        &mut self,
-        mut working_expr: KExpression<'run>,
-        staged_subs: Vec<(usize, PendingSub<'run>)>,
-        picked: Option<&'run KFunction<'run>>,
-        idx: usize,
-    ) -> EagerSubsInstall<'run> {
-        let mut pending_subs: Vec<(usize, NodeId)> = Vec::with_capacity(staged_subs.len());
-        for (i, pending) in staged_subs {
-            let is_reuse = matches!(pending, PendingSub::Reuse(_));
-            let sub_id = match pending {
-                PendingSub::Reuse(id) => id,
-                PendingSub::Dispatch(sub_expr) => self.add_dispatch_here(sub_expr),
-                PendingSub::ListLit(items) => self.schedule_list_literal(items),
-                PendingSub::DictLit(pairs) => self.schedule_dict_literal(pairs),
-                PendingSub::RecordLit(fields) => self.schedule_record_literal(fields),
-            };
-            // Eager-splice invariant: submission is enqueue-then-drain, so a freshly minted sub is
-            // never terminal in the same step — only a `Reuse` of an already-resolved producer can
-            // splice eagerly. The dispatcher-as-`Combine` rearchitecture relies on this (fresh subs
-            // are always parked deps), so lock it here.
-            debug_assert!(
-                is_reuse || !self.is_result_ready(sub_id),
-                "freshly-submitted sub {sub_id:?} is immediately ready — \
-                 eager-splice should only ever fire for a Reuse of a resolved producer"
-            );
-            if self.is_result_ready(sub_id) {
-                match self.read_result(sub_id) {
-                    Err(e) => return EagerSubsInstall::DepError(bind_frame_err(e, &working_expr)),
-                    Ok(value) => {
-                        working_expr.parts[i].value = ExpressionPart::Future(value);
-                        self.free(sub_id.index());
-                    }
-                }
-            } else {
-                self.add_owned_edge(sub_id, NodeId(idx));
-                pending_subs.push((i, sub_id));
-            }
-        }
-        if pending_subs.is_empty() {
-            EagerSubsInstall::AllInline(working_expr)
-        } else {
-            EagerSubsInstall::Parked(EagerSubsTrack {
-                working_expr,
-                subs: pending_subs,
-                picked,
-            })
-        }
-    }
-
-    /// [`NodeWork::DispatchCombine`] dual of [`Self::install_eager_subs`]. A `Reuse` of an
-    /// already-resolved producer splices inline (a freshly minted sub is never terminal in
-    /// the same step); every in-flight sub becomes an owned dep of a `DispatchCombine` whose
-    /// finish splices the resolved values into `working_expr` and routes on `picked` exactly
-    /// as [`Self::resume_eager_subs`] does (`Some(f)` calls `f`; `None` re-resolves through
-    /// [`KeywordedState::finish`]). The `<bind>` dep-error frame rides on `dep_error_frame`,
-    /// attached by `run_dispatch_combine` at the short-circuit — same framing as the legacy
-    /// `bind_frame_err` / `resume_eager_subs` path it replaces under the feature.
-    #[cfg(feature = "dispatch-combine")]
-    pub(super) fn install_eager_subs_combine(
         &mut self,
         mut working_expr: KExpression<'run>,
         staged_subs: Vec<(usize, PendingSub<'run>)>,
@@ -343,11 +286,14 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
             }
         }
         if deps.is_empty() {
-            // Every sub was an already-resolved `Reuse` spliced inline — continue now,
-            // matching the legacy `EagerSubsInstall::AllInline` arm.
+            // Every sub was an already-resolved `Reuse` spliced inline — `working_expr` is fully
+            // resolved, so continue to the finish now instead of parking on a Combine.
             return finish_eager_subs(self, working_expr, picked, idx);
         }
-        let dep_error_frame = Some(crate::machine::TraceFrame::from_expr("<bind>", &working_expr));
+        let dep_error_frame = Some(crate::machine::TraceFrame::from_expr(
+            "<bind>",
+            &working_expr,
+        ));
         let finish: DispatchCombineFinish<'run> = Box::new(move |ctx, results, idx| {
             // The short-circuit already guaranteed every dep resolved; splice each into the
             // slot it was staged from, then run the routed continuation.
@@ -388,57 +334,12 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
             body_index: 0,
         }
     }
-
-    /// Track-completion continuation for `eager_subs` tracks. Routes on
-    /// `track.picked`:
-    ///
-    /// - `None` (Keyworded install) — tail into
-    ///   [`KeywordedState::finish`], which re-resolves dispatch so an
-    ///   element-typed `Future(_)` revealed by a sub can surface as
-    ///   `DispatchFailed` rather than a bind-time `TypeMismatch`.
-    /// - `Some(f)` (FunctionValueCall install) — bind `f` directly.
-    pub(super) fn resume_eager_subs(
-        &mut self,
-        track: EagerSubsTrack<'run>,
-        idx: usize,
-    ) -> NodeStep<'run> {
-        let EagerSubsTrack {
-            mut working_expr,
-            subs,
-            picked,
-        } = track;
-        for (_, sub_id) in &subs {
-            if let Err(e) = self.read_result(*sub_id) {
-                return bind_frame_err(e, &working_expr);
-            }
-        }
-        let dep_indices: Vec<usize> = subs.iter().map(|(_, d)| d.index()).collect();
-        for (part_idx, dep_id) in subs {
-            let value = self.read(dep_id);
-            working_expr.parts[part_idx].value = ExpressionPart::Future(value);
-        }
-        self.clear_dep_edges(idx);
-        for d in dep_indices {
-            self.free(d);
-        }
-        match picked {
-            None => KeywordedState::finish(self, working_expr, idx),
-            // The parked subs are now all spliced, so `working_expr` is fully resolved — run the call.
-            Some(f) => {
-                let body = super::exec::invoke(self, f, working_expr);
-                self.body_result_to_step(body, idx)
-            }
-        }
-    }
 }
 
 /// Route a fully-spliced eager-subs `working_expr` to its continuation — the shared tail of
 /// the `DispatchCombine` finish and its all-inline fast path. `Some(f)` runs the committed
 /// call; `None` re-resolves dispatch via [`KeywordedState::finish`] (an element-typed
-/// `Future(_)` revealed by a sub then surfaces as a slot-terminal `DispatchFailed`). Mirrors
-/// [`DispatchCtx::resume_eager_subs`]'s `picked` routing; `KeywordedState::finish` reports
-/// dispatch failures slot-terminally.
-#[cfg(feature = "dispatch-combine")]
+/// `Future(_)` revealed by a sub then surfaces as a slot-terminal `DispatchFailed`).
 fn finish_eager_subs<'run>(
     ctx: &mut DispatchCtx<'run, '_>,
     working_expr: KExpression<'run>,

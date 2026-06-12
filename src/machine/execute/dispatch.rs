@@ -20,7 +20,6 @@
 //! [`DispatchCtx`] — the typed facade over `&mut Scheduler<'run>` — so the
 //! shape modules never spell scheduler field names.
 
-use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};
@@ -288,13 +287,6 @@ pub(super) fn stage_all_eager_parts<'run>(
     (new_parts, staged)
 }
 
-/// Outcome of [`DispatchCtx::install_eager_subs`].
-pub(in crate::machine::execute::dispatch) enum EagerSubsInstall<'run> {
-    AllInline(KExpression<'run>),
-    Parked(EagerSubsTrack<'run>),
-    DepError(NodeStep<'run>),
-}
-
 // ---------- State carrier ----------
 
 /// Universal birth state of a Dispatch slot — the shape before
@@ -306,23 +298,6 @@ pub(in crate::machine::execute) struct Initialized {
     /// `expr.parts`; populated by submit-time recursion for
     /// binder-shaped expressions, empty otherwise.
     pub(in crate::machine::execute) pre_subs: Vec<(usize, NodeId)>,
-}
-
-/// Track state for the eager-subs sub-Dispatches a Keyworded or
-/// FunctionValueCall slot is parked on. Each `(part_idx, sub_id)` is
-/// the slot index in `working_expr.parts` to splice into at track
-/// completion plus the sub NodeId (the Owned dep this slot installed
-/// at park-install time).
-pub(in crate::machine::execute) struct EagerSubsTrack<'run> {
-    pub(in crate::machine::execute) working_expr: KExpression<'run>,
-    pub(in crate::machine::execute) subs: Vec<(usize, NodeId)>,
-    /// `Some(f)` is the FunctionValueCall install; resume binds `f`
-    /// directly. `None` is the Keyworded install; resume re-runs
-    /// `resolve_dispatch` — re-resolve is authoritative so
-    /// an element-typed `Future(_)` revealed by an eager sub surfaces
-    /// as `DispatchFailed` (non-match) rather than a bind-time
-    /// `TypeMismatch`.
-    pub(in crate::machine::execute) picked: Option<&'run KFunction<'run>>,
 }
 
 /// One variant per [`DispatchShape`], plus the pre-classification
@@ -358,15 +333,7 @@ impl<'run> DispatchState<'run> {
     pub(in crate::machine::execute) fn parked_carrier_expr(&self) -> Option<&KExpression<'run>> {
         match self {
             DispatchState::Keyworded(ks) => ks.track.as_ref().map(|t| t.carrier_expr()),
-            DispatchState::FunctionValueCall(fs) => {
-                if let Some(track) = &fs.eager_subs {
-                    return Some(&track.working_expr);
-                }
-                if let Some(track) = &fs.head_placeholder {
-                    return Some(&track.expr);
-                }
-                None
-            }
+            DispatchState::FunctionValueCall(fs) => Some(&fs.head_placeholder.expr),
             _ => None,
         }
     }
@@ -435,8 +402,8 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
         }
         // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
         // a non-callable head is a runtime error, not a fatal `execute()` abort.
-        DispatchShape::NonCallableHead => NodeStep::Done(NodeOutput::Err(KError::new(
-            KErrorKind::DispatchFailed {
+        DispatchShape::NonCallableHead => {
+            NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(),
                 reason: format!(
                     "head is not callable: `{}`",
@@ -445,8 +412,8 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
                         .map(|p| p.value.summarize())
                         .unwrap_or_else(|| "<empty>".into())
                 ),
-            },
-        ))),
+            })))
+        }
         DispatchShape::OperatorChain => {
             debug_assert!(init.pre_subs.is_empty());
             // Decide against a read-only view (immutable scheduler borrow), then reborrow

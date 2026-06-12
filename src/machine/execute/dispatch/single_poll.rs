@@ -9,12 +9,11 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use super::constructors;
 use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
-use crate::machine::model::{KObject, KType, RecursiveSet};
+use crate::machine::model::{KType, RecursiveSet};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, SchedulerHandle};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
@@ -38,15 +37,15 @@ pub(in crate::machine::execute) struct BareTypeParkTrack {
     pub(in crate::machine::execute) producer: NodeId,
 }
 
+/// Parked `TypeCall` state. Ctor value subs park as a [`NodeWork::DispatchCombine`]
+/// (`constructors::launch`), so the only thing a `CtorState` carries is a still-finalizing
+/// *head* binding: `type_call` parked on a `LET <Type-class> = …` placeholder (e.g. a forward
+/// functor). On resume the whole `type_call` re-runs against the now-finalized binding — the
+/// head may resolve type-side (a functor or type alias), so the keyworded resolve path is the
+/// wrong continuation.
 pub(in crate::machine::execute) struct CtorState<'run> {
     pub(in crate::machine::execute) init: Initialized,
-    pub(in crate::machine::execute) track: Option<CtorTrack<'run>>,
-    /// Set when `type_call` parked on a still-finalizing head binding (a
-    /// `LET <Type-class> = …` placeholder, e.g. a forward functor). On resume
-    /// the whole `type_call` re-runs against the now-finalized binding — the
-    /// head may resolve type-side (a functor or type alias), so the keyworded
-    /// resolve path is the wrong continuation. Mutually exclusive with `track`.
-    pub(in crate::machine::execute) head_placeholder: Option<TypeCallHeadPlaceholder<'run>>,
+    pub(in crate::machine::execute) head_placeholder: TypeCallHeadPlaceholder<'run>,
 }
 
 /// Parked head-resolution state for a `TypeCall` whose head name was a
@@ -55,18 +54,6 @@ pub(in crate::machine::execute) struct CtorState<'run> {
 pub(in crate::machine::execute) struct TypeCallHeadPlaceholder<'run> {
     pub(in crate::machine::execute) expr: KExpression<'run>,
     pub(in crate::machine::execute) producer: NodeId,
-}
-
-/// Pending eager-subs for a parked `TypeCall`. `staged_values`
-/// already holds the slots whose dispatch short-circuited at install
-/// time (an arena-resident `&KObject`); `subs` carries `(slot_index,
-/// sub_id)` for the remaining parked slots. The resume reads each
-/// sub's terminal, fills the slot, and tail-calls
-/// [`constructors::finish`].
-pub(in crate::machine::execute) struct CtorTrack<'run> {
-    pub(in crate::machine::execute) subs: Vec<(usize, NodeId)>,
-    pub(in crate::machine::execute) staged_values: Vec<Option<&'run KObject<'run>>>,
-    pub(in crate::machine::execute) kind: CtorKind<'run>,
 }
 
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
@@ -123,32 +110,19 @@ impl<'run> BareTypeState<'run> {
 }
 
 impl<'run> CtorState<'run> {
-    pub(in crate::machine::execute) fn with_track(
-        init: Initialized,
-        track: CtorTrack<'run>,
-    ) -> Self {
-        Self {
-            init,
-            track: Some(track),
-            head_placeholder: None,
-        }
-    }
-
     pub(in crate::machine::execute) fn with_head_placeholder(
         init: Initialized,
         head_placeholder: TypeCallHeadPlaceholder<'run>,
     ) -> Self {
         Self {
             init,
-            track: None,
-            head_placeholder: Some(head_placeholder),
+            head_placeholder,
         }
     }
 
-    /// Drain the parked subs into `staged_values` and tail-call
-    /// `constructors::finish` once every slot is bound. Errors on a
-    /// dep terminate the resume with that error. A `head_placeholder` resume
-    /// instead re-runs `type_call` against the now-finalized head binding.
+    /// Re-run `type_call` against the now-finalized head binding. Ctor value subs resolve
+    /// through their own `DispatchCombine`, so a `CtorState` only ever parks on a head
+    /// placeholder.
     pub(in crate::machine::execute) fn resume(
         self,
         ctx: &mut DispatchCtx<'run, '_>,
@@ -156,44 +130,12 @@ impl<'run> CtorState<'run> {
     ) -> NodeStep<'run> {
         let CtorState {
             init,
-            track,
-            head_placeholder,
+            head_placeholder: TypeCallHeadPlaceholder { expr, producer },
         } = self;
         let _ = init;
-        if let Some(TypeCallHeadPlaceholder { expr, producer }) = head_placeholder {
-            debug_assert!(
-                track.is_none(),
-                "head_placeholder and eager-subs track are mutually exclusive",
-            );
-            let _ = producer;
-            ctx.clear_dep_edges(idx);
-            return type_call(ctx, expr, idx);
-        }
-        let CtorTrack {
-            subs,
-            mut staged_values,
-            kind,
-        } = track.expect("TypeCall resume only entered after a track is installed");
-        for (slot_idx, sub_id) in &subs {
-            match ctx.read_result(*sub_id) {
-                Ok(v) => staged_values[*slot_idx] = Some(v.object()),
-                Err(e) => {
-                    let err = e.clone_for_propagation();
-                    ctx.clear_dep_edges(idx);
-                    for (_, dep_id) in &subs {
-                        ctx.free(dep_id.index());
-                    }
-                    return NodeStep::Done(NodeOutput::Err(err));
-                }
-            }
-        }
+        let _ = producer;
         ctx.clear_dep_edges(idx);
-        for (_, dep_id) in &subs {
-            ctx.free(dep_id.index());
-        }
-        let values: Vec<&'run KObject<'run>> =
-            staged_values.into_iter().map(|o| o.unwrap()).collect();
-        constructors::finish(ctx.current_scope(), &kind, &values)
+        type_call(ctx, expr, idx)
     }
 }
 
@@ -374,31 +316,19 @@ fn park_on_literal_producer<'run>(
         return NodeStep::Done(outcome);
     }
     ctx.add_owned_edge(producer, NodeId(idx));
-    #[cfg(feature = "dispatch-combine")]
-    {
-        // Single-owned-dep [`NodeWork::DispatchCombine`]: the finish lifts the producer's
-        // resolved value straight through. A dep error short-circuits frameless in
-        // `run_dispatch_combine` (matching the `Lift` path's `clone_for_propagation`), so
-        // the finish only runs on a resolved producer.
-        use super::super::nodes::DispatchCombineFinish;
-        let finish: DispatchCombineFinish<'run> =
-            Box::new(|_ctx, results, _idx| NodeStep::Done(NodeOutput::Value(results[0])));
-        NodeStep::Replace {
-            work: NodeWork::DispatchCombine {
-                deps: vec![producer],
-                park_count: 0,
-                finish,
-                dep_error_frame: None,
-            },
-            frame: None,
-            function: None,
-            block_entry: None,
-            body_index: 0,
-        }
-    }
-    #[cfg(not(feature = "dispatch-combine"))]
+    // Single-owned-dep [`NodeWork::DispatchCombine`]: the finish lifts the producer's resolved
+    // value straight through. A dep error short-circuits frameless in `run_dispatch_combine`, so
+    // the finish only runs on a resolved producer.
+    use super::super::nodes::DispatchCombineFinish;
+    let finish: DispatchCombineFinish<'run> =
+        Box::new(|_ctx, results, _idx| NodeStep::Done(NodeOutput::Value(results[0])));
     NodeStep::Replace {
-        work: NodeWork::Lift(LiftState::Pending(producer)),
+        work: NodeWork::DispatchCombine {
+            deps: vec![producer],
+            park_count: 0,
+            finish,
+            dep_error_frame: None,
+        },
         frame: None,
         function: None,
         block_entry: None,

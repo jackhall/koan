@@ -20,11 +20,7 @@ use crate::machine::{KError, KErrorKind, NodeId, Scope};
 
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::single_poll::CtorKind;
-#[cfg(not(feature = "dispatch-combine"))]
-use super::single_poll::{CtorState, CtorTrack};
 use super::DispatchCtx;
-#[cfg(not(feature = "dispatch-combine"))]
-use super::{DispatchState, Initialized};
 
 pub(in crate::machine::execute) mod tagged_union;
 
@@ -191,33 +187,14 @@ fn launch<'run>(
             staged_values.into_iter().map(|o| o.unwrap()).collect();
         return finish(ctx.current_scope(), &kind, &values);
     }
-    #[cfg(feature = "dispatch-combine")]
-    {
-        park_subs_as_combine(subs, staged_values, kind)
-    }
-    #[cfg(not(feature = "dispatch-combine"))]
-    {
-        let track = CtorTrack {
-            subs,
-            staged_values,
-            kind,
-        };
-        let init = Initialized {
-            pre_subs: Vec::new(),
-        };
-        ctx.replace_with_parked_dispatch(DispatchState::TypeCall(Box::new(CtorState::with_track(
-            init, track,
-        ))))
-    }
+    park_subs_as_combine(subs, staged_values, kind)
 }
 
-/// [`NodeWork::DispatchCombine`] dual of the legacy `CtorState`-track park. Every staged sub is
-/// already an owned dep (a fresh ctor sub is never terminal in the same step, locked by the
-/// `debug_assert!` in [`launch`]); the finish splices each resolved value into its slot of
-/// `staged_values` and tail-calls [`finish`]. Dep errors propagate frameless in
-/// `run_dispatch_combine`, matching [`CtorState::resume`]'s `clone_for_propagation` (no `<ctor>`
+/// Park the staged ctor subs as a [`NodeWork::DispatchCombine`]. Every staged sub is already an
+/// owned dep (a fresh ctor sub is never terminal in the same step, locked by the `debug_assert!`
+/// in [`launch`]); the finish splices each resolved value into its slot of `staged_values` and
+/// tail-calls [`finish`]. Dep errors propagate frameless in `run_dispatch_combine` (no `<ctor>`
 /// frame), so the finish only runs once every dep resolved.
-#[cfg(feature = "dispatch-combine")]
 fn park_subs_as_combine<'run>(
     subs: Vec<(usize, NodeId)>,
     mut staged_values: Vec<Option<&'run KObject<'run>>>,

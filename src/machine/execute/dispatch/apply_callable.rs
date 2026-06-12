@@ -30,8 +30,6 @@ use super::{
     body_shape_err, constructors, extract_call_body, stage_all_eager_parts, CallBody, DispatchCtx,
     NAMED_ONLY, POSITIONAL_ONLY,
 };
-#[cfg(not(feature = "dispatch-combine"))]
-use super::{DispatchState, EagerSubsInstall, FnValueState, Initialized};
 
 /// A head resolved to something callable. The lane decides which arm; the tail
 /// branches on the body surface and launches.
@@ -193,10 +191,10 @@ fn apply_function<'run>(
     }
 }
 
-/// Stage every eager part of the reconstructed call as a sub-Dispatch, splice
-/// already-terminal subs inline, and either bind `picked` directly (all inline)
-/// or park as a `FunctionValueCall` eager-subs track. Shared by the
-/// `FunctionValueCall` lane and every head-deferred / type-call function arm.
+/// Stage every eager part of the reconstructed call as a sub-Dispatch, splice already-terminal
+/// subs inline, and park the slot on the in-flight ones as a `DispatchCombine` whose finish binds
+/// `picked`. Shared by the `FunctionValueCall` lane and every head-deferred / type-call function
+/// arm.
 pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
     ctx: &mut DispatchCtx<'run, '_>,
     expr: KExpression<'run>,
@@ -209,27 +207,5 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
     let wrap_indices = picked.classify_for_pick(&expr).wrap_indices;
     let (new_parts, staged_subs) = stage_all_eager_parts(expr.parts, &wrap_indices);
     let working_expr = KExpression::new(new_parts);
-    #[cfg(feature = "dispatch-combine")]
-    {
-        ctx.install_eager_subs_combine(working_expr, staged_subs, Some(picked), idx)
-    }
-    #[cfg(not(feature = "dispatch-combine"))]
-    match ctx.install_eager_subs(working_expr, staged_subs, Some(picked), idx) {
-        EagerSubsInstall::DepError(step) => step,
-        EagerSubsInstall::AllInline(working_expr) => {
-            // All eager subs resolved inline → run the call (builtins direct, user-fns through the
-            // exec executor).
-            let body = super::exec::invoke(ctx, picked, working_expr);
-            ctx.body_result_to_step(body, idx)
-        }
-        EagerSubsInstall::Parked(track) => {
-            // The function arm is non-binder; `pre_subs` is always empty.
-            let init = Initialized {
-                pre_subs: Vec::new(),
-            };
-            ctx.replace_with_parked_dispatch(DispatchState::FunctionValueCall(Box::new(
-                FnValueState::with_eager_subs(init, track),
-            )))
-        }
-    }
+    ctx.install_eager_subs(working_expr, staged_subs, Some(picked), idx)
 }

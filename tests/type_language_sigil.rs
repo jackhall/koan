@@ -49,7 +49,10 @@ fn run_expect_err(arena: &RuntimeArena, src: &str) -> String {
     let scope = default_scope(arena, Box::new(SharedBuf(captured)));
     let exprs = parse(src).expect("parse should succeed");
     let mut sched = Scheduler::new();
-    let ids: Vec<_> = exprs.into_iter().map(|e| sched.add_dispatch(e, scope)).collect();
+    let ids: Vec<_> = exprs
+        .into_iter()
+        .map(|e| sched.add_dispatch(e, scope))
+        .collect();
     sched
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");

@@ -349,7 +349,10 @@ fn producer_error_propagates_to_parked_consumer() {
     )
     .expect("parse should succeed");
     let mut sched = Scheduler::new();
-    let ids: Vec<_> = exprs.into_iter().map(|e| sched.add_dispatch(e, scope)).collect();
+    let ids: Vec<_> = exprs
+        .into_iter()
+        .map(|e| sched.add_dispatch(e, scope))
+        .collect();
     sched
         .execute()
         .expect("a producer error routes into the slot, not a fatal execute abort");

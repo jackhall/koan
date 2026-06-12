@@ -28,7 +28,7 @@ use super::outcome::DispatchOutcome;
 /// so a `None` probe is a classification bug.
 ///
 /// This handler issues no scheduler write — every path is a terminal — so it decides
-/// against a read-only `&DispatchCtx` and returns a [`DispatchOutcome::Terminal`]; the
+/// against a read-only [`DispatchCx`] and returns a [`DispatchOutcome::Terminal`]; the
 /// router applies it through [`super::harness::apply_dispatch_outcome`].
 pub(in crate::machine::execute) fn run<'run>(
     ctx: &DispatchCx<'run, '_>,
@@ -42,12 +42,12 @@ pub(in crate::machine::execute) fn run<'run>(
         .current_scope()
         .resolve_operator_group_with_chain(probe, chain)
     {
-        None => DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
-            KErrorKind::DispatchFailed {
+        None => {
+            DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(),
                 reason: undeclared_operator_reason(probe),
-            },
-        ))),
+            })))
+        }
         Some(group) => {
             // A hit on a key whose probe operators aren't all members would be a
             // registry-build bug (the powerset keys only name members), but guard it:

@@ -12,8 +12,8 @@ use crate::machine::{
 
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::{
-    bare_name_of, propagate_dep_error, DispatchCtx, DispatchState, EagerSubsInstall,
-    EagerSubsTrack, Initialized, PartWalkResult, PendingSub,
+    bare_name_of, propagate_dep_error, DispatchCtx, DispatchState, Initialized, PartWalkResult,
+    PendingSub,
 };
 
 pub(in crate::machine::execute) struct KeywordedState<'run> {
@@ -22,16 +22,14 @@ pub(in crate::machine::execute) struct KeywordedState<'run> {
     pub(in crate::machine::execute) track: Option<ParkTrack<'run>>,
 }
 
-/// Park reason for a `Keyworded` slot. Variants are mutually exclusive
-/// by construction: a single resolve either parks on producers
-/// (`Overload`), or runs the part walk which discovers bare-name
-/// producers (`BareName`) or stages eager subs (`EagerSubs`). The
-/// bare-name park must be installed *before* staging any subs — submitting
-/// would leak nodes on the re-Dispatch wake path.
+/// Park reason for a `Keyworded` slot. Variants are mutually exclusive by construction: a
+/// single resolve either parks on producers (`Overload`) or runs the part walk which discovers
+/// bare-name producers (`BareName`). Eager subs do not park here — they resolve through their
+/// own [`NodeWork::DispatchCombine`](super::super::nodes::NodeWork), so a re-Dispatch never
+/// re-enters the Keyworded resume for them.
 pub(in crate::machine::execute) enum ParkTrack<'run> {
     Overload(OverloadParkTrack<'run>),
     BareName(BareNameParkTrack<'run>),
-    EagerSubs(EagerSubsTrack<'run>),
 }
 
 impl<'run> ParkTrack<'run> {
@@ -41,7 +39,6 @@ impl<'run> ParkTrack<'run> {
         match self {
             ParkTrack::Overload(t) => &t.expr,
             ParkTrack::BareName(t) => &t.working_expr,
-            ParkTrack::EagerSubs(t) => &t.working_expr,
         }
     }
 }
@@ -82,16 +79,6 @@ impl<'run> OverloadParkTrack<'run> {
 }
 
 impl<'run> KeywordedState<'run> {
-    pub(in crate::machine::execute) fn with_eager_subs(
-        init: Initialized,
-        track: EagerSubsTrack<'run>,
-    ) -> Self {
-        Self {
-            init,
-            track: Some(ParkTrack::EagerSubs(track)),
-        }
-    }
-
     pub(in crate::machine::execute) fn with_bare_name_park(
         init: Initialized,
         track: BareNameParkTrack<'run>,
@@ -147,12 +134,10 @@ impl<'run> KeywordedState<'run> {
                 )));
             }
             ResolveOutcome::Unmatched => {
-                return NodeStep::Done(NodeOutput::Err(KError::new(
-                    KErrorKind::DispatchFailed {
-                        expr: expr.summarize(),
-                        reason: "no matching function".to_string(),
-                    },
-                )));
+                return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+                    expr: expr.summarize(),
+                    reason: "no matching function".to_string(),
+                })));
             }
             ResolveOutcome::UnboundName(name) => {
                 return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))));
@@ -224,11 +209,7 @@ impl<'run> KeywordedState<'run> {
     }
 
     /// Resume entry, dispatched on the installed `ParkTrack` variant.
-    pub(super) fn resume(
-        self,
-        ctx: &mut DispatchCtx<'run, '_>,
-        idx: usize,
-    ) -> NodeStep<'run> {
+    pub(super) fn resume(self, ctx: &mut DispatchCtx<'run, '_>, idx: usize) -> NodeStep<'run> {
         let KeywordedState { init, track } = self;
         let track = track.expect("Keyworded resume is only entered after a track is installed");
         match track {
@@ -238,7 +219,6 @@ impl<'run> KeywordedState<'run> {
             ParkTrack::BareName(BareNameParkTrack { working_expr, .. }) => {
                 Self::initial(ctx, working_expr, init.pre_subs, idx)
             }
-            ParkTrack::EagerSubs(track) => ctx.resume_eager_subs(track, idx),
         }
     }
 
@@ -275,9 +255,9 @@ impl<'run> KeywordedState<'run> {
             ResolveOutcome::ParkOnProducers(producers) => {
                 Self::install_overload_park(ctx, producers, working_expr, Vec::new(), idx)
             }
-            ResolveOutcome::UnboundName(name) => NodeStep::Done(NodeOutput::Err(KError::new(
-                KErrorKind::UnboundName(name),
-            ))),
+            ResolveOutcome::UnboundName(name) => {
+                NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))))
+            }
         }
     }
 
@@ -362,25 +342,11 @@ impl<'run> KeywordedState<'run> {
         pre_subs: Vec<(usize, NodeId)>,
         idx: usize,
     ) -> NodeStep<'run> {
-        // `pre_subs` rides only on the legacy parked-Keyworded state; the combine carrier
-        // owns its deps directly, so the Keyworded eager-subs resume state is unused under
-        // the feature (a re-Dispatch never re-enters here — the combine finish runs instead).
-        #[cfg(feature = "dispatch-combine")]
-        {
-            let _ = pre_subs;
-            return ctx.install_eager_subs_combine(working_expr, staged_subs, None, idx);
-        }
-        #[cfg(not(feature = "dispatch-combine"))]
-        match ctx.install_eager_subs(working_expr, staged_subs, None, idx) {
-            EagerSubsInstall::DepError(step) => step,
-            EagerSubsInstall::AllInline(working_expr) => Self::finish(ctx, working_expr, idx),
-            EagerSubsInstall::Parked(track) => {
-                let init = Initialized { pre_subs };
-                ctx.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
-                    Self::with_eager_subs(init, track),
-                )))
-            }
-        }
+        // The combine carrier owns its deps directly; the Keyworded eager-subs resume state is
+        // never re-entered (a re-Dispatch never lands here — the combine finish runs instead),
+        // so `pre_subs` is unused on this path.
+        let _ = pre_subs;
+        ctx.install_eager_subs(working_expr, staged_subs, None, idx)
     }
 }
 

@@ -758,7 +758,7 @@ fn keyworded_parked_carrier_expr_reads_state() {
     use crate::machine::execute::dispatch::keyworded::{
         BareNameParkTrack, KeywordedState, OverloadParkTrack,
     };
-    use crate::machine::execute::dispatch::{DispatchState, EagerSubsTrack, Initialized};
+    use crate::machine::execute::dispatch::{DispatchState, Initialized};
 
     fn carrier_expr<'run>() -> KExpression<'run> {
         // `(LIFT_BARE arg)` — a recognizable sample distinct from any other
@@ -770,24 +770,6 @@ fn keyworded_parked_carrier_expr_reads_state() {
         ])
     }
     let expected = carrier_expr().summarize();
-
-    let with_eager_subs = DispatchState::Keyworded(Box::new(KeywordedState::with_eager_subs(
-        Initialized {
-            pre_subs: Vec::new(),
-        },
-        EagerSubsTrack {
-            working_expr: carrier_expr(),
-            subs: Vec::new(),
-            picked: None,
-        },
-    )));
-    assert_eq!(
-        with_eager_subs
-            .parked_carrier_expr()
-            .map(Parseable::summarize),
-        Some(expected.clone()),
-        "eager-subs track must surface `working_expr` as the parked sample",
-    );
 
     let with_bare_name = DispatchState::Keyworded(Box::new(KeywordedState::with_bare_name_park(
         Initialized {
