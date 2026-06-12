@@ -55,7 +55,7 @@ fn register_function_dedupes_exact_signature() {
     let scope = run_root_bare(&arena);
     let f1 = arena.alloc_function(KFunction::new(
         unit_signature(),
-        Body::Builtin(body_no_op),
+        Body::Action(body_no_op),
         scope,
     ));
     let obj1 = arena.alloc_object(KObject::KFunction(f1, None));
@@ -64,7 +64,7 @@ fn register_function_dedupes_exact_signature() {
         .unwrap();
     let f2 = arena.alloc_function(KFunction::new(
         unit_signature(),
-        Body::Builtin(body_no_op),
+        Body::Action(body_no_op),
         scope,
     ));
     let obj2 = arena.alloc_object(KObject::KFunction(f2, None));
@@ -86,7 +86,7 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
     let scope = run_root_bare(&arena);
     let f1 = arena.alloc_function(KFunction::new(
         unit_signature(),
-        Body::Builtin(body_no_op),
+        Body::Action(body_no_op),
         scope,
     ));
     let obj1 = arena.alloc_object(KObject::KFunction(f1, None));
@@ -95,7 +95,7 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         .unwrap();
     let f2 = arena.alloc_function(KFunction::new(
         unit_signature(),
-        Body::Builtin(body_no_op),
+        Body::Action(body_no_op),
         scope,
     ));
     let obj2 = arena.alloc_object(KObject::KFunction(f2, None));
@@ -117,7 +117,7 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
     let scope = run_root_bare(&arena);
     let f = arena.alloc_function(KFunction::new(
         unit_signature(),
-        Body::Builtin(body_no_op),
+        Body::Action(body_no_op),
         scope,
     ));
     let obj1 = arena.alloc_object(KObject::KFunction(f, None));
@@ -154,8 +154,8 @@ fn register_function_allows_overload_with_different_arg_types() {
             }),
         ],
     };
-    let f1 = arena.alloc_function(KFunction::new(sig_num, Body::Builtin(body_no_op), scope));
-    let f2 = arena.alloc_function(KFunction::new(sig_str, Body::Builtin(body_no_op), scope));
+    let f1 = arena.alloc_function(KFunction::new(sig_num, Body::Action(body_no_op), scope));
+    let f2 = arena.alloc_function(KFunction::new(sig_str, Body::Action(body_no_op), scope));
     let obj1 = arena.alloc_object(KObject::KFunction(f1, None));
     let obj2 = arena.alloc_object(KObject::KFunction(f2, None));
     scope
@@ -178,7 +178,7 @@ fn register_function_coexists_with_same_name_value() {
         .unwrap();
     let f = arena.alloc_function(KFunction::new(
         unit_signature(),
-        Body::Builtin(body_no_op),
+        Body::Action(body_no_op),
         scope,
     ));
     let obj = arena.alloc_object(KObject::KFunction(f, None));

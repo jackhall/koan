@@ -123,10 +123,9 @@ pub fn require_kexpression<'a>(
     }
 }
 
-/// A builtin body: `fn(&BodyCtx) -> Action`. Replaces
-/// [`BuiltinFn`](super::body::BuiltinFn)'s `fn(&mut SchedulerHandle, ArgumentBundle) -> BodyResult`.
-/// The builtin mutates `BodyCtx.scope` directly (binding install is a scope write, not a Action
-/// effect) and returns a `Action` describing the scheduler continuation.
+/// A builtin body: `fn(&BodyCtx) -> Action`. The builtin mutates `BodyCtx.scope` directly (binding
+/// install is a scope write, not an `Action` effect) and returns an `Action` describing the
+/// scheduler continuation.
 pub type ActionFn = for<'a> fn(&BodyCtx<'a, '_>) -> Action<'a>;
 
 /// Read-only-ish context a builtin body receives. `scope` is **interior-mutable**: the builtin

@@ -10,7 +10,7 @@
 
 use crate::builtins::default_scope;
 use crate::builtins::test_support::parse_one;
-use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle as KfHandle};
+use crate::machine::core::kfunction::action::{arg_object, Action, BodyCtx};
 use crate::machine::core::source::Spanned;
 use crate::machine::execute::dispatch::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
@@ -44,15 +44,14 @@ fn sched_read_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -
 /// Accepts one Number arg and returns it unchanged. The signature is `<n :Number>`
 /// (no keywords), which means no koan user surface can call it directly — tests
 /// using it only inspect routing, never the call outcome.
-fn body_identity<'run, 's>(
-    sched: &mut dyn KfHandle<'run, 's>,
-    bundle: ArgumentBundle<'run>,
-) -> BodyResult<'run> {
-    match bundle.get("n") {
-        Some(obj) => BodyResult::value(sched.current_scope().arena.alloc_object(obj.deep_clone())),
-        None => BodyResult::Err(crate::machine::KError::new(
+fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
+    match arg_object(ctx.args, "n") {
+        Some(obj) => Action::Done(Ok(Carried::Object(
+            ctx.scope.arena.alloc_object(obj.deep_clone()),
+        ))),
+        None => Action::Done(Err(crate::machine::KError::new(
             crate::machine::KErrorKind::MissingArg("n".to_string()),
-        )),
+        ))),
     }
 }
 
@@ -68,7 +67,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
     };
     let f = scope.arena.alloc_function(KFunction::new(
         sig,
-        crate::machine::core::kfunction::Body::Builtin(body_identity),
+        crate::machine::core::kfunction::Body::Action(body_identity),
         scope,
     ));
     let obj = scope.arena.alloc_object(KObject::KFunction(f, None));

@@ -1,4 +1,4 @@
-use crate::machine::core::kfunction::{BinderNameFn, Body, BodyResult, BuiltinFn, KFunction};
+use crate::machine::core::kfunction::{BinderNameFn, Body, BodyResult, KFunction};
 use crate::machine::core::{BindingIndex, KError, Scope};
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::{
@@ -63,15 +63,6 @@ pub(crate) fn sig<'a>(
     }
 }
 
-pub fn register_builtin<'a>(
-    scope: &'a Scope<'a>,
-    name: &str,
-    signature: ExpressionSignature<'a>,
-    body: BuiltinFn,
-) {
-    register_builtin_with_binder(scope, name, signature, body, None);
-}
-
 /// Shared [`BinderNameFn`] for typed-binder builtins (SIG / MODULE / UNION /
 /// RECURSIVE TYPES / NEWTYPE): the binder name is `parts[1]`'s `Type(t)` token.
 /// A free function (not the `KExpression::binder_name_from_type_part` method
@@ -83,50 +74,11 @@ pub(crate) fn type_part_binder_name(
     expr.binder_name_from_type_part()
 }
 
-/// Collisions from `register_function` are dropped: each builtin registers once at
-/// run-root construction, so a collision would be a programming error.
-pub(crate) fn register_builtin_with_binder<'a>(
-    scope: &'a Scope<'a>,
-    name: &str,
-    signature: ExpressionSignature<'a>,
-    body: BuiltinFn,
-    binder_name: Option<BinderNameFn>,
-) {
-    register_builtin_full(scope, name, signature, body, binder_name, None, false);
-}
-
-/// Full-form builtin registration with both binder hooks and the `is_functor` flag.
+/// Full-form builtin registration with both binder hooks and the `is_functor` flag. The `body` is
+/// an [`ActionFn`](crate::machine::core::kfunction::ActionFn) (`fn(&BodyCtx) -> Action`) installed
+/// as [`Body::Action`] — the builtin runs through `machine::execute::harness::run_action`.
 /// `binder_bucket` lets FN / FUNCTOR key pending-overload entries by inner-call bucket.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn register_builtin_full<'a>(
-    scope: &'a Scope<'a>,
-    name: &str,
-    signature: ExpressionSignature<'a>,
-    body: BuiltinFn,
-    binder_name: Option<BinderNameFn>,
-    binder_bucket: Option<crate::machine::core::kfunction::BinderBucketFn>,
-    is_functor: bool,
-) {
-    let arena = scope.arena;
-    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
-        signature,
-        Body::Builtin(body),
-        scope,
-        binder_name,
-        binder_bucket,
-        is_functor,
-    ));
-    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
-    let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
-}
-
-/// `Action`-harness replacement for [`register_builtin`] (WIP, `action-harness` feature). Identical
-/// contract except the `body` is a [`ActionFn`](crate::machine::core::kfunction::ActionFn)
-/// (`fn(&BodyCtx) -> Action`) installed as [`Body::Action`] — the builtin runs through
-/// `machine::execute::harness::interpret`, not the `BuiltinFn` path. `signature`, the dispatch-time
-/// `binder_name` / `binder_bucket` hooks, and `is_functor` are unchanged: only the body slot moves.
-/// Builtins migrate to this one at a time; `register_builtin` (and `Body::Builtin`) are deleted at
-/// parity.
 pub(crate) fn register_action_builtin_full<'a>(
     scope: &'a Scope<'a>,
     name: &str,
@@ -168,13 +120,13 @@ pub(crate) fn register_overload_at<'a>(
     scope: &'a Scope<'a>,
     name: &str,
     signature: ExpressionSignature<'a>,
-    body: BuiltinFn,
+    body: crate::machine::core::kfunction::ActionFn,
     index: BindingIndex,
 ) {
     let arena = scope.arena;
     let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
         signature,
-        Body::Builtin(body),
+        Body::Action(body),
         scope,
         None,
         None,

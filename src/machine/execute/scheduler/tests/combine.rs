@@ -102,31 +102,29 @@ fn combine_short_circuits_on_dep_error() {
 fn defer_to_lifts_slot_terminal_off_combine_id() {
     // Pins the binder-body wrap-up shape MODULE / SIG use: a body returning
     // `BodyResult::DeferTo(combine_id)` leaves its slot with the Combine's terminal.
-    use crate::builtins::{default_scope, register_builtin};
+    use crate::builtins::{default_scope, register_action_builtin};
     use crate::machine::model::ast::ExpressionPart;
     use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
-    use crate::machine::{ArgumentBundle, BodyResult, CombineFinish};
+    use crate::machine::core::kfunction::action::{Action, BodyCtx, Cont};
+    use crate::machine::model::Carried;
 
-    fn body<'run, 's>(
-        sched: &mut dyn crate::machine::SchedulerHandle<'run, 's>,
-        _bundle: ArgumentBundle<'run>,
-    ) -> BodyResult<'run> {
-        let finish: CombineFinish<'run> = Box::new(
-            |_sched: &mut dyn crate::machine::SchedulerHandle<'run, '_>, _results| {
-                let v = _sched
-                    .current_scope()
-                    .arena
-                    .alloc_object(KObject::KString("from-combine".into()));
-                BodyResult::value(v)
-            },
-        );
-        let combine_id = sched.add_combine_in_frame(Vec::new(), Vec::new(), finish);
-        BodyResult::DeferTo(combine_id)
+    fn body<'run>(_ctx: &BodyCtx<'run, '_>) -> Action<'run> {
+        let finish: Cont<'run> = Box::new(|fctx, _results| {
+            let v = fctx
+                .scope
+                .arena
+                .alloc_object(KObject::KString("from-combine".into()));
+            Action::Done(Ok(Carried::Object(v)))
+        });
+        Action::Combine {
+            deps: Vec::new(),
+            finish,
+        }
     }
 
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    register_builtin(
+    register_action_builtin(
         scope,
         "DEFERTEST",
         ExpressionSignature {

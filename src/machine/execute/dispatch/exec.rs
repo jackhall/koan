@@ -22,8 +22,7 @@ use crate::machine::model::Carried;
 use crate::machine::{KError, KErrorKind};
 
 /// The single invoke entry for the dispatcher's bind sites — run a resolved call:
-/// - **builtin** → invoked directly with its `ArgumentBundle` (kept distinct from the
-///   `Record<Carried>` executor machinery; builtins keep their own I/O);
+/// - **builtin** → the action harness (`BodyCtx` → `Action` → `run_action`);
 /// - **user-defined** → the `exec` executor (`run_user_fn` + the `ExecOutcome` lowering).
 ///
 /// Every call reaches here with its value parts already `Future`/literal-resolved (the eager-subs
@@ -34,18 +33,6 @@ pub(super) fn invoke<'run>(
     working_expr: KExpression<'run>,
     idx: usize,
 ) -> NodeStep<'run> {
-    // Builtins keep their `ArgumentBundle` I/O and are called directly — the `exec` executor
-    // (`run_user_fn`, `Record<Carried>`) never sees them.
-    if let Body::Builtin(f) = &picked.body {
-        let f = *f;
-        let bundle = match picked.bind(working_expr) {
-            Ok(future) => future.bundle,
-            Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
-        };
-        let result = f(ctx, bundle);
-        return ctx.body_result_to_step(result, idx);
-    }
-
     // An action-harness builtin: build a read-only `BodyCtx`, get the `Action`, and lower it
     // through the shared `run_action` interpreter.
     if let Body::Action(f) = &picked.body {

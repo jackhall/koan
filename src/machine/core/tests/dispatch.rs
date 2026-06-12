@@ -2,20 +2,21 @@
 
 use super::super::{RuntimeArena, Scope};
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
-use crate::builtins::{register_builtin, register_overload_at};
-use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+use crate::builtins::{register_action_builtin, register_overload_at};
+use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::core::source::Spanned;
+use crate::machine::model::Carried;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
 use crate::machine::{BindingIndex, LexicalFrame, ResolveOutcome};
 
-fn body_a<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, _a: ArgumentBundle<'a>) -> BodyResult<'a> {
-    BodyResult::value(marker(h.current_scope(), "a"))
+fn body_a<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+    Action::Done(Ok(Carried::Object(marker(ctx.scope, "a"))))
 }
-fn body_b<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, _a: ArgumentBundle<'a>) -> BodyResult<'a> {
-    BodyResult::value(marker(h.current_scope(), "b"))
+fn body_b<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+    Action::Done(Ok(Carried::Object(marker(ctx.scope, "b"))))
 }
 
 fn two_slot_sig<'a>(a: KType<'a>, b: KType<'a>) -> ExpressionSignature<'a> {
@@ -40,7 +41,7 @@ fn two_slot_sig<'a>(a: KType<'a>, b: KType<'a>) -> ExpressionSignature<'a> {
 fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    register_builtin(scope, "ONE", one_slot_sig("v", KType::Any), body_a);
+    register_action_builtin(scope, "ONE", one_slot_sig("v", KType::Any), body_a);
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "foo".into(),
     ))]);
@@ -59,8 +60,8 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
 fn resolve_returns_ambiguous_for_tied_overloads() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    register_builtin(scope, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
-    register_builtin(scope, "AN", two_slot_sig(KType::Any, KType::Number), body_b);
+    register_action_builtin(scope, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
+    register_action_builtin(scope, "AN", two_slot_sig(KType::Any, KType::Number), body_b);
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(5.0))),
         Spanned::bare(ExpressionPart::Keyword("OP".into())),
@@ -89,8 +90,8 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
         BindingIndex::value(1),
     );
     let inner = arena.alloc_scope(outer.child_for_call());
-    register_builtin(inner, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
-    register_builtin(inner, "AN", two_slot_sig(KType::Any, KType::Number), body_b);
+    register_action_builtin(inner, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
+    register_action_builtin(inner, "AN", two_slot_sig(KType::Any, KType::Number), body_b);
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(5.0))),
         Spanned::bare(ExpressionPart::Keyword("OP".into())),
@@ -106,7 +107,7 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
 /// A binder_name-bearing overload populates `placeholder_name` from its extractor.
 #[test]
 fn resolve_carries_placeholder_name_for_binder_function() {
-    use crate::builtins::register_builtin_with_binder;
+    use crate::builtins::register_action_builtin_full;
     fn name_extractor(expr: &KExpression<'_>) -> Option<String> {
         match expr.parts.get(1).map(|p| &p.value) {
             Some(ExpressionPart::Identifier(n)) => Some(n.clone()),
@@ -130,7 +131,7 @@ fn resolve_carries_placeholder_name_for_binder_function() {
             }),
         ],
     };
-    register_builtin_with_binder(scope, "LETLIKE", sig, body_a, Some(name_extractor));
+    register_action_builtin_full(scope, "LETLIKE", sig, body_a, Some(name_extractor), None, false);
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("LETLIKE".into())),
         Spanned::bare(ExpressionPart::Identifier("foo".into())),
@@ -153,7 +154,7 @@ fn resolve_carries_placeholder_name_for_binder_function() {
 fn resolve_tentative_falls_back_only_when_strict_empty() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    register_builtin(
+    register_action_builtin(
         scope,
         "ONE_ID",
         one_slot_sig("v", KType::Identifier),
@@ -178,7 +179,7 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
 fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    register_builtin(
+    register_action_builtin(
         scope,
         "PLUS",
         two_slot_sig(KType::Number, KType::Number),
@@ -303,14 +304,14 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
     let arena = RuntimeArena::new();
     let outer = run_root_bare(&arena);
     // Outer overload that would strictly Pick once the eager sub resolves.
-    register_builtin(
+    register_action_builtin(
         outer,
         "outer_plus",
         two_slot_sig(KType::Number, KType::Number),
         body_a,
     );
     let inner = arena.alloc_scope(outer.child_for_call());
-    register_builtin(
+    register_action_builtin(
         inner,
         "inner_plus",
         two_slot_sig(KType::Number, KType::Number),
@@ -343,7 +344,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     let arena = RuntimeArena::new();
     let outer = run_root_bare(&arena);
     // Outer `:Identifier` overload that owns the bare name (shape-only admit).
-    register_builtin(
+    register_action_builtin(
         outer,
         "outer_id",
         one_slot_sig("v", KType::Identifier),
@@ -352,7 +353,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     let inner = arena.alloc_scope(outer.child_for_call());
     // Inner `:Number` overload: the unbound bare name rejects its shape, so the
     // inner scope's only contribution is a dead lean (must not terminate).
-    register_builtin(inner, "inner_num", one_slot_sig("v", KType::Number), body_b);
+    register_action_builtin(inner, "inner_num", one_slot_sig("v", KType::Number), body_b);
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "fwd".into(),
     ))]);
@@ -397,7 +398,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             }),
         ],
     };
-    let pick_num_fn = arena.alloc_function(KFunction::new(pick_num, Body::Builtin(body_a), scope));
+    let pick_num_fn = arena.alloc_function(KFunction::new(pick_num, Body::Action(body_a), scope));
     let pick_num_obj = arena.alloc_object(KObject::KFunction(pick_num_fn, None));
     scope
         .register_function(
@@ -444,7 +445,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     };
     let sibling = arena.alloc_function(KFunction::new(
         pick_str,
-        Body::Builtin(super::body_no_op),
+        Body::Action(super::body_no_op),
         scope,
     ));
     let sibling_obj = arena.alloc_object(KObject::KFunction(sibling, None));

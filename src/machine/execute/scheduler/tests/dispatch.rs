@@ -4,9 +4,10 @@
 
 use super::super::Scheduler;
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
-use crate::builtins::{register_builtin, register_overload_at};
-use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+use crate::builtins::{register_action_builtin, register_overload_at};
+use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::core::source::Spanned;
+use crate::machine::model::Carried;
 use crate::machine::core::BindingIndex;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{
@@ -15,35 +16,20 @@ use crate::machine::model::types::{
 use crate::machine::model::KObject;
 use crate::machine::RuntimeArena;
 
-fn body_identifier<'run, 's>(
-    h: &mut dyn SchedulerHandle<'run, 's>,
-    _a: ArgumentBundle<'run>,
-) -> BodyResult<'run> {
-    BodyResult::value(marker(h.current_scope(), "identifier"))
+fn body_identifier<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
+    Action::Done(Ok(Carried::Object(marker(ctx.scope, "identifier"))))
 }
-fn body_marker_any<'run, 's>(
-    h: &mut dyn SchedulerHandle<'run, 's>,
-    _a: ArgumentBundle<'run>,
-) -> BodyResult<'run> {
-    BodyResult::value(marker(h.current_scope(), "any"))
+fn body_marker_any<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
+    Action::Done(Ok(Carried::Object(marker(ctx.scope, "any"))))
 }
-fn body_inner_any<'run, 's>(
-    h: &mut dyn SchedulerHandle<'run, 's>,
-    _a: ArgumentBundle<'run>,
-) -> BodyResult<'run> {
-    BodyResult::value(marker(h.current_scope(), "inner_any"))
+fn body_inner_any<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
+    Action::Done(Ok(Carried::Object(marker(ctx.scope, "inner_any"))))
 }
-fn body_outer_number<'run, 's>(
-    h: &mut dyn SchedulerHandle<'run, 's>,
-    _a: ArgumentBundle<'run>,
-) -> BodyResult<'run> {
-    BodyResult::value(marker(h.current_scope(), "outer_number"))
+fn body_outer_number<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
+    Action::Done(Ok(Carried::Object(marker(ctx.scope, "outer_number"))))
 }
-fn body_lowercase<'run, 's>(
-    h: &mut dyn SchedulerHandle<'run, 's>,
-    _a: ArgumentBundle<'run>,
-) -> BodyResult<'run> {
-    BodyResult::value(marker(h.current_scope(), "lowercase"))
+fn body_lowercase<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
+    Action::Done(Ok(Carried::Object(marker(ctx.scope, "lowercase"))))
 }
 
 fn summarize_marker(obj: &KObject<'_>) -> String {
@@ -94,7 +80,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
             }),
         ],
     };
-    register_builtin(inner, "inner_loose", inner_sig, body_inner_any);
+    register_action_builtin(inner, "inner_loose", inner_sig, body_inner_any);
 
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("MARK".into())),
@@ -119,13 +105,13 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     use crate::machine::KErrorKind;
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    register_builtin(
+    register_action_builtin(
         scope,
         "any_first",
         one_slot_sig("v", KType::Any),
         body_marker_any,
     );
-    register_builtin(
+    register_action_builtin(
         scope,
         "ident_second",
         one_slot_sig("v", KType::Identifier),
@@ -169,7 +155,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
             }),
         ],
     };
-    register_builtin(scope, "FOO", sig, body_lowercase);
+    register_action_builtin(scope, "FOO", sig, body_lowercase);
 
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("FOO".into())),

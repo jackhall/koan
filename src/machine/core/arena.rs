@@ -835,8 +835,10 @@ mod tests {
                         "DUMMY".into(),
                     )],
                 },
-                crate::machine::core::kfunction::Body::Builtin(|_, _| {
-                    crate::machine::core::kfunction::BodyResult::value(null_singleton())
+                crate::machine::core::kfunction::Body::Action(|_| {
+                    crate::machine::core::kfunction::action::Action::Done(Ok(
+                        crate::machine::model::Carried::Object(null_singleton()),
+                    ))
                 }),
                 scope,
             )),

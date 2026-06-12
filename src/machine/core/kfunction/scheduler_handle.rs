@@ -1,5 +1,5 @@
 //! Scheduler-facing types a builtin body uses to spawn additional work. Defined in
-//! `kfunction` so `BuiltinFn` / `BodyResult` can name them without `kfunction` importing
+//! `kfunction` so `BodyResult` can name them without `kfunction` importing
 //! from `execute`; `execute/scheduler.rs` impls `SchedulerHandle`.
 
 use std::rc::Rc;

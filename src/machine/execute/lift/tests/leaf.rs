@@ -57,14 +57,16 @@ fn kfunction_with_foreign_runtime_does_not_anchor() {
     defeat_fast_path(&dying);
 
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
-    use crate::machine::{Body, BodyResult, KFunction};
+    use crate::machine::{Body, KFunction};
     let foreign = KFunction::new(
         ExpressionSignature {
             return_type: ReturnType::Resolved(KType::Null),
             elements: vec![SignatureElement::Keyword("__FOREIGN__".into())],
         },
-        Body::Builtin(|s, _| {
-            BodyResult::value(s.current_scope().arena.alloc_object(KObject::Null))
+        Body::Action(|ctx| {
+            crate::machine::core::kfunction::action::Action::Done(Ok(
+                crate::machine::model::Carried::Object(ctx.scope.arena.alloc_object(KObject::Null)),
+            ))
         }),
         scope,
     );

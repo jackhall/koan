@@ -37,7 +37,7 @@ pub fn body_action<'a>(
     let bind_index = ctx.bind_index();
     let name_for_finish = name;
     let finish: Cont<'a> = Box::new(move |fctx, _results| {
-        // Idempotent-finalize guard (mirrors the `BuiltinFn` body): re-bound name short-circuits.
+        // Idempotent-finalize guard: a re-bound name short-circuits.
         if let Some(kt) = fctx.scope.bindings().lookup_type(&name_for_finish, None) {
             return Action::Done(Ok(Carried::Type(fctx.scope.arena.alloc_ktype(kt.clone()))));
         }

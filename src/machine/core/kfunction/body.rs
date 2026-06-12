@@ -1,5 +1,5 @@
-//! Body-shape types: `BodyResult`, the builtin-body / binder-hook `fn`-pointer aliases,
-//! and the `Body` enum (builtin pointer vs captured `KExpression`).
+//! Body-shape types: `BodyResult`, the binder-hook `fn`-pointer aliases, and the `Body` enum
+//! (an action `fn` pointer vs a captured user-defined `KExpression`).
 
 use std::rc::Rc;
 
@@ -10,8 +10,7 @@ use crate::machine::model::types::UntypedKey;
 use crate::machine::model::values::{Carried, KObject};
 use crate::machine::model::KType;
 
-use super::argument_bundle::ArgumentBundle;
-use super::scheduler_handle::{NodeId, SchedulerHandle};
+use super::scheduler_handle::NodeId;
 use super::KFunction;
 
 /// What a builtin's body returns.
@@ -287,16 +286,6 @@ pub(crate) fn body_statement_refs<'ast>(
     }
 }
 
-/// Builtin body. The body takes no scope argument: it reads the executing slot's scope on demand
-/// via [`SchedulerHandle::current_scope`], a **short** borrow re-fetched per use and never held
-/// across a `&mut` handle call. That on-demand access is what keeps the read boundary an honest
-/// bounded brand (no fabricated `&'run`): nothing holds a live scope borrow across the in-step TCO
-/// frame reset. A body re-dispatching against its own scope uses the `*_here` handle methods; a
-/// genuinely `'a`-lived scope it allocates itself (a fresh child) flows to `add_dispatch` /
-/// `enter_body_block`.
-pub type BuiltinFn =
-    for<'a, 's> fn(&mut dyn SchedulerHandle<'a, 's>, ArgumentBundle<'a>) -> BodyResult<'a>;
-
 /// Dispatch-time name extractor for a binder builtin. Returning `Some(name)` installs
 /// `placeholders[name] = NodeId(this_slot)` so a sibling looking up `name` while the
 /// body is in flight parks on this slot (see [`crate::machine::core::Scope::resolve`]).
@@ -318,7 +307,6 @@ pub type BinderBucketFn = for<'a> fn(&KExpression<'a>) -> Option<UntypedKey>;
 /// Enum (not `Box<dyn Fn>`) so `UserDefined` stays introspectable — TCO and
 /// error-frame attribution walk into the captured expression.
 pub enum Body<'a> {
-    Builtin(BuiltinFn),
     UserDefined(KExpression<'a>),
     /// A builtin authored against the `Action` harness. Runs through
     /// `machine::execute::harness::run_action`.

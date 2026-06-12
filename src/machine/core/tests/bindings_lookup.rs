@@ -95,7 +95,7 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
     let scope = run_root_bare(&arena);
     let f = arena.alloc_function(KFunction::new(
         unit_signature(),
-        Body::Builtin(body_no_op),
+        Body::Action(body_no_op),
         scope,
     ));
     let obj = arena.alloc_object(KObject::KFunction(f, None));
@@ -137,8 +137,8 @@ fn lookup_function_filters_per_overload_visibility() {
     };
     let key = sig_num.untyped_key();
     debug_assert_eq!(key, sig_str.untyped_key(), "untyped keys must collide");
-    let f_early = arena.alloc_function(KFunction::new(sig_num, Body::Builtin(body_no_op), scope));
-    let f_late = arena.alloc_function(KFunction::new(sig_str, Body::Builtin(body_no_op), scope));
+    let f_early = arena.alloc_function(KFunction::new(sig_num, Body::Action(body_no_op), scope));
+    let f_late = arena.alloc_function(KFunction::new(sig_str, Body::Action(body_no_op), scope));
     let obj_early = arena.alloc_object(KObject::KFunction(f_early, None));
     let obj_late = arena.alloc_object(KObject::KFunction(f_late, None));
     scope
@@ -189,7 +189,7 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
     let scope = run_root_bare(&arena);
     let f = arena.alloc_function(KFunction::new(
         unit_signature(),
-        Body::Builtin(body_no_op),
+        Body::Action(body_no_op),
         scope,
     ));
     let obj = arena.alloc_object(KObject::KFunction(f, None));
@@ -213,7 +213,7 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
     let scope = run_root_bare(&arena);
     let f = arena.alloc_function(KFunction::new(
         unit_signature(),
-        Body::Builtin(body_no_op),
+        Body::Action(body_no_op),
         scope,
     ));
     let obj = arena.alloc_object(KObject::KFunction(f, None));
