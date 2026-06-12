@@ -122,7 +122,7 @@ impl<'run> Scope<'run> {
         // scope reached a terminal decision.
         let mut dead_lean: Option<String> = None;
         for scope in self.ancestors() {
-            let cutoff = chain.and_then(|c| c.index_for(scope.id));
+            let cutoff = scope.binding_cutoff(chain);
             let lookup = scope.bindings().lookup_function(&key, cutoff);
             match decide_scope(&lookup, expr, bare_outcomes) {
                 ScopeDecision::Terminal(outcome) => return outcome,

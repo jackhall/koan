@@ -585,12 +585,24 @@ impl<'a> Scope<'a> {
     /// [`visible`] before being returned; hidden entries (later siblings, or
     /// value-style binders before their lexical position) are skipped and the walk
     /// continues outward.
+    /// The chain-derived visibility cutoff for a per-scope `bindings` lookup, or `None` when this
+    /// scope's bindings are all unconditionally visible. A transparent `USING` window
+    /// ([`Self::child_transparent`]) surfaces a finalized module's members as imports available
+    /// throughout the block — index-0 semantics, like builtins and bound parameters — so they
+    /// carry no lexical-ordering relationship to the reading position and take no cutoff. Without
+    /// this, a body statement dispatched into the window via `enter_block` (chain frame
+    /// `(window, i)`) would filter the surfaced members by an unrelated index and miss them.
+    pub(crate) fn binding_cutoff(&self, chain: Option<&LexicalFrame>) -> Option<usize> {
+        if self.bindings.is_borrowed() {
+            None
+        } else {
+            chain.and_then(|c| c.index_for(self.id))
+        }
+    }
+
     pub fn resolve_with_chain(&self, name: &str, chain: Option<&LexicalFrame>) -> Resolution<'a> {
         self.ancestors()
-            .find_map(|scope| {
-                let cutoff = chain.and_then(|c| c.index_for(scope.id));
-                scope.bindings().lookup_value(name, cutoff)
-            })
+            .find_map(|scope| scope.bindings().lookup_value(name, scope.binding_cutoff(chain)))
             .unwrap_or(Resolution::UnboundName)
     }
 
@@ -671,10 +683,8 @@ impl<'a> Scope<'a> {
         if root.bindings().has_builtin_type(name) {
             return root.bindings().lookup_type(name, None);
         }
-        self.ancestors().find_map(|scope| {
-            let cutoff = chain.and_then(|c| c.index_for(scope.id));
-            scope.bindings().lookup_type(name, cutoff)
-        })
+        self.ancestors()
+            .find_map(|scope| scope.bindings().lookup_type(name, scope.binding_cutoff(chain)))
     }
 
     /// Resolve a chain's operator-group probe against this scope and the `outer`
@@ -695,8 +705,9 @@ impl<'a> Scope<'a> {
             return root.bindings().lookup_operator_group(probe, None);
         }
         self.ancestors().find_map(|scope| {
-            let cutoff = chain.and_then(|c| c.index_for(scope.id));
-            scope.bindings().lookup_operator_group(probe, cutoff)
+            scope
+                .bindings()
+                .lookup_operator_group(probe, scope.binding_cutoff(chain))
         })
     }
 
