@@ -46,9 +46,51 @@ pub(in crate::machine::execute) struct DispatchCtx<'run, 'b> {
     sched: &'b mut Scheduler<'run>,
 }
 
+/// Read-only dispatch view — the decide-phase peer of [`DispatchCtx`] that holds only
+/// `&Scheduler`, never `&mut`. A migrated shape handler decides against this and *returns*
+/// a [`DispatchOutcome`](super::outcome::DispatchOutcome); the harness reborrows the
+/// scheduler mutably to apply the writes. The borrow contract: a `DispatchCx` lives only
+/// for the decide call, the handler returns an owned outcome, and the immutable borrow ends
+/// before the harness takes `&mut` — so decide and apply never overlap.
+///
+/// The static-over-the-step reads (`current_scope`, `chain_deref`, …) and the live reads of
+/// *pre-existing* producers (`is_result_ready`, `would_create_cycle`, `read_result`) both
+/// forward to the borrowed scheduler; the dispatcher genuinely reads evolving graph state, so
+/// full scheduler-unawareness (the builtin model) is not a goal — only the *writes* defer.
+pub(in crate::machine::execute) struct DispatchCx<'run, 's> {
+    sched: &'s Scheduler<'run>,
+}
+
+impl<'run, 's> DispatchCx<'run, 's> {
+    pub(super) fn new(sched: &'s Scheduler<'run>) -> Self {
+        Self { sched }
+    }
+
+    // Read surface (forwards on `&self`). This grows one method per migrated handler — the
+    // static-over-the-step reads (`current_scope`, `chain_deref`, `active_chain`,
+    // `in_contract_chain`) and the live reads of pre-existing producers (`is_result_ready`,
+    // `would_create_cycle`, `read_result`) all forward to the borrowed scheduler.
+
+    pub(super) fn current_scope(&self) -> &Scope<'run> {
+        self.sched.current_scope()
+    }
+
+    pub(super) fn chain_deref(&self) -> Option<&LexicalFrame> {
+        self.sched.chain_deref()
+    }
+}
+
 impl<'run, 'b> DispatchCtx<'run, 'b> {
     pub(in crate::machine::execute) fn new(sched: &'b mut Scheduler<'run>) -> Self {
         Self { sched }
+    }
+
+    /// Immutable reborrow of the wrapped scheduler — the bridge that lets a still-`&mut`
+    /// router build a read-only [`DispatchCx`] for a migrated handler, decide, then reborrow
+    /// `&mut self` for the harness. The returned `DispatchCx` must be dropped (last-used)
+    /// before the harness call, which NLL enforces.
+    pub(super) fn read_view(&self) -> DispatchCx<'run, '_> {
+        DispatchCx::new(self.sched)
     }
 
     // ----- ambient state -----

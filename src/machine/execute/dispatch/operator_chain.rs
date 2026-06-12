@@ -15,14 +15,13 @@
 //! lands, so every chain misses and errors cleanly; the hit path is exercised only by
 //! test fixtures that register an `OperatorGroup`.
 
-use crate::machine::core::kfunction::SchedulerHandle;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Parseable;
 use crate::machine::{KError, KErrorKind};
 
 use super::super::nodes::NodeOutput;
+use super::ctx::DispatchCx;
 use super::outcome::DispatchOutcome;
-use super::DispatchCtx;
 
 /// Resolve the chain's operator group via the cached probe and route to the fold
 /// seam. The probe is `Some` for every `OperatorChain` (the classifier guarantees it),
@@ -32,7 +31,7 @@ use super::DispatchCtx;
 /// against a read-only `&DispatchCtx` and returns a [`DispatchOutcome::Terminal`]; the
 /// router applies it through [`super::harness::apply_dispatch_outcome`].
 pub(in crate::machine::execute) fn run<'run>(
-    ctx: &DispatchCtx<'run, '_>,
+    ctx: &DispatchCx<'run, '_>,
     expr: &KExpression<'run>,
 ) -> DispatchOutcome<'run> {
     let probe = expr

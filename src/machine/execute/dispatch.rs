@@ -449,7 +449,10 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
         ))),
         DispatchShape::OperatorChain => {
             debug_assert!(init.pre_subs.is_empty());
-            let outcome = operator_chain::run(ctx, &expr);
+            // Decide against a read-only view (immutable scheduler borrow), then reborrow
+            // `&mut` through the harness to apply — the borrow contract the effect split rests
+            // on. The `read_view` borrow ends at the `run` call (NLL), freeing `ctx` for apply.
+            let outcome = operator_chain::run(&ctx.read_view(), &expr);
             harness::apply_dispatch_outcome(ctx, outcome, idx)
         }
         DispatchShape::Keyworded => KeywordedState::initial(ctx, expr, init.pre_subs, idx),
