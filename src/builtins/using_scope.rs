@@ -119,10 +119,7 @@ pub fn body_action<'a>(
         }
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("m".to_string())))),
     };
-    let body_expr = match require_kexpression(ctx.args, "USING", "body") {
-        Ok(e) => e,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let body_expr = crate::try_action!(require_kexpression(ctx.args, "USING", "body"));
     // Root the frame `Rc` in the call-site arena so the borrowed window outlives the eager `m`
     // arg and any escaping closure. No-op for top-level modules.
     if module_frame.is_some() {

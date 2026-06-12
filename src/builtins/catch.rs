@@ -81,10 +81,7 @@ pub fn body_action<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, Action, CatchCont, Dep, DepPlacement};
     use crate::machine::model::Carried;
-    let expr_inner = match require_kexpression(ctx.args, "CATCH", "expr") {
-        Ok(e) => e,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", "expr"));
     // Capture the prelude `Result` member identity at body time so the CATCH value shares the
     // nominal identity of a `Result (...)`-constructed one.
     let (result_set, result_index) = match ctx.scope.resolve_type("Result") {

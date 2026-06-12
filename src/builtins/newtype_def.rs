@@ -41,8 +41,6 @@ use crate::machine::{
 use super::{arg, err, kw, sig};
 #[cfg(not(feature = "action-harness"))]
 use super::register_builtin_with_binder;
-#[cfg(feature = "action-harness")]
-use crate::machine::execute::defer_field_list_action;
 
 /// Body of `NEWTYPE <name> = <repr>`, shared by the scalar (`:TypeExprRef` repr) and
 /// non-record-sigil (`:SigiledTypeExpr` repr) overloads. Branches on the repr carrier: a
@@ -332,22 +330,12 @@ pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        arg_object, arg_type, body_result_to_action, Action, Cont, Dep,
+        arg_object, arg_type, body_result_to_action, require_bare_type_name, Action, Cont, Dep,
     };
-    use crate::machine::core::kfunction::argument_bundle::bare_type_name;
 
-    let name = match arg_type(ctx.args, "name") {
-        Some(t) => match bare_type_name(t, "name", "NEWTYPE") {
-            Ok(n) => n,
-            Err(e) => return Action::Done(Err(e)),
-        },
-        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("name".to_string())))),
-    };
+    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "NEWTYPE"));
     let chain = ctx.chain.clone();
-    let bind_index = chain
-        .as_ref()
-        .map(|c| BindingIndex::value(c.index))
-        .unwrap_or(BindingIndex::BUILTIN);
+    let bind_index = ctx.bind_index();
     if let Some(repr_kt) = arg_type(ctx.args, "repr") {
         match repr_kt {
             KType::Unresolved(te) => {
@@ -453,23 +441,10 @@ fn defer_resolved_sigil_action<'a>(
 pub fn body_record_repr_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{
-        arg_object, arg_type, body_result_to_action, Action,
-    };
-    use crate::machine::core::kfunction::argument_bundle::bare_type_name;
+    use crate::machine::core::kfunction::action::{arg_object, require_bare_type_name, Action};
+    use super::nominal_schema::nominal_schema_action;
 
-    let name = match arg_type(ctx.args, "name") {
-        Some(t) => match bare_type_name(t, "name", "NEWTYPE") {
-            Ok(n) => n,
-            Err(e) => return Action::Done(Err(e)),
-        },
-        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("name".to_string())))),
-    };
-    let chain = ctx.chain.clone();
-    let bind_index = chain
-        .as_ref()
-        .map(|c| BindingIndex::value(c.index))
-        .unwrap_or(BindingIndex::BUILTIN);
+    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "NEWTYPE"));
     let fields = match arg_object(ctx.args, "repr") {
         Some(KObject::KExpression(e)) => e.clone(),
         _ => {
@@ -478,50 +453,17 @@ pub fn body_record_repr_action<'a>(
             ))))
         }
     };
-    let pending_guard = ctx.scope.bindings().insert_pending_type(
-        name.clone(),
-        PendingTypeEntry {
-            kind: KKind::Newtype,
-            scope_id: ctx.scope.id,
-            schema_expr: fields.clone(),
-        },
-    );
-    let mut elaborator = Elaborator::new(ctx.scope)
-        .with_threaded([name.clone()])
-        .with_chain(chain.clone());
-    let outcome = parse_typed_field_list_via_elaborator(
-        &fields,
+    let error_frame = Frame::bare("<newtype>", format!("NEWTYPE {name}"));
+    nominal_schema_action(
+        ctx,
+        name,
+        fields,
+        KKind::Newtype,
         "NEWTYPE record repr",
         FieldNameKind::Identifier,
-        &mut elaborator,
-        None,
-    );
-    match outcome {
-        FieldListOutcome::Done(sealed) => {
-            body_result_to_action(finalize_record_newtype(ctx.scope, name, sealed, bind_index))
-        }
-        FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
-        FieldListOutcome::Pending {
-            park_producers,
-            sub_dispatches,
-        } => {
-            let name_for_finish = name.clone();
-            defer_field_list_action(
-                fields,
-                park_producers,
-                sub_dispatches,
-                "NEWTYPE record repr",
-                FieldNameKind::Identifier,
-                vec![name.clone()],
-                chain,
-                Some(pending_guard),
-                Some(Frame::bare("<newtype>", format!("NEWTYPE {name}"))),
-                Box::new(move |scope, sealed| {
-                    finalize_record_newtype(scope, name_for_finish, sealed, bind_index)
-                }),
-            )
-        }
-    }
+        error_frame,
+        finalize_record_newtype,
+    )
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

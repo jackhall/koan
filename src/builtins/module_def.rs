@@ -116,33 +116,18 @@ pub fn body<'a, 's>(
 pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_type, require_kexpression, Action, Cont, Dep, DepPlacement};
-    use crate::machine::core::kfunction::argument_bundle::bare_type_name;
+    use crate::machine::core::kfunction::action::{require_bare_type_name, require_kexpression, Action, Cont, Dep, DepPlacement};
     use crate::machine::model::Carried;
-    use crate::machine::{KError, KErrorKind};
     use std::rc::Rc;
 
-    let name = match arg_type(ctx.args, "name") {
-        Some(t) => match bare_type_name(t, "name", "MODULE") {
-            Ok(n) => n,
-            Err(e) => return Action::Done(Err(e)),
-        },
-        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("name".to_string())))),
-    };
-    let body_expr = match require_kexpression(ctx.args, "MODULE", "body") {
-        Ok(e) => e,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "MODULE"));
+    let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", "body"));
     let child_scope = ctx
         .scope
         .arena
         .alloc_scope(Scope::child_under_module(ctx.scope, name.clone()));
     let active_frame = ctx.frame.map(Rc::clone);
-    let bind_index = ctx
-        .chain
-        .as_ref()
-        .map(|chain| BindingIndex::value(chain.index))
-        .unwrap_or(BindingIndex::BUILTIN);
+    let bind_index = ctx.bind_index();
     let name_for_finish = name;
     let finish: Cont<'a> = Box::new(move |fctx, _results| {
         // Idempotent-finalize guard (mirrors the `BuiltinFn` body): re-bound name short-circuits.

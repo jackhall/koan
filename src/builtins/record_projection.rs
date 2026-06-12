@@ -100,10 +100,7 @@ pub fn body_action<'a>(
     use crate::machine::core::kfunction::action::{arg_object, require_kexpression, Action};
     use crate::machine::model::Carried;
 
-    let fields_expr = match require_kexpression(ctx.args, "FROM", "fields") {
-        Ok(e) => e,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let fields_expr = crate::try_action!(require_kexpression(ctx.args, "FROM", "fields"));
 
     // Extract field names from the captured expression. Each part must be a bare
     // identifier; a computed field list is out of scope by design.

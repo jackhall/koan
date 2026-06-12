@@ -260,24 +260,15 @@ mod action_bodies {
     use crate::machine::{KError, KErrorKind};
 
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-        let elem = match require_ktype(ctx.args, "elem") {
-            Ok(t) => t,
-            Err(e) => return Action::Done(Err(e)),
-        };
+        let elem = crate::try_action!(require_ktype(ctx.args, "elem"));
         Action::Done(Ok(Carried::Type(
             ctx.scope.arena.alloc_ktype(KType::List(Box::new(elem))),
         )))
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-        let k = match require_ktype(ctx.args, "k") {
-            Ok(t) => t,
-            Err(e) => return Action::Done(Err(e)),
-        };
-        let v = match require_ktype(ctx.args, "v") {
-            Ok(t) => t,
-            Err(e) => return Action::Done(Err(e)),
-        };
+        let k = crate::try_action!(require_ktype(ctx.args, "k"));
+        let v = crate::try_action!(require_ktype(ctx.args, "v"));
         Action::Done(Ok(Carried::Type(
             ctx.scope
                 .arena
@@ -286,14 +277,8 @@ mod action_bodies {
     }
 
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-        let applied = match require_ktype(ctx.args, "applied") {
-            Ok(t) => t,
-            Err(e) => return Action::Done(Err(e)),
-        };
-        let ctor = match require_ktype(ctx.args, "ctor") {
-            Ok(t) => t,
-            Err(e) => return Action::Done(Err(e)),
-        };
+        let applied = crate::try_action!(require_ktype(ctx.args, "applied"));
+        let ctor = crate::try_action!(require_ktype(ctx.args, "ctor"));
         let param_count = match &ctor {
             KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
                 match RecursiveSet::projected_schema(set, *index) {
@@ -343,14 +328,8 @@ fn build_carrier_action<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, require_ktype, Action};
     use crate::machine::model::values::Carried;
-    let sig_expr = match require_kexpression(ctx.args, "FN", sig_slot) {
-        Ok(e) => e,
-        Err(e) => return Action::Done(Err(e)),
-    };
-    let ret = match require_ktype(ctx.args, ret_slot) {
-        Ok(t) => t,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let sig_expr = crate::try_action!(require_kexpression(ctx.args, "FN", sig_slot));
+    let ret = crate::try_action!(require_ktype(ctx.args, ret_slot));
     let mut elaborator = Elaborator::new(ctx.scope);
     match parse_typed_field_list_via_elaborator(
         &sig_expr,

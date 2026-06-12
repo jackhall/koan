@@ -212,28 +212,13 @@ pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        arg_type, require_kexpression, Action, Cont, Dep, DepPlacement,
+        require_bare_type_name, require_kexpression, Action, Cont, Dep, DepPlacement,
     };
-    use crate::machine::core::kfunction::argument_bundle::bare_type_name;
     use crate::machine::model::Carried;
 
-    let group_name = match arg_type(ctx.args, "name") {
-        Some(t) => match bare_type_name(t, "name", "RECURSIVE TYPES") {
-            Ok(n) => n,
-            Err(e) => return Action::Done(Err(e)),
-        },
-        None => {
-            return Action::Done(Err(KError::new(KErrorKind::MissingArg("name".to_string()))))
-        }
-    };
-    let body_expr = match require_kexpression(ctx.args, "RECURSIVE TYPES", "body") {
-        Ok(e) => e,
-        Err(e) => return Action::Done(Err(e)),
-    };
-    let members = match discover_members(&body_expr) {
-        Ok(m) => m,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let group_name = crate::try_action!(require_bare_type_name(ctx.args, "name", "RECURSIVE TYPES"));
+    let body_expr = crate::try_action!(require_kexpression(ctx.args, "RECURSIVE TYPES", "body"));
+    let members = crate::try_action!(discover_members(&body_expr));
 
     let scope_id = ctx.scope.id;
     let set = Rc::new(RecursiveSet::new(
@@ -257,11 +242,7 @@ pub fn body_action<'a>(
         );
     }
 
-    let bind_index = ctx
-        .chain
-        .as_ref()
-        .map(|chain| BindingIndex::value(chain.index))
-        .unwrap_or(BindingIndex::BUILTIN);
+    let bind_index = ctx.bind_index();
     let finish: Cont<'a> = Box::new(move |fctx, _results| {
         let frame = || Frame::bare("<recursive-types>", format!("RECURSIVE TYPES {group_name}"));
         for (index, (name, _)) in members.iter().enumerate() {

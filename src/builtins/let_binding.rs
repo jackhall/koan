@@ -206,11 +206,7 @@ pub fn body_action<'a>(
     use crate::machine::model::Carried;
 
     let done_err = |e: KError| Action::Done(Err(e));
-    let bind_index = ctx
-        .chain
-        .as_ref()
-        .map(|chain| BindingIndex::value(chain.index))
-        .unwrap_or(BindingIndex::BUILTIN);
+    let bind_index = ctx.bind_index();
     let rhs = match arg_held(ctx.args, "value") {
         Some(v) => v,
         None => return done_err(KError::new(KErrorKind::MissingArg("value".to_string()))),

@@ -212,10 +212,7 @@ pub fn body_identifier_action<'a>(
         }
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
-    let field_name = match read_field_name_action(ctx.args) {
-        Ok(s) => s,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let field_name = crate::try_action!(read_field_name_action(ctx.args));
     if let Some(target) = ctx.scope.lookup(&s_name) {
         return done(access_field(ctx.scope, target, &field_name));
     }
@@ -255,10 +252,7 @@ pub fn body_type_lhs_action<'a>(
             }));
         }
     };
-    let field_name = match read_field_name_action(ctx.args) {
-        Ok(s) => s,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let field_name = crate::try_action!(read_field_name_action(ctx.args));
     match s_kt {
         KType::Unresolved(te) => match resolve_type_leaf_carrier(ctx.scope, te, None) {
             TypeLeafCarrier::Resolved(kt) => done(access_type_member(ctx.scope, kt, &field_name)),
@@ -290,10 +284,7 @@ pub fn body_newtype_action<'a>(
         Some(obj) => obj,
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
-    let field_name = match read_field_name_action(ctx.args) {
-        Ok(s) => s,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let field_name = crate::try_action!(read_field_name_action(ctx.args));
     done(access_field(ctx.scope, target, &field_name))
 }
 
@@ -321,10 +312,7 @@ pub fn body_module_action<'a>(
             }));
         }
     };
-    let field_name = match read_field_name_action(ctx.args) {
-        Ok(s) => s,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let field_name = crate::try_action!(read_field_name_action(ctx.args));
     done(access_module_member(m, &field_name))
 }
 

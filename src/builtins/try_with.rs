@@ -149,18 +149,9 @@ pub fn body_action<'a>(
     use super::branch_walk::{arm_tail, resolve_arm_contract};
     use crate::machine::core::kfunction::action::{require_kexpression, Action, CatchCont, Dep, DepPlacement};
 
-    let expr_inner = match require_kexpression(ctx.args, "TRY", "expr") {
-        Ok(e) => e,
-        Err(e) => return Action::Done(Err(e)),
-    };
-    let contract = match resolve_arm_contract(ctx, "TRY") {
-        Ok(c) => c,
-        Err(e) => return Action::Done(Err(e)),
-    };
-    let branches_expr = match require_kexpression(ctx.args, "TRY", "branches") {
-        Ok(e) => e,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let expr_inner = crate::try_action!(require_kexpression(ctx.args, "TRY", "expr"));
+    let contract = crate::try_action!(resolve_arm_contract(ctx, "TRY"));
+    let branches_expr = crate::try_action!(require_kexpression(ctx.args, "TRY", "branches"));
     // Body runs in a fresh `child_under` scope so a `LET` inside it stays local and reads still
     // chain out to the call-site scope.
     let body_scope: &'a Scope<'a> = ctx.scope.arena.alloc_scope(Scope::child_under(ctx.scope));

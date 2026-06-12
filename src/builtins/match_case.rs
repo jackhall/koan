@@ -130,14 +130,8 @@ pub fn body_action<'a>(
         }
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("value".to_string())))),
     };
-    let contract = match resolve_arm_contract(ctx, "MATCH") {
-        Ok(c) => c,
-        Err(e) => return Action::Done(Err(e)),
-    };
-    let branches_expr = match require_kexpression(ctx.args, "MATCH", "branches") {
-        Ok(e) => e,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let contract = crate::try_action!(resolve_arm_contract(ctx, "MATCH"));
+    let branches_expr = crate::try_action!(require_kexpression(ctx.args, "MATCH", "branches"));
     let branch_body = match find_branch_body(&branches_expr, &tag, false) {
         Ok(Some(body)) => body,
         Ok(None) => {

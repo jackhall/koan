@@ -232,11 +232,7 @@ pub fn body_action<'a>(
         }
     };
 
-    let bind_index = ctx
-        .chain
-        .as_ref()
-        .map(|chain| BindingIndex::value(chain.index))
-        .unwrap_or(BindingIndex::BUILTIN);
+    let bind_index = ctx.bind_index();
 
     let (te, _) = match carrier {
         CarrierForm::Direct(kt) => {

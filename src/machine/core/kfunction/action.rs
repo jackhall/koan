@@ -16,7 +16,24 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::values::Held;
 use crate::machine::model::types::KType;
 use crate::machine::model::{Carried, KObject};
-use crate::machine::{KError, KErrorKind, NodeId};
+use crate::machine::{BindingIndex, KError, KErrorKind, NodeId};
+
+/// Unwrap a `Result<T, KError>` inside an `Action`-returning body, early-returning
+/// `Action::Done(Err(e))` on the error arm — the `Action`-body analogue of `?`. Collapses the
+/// pervasive `match helper(…) { Ok(v) => v, Err(e) => return Action::Done(Err(e)) }` envelope.
+/// `#[macro_export]` hoists it to the crate root, so call it as `crate::try_action!(…)` from
+/// anywhere with no import.
+#[macro_export]
+macro_rules! try_action {
+    ($expr:expr) => {
+        match $expr {
+            Ok(value) => value,
+            Err(error) => {
+                return $crate::machine::core::kfunction::action::Action::Done(Err(error))
+            }
+        }
+    };
+}
 
 /// Read a builtin argument's `KObject` from a `BodyCtx::args` `KObject::Record` by name. `None` if
 /// the args aren't a record or the named field is a type cell. Two lifetimes: the borrow (`'c`,
@@ -57,6 +74,22 @@ pub fn require_ktype<'a>(args: &KObject<'a>, name: &str) -> Result<KType<'a>, KE
             got: o.ktype().name(),
         })),
         None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
+    }
+}
+
+/// Resolve the bare type-name in the `Type`-arm of arg `slot` — the binder name of a
+/// type-defining builtin (UNION / NEWTYPE / MODULE / SIG / RECURSIVE) — or the canonical error:
+/// `MissingArg` for an absent slot, `ShapeError` for a structural type. `surface` is the keyword
+/// embedded in the diagnostic. The `Action`-side twin of
+/// [`extract_bare_type_name`](super::argument_bundle::extract_bare_type_name).
+pub fn require_bare_type_name<'a>(
+    args: &KObject<'a>,
+    slot: &str,
+    surface: &str,
+) -> Result<String, KError> {
+    match arg_type(args, slot) {
+        Some(t) => super::argument_bundle::bare_type_name(t, slot, surface),
+        None => Err(KError::new(KErrorKind::MissingArg(slot.to_string()))),
     }
 }
 
@@ -109,6 +142,18 @@ pub struct BodyCtx<'a, 'c> {
     /// its `index` for `BindingIndex`, MATCH passes it to `resolve_type_expr`). `None` at top level.
     pub chain: Option<Rc<LexicalFrame>>,
     pub args: &'c KObject<'a>,
+}
+
+impl<'a, 'c> BodyCtx<'a, 'c> {
+    /// The lexical position a binding the builtin installs takes: the ambient chain's index, or
+    /// [`BindingIndex::BUILTIN`] when there is no chain (a top-level / direct-body binder, e.g. a
+    /// test fixture that bypasses the scheduler).
+    pub fn bind_index(&self) -> BindingIndex {
+        self.chain
+            .as_ref()
+            .map(|chain| BindingIndex::value(chain.index))
+            .unwrap_or(BindingIndex::BUILTIN)
+    }
 }
 
 /// Wake-time context a finish receives: the slot's **own** scope (interior-mutable, with `.arena`)

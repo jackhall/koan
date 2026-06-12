@@ -277,34 +277,22 @@ pub(crate) fn build_fn_like_action<'a>(
     use finalize::defer_via_combine_action;
     use return_type::extract_return_type_raw_action;
 
-    let signature_expr = match require_kexpression(ctx.args, builtin, "signature") {
-        Ok(e) => e,
-        Err(e) => return Action::Done(Err(e)),
-    };
-    let return_type_raw = match extract_return_type_raw_action(ctx.args) {
-        Ok(r) => r,
-        Err(e) => return Action::Done(Err(e)),
-    };
-    let body_expr = match require_kexpression(ctx.args, builtin, "body") {
-        Ok(e) => e,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let signature_expr = crate::try_action!(require_kexpression(ctx.args, builtin, "signature"));
+    let return_type_raw = crate::try_action!(extract_return_type_raw_action(ctx.args));
+    let body_expr = crate::try_action!(require_kexpression(ctx.args, builtin, "body"));
     let param_names = signature::collect_param_names_from_signature(&signature_expr);
     let param_type_map = match kind {
         FnKind::Functor => Some(collect_param_types(&signature_expr, ctx.scope)),
         FnKind::Function | FnKind::Anonymous => None,
     };
     let mut elaborator = Elaborator::new(ctx.scope).with_chain(ctx.chain.clone());
-    let (return_type_state, verdict) = match classify_return_type(
+    let (return_type_state, verdict) = crate::try_action!(classify_return_type(
         return_type_raw,
         &param_names,
         ctx.scope,
         ctx.chain.clone(),
         param_type_map.as_ref(),
-    ) {
-        Ok(p) => p,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    ));
     if let AdmissibleVerdict::Rejected(e) = verdict {
         return Action::Done(Err(e));
     }
@@ -321,11 +309,7 @@ pub(crate) fn build_fn_like_action<'a>(
             sub_dispatches,
         },
     };
-    let bind_index = ctx
-        .chain
-        .as_ref()
-        .map(|chain| BindingIndex::value(chain.index))
-        .unwrap_or(BindingIndex::BUILTIN);
+    let bind_index = ctx.bind_index();
     match classify(return_type_state, params) {
         FnPlan::Synchronous {
             elements,
@@ -387,29 +371,16 @@ pub fn body_record_schema_action<'a>(
         })
         .collect();
     let param_names: Vec<String> = schema.keys().cloned().collect();
-    let return_type_raw = match extract_return_type_raw_action(ctx.args) {
-        Ok(r) => r,
-        Err(e) => return Action::Done(Err(e)),
-    };
-    let body_expr = match require_kexpression(ctx.args, "FN", "body") {
-        Ok(e) => e,
-        Err(e) => return Action::Done(Err(e)),
-    };
-    let (return_type_state, _verdict) = match classify_return_type(
+    let return_type_raw = crate::try_action!(extract_return_type_raw_action(ctx.args));
+    let body_expr = crate::try_action!(require_kexpression(ctx.args, "FN", "body"));
+    let (return_type_state, _verdict) = crate::try_action!(classify_return_type(
         return_type_raw,
         &param_names,
         ctx.scope,
         ctx.chain.clone(),
         None,
-    ) {
-        Ok(p) => p,
-        Err(e) => return Action::Done(Err(e)),
-    };
-    let bind_index = ctx
-        .chain
-        .as_ref()
-        .map(|chain| BindingIndex::value(chain.index))
-        .unwrap_or(BindingIndex::BUILTIN);
+    ));
+    let bind_index = ctx.bind_index();
     match classify(return_type_state, ParamListResult::Done(Vec::new())) {
         FnPlan::Synchronous { return_type, .. } => body_result_to_action(finalize_fn_with_kind(
             ctx.scope,

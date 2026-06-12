@@ -35,10 +35,7 @@ pub fn body_action<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, Action};
     use crate::machine::model::Carried;
-    let expr = match require_kexpression(ctx.args, "QUOTE", "expr") {
-        Ok(e) => e,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let expr = crate::try_action!(require_kexpression(ctx.args, "QUOTE", "expr"));
     let obj = ctx.scope.arena.alloc_object(KObject::KExpression(expr));
     Action::Done(Ok(Carried::Object(obj)))
 }

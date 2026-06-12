@@ -174,10 +174,7 @@ pub fn body_opaque_action<'a>(
     use crate::machine::core::kfunction::action::Action;
     use crate::machine::model::Carried;
 
-    let (m, s) = match resolve_module_and_signature_action(ctx.args) {
-        Ok(pair) => pair,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let (m, s) = crate::try_action!(resolve_module_and_signature_action(ctx.args));
 
     let arena = ctx.scope.arena;
     let new_scope = arena.alloc_scope(Scope::child_under_module(
@@ -289,10 +286,7 @@ pub fn body_transparent_action<'a>(
     use crate::machine::core::kfunction::action::Action;
     use crate::machine::model::Carried;
 
-    let (m, s) = match resolve_module_and_signature_action(ctx.args) {
-        Ok(pair) => pair,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let (m, s) = crate::try_action!(resolve_module_and_signature_action(ctx.args));
     if let Err(e) = shape_check(s, m.child_scope()) {
         return Action::Done(Err(e));
     }

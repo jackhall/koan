@@ -426,10 +426,7 @@ pub(crate) fn defer_via_combine_action<'a>(
         }
         let spliced_signature = KExpression::new(spliced_parts);
         let return_type: ReturnType<'a> =
-            match resolve_capture_at_finish(capture, fctx.scope, results) {
-                Ok(rt) => rt,
-                Err(e) => return Action::Done(Err(e)),
-            };
+            crate::try_action!(resolve_capture_at_finish(capture, fctx.scope, results));
         let elements = match prebuilt_elements {
             Some(es) => es,
             None => {

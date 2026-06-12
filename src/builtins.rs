@@ -16,6 +16,8 @@ mod functor_def;
 mod let_binding;
 mod match_case;
 mod module_def;
+#[cfg(feature = "action-harness")]
+mod nominal_schema;
 pub(crate) mod newtype_def;
 mod print;
 mod quote;
