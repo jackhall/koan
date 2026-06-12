@@ -16,17 +16,28 @@ Standardized workflow for running Miri in the koan repo. The audit slate is the 
 
 ## The command of record
 
-```
-MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test --quiet -- <test-names>
-```
-
-For the bulk audit slate, the canonical list lives in [`observe/miri_slate.md`](../../../observe/miri_slate.md); interpolate it directly with `$(python3 tools/observe_tests.py slate)`:
+Run Miri through [`tools/miri.py`](../../../tools/miri.py) — never hand-roll `cargo miri test`. The
+script encapsulates the correct invocation and returns only the summary, so the output can't be
+misread:
 
 ```
-MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test --quiet -- $(python3 tools/observe_tests.py slate)
+python3 tools/miri.py                         # full audit slate
+python3 tools/miri.py --tests <name> [<name>…]  # triage specific tests
+python3 tools/miri.py --tests <name> --track <alloc-id>   # + -Zmiri-track-alloc-id
+python3 tools/miri.py --log                    # full slate; on a clean run, log the duration entry
 ```
 
-For triage, `<test-names>` is a single test name at a time.
+It runs `MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test --lib …`. The **`--lib` is
+load-bearing**: every slate test lives in the lib unit-test binary, so restricting to it skips the
+`tests/*.rs` integration binaries that otherwise print a misleading `0 passed; all filtered out`. The
+slate names come from [`observe/miri_slate.md`](../../../observe/miri_slate.md) via
+`tools/observe_tests.py slate` — never hard-code them.
+
+The script writes the full output to `observe/miri-last-run.log`, prints one line
+(`Slate: <N> passed, <failed>, <leaks> leaks, <UB> UB, <secs>s`), and **exits non-zero on any
+failed test, UB, leak, or a run count that doesn't equal the slate list** — the last guard turns a
+no-match filter (the classic "everything filtered out" footgun) into a loud error instead of a
+silent green. Read that one line; do not re-inspect the raw log unless triaging a specific failure.
 
 ## Keeping the slate in sync
 
@@ -38,7 +49,7 @@ When a slate test is added, removed, or renamed:
 
 1. Edit [`observe/miri_slate.md`](../../../observe/miri_slate.md). New tests go under the group they pin down, or under a fresh group if the shape isn't already represented.
 2. Update [`design/memory-model.md`](../../../design/memory-model.md)'s `## Verification` section if the test is named there.
-3. Re-run the full slate (the command of record above) and confirm the count still holds.
+3. Re-run the full slate (`python3 tools/miri.py --log`); the script's count guard confirms it still holds.
 4. `python3 tools/doclinks.py check` to catch any broken inbound links.
 
 A non-slate change to a test in `dispatch/`, `execute/`, or `parse/` does not trigger this rule — only changes that affect a test named in `observe/miri_slate.md` do.
@@ -51,7 +62,7 @@ Miri runs are slow. First-time compilation under Miri is several minutes; per-te
 
 1. **Always launch Miri with `Bash(run_in_background=true)`.** One background invocation per Miri command.
 2. **Wait for the harness's completion notification.** Do not poll with `BashOutput` in a loop, do not run `sleep N; <check>` constructs, do not spawn a separate watcher process. The harness pings when the background command finishes; do other work or wait, and pick it up then.
-3. **Read the output once at completion** with a single `BashOutput` call. Parse the leak count, UB lines, and per-test pass/fail from that one read. Move on.
+3. **Read the script's one-line summary at completion.** It has already parsed leaks/UB/pass-fail from the full log and enforced the count guard — don't re-tail the raw output. Move on.
 4. **Run Miri invocations back-to-back, not interleaved with non-Miri builds.** Miri's target dir is separate from the regular `cargo` target dir, but switching back and forth thrashes the file cache. Plan your work: bulk baseline run, then per-test triage runs in sequence, then a final bulk verification — one continuous chain.
 
 ## Triage workflow (when leaks are reported)
@@ -65,46 +76,31 @@ The triage pattern documented in past audit work:
 
 ## Reading the output
 
-**Read the whole output — never `tail` it, and never append `| tail -N` to the command.** The
-slate's audit tests all live in the **lib unit-test binary, which `cargo test` runs *first*.** The
-binaries that run *last* are the `tests/*.rs` integration tests: each is handed the slate name-filter,
-matches none of it (the slate tests aren't there), and reports `0 passed; N filtered out`. So the
-**tail of every slate run is a wall of `0 passed` lines that looks exactly like "Miri ran nothing"** —
-when in fact the binary that ran the slate scrolled off the *top*. This is the single most common way
-a slate run is misread. Capture the full output (the background task's output file, or redirect to a
-file) and `grep` it; do not inspect only the end.
+`tools/miri.py` does the reading: it parses the full captured log (not a tail), sums passes/leaks/UB
+across binaries, enforces the run-count guard, and prints the one-line summary. Trust that line.
 
-**Sanity-check that the slate actually ran before trusting a clean result.** The **lib** binary's
-`test result:` line must show `passed` ≈ the slate size (`python3 tools/observe_tests.py slate | wc -w`).
-If *every* binary shows `0 passed`, the slate did **not** run — the read was truncated, or the lib test
-binary failed to build/run under Miri. Investigate; do **not** report a pass. **Exit code 0 is not
-sufficient** — `cargo test` exits 0 when 0 tests run.
+Only when **triaging a specific failure** do you open `observe/miri-last-run.log` directly. What to
+look for there:
 
-- **Pass:** `test result: ok. <N> passed; 0 failed; ...` — on the **lib** binary, `<N>` ≈ slate size.
 - **UB:** `error: Undefined Behavior: <kind>` — never acceptable. Stop and surface.
-- **Leaks:** `error: memory leaked: <N> allocations (<bytes> bytes) in <K> allocations` — the leak detector runs at process exit. Sum across tests for a slate-wide count.
-- **Tree-borrows-specific:** look for "protector", "activation", "disabled tag" in error messages — all are UB classes.
+- **Leaks:** `error: memory leaked: <N> allocations (<bytes> bytes)` — the detector runs at process exit.
+- **Tree-borrows-specific:** "protector", "activation", "disabled tag" in error messages — all UB classes.
+
+If you ever run `cargo miri test` by hand instead of the script, remember why the script exists:
+slate tests live in the lib binary (`cargo test` runs it *first*); the `tests/*.rs` binaries run
+*last*, match none of the slate filter, and tail a wall of `0 passed; N filtered out` that looks like
+"Miri ran nothing." Exit code 0 alone is not proof of a pass — `cargo test` exits 0 when 0 tests run.
+The script's count guard is exactly this check; prefer it.
 
 ## Reporting full-slate runs
 
-Every full-slate run ends with a single user-facing line of the form:
+Pass `--log` to a full-slate run: on a clean result the script prepends today's entry to the
+`<!-- slate-durations:start -->` / `<!-- slate-durations:end -->` block in
+[`observe/miri_slate.md`](../../../observe/miri_slate.md) and trims it to five, in the format
 
 ```
-Slate: <N> tests, <leaks> leaks, <ub> UB, <duration>s — last full-slate baseline was <prev>s.
+- YYYY-MM-DD: <duration>s — <N> tests, <leaks> leaks, <ub> UB
 ```
 
-Read `<prev>` from the top entry of the `<!-- slate-durations:start -->` /
-`<!-- slate-durations:end -->` block in [`observe/miri_slate.md`](../../../observe/miri_slate.md) (the "Recent full-slate run durations" section)
-(write `first run` if the block is empty). Then prepend the new entry and trim
-the list to five entries so the bound holds. Entry format:
-
-```
-- YYYY-MM-DD: <duration>s — <N> tests, 0 leaks, 0 UB
-```
-
-Use today's date (the harness has it in `currentDate`). A run that fails
-(non-zero leaks or UB) still gets logged so the list reflects real timings,
-with the failure counts in place of the zeros.
-
-This rule applies to **full-slate runs only** — single-test triage runs and
-non-slate Miri invocations do not append.
+Relay the script's summary line to the user. `--log` applies to full-slate runs only; triage
+(`--tests`) never logs.
