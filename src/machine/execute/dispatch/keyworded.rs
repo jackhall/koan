@@ -138,20 +138,29 @@ impl<'run> KeywordedState<'run> {
             .resolve_dispatch(&expr, chain, &bare_outcomes);
         let resolved = match outcome {
             ResolveOutcome::Resolved(r) => r,
+            // Dispatch failures are slot-terminal (TRY-catchable), uniform with the
+            // bare-identifier and head-deferred lanes — not a fatal `?` abort. `interpret`
+            // reads each top-level slot result and re-raises, so the CLI surfacing is unchanged.
             ResolveOutcome::Ambiguous(n) => {
-                return Err(KError::new(KErrorKind::AmbiguousDispatch {
-                    expr: expr.summarize(),
-                    candidates: n,
-                }));
+                return Ok(NodeStep::Done(NodeOutput::Err(KError::new(
+                    KErrorKind::AmbiguousDispatch {
+                        expr: expr.summarize(),
+                        candidates: n,
+                    },
+                ))));
             }
             ResolveOutcome::Unmatched => {
-                return Err(KError::new(KErrorKind::DispatchFailed {
-                    expr: expr.summarize(),
-                    reason: "no matching function".to_string(),
-                }));
+                return Ok(NodeStep::Done(NodeOutput::Err(KError::new(
+                    KErrorKind::DispatchFailed {
+                        expr: expr.summarize(),
+                        reason: "no matching function".to_string(),
+                    },
+                ))));
             }
             ResolveOutcome::UnboundName(name) => {
-                return Err(KError::new(KErrorKind::UnboundName(name)));
+                return Ok(NodeStep::Done(NodeOutput::Err(KError::new(
+                    KErrorKind::UnboundName(name),
+                ))));
             }
             ResolveOutcome::Deferred => {
                 debug_assert!(
@@ -262,16 +271,20 @@ impl<'run> KeywordedState<'run> {
                 let body = super::exec::invoke(ctx, r.function, working_expr);
                 Ok(ctx.body_result_to_step(body, idx))
             }
-            ResolveOutcome::Ambiguous(n) => Err(KError::new(KErrorKind::AmbiguousDispatch {
-                expr: working_expr.summarize(),
-                candidates: n,
-            })),
-            ResolveOutcome::Deferred | ResolveOutcome::Unmatched => {
-                Err(KError::new(KErrorKind::DispatchFailed {
+            // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
+            // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
+            ResolveOutcome::Ambiguous(n) => Ok(NodeStep::Done(NodeOutput::Err(KError::new(
+                KErrorKind::AmbiguousDispatch {
+                    expr: working_expr.summarize(),
+                    candidates: n,
+                },
+            )))),
+            ResolveOutcome::Deferred | ResolveOutcome::Unmatched => Ok(NodeStep::Done(
+                NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
                     expr: working_expr.summarize(),
                     reason: "no matching function".to_string(),
-                }))
-            }
+                })),
+            )),
             ResolveOutcome::ParkOnProducers(producers) => Ok(Self::install_overload_park(
                 ctx,
                 producers,
@@ -279,7 +292,9 @@ impl<'run> KeywordedState<'run> {
                 Vec::new(),
                 idx,
             )),
-            ResolveOutcome::UnboundName(name) => Err(KError::new(KErrorKind::UnboundName(name))),
+            ResolveOutcome::UnboundName(name) => Ok(NodeStep::Done(NodeOutput::Err(KError::new(
+                KErrorKind::UnboundName(name),
+            )))),
         }
     }
 
@@ -364,6 +379,15 @@ impl<'run> KeywordedState<'run> {
         pre_subs: Vec<(usize, NodeId)>,
         idx: usize,
     ) -> Result<NodeStep<'run>, KError> {
+        // `pre_subs` rides only on the legacy parked-Keyworded state; the combine carrier
+        // owns its deps directly, so the Keyworded eager-subs resume state is unused under
+        // the feature (a re-Dispatch never re-enters here — the combine finish runs instead).
+        #[cfg(feature = "dispatch-combine")]
+        {
+            let _ = pre_subs;
+            return Ok(ctx.install_eager_subs_combine(working_expr, staged_subs, None, idx));
+        }
+        #[cfg(not(feature = "dispatch-combine"))]
         match ctx.install_eager_subs(working_expr, staged_subs, None, idx) {
             EagerSubsInstall::DepError(step) => Ok(step),
             EagerSubsInstall::AllInline(working_expr) => Self::finish(ctx, working_expr, idx),

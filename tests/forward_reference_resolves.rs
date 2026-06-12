@@ -349,14 +349,21 @@ fn producer_error_propagates_to_parked_consumer() {
     )
     .expect("parse should succeed");
     let mut sched = Scheduler::new();
-    for e in exprs {
-        let _ = sched.add_dispatch(e, scope);
-    }
-    let exec_result = sched.execute();
-    let err = exec_result.expect_err("execute should surface UNDEFINED_FN's dispatch failure");
+    let ids: Vec<_> = exprs.into_iter().map(|e| sched.add_dispatch(e, scope)).collect();
+    sched
+        .execute()
+        .expect("a producer error routes into the slot, not a fatal execute abort");
+    let err = sched
+        .read_result(ids[0])
+        .err()
+        .expect("execute should surface UNDEFINED_FN's dispatch failure");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed for UNDEFINED_FN, got {err}",
+    );
+    assert!(
+        sched.read_result(ids[1]).is_err(),
+        "y must inherit its dependency's error",
     );
 }
 

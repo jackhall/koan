@@ -214,7 +214,7 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
     let working_expr = KExpression::new(new_parts);
     #[cfg(feature = "dispatch-combine")]
     {
-        Ok(ctx.install_eager_subs_combine(working_expr, staged_subs, picked, idx))
+        Ok(ctx.install_eager_subs_combine(working_expr, staged_subs, Some(picked), idx))
     }
     #[cfg(not(feature = "dispatch-combine"))]
     match ctx.install_eager_subs(working_expr, staged_subs, Some(picked), idx) {

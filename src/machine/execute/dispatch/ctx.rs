@@ -251,20 +251,20 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         }
     }
 
-    /// [`NodeWork::DispatchCombine`] dual of [`Self::install_eager_subs`] for the
-    /// committed-pick (FunctionValueCall / apply-a-callable) path. A `Reuse` of an
-    /// already-resolved producer splices inline (a freshly minted sub is never terminal
-    /// in the same step); every in-flight sub becomes an owned dep of a `DispatchCombine`
-    /// whose finish splices the resolved values into `working_expr` and calls `picked`.
-    /// The `<bind>` dep-error frame rides on `dep_error_frame`, attached by
-    /// `run_dispatch_combine` at the short-circuit — same framing as the legacy
+    /// [`NodeWork::DispatchCombine`] dual of [`Self::install_eager_subs`]. A `Reuse` of an
+    /// already-resolved producer splices inline (a freshly minted sub is never terminal in
+    /// the same step); every in-flight sub becomes an owned dep of a `DispatchCombine` whose
+    /// finish splices the resolved values into `working_expr` and routes on `picked` exactly
+    /// as [`Self::resume_eager_subs`] does (`Some(f)` calls `f`; `None` re-resolves through
+    /// [`KeywordedState::finish`]). The `<bind>` dep-error frame rides on `dep_error_frame`,
+    /// attached by `run_dispatch_combine` at the short-circuit — same framing as the legacy
     /// `bind_frame_err` / `resume_eager_subs` path it replaces under the feature.
     #[cfg(feature = "dispatch-combine")]
     pub(super) fn install_eager_subs_combine(
         &mut self,
         mut working_expr: KExpression<'run>,
         staged_subs: Vec<(usize, PendingSub<'run>)>,
-        picked: &'run KFunction<'run>,
+        picked: Option<&'run KFunction<'run>>,
         idx: usize,
     ) -> NodeStep<'run> {
         use super::super::nodes::{DispatchCombineFinish, NodeWork};
@@ -301,20 +301,18 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
             }
         }
         if deps.is_empty() {
-            // Every sub was an already-resolved `Reuse` spliced inline — run the call now,
+            // Every sub was an already-resolved `Reuse` spliced inline — continue now,
             // matching the legacy `EagerSubsInstall::AllInline` arm.
-            let body = super::exec::invoke(self, picked, working_expr);
-            return self.body_result_to_step(body, idx);
+            return finish_eager_subs(self, working_expr, picked, idx);
         }
         let dep_error_frame = Some(crate::machine::TraceFrame::from_expr("<bind>", &working_expr));
         let finish: DispatchCombineFinish<'run> = Box::new(move |ctx, results, idx| {
             // The short-circuit already guaranteed every dep resolved; splice each into the
-            // slot it was staged from, then run the committed call.
+            // slot it was staged from, then run the routed continuation.
             for (slot, value) in part_indices.iter().zip(results) {
                 working_expr.parts[*slot].value = ExpressionPart::Future(*value);
             }
-            let body = super::exec::invoke(ctx, picked, working_expr);
-            ctx.body_result_to_step(body, idx)
+            finish_eager_subs(ctx, working_expr, picked, idx)
         });
         NodeStep::Replace {
             work: NodeWork::DispatchCombine {
@@ -389,6 +387,31 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
                 Ok(self.body_result_to_step(body, idx))
             }
         }
+    }
+}
+
+/// Route a fully-spliced eager-subs `working_expr` to its continuation — the shared tail of
+/// the `DispatchCombine` finish and its all-inline fast path. `Some(f)` runs the committed
+/// call; `None` re-resolves dispatch via [`KeywordedState::finish`] (an element-typed
+/// `Future(_)` revealed by a sub then surfaces as a slot-terminal `DispatchFailed`). Mirrors
+/// [`DispatchCtx::resume_eager_subs`]'s `picked` routing; the `Err` arm is dead now that
+/// `KeywordedState::finish` reports dispatch failures slot-terminally, kept for signature parity.
+#[cfg(feature = "dispatch-combine")]
+fn finish_eager_subs<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    working_expr: KExpression<'run>,
+    picked: Option<&'run KFunction<'run>>,
+    idx: usize,
+) -> NodeStep<'run> {
+    match picked {
+        Some(f) => {
+            let body = super::exec::invoke(ctx, f, working_expr);
+            ctx.body_result_to_step(body, idx)
+        }
+        None => match KeywordedState::finish(ctx, working_expr, idx) {
+            Ok(step) => step,
+            Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+        },
     }
 }
 

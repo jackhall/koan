@@ -172,10 +172,14 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let mut sched = Scheduler::new();
-        sched.add_dispatch(parse_one("UNION (Ok :Number Err :Str)"), scope);
-        let err = sched
+        let root = sched.add_dispatch(parse_one("UNION (Ok :Number Err :Str)"), scope);
+        sched
             .execute()
-            .expect_err("a bare anonymous UNION (...) must fail dispatch");
+            .expect("a dispatch failure is slot-terminal, not a fatal execute error");
+        let err = sched
+            .read_result(root)
+            .err()
+            .expect("a bare anonymous UNION (...) must fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed on bare UNION (...) (matches no UNION overload); got {err}",

@@ -622,19 +622,27 @@ mod tests {
             other => panic!("expected \"num\", got {:?}", other.ktype()),
         }
         let mut sched1 = Scheduler::new();
-        sched1.add_dispatch(parse_one("TAKES_NUM (Distance (3.0))"), scope);
-        let err = sched1
+        let root = sched1.add_dispatch(parse_one("TAKES_NUM (Distance (3.0))"), scope);
+        sched1
             .execute()
-            .expect_err("TAKES_NUM on Distance should fail dispatch");
+            .expect("a dispatch failure is slot-terminal, not a fatal execute error");
+        let err = sched1
+            .read_result(root)
+            .err()
+            .expect("TAKES_NUM on Distance should fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed on Number-slot Distance, got {err}",
         );
         let mut sched2 = Scheduler::new();
-        sched2.add_dispatch(parse_one("TAKES_DIST (3.0)"), scope);
-        let err2 = sched2
+        let root2 = sched2.add_dispatch(parse_one("TAKES_DIST (3.0)"), scope);
+        sched2
             .execute()
-            .expect_err("TAKES_DIST on raw Number should fail dispatch");
+            .expect("a dispatch failure is slot-terminal, not a fatal execute error");
+        let err2 = sched2
+            .read_result(root2)
+            .err()
+            .expect("TAKES_DIST on raw Number should fail dispatch");
         assert!(
             matches!(&err2.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed on Distance-slot Number, got {err2}",

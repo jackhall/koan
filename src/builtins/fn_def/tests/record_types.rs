@@ -94,10 +94,14 @@ fn record_field_type_mismatch_is_dispatch_failure() {
     run(scope, "LET r = {x = \"s\"}");
     run(scope, "FN (USE r :{x :Number}) -> Str = (\"ok\")");
     let mut sched = Scheduler::new();
-    sched.add_dispatch(parse_one("USE r"), scope);
-    let error = sched
+    let root = sched.add_dispatch(parse_one("USE r"), scope);
+    sched
         .execute()
-        .expect_err("a `:{x :Str}` value must not fill a `:{x :Number}` slot");
+        .expect("a dispatch failure is slot-terminal, not a fatal execute error");
+    let error = sched
+        .read_result(root)
+        .err()
+        .expect("a `:{x :Str}` value must not fill a `:{x :Number}` slot");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed on record field-type mismatch, got {error:?}",
@@ -113,10 +117,14 @@ fn record_missing_field_is_dispatch_failure() {
     run(scope, "LET r = {x = 1}");
     run(scope, "FN (NEED r :{x :Number, q :Bool}) -> Str = (\"ok\")");
     let mut sched = Scheduler::new();
-    sched.add_dispatch(parse_one("NEED r"), scope);
-    let error = sched
+    let root = sched.add_dispatch(parse_one("NEED r"), scope);
+    sched
         .execute()
-        .expect_err("a `{x = 1}` value must not fill a `:{x :Number, q :Bool}` slot");
+        .expect("a dispatch failure is slot-terminal, not a fatal execute error");
+    let error = sched
+        .read_result(root)
+        .err()
+        .expect("a `{x = 1}` value must not fill a `:{x :Number, q :Bool}` slot");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed on missing record field, got {error:?}",
@@ -134,10 +142,14 @@ fn record_incomparable_overloads_are_ambiguous() {
     run(scope, "FN (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")");
     run(scope, "FN (PICK r :{x :Number, z :Str}) -> Str = (\"xz\")");
     let mut sched = Scheduler::new();
-    sched.add_dispatch(parse_one("PICK {x = 1, y = \"a\", z = \"b\"}"), scope);
-    let error = sched
+    let root = sched.add_dispatch(parse_one("PICK {x = 1, y = \"a\", z = \"b\"}"), scope);
+    sched
         .execute()
-        .expect_err("a value matching two incomparable record slots must be ambiguous");
+        .expect("a dispatch failure is slot-terminal, not a fatal execute error");
+    let error = sched
+        .read_result(root)
+        .err()
+        .expect("a value matching two incomparable record slots must be ambiguous");
     assert!(
         matches!(error.kind, KErrorKind::AmbiguousDispatch { .. }),
         "expected AmbiguousDispatch across incomparable record slots, got {error:?}",

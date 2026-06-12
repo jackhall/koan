@@ -163,10 +163,14 @@ fn using_on_non_module_fails_dispatch() {
     let scope = run_root_silent(&arena);
     run(scope, "LET n = 5");
     let mut sched = Scheduler::new();
-    sched.add_dispatch(parse_one("USING n SCOPE (1)"), scope);
-    let err = sched
+    let root = sched.add_dispatch(parse_one("USING n SCOPE (1)"), scope);
+    sched
         .execute()
-        .expect_err("expected DispatchFailed at execute boundary");
+        .expect("a dispatch failure is slot-terminal, not a fatal execute error");
+    let err = sched
+        .read_result(root)
+        .err()
+        .expect("expected a DispatchFailed in the dispatch slot");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed for USING on a Number, got {err}",

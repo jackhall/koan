@@ -53,6 +53,20 @@ fn unbound_name_arm_catches_unbound_name() {
 }
 
 #[test]
+fn dispatch_failed_arm_catches_keyworded_dispatch_failure() {
+    // A Keyworded overload miss (type-mismatched arg, no matching FN) is slot-terminal,
+    // so TRY intercepts it rather than the run aborting at the `execute()` boundary.
+    let bytes = run_program(
+        "FN (DOUBLE x :Number) -> Number = (x)\n\
+         TRY (DOUBLE \"hi\") -> :Str WITH (\
+            Ok -> (PRINT \"ok\")\
+            DispatchFailed -> (PRINT \"caught\")\
+         )",
+    );
+    assert_eq!(bytes, b"caught\n");
+}
+
+#[test]
 fn shape_error_arm_catches_shape_error() {
     // Inexhaustive MATCH is a deterministic ShapeError trigger.
     let bytes = run_program(
