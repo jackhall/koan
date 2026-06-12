@@ -71,9 +71,6 @@ pub fn run_action<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, action: Action<'a
                         DepPlacement::InScope(scope) => owned.extend(h.enter_body_block(scope, expr)),
                         DepPlacement::OwnScope => owned.push(h.add_dispatch_here(expr)),
                         DepPlacement::ActiveFrame => owned.push(h.add_dispatch_in_frame(expr)),
-                        DepPlacement::WithChain(_) => {
-                            todo!("Combine dep with DepPlacement::WithChain not yet implemented")
-                        }
                     },
                 }
             }
@@ -116,9 +113,6 @@ fn dispatch_dep<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, dep: Dep<'a>) -> No
                 .into_iter()
                 .next()
                 .expect("enter_block of one statement yields one node"),
-            DepPlacement::WithChain(_) => {
-                todo!("dispatch_dep: DepPlacement::WithChain (TRY arms) not yet implemented")
-            }
         },
     }
 }

@@ -146,49 +146,20 @@ fn dispatch_branch<'a, 's>(
 pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_object, arg_type, Action, CatchCont, Dep, DepPlacement, FramePlacement};
-    use crate::machine::ResolveTypeExprOutcome;
+    use super::branch_walk::{arm_tail, resolve_arm_contract};
+    use crate::machine::core::kfunction::action::{require_kexpression, Action, CatchCont, Dep, DepPlacement};
 
-    let expr_inner = match arg_object(ctx.args, "expr") {
-        Some(KObject::KExpression(e)) => e.clone(),
-        _ => {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
-                "TRY expr slot must be a parenthesized expression".to_string(),
-            ))))
-        }
+    let expr_inner = match require_kexpression(ctx.args, "TRY", "expr") {
+        Ok(e) => e,
+        Err(e) => return Action::Done(Err(e)),
     };
-    // `-> :T` contract (resolve a forward-referenced type name against the call-site scope/chain).
-    let ret_kt = match arg_type(ctx.args, "return_type") {
-        Some(KType::Unresolved(te)) => match ctx.scope.resolve_type_expr(te, ctx.chain.clone()) {
-            ResolveTypeExprOutcome::Done(kt) => kt.clone(),
-            _ => match KType::from_name(&te.render()) {
-                Some(kt) => kt,
-                None => {
-                    return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                        "TRY return type `{}` is not a known type",
-                        te.render()
-                    )))))
-                }
-            },
-        },
-        Some(other) => other.clone(),
-        None => {
-            return Action::Done(Err(KError::new(KErrorKind::MissingArg(
-                "return_type".to_string(),
-            ))))
-        }
+    let contract = match resolve_arm_contract(ctx, "TRY") {
+        Ok(c) => c,
+        Err(e) => return Action::Done(Err(e)),
     };
-    let contract = ReturnContract::Arm {
-        ret: ctx.scope.arena.alloc_ktype(ret_kt),
-        kind: "TRY",
-    };
-    let branches_expr = match arg_object(ctx.args, "branches") {
-        Some(KObject::KExpression(e)) => e.clone(),
-        _ => {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
-                "TRY branches slot must be a parenthesized expression".to_string(),
-            ))))
-        }
+    let branches_expr = match require_kexpression(ctx.args, "TRY", "branches") {
+        Ok(e) => e,
+        Err(e) => return Action::Done(Err(e)),
     };
     // Body runs in a fresh `child_under` scope so a `LET` inside it stays local and reads still
     // chain out to the call-site scope.
@@ -222,23 +193,7 @@ pub fn body_action<'a>(
             }
             Err(msg) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         };
-        // Fresh per-call frame (call-site rooted via the outer-frame chain), with `it` bound at
-        // idx 0 — the harness tail-replaces into the arm body against this frame.
-        let frame: Rc<CallArena> = CallArena::new(fctx.scope, outer_frame);
-        frame.with_anchored_child(|arena, child| {
-            let it_obj = arena.alloc_object(it_value);
-            let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
-        });
-        let arm_scope_id = frame.scope_for_bind().id;
-        let mut statements = split_body_statements(body_expr);
-        let tail = statements.pop().expect("split_body_statements always yields at least one");
-        Action::Tail {
-            leading: statements,
-            tail,
-            contract: Some(contract),
-            frame_placement: FramePlacement::FreshChild { frame },
-            block_entry: Some(arm_scope_id),
-        }
+        arm_tail(fctx.scope, outer_frame, it_value, body_expr, contract)
     });
     Action::Catch {
         watched: Dep::Dispatch {

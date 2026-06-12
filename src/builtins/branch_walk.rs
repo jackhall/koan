@@ -49,6 +49,68 @@ pub(crate) fn resolve_arm_return_contract<'a>(
     })
 }
 
+/// `Action`-side twin of [`resolve_arm_return_contract`]: read the `-> :T` slot from `ctx.args`
+/// (resolving a forward-referenced bare name against the call-site scope/chain) into the
+/// [`ReturnContract::Arm`] both `MATCH` and `TRY` arms are checked against.
+#[cfg(feature = "action-harness")]
+pub(crate) fn resolve_arm_contract<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+    kind: &'static str,
+) -> Result<ReturnContract<'a>, KError> {
+    use crate::machine::core::kfunction::action::arg_type;
+    let ret_kt = match arg_type(ctx.args, "return_type") {
+        Some(KType::Unresolved(te)) => match ctx.scope.resolve_type_expr(te, ctx.chain.clone()) {
+            ResolveTypeExprOutcome::Done(kt) => kt.clone(),
+            _ => KType::from_name(&te.render()).ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(format!(
+                    "{kind} return type `{}` is not a known type",
+                    te.render()
+                )))
+            })?,
+        },
+        Some(other) => other.clone(),
+        None => return Err(KError::new(KErrorKind::MissingArg("return_type".to_string()))),
+    };
+    Ok(ReturnContract::Arm {
+        ret: ctx.scope.arena.alloc_ktype(ret_kt),
+        kind,
+    })
+}
+
+/// Build the matched-arm tail shared by the `Action`-harness `MATCH` and `TRY` bodies: a fresh
+/// per-call frame (`root`-rooted, chained onto `outer_frame`) with `it` bound at idx 0,
+/// tail-replacing into the arm body's last statement (the harness dispatches the leading
+/// statements as siblings) carrying `contract`.
+#[cfg(feature = "action-harness")]
+pub(crate) fn arm_tail<'a>(
+    root: &Scope<'a>,
+    outer_frame: Option<Rc<crate::machine::CallArena>>,
+    it_value: crate::machine::model::KObject<'a>,
+    body_expr: KExpression<'a>,
+    contract: ReturnContract<'a>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{Action, FramePlacement};
+    use crate::machine::core::kfunction::body::split_body_statements;
+    use crate::machine::{BindingIndex, CallArena};
+    let frame: Rc<CallArena> = CallArena::new(root, outer_frame);
+    frame.with_anchored_child(|arena, child| {
+        let it_obj = arena.alloc_object(it_value);
+        let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
+    });
+    let arm_scope_id = frame.scope_for_bind().id;
+    let mut statements = split_body_statements(body_expr);
+    let tail = statements
+        .pop()
+        .expect("split_body_statements always yields at least one");
+    Action::Tail {
+        leading: statements,
+        tail,
+        contract: Some(contract),
+        frame_placement: FramePlacement::FreshChild { frame },
+        block_entry: Some(arm_scope_id),
+    }
+}
+
 /// Returns the body for the first triple whose tag matches `target_tag`, or — when
 /// `allow_wildcard` is true and no exact match was found — the first `_` body. Exact-tag
 /// matches always win over `_`, regardless of source order.

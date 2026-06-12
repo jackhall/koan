@@ -79,16 +79,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_object, Action, CatchCont, Dep, DepPlacement};
+    use crate::machine::core::kfunction::action::{require_kexpression, Action, CatchCont, Dep, DepPlacement};
     use crate::machine::model::Carried;
-    use crate::machine::{KError, KErrorKind};
-    let expr_inner = match arg_object(ctx.args, "expr") {
-        Some(KObject::KExpression(e)) => e.clone(),
-        _ => {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
-                "CATCH expects a parenthesized expression body".to_string(),
-            ))))
-        }
+    let expr_inner = match require_kexpression(ctx.args, "CATCH", "expr") {
+        Ok(e) => e,
+        Err(e) => return Action::Done(Err(e)),
     };
     // Capture the prelude `Result` member identity at body time so the CATCH value shares the
     // nominal identity of a `Result (...)`-constructed one.

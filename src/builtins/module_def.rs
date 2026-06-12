@@ -116,9 +116,9 @@ pub fn body<'a, 's>(
 pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_object, arg_type, Action, Cont, Dep, DepPlacement};
+    use crate::machine::core::kfunction::action::{arg_type, require_kexpression, Action, Cont, Dep, DepPlacement};
     use crate::machine::core::kfunction::argument_bundle::bare_type_name;
-    use crate::machine::model::{Carried, KObject};
+    use crate::machine::model::Carried;
     use crate::machine::{KError, KErrorKind};
     use std::rc::Rc;
 
@@ -129,13 +129,9 @@ pub fn body_action<'a>(
         },
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("name".to_string())))),
     };
-    let body_expr = match arg_object(ctx.args, "body") {
-        Some(KObject::KExpression(e)) => e.clone(),
-        _ => {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
-                "MODULE body must be a parenthesized expression".to_string(),
-            ))))
-        }
+    let body_expr = match require_kexpression(ctx.args, "MODULE", "body") {
+        Ok(e) => e,
+        Err(e) => return Action::Done(Err(e)),
     };
     let child_scope = ctx
         .scope

@@ -16,7 +16,7 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::values::Held;
 use crate::machine::model::types::KType;
 use crate::machine::model::{Carried, KObject};
-use crate::machine::{KError, NodeId};
+use crate::machine::{KError, KErrorKind, NodeId};
 
 /// Read a builtin argument's `KObject` from a `BodyCtx::args` `KObject::Record` by name. `None` if
 /// the args aren't a record or the named field is a type cell. Two lifetimes: the borrow (`'c`,
@@ -42,6 +42,23 @@ pub fn arg_held<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c Held<'a
     match args {
         KObject::Record(fields, _) => fields.get(name),
         _ => None,
+    }
+}
+
+/// Extract a cloned `KExpression` from arg `slot`, or the canonical parenthesized-slot
+/// `ShapeError` (`"<builtin> <slot> slot must be a parenthesized expression"`). The `Action`-side
+/// twin of [`ArgumentBundle::extract_kexpression_or_shape_error`](super::argument_bundle::ArgumentBundle::extract_kexpression_or_shape_error),
+/// owning that error text so every `KExpression`-slot builtin reports it identically.
+pub fn require_kexpression<'a>(
+    args: &KObject<'a>,
+    builtin: &str,
+    slot: &str,
+) -> Result<KExpression<'a>, KError> {
+    match arg_object(args, slot) {
+        Some(KObject::KExpression(e)) => Ok(e.clone()),
+        _ => Err(KError::new(KErrorKind::ShapeError(format!(
+            "{builtin} {slot} slot must be a parenthesized expression"
+        )))),
     }
 }
 
@@ -116,11 +133,11 @@ pub enum DepPlacement<'a> {
     OwnScope,
     /// The active frame's child (`add_dispatch_in_frame`) — FN-body leading statements.
     ActiveFrame,
-    /// A builtin-minted child scope (module/sig/recursive/using/try body), carried by reference. A
-    /// multi-statement body here fans out one sub-dispatch per top-level statement (`enter_body_block`).
+    /// A builtin-minted child scope (module/sig/recursive/using/try body), carried by reference. In
+    /// a `Combine` a multi-statement body fans out one sub-dispatch per top-level statement
+    /// (`enter_body_block`); in a `Catch` a single watched expr enters a fresh lexical block
+    /// (`enter_block`).
     InScope(&'a Scope<'a>),
-    /// An explicit lexical chain (TRY's per-statement arm chains).
-    WithChain(Rc<LexicalFrame>),
 }
 
 /// The cart a `Tail` runs in.
