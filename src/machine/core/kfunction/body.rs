@@ -46,7 +46,7 @@ pub enum ReturnContract<'a> {
         kind: &'static str,
     },
     /// A deferred-return FN whose per-call return type resolved to `ret`. Rides the FN-body
-    /// chain shape (`is_function` is true) so a tail-replaced deferred body assembles its
+    /// chain shape (a `Function`/`PerCall` contract) so a tail-replaced deferred body assembles its
     /// lexical chain like any FN — preserving TCO — while `check_declared_return` checks the
     /// lifted value against the resolved `ret` (labelled "per-call return type", `func` names
     /// the frame). `ret` is arena-borrowed like `Arm`'s, so the contract stays `Copy`.
@@ -66,8 +66,8 @@ pub enum ReturnContract<'a> {
 /// This is the single audited owner of the contract erasure, mirroring
 /// [`ScopePtr`](crate::machine::core::scope_ptr::ScopePtr): the lifetime is forgotten for
 /// storage and re-anchored at the Done read boundary, witnessed by the cart. The `Function` /
-/// `Arm` discriminant is readable without a re-anchor ([`Self::is_function`]) for the chain-shape
-/// decision that needs the tag but not the pointee.
+/// `Arm` discriminant is readable without a re-anchor for the chain-shape decision that needs the
+/// tag but not the pointee.
 #[derive(Clone, Copy)]
 pub struct ErasedContract {
     inner: ReturnContract<'static>,
@@ -101,15 +101,6 @@ impl ErasedContract {
         std::mem::transmute::<ReturnContract<'static>, ReturnContract<'a>>(self.inner)
     }
 
-    /// Whether this contract rides the FN-body chain shape — `Function` or `PerCall` (a deferred
-    /// FN body), vs an `Arm`. Reads the discriminant only — no pointer deref — so it needs no cart
-    /// witness.
-    pub fn is_function(self) -> bool {
-        matches!(
-            self.inner,
-            ReturnContract::Function(_) | ReturnContract::PerCall { .. }
-        )
-    }
 }
 
 pub enum BodyResult<'a> {
@@ -159,7 +150,7 @@ impl<'a> BodyResult<'a> {
     /// FN-body tail-replace carrying an explicit `contract` and `body_index` (see
     /// [`BodyResult::Tail`]). The `Function` form is the resolved-return call; the `PerCall` form
     /// is a deferred-return FN whose per-call type has been resolved. Both ride the FN-body chain
-    /// shape (`contract.is_function()`), so a deferred body tail-replaces like any FN and stays
+    /// shape (a `Function`/`PerCall` contract), so a deferred body tail-replaces like any FN and stays
     /// TCO-flat. `body_index` is `1` for a single-statement body (the lone statement sits above the
     /// `idx 0` params), or `N` when tail-replacing into the last of N statements.
     pub fn tail_with_frame_contract(

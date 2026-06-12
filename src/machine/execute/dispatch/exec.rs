@@ -69,12 +69,8 @@ pub(super) fn invoke<'run>(
 
     let outer = picked.captured_scope();
     let frame = ctx.acquire_tail_frame(outer);
-    let chain = ctx
-        .current_lexical_chain()
-        .expect("dispatch runs inside an active lexical chain");
     let exec_frame = ExecFrame {
         arena: frame.clone(),
-        chain,
     };
     // A deferred-return FN dispatched as a tail call inside an established contract chain skips
     // resolving its own (keep-first-discarded) return type — see `run_user_fn`.
@@ -151,9 +147,6 @@ pub(super) fn invoke<'run>(
             BodyResult::DeferTo(combine_id.expect("combine spawns"))
         }
         ExecOutcome::Errored(e) => BodyResult::Err(e),
-        ExecOutcome::Value(_) => {
-            unreachable!("run_user_fn yields Tail or DeferredExprTail, not a bare Value")
-        }
     };
     ctx.body_result_to_step(result, idx)
 }

@@ -3,9 +3,9 @@
 //!
 //! `exec` runs a body in its per-call frame and describes — in its *native* terms
 //! ([`KExpression`], [`Carried`]) — what should happen next, as an [`ExecOutcome`]: it failed, it
-//! produced a (still-unlifted) value, it tail-calls after some leading statements, or (a first-call
-//! deferred-`Expression` return) it resolves a return-type sub-dispatch before tail-replacing. It
-//! names *expressions to dispatch* — never a scheduler step, never the scheduler itself.
+//! tail-calls after some leading statements, or (a first-call deferred-`Expression` return) it
+//! resolves a return-type sub-dispatch before tail-replacing. It names *expressions to dispatch* —
+//! never a scheduler step, never the scheduler itself.
 //!
 //! The scheduler-aware shell that maps an [`ExecOutcome`] onto the scheduler is
 //! `execute::dispatch::exec::invoke`: it reuses the live dispatcher's resolution, turns the outcome
@@ -23,7 +23,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::{BindingIndex, CallArena, KError, LexicalFrame, Scope};
+use crate::machine::core::{BindingIndex, CallArena, KError};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, Record, ReturnType,
@@ -33,24 +33,14 @@ use crate::machine::model::values::{Carried, Held, KObject};
 use super::body::{body_statement_refs, Body};
 use super::KFunction;
 
-/// A body's execution context: the per-call `arena` it runs in, plus its lexical `chain`. Owned
-/// (both fields are `Rc`), so it carries no lifetime; the body re-projects its scope from the
-/// arena on demand. The arena rides forward via the `Rc` — no borrow is stored.
+/// A body's execution context: the per-call `arena` it runs in. Owned (an `Rc`), so it carries no
+/// lifetime; the body re-projects its scope from the arena on demand. The arena rides forward via
+/// the `Rc` — no borrow is stored.
 #[derive(Clone)]
 pub struct Frame {
     /// The per-call arena the body executes in: it backs allocations, and its child scope is the
     /// body's scope. Owned — supplied (and, for TCO, reset) by the scheduler.
     pub arena: Rc<CallArena>,
-    /// The body's lexical position — the parent chain for sub-expressions it hands back.
-    pub chain: Rc<LexicalFrame>,
-}
-
-impl Frame {
-    /// The scope where bindings land and effects accumulate. Re-projected from the owned arena,
-    /// bounded by `&self`: a transient borrow that never escapes.
-    pub fn scope(&self) -> &Scope<'_> {
-        self.arena.scope_bounded()
-    }
 }
 
 /// **exec → scheduler.** What running a body describes next, in `exec`'s native currency. Two
@@ -61,9 +51,6 @@ impl Frame {
 pub enum ExecOutcome<'ast, 'frame> {
     /// The body failed; propagate the error.
     Errored(KError),
-    /// The body produced its result — **still in the frame, unlifted.** The scheduler lifts it out
-    /// to `'run` at the done boundary; `exec` holds no lift handle and cannot.
-    Value(Carried<'frame>),
     /// Run the body as a flat sequence: dispatch each `leading` expression — the non-tail
     /// statements, whose results flow into the `Scope` as bindings and are otherwise discarded —
     /// then `tail` in the same frame, whose value is the body's result. All borrowed from the AST.
@@ -99,8 +86,7 @@ pub enum PerCallReturn<'frame> {
 /// The new `invoke` for a user-defined function: bind `args` into `ctx`'s scope (a frame/scope
 /// operation), then describe the body as an [`ExecOutcome`] — `Tail` of the non-tail statements +
 /// the last, or `DeferredExprTail` for a first-call deferred-`Expression` return. `ctx` is
-/// **borrowed** so the caller retains it
-/// (its `chain` positions the body's `leading` statements when the scheduler dispatches them); the
+/// **borrowed** so the caller retains it; the
 /// carrier lifetime of `func` is free — only read. `args` is the argument record from
 /// [`super::bind_by_name`] (a `Record<Carried>`, resolved values keyed by parameter name).
 ///

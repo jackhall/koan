@@ -82,10 +82,6 @@ impl<'run> OverloadParkTrack<'run> {
 }
 
 impl<'run> KeywordedState<'run> {
-    pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self { init, track: None }
-    }
-
     pub(in crate::machine::execute) fn with_eager_subs(
         init: Initialized,
         track: EagerSubsTrack<'run>,

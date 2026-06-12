@@ -18,8 +18,6 @@ use return_type::{classify_return_type, AdmissibleVerdict};
 use signature::ParamListOutcome;
 
 pub(crate) use signature::binder_bucket;
-#[cfg(test)]
-pub(crate) use signature::binder_name;
 
 /// Build a map of `param_name → declared-KType` for the FUNCTOR deferred-arm head
 /// inspector. Skips slots that don't elaborate eagerly; the Combine path's

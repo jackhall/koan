@@ -324,19 +324,6 @@ pub(in crate::machine::execute) struct EagerSubsTrack<'run> {
     pub(in crate::machine::execute) picked: Option<&'run KFunction<'run>>,
 }
 
-impl<'run> EagerSubsTrack<'run> {
-    pub(in crate::machine::execute) fn keyworded(
-        working_expr: KExpression<'run>,
-        subs: Vec<(usize, NodeId)>,
-    ) -> Self {
-        Self {
-            working_expr,
-            subs,
-            picked: None,
-        }
-    }
-}
-
 /// One variant per [`DispatchShape`], plus the pre-classification
 /// `Initialized` birth state. `Keyworded` and `FunctionValueCall` are
 /// boxed because each carries multiple independent `Option<Track>`

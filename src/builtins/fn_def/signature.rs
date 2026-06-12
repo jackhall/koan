@@ -175,18 +175,6 @@ pub(crate) fn parse_fn_param_list<'a>(
     ParamListOutcome::Done(elements)
 }
 
-/// Dispatch-time placeholder extractor for FN. Returns `None` on shape mismatch — the
-/// body's full parse surfaces the real `ShapeError`.
-pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
-    let signature_expr = signature_expr_part(expr)?;
-    for part in &signature_expr.parts {
-        if let ExpressionPart::Keyword(s) = &part.value {
-            return Some(s.clone());
-        }
-    }
-    None
-}
-
 /// Dispatch-time bucket-key extractor for FN / FUNCTOR. The key must match what a
 /// future call would compute via `KExpression::untyped_key`: each Keyword maps to
 /// `UntypedElement::Keyword`, and each `<name> :<Type>` pair collapses to one

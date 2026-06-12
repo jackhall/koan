@@ -775,7 +775,11 @@ fn keyworded_parked_carrier_expr_reads_state() {
         Initialized {
             pre_subs: Vec::new(),
         },
-        EagerSubsTrack::keyworded(carrier_expr(), Vec::new()),
+        EagerSubsTrack {
+            working_expr: carrier_expr(),
+            subs: Vec::new(),
+            picked: None,
+        },
     )));
     assert_eq!(
         with_eager_subs
@@ -817,9 +821,12 @@ fn keyworded_parked_carrier_expr_reads_state() {
     // terminalizes without installing a track — never park, so the
     // accessor surfaces `None` and the drain-end guard falls back to
     // the slot's `NodeWork::Dispatch.expr` field.
-    let untracked = DispatchState::Keyworded(Box::new(KeywordedState::from_init(Initialized {
-        pre_subs: Vec::new(),
-    })));
+    let untracked = DispatchState::Keyworded(Box::new(KeywordedState {
+        init: Initialized {
+            pre_subs: Vec::new(),
+        },
+        track: None,
+    }));
     assert!(
         untracked.parked_carrier_expr().is_none(),
         "Keyworded with no installed track must surface None (fall back to NodeWork expr)",

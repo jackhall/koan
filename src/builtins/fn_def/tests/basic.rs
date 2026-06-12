@@ -8,15 +8,6 @@ use crate::machine::RuntimeArena;
 
 use super::capture_program_output;
 
-/// FN's name slot lives *inside* the signature Expression at `parts[1]`, not at
-/// `parts[1]` directly; `binder_name` must pull the first Keyword out of the signature.
-#[test]
-fn binder_name_extracts_first_keyword_of_signature() {
-    let expr = parse_one("FN (DOUBLE x :Number) -> Number = (x)");
-    let name = crate::builtins::fn_def::binder_name(&expr);
-    assert_eq!(name.as_deref(), Some("DOUBLE"));
-}
-
 #[test]
 fn fn_registers_user_function_under_keyword_signature() {
     let arena = RuntimeArena::new();
