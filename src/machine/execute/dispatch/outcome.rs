@@ -15,6 +15,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::{NodeId, TraceFrame};
 
 use super::super::nodes::{DispatchCombineFinish, NodeOutput};
+use super::DispatchState;
 
 /// What a decided dispatch slot wants the harness to do. Each variant is a pure data
 /// description of a scheduler effect — no `&mut Scheduler` is captured.
@@ -31,6 +32,15 @@ pub(in crate::machine::execute) enum DispatchOutcome<'run> {
         deps: Vec<DispatchDep<'run>>,
         dep_error_frame: Option<TraceFrame>,
         finish: DispatchCombineFinish<'run>,
+    },
+    /// Park the slot on `producers` (pre-existing sibling producers it merely waits on, via
+    /// `Notify` edges — never owned) and stash `state` so the slot re-decides on resume. The
+    /// harness adds the park edges and replaces the slot with the parked `Dispatch`. The
+    /// producers are the *to-wait* set the decide phase already filtered (cycle-free, deduped);
+    /// the harness adds edges only — the cycle check is a decide-phase read.
+    ParkSelf {
+        producers: Vec<NodeId>,
+        state: DispatchState<'run>,
     },
 }
 

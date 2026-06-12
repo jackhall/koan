@@ -11,9 +11,10 @@ use crate::machine::{
 };
 
 use super::super::nodes::{NodeOutput, NodeStep};
+use super::outcome::DispatchOutcome;
 use super::{
-    bare_name_of, propagate_dep_error, DispatchCtx, DispatchState, Initialized, PartWalkResult,
-    PendingSub,
+    bare_name_of, harness, propagate_dep_error, DispatchCtx, DispatchState, Initialized,
+    PartWalkResult, PendingSub,
 };
 
 pub(in crate::machine::execute) struct KeywordedState<'run> {
@@ -289,14 +290,13 @@ impl<'run> KeywordedState<'run> {
                 reason: "no matching function".to_string(),
             })));
         }
-        for p in &to_wait {
-            ctx.add_park_edge(*p, NodeId(idx));
-        }
         let track = OverloadParkTrack::new(expr);
         let init = Initialized { pre_subs };
-        ctx.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
-            Self::with_overload_park(init, track),
-        )))
+        let outcome = DispatchOutcome::ParkSelf {
+            producers: to_wait,
+            state: DispatchState::Keyworded(Box::new(Self::with_overload_park(init, track))),
+        };
+        harness::apply_dispatch_outcome(ctx, outcome, idx)
     }
 
     /// `ResolveOutcome::Deferred` arm: stage every eager part and park
@@ -325,14 +325,13 @@ impl<'run> KeywordedState<'run> {
         pre_subs: Vec<(usize, NodeId)>,
         idx: usize,
     ) -> NodeStep<'run> {
-        for p in &producers {
-            ctx.add_park_edge(*p, NodeId(idx));
-        }
         let track = BareNameParkTrack::new(working_expr);
         let init = Initialized { pre_subs };
-        ctx.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
-            Self::with_bare_name_park(init, track),
-        )))
+        let outcome = DispatchOutcome::ParkSelf {
+            producers,
+            state: DispatchState::Keyworded(Box::new(Self::with_bare_name_park(init, track))),
+        };
+        harness::apply_dispatch_outcome(ctx, outcome, idx)
     }
 
     fn install_eager_subs_track(

@@ -200,14 +200,15 @@ pub(super) fn bare_type_leaf<'run>(
                 // re-resolve directly — the memoized bridge now admits.
                 return bare_type_leaf(ctx, t, idx);
             }
-            ctx.add_park_edge(producer, NodeId(idx));
             let track = BareTypeParkTrack {
                 leaf: t.clone(),
                 producer,
             };
-            ctx.replace_with_parked_dispatch(DispatchState::BareTypeLeaf(BareTypeState::with_park(
-                track,
-            )))
+            let outcome = DispatchOutcome::ParkSelf {
+                producers: vec![producer],
+                state: DispatchState::BareTypeLeaf(BareTypeState::with_park(track)),
+            };
+            harness::apply_dispatch_outcome(ctx, outcome, idx)
         }
     }
 }
@@ -344,14 +345,18 @@ pub(super) fn type_call<'run>(
         .resolve_with_chain(head_t.as_str(), chain)
     {
         if !ctx.is_result_ready(producer) {
-            ctx.add_park_edge(producer, NodeId(idx));
             let init = Initialized {
                 pre_subs: Vec::new(),
             };
             let head_placeholder = TypeCallHeadPlaceholder { expr, producer };
-            return ctx.replace_with_parked_dispatch(DispatchState::TypeCall(Box::new(
-                CtorState::with_head_placeholder(init, head_placeholder),
-            )));
+            let outcome = DispatchOutcome::ParkSelf {
+                producers: vec![producer],
+                state: DispatchState::TypeCall(Box::new(CtorState::with_head_placeholder(
+                    init,
+                    head_placeholder,
+                ))),
+            };
+            return harness::apply_dispatch_outcome(ctx, outcome, idx);
         }
     }
     // Fresh `types[name]` lookup at construction time. A sealed nominal type's identity is

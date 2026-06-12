@@ -14,6 +14,9 @@ use super::super::nodes::{NodeStep, NodeWork};
 use super::outcome::{DispatchDep, DispatchOutcome};
 use super::DispatchCtx;
 
+// The park edges a `ParkSelf` adds are `Notify` (sibling producers the slot waits on), never
+// owned — `add_park_edge` is the right primitive.
+
 /// Interpret a handler's [`DispatchOutcome`] into the scheduler effect it names and return
 /// the slot's [`NodeStep`]. Grows one arm per migrated handler.
 pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
@@ -58,6 +61,12 @@ pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
                 block_entry: None,
                 body_index: 0,
             }
+        }
+        DispatchOutcome::ParkSelf { producers, state } => {
+            for producer in producers {
+                ctx.add_park_edge(producer, NodeId(idx));
+            }
+            ctx.replace_with_parked_dispatch(state)
         }
     }
 }

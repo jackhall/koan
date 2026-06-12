@@ -14,7 +14,8 @@ use crate::machine::{KError, KErrorKind, NodeId, Resolution};
 
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::apply_callable::{apply_callable, ResolvedCallable};
-use super::{DispatchCtx, DispatchState, Initialized};
+use super::outcome::DispatchOutcome;
+use super::{harness, DispatchCtx, DispatchState, Initialized};
 
 /// Parked `FunctionValueCall` state. Eager subs park as a [`NodeWork::DispatchCombine`]
 /// (`apply_callable::install_eager_subs_track`), so the only thing a `FnValueState` carries is a
@@ -116,13 +117,16 @@ impl<'run> FnValueState<'run> {
         expr: KExpression<'run>,
         idx: usize,
     ) -> NodeStep<'run> {
-        ctx.add_park_edge(producer, NodeId(idx));
         let track = FnValueHeadPlaceholderTrack::new(expr, producer);
         let init = Initialized {
             pre_subs: Vec::new(),
         };
-        ctx.replace_with_parked_dispatch(DispatchState::FunctionValueCall(Box::new(
-            Self::with_head_placeholder(init, track),
-        )))
+        let outcome = DispatchOutcome::ParkSelf {
+            producers: vec![producer],
+            state: DispatchState::FunctionValueCall(Box::new(Self::with_head_placeholder(
+                init, track,
+            ))),
+        };
+        harness::apply_dispatch_outcome(ctx, outcome, idx)
     }
 }
