@@ -59,11 +59,13 @@ impl Frame {
 pub type DepResult<'frame> = Carried<'frame>;
 
 /// The continuation of a suspended body: re-entered with the resolved join values, yielding the
-/// body's terminal [`ExecOutcome`] (a `Value` — e.g. after a deferred-return type check — or an
-/// `Errored`). In the reuse path the scheduler-side lowering wraps this into a `CombineFinish`, so
-/// it mirrors that shape: dep values in, terminal outcome out (no frame re-read).
-pub type Resume<'ast, 'frame> =
-    Box<dyn FnOnce(&[DepResult<'frame>]) -> ExecOutcome<'ast, 'frame> + 'frame>;
+/// checked body value **paired with the resolved per-call return type** (or an error). The pairing
+/// lets the scheduler-side `CombineFinish` stamp the value to that type — the deferred-path twin of
+/// the resolved-return stamp at the lift boundary. Dep values in, `(value, return type)` out (no
+/// frame re-read).
+pub type Resume<'frame> = Box<
+    dyn FnOnce(&[DepResult<'frame>]) -> Result<(Carried<'frame>, KType<'frame>), KError> + 'frame,
+>;
 
 /// **exec → scheduler.** What running a body describes next, in `exec`'s native currency. Two
 /// lifetimes, because the AST and the produced value genuinely differ: the dispatchable
@@ -88,7 +90,7 @@ pub enum ExecOutcome<'ast, 'frame> {
     /// `resume` checks the body value against the per-call return type).
     Suspend {
         join: Vec<&'ast KExpression<'ast>>,
-        resume: Resume<'ast, 'frame>,
+        resume: Resume<'frame>,
     },
 }
 
@@ -174,7 +176,7 @@ pub fn run_user_fn<'ast, 'frame>(
             let join = body_statement_refs(body_expr);
             let body_terminal_idx = join.len() - 1;
             let summary = func.summarize();
-            let resume: Resume<'ast, 'frame> = Box::new(move |results: &[DepResult<'frame>]| {
+            let resume: Resume<'frame> = Box::new(move |results: &[DepResult<'frame>]| {
                 check_deferred_return(results[body_terminal_idx], &return_type, &summary)
             });
             ExecOutcome::Suspend { join, resume }
@@ -189,11 +191,11 @@ pub fn run_user_fn<'ast, 'frame>(
             let type_idx = join.len();
             join.push(return_expr);
             let summary = func.summarize();
-            let resume: Resume<'ast, 'frame> = Box::new(move |results: &[DepResult<'frame>]| {
+            let resume: Resume<'frame> = Box::new(move |results: &[DepResult<'frame>]| {
                 let per_call_ret = match results[type_idx] {
                     Carried::Type(kind) => kind,
                     Carried::Object(other) => {
-                        return ExecOutcome::Errored(KError::new(KErrorKind::ShapeError(format!(
+                        return Err(KError::new(KErrorKind::ShapeError(format!(
                             "FN deferred return-type expression produced a non-type {} value",
                             other.ktype().name(),
                         ))));
@@ -206,36 +208,33 @@ pub fn run_user_fn<'ast, 'frame>(
     }
 }
 
-/// Check a deferred-return body value against the resolved per-call return type, yielding the
-/// (still-unframed) value or a `<return>` type-mismatch. Shared by both deferred-return arms. No
-/// return-type stamp yet: a passing value already satisfies the declared type (at worst a subtype),
-/// so the coarsening re-tag is a later increment.
-fn check_deferred_return<'ast, 'frame>(
+/// Check a deferred-return body value against the resolved per-call return type. On a pass, hand
+/// back the value paired with that type so the scheduler-side finish can stamp it (the coarsening
+/// re-tag); on a mismatch, a `<return>` `TypeMismatch`. Shared by both deferred-return arms.
+fn check_deferred_return<'frame>(
     body_value: Carried<'frame>,
     per_call_ret: &KType<'frame>,
     summary: &str,
-) -> ExecOutcome<'ast, 'frame> {
+) -> Result<(Carried<'frame>, KType<'frame>), KError> {
     let accepted = match body_value {
         Carried::Object(object) => per_call_ret.matches_value(object),
         Carried::Type(kind) => per_call_ret.matches_type(kind),
     };
     if accepted {
-        ExecOutcome::Value(body_value)
+        Ok((body_value, per_call_ret.clone()))
     } else {
         let got = match body_value {
             Carried::Object(object) => object.ktype().name(),
             Carried::Type(kind) => kind.name(),
         };
-        ExecOutcome::Errored(
-            KError::new(KErrorKind::TypeMismatch {
-                arg: "<return>".to_string(),
-                expected: format!("{} (per-call return type)", per_call_ret.name()),
-                got,
-            })
-            .with_frame(crate::machine::Frame::bare(
-                summary.to_string(),
-                summary.to_string(),
-            )),
-        )
+        Err(KError::new(KErrorKind::TypeMismatch {
+            arg: "<return>".to_string(),
+            expected: format!("{} (per-call return type)", per_call_ret.name()),
+            got,
+        })
+        .with_frame(crate::machine::Frame::bare(
+            summary.to_string(),
+            summary.to_string(),
+        )))
     }
 }

@@ -150,6 +150,36 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     );
 }
 
+/// The deferred-return stamp coarsens a parameterized carrier. A body producing a
+/// `List<Number>` whose per-call return type resolves to the transparent carrier
+/// `(LIST OF Any)` lifts with the *declared* element type `Any` — the deferred-path twin
+/// of the resolved-return coarsening at the lift boundary. Without the stamp the body's
+/// incidental `Number` element type would leak through.
+#[test]
+fn functor_deferred_return_coarsens_list_carrier() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "SIG Seq = ((LET Carrier = :(LIST OF Any)) (VAL items :Carrier))\n\
+         MODULE Ints = ((LET Carrier = :(LIST OF Any)) (LET items = [1 2 3]))\n\
+         LET IntsView = (Ints :! Seq)",
+    );
+    run(scope, "FN (ITEMS Er :Seq) -> Er.Carrier = (Er.items)");
+    let result = run_one(scope, parse_one("ITEMS IntsView"));
+    match result {
+        KObject::List(_, elem) => assert!(
+            matches!(elem.as_ref(), KType::Any),
+            "deferred return stamped to (LIST OF Any) must coarsen the element type to Any, got {:?}",
+            elem,
+        ),
+        other => panic!(
+            "expected a List from (ITEMS IntsView), got {:?}",
+            other.ktype(),
+        ),
+    }
+}
+
 /// Wrong-typed body for a per-call return type — Combine-finish runs the
 /// slot check against the per-call elaboration and rejects with a diagnostic
 /// mentioning "per-call return type", pinning that the rejection path is the

@@ -17,6 +17,7 @@ use crate::machine::core::kfunction::{
 };
 use crate::machine::core::{assemble_body_chain, CallArena, LexicalFrame};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::types::KType;
 use crate::machine::model::Carried;
 use crate::machine::{KError, KErrorKind, NodeId};
 
@@ -93,10 +94,9 @@ pub(super) fn invoke<'run>(
             // finish runs `resume` (the return-type check) over their resolved values. The slot
             // defers to the Combine.
             let body_ids = dispatch_body_statements(ctx, &frame, &exec_frame.chain, &join);
-            let finish: CombineFinish<'run> = Box::new(move |_s, results| match resume(results) {
-                ExecOutcome::Value(c) => BodyResult::Value(c),
-                ExecOutcome::Errored(e) => BodyResult::Err(e),
-                _ => unreachable!("a deferred-return resume yields Value or Errored"),
+            let finish: CombineFinish<'run> = Box::new(move |s, results| match resume(results) {
+                Ok((value, ret_ty)) => BodyResult::Value(stamp_deferred_return(s, value, &ret_ty)),
+                Err(e) => BodyResult::Err(e),
             });
             let mut pending = Some((body_ids, finish));
             let mut combine_id = None;
@@ -112,6 +112,27 @@ pub(super) fn invoke<'run>(
         }
     };
     ctx.body_result_to_step(result, idx)
+}
+
+/// Re-tag a deferred return's body value to its resolved per-call return type and re-allocate the
+/// coarsened object in the finish's scope arena — the deferred-path twin of the resolved-return
+/// stamp in [`super::super::scheduler`]'s `compute_done_output`. The combine ran in-frame, so this
+/// value is lifted into the surviving arena at the combine's Done boundary (the lift preserves the
+/// re-tagged `ktype`). `deep_clone` is cheap (Rc-shares payloads, preserves anchors); the type
+/// channel carries its own identity, so a `Carried::Type` passes through unchanged — mirroring that
+/// boundary's `Carried::Type` arm.
+fn stamp_deferred_return<'run>(
+    s: &mut dyn SchedulerHandle<'run, '_>,
+    value: Carried<'run>,
+    ret_ty: &KType<'run>,
+) -> Carried<'run> {
+    match value {
+        Carried::Object(object) => {
+            let stamped = object.deep_clone().stamp_type(ret_ty);
+            Carried::Object(s.current_scope().arena.alloc_object(stamped))
+        }
+        Carried::Type(_) => value,
+    }
 }
 
 /// Extract the call's resolved value arguments from `working_expr`'s parts, in order. Returns
