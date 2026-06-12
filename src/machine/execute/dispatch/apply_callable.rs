@@ -215,7 +215,8 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
         EagerSubsInstall::AllInline(working_expr) => {
             // All eager subs resolved inline → run the call (builtins direct, user-fns through the
             // exec executor).
-            Ok(super::exec::invoke(ctx, picked, working_expr, idx))
+            let body = super::exec::invoke(ctx, picked, working_expr);
+            Ok(ctx.body_result_to_step(body, idx))
         }
         EagerSubsInstall::Parked(track) => {
             // The function arm is non-binder; `pre_subs` is always empty.

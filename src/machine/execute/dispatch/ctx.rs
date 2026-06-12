@@ -305,7 +305,10 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         match picked {
             None => KeywordedState::finish(self, working_expr, idx),
             // The parked subs are now all spliced, so `working_expr` is fully resolved — run the call.
-            Some(f) => Ok(super::exec::invoke(self, f, working_expr, idx)),
+            Some(f) => {
+                let body = super::exec::invoke(self, f, working_expr);
+                Ok(self.body_result_to_step(body, idx))
+            }
         }
     }
 }

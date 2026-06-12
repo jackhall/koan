@@ -6,7 +6,6 @@
 //! `ctx.rs` (the dispatcher facade) so the dispatcher core stays thin; pure body semantics live one
 //! layer down in [`crate::machine::core::kfunction::exec`].
 
-use super::super::nodes::{NodeOutput, NodeStep};
 use super::DispatchCtx;
 use crate::machine::core::kfunction::bind_by_name::CallArgs;
 use crate::machine::core::kfunction::body::ReturnContract;
@@ -31,24 +30,23 @@ pub(super) fn invoke<'run>(
     ctx: &mut DispatchCtx<'run, '_>,
     picked: &'run KFunction<'run>,
     working_expr: KExpression<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> BodyResult<'run> {
     // An action-harness builtin: build a read-only `BodyCtx`, get the `Action`, and lower it
     // through the shared `run_action` interpreter.
     if let Body::Builtin(f) = &picked.body {
         let f = *f;
         let args = match picked.bind(working_expr) {
             Ok(future) => future.args,
-            Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+            Err(e) => return BodyResult::Err(e),
         };
-        return run_action_builtin(ctx, f, args, idx);
+        return run_action_builtin(ctx, f, args);
     }
 
     // Validate each argument against its declared parameter type before the (type-trusting)
     // `bind_by_name`: a uniquely-picked call is admitted shape-only by dispatch, so a non-satisfying
     // typed argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here.
     if let Err(e) = picked.validate_call_args(&working_expr) {
-        return NodeStep::Done(NodeOutput::Err(e));
+        return BodyResult::Err(e);
     }
 
     let args = match extract_carried_args(ctx, &working_expr) {
@@ -56,15 +54,15 @@ pub(super) fn invoke<'run>(
         // Unreachable by construction (the bind sites resolve value parts to `Future`/literal
         // first); surface a diagnostic rather than silently mis-bind if that ever breaks.
         None => {
-            return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::User(
+            return BodyResult::Err(KError::new(KErrorKind::User(
                 "exec: a call argument was not a resolved value at the bind site".to_string(),
-            ))))
+            )))
         }
     };
 
     let bound = match picked.bind_by_name(CallArgs::Positional(args)) {
         Ok(record) => record,
-        Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+        Err(e) => return BodyResult::Err(e),
     };
 
     let outer = picked.captured_scope();
@@ -148,7 +146,7 @@ pub(super) fn invoke<'run>(
         }
         ExecOutcome::Errored(e) => BodyResult::Err(e),
     };
-    ctx.body_result_to_step(result, idx)
+    result
 }
 
 /// Lower an action-harness builtin: convert its resolved `args` record into the `KObject::Record`
@@ -158,8 +156,7 @@ fn run_action_builtin<'run>(
     ctx: &mut DispatchCtx<'run, '_>,
     f: crate::machine::core::kfunction::ActionFn,
     args: crate::machine::model::types::Record<crate::machine::model::values::ArgValue<'run>>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> BodyResult<'run> {
     use crate::machine::core::kfunction::action::BodyCtx;
     use crate::machine::model::values::{ArgValue, Held};
     use crate::machine::model::KObject;
@@ -183,8 +180,7 @@ fn run_action_builtin<'run>(
         };
         f(&body_ctx)
     };
-    let result = super::super::harness::run_action(ctx, action);
-    ctx.body_result_to_step(result, idx)
+    super::super::harness::run_action(ctx, action)
 }
 
 /// Extract the call's resolved value arguments from `working_expr`'s parts, in order. Returns

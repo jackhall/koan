@@ -220,7 +220,8 @@ impl<'run> KeywordedState<'run> {
         }
         if staged_subs.is_empty() {
             // The synchronous (no-eager-subs) call — the common path for builtins and simple calls.
-            return Ok(super::exec::invoke(ctx, resolved.function, new_expr, idx));
+            let body = super::exec::invoke(ctx, resolved.function, new_expr);
+            return Ok(ctx.body_result_to_step(body, idx));
         }
         let _ = resolved; // discard the speculative pick.
         Self::install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs, idx)
@@ -258,7 +259,8 @@ impl<'run> KeywordedState<'run> {
         {
             // The post-eager-subs re-dispatch lands resolved calls here.
             ResolveOutcome::Resolved(r) => {
-                Ok(super::exec::invoke(ctx, r.function, working_expr, idx))
+                let body = super::exec::invoke(ctx, r.function, working_expr);
+                Ok(ctx.body_result_to_step(body, idx))
             }
             ResolveOutcome::Ambiguous(n) => Err(KError::new(KErrorKind::AmbiguousDispatch {
                 expr: working_expr.summarize(),
