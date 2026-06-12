@@ -15,7 +15,9 @@ use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, SchedulerHandle, Scope,
 };
 
-use super::{arg, err, kw, register_builtin_with_binder, sig};
+use super::{arg, err, kw, sig};
+#[cfg(not(feature = "action-harness"))]
+use super::register_builtin_with_binder;
 use crate::machine::core::kfunction::argument_bundle::extract_bare_type_name;
 
 pub fn body<'a, 's>(
@@ -107,19 +109,110 @@ pub fn body<'a, 's>(
     BodyResult::DeferTo(combine_id)
 }
 
+/// `Action`-harness twin of [`body`]: mints the child scope, dispatches the body block against it
+/// (an `InScope` Combine dep), and the finish installs the `KType::Module` identity into the parent
+/// scope.
+#[cfg(feature = "action-harness")]
+pub fn body_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_object, arg_type, Action, Cont, Dep, DepPlacement};
+    use crate::machine::core::kfunction::argument_bundle::bare_type_name;
+    use crate::machine::model::{Carried, KObject};
+    use crate::machine::{KError, KErrorKind};
+    use std::rc::Rc;
+
+    let name = match arg_type(ctx.args, "name") {
+        Some(t) => match bare_type_name(t, "name", "MODULE") {
+            Ok(n) => n,
+            Err(e) => return Action::Done(Err(e)),
+        },
+        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("name".to_string())))),
+    };
+    let body_expr = match arg_object(ctx.args, "body") {
+        Some(KObject::KExpression(e)) => e.clone(),
+        _ => {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+                "MODULE body must be a parenthesized expression".to_string(),
+            ))))
+        }
+    };
+    let child_scope = ctx
+        .scope
+        .arena
+        .alloc_scope(Scope::child_under_module(ctx.scope, name.clone()));
+    let active_frame = ctx.frame.map(Rc::clone);
+    let bind_index = ctx
+        .chain
+        .as_ref()
+        .map(|chain| BindingIndex::value(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
+    let name_for_finish = name;
+    let finish: Cont<'a> = Box::new(move |fctx, _results| {
+        // Idempotent-finalize guard (mirrors the `BuiltinFn` body): re-bound name short-circuits.
+        if let Some(kt) = fctx.scope.bindings().lookup_type(&name_for_finish, None) {
+            return Action::Done(Ok(Carried::Type(fctx.scope.arena.alloc_ktype(kt.clone()))));
+        }
+        let module: &'a Module<'a> = fctx
+            .scope
+            .arena
+            .alloc_module(Module::new(name_for_finish.clone(), child_scope));
+        // Mirror pure type-side bindings into the module's `type_members`.
+        {
+            let bindings = child_scope.bindings();
+            let data_names: std::collections::HashSet<String> =
+                bindings.iter_data().into_iter().map(|(n, _)| n).collect();
+            let mut tm = module.type_members.borrow_mut();
+            for (member, kt) in bindings.iter_types() {
+                if data_names.contains(&member) {
+                    continue;
+                }
+                tm.insert(member, kt.clone());
+            }
+        }
+        let identity = KType::Module {
+            module,
+            frame: active_frame.clone(),
+        };
+        match fctx
+            .scope
+            .register_type_upsert(name_for_finish.clone(), identity, bind_index)
+        {
+            Ok(kt_ref) => Action::Done(Ok(Carried::Type(fctx.scope.arena.alloc_ktype(kt_ref.clone())))),
+            Err(e) => Action::Done(Err(e.with_frame(Frame::bare(
+                "<module>",
+                format!("MODULE {} body", name_for_finish),
+            )))),
+        }
+    });
+    Action::Combine {
+        deps: vec![Dep::Dispatch {
+            expr: body_expr,
+            placement: DepPlacement::InScope(child_scope),
+        }],
+        finish,
+    }
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
+    let signature = sig(
+        KType::OfKind(KKind::Module),
+        vec![
+            kw("MODULE"),
+            arg("name", KType::OfKind(KKind::Proper)),
+            kw("="),
+            arg("body", KType::KExpression),
+        ],
+    );
+    #[cfg(feature = "action-harness")]
+    crate::builtins::register_action_builtin_full(
+        scope, "MODULE", signature, body_action, Some(super::type_part_binder_name), None, false,
+    );
+    #[cfg(not(feature = "action-harness"))]
     register_builtin_with_binder(
         scope,
         "MODULE",
-        sig(
-            KType::OfKind(KKind::Module),
-            vec![
-                kw("MODULE"),
-                arg("name", KType::OfKind(KKind::Proper)),
-                kw("="),
-                arg("body", KType::KExpression),
-            ],
-        ),
+        signature,
         body,
         Some(super::type_part_binder_name),
     );

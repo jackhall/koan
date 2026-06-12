@@ -147,43 +147,50 @@ pub(crate) fn extract_ktype<'a>(bundle: &mut ArgumentBundle<'a>, name: &str) -> 
 /// Resolve a type-name slot to its bare type name. A bare-leaf / wildcard / nominal type
 /// renders directly; structural / parameterized shapes are rejected as `ShapeError`.
 /// `surface` is the keyword (`"STRUCT"`, `"UNION"`, …) embedded in the message.
+/// The bare-name check on a resolved `KType` (shared by [`extract_bare_type_name`] and the
+/// `Action`-harness binders that read their name from a `KObject::Record` type cell): a simple /
+/// nominal leaf yields its `name()`; a structural type (List, Record, FN, …) is a shape error.
+pub(crate) fn bare_type_name<'a>(t: &KType<'a>, name: &str, surface: &str) -> Result<String, KError> {
+    match t {
+        KType::Number
+        | KType::Str
+        | KType::Bool
+        | KType::Null
+        | KType::Identifier
+        | KType::KExpression
+        | KType::SigiledTypeExpr
+        | KType::RecordType
+        | KType::OfKind(_)
+        | KType::Unresolved(_)
+        | KType::Any
+        | KType::SetRef { .. }
+        | KType::Signature { .. }
+        | KType::Module { .. }
+        | KType::AbstractType { .. } => Ok(t.name()),
+        KType::List(_)
+        | KType::Dict(_, _)
+        | KType::Record(_)
+        | KType::KFunction { .. }
+        | KType::KFunctor { .. }
+        | KType::DeferredReturn(_)
+        | KType::SetLocal(_)
+        | KType::Variant { .. }
+        | KType::RecursiveRef(_)
+        | KType::RecursiveGroup(_)
+        | KType::ConstructorApply { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
+            "{surface} {name} must be a bare type name, got `{}`",
+            t.render(),
+        )))),
+    }
+}
+
 pub(crate) fn extract_bare_type_name<'a>(
     bundle: &ArgumentBundle<'a>,
     name: &str,
     surface: &str,
 ) -> Result<String, KError> {
     match bundle.get_type(name) {
-        Some(t) => match t {
-            KType::Number
-            | KType::Str
-            | KType::Bool
-            | KType::Null
-            | KType::Identifier
-            | KType::KExpression
-            | KType::SigiledTypeExpr
-            | KType::RecordType
-            | KType::OfKind(_)
-            | KType::Unresolved(_)
-            | KType::Any
-            | KType::SetRef { .. }
-            | KType::Signature { .. }
-            | KType::Module { .. }
-            | KType::AbstractType { .. } => Ok(t.name()),
-            KType::List(_)
-            | KType::Dict(_, _)
-            | KType::Record(_)
-            | KType::KFunction { .. }
-            | KType::KFunctor { .. }
-            | KType::DeferredReturn(_)
-            | KType::SetLocal(_)
-            | KType::Variant { .. }
-            | KType::RecursiveRef(_)
-            | KType::RecursiveGroup(_)
-            | KType::ConstructorApply { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
-                "{surface} {name} must be a bare type name, got `{}`",
-                t.render(),
-            )))),
-        },
+        Some(t) => bare_type_name(t, name, surface),
         None => match bundle.args.get(name) {
             Some(_) => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: name.to_string(),

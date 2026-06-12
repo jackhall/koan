@@ -36,6 +36,15 @@ pub fn arg_type<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c KType<'
     }
 }
 
+/// Read a builtin argument's raw cell ([`Held::Object`] / [`Held::Type`]) from `BodyCtx::args` by
+/// name — for builtins that branch on the value vs type channel (e.g. LET's name/value slots).
+pub fn arg_held<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c Held<'a>> {
+    match args {
+        KObject::Record(fields, _) => fields.get(name),
+        _ => None,
+    }
+}
+
 /// A builtin body: `fn(&BodyCtx) -> Action`. Replaces
 /// [`BuiltinFn`](super::body::BuiltinFn)'s `fn(&mut SchedulerHandle, ArgumentBundle) -> BodyResult`.
 /// The builtin mutates `BodyCtx.scope` directly (binding install is a scope write, not a Action

@@ -8,7 +8,7 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::{Action, Dep, DepPlacement, FinishCtx, FramePlacement};
-use crate::machine::core::kfunction::{BodyResult, CatchFinish, SchedulerHandle};
+use crate::machine::core::kfunction::{BodyResult, CatchFinish, CombineFinish, SchedulerHandle};
 use crate::machine::core::CallArena;
 use crate::machine::NodeId;
 
@@ -59,8 +59,32 @@ pub fn run_action<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, action: Action<'a
             }
         }
 
-        Action::Combine { .. } => {
-            todo!("run_action: Action::Combine (dispatch deps, add_combine_in_frame, finish→run_action)")
+        Action::Combine { deps, finish } => {
+            // `Dispatch` deps → owned sub-slots (an `InScope` body fans out one per statement via
+            // `enter_body_block`); `Existing` deps → park-producers the combine reads but doesn't own.
+            let mut owned = Vec::new();
+            let mut park = Vec::new();
+            for dep in deps {
+                match dep {
+                    Dep::Existing(id) => park.push(id),
+                    Dep::Dispatch { expr, placement } => match placement {
+                        DepPlacement::InScope(scope) => owned.extend(h.enter_body_block(scope, expr)),
+                        DepPlacement::OwnScope => owned.push(h.add_dispatch_here(expr)),
+                        DepPlacement::ActiveFrame => owned.push(h.add_dispatch_in_frame(expr)),
+                        DepPlacement::WithChain(_) => {
+                            todo!("Combine dep with DepPlacement::WithChain not yet implemented")
+                        }
+                    },
+                }
+            }
+            let wrapped: CombineFinish<'a> = Box::new(move |sched, results| {
+                let fctx = FinishCtx {
+                    scope: sched.current_scope(),
+                };
+                let next = finish(&fctx, results);
+                run_action(sched, next)
+            });
+            BodyResult::DeferTo(h.add_combine_here(owned, park, wrapped))
         }
 
         Action::Catch { watched, finish } => {
