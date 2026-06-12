@@ -431,16 +431,20 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
             debug_assert!(init.pre_subs.is_empty());
             Ok(head_deferred::initial_type(ctx, expr, idx))
         }
-        DispatchShape::NonCallableHead => Err(KError::new(KErrorKind::DispatchFailed {
-            expr: expr.summarize(),
-            reason: format!(
-                "head is not callable: `{}`",
-                expr.parts
-                    .first()
-                    .map(|p| p.value.summarize())
-                    .unwrap_or_else(|| "<empty>".into())
-            ),
-        })),
+        // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
+        // a non-callable head is a runtime error, not a fatal `execute()` abort.
+        DispatchShape::NonCallableHead => Ok(NodeStep::Done(NodeOutput::Err(KError::new(
+            KErrorKind::DispatchFailed {
+                expr: expr.summarize(),
+                reason: format!(
+                    "head is not callable: `{}`",
+                    expr.parts
+                        .first()
+                        .map(|p| p.value.summarize())
+                        .unwrap_or_else(|| "<empty>".into())
+                ),
+            },
+        )))),
         DispatchShape::OperatorChain => {
             debug_assert!(init.pre_subs.is_empty());
             Ok(operator_chain::run(ctx, &expr))
