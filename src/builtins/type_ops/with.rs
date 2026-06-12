@@ -10,59 +10,13 @@
 use std::collections::HashSet;
 
 use crate::machine::model::{Held, KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle};
+use crate::machine::{KError, KErrorKind};
 
 use crate::builtins::ascribe::abstract_type_names_of;
-use crate::builtins::err;
 
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let s = match bundle.require_signature("sig") {
-        Ok(s) => s,
-        Err(e) => return err(e),
-    };
-    let fields = match bundle.get("bindings") {
-        Some(KObject::Record(fields, _types)) => fields,
-        _ => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "WITH bindings must be a record literal `{Slot = Type, …}`".to_string(),
-            )));
-        }
-    };
-    // A binding must name one of the SIG's abstract type slots — a width-subset check
-    // against the slot set. Slot names are capitalized, so a lowercase / unknown key
-    // simply isn't in the set; no separate name-shape check is needed.
-    let known_slots: HashSet<String> = abstract_type_names_of(s.decl_scope()).into_iter().collect();
-    let mut pinned: Vec<(String, KType<'a>)> = Vec::with_capacity(fields.len());
-    for (name, value) in fields.iter() {
-        if !known_slots.contains(name) {
-            return err(KError::new(KErrorKind::ShapeError(format!(
-                "{} has no abstract type slot `{name}`",
-                s.path,
-            ))));
-        }
-        match value {
-            Held::Type(kt) => pinned.push((name.clone(), kt.clone())),
-            Held::Object(other) => {
-                return err(KError::new(KErrorKind::ShapeError(format!(
-                    "WITH binding `{name}` value must be a type, got `{}`",
-                    other.ktype().name(),
-                ))));
-            }
-        }
-    }
-    BodyResult::ktype(sched.current_scope().arena.alloc_ktype(KType::Signature {
-        sig: s,
-        pinned_slots: pinned,
-    }))
-}
-
-/// `Action`-harness twin of [`body`]: reads the `sig` type cell and the eager-evaluated `bindings`
+/// `<sig> WITH {<Slot> = <Type>, …}`: reads the `sig` type cell and the eager-evaluated `bindings`
 /// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and
 /// returns the specialized `KType::Signature` as a `Carried::Type`.
-#[cfg(feature = "action-harness")]
 pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {

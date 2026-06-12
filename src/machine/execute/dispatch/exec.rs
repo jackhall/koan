@@ -46,9 +46,8 @@ pub(super) fn invoke<'run>(
         return ctx.body_result_to_step(result, idx);
     }
 
-    // A `Step`-harness builtin (`action-harness` feature): build a read-only `BodyCtx`, get the
-    // `Action`, and lower it through the shared `run_action` interpreter.
-    #[cfg(feature = "action-harness")]
+    // An action-harness builtin: build a read-only `BodyCtx`, get the `Action`, and lower it
+    // through the shared `run_action` interpreter.
     if let Body::Action(f) = &picked.body {
         let f = *f;
         let bundle = match picked.bind(working_expr) {
@@ -174,9 +173,8 @@ pub(super) fn invoke<'run>(
 
 /// Lower a `Step`-harness builtin: bind its args into a `KObject::Record`, build the read-only
 /// `BodyCtx`, call the `ActionFn`, then interpret the returned `Action` through the shared
-/// `run_action`. The args-as-`Record` build is the spike's stand-in for the eventual
+/// `run_action`. The args-as-`Record` build is the stand-in for the eventual
 /// `ArgumentBundle → KObject::Record` migration.
-#[cfg(feature = "action-harness")]
 fn run_action_builtin<'run>(
     ctx: &mut DispatchCtx<'run, '_>,
     f: crate::machine::core::kfunction::ActionFn,

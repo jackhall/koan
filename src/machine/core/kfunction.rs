@@ -16,13 +16,12 @@ pub mod body;
 pub mod exec;
 pub mod pick;
 pub mod scheduler_handle;
-// The scheduler-aware `Action` currency for the builtin-harness refactor (WIP). Off the default build.
-#[cfg(feature = "action-harness")]
+/// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
+/// `machine::execute::harness::run_action`.
 pub mod action;
 
 pub use argument_bundle::ArgumentBundle;
 pub use body::{BinderBucketFn, BinderNameFn, Body, BodyResult, BuiltinFn};
-#[cfg(feature = "action-harness")]
 pub use action::ActionFn;
 pub use pick::ClassifiedSlots;
 pub use scheduler_handle::{CatchFinish, CombineFinish, NodeId, SchedulerHandle};

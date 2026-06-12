@@ -1,35 +1,13 @@
 use crate::machine::model::{KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
+use crate::machine::Scope;
 
-use super::{arg, err, kw, sig};
-#[cfg(not(feature = "action-harness"))]
-use super::register_builtin;
-use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
+use super::{arg, kw, sig};
 
 /// `QUOTE <expr:KExpression>` — surface form `#(expr)`, desugared by the parser
-/// (see `expression_tree::build_tree`). Returns the captured AST as a
-/// `KObject::KExpression` with no evaluation, so raw ASTs can thread through
-/// eager-evaluating contexts. The `QUOTE` head-keyword is not part of the
-/// documented surface; user code goes through the `#` sigil.
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    mut bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let expr = match extract_kexpression(&mut bundle, "expr") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "QUOTE expects a parenthesized expression body".to_string(),
-            )));
-        }
-    };
-    let arena = sched.current_scope().arena;
-    BodyResult::value(arena.alloc_object(KObject::KExpression(expr)))
-}
-
-/// `Action`-harness twin of [`body`]: reads the unevaluated `expr` cell from `BodyCtx::args` and
-/// returns it as a `KObject::KExpression` value.
-#[cfg(feature = "action-harness")]
+/// (see `expression_tree::build_tree`). Reads the unevaluated `expr` cell from `BodyCtx::args`
+/// and returns it as a `KObject::KExpression` value with no evaluation, so raw ASTs can thread
+/// through eager-evaluating contexts. The `QUOTE` head-keyword is not part of the documented
+/// surface; user code goes through the `#` sigil.
 pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -45,10 +23,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         KType::KExpression,
         vec![kw("QUOTE"), arg("expr", KType::KExpression)],
     );
-    #[cfg(feature = "action-harness")]
     crate::builtins::register_action_builtin(scope, "QUOTE", signature, body_action);
-    #[cfg(not(feature = "action-harness"))]
-    register_builtin(scope, "QUOTE", signature, body);
 }
 
 #[cfg(test)]

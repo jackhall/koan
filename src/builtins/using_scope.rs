@@ -22,74 +22,14 @@
 
 use crate::machine::model::types::KKind;
 use crate::machine::model::KType;
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
+use crate::machine::{KError, KErrorKind, Scope};
 
-use super::{arg, err, kw, sig};
-#[cfg(not(feature = "action-harness"))]
-use super::register_builtin;
+use super::{arg, kw, sig};
 
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    mut bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    // A module identity rides the type channel as `KType::Module { module, frame }`; the
-    // carried frame anchors the call-site `Rc` so a per-call module's child scope stays live.
-    let (module, module_frame) = match bundle.get_type("m") {
-        Some(KType::Module {
-            module: m,
-            frame: anchor,
-        }) => (*m, anchor.clone()),
-        Some(other) => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "m".to_string(),
-                expected: "Module".to_string(),
-                got: other.name(),
-            }));
-        }
-        None => match bundle.get("m") {
-            Some(other) => {
-                return err(KError::new(KErrorKind::TypeMismatch {
-                    arg: "m".to_string(),
-                    expected: "Module".to_string(),
-                    got: other.ktype().name().to_string(),
-                }));
-            }
-            None => return err(KError::new(KErrorKind::MissingArg("m".to_string()))),
-        },
-    };
-    let body_expr = match bundle.extract_kexpression_or_shape_error("USING", "body") {
-        Ok(e) => e,
-        Err(e) => return err(e),
-    };
-
-    // Root the frame `Rc` in the call-site arena so the borrowed window outlives
-    // the eager `m` arg and any escaping closure. No-op for top-level modules.
-    if module_frame.is_some() {
-        sched.current_scope().arena.alloc_ktype(KType::Module {
-            module,
-            frame: module_frame,
-        });
-    }
-
-    // Transparent scope lives in the call-site arena so forwarded binds and
-    // block-defined functions outlive the block.
-    let module_bindings = module.child_scope().bindings();
-    let child: &'a Scope<'a> = sched
-        .current_scope()
-        .arena
-        .alloc_scope(Scope::child_transparent(
-            sched.current_scope(),
-            module_bindings,
-        ));
-    let sub_id = sched.add_dispatch(body_expr, child);
-    BodyResult::DeferTo(sub_id)
-}
-
-/// `Action`-harness twin of [`body`]: mint the transparent child scope and dispatch the body into
-/// it as a block (`InScope` — a multi-statement body fans out one sub-dispatch per statement),
-/// forwarding the final statement's value as the USING result. The window's surfaced members
-/// resolve through [`Scope::binding_cutoff`]'s index-0 (no-cutoff) rule for a borrowed window.
-#[cfg(feature = "action-harness")]
+/// Mint the transparent child scope and dispatch the body into it as a block (`InScope` — a
+/// multi-statement body fans out one sub-dispatch per statement), forwarding the final
+/// statement's value as the USING result. The window's surfaced members resolve through
+/// [`Scope::binding_cutoff`]'s index-0 (no-cutoff) rule for a borrowed window.
 pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -160,10 +100,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ],
     );
-    #[cfg(feature = "action-harness")]
     crate::builtins::register_action_builtin(scope, "USING", signature, body_action);
-    #[cfg(not(feature = "action-harness"))]
-    register_builtin(scope, "USING", signature, body);
 }
 
 #[cfg(test)]

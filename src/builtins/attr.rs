@@ -1,162 +1,28 @@
 //! `ATTR <s> <field:Identifier>` — newtype (record-repr or scalar), module, or signature
 //! field access. Surface syntax is the `.` infix operator. Overloads share the bucket
-//! `[Keyword, Slot, Slot]` and pick by lhs shape: [`body_identifier`] for `p.x` where
-//! the lhs is still an `Identifier`, [`body_newtype`] for a `Wrapped` lhs (a record-repr
-//! newtype's `.x` reads through to the wrapped record), [`body_module`] for chained module
+//! `[Keyword, Slot, Slot]` and pick by lhs shape: [`body_identifier_action`] for `p.x` where
+//! the lhs is still an `Identifier`, [`body_newtype_action`] for a `Wrapped` lhs (a record-repr
+//! newtype's `.x` reads through to the wrapped record), [`body_module_action`] for chained module
 //! access.
 //!
 //! The lhs is matched by *type*, never by a kind: a type-channel lhs (a module / type token)
-//! picks `body_module` / `body_type_lhs` through its `OfKind` kind, while a value-channel lhs
-//! is caught by the least-specific `s: Any` slot and validated in [`access_field`]. Specificity
-//! (`Any` < `OfKind` < `Identifier`) resolves the overloads: an `Identifier` lhs wins
-//! `body_identifier`, a module / type-token lhs wins its `OfKind` overload, and only a bare
-//! runtime value falls through to [`body_newtype`].
+//! picks `body_module_action` / `body_type_lhs_action` through its `OfKind` kind, while a
+//! value-channel lhs is caught by the least-specific `s: Any` slot and validated in
+//! [`access_field`]. Specificity (`Any` < `OfKind` < `Identifier`) resolves the overloads: an
+//! `Identifier` lhs wins `body_identifier_action`, a module / type-token lhs wins its `OfKind`
+//! overload, and only a bare runtime value falls through to [`body_newtype_action`].
 
 use crate::machine::execute::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::{Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
-use crate::machine::{
-    ArgumentBundle, BodyResult, KError, KErrorKind, Resolution, SchedulerHandle, Scope,
-};
+use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Resolution, Scope};
 
 use super::{arg, err, kw, sig};
-#[cfg(not(feature = "action-harness"))]
-use super::register_builtin;
-
-pub fn body_identifier<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let s_name = match bundle.get("s") {
-        Some(KObject::KString(s)) => s.clone(),
-        Some(other) => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "s".to_string(),
-                expected: "Identifier".to_string(),
-                got: other.ktype().name().to_string(),
-            }));
-        }
-        None => return err(KError::new(KErrorKind::MissingArg("s".to_string()))),
-    };
-    let field_name = read_field_name(&bundle);
-    let field_name = match field_name {
-        Ok(s) => s,
-        Err(e) => return err(e),
-    };
-    // Value-side first, then type-side: a FUNCTOR's signature-typed parameter is bound
-    // only into `bindings.types`, so `Er.pure(x)` inside the functor body must reach the
-    // carried `&Module` through `resolve_type`.
-    if let Some(target) = sched.current_scope().lookup(&s_name) {
-        return access_field(sched.current_scope(), target, &field_name);
-    }
-    if let Some(kt) = sched.current_scope().resolve_type(&s_name) {
-        match kt {
-            KType::Module { module: m, .. } => return access_module_member(m, &field_name),
-            KType::AbstractType {
-                source: AbstractSource::Module(m),
-                ..
-            } => {
-                return access_module_member(m, &field_name);
-            }
-            // A `Sig`-rooted abstract type has no module to project a member off; fall
-            // through to UnboundName like the scalar arms below.
-            KType::AbstractType { .. } => {}
-            // Scalar type-side bindings have no members; fall through to UnboundName so
-            // the diagnostic stays attributed to the lhs identifier rather than the
-            // type-language side.
-            _ => {}
-        }
-    }
-    err(KError::new(KErrorKind::UnboundName(s_name)))
-}
-
-/// `ATTR <s:TypeExprRef> <field:_>` — entry for a Type-classed lhs. Module names are
-/// Type-classed tokens (see [token classes](../../design/typing/tokens.md)), so `Foo.x`
-/// parses as `[ATTR Type(Foo) Identifier(x)]` instead of the `Identifier`-lhs the struct
-/// path uses. The Type-Type overload shares this body so chained module access
-/// (`Outer.Inner.x`) works regardless of whether each step's field is a module name or
-/// a regular member.
-pub fn body_type_lhs<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let s_kt = match bundle.get_type("s") {
-        Some(kt) => kt,
-        None => {
-            return err(match bundle.get("s") {
-                Some(other) => KError::new(KErrorKind::TypeMismatch {
-                    arg: "s".to_string(),
-                    expected: "TypeExprRef".to_string(),
-                    got: other.ktype().name(),
-                }),
-                None => KError::new(KErrorKind::MissingArg("s".to_string())),
-            });
-        }
-    };
-    let field_name = match read_field_name(&bundle) {
-        Ok(s) => s,
-        Err(e) => return err(e),
-    };
-    // The Type-classed lhs is a nominal type-side binding flowing in the type channel. A
-    // module / signature / opaque-abstract identity projects a member off directly; a struct
-    // / union name (`SetRef`) has no members and falls through to a TypeMismatch. A bare name
-    // that dispatch couldn't pre-resolve arrives `Unresolved`; resolve it through the
-    // memoized, park-capable bridge. Dispatch resolves this argument before the body runs, so
-    // a `Park` outcome is unreachable here and surfaces as a loud structured error.
-    match s_kt {
-        KType::Unresolved(te) => match resolve_type_leaf_carrier(sched.current_scope(), te, None) {
-            TypeLeafCarrier::Resolved(kt) => {
-                access_type_member(sched.current_scope(), kt, &field_name)
-            }
-            TypeLeafCarrier::Unbound(name) => err(KError::new(KErrorKind::UnboundName(name))),
-            TypeLeafCarrier::Park(producers) => err(KError::new(KErrorKind::ShapeError(format!(
-                "ATTR lhs type `{}` resolved to a still-finalizing type \
-                 (parked on {} producer(s)); the type argument should already be sealed \
-                 at body entry",
-                te.render(),
-                producers.len(),
-            )))),
-        },
-        kt => access_type_member(sched.current_scope(), kt, &field_name),
-    }
-}
-
-pub fn body_newtype<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let target = match bundle.require("s") {
-        Ok(obj) => obj,
-        Err(e) => return err(e),
-    };
-    let field_name = match read_field_name(&bundle) {
-        Ok(s) => s,
-        Err(e) => return err(e),
-    };
-    access_field(sched.current_scope(), target, &field_name)
-}
-
-pub fn body_module<'a, 's>(
-    _sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    // A module identity rides the type channel, so the lhs is the `Type` arm.
-    let m = match bundle.require_module("s") {
-        Ok(m) => m,
-        Err(e) => return err(e),
-    };
-    let field_name = match read_field_name(&bundle) {
-        Ok(s) => s,
-        Err(e) => return err(e),
-    };
-    access_module_member(m, &field_name)
-}
 
 /// Translate a [`BodyResult`] from the shared `access_*` helpers into a `Done` [`Action`]. The ATTR
 /// helpers only ever produce `Value` / `Err`, so the tail / defer arms are unreachable.
-#[cfg(feature = "action-harness")]
 fn done<'a>(
     result: BodyResult<'a>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -172,7 +38,6 @@ fn done<'a>(
 
 /// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the
 /// type-channel leaf token (resolved or rendered), else a `MissingArg`. Mirrors [`read_field_name`].
-#[cfg(feature = "action-harness")]
 fn read_field_name_action<'a>(args: &KObject<'a>) -> Result<String, KError> {
     use crate::machine::core::kfunction::action::{arg_object, arg_type};
     if let Some(obj) = arg_object(args, "field") {
@@ -194,9 +59,10 @@ fn read_field_name_action<'a>(args: &KObject<'a>) -> Result<String, KError> {
     Err(KError::new(KErrorKind::MissingArg("field".to_string())))
 }
 
-/// `Action`-harness twin of [`body_identifier`]: same value-then-type lookup of the `s` identifier
-/// against `ctx.scope`, returning the projected member as `Action::Done`.
-#[cfg(feature = "action-harness")]
+/// Value-then-type lookup of the `s` identifier against `ctx.scope`, returning the projected
+/// member as `Action::Done`. A FUNCTOR's signature-typed parameter is bound only into
+/// `bindings.types`, so `Er.pure(x)` inside the functor body must reach the carried `&Module`
+/// through `resolve_type` — hence value-side first, then type-side.
 pub fn body_identifier_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -232,9 +98,12 @@ pub fn body_identifier_action<'a>(
     Action::Done(Err(KError::new(KErrorKind::UnboundName(s_name))))
 }
 
-/// `Action`-harness twin of [`body_type_lhs`]: projects a member off a Type-classed `s`, resolving
-/// an `Unresolved` leaf through the memoized bridge first.
-#[cfg(feature = "action-harness")]
+/// `ATTR <s:TypeExprRef> <field:_>` — entry for a Type-classed lhs. Module names are Type-classed
+/// tokens (see [token classes](../../design/typing/tokens.md)), so `Foo.x` parses as
+/// `[ATTR Type(Foo) Identifier(x)]` instead of the `Identifier`-lhs the struct path uses. The
+/// Type-Type overload shares this body so chained module access (`Outer.Inner.x`) works regardless
+/// of whether each step's field is a module name or a regular member. Projects a member off the
+/// Type-classed `s`, resolving an `Unresolved` leaf through the memoized bridge first.
 pub fn body_type_lhs_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -273,9 +142,7 @@ pub fn body_type_lhs_action<'a>(
     }
 }
 
-/// `Action`-harness twin of [`body_newtype`]: reads the `Wrapped` runtime lhs and projects the field
-/// through [`access_field`].
-#[cfg(feature = "action-harness")]
+/// Reads the `Wrapped` runtime lhs and projects the field through [`access_field`].
 pub fn body_newtype_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -288,9 +155,7 @@ pub fn body_newtype_action<'a>(
     done(access_field(ctx.scope, target, &field_name))
 }
 
-/// `Action`-harness twin of [`body_module`]: projects the field off a module identity riding the
-/// type channel.
-#[cfg(feature = "action-harness")]
+/// Projects the field off a module identity riding the type channel (the lhs is the `Type` arm).
 pub fn body_module_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -474,8 +339,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // arm validates the shape, reading a record repr's field directly and recursing one level
     // for any other inner (a non-`Wrapped` value errors "a value with fields"). This stays
     // unambiguous with the sibling overloads: `Any` is the least specific, so an `Identifier`
-    // lhs picks `body_identifier`, a module / type-token lhs picks `body_module` /
-    // `body_type_lhs`, and only a bare runtime value falls through to here.
+    // lhs picks `body_identifier_action`, a module / type-token lhs picks `body_module_action` /
+    // `body_type_lhs_action`, and only a bare runtime value falls through to here.
     let newtype_sig = || {
         sig(
             KType::Any,
@@ -518,25 +383,13 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         )
     };
 
-    #[cfg(feature = "action-harness")]
-    {
-        use crate::builtins::register_action_builtin;
-        register_action_builtin(scope, "ATTR", identifier_sig(), body_identifier_action);
-        register_action_builtin(scope, "ATTR", module_field_sig(), body_module_action);
-        register_action_builtin(scope, "ATTR", newtype_sig(), body_newtype_action);
-        register_action_builtin(scope, "ATTR", type_identifier_field_sig(), body_type_lhs_action);
-        register_action_builtin(scope, "ATTR", type_type_field_sig(), body_type_lhs_action);
-        register_action_builtin(scope, "ATTR", module_type_field_sig(), body_module_action);
-    }
-    #[cfg(not(feature = "action-harness"))]
-    {
-        register_builtin(scope, "ATTR", identifier_sig(), body_identifier);
-        register_builtin(scope, "ATTR", module_field_sig(), body_module);
-        register_builtin(scope, "ATTR", newtype_sig(), body_newtype);
-        register_builtin(scope, "ATTR", type_identifier_field_sig(), body_type_lhs);
-        register_builtin(scope, "ATTR", type_type_field_sig(), body_type_lhs);
-        register_builtin(scope, "ATTR", module_type_field_sig(), body_module);
-    }
+    use crate::builtins::register_action_builtin;
+    register_action_builtin(scope, "ATTR", identifier_sig(), body_identifier_action);
+    register_action_builtin(scope, "ATTR", module_field_sig(), body_module_action);
+    register_action_builtin(scope, "ATTR", newtype_sig(), body_newtype_action);
+    register_action_builtin(scope, "ATTR", type_identifier_field_sig(), body_type_lhs_action);
+    register_action_builtin(scope, "ATTR", type_type_field_sig(), body_type_lhs_action);
+    register_action_builtin(scope, "ATTR", module_type_field_sig(), body_module_action);
 }
 
 #[cfg(test)]

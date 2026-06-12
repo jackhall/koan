@@ -16,7 +16,6 @@ mod functor_def;
 mod let_binding;
 mod match_case;
 mod module_def;
-#[cfg(feature = "action-harness")]
 mod nominal_schema;
 pub(crate) mod newtype_def;
 mod print;
@@ -128,7 +127,6 @@ pub(crate) fn register_builtin_full<'a>(
 /// `binder_name` / `binder_bucket` hooks, and `is_functor` are unchanged: only the body slot moves.
 /// Builtins migrate to this one at a time; `register_builtin` (and `Body::Builtin`) are deleted at
 /// parity.
-#[cfg(feature = "action-harness")]
 pub(crate) fn register_action_builtin_full<'a>(
     scope: &'a Scope<'a>,
     name: &str,
@@ -152,7 +150,6 @@ pub(crate) fn register_action_builtin_full<'a>(
 }
 
 /// Common-case [`register_action_builtin_full`]: no binder hooks, not a functor.
-#[cfg(feature = "action-harness")]
 pub(crate) fn register_action_builtin<'a>(
     scope: &'a Scope<'a>,
     name: &str,

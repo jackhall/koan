@@ -1,38 +1,6 @@
-use std::rc::Rc;
-
-use super::body;
 use crate::builtins::default_scope;
-use crate::builtins::test_support::run_root_bare;
 use crate::machine::execute::Scheduler;
-use crate::machine::model::types::Record;
-use crate::machine::model::values::ArgValue;
 use crate::machine::model::{KObject, KType};
-use crate::machine::ArgumentBundle;
-
-#[test]
-fn let_inserts_binding_into_scope() {
-    use crate::machine::RuntimeArena;
-    let arena = RuntimeArena::new();
-    let scope = run_root_bare(&arena);
-    let mut sched = Scheduler::new();
-    let mut args = Record::new();
-    args.insert(
-        "name".to_string(),
-        ArgValue::Object(Rc::new(KObject::KString("x".into()))),
-    );
-    args.insert(
-        "value".to_string(),
-        ArgValue::Object(Rc::new(KObject::Number(42.0))),
-    );
-
-    let value = sched
-        .run_body_against(scope, |h| body(h, ArgumentBundle { args }))
-        .expect_value("LET");
-    assert!(matches!(value, KObject::Number(n) if *n == 42.0));
-    let data = scope.bindings().data();
-    let (entry, _) = data.get("x").expect("expected binding 'x'");
-    assert!(matches!(entry, KObject::Number(n) if *n == 42.0));
-}
 
 #[test]
 fn binder_name_extracts_let_name() {

@@ -22,124 +22,11 @@ use std::rc::Rc;
 
 use crate::machine::model::types::{NominalMember, RecursiveSet};
 use crate::machine::model::KType;
-use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind,
-    SchedulerHandle, Scope,
-};
+use crate::machine::{BindingIndex, Frame, KError, KErrorKind, Scope};
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use super::{arg, err, kw, sig};
-#[cfg(not(feature = "action-harness"))]
-use super::register_builtin_with_binder;
-use crate::machine::core::kfunction::argument_bundle::extract_bare_type_name;
-
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    mut bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let group_name = match extract_bare_type_name(&bundle, "name", "RECURSIVE TYPES") {
-        Ok(n) => n,
-        Err(e) => return err(e),
-    };
-    let body_expr = match bundle.extract_kexpression_or_shape_error("RECURSIVE TYPES", "body") {
-        Ok(e) => e,
-        Err(e) => return err(e),
-    };
-    // Discover the members (name + kind) before dispatching anything, so the shared set
-    // exists when the declarations elaborate.
-    let members = match discover_members(&body_expr) {
-        Ok(m) => m,
-        Err(e) => return err(e),
-    };
-
-    // One shared set; members are `pending` until each declaration's finalize fills it.
-    // `scope_id` is diagnostics-only; each member finalizes exactly once on the block path
-    // (cross-references lower to `RecursiveRef`, so no declaration parks and re-finalizes).
-    let scope_id = sched.current_scope().id;
-    let set = Rc::new(RecursiveSet::new(
-        members
-            .iter()
-            .map(|(name, kind)| NominalMember::pending(name.clone(), scope_id, *kind))
-            .collect(),
-    ));
-    // The child scope carries the set: declarations dispatch against it, so the elaborator
-    // threads the group (a member name lowers to `RecursiveRef`).
-    let child = sched
-        .current_scope()
-        .arena
-        .alloc_scope(Scope::child_recursive_group(
-            sched.current_scope(),
-            Rc::clone(&set),
-        ));
-    // Pre-install each member's external `SetRef` into the child so its own finalize fills
-    // the shared set rather than minting a singleton (the same routing the reactive SCC seal
-    // uses). The members co-declare at one lexical position, so index 0 is fine.
-    for (index, (name, _)) in members.iter().enumerate() {
-        child.preinstall_identity(
-            name.clone(),
-            KType::SetRef {
-                set: Rc::clone(&set),
-                index,
-            },
-            BindingIndex::value(0),
-        );
-    }
-
-    let deps = sched.enter_body_block(child, body_expr);
-
-    // The group handle and the mirrored members bind at the block's lexical position in the
-    // enclosing scope. `RECURSIVE TYPES` is a non-nominal binder — the group name obeys
-    // source order like any other type name.
-    let bind_index = sched
-        .current_lexical_chain()
-        .map(|chain| BindingIndex::value(chain.index))
-        .unwrap_or(BindingIndex::BUILTIN);
-    let finish: CombineFinish<'a> = Box::new(move |_sched, _results| {
-        let frame = || Frame::bare("<recursive-types>", format!("RECURSIVE TYPES {group_name}"));
-        // Exit guarantees resolution: every member must have sealed. A declaration that
-        // errored short-circuits the Combine before this runs, so an unfilled member here
-        // means a forward reference named a name outside the group.
-        for (index, (name, _)) in members.iter().enumerate() {
-            if !set.member(index).is_filled() {
-                return BodyResult::Err(
-                    KError::new(KErrorKind::ShapeError(format!(
-                        "RECURSIVE TYPES `{group_name}`: member `{name}` did not seal — a \
-                         declaration referenced a name outside the group",
-                    )))
-                    .with_frame(frame()),
-                );
-            }
-        }
-        // Mirror the sealed members into the enclosing scope as external handles into the
-        // shared set, then bind the group handle itself.
-        for (index, (name, _)) in members.iter().enumerate() {
-            let member_ref = KType::SetRef {
-                set: Rc::clone(&set),
-                index,
-            };
-            if let Err(e) =
-                _sched
-                    .current_scope()
-                    .register_type_upsert(name.clone(), member_ref, bind_index)
-            {
-                return BodyResult::Err(e.with_frame(frame()));
-            }
-        }
-        let handle = KType::RecursiveGroup(Rc::clone(&set));
-        match _sched
-            .current_scope()
-            .register_type_upsert(group_name.clone(), handle, bind_index)
-        {
-            Ok(kt_ref) => {
-                BodyResult::ktype(_sched.current_scope().arena.alloc_ktype(kt_ref.clone()))
-            }
-            Err(e) => BodyResult::Err(e.with_frame(frame())),
-        }
-    });
-    let combine_id = sched.add_combine_here(deps, vec![], finish);
-    BodyResult::DeferTo(combine_id)
-}
+use super::{arg, kw, sig};
 
 /// Discover each member declaration's `(name, kind)` from the block body, using the same
 /// multi-statement split `enter_body_block` applies. Rejects a body with no declarations, a
@@ -203,11 +90,10 @@ fn leading_keyword<'b>(decl: &'b KExpression<'_>) -> Option<&'b str> {
     })
 }
 
-/// `Action`-harness twin of [`body`]: discovers the members, mints the set + carrying child scope,
-/// pre-installs each member's `SetRef`, dispatches the body block (an `InScope` Combine dep that fans
-/// out per declaration), and the finish mirrors the sealed members + binds the group handle into the
-/// enclosing scope.
-#[cfg(feature = "action-harness")]
+/// `Action`-harness twin of the legacy body: discovers the members, mints the set + carrying child
+/// scope, pre-installs each member's `SetRef`, dispatches the body block (an `InScope` Combine dep
+/// that fans out per declaration), and the finish mirrors the sealed members + binds the group
+/// handle into the enclosing scope.
 pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -297,7 +183,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ],
     );
-    #[cfg(feature = "action-harness")]
     crate::builtins::register_action_builtin_full(
         scope,
         "RECURSIVE TYPES",
@@ -306,14 +191,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         Some(super::type_part_binder_name),
         None,
         false,
-    );
-    #[cfg(not(feature = "action-harness"))]
-    register_builtin_with_binder(
-        scope,
-        "RECURSIVE TYPES",
-        signature,
-        body,
-        Some(super::type_part_binder_name),
     );
 }
 

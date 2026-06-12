@@ -46,8 +46,6 @@ pub(in crate::machine::execute) mod single_poll;
 mod tests;
 
 pub(in crate::machine::execute) use ctx::DispatchCtx;
-pub(crate) use field_list::defer_field_list_via_combine;
-#[cfg(feature = "action-harness")]
 pub(crate) use field_list::defer_field_list_action;
 use fn_value::FnValueState;
 use head_deferred::HeadDeferredState;

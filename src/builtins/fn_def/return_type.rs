@@ -3,13 +3,12 @@
 
 use std::collections::HashMap;
 
-use crate::machine::core::kfunction::argument_bundle::{extract_kexpression, extract_ktype};
 use crate::machine::core::LexicalFrame;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::types::{DeferredReturn, ReturnType};
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::ResolveTypeExprOutcome;
-use crate::machine::{ArgumentBundle, KError, KErrorKind, NodeId, Scope};
+use crate::machine::{KError, KErrorKind, NodeId, Scope};
 use std::rc::Rc;
 
 use super::param_refs::{kexpression_references_any, type_expr_references_any};
@@ -36,7 +35,7 @@ pub(crate) enum ReturnTypeState<'a> {
     Deferred(DeferredReturn<'a>),
     /// `Expression(_)` carrier (e.g. `-> :(Mo.Ty)`) that doesn't reference any FN
     /// parameter; safe to resolve once at FN-def time. Scheduling happens via
-    /// `super::finalize::defer_via_combine` so all owned-sub registration lives
+    /// `super::finalize::defer_via_combine_action` so all owned-sub registration lives
     /// at one site.
     ExprToSubDispatch(KExpression<'a>),
 }
@@ -51,37 +50,9 @@ pub(crate) enum ReturnTypeCapture<'a> {
     },
 }
 
-/// `unreachable!` arms guard the `peek → extract` pairing — an internal `ArgumentBundle`
-/// invariant, not a user-surface error. A resolved type rides the `Type` arm: a bare user
-/// name surfaces as [`KType::Unresolved`] (→ `TypeExprCarrier`), every other shape is
-/// `Resolved`. A `:(…)` / dotted return rides the `Object` arm as a `KObject::KExpression`.
-pub(crate) fn extract_return_type_raw<'a>(
-    bundle: &mut ArgumentBundle<'a>,
-) -> Result<ReturnTypeRaw<'a>, KError> {
-    if bundle.get_type("return_type").is_some() {
-        match extract_ktype(bundle, "return_type") {
-            Some(KType::Unresolved(te)) => Ok(ReturnTypeRaw::TypeExprCarrier(te)),
-            Some(t) => Ok(ReturnTypeRaw::Resolved(t)),
-            None => unreachable!("get_type(return_type) then extract_ktype must succeed"),
-        }
-    } else if matches!(bundle.get("return_type"), Some(KObject::KExpression(_))) {
-        match extract_kexpression(bundle, "return_type") {
-            Some(e) => Ok(ReturnTypeRaw::ExprCarrier(e)),
-            None => unreachable!("get(KExpression) then extract_kexpression must succeed"),
-        }
-    } else {
-        Err(KError::new(KErrorKind::ShapeError(
-            "FN return-type slot must be a type expression (e.g. `Number`, `:(LIST OF Str)`)"
-                .to_string(),
-        )))
-    }
-}
-
-/// `Action`-harness twin of [`extract_return_type_raw`]: read the `return_type` slot from a
-/// `BodyCtx::args` record rather than an `&mut ArgumentBundle`. Same channel logic — a `Type`-arm
-/// `KType` (bare-leaf `Unresolved` → `TypeExprCarrier`, else `Resolved`), or an `Object`-arm
-/// `KObject::KExpression` (`:(…)` / dotted return → `ExprCarrier`).
-#[cfg(feature = "action-harness")]
+/// Read the `return_type` slot from a `BodyCtx::args` record. A `Type`-arm `KType` (bare-leaf
+/// `Unresolved` → `TypeExprCarrier`, else `Resolved`), or an `Object`-arm `KObject::KExpression`
+/// (`:(…)` / dotted return → `ExprCarrier`).
 pub(crate) fn extract_return_type_raw_action<'a>(
     args: &KObject<'a>,
 ) -> Result<ReturnTypeRaw<'a>, KError> {
@@ -108,7 +79,7 @@ pub(crate) enum AdmissibleVerdict {
     Admissible,
     /// `Pending` and `ExprToSubDispatch` carriers can't be classified until the resolved
     /// `KType` is in hand; the `is_functor: true` flag threaded through
-    /// `defer_via_combine` re-runs the predicate at Combine-finish.
+    /// `defer_via_combine_action` re-runs the predicate at Combine-finish.
     DeferredToCombine,
     /// Diagnostic is already formatted with the `FUNCTOR return-type slot` prefix.
     Rejected(KError),

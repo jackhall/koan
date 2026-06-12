@@ -7,133 +7,19 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::Elaborator;
 use crate::machine::model::types::KKind;
 use crate::machine::model::{Argument, KType, SignatureElement};
-use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, SchedulerHandle, Scope,
-};
+use crate::machine::{KError, KErrorKind, Scope};
 
-use super::{arg, err, kw, sig};
-#[cfg(not(feature = "action-harness"))]
-use super::register_builtin_full;
-use crate::machine::core::kfunction::argument_bundle::extract_ktype;
+use super::{arg, kw, sig};
 
 use finalize::{
-    classify, defer_via_combine, finalize_fn_with_kind, FnKind, FnPlan, ParamListResult,
+    classify, finalize_fn_with_kind, FnKind, FnPlan, ParamListResult,
 };
-use return_type::{classify_return_type, extract_return_type_raw, AdmissibleVerdict};
+use return_type::{classify_return_type, AdmissibleVerdict};
 use signature::ParamListOutcome;
 
 pub(crate) use signature::binder_bucket;
 #[cfg(test)]
 pub(crate) use signature::binder_name;
-
-/// Keyworded FN body: the parenthesized `(<signature>)` form, which registers
-/// under its lead keyword. At least one `Keyword` is required — an all-Argument
-/// signature has no fast-lane shape to key on (every keyword-free expression
-/// routes through `BareIdentifier` / `BareTypeLeaf` / `LiteralPassThrough` /
-/// `TypeCall` / `FunctionValueCall` / `SigiledTypeExpr`), so the dispatcher needs
-/// a fixed token. The keyword-less `FN :{…}` record-schema form is
-/// [`body_record_schema`].
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    build_fn_like(sched, bundle, "FN", FnKind::Function)
-}
-
-/// Shared FN / FUNCTOR elaboration: extract the `signature` / return / `body`
-/// slots, collect param names, classify the return type, parse the param list,
-/// and route to [`finalize_fn_with_kind`] (synchronous) or [`defer_via_combine`]
-/// (Combine). `kind` is the sole behavioral fork — `FnKind::Functor` builds the
-/// param-type map and acts on the return-admissibility verdict; FN passes `None`
-/// and [`classify_return_type`] returns `Admissible`, so the `Rejected` check is a
-/// no-op. `builtin` (`"FN"` / `"FUNCTOR"`) names the surface in slot errors.
-pub(crate) fn build_fn_like<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    mut bundle: ArgumentBundle<'a>,
-    builtin: &str,
-    kind: FnKind,
-) -> BodyResult<'a> {
-    let signature_expr = match bundle.extract_kexpression_or_shape_error(builtin, "signature") {
-        Ok(e) => e,
-        Err(e) => return err(e),
-    };
-    let return_type_raw = match extract_return_type_raw(&mut bundle) {
-        Ok(r) => r,
-        Err(e) => return err(e),
-    };
-    let body_expr = match bundle.extract_kexpression_or_shape_error(builtin, "body") {
-        Ok(e) => e,
-        Err(e) => return err(e),
-    };
-    // Scan param names against the raw signature: a param type still parked on a
-    // placeholder still contributes its name, which the return-type carrier may
-    // reference (deferring elaboration to per-call scope at invoke time).
-    let param_names = signature::collect_param_names_from_signature(&signature_expr);
-
-    // FUNCTOR-only: param-name → declared-`KType` map drives the deferred-arm head
-    // inspector's "is this bare-param ref type-denoting?" check (slots like `-> Er`).
-    // `Some(&map)` activates the FUNCTOR-return verdict; FN passes `None`.
-    let param_type_map = match kind {
-        FnKind::Functor => Some(collect_param_types(&signature_expr, sched.current_scope())),
-        FnKind::Function | FnKind::Anonymous => None,
-    };
-
-    // Gate param type names to the binder's lexical position — a parameter naming a
-    // later type is a position error, like any other forward type reference.
-    let mut elaborator =
-        Elaborator::new(sched.current_scope()).with_chain(sched.current_lexical_chain());
-
-    let (return_type_state, verdict) = match classify_return_type(
-        return_type_raw,
-        &param_names,
-        sched.current_scope(),
-        sched.current_lexical_chain(),
-        param_type_map.as_ref(),
-    ) {
-        Ok(p) => p,
-        Err(e) => return err(e),
-    };
-    // `Rejected` short-circuits the FUNCTOR; `DeferredToCombine` rides Combine-finish
-    // via the `FnKind::Functor` gate in `finalize_fn_with_kind` / `defer_via_combine`.
-    if let AdmissibleVerdict::Rejected(e) = verdict {
-        return err(e);
-    }
-
-    let params = match signature::parse_fn_param_list(&signature_expr, &mut elaborator) {
-        ParamListOutcome::Done(es) => ParamListResult::Done(es),
-        ParamListOutcome::Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
-        ParamListOutcome::Pending {
-            park_producers,
-            sub_dispatches,
-        } => ParamListResult::Pending {
-            park_producers,
-            sub_dispatches,
-        },
-    };
-
-    // The binder name binds at its own lexical position, like every other binder.
-    let bind_index = sched
-        .current_lexical_chain()
-        .map(|chain| BindingIndex::value(chain.index))
-        .unwrap_or(BindingIndex::BUILTIN);
-
-    match classify(return_type_state, params) {
-        FnPlan::Synchronous {
-            elements,
-            return_type,
-        } => finalize_fn_with_kind(
-            sched.current_scope(),
-            elements,
-            return_type,
-            body_expr,
-            kind,
-            bind_index,
-        ),
-        FnPlan::Combine(inputs) => {
-            defer_via_combine(sched, signature_expr, inputs, body_expr, kind, bind_index)
-        }
-    }
-}
 
 /// Build a map of `param_name → declared-KType` for the FUNCTOR deferred-arm head
 /// inspector. Skips slots that don't elaborate eagerly; the Combine path's
@@ -169,105 +55,14 @@ fn collect_param_types<'a>(
     map
 }
 
-/// Anonymous-FN body: `FN :{<record schema>} -> ReturnType = (<body>)`.
-///
-/// The record-schema sigil `:{…}` resolves to a `KType::Record` before this
-/// fires — it is a first-class `ExpressionPart::RecordType` the dispatcher folds
-/// structurally, and the `signature` slot is typed `TypeExprRef`, so the operand
-/// sub-dispatches to a type-side carrier and the bundle hands us the resolved
-/// record. Each field becomes a keyword-less
-/// `Argument`; the function registers no dispatch keyword (see
-/// [`FnKind::Anonymous`]) and is reachable only through the value it returns.
-pub fn body_record_schema<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    mut bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let schema = match extract_ktype(&mut bundle, "signature") {
-        Some(KType::Record(record)) => record,
-        Some(other) => {
-            return err(KError::new(KErrorKind::ShapeError(format!(
-                "anonymous FN signature must be a record schema `:{{…}}`, got `{}`",
-                other.name(),
-            ))));
-        }
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "anonymous FN signature slot must be a record schema `:{…}`".to_string(),
-            )));
-        }
-    };
-    let elements: Vec<SignatureElement<'a>> = schema
-        .iter()
-        .map(|(name, ktype)| {
-            SignatureElement::Argument(Argument {
-                name: name.clone(),
-                ktype: ktype.clone(),
-            })
-        })
-        .collect();
-    let param_names: Vec<String> = schema.keys().cloned().collect();
-
-    let return_type_raw = match extract_return_type_raw(&mut bundle) {
-        Ok(r) => r,
-        Err(e) => return err(e),
-    };
-    let body_expr = match bundle.extract_kexpression_or_shape_error("FN", "body") {
-        Ok(e) => e,
-        Err(e) => return err(e),
-    };
-
-    // `None` verdict context: the FUNCTOR-only return admissibility check is
-    // skipped (an anonymous function is never a functor).
-    let (return_type_state, _verdict) = match classify_return_type(
-        return_type_raw,
-        &param_names,
-        sched.current_scope(),
-        sched.current_lexical_chain(),
-        None,
-    ) {
-        Ok(p) => p,
-        Err(e) => return err(e),
-    };
-
-    let bind_index = sched
-        .current_lexical_chain()
-        .map(|chain| BindingIndex::value(chain.index))
-        .unwrap_or(BindingIndex::BUILTIN);
-
-    // The schema is already resolved, so the parameter list never parks — only
-    // the return type can defer. `classify` only routes on the return-type state
-    // here (its `Done` params pass through on the synchronous arm and are
-    // discarded on the Combine arm), so it gets an empty placeholder and the real
-    // `elements` move into whichever arm runs: directly on the synchronous arm,
-    // or through `prebuilt_elements` on the Combine arm (the anonymous form has
-    // no keyword/arg signature expression to re-parse).
-    match classify(return_type_state, ParamListResult::Done(Vec::new())) {
-        FnPlan::Synchronous { return_type, .. } => finalize_fn_with_kind(
-            sched.current_scope(),
-            elements,
-            return_type,
-            body_expr,
-            FnKind::Anonymous,
-            bind_index,
-        ),
-        FnPlan::Combine(mut inputs) => {
-            inputs.prebuilt_elements = Some(elements);
-            defer_via_combine(
-                sched,
-                crate::machine::model::ast::KExpression::new(Vec::new()),
-                inputs,
-                body_expr,
-                FnKind::Anonymous,
-                bind_index,
-            )
-        }
-    }
-}
-
-/// `Action`-harness twin of [`build_fn_like`]: same elaboration, reading slots from
-/// `BodyCtx::args` and routing to [`finalize_fn_with_kind`] (synchronous, via
+/// Shared FN / FUNCTOR elaboration: extract the `signature` / return / `body`
+/// slots from `BodyCtx::args`, collect param names, classify the return type,
+/// parse the param list, and route to [`finalize_fn_with_kind`] (synchronous, via
 /// `body_result_to_action`) or [`finalize::defer_via_combine_action`] (Combine).
-#[cfg(feature = "action-harness")]
+/// `kind` is the sole behavioral fork — `FnKind::Functor` builds the param-type
+/// map and acts on the return-admissibility verdict; FN passes `None` and
+/// [`classify_return_type`] returns `Admissible`, so the `Rejected` check is a
+/// no-op. `builtin` (`"FN"` / `"FUNCTOR"`) names the surface in slot errors.
 pub(crate) fn build_fn_like_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
     builtin: &str,
@@ -328,16 +123,28 @@ pub(crate) fn build_fn_like_action<'a>(
     }
 }
 
-/// `Action`-harness twin of [`body`] (keyworded FN).
-#[cfg(feature = "action-harness")]
+/// Keyworded FN body: the parenthesized `(<signature>)` form, which registers
+/// under its lead keyword. At least one `Keyword` is required — an all-Argument
+/// signature has no fast-lane shape to key on (every keyword-free expression
+/// routes through `BareIdentifier` / `BareTypeLeaf` / `LiteralPassThrough` /
+/// `TypeCall` / `FunctionValueCall` / `SigiledTypeExpr`), so the dispatcher needs
+/// a fixed token. The keyword-less `FN :{…}` record-schema form is
+/// [`body_record_schema_action`].
 pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     build_fn_like_action(ctx, "FN", FnKind::Function)
 }
 
-/// `Action`-harness twin of [`body_record_schema`] (anonymous `FN :{…}`).
-#[cfg(feature = "action-harness")]
+/// Anonymous-FN body: `FN :{<record schema>} -> ReturnType = (<body>)`.
+///
+/// The record-schema sigil `:{…}` resolves to a `KType::Record` before this
+/// fires — it is a first-class `ExpressionPart::RecordType` the dispatcher folds
+/// structurally, and the `signature` slot is typed `TypeExprRef`, so the operand
+/// sub-dispatches to a type-side carrier and the args record hands us the
+/// resolved record. Each field becomes a keyword-less `Argument`; the function
+/// registers no dispatch keyword (see [`FnKind::Anonymous`]) and is reachable
+/// only through the value it returns.
 pub fn body_record_schema_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -473,27 +280,18 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         )
     };
-    #[cfg(feature = "action-harness")]
-    {
-        use crate::builtins::register_action_builtin_full;
-        register_action_builtin_full(scope, "FN", typeexpr_sig(), body_action, None, Some(binder_bucket), false);
-        register_action_builtin_full(scope, "FN", sigil_sig(), body_action, None, Some(binder_bucket), false);
-        register_action_builtin_full(
-            scope,
-            "FN",
-            record_sig(),
-            body_record_schema_action,
-            None,
-            None,
-            false,
-        );
-    }
-    #[cfg(not(feature = "action-harness"))]
-    {
-        register_builtin_full(scope, "FN", typeexpr_sig(), body, None, Some(binder_bucket), false);
-        register_builtin_full(scope, "FN", sigil_sig(), body, None, Some(binder_bucket), false);
-        register_builtin_full(scope, "FN", record_sig(), body_record_schema, None, None, false);
-    }
+    use crate::builtins::register_action_builtin_full;
+    register_action_builtin_full(scope, "FN", typeexpr_sig(), body_action, None, Some(binder_bucket), false);
+    register_action_builtin_full(scope, "FN", sigil_sig(), body_action, None, Some(binder_bucket), false);
+    register_action_builtin_full(
+        scope,
+        "FN",
+        record_sig(),
+        body_record_schema_action,
+        None,
+        None,
+        false,
+    );
 }
 
 #[cfg(test)]

@@ -7,9 +7,7 @@
 //! [design/memory-model.md](../../design/memory-model.md).
 
 mod dispatch;
-// The shared action-harness for KFunction::invoke + builtins (design sketch / WIP). Hidden behind the
-// `action-harness` feature so it stays off the default build until the refactor lands. See harness.rs.
-#[cfg(feature = "action-harness")]
+// The shared action-harness for KFunction::invoke + builtins. See harness.rs.
 mod harness;
 mod interpret;
 mod lift;
@@ -20,10 +18,9 @@ pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path
 pub use scheduler::Scheduler;
 
 pub(crate) use dispatch::{
-    defer_field_list_via_combine, resolve_type_leaf_carrier, TypeLeafCarrier,
+    defer_field_list_action, resolve_type_leaf_carrier,
+    TypeLeafCarrier,
 };
-#[cfg(feature = "action-harness")]
-pub(crate) use dispatch::defer_field_list_action;
 pub use dispatch::{NameOutcome, ResolveOutcome, ResolveTypeExprOutcome, Resolved};
 
 #[cfg(test)]

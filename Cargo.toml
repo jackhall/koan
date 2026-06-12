@@ -7,11 +7,6 @@ edition = "2021"
 name = "koan"
 path = "src/lib.rs"
 
-[features]
-# The builtin → `Action` harness refactor (src/machine/execute/harness.rs and its lowerings), hidden
-# off the default build while it's developed. Off by default; build/test with `--features action-harness`.
-action-harness = []
-
 [[bin]]
 name = "koan"
 path = "src/main.rs"

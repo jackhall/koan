@@ -2,47 +2,15 @@ use std::rc::Rc;
 
 use crate::machine::model::types::{KKind, NominalMember, NominalSchema, RecursiveSet};
 use crate::machine::model::KType;
-use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, ScopeId};
-
-use crate::builtins::err;
+use crate::machine::ScopeId;
 
 /// `TEMPLATE <param:TypeExprRef>` → `TypeExprRef` carrying a template singleton
 /// [`RecursiveSet`] of one [`KKind::TypeConstructor`] member with `ScopeId::SENTINEL`
 /// and a placeholder `name` (`"_typeconstructor"`). The surrounding opaque ascription
 /// (`ascribe.rs:body_opaque`) re-mints a fresh per-call singleton with the binding's slot
-/// name and a per-call `scope_id`. Arity-1 only.
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let param_kt = match bundle.require_ktype("param") {
-        Ok(t) => t.clone(),
-        Err(e) => return err(e),
-    };
-    let param = param_kt.name();
-    // Abstract higher-kinded SIG slot — not a constructible union, so the variant schema
-    // is empty (identity ignores it anyway).
-    let member = NominalMember::pending(
-        "_typeconstructor".into(),
-        ScopeId::SENTINEL,
-        KKind::TypeConstructor,
-    );
-    member.fill(NominalSchema::TypeConstructor {
-        schema: std::collections::HashMap::new(),
-        param_names: vec![param],
-    });
-    let set = Rc::new(RecursiveSet::new(vec![member]));
-    BodyResult::ktype(
-        sched
-            .current_scope()
-            .arena
-            .alloc_ktype(KType::SetRef { set, index: 0 }),
-    )
-}
-
-/// `Action`-harness twin of [`body`]: reads the `param` type cell from `BodyCtx::args`, mints the
-/// template singleton [`RecursiveSet`], and returns it as a `Carried::Type`.
-#[cfg(feature = "action-harness")]
+/// name and a per-call `scope_id`. Arity-1 only. Reads the `param` type cell from
+/// `BodyCtx::args`, mints the template singleton [`RecursiveSet`], and returns it as a
+/// `Carried::Type`.
 pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {

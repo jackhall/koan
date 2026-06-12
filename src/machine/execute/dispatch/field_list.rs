@@ -92,7 +92,6 @@ pub(crate) fn defer_field_list_via_combine<'run, 's>(
 /// `Dep::Existing`, sigil sub-Dispatches `Dep::Dispatch { OwnScope }`, and the finish re-walks
 /// `expr` then routes the still-`BodyResult`-returning `finalize` through `body_result_to_action`.
 /// Reuses the caller's existing finalize unchanged.
-#[cfg(feature = "action-harness")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn defer_field_list_action<'a>(
     expr: KExpression<'a>,

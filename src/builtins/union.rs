@@ -1,108 +1,14 @@
 use crate::machine::model::types::KKind;
 use std::collections::HashMap;
 
-use crate::machine::core::PendingTypeEntry;
-use crate::machine::execute::defer_field_list_via_combine;
 use crate::machine::model::types::{
-    finalize_nominal_member, parse_typed_field_list_via_elaborator, seal_recursive_refs,
-    Elaborator, FieldListOutcome, FieldNameKind, NominalSchema, SchemaSealResult, SealOutcome,
+    finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalSchema, SchemaSealResult,
+    SealOutcome,
 };
 use crate::machine::model::KType;
-use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, Frame, KError, KErrorKind, SchedulerHandle, Scope,
-};
+use crate::machine::{BindingIndex, BodyResult, Frame, KError, KErrorKind, Scope};
 
 use super::{arg, err, kw, sig};
-#[cfg(not(feature = "action-harness"))]
-use super::register_builtin_with_binder;
-use crate::machine::core::kfunction::argument_bundle::{
-    extract_bare_type_name, extract_kexpression,
-};
-
-/// `UNION <name:TypeExprRef> = (<schema>)` — declare a named tagged-union type.
-///
-/// The schema slot is a parens-wrapped expression of `<tag:Type> :<type:Type>`
-/// pairs — variant tags are capitalized type names. Parens keep the parts from
-/// dispatching as their own expression so the elaborator sees tag/type pairs
-/// directly. Type-only: the variant schema rides
-/// the sealed `RecursiveSet` member in `bindings.types`, and the declaration yields a
-/// `KTypeValue(SetRef)` first-class type value — no value-side carrier.
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    mut bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let name = match extract_bare_type_name(&bundle, "name", "UNION") {
-        Ok(n) => n,
-        Err(e) => return err(e),
-    };
-    let schema_expr = match extract_kexpression(&mut bundle, "schema") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "UNION schema slot must be a parenthesized dict literal".to_string(),
-            )));
-        }
-    };
-    // Mark this binder in-flight so a consumer referencing it (an earlier sibling still
-    // finalizing) can park on our producer node. The guard's Drop removes the entry; the
-    // Park path moves it into the Combine-finish closure.
-    let scope_id = sched.current_scope().id;
-    let pending_guard = sched.current_scope().bindings().insert_pending_type(
-        name.clone(),
-        PendingTypeEntry {
-            kind: KKind::Tagged,
-            scope_id,
-            schema_expr: schema_expr.clone(),
-        },
-    );
-    // Seed the threaded set with this UNION's name so a self-recursive
-    // `UNION List = (cons :List nil :Null)` resolves to the transient `RecursiveRef`
-    // rather than parking on its own placeholder. The chain gates variant type names to
-    // this binder's lexical position.
-    let chain = sched.current_lexical_chain();
-    let mut elaborator = Elaborator::new(sched.current_scope())
-        .with_threaded([name.clone()])
-        .with_chain(chain.clone());
-    let outcome = parse_typed_field_list_via_elaborator(
-        &schema_expr,
-        "UNION schema",
-        FieldNameKind::Type,
-        &mut elaborator,
-        None,
-    );
-    // Non-nominal: the UNION name obeys source order like any other type name.
-    let bind_index = chain
-        .as_ref()
-        .map(|c| BindingIndex::value(c.index))
-        .unwrap_or(BindingIndex::BUILTIN);
-    match outcome {
-        FieldListOutcome::Done(fields) => {
-            finalize_union(sched.current_scope(), name, fields, bind_index)
-        }
-        FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
-        FieldListOutcome::Pending {
-            park_producers,
-            sub_dispatches,
-        } => {
-            let name_for_finish = name.clone();
-            defer_field_list_via_combine(
-                sched,
-                schema_expr,
-                park_producers,
-                sub_dispatches,
-                "UNION schema",
-                FieldNameKind::Type,
-                vec![name.clone()],
-                chain,
-                Some(pending_guard),
-                Some(Frame::bare("<union>", format!("UNION {name} schema"))),
-                Box::new(move |scope, fields| {
-                    finalize_union(scope, name_for_finish, fields, bind_index)
-                }),
-            )
-        }
-    }
-}
 
 /// Seal the elaborated variant schema into the UNION's [`RecursiveSet`] member and install
 /// the `SetRef` identity into `bindings.types` — type-only, no value-side carrier.
@@ -149,10 +55,9 @@ fn finalize_union<'a>(
     }
 }
 
-/// `Action`-harness twin of [`body`]: elaborate the variant schema, folding synchronously via
-/// [`finalize_union`] or deferring through [`defer_field_list_action`] (threading the binder name
-/// and the in-flight pending guard), then install the sealed `SetRef` identity.
-#[cfg(feature = "action-harness")]
+/// Elaborate the variant schema, folding synchronously via [`finalize_union`] or deferring through
+/// the shared `nominal_schema_action` field-list path (threading the binder name and the in-flight
+/// pending guard), then install the sealed `SetRef` identity.
 pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -192,7 +97,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("schema", KType::KExpression),
         ],
     );
-    #[cfg(feature = "action-harness")]
     crate::builtins::register_action_builtin_full(
         scope,
         "UNION",
@@ -201,14 +105,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         Some(super::type_part_binder_name),
         None,
         false,
-    );
-    #[cfg(not(feature = "action-harness"))]
-    register_builtin_with_binder(
-        scope,
-        "UNION",
-        signature,
-        body,
-        Some(super::type_part_binder_name),
     );
 }
 

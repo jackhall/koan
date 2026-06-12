@@ -73,11 +73,6 @@ fn using_module_function_resolves_its_own_internals() {
 /// Multi-statement USING body runs as a block: a body-local `LET` reading a surfaced member
 /// is visible to a later statement, and the *final* statement's value is the USING result
 /// (not the first statement's). Pins block semantics through the transparent window.
-///
-/// This is a capability of the `Action`-harness USING body only — the legacy `BuiltinFn` body
-/// dispatches the whole body as a single expression and has no block-split, so the test is
-/// gated to the harness path (the legacy path is retired once `Body::Builtin` is deleted).
-#[cfg(feature = "action-harness")]
 #[test]
 fn using_multi_statement_body_sequences_and_returns_last() {
     let arena = RuntimeArena::new();

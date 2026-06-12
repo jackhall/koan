@@ -13,8 +13,6 @@ use crate::machine::model::KType;
 use crate::machine::Scope;
 
 use super::{arg, kw, sig};
-#[cfg(not(feature = "action-harness"))]
-use super::register_builtin;
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let template_sig = || {
@@ -37,19 +35,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         )
     };
-    #[cfg(feature = "action-harness")]
-    {
-        crate::builtins::register_action_builtin(
-            scope,
-            "TEMPLATE",
-            template_sig(),
-            type_constructor::body_action,
-        );
-        crate::builtins::register_action_builtin(scope, "WITH", with_sig(), with::body_action);
-    }
-    #[cfg(not(feature = "action-harness"))]
-    {
-        register_builtin(scope, "TEMPLATE", template_sig(), type_constructor::body);
-        register_builtin(scope, "WITH", with_sig(), with::body);
-    }
+    crate::builtins::register_action_builtin(
+        scope,
+        "TEMPLATE",
+        template_sig(),
+        type_constructor::body_action,
+    );
+    crate::builtins::register_action_builtin(scope, "WITH", with_sig(), with::body_action);
 }

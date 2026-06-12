@@ -1,41 +1,17 @@
 use std::rc::Rc;
 
 use crate::machine::model::KType;
-use crate::machine::{ArgumentBundle, BodyResult, CallArena, SchedulerHandle, Scope};
+use crate::machine::{CallArena, Scope};
 
-use super::{arg, err, kw, sig};
-#[cfg(not(feature = "action-harness"))]
-use super::register_builtin;
+use super::{arg, kw, sig};
 
-/// `EVAL <expr:Any>` — surface form `$(expr)`. Dispatches the captured AST inside a
-/// `KExpression` in a fresh per-call frame so bindings introduced by the body don't leak;
-/// the call site is the new frame's `outer`, so free names resolve against the surrounding
-/// scope. Non-`KExpression` values raise `TypeMismatch`.
+/// `EVAL <expr:Any>` — surface form `$(expr)`. Reads the evaluated `expr` (must be a
+/// `KExpression`) and tail-replaces into it in a fresh call-site frame (`FreshChild` — the UAF
+/// guard) so bindings introduced by the body don't leak; the call site is the new frame's
+/// `outer`, so free names resolve against the surrounding scope. Non-`KExpression` values raise
+/// `TypeMismatch`.
 ///
 /// The `EVAL` head-keyword is not part of the surface; user code goes through the `$` sigil.
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let inner = match bundle.require_kexpression("expr") {
-        Ok(e) => e.clone(),
-        Err(e) => return err(e),
-    };
-    // Chain the call-site's frame Rc onto the new frame so the parent's per-call arena
-    // stays alive while the new frame's `outer`-scope pointer is in use.
-    let frame: Rc<CallArena> = CallArena::new(sched.current_scope(), sched.current_frame());
-    BodyResult::Tail {
-        expr: inner,
-        frame: Some(frame),
-        function: None,
-        block_entry: None,
-        body_index: 0,
-    }
-}
-
-/// `Action`-harness twin of [`body`]: reads the evaluated `expr` (must be a `KExpression`) and
-/// tail-replaces into it in a fresh call-site frame (`FreshChild` — the UAF guard).
-#[cfg(feature = "action-harness")]
 pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -69,10 +45,7 @@ pub fn body_action<'a>(
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let signature = sig(KType::Any, vec![kw("EVAL"), arg("expr", KType::Any)]);
-    #[cfg(feature = "action-harness")]
     crate::builtins::register_action_builtin(scope, "EVAL", signature, body_action);
-    #[cfg(not(feature = "action-harness"))]
-    register_builtin(scope, "EVAL", signature, body);
 }
 
 #[cfg(test)]

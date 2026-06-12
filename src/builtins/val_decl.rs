@@ -15,22 +15,9 @@ use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::types::KKind;
 use crate::machine::model::{Carried, KObject, KType};
-use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, KError, KErrorKind, NodeId,
-    SchedulerHandle, Scope,
-};
+use crate::machine::{BindingIndex, KError, KErrorKind, Scope};
 
-use super::{arg, err, kw, sig};
-#[cfg(not(feature = "action-harness"))]
-use super::register_builtin_with_binder;
-
-fn schedule_type_resolve<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    te: &TypeName,
-) -> crate::machine::NodeId {
-    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Type(te.clone()))]);
-    sched.add_dispatch_here(expr)
-}
+use super::{arg, kw, sig};
 
 fn typeexpr_from_carrier<'a>(kt: &KType<'a>) -> CarrierForm<'a> {
     match kt {
@@ -59,130 +46,10 @@ enum CarrierForm<'a> {
     Direct(KType<'a>),
 }
 
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    if !sched.current_scope().is_in_sig_body() {
-        return err(KError::new(KErrorKind::ShapeError(
-            "VAL is only valid inside a SIG body — use LET for value bindings in \
-             modules and run-root scope"
-                .to_string(),
-        )));
-    }
-
-    let name = match bundle.get("name") {
-        Some(KObject::KString(s)) => s.clone(),
-        Some(other) => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "name".to_string(),
-                expected: "Identifier".to_string(),
-                got: other.ktype().name(),
-            }));
-        }
-        None => return err(KError::new(KErrorKind::MissingArg("name".to_string()))),
-    };
-
-    // Defense-in-depth: abstract-type members must use `LET`, not `VAL`.
-    if super::ascribe::is_abstract_type_name(&name) {
-        return err(KError::new(KErrorKind::ShapeError(format!(
-            "VAL slot name `{name}` classifies as a Type token; abstract-type members \
-             must use `LET {name} = <Type>` instead of `VAL`",
-        ))));
-    }
-
-    let carrier = match bundle.get_type("ty") {
-        Some(kt) => typeexpr_from_carrier(kt),
-        None => {
-            return err(match bundle.get("ty") {
-                Some(other) => KError::new(KErrorKind::TypeMismatch {
-                    arg: "ty".to_string(),
-                    expected: "TypeExprRef".to_string(),
-                    got: other.ktype().name(),
-                }),
-                None => KError::new(KErrorKind::MissingArg("ty".to_string())),
-            });
-        }
-    };
-
-    // Value-style: strict lexical cutoff against the SIG body's chain index.
-    let bind_index = sched
-        .current_lexical_chain()
-        .map(|chain| BindingIndex::value(chain.index))
-        .unwrap_or(BindingIndex::BUILTIN);
-
-    match carrier {
-        CarrierForm::Direct(kt) => finalize_val(sched.current_scope(), name, kt, bind_index),
-        CarrierForm::Leaf(te) => {
-            let resolve_id = schedule_type_resolve(sched, &te);
-            defer_val_via_combine(sched, name, te, resolve_id, bind_index)
-        }
-        // A `TypeNameRef` carrier always holds a bare-leaf `TypeName` now —
-        // parameterized surface forms sub-Dispatch and never reach this slot — so the
-        // leaf is the only shape and always re-dispatches against decl_scope.
-        CarrierForm::Raw(te) => {
-            let resolve_id = schedule_type_resolve(sched, &te);
-            defer_val_via_combine(sched, name, te, resolve_id, bind_index)
-        }
-    }
-}
-
-/// Record the value slot's declared type in `bindings.types`. A VAL is a *value* member
-/// whose *declared type* we keep; storing the `KType` directly (not a boxed carrier) keeps
-/// the type table the single home for everything ascription enumerates. Uses the same
-/// infallible `register_type` path as a SIG-local `LET <TypeName> = …` abstract member.
-fn finalize_val<'a>(
-    scope: &Scope<'a>,
-    name: String,
-    declared_kt: KType<'a>,
-    bind_index: BindingIndex,
-) -> BodyResult<'a> {
-    let kt_ref: &'a KType<'a> = scope.arena.alloc_ktype(declared_kt.clone());
-    if let Err(e) = scope.register_user_type(name, declared_kt, bind_index) {
-        return err(e);
-    }
-    BodyResult::ktype(kt_ref)
-}
-
-/// Errored deps short-circuit via `run_combine` before the closure runs.
-fn defer_val_via_combine<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    name: String,
-    te: TypeName,
-    resolve_id: NodeId,
-    bind_index: BindingIndex,
-) -> BodyResult<'a> {
-    let name_for_finish = name;
-    let te_for_finish = te;
-    let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
-        debug_assert_eq!(results.len(), 1, "VAL Combine has exactly one dep");
-        let kt = match results[0] {
-            Carried::Type(kt) => kt.clone(),
-            // Routing bug — surface structured, don't panic.
-            Carried::Object(other) => {
-                return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
-                    "VAL type `{}` sub-dispatch resolved to a non-type value of kind `{}`",
-                    te_for_finish.render(),
-                    other.ktype().name(),
-                ))));
-            }
-        };
-        finalize_val(
-            _sched.current_scope(),
-            name_for_finish.clone(),
-            kt,
-            bind_index,
-        )
-    });
-    let combine_id = sched.add_combine_here(vec![resolve_id], vec![], finish);
-    BodyResult::DeferTo(combine_id)
-}
-
-/// `Action`-harness twin of [`body`]: same SIG-body guard and carrier-shape split, but reads its
+/// SIG-body-only value-slot declarator. Same SIG-body guard and carrier-shape split: reads its
 /// args from `BodyCtx::args`, registers the value slot's declared type directly on a scope, and
 /// returns `Action::Done` for a structural carrier or an `Action::Combine` (one `OwnScope` type
 /// sub-dispatch) for a leaf that re-resolves against decl_scope.
-#[cfg(feature = "action-harness")]
 pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -272,9 +139,11 @@ pub fn body_action<'a>(
     }
 }
 
-/// `Action`-side twin of [`finalize_val`]: records the value slot's declared type in
-/// `bindings.types` and returns the slot's carrier as `Action::Done`.
-#[cfg(feature = "action-harness")]
+/// Records the value slot's declared type in `bindings.types` and returns the slot's carrier as
+/// `Action::Done`. A VAL is a *value* member whose *declared type* we keep; storing the `KType`
+/// directly (not a boxed carrier) keeps the type table the single home for everything ascription
+/// enumerates. Uses the same infallible `register_type` path as a SIG-local `LET <TypeName> = …`
+/// abstract member.
 fn finalize_val_action<'a>(
     scope: &Scope<'a>,
     name: String,
@@ -306,7 +175,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("ty", KType::OfKind(KKind::Proper)),
         ],
     );
-    #[cfg(feature = "action-harness")]
     crate::builtins::register_action_builtin_full(
         scope,
         "VAL",
@@ -316,8 +184,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         None,
         false,
     );
-    #[cfg(not(feature = "action-harness"))]
-    register_builtin_with_binder(scope, "VAL", signature, body, Some(binder_name));
 }
 
 #[cfg(test)]

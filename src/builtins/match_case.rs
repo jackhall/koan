@@ -1,17 +1,11 @@
 use crate::machine::model::types::KKind;
 use std::rc::Rc;
 
-use crate::machine::core::LexicalFrame;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CallArena, KError, KErrorKind, SchedulerHandle, Scope,
-};
+use crate::machine::{KError, KErrorKind, Scope};
 
-use super::branch_walk::{find_branch_body, resolve_arm_return_contract};
-use super::{arg, err, kw, sig};
-#[cfg(not(feature = "action-harness"))]
-use super::register_builtin;
-use crate::machine::core::kfunction::body::split_body_statements;
+use super::branch_walk::find_branch_body;
+use super::{arg, kw, sig};
 
 /// `MATCH <value:Any> -> :<T> WITH <branches:KExpression>` — branch by tag.
 ///
@@ -25,90 +19,6 @@ use crate::machine::core::kfunction::body::split_body_statements;
 /// expression with `it` bound to the inner value in a per-MATCH child scope (so
 /// the binding can't leak). No matching branch → `ShapeError("inexhaustive match
 /// = no branch for `X`")`; malformed shape → `ShapeError`.
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    mut bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let (tag, value) = match bundle.get("value") {
-        Some(KObject::Tagged { tag, value, .. }) => (tag.clone(), Rc::clone(value)),
-        Some(KObject::Bool(b)) => (
-            if *b {
-                "true".to_string()
-            } else {
-                "false".to_string()
-            },
-            Rc::new(KObject::Null),
-        ),
-        Some(other) => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "value".to_string(),
-                expected: "Tagged or Bool".to_string(),
-                got: other.ktype().name().to_string(),
-            }));
-        }
-        None => return err(KError::new(KErrorKind::MissingArg("value".to_string()))),
-    };
-    let contract = match resolve_arm_return_contract(
-        sched.current_scope(),
-        &mut bundle,
-        "MATCH",
-        sched.current_lexical_chain(),
-    ) {
-        Ok(c) => c,
-        Err(e) => return err(e),
-    };
-    let branches_expr = match bundle.extract_kexpression_or_shape_error("MATCH", "branches") {
-        Ok(e) => e,
-        Err(e) => return err(e),
-    };
-    let branch_body = match find_branch_body(&branches_expr, &tag, false) {
-        Ok(Some(body)) => body,
-        Ok(None) => {
-            return err(KError::new(KErrorKind::ShapeError(format!(
-                "inexhaustive match = no branch for `{}`",
-                tag
-            ))));
-        }
-        Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
-    };
-    // Chain the call-site frame per per-call-arena-protocol.md § Outer-frame chain.
-    let frame: Rc<CallArena> = CallArena::new(sched.current_scope(), sched.current_frame());
-    // `it` binds at idx 0; the arm body's statements sit at idx >= 1, so the strict
-    // `idx < cutoff` rule lets the body see it — same path the FN parameter uses. The
-    // per-call re-anchor is concentrated in `with_anchored_child`; arm statements dispatch
-    // via `add_dispatch_with_chain_in_frame`, which stores `Yoked` and re-projects the scope
-    // from the frame cart at the read boundary — so the seed itself fabricates no `&'a`.
-    frame.with_anchored_child(|arena, child| {
-        let it_obj = arena.alloc_object(value.deep_clone());
-        let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
-    });
-    // Multi-statement arms (`tag -> ((s_0) ... (s_{N-1}))`) submit the first N-1 as
-    // siblings at chain indices `1..N-1` and tail-replace into the last at `N`.
-    let arm_scope_id = frame.scope_for_bind().id;
-    let statements = split_body_statements(branch_body);
-    let n = statements.len();
-    if n >= 2 {
-        let call_site_chain = sched
-            .current_lexical_chain()
-            .expect("MATCH body runs inside an enter_block / active_chain");
-        let mut stmts = statements;
-        let last = stmts.pop().expect("n >= 2");
-        for (i, stmt) in stmts.into_iter().enumerate() {
-            let chain = LexicalFrame::push(Some(call_site_chain.clone()), arm_scope_id, i + 1);
-            sched.with_active_frame(frame.clone(), &mut |s| {
-                s.add_dispatch_with_chain_in_frame(stmt.clone(), chain.clone());
-            });
-        }
-        BodyResult::tail_with_block_at_index(last, Some(frame), arm_scope_id, n, Some(contract))
-    } else {
-        let only = statements.into_iter().next().expect("n >= 1");
-        BodyResult::tail_with_block(only, Some(frame), arm_scope_id, Some(contract))
-    }
-}
-
-/// `Action`-harness twin of [`body`]: selects the matching arm, mints a per-MATCH child frame with
-/// `it` bound, and tail-replaces into the arm body carrying the `-> :T` `Arm` contract.
-#[cfg(feature = "action-harness")]
 pub fn body_action<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -163,10 +73,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("branches", KType::KExpression),
         ],
     );
-    #[cfg(feature = "action-harness")]
     crate::builtins::register_action_builtin(scope, "MATCH", signature, body_action);
-    #[cfg(not(feature = "action-harness"))]
-    register_builtin(scope, "MATCH", signature, body);
 }
 
 #[cfg(test)]
