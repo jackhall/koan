@@ -59,6 +59,69 @@ pub fn body<'a, 's>(
     }))
 }
 
+/// `Action`-harness twin of [`body`]: reads the `sig` type cell and the eager-evaluated `bindings`
+/// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and
+/// returns the specialized `KType::Signature` as a `Carried::Type`.
+#[cfg(feature = "action-harness")]
+pub fn body_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_held, arg_object, arg_type, Action};
+    use crate::machine::model::Carried;
+
+    let done_err = |e: KError| Action::Done(Err(e));
+    let s = match arg_type(ctx.args, "sig") {
+        Some(KType::Signature { sig, .. }) => *sig,
+        other => {
+            let got = match (other, arg_held(ctx.args, "sig")) {
+                (Some(kt), _) => kt.name(),
+                (None, Some(Held::Object(object))) => object.ktype().name(),
+                (None, _) => return done_err(KError::new(KErrorKind::MissingArg("sig".to_string()))),
+            };
+            return done_err(KError::new(KErrorKind::TypeMismatch {
+                arg: "sig".to_string(),
+                expected: "Signature".to_string(),
+                got,
+            }));
+        }
+    };
+    let fields = match arg_object(ctx.args, "bindings") {
+        Some(KObject::Record(fields, _types)) => fields,
+        _ => {
+            return done_err(KError::new(KErrorKind::ShapeError(
+                "WITH bindings must be a record literal `{Slot = Type, …}`".to_string(),
+            )));
+        }
+    };
+    // A binding must name one of the SIG's abstract type slots — a width-subset check
+    // against the slot set. Slot names are capitalized, so a lowercase / unknown key
+    // simply isn't in the set; no separate name-shape check is needed.
+    let known_slots: HashSet<String> = abstract_type_names_of(s.decl_scope()).into_iter().collect();
+    let mut pinned: Vec<(String, KType<'a>)> = Vec::with_capacity(fields.len());
+    for (name, value) in fields.iter() {
+        if !known_slots.contains(name) {
+            return done_err(KError::new(KErrorKind::ShapeError(format!(
+                "{} has no abstract type slot `{name}`",
+                s.path,
+            ))));
+        }
+        match value {
+            Held::Type(kt) => pinned.push((name.clone(), kt.clone())),
+            Held::Object(other) => {
+                return done_err(KError::new(KErrorKind::ShapeError(format!(
+                    "WITH binding `{name}` value must be a type, got `{}`",
+                    other.ktype().name(),
+                ))));
+            }
+        }
+    }
+    let kt = ctx.scope.arena.alloc_ktype(KType::Signature {
+        sig: s,
+        pinned_slots: pinned,
+    });
+    Action::Done(Ok(Carried::Type(kt)))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};

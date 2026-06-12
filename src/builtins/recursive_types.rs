@@ -29,7 +29,9 @@ use crate::machine::{
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use super::{arg, err, kw, register_builtin_with_binder, sig};
+use super::{arg, err, kw, sig};
+#[cfg(not(feature = "action-harness"))]
+use super::register_builtin_with_binder;
 use crate::machine::core::kfunction::argument_bundle::extract_bare_type_name;
 
 pub fn body<'a, 's>(
@@ -201,20 +203,134 @@ fn leading_keyword<'b>(decl: &'b KExpression<'_>) -> Option<&'b str> {
     })
 }
 
+/// `Action`-harness twin of [`body`]: discovers the members, mints the set + carrying child scope,
+/// pre-installs each member's `SetRef`, dispatches the body block (an `InScope` Combine dep that fans
+/// out per declaration), and the finish mirrors the sealed members + binds the group handle into the
+/// enclosing scope.
+#[cfg(feature = "action-harness")]
+pub fn body_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{
+        arg_type, require_kexpression, Action, Cont, Dep, DepPlacement,
+    };
+    use crate::machine::core::kfunction::argument_bundle::bare_type_name;
+    use crate::machine::model::Carried;
+
+    let group_name = match arg_type(ctx.args, "name") {
+        Some(t) => match bare_type_name(t, "name", "RECURSIVE TYPES") {
+            Ok(n) => n,
+            Err(e) => return Action::Done(Err(e)),
+        },
+        None => {
+            return Action::Done(Err(KError::new(KErrorKind::MissingArg("name".to_string()))))
+        }
+    };
+    let body_expr = match require_kexpression(ctx.args, "RECURSIVE TYPES", "body") {
+        Ok(e) => e,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    let members = match discover_members(&body_expr) {
+        Ok(m) => m,
+        Err(e) => return Action::Done(Err(e)),
+    };
+
+    let scope_id = ctx.scope.id;
+    let set = Rc::new(RecursiveSet::new(
+        members
+            .iter()
+            .map(|(name, kind)| NominalMember::pending(name.clone(), scope_id, *kind))
+            .collect(),
+    ));
+    let child = ctx
+        .scope
+        .arena
+        .alloc_scope(Scope::child_recursive_group(ctx.scope, Rc::clone(&set)));
+    for (index, (name, _)) in members.iter().enumerate() {
+        child.preinstall_identity(
+            name.clone(),
+            KType::SetRef {
+                set: Rc::clone(&set),
+                index,
+            },
+            BindingIndex::value(0),
+        );
+    }
+
+    let bind_index = ctx
+        .chain
+        .as_ref()
+        .map(|chain| BindingIndex::value(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
+    let finish: Cont<'a> = Box::new(move |fctx, _results| {
+        let frame = || Frame::bare("<recursive-types>", format!("RECURSIVE TYPES {group_name}"));
+        for (index, (name, _)) in members.iter().enumerate() {
+            if !set.member(index).is_filled() {
+                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                    "RECURSIVE TYPES `{group_name}`: member `{name}` did not seal — a \
+                     declaration referenced a name outside the group",
+                )))
+                .with_frame(frame())));
+            }
+        }
+        for (index, (name, _)) in members.iter().enumerate() {
+            let member_ref = KType::SetRef {
+                set: Rc::clone(&set),
+                index,
+            };
+            if let Err(e) =
+                fctx.scope
+                    .register_type_upsert(name.clone(), member_ref, bind_index)
+            {
+                return Action::Done(Err(e.with_frame(frame())));
+            }
+        }
+        let handle = KType::RecursiveGroup(Rc::clone(&set));
+        match fctx
+            .scope
+            .register_type_upsert(group_name.clone(), handle, bind_index)
+        {
+            Ok(kt_ref) => Action::Done(Ok(Carried::Type(
+                fctx.scope.arena.alloc_ktype(kt_ref.clone()),
+            ))),
+            Err(e) => Action::Done(Err(e.with_frame(frame()))),
+        }
+    });
+    Action::Combine {
+        deps: vec![Dep::Dispatch {
+            expr: body_expr,
+            placement: DepPlacement::InScope(child),
+        }],
+        finish,
+    }
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
+    let signature = sig(
+        KType::OfKind(KKind::Any),
+        vec![
+            kw("RECURSIVE"),
+            kw("TYPES"),
+            arg("name", KType::OfKind(KKind::Proper)),
+            kw("="),
+            arg("body", KType::KExpression),
+        ],
+    );
+    #[cfg(feature = "action-harness")]
+    crate::builtins::register_action_builtin_full(
+        scope,
+        "RECURSIVE TYPES",
+        signature,
+        body_action,
+        Some(super::type_part_binder_name),
+        None,
+        false,
+    );
+    #[cfg(not(feature = "action-harness"))]
     register_builtin_with_binder(
         scope,
         "RECURSIVE TYPES",
-        sig(
-            KType::OfKind(KKind::Any),
-            vec![
-                kw("RECURSIVE"),
-                kw("TYPES"),
-                arg("name", KType::OfKind(KKind::Proper)),
-                kw("="),
-                arg("body", KType::KExpression),
-            ],
-        ),
+        signature,
         body,
         Some(super::type_part_binder_name),
     );

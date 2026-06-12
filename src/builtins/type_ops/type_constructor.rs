@@ -40,6 +40,51 @@ pub fn body<'a, 's>(
     )
 }
 
+/// `Action`-harness twin of [`body`]: reads the `param` type cell from `BodyCtx::args`, mints the
+/// template singleton [`RecursiveSet`], and returns it as a `Carried::Type`.
+#[cfg(feature = "action-harness")]
+pub fn body_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_held, arg_type, Action};
+    use crate::machine::model::values::Held;
+    use crate::machine::model::Carried;
+    use crate::machine::{KError, KErrorKind};
+
+    let param_kt = match arg_type(ctx.args, "param") {
+        Some(kt) => kt.clone(),
+        None => {
+            let error = match arg_held(ctx.args, "param") {
+                Some(Held::Object(object)) => KError::new(KErrorKind::TypeMismatch {
+                    arg: "param".to_string(),
+                    expected: "TypeExprRef".to_string(),
+                    got: object.ktype().name(),
+                }),
+                _ => KError::new(KErrorKind::MissingArg("param".to_string())),
+            };
+            return Action::Done(Err(error));
+        }
+    };
+    let param = param_kt.name();
+    // Abstract higher-kinded SIG slot — not a constructible union, so the variant schema
+    // is empty (identity ignores it anyway).
+    let member = NominalMember::pending(
+        "_typeconstructor".into(),
+        ScopeId::SENTINEL,
+        KKind::TypeConstructor,
+    );
+    member.fill(NominalSchema::TypeConstructor {
+        schema: std::collections::HashMap::new(),
+        param_names: vec![param],
+    });
+    let set = Rc::new(RecursiveSet::new(vec![member]));
+    let kt = ctx
+        .scope
+        .arena
+        .alloc_ktype(KType::SetRef { set, index: 0 });
+    Action::Done(Ok(Carried::Type(kt)))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};

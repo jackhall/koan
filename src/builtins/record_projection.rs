@@ -18,7 +18,9 @@ use crate::machine::model::types::Record;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
 
-use super::{arg, err, kw, register_builtin, sig};
+use super::{arg, err, kw, sig};
+#[cfg(not(feature = "action-harness"))]
+use super::register_builtin;
 
 /// `(x y) FROM <record:{}>` — re-tag the record's carried type to the named fields.
 ///
@@ -89,25 +91,95 @@ pub fn body<'a, 's>(
     BodyResult::value(sched.current_scope().arena.alloc_object(result))
 }
 
+/// `Action`-harness twin of [`body`]: re-tags the carried type of the `record` arg to the named
+/// fields, reads its args from `BodyCtx::args`, and returns the re-typed record as `Action::Done`.
+#[cfg(feature = "action-harness")]
+pub fn body_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_object, require_kexpression, Action};
+    use crate::machine::model::Carried;
+
+    let fields_expr = match require_kexpression(ctx.args, "FROM", "fields") {
+        Ok(e) => e,
+        Err(e) => return Action::Done(Err(e)),
+    };
+
+    // Extract field names from the captured expression. Each part must be a bare
+    // identifier; a computed field list is out of scope by design.
+    let mut names: Vec<String> = Vec::with_capacity(fields_expr.parts.len());
+    for part in &fields_expr.parts {
+        match &part.value {
+            ExpressionPart::Identifier(name) => {
+                if names.iter().any(|n| n == name) {
+                    return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                        "FROM field list has duplicate field `{name}`",
+                    )))));
+                }
+                names.push(name.clone());
+            }
+            other => {
+                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                    "FROM field list must be bare field names, got `{}`",
+                    other.summarize(),
+                )))));
+            }
+        }
+    }
+
+    let (fields, types) = match arg_object(ctx.args, "record") {
+        Some(KObject::Record(fields, types)) => (fields, types),
+        // The `:{}` slot shape-gates to records, so a non-record argument is a
+        // dispatch non-match that never reaches the body. Defensive arm only.
+        Some(other) => {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "FROM record operand must be a record, got `{}`",
+                other.ktype().name(),
+            )))));
+        }
+        None => {
+            return Action::Done(Err(KError::new(KErrorKind::MissingArg("record".to_string()))));
+        }
+    };
+
+    // Each named field must exist in the record; narrow the carried type to exactly
+    // the named fields, reading each kept field's type off the record's own carrier.
+    let mut narrowed_pairs: Vec<(String, KType<'a>)> = Vec::with_capacity(names.len());
+    for name in &names {
+        match types.get(name) {
+            Some(kt) => narrowed_pairs.push((name.clone(), kt.clone())),
+            None => {
+                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                    "FROM: record has no field `{name}`",
+                )))));
+            }
+        }
+    }
+
+    let narrowed = Record::from_pairs(narrowed_pairs);
+    let result = KObject::record_with_type(Rc::clone(fields), narrowed);
+    let obj = ctx.scope.arena.alloc_object(result);
+    Action::Done(Ok(Carried::Object(obj)))
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Return type `:{}` is contract-only ("FROM returns a record"): a native
     // `BodyResult::Value` flows straight to Done without being stamped against the
     // declared return, so the empty `:{}` does not coarsen the body's narrowed
     // `{x,y}` carrier. The `fields` slot is `KExpression` (captured unevaluated);
     // the `record` slot is `:{}`, which shape-gates the operand to records.
-    register_builtin(
-        scope,
-        "FROM",
-        sig(
-            KType::Record(Box::new(Record::new())),
-            vec![
-                arg("fields", KType::KExpression),
-                kw("FROM"),
-                arg("record", KType::Record(Box::new(Record::new()))),
-            ],
-        ),
-        body,
+    let signature = sig(
+        KType::Record(Box::new(Record::new())),
+        vec![
+            arg("fields", KType::KExpression),
+            kw("FROM"),
+            arg("record", KType::Record(Box::new(Record::new()))),
+        ],
     );
+    #[cfg(feature = "action-harness")]
+    crate::builtins::register_action_builtin(scope, "FROM", signature, body_action);
+    #[cfg(not(feature = "action-harness"))]
+    register_builtin(scope, "FROM", signature, body);
 }
 
 #[cfg(test)]

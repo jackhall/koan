@@ -11,7 +11,9 @@ use crate::machine::model::values::Module;
 use crate::machine::model::KType;
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
 
-use super::{arg, kw, register_builtin, sig};
+use super::{arg, kw, sig};
+#[cfg(not(feature = "action-harness"))]
+use super::register_builtin;
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription.
 pub fn body_opaque<'a, 's>(
@@ -162,6 +164,191 @@ pub fn body_transparent<'a, 's>(
     BodyResult::ktype(module_obj)
 }
 
+/// `Action`-harness twin of [`body_opaque`]: same opaque-ascription logic, reading `m` / `s` from
+/// the `BodyCtx::args` type channel, minting on `ctx.scope.arena`, and returning the view module as
+/// `Action::Done(Ok(Carried::Type(..)))`.
+#[cfg(feature = "action-harness")]
+pub fn body_opaque_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::Action;
+    use crate::machine::model::Carried;
+
+    let (m, s) = match resolve_module_and_signature_action(ctx.args) {
+        Ok(pair) => pair,
+        Err(e) => return Action::Done(Err(e)),
+    };
+
+    let arena = ctx.scope.arena;
+    let new_scope = arena.alloc_scope(Scope::child_under_module(
+        ctx.scope,
+        format!("{} :| {}", m.path, s.path),
+    ));
+
+    let src = m.child_scope();
+    if let Err(e) = new_scope.bindings().try_bulk_install_from(src.bindings()) {
+        return Action::Done(Err(e));
+    }
+
+    let new_module: &'a Module<'a> = arena.alloc_module(Module::new(m.path.clone(), new_scope));
+    // Per-slot kind: a SIG-declared `LET Wrap = (TEMPLATE T)` mints a fresh
+    // `TypeConstructor` rather than the default `AbstractType` arm, preserving the
+    // higher-kinded shape across the ascription barrier.
+    let mut minted: Vec<(String, KType<'a>)> = Vec::new();
+    {
+        let sig_bindings = s.decl_scope().bindings();
+        for name in abstract_type_names_of(s.decl_scope()) {
+            let kt = match sig_bindings.lookup_type(&name, None) {
+                Some(KType::SetRef { set, index })
+                    if set.member(*index).kind == KKind::TypeConstructor =>
+                {
+                    let ProjectedSchema::TypeConstructor {
+                        schema,
+                        param_names,
+                    } = RecursiveSet::projected_schema(set, *index)
+                    else {
+                        unreachable!(
+                            "TypeConstructor-kind member projects a TypeConstructor schema"
+                        )
+                    };
+                    let member = NominalMember::pending(
+                        name.clone(),
+                        new_module.scope_id(),
+                        KKind::TypeConstructor,
+                    );
+                    member.fill(NominalSchema::TypeConstructor {
+                        schema,
+                        param_names,
+                    });
+                    let fresh = std::rc::Rc::new(RecursiveSet::new(vec![member]));
+                    KType::SetRef {
+                        set: fresh,
+                        index: 0,
+                    }
+                }
+                _ => KType::AbstractType {
+                    source: AbstractSource::Module(new_module),
+                    name: name.clone(),
+                },
+            };
+            minted.push((name.clone(), kt));
+        }
+    }
+    if !minted.is_empty() {
+        let mut tm = new_module.type_members.borrow_mut();
+        for (n, t) in minted {
+            tm.insert(n, t);
+        }
+    }
+
+    {
+        let tm = new_module.type_members.borrow();
+        let mut tags: Vec<(String, KType<'a>)> = Vec::new();
+        for (slot_name, kt) in s.decl_scope().bindings().iter_types() {
+            if is_abstract_type_name(&slot_name) {
+                continue;
+            }
+            if let KType::AbstractType {
+                source: AbstractSource::Sig(_),
+                name: member,
+            } = kt
+            {
+                if let Some(per_call) = tm.get(member) {
+                    tags.push((slot_name, per_call.clone()));
+                }
+            }
+        }
+        drop(tm);
+        if !tags.is_empty() {
+            let mut stt = new_module.slot_type_tags.borrow_mut();
+            for (slot_name, tag) in tags {
+                stt.insert(slot_name, tag);
+            }
+        }
+    }
+
+    if let Err(e) = shape_check(s, src) {
+        return Action::Done(Err(e));
+    }
+
+    new_module.mark_satisfies(s.sig_id());
+
+    let module_obj: &'a KType<'a> = arena.alloc_ktype(KType::Module {
+        module: new_module,
+        frame: None,
+    });
+    Action::Done(Ok(Carried::Type(module_obj)))
+}
+
+/// `Action`-harness twin of [`body_transparent`]: shape-checks against the source's own child scope
+/// and returns the retagged view module as `Action::Done(Ok(Carried::Type(..)))`.
+#[cfg(feature = "action-harness")]
+pub fn body_transparent_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::Action;
+    use crate::machine::model::Carried;
+
+    let (m, s) = match resolve_module_and_signature_action(ctx.args) {
+        Ok(pair) => pair,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    if let Err(e) = shape_check(s, m.child_scope()) {
+        return Action::Done(Err(e));
+    }
+    let arena = ctx.scope.arena;
+    let new_module: &'a Module<'a> = arena.alloc_module(Module::new(
+        format!("{} :! {}", m.path, s.path),
+        m.child_scope(),
+    ));
+    new_module.mark_satisfies(s.sig_id());
+    let module_obj: &'a KType<'a> = arena.alloc_ktype(KType::Module {
+        module: new_module,
+        frame: None,
+    });
+    Action::Done(Ok(Carried::Type(module_obj)))
+}
+
+/// `Action`-side resolver: read the `m:Module` / `s:Signature` operands from the `BodyCtx::args`
+/// type channel, reproducing [`resolve_module_and_signature`]'s missing / mismatch diagnostics.
+#[cfg(feature = "action-harness")]
+fn resolve_module_and_signature_action<'a>(
+    args: &crate::machine::model::KObject<'a>,
+) -> Result<
+    (
+        &'a crate::machine::model::values::Module<'a>,
+        &'a crate::machine::model::values::Signature<'a>,
+    ),
+    KError,
+> {
+    use crate::machine::core::kfunction::action::{arg_held, arg_type};
+
+    fn type_mismatch_or_missing(
+        args: &crate::machine::model::KObject<'_>,
+        name: &str,
+        expected: &str,
+    ) -> KError {
+        match arg_held(args, name) {
+            Some(held) => KError::new(KErrorKind::TypeMismatch {
+                arg: name.to_string(),
+                expected: expected.to_string(),
+                got: held.ktype().name(),
+            }),
+            None => KError::new(KErrorKind::MissingArg(name.to_string())),
+        }
+    }
+
+    let m = match arg_type(args, "m") {
+        Some(KType::Module { module, .. }) => *module,
+        _ => return Err(type_mismatch_or_missing(args, "m", "Module")),
+    };
+    let s = match arg_type(args, "s") {
+        Some(KType::Signature { sig, .. }) => *sig,
+        _ => return Err(type_mismatch_or_missing(args, "s", "Signature")),
+    };
+    Ok((m, s))
+}
+
 /// Verify every non-abstract-type name in `sig` has a binding in `src_scope`.
 fn shape_check<'a>(
     sig: &crate::machine::model::values::Signature<'a>,
@@ -247,32 +434,37 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // Slots are typed `Module` / `Signature`. Bare Type-token operands
     // (`IntOrd :| OrderedSig`) ride the auto-wrap rails into a value-typed future, so
     // no parallel Type-Type overload is required.
-    register_builtin(
-        scope,
-        ":|",
-        sig(
-            KType::OfKind(KKind::Module),
-            vec![
-                arg("m", KType::OfKind(KKind::Module)),
-                kw(":|"),
-                arg("s", KType::OfKind(KKind::Signature)),
-            ],
-        ),
-        body_opaque,
+    let opaque_sig = sig(
+        KType::OfKind(KKind::Module),
+        vec![
+            arg("m", KType::OfKind(KKind::Module)),
+            kw(":|"),
+            arg("s", KType::OfKind(KKind::Signature)),
+        ],
     );
-    register_builtin(
-        scope,
-        ":!",
-        sig(
-            KType::OfKind(KKind::Module),
-            vec![
-                arg("m", KType::OfKind(KKind::Module)),
-                kw(":!"),
-                arg("s", KType::OfKind(KKind::Signature)),
-            ],
-        ),
-        body_transparent,
+    let transparent_sig = sig(
+        KType::OfKind(KKind::Module),
+        vec![
+            arg("m", KType::OfKind(KKind::Module)),
+            kw(":!"),
+            arg("s", KType::OfKind(KKind::Signature)),
+        ],
     );
+    #[cfg(feature = "action-harness")]
+    {
+        crate::builtins::register_action_builtin(scope, ":|", opaque_sig, body_opaque_action);
+        crate::builtins::register_action_builtin(
+            scope,
+            ":!",
+            transparent_sig,
+            body_transparent_action,
+        );
+    }
+    #[cfg(not(feature = "action-harness"))]
+    {
+        register_builtin(scope, ":|", opaque_sig, body_opaque);
+        register_builtin(scope, ":!", transparent_sig, body_transparent);
+    }
 }
 
 #[cfg(test)]

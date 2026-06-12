@@ -21,7 +21,9 @@ use crate::machine::{
     ArgumentBundle, BodyResult, KError, KErrorKind, Resolution, SchedulerHandle, Scope,
 };
 
-use super::{arg, err, kw, register_builtin, sig};
+use super::{arg, err, kw, sig};
+#[cfg(not(feature = "action-harness"))]
+use super::register_builtin;
 
 pub fn body_identifier<'a, 's>(
     sched: &mut dyn SchedulerHandle<'a, 's>,
@@ -150,6 +152,180 @@ pub fn body_module<'a, 's>(
         Err(e) => return err(e),
     };
     access_module_member(m, &field_name)
+}
+
+/// Translate a [`BodyResult`] from the shared `access_*` helpers into a `Done` [`Action`]. The ATTR
+/// helpers only ever produce `Value` / `Err`, so the tail / defer arms are unreachable.
+#[cfg(feature = "action-harness")]
+fn done<'a>(
+    result: BodyResult<'a>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::Action;
+    match result {
+        BodyResult::Value(carried) => Action::Done(Ok(carried)),
+        BodyResult::Err(e) => Action::Done(Err(e)),
+        BodyResult::Tail { .. } | BodyResult::DeferTo(_) => {
+            unreachable!("ATTR access helpers only produce Value / Err")
+        }
+    }
+}
+
+/// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the
+/// type-channel leaf token (resolved or rendered), else a `MissingArg`. Mirrors [`read_field_name`].
+#[cfg(feature = "action-harness")]
+fn read_field_name_action<'a>(args: &KObject<'a>) -> Result<String, KError> {
+    use crate::machine::core::kfunction::action::{arg_object, arg_type};
+    if let Some(obj) = arg_object(args, "field") {
+        return match obj {
+            KObject::KString(s) => Ok(s.clone()),
+            other => Err(KError::new(KErrorKind::TypeMismatch {
+                arg: "field".to_string(),
+                expected: "Identifier".to_string(),
+                got: other.ktype().name().to_string(),
+            })),
+        };
+    }
+    if let Some(kt) = arg_type(args, "field") {
+        return Ok(match kt {
+            KType::Unresolved(te) => te.render(),
+            other => other.name(),
+        });
+    }
+    Err(KError::new(KErrorKind::MissingArg("field".to_string())))
+}
+
+/// `Action`-harness twin of [`body_identifier`]: same value-then-type lookup of the `s` identifier
+/// against `ctx.scope`, returning the projected member as `Action::Done`.
+#[cfg(feature = "action-harness")]
+pub fn body_identifier_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_object, Action};
+    let s_name = match arg_object(ctx.args, "s") {
+        Some(KObject::KString(s)) => s.clone(),
+        Some(other) => {
+            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+                arg: "s".to_string(),
+                expected: "Identifier".to_string(),
+                got: other.ktype().name().to_string(),
+            })));
+        }
+        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
+    };
+    let field_name = match read_field_name_action(ctx.args) {
+        Ok(s) => s,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    if let Some(target) = ctx.scope.lookup(&s_name) {
+        return done(access_field(ctx.scope, target, &field_name));
+    }
+    if let Some(kt) = ctx.scope.resolve_type(&s_name) {
+        match kt {
+            KType::Module { module: m, .. } => return done(access_module_member(m, &field_name)),
+            KType::AbstractType {
+                source: AbstractSource::Module(m),
+                ..
+            } => {
+                return done(access_module_member(m, &field_name));
+            }
+            KType::AbstractType { .. } => {}
+            _ => {}
+        }
+    }
+    Action::Done(Err(KError::new(KErrorKind::UnboundName(s_name))))
+}
+
+/// `Action`-harness twin of [`body_type_lhs`]: projects a member off a Type-classed `s`, resolving
+/// an `Unresolved` leaf through the memoized bridge first.
+#[cfg(feature = "action-harness")]
+pub fn body_type_lhs_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_object, arg_type, Action};
+    let s_kt = match arg_type(ctx.args, "s") {
+        Some(kt) => kt,
+        None => {
+            return Action::Done(Err(match arg_object(ctx.args, "s") {
+                Some(other) => KError::new(KErrorKind::TypeMismatch {
+                    arg: "s".to_string(),
+                    expected: "TypeExprRef".to_string(),
+                    got: other.ktype().name(),
+                }),
+                None => KError::new(KErrorKind::MissingArg("s".to_string())),
+            }));
+        }
+    };
+    let field_name = match read_field_name_action(ctx.args) {
+        Ok(s) => s,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    match s_kt {
+        KType::Unresolved(te) => match resolve_type_leaf_carrier(ctx.scope, te, None) {
+            TypeLeafCarrier::Resolved(kt) => done(access_type_member(ctx.scope, kt, &field_name)),
+            TypeLeafCarrier::Unbound(name) => {
+                Action::Done(Err(KError::new(KErrorKind::UnboundName(name))))
+            }
+            TypeLeafCarrier::Park(producers) => {
+                Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                    "ATTR lhs type `{}` resolved to a still-finalizing type \
+                     (parked on {} producer(s)); the type argument should already be sealed \
+                     at body entry",
+                    te.render(),
+                    producers.len(),
+                )))))
+            }
+        },
+        kt => done(access_type_member(ctx.scope, kt, &field_name)),
+    }
+}
+
+/// `Action`-harness twin of [`body_newtype`]: reads the `Wrapped` runtime lhs and projects the field
+/// through [`access_field`].
+#[cfg(feature = "action-harness")]
+pub fn body_newtype_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_object, Action};
+    let target = match arg_object(ctx.args, "s") {
+        Some(obj) => obj,
+        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
+    };
+    let field_name = match read_field_name_action(ctx.args) {
+        Ok(s) => s,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    done(access_field(ctx.scope, target, &field_name))
+}
+
+/// `Action`-harness twin of [`body_module`]: projects the field off a module identity riding the
+/// type channel.
+#[cfg(feature = "action-harness")]
+pub fn body_module_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_object, arg_type, Action};
+    let m = match arg_type(ctx.args, "s") {
+        Some(KType::Module { module, .. }) => *module,
+        _ => {
+            return Action::Done(Err(match arg_object(ctx.args, "s") {
+                Some(other) => KError::new(KErrorKind::TypeMismatch {
+                    arg: "s".to_string(),
+                    expected: "Module".to_string(),
+                    got: other.ktype().name(),
+                }),
+                None => KError::new(KErrorKind::TypeMismatch {
+                    arg: "s".to_string(),
+                    expected: "Module".to_string(),
+                    got: "Type".to_string(),
+                }),
+            }));
+        }
+    };
+    let field_name = match read_field_name_action(ctx.args) {
+        Ok(s) => s,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    done(access_module_member(m, &field_name))
 }
 
 fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
@@ -284,11 +460,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    let module_ty = KType::OfKind(KKind::Module);
-
-    register_builtin(
-        scope,
-        "ATTR",
+    let identifier_sig = || {
         sig(
             KType::Any,
             vec![
@@ -296,22 +468,18 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 arg("s", KType::Identifier),
                 arg("field", KType::Identifier),
             ],
-        ),
-        body_identifier,
-    );
-    register_builtin(
-        scope,
-        "ATTR",
+        )
+    };
+    let module_field_sig = || {
         sig(
             KType::Any,
             vec![
                 kw("ATTR"),
-                arg("s", module_ty.clone()),
+                arg("s", KType::OfKind(KKind::Module)),
                 arg("field", KType::Identifier),
             ],
-        ),
-        body_module,
-    );
+        )
+    };
     // NEWTYPE fall-through, including ex-structs. A computed `Wrapped` lhs (e.g.
     // `seg.finish.x`) arrives in the Object channel; the `s: Any` slot matches the *value* by
     // a type (never by a kind — `OfKind` is type-channel-only), and `access_field`'s `Wrapped`
@@ -320,9 +488,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // unambiguous with the sibling overloads: `Any` is the least specific, so an `Identifier`
     // lhs picks `body_identifier`, a module / type-token lhs picks `body_module` /
     // `body_type_lhs`, and only a bare runtime value falls through to here.
-    register_builtin(
-        scope,
-        "ATTR",
+    let newtype_sig = || {
         sig(
             KType::Any,
             vec![
@@ -330,12 +496,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 arg("s", KType::Any),
                 arg("field", KType::Identifier),
             ],
-        ),
-        body_newtype,
-    );
-    register_builtin(
-        scope,
-        "ATTR",
+        )
+    };
+    let type_identifier_field_sig = || {
         sig(
             KType::Any,
             vec![
@@ -343,12 +506,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 arg("s", KType::OfKind(KKind::Proper)),
                 arg("field", KType::Identifier),
             ],
-        ),
-        body_type_lhs,
-    );
-    register_builtin(
-        scope,
-        "ATTR",
+        )
+    };
+    let type_type_field_sig = || {
         sig(
             KType::Any,
             vec![
@@ -356,23 +516,39 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 arg("s", KType::OfKind(KKind::Proper)),
                 arg("field", KType::OfKind(KKind::Proper)),
             ],
-        ),
-        body_type_lhs,
-    );
+        )
+    };
     // Module lhs with a Type-classed field (e.g. the `Outer.Inner` step in `Outer.Inner.x`).
-    register_builtin(
-        scope,
-        "ATTR",
+    let module_type_field_sig = || {
         sig(
             KType::Any,
             vec![
                 kw("ATTR"),
-                arg("s", module_ty),
+                arg("s", KType::OfKind(KKind::Module)),
                 arg("field", KType::OfKind(KKind::Proper)),
             ],
-        ),
-        body_module,
-    );
+        )
+    };
+
+    #[cfg(feature = "action-harness")]
+    {
+        use crate::builtins::register_action_builtin;
+        register_action_builtin(scope, "ATTR", identifier_sig(), body_identifier_action);
+        register_action_builtin(scope, "ATTR", module_field_sig(), body_module_action);
+        register_action_builtin(scope, "ATTR", newtype_sig(), body_newtype_action);
+        register_action_builtin(scope, "ATTR", type_identifier_field_sig(), body_type_lhs_action);
+        register_action_builtin(scope, "ATTR", type_type_field_sig(), body_type_lhs_action);
+        register_action_builtin(scope, "ATTR", module_type_field_sig(), body_module_action);
+    }
+    #[cfg(not(feature = "action-harness"))]
+    {
+        register_builtin(scope, "ATTR", identifier_sig(), body_identifier);
+        register_builtin(scope, "ATTR", module_field_sig(), body_module);
+        register_builtin(scope, "ATTR", newtype_sig(), body_newtype);
+        register_builtin(scope, "ATTR", type_identifier_field_sig(), body_type_lhs);
+        register_builtin(scope, "ATTR", type_type_field_sig(), body_type_lhs);
+        register_builtin(scope, "ATTR", module_type_field_sig(), body_module);
+    }
 }
 
 #[cfg(test)]
