@@ -7,7 +7,7 @@ use std::rc::Rc;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use crate::machine::core::kerror::KError;
-use crate::machine::core::{CallArena, LexicalFrame, Scope, ScopeId};
+use crate::machine::core::{assemble_body_chain, CallArena, LexicalFrame, Scope, ScopeId};
 use crate::machine::model::values::{Carried, KObject};
 
 use super::body::BodyResult;
@@ -173,6 +173,39 @@ pub trait SchedulerHandle<'a, 's> {
             vec![body_expr]
         };
         self.enter_block(scope.id, statements, scope)
+    }
+
+    /// Dispatch a body's non-tail `statements` as sibling sub-slots in `frame`, each positioned at
+    /// body-chain index `i + 1` (the params / `it` sit at idx 0) over the frame's body scope, with
+    /// the parent chain reconstructed from the call site via [`assemble_body_chain`]. The shared
+    /// "execute a block of expressions" primitive: a multi-statement FN body (`KFunction::invoke`),
+    /// a deferred return-type dep, and a MATCH/TRY arm body (the action harness) all use it. The
+    /// caller tail-replaces into the body's last statement separately. Returns the sub-slots' ids.
+    fn dispatch_body_statements(
+        &mut self,
+        frame: &Rc<CallArena>,
+        statements: Vec<KExpression<'a>>,
+    ) -> Vec<NodeId> {
+        let body_scope = frame.scope_for_bind();
+        let body_scope_id = body_scope.id;
+        let parent = assemble_body_chain(
+            body_scope,
+            self.current_lexical_chain()
+                .expect("a body block runs inside an active lexical chain"),
+            0,
+        )
+        .parent
+        .clone();
+        let mut ids = Vec::with_capacity(statements.len());
+        for (i, statement) in statements.into_iter().enumerate() {
+            let statement_chain = LexicalFrame::push(parent.clone(), body_scope_id, i + 1);
+            let mut bid = None;
+            self.with_active_frame(frame.clone(), &mut |s| {
+                bid = Some(s.add_dispatch_with_chain_in_frame(statement.clone(), statement_chain.clone()));
+            });
+            ids.push(bid.expect("body dispatch spawns"));
+        }
+        ids
     }
 }
 

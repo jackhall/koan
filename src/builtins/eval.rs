@@ -63,6 +63,7 @@ pub fn body_action<'a>(
         tail: inner,
         contract: None,
         frame_placement: FramePlacement::FreshChild { frame },
+        block_entry: None,
     }
 }
 

@@ -8,7 +8,9 @@ use crate::machine::{
 };
 
 use super::branch_walk::{find_branch_body, resolve_arm_return_contract};
-use super::{arg, err, kw, register_builtin, sig};
+use super::{arg, err, kw, sig};
+#[cfg(not(feature = "action-harness"))]
+use super::register_builtin;
 use crate::machine::core::kfunction::body::split_body_statements;
 
 /// `MATCH <value:Any> -> :<T> WITH <branches:KExpression>` — branch by tag.
@@ -104,23 +106,109 @@ pub fn body<'a, 's>(
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin(
-        scope,
-        "MATCH",
-        sig(
-            KType::Any,
-            vec![
-                kw("MATCH"),
-                arg("value", KType::Any),
-                kw("->"),
-                arg("return_type", KType::OfKind(KKind::Proper)),
-                kw("WITH"),
-                arg("branches", KType::KExpression),
-            ],
+/// `Action`-harness twin of [`body`]: selects the matching arm, mints a per-MATCH child frame with
+/// `it` bound, and tail-replaces into the arm body carrying the `-> :T` `Arm` contract.
+#[cfg(feature = "action-harness")]
+pub fn body_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_object, arg_type, Action, FramePlacement};
+    use crate::machine::core::kfunction::body::ReturnContract;
+    use crate::machine::ResolveTypeExprOutcome;
+
+    let (tag, value) = match arg_object(ctx.args, "value") {
+        Some(KObject::Tagged { tag, value, .. }) => (tag.clone(), Rc::clone(value)),
+        Some(KObject::Bool(b)) => (
+            if *b { "true" } else { "false" }.to_string(),
+            Rc::new(KObject::Null),
         ),
-        body,
+        Some(other) => {
+            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+                arg: "value".to_string(),
+                expected: "Tagged or Bool".to_string(),
+                got: other.ktype().name(),
+            })))
+        }
+        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("value".to_string())))),
+    };
+    // `-> :T` contract (resolve a forward-referenced type name against the call-site scope/chain).
+    let ret_kt = match arg_type(ctx.args, "return_type") {
+        Some(KType::Unresolved(te)) => match ctx.scope.resolve_type_expr(te, ctx.chain.clone()) {
+            ResolveTypeExprOutcome::Done(kt) => kt.clone(),
+            _ => match KType::from_name(&te.render()) {
+                Some(kt) => kt,
+                None => {
+                    return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                        "MATCH return type `{}` is not a known type",
+                        te.render()
+                    )))))
+                }
+            },
+        },
+        Some(other) => other.clone(),
+        None => {
+            return Action::Done(Err(KError::new(KErrorKind::MissingArg(
+                "return_type".to_string(),
+            ))))
+        }
+    };
+    let contract = ReturnContract::Arm {
+        ret: ctx.scope.arena.alloc_ktype(ret_kt),
+        kind: "MATCH",
+    };
+    let branches_expr = match arg_object(ctx.args, "branches") {
+        Some(KObject::KExpression(e)) => e.clone(),
+        _ => {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+                "MATCH expects a parenthesized branches body".to_string(),
+            ))))
+        }
+    };
+    let branch_body = match find_branch_body(&branches_expr, &tag, false) {
+        Ok(Some(body)) => body,
+        Ok(None) => {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "inexhaustive match = no branch for `{}`",
+                tag
+            )))))
+        }
+        Err(msg) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
+    };
+    // Fresh per-MATCH child frame (call-site rooted), with `it` bound at idx 0 — the harness
+    // tail-replaces into the arm body against this frame.
+    let frame: Rc<CallArena> = CallArena::new(ctx.scope, ctx.frame.map(Rc::clone));
+    frame.with_anchored_child(|arena, child| {
+        let it_obj = arena.alloc_object(value.deep_clone());
+        let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
+    });
+    let arm_scope_id = frame.scope_for_bind().id;
+    let mut statements = split_body_statements(branch_body);
+    let tail = statements.pop().expect("split_body_statements always yields at least one");
+    Action::Tail {
+        leading: statements,
+        tail,
+        contract: Some(contract),
+        frame_placement: FramePlacement::FreshChild { frame },
+        block_entry: Some(arm_scope_id),
+    }
+}
+
+pub fn register<'a>(scope: &'a Scope<'a>) {
+    let signature = sig(
+        KType::Any,
+        vec![
+            kw("MATCH"),
+            arg("value", KType::Any),
+            kw("->"),
+            arg("return_type", KType::OfKind(KKind::Proper)),
+            kw("WITH"),
+            arg("branches", KType::KExpression),
+        ],
     );
+    #[cfg(feature = "action-harness")]
+    crate::builtins::register_action_builtin(scope, "MATCH", signature, body_action);
+    #[cfg(not(feature = "action-harness"))]
+    register_builtin(scope, "MATCH", signature, body);
 }
 
 #[cfg(test)]

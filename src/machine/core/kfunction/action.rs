@@ -11,9 +11,10 @@
 use std::rc::Rc;
 
 use super::body::ReturnContract;
-use crate::machine::core::{CallArena, LexicalFrame, Scope};
+use crate::machine::core::{CallArena, LexicalFrame, Scope, ScopeId};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::values::Held;
+use crate::machine::model::types::KType;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::{KError, NodeId};
 
@@ -23,6 +24,14 @@ use crate::machine::{KError, NodeId};
 pub fn arg_object<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c KObject<'a>> {
     match args {
         KObject::Record(fields, _) => fields.get(name).and_then(Held::as_object),
+        _ => None,
+    }
+}
+
+/// Read a builtin argument's `KType` (a type-cell arg) from `BodyCtx::args` by name.
+pub fn arg_type<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c KType<'a>> {
+    match args {
+        KObject::Record(fields, _) => fields.get(name).and_then(Held::as_type),
         _ => None,
     }
 }
@@ -42,7 +51,9 @@ pub type ActionFn = for<'a> fn(&BodyCtx<'a, '_>) -> Action<'a>;
 pub struct BodyCtx<'a, 'c> {
     pub scope: &'c Scope<'a>,
     pub frame: Option<&'c Rc<CallArena>>,
-    pub chain: Option<&'c LexicalFrame>,
+    /// The ambient lexical chain (an `Rc`, as `current_lexical_chain` hands it out — binders read
+    /// its `index` for `BindingIndex`, MATCH passes it to `resolve_type_expr`). `None` at top level.
+    pub chain: Option<Rc<LexicalFrame>>,
     pub args: &'c KObject<'a>,
 }
 
@@ -64,12 +75,17 @@ pub type CatchCont<'a> =
 pub enum Action<'a> {
     /// Produce a value / error for this slot (after any direct scope mutation the builtin did).
     Done(Result<Carried<'a>, KError>),
-    /// Tail-replace into `tail` (after `leading`), carrying `contract`, in a cart per `frame_placement`.
+    /// Tail-replace into `tail` (after the `leading` body statements, dispatched as siblings),
+    /// carrying `contract`, in a cart per `frame_placement`. `block_entry` is the body/arm scope id
+    /// when the tail enters a fresh lexical block (MATCH / TRY arms, FN-body tails) — `None` for a
+    /// frameless / current-block continuation (EVAL). The harness derives the body-statement chains
+    /// and the tail's `body_index` from `block_entry` + `leading`.
     Tail {
-        leading: Vec<Dep<'a>>,
+        leading: Vec<KExpression<'a>>,
         tail: KExpression<'a>,
         contract: Option<ReturnContract<'a>>,
         frame_placement: FramePlacement<'a>,
+        block_entry: Option<ScopeId>,
     },
     /// Dispatch `deps`, then `finish` over their resolved values yields the next `Action`.
     Combine { deps: Vec<Dep<'a>>, finish: Cont<'a> },

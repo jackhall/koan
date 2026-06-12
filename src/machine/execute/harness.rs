@@ -26,25 +26,36 @@ pub fn run_action<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, action: Action<'a
             tail,
             contract,
             frame_placement,
+            block_entry,
         } => {
-            // Spike: only the no-`leading`, no-block-entry shape (EVAL). Leading siblings + a fresh
-            // lexical block need an `Action::Tail` `block_entry` field — added when MATCH / the
-            // FN-body tails are ported.
-            assert!(
-                leading.is_empty(),
-                "run_action: Action::Tail with leading siblings not yet implemented"
-            );
             let frame: Option<Rc<CallArena>> = match frame_placement {
                 FramePlacement::ReuseReserve { outer } => Some(h.acquire_tail_frame(outer)),
                 FramePlacement::FreshChild { frame } => Some(frame),
                 FramePlacement::Inherit => None,
             };
+            let n_leading = leading.len();
+            // The body's non-tail statements dispatch as siblings via the shared
+            // `SchedulerHandle::dispatch_body_statements` — the same primitive `KFunction::invoke`
+            // uses. The caller (here) tail-replaces into the last statement separately.
+            if !leading.is_empty() {
+                let cart = frame
+                    .clone()
+                    .expect("Action::Tail with leading requires a frame");
+                h.dispatch_body_statements(&cart, leading);
+            }
+            // A block-entering tail sits above the params (`1`) or the leading siblings (`N`); a
+            // frameless continuation keeps the slot's block at index `0`.
+            let body_index = if block_entry.is_some() {
+                n_leading + 1
+            } else {
+                0
+            };
             BodyResult::Tail {
                 expr: tail,
                 frame,
                 function: contract,
-                block_entry: None,
-                body_index: 0,
+                block_entry,
+                body_index,
             }
         }
 

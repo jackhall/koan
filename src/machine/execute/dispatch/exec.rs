@@ -6,8 +6,6 @@
 //! `ctx.rs` (the dispatcher facade) so the dispatcher core stays thin; pure body semantics live one
 //! layer down in [`crate::machine::core::kfunction::exec`].
 
-use std::rc::Rc;
-
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::DispatchCtx;
 use crate::machine::core::kfunction::bind_by_name::CallArgs;
@@ -19,10 +17,9 @@ use crate::machine::core::kfunction::{
     Body, BodyResult, CombineFinish, KFunction, SchedulerHandle,
 };
 use crate::machine::execute::lift::lift_ktype;
-use crate::machine::core::{assemble_body_chain, CallArena, LexicalFrame};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
-use crate::machine::{KError, KErrorKind, NodeId};
+use crate::machine::{KError, KErrorKind};
 
 /// The single invoke entry for the dispatcher's bind sites — run a resolved call:
 /// - **builtin** → invoked directly with its `ArgumentBundle` (kept distinct from the
@@ -118,7 +115,7 @@ pub(super) fn invoke<'run>(
             // Empty `leading` → body_index 1 (the lone statement sits above the params); otherwise
             // dispatch the non-tail statements as siblings and tail-replace into the last at N.
             let body_index = leading.len() + 1;
-            dispatch_body_statements(ctx, &frame, &exec_frame.chain, &leading);
+            ctx.dispatch_body_statements(&frame, leading.into_iter().map(|e| (*e).clone()).collect());
             BodyResult::tail_with_frame_contract(tail.clone(), frame, contract, body_index)
         }
         ExecOutcome::DeferredExprTail {
@@ -134,9 +131,10 @@ pub(super) fn invoke<'run>(
             // the type slot.
             let mut body_and_type = leading;
             body_and_type.push(type_expr);
-            let ids = dispatch_body_statements(ctx, &frame, &exec_frame.chain, &body_and_type);
-            let type_dep = *ids.last().expect("the return-type expr was dispatched");
             let body_index = body_and_type.len() + 1;
+            let ids =
+                ctx.dispatch_body_statements(&frame, body_and_type.into_iter().map(|e| (*e).clone()).collect());
+            let type_dep = *ids.last().expect("the return-type expr was dispatched");
             let tail_expr = tail.clone();
             let body_frame = frame.clone();
             let finish: CombineFinish<'run> = Box::new(move |_s, results| {
@@ -203,7 +201,7 @@ fn run_action_builtin<'run>(
         let body_ctx = BodyCtx {
             scope: ctx.current_scope(),
             frame: frame.as_ref(),
-            chain: chain.as_deref(),
+            chain,
             args: args_obj,
         };
         f(&body_ctx)
@@ -236,31 +234,3 @@ fn extract_carried_args<'run>(
     Some(args)
 }
 
-/// Dispatch a body's statements as sibling sub-slots in `frame`, each positioned by the body chain
-/// (assembled from `chain` + the frame's body scope, at the statement's index). Returns their node
-/// ids — the multi-statement `Tail` path ignores them; the `DeferredExprTail` path takes the
-/// last (the return-type expr) as its Combine dep.
-fn dispatch_body_statements<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
-    frame: &Rc<CallArena>,
-    chain: &Rc<LexicalFrame>,
-    statements: &[&KExpression<'run>],
-) -> Vec<NodeId> {
-    let body_scope_id = frame.scope_for_bind().id;
-    let body_chain_parent = assemble_body_chain(frame.scope_for_bind(), chain.clone(), 0)
-        .parent
-        .clone();
-    let mut ids = Vec::with_capacity(statements.len());
-    for (i, statement) in statements.iter().enumerate() {
-        let statement_chain = LexicalFrame::push(body_chain_parent.clone(), body_scope_id, i + 1);
-        let statement = (*statement).clone();
-        let mut bid = None;
-        ctx.with_active_frame(frame.clone(), &mut |s| {
-            bid = Some(
-                s.add_dispatch_with_chain_in_frame(statement.clone(), statement_chain.clone()),
-            );
-        });
-        ids.push(bid.expect("body dispatch spawns"));
-    }
-    ids
-}
