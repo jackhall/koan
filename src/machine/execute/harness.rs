@@ -109,7 +109,13 @@ fn dispatch_dep<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, dep: Dep<'a>) -> No
         Dep::Dispatch { expr, placement } => match placement {
             DepPlacement::OwnScope => h.add_dispatch_here(expr),
             DepPlacement::ActiveFrame => h.add_dispatch_in_frame(expr),
-            DepPlacement::InScope(scope) => h.add_dispatch(expr, scope),
+            // A single watched expr enters a fresh lexical block over `scope` (TRY's
+            // `child_under` body scope), so an inner `LET` stays local. One statement → one id.
+            DepPlacement::InScope(scope) => h
+                .enter_block(scope.id, vec![expr], scope)
+                .into_iter()
+                .next()
+                .expect("enter_block of one statement yields one node"),
             DepPlacement::WithChain(_) => {
                 todo!("dispatch_dep: DepPlacement::WithChain (TRY arms) not yet implemented")
             }

@@ -24,7 +24,9 @@ use crate::machine::{
 };
 
 use super::branch_walk::{find_branch_body, resolve_arm_return_contract};
-use super::{arg, err, kw, register_builtin, sig};
+use super::{arg, err, kw, sig};
+#[cfg(not(feature = "action-harness"))]
+use super::register_builtin;
 use crate::machine::core::kfunction::body::split_body_statements;
 use crate::machine::core::kfunction::body::ReturnContract;
 
@@ -137,23 +139,132 @@ fn dispatch_branch<'a, 's>(
     }
 }
 
+/// `Action`-harness twin of [`body`]: watches `expr` in a fresh `child_under` body scope, then a
+/// `Catch` finish walks the arms against the `Result` and tail-replaces into the matched arm (per-
+/// call frame with `it` bound) carrying the `-> :T` `Arm` contract, re-raising on no match.
+#[cfg(feature = "action-harness")]
+pub fn body_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_object, arg_type, Action, CatchCont, Dep, DepPlacement, FramePlacement};
+    use crate::machine::ResolveTypeExprOutcome;
+
+    let expr_inner = match arg_object(ctx.args, "expr") {
+        Some(KObject::KExpression(e)) => e.clone(),
+        _ => {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+                "TRY expr slot must be a parenthesized expression".to_string(),
+            ))))
+        }
+    };
+    // `-> :T` contract (resolve a forward-referenced type name against the call-site scope/chain).
+    let ret_kt = match arg_type(ctx.args, "return_type") {
+        Some(KType::Unresolved(te)) => match ctx.scope.resolve_type_expr(te, ctx.chain.clone()) {
+            ResolveTypeExprOutcome::Done(kt) => kt.clone(),
+            _ => match KType::from_name(&te.render()) {
+                Some(kt) => kt,
+                None => {
+                    return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                        "TRY return type `{}` is not a known type",
+                        te.render()
+                    )))))
+                }
+            },
+        },
+        Some(other) => other.clone(),
+        None => {
+            return Action::Done(Err(KError::new(KErrorKind::MissingArg(
+                "return_type".to_string(),
+            ))))
+        }
+    };
+    let contract = ReturnContract::Arm {
+        ret: ctx.scope.arena.alloc_ktype(ret_kt),
+        kind: "TRY",
+    };
+    let branches_expr = match arg_object(ctx.args, "branches") {
+        Some(KObject::KExpression(e)) => e.clone(),
+        _ => {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+                "TRY branches slot must be a parenthesized expression".to_string(),
+            ))))
+        }
+    };
+    // Body runs in a fresh `child_under` scope so a `LET` inside it stays local and reads still
+    // chain out to the call-site scope.
+    let body_scope: &'a Scope<'a> = ctx.scope.arena.alloc_scope(Scope::child_under(ctx.scope));
+    let outer_frame = ctx.frame.map(Rc::clone);
+    let finish: CatchCont<'a> = Box::new(move |fctx, result| {
+        // On `ok`, `it` is the bare success value; on error, the per-variant payload Struct
+        // unwrapped from `KError::to_tagged`'s Tagged carrier.
+        let (tag, it_value, original_err): (String, KObject<'a>, Option<KError>) = match result {
+            Ok(v) => ("Ok".to_string(), v.deep_clone(), None),
+            Err(e) => {
+                let tagged: KObject<'a> = e.to_tagged(fctx.scope.arena);
+                let (tag, payload) = match tagged {
+                    KObject::Tagged { tag, value, .. } => (tag, (*value).deep_clone()),
+                    _ => unreachable!("KError::to_tagged always returns Tagged"),
+                };
+                (tag, payload, Some(e))
+            }
+        };
+        let body_expr = match find_branch_body(&branches_expr, &tag, true) {
+            Ok(Some(body)) => body,
+            // On no match: re-raise the original `KError`, or `ShapeError` on the success path
+            // without an `Ok` or `_` arm.
+            Ok(None) => {
+                return match original_err {
+                    Some(e) => Action::Done(Err(e)),
+                    None => Action::Done(Err(KError::new(KErrorKind::ShapeError(
+                        "TRY missing Ok arm".to_string(),
+                    )))),
+                };
+            }
+            Err(msg) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
+        };
+        // Fresh per-call frame (call-site rooted via the outer-frame chain), with `it` bound at
+        // idx 0 — the harness tail-replaces into the arm body against this frame.
+        let frame: Rc<CallArena> = CallArena::new(fctx.scope, outer_frame);
+        frame.with_anchored_child(|arena, child| {
+            let it_obj = arena.alloc_object(it_value);
+            let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
+        });
+        let arm_scope_id = frame.scope_for_bind().id;
+        let mut statements = split_body_statements(body_expr);
+        let tail = statements.pop().expect("split_body_statements always yields at least one");
+        Action::Tail {
+            leading: statements,
+            tail,
+            contract: Some(contract),
+            frame_placement: FramePlacement::FreshChild { frame },
+            block_entry: Some(arm_scope_id),
+        }
+    });
+    Action::Catch {
+        watched: Dep::Dispatch {
+            expr: expr_inner,
+            placement: DepPlacement::InScope(body_scope),
+        },
+        finish,
+    }
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin(
-        scope,
-        "TRY",
-        sig(
-            KType::Any,
-            vec![
-                kw("TRY"),
-                arg("expr", KType::KExpression),
-                kw("->"),
-                arg("return_type", KType::OfKind(KKind::Proper)),
-                kw("WITH"),
-                arg("branches", KType::KExpression),
-            ],
-        ),
-        body,
+    let signature = sig(
+        KType::Any,
+        vec![
+            kw("TRY"),
+            arg("expr", KType::KExpression),
+            kw("->"),
+            arg("return_type", KType::OfKind(KKind::Proper)),
+            kw("WITH"),
+            arg("branches", KType::KExpression),
+        ],
     );
+    #[cfg(feature = "action-harness")]
+    crate::builtins::register_action_builtin(scope, "TRY", signature, body_action);
+    #[cfg(not(feature = "action-harness"))]
+    register_builtin(scope, "TRY", signature, body);
 }
 
 #[cfg(test)]
