@@ -16,11 +16,12 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::NonWrappedRef;
 use crate::machine::model::KObject;
-use crate::machine::{KError, KErrorKind, NodeId, Scope};
+use crate::machine::{KError, KErrorKind, Scope};
 
-use super::super::nodes::{NodeOutput, NodeStep};
+use super::super::nodes::{DispatchCombineFinish, NodeOutput, NodeStep};
+use super::outcome::{DispatchDep, DispatchOutcome};
 use super::single_poll::CtorKind;
-use super::DispatchCtx;
+use super::{harness, DispatchCtx};
 
 pub(in crate::machine::execute) mod tagged_union;
 
@@ -139,90 +140,35 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
     )
 }
 
-/// Stage each value part as a sub-Dispatch (single-part `Expression`
-/// wrapping routes through normal classification). If every sub
-/// short-circuits at install time, construct in place; otherwise park as
-/// a `CtorState` with an eager-subs track.
+/// Decide a constructor park: every value part is a fresh sub-Dispatch dep (a single-part
+/// `Expression` wrapping routes through normal classification), and a freshly-minted sub is never
+/// terminal in the same step (submission is enqueue-then-drain), so there is no inline-ready case —
+/// the slot always parks as a [`DispatchOutcome::Combine`]. The finish reads the resolved deps in
+/// declaration order and materializes the value via [`finish`]; dep errors propagate frameless.
 fn launch<'run>(
     ctx: &mut DispatchCtx<'run, '_>,
     value_parts: Vec<ExpressionPart<'run>>,
     kind: CtorKind<'run>,
     idx: usize,
 ) -> NodeStep<'run> {
-    let n = value_parts.len();
-    let mut staged_values: Vec<Option<&'run KObject<'run>>> = vec![None; n];
-    let mut subs: Vec<(usize, NodeId)> = Vec::new();
-    for (i, part) in value_parts.into_iter().enumerate() {
-        let sub_expr = KExpression::new(vec![Spanned::bare(part)]);
-        let sub_id = ctx.add_dispatch_here(sub_expr);
-        // Submission is enqueue-then-drain, so a sub minted this step is never terminal
-        // yet — the inline-ready branch below is dead for fresh subs. Locking this proves
-        // the site is a hand-rolled `Combine` (deps + a finish), collapsible onto
-        // `combine_here`. Mirrors the eager-subs guard in `install_eager_subs`.
-        debug_assert!(
-            !ctx.is_result_ready(sub_id),
-            "freshly-submitted ctor sub {sub_id:?} is immediately ready — \
-             fresh subs are always parked deps"
-        );
-        if ctx.is_result_ready(sub_id) {
-            let outcome = ctx.read_result(sub_id);
-            match outcome {
-                Ok(v) => {
-                    staged_values[i] = Some(v.object());
-                    ctx.free(sub_id.index());
-                }
-                Err(e) => {
-                    let err = e.clone_for_propagation();
-                    ctx.free(sub_id.index());
-                    return NodeStep::Done(NodeOutput::Err(err));
-                }
-            }
-        } else {
-            ctx.add_owned_edge(sub_id, NodeId(idx));
-            subs.push((i, sub_id));
-        }
-    }
-    if subs.is_empty() {
-        let values: Vec<&'run KObject<'run>> =
-            staged_values.into_iter().map(|o| o.unwrap()).collect();
-        return finish(ctx.current_scope(), &kind, &values);
-    }
-    park_subs_as_combine(subs, staged_values, kind)
-}
-
-/// Park the staged ctor subs as a [`NodeWork::DispatchCombine`]. Every staged sub is already an
-/// owned dep (a fresh ctor sub is never terminal in the same step, locked by the `debug_assert!`
-/// in [`launch`]); the finish splices each resolved value into its slot of `staged_values` and
-/// tail-calls [`finish`]. Dep errors propagate frameless in `run_dispatch_combine` (no `<ctor>`
-/// frame), so the finish only runs once every dep resolved.
-fn park_subs_as_combine<'run>(
-    subs: Vec<(usize, NodeId)>,
-    mut staged_values: Vec<Option<&'run KObject<'run>>>,
-    kind: CtorKind<'run>,
-) -> NodeStep<'run> {
-    use super::super::nodes::{DispatchCombineFinish, NodeWork};
-    let deps: Vec<NodeId> = subs.iter().map(|(_, id)| *id).collect();
-    let part_indices: Vec<usize> = subs.iter().map(|(i, _)| *i).collect();
-    let finish_combine: DispatchCombineFinish<'run> = Box::new(move |ctx, results, _idx| {
-        for (slot, value) in part_indices.iter().zip(results) {
-            staged_values[*slot] = Some(value.object());
-        }
-        let values: Vec<&'run KObject<'run>> =
-            staged_values.into_iter().map(|o| o.unwrap()).collect();
+    debug_assert!(
+        !value_parts.is_empty(),
+        "launch requires at least one value part (arity-zero is rejected upstream)"
+    );
+    let deps: Vec<DispatchDep<'run>> = value_parts
+        .into_iter()
+        .map(|part| DispatchDep::Dispatch(KExpression::new(vec![Spanned::bare(part)])))
+        .collect();
+    let combine_finish: DispatchCombineFinish<'run> = Box::new(move |ctx, results, _idx| {
+        let values: Vec<&'run KObject<'run>> = results.iter().map(|c| c.object()).collect();
         finish(ctx.current_scope(), &kind, &values)
     });
-    NodeStep::Replace {
-        work: NodeWork::DispatchCombine {
-            deps,
-            park_count: 0,
-            finish: finish_combine,
-            dep_error_frame: None,
-        },
-        frame: None,
-        function: None,
-        block_entry: None,
-        body_index: 0,
-    }
+    let outcome = DispatchOutcome::Combine {
+        deps,
+        dep_error_frame: None,
+        finish: combine_finish,
+    };
+    harness::apply_dispatch_outcome(ctx, outcome, idx)
 }
 
 /// All value subs have completed. Read each, materialize the kind-keyed

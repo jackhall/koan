@@ -16,9 +16,10 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{KType, RecursiveSet};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, SchedulerHandle};
 
-use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{DispatchCombineFinish, LiftState, NodeOutput, NodeStep, NodeWork};
 use super::apply_callable::{apply_callable, ResolvedCallable};
-use super::{DispatchCtx, DispatchState, Initialized};
+use super::outcome::{DispatchDep, DispatchOutcome};
+use super::{harness, DispatchCtx, DispatchState, Initialized};
 
 pub(in crate::machine::execute) struct BareTypeState<'run> {
     /// Set when `bare_type_leaf` parked on a still-finalizing referent (a
@@ -275,65 +276,31 @@ pub(super) fn literal_pass_through<'run>(
             block_entry: None,
             body_index: 0,
         },
-        ExpressionPart::ListLiteral(items) => {
-            let producer = ctx.schedule_list_literal(items);
-            park_on_literal_producer(ctx, producer, idx)
-        }
-        ExpressionPart::DictLiteral(pairs) => {
-            let producer = ctx.schedule_dict_literal(pairs);
-            park_on_literal_producer(ctx, producer, idx)
-        }
+        ExpressionPart::ListLiteral(items) => park_on_literal(ctx, DispatchDep::ListLit(items), idx),
+        ExpressionPart::DictLiteral(pairs) => park_on_literal(ctx, DispatchDep::DictLit(pairs), idx),
         ExpressionPart::RecordLiteral(fields) => {
-            let producer = ctx.schedule_record_literal(fields);
-            park_on_literal_producer(ctx, producer, idx)
+            park_on_literal(ctx, DispatchDep::RecordLit(fields), idx)
         }
         _ => unreachable!("LiteralPassThrough classifier only routes Literal/Future/Expression/ListLiteral/DictLiteral/RecordLiteral"),
     }
 }
 
-/// Either lift the producer's already-ready value, or park on it via a
-/// `Lift(Pending)`. Owned-edge install mirrors `install_eager_subs`.
-fn park_on_literal_producer<'run>(
+/// Park the slot on a single literal-producer dep as a [`DispatchOutcome::Combine`] whose finish
+/// lifts the producer's resolved value straight through. The harness submits the literal and owns
+/// it; a dep error short-circuits frameless before the finish runs.
+fn park_on_literal<'run>(
     ctx: &mut DispatchCtx<'run, '_>,
-    producer: NodeId,
+    dep: DispatchDep<'run>,
     idx: usize,
 ) -> NodeStep<'run> {
-    // The literal producer was scheduled this step (`schedule_*_literal`), and submission
-    // is enqueue-then-drain, so it is never terminal yet — the inline-ready branch is dead
-    // for fresh producers. Locking this proves the site is a hand-rolled `Combine` (a dep
-    // + a lift finish), collapsible onto `combine_here`. Mirrors `install_eager_subs`.
-    debug_assert!(
-        !ctx.is_result_ready(producer),
-        "freshly-scheduled literal producer {producer:?} is immediately ready — \
-         fresh producers are always parked deps"
-    );
-    if ctx.is_result_ready(producer) {
-        let outcome = match ctx.read_result(producer) {
-            Ok(v) => NodeOutput::Value(v),
-            Err(e) => NodeOutput::Err(e.clone_for_propagation()),
-        };
-        ctx.free(producer.index());
-        return NodeStep::Done(outcome);
-    }
-    ctx.add_owned_edge(producer, NodeId(idx));
-    // Single-owned-dep [`NodeWork::DispatchCombine`]: the finish lifts the producer's resolved
-    // value straight through. A dep error short-circuits frameless in `run_dispatch_combine`, so
-    // the finish only runs on a resolved producer.
-    use super::super::nodes::DispatchCombineFinish;
     let finish: DispatchCombineFinish<'run> =
         Box::new(|_ctx, results, _idx| NodeStep::Done(NodeOutput::Value(results[0])));
-    NodeStep::Replace {
-        work: NodeWork::DispatchCombine {
-            deps: vec![producer],
-            park_count: 0,
-            finish,
-            dep_error_frame: None,
-        },
-        frame: None,
-        function: None,
-        block_entry: None,
-        body_index: 0,
-    }
+    let outcome = DispatchOutcome::Combine {
+        deps: vec![dep],
+        dep_error_frame: None,
+        finish,
+    };
+    harness::apply_dispatch_outcome(ctx, outcome, idx)
 }
 
 /// Synchronous resolve-then-branch for a bare-`Type`-head call. One resolution,

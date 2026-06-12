@@ -36,8 +36,10 @@ use crate::machine::{
 
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
+use super::outcome::{DispatchDep, DispatchOutcome};
 use super::{
-    bind_frame_err, keyworded::KeywordedState, resolve_name_part, DispatchState, PendingSub,
+    bind_frame_err, harness, keyworded::KeywordedState, resolve_name_part, DispatchState,
+    PendingSub,
 };
 
 /// Newtype wrapping `&'b mut Scheduler<'run>`, exposing exactly the
@@ -252,38 +254,36 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         picked: Option<&'run KFunction<'run>>,
         idx: usize,
     ) -> NodeStep<'run> {
-        use super::super::nodes::{DispatchCombineFinish, NodeWork};
-        let mut deps: Vec<NodeId> = Vec::with_capacity(staged_subs.len());
+        use super::super::nodes::DispatchCombineFinish;
+        let mut deps: Vec<DispatchDep<'run>> = Vec::with_capacity(staged_subs.len());
         let mut part_indices: Vec<usize> = Vec::with_capacity(staged_subs.len());
         for (i, pending) in staged_subs {
-            let is_reuse = matches!(pending, PendingSub::Reuse(_));
-            let sub_id = match pending {
-                PendingSub::Reuse(id) => id,
-                PendingSub::Dispatch(sub_expr) => self.add_dispatch_here(sub_expr),
-                PendingSub::ListLit(items) => self.schedule_list_literal(items),
-                PendingSub::DictLit(pairs) => self.schedule_dict_literal(pairs),
-                PendingSub::RecordLit(fields) => self.schedule_record_literal(fields),
-            };
-            // Same eager-splice invariant as `install_eager_subs`: only a `Reuse` of an
-            // already-resolved producer can be terminal here.
-            debug_assert!(
-                is_reuse || !self.is_result_ready(sub_id),
-                "freshly-submitted sub {sub_id:?} is immediately ready — \
-                 eager-splice should only ever fire for a Reuse of a resolved producer"
-            );
-            if self.is_result_ready(sub_id) {
-                match self.read_result(sub_id) {
-                    Err(e) => return bind_frame_err(e, &working_expr),
-                    Ok(value) => {
-                        working_expr.parts[i].value = ExpressionPart::Future(value);
-                        self.free(sub_id.index());
+            // A `Reuse` is a pre-existing producer the pre-pick found: splice it inline if it has
+            // already resolved (a read of a static-over-this-step slot), else park on it as an
+            // `Existing` dep. A freshly-staged sub (`Dispatch`/`*Lit`) is never terminal in the
+            // same step (submission is enqueue-then-drain), so it is always a fresh dep the harness
+            // submits — never read back here.
+            let dep = match pending {
+                PendingSub::Reuse(id) => {
+                    if self.is_result_ready(id) {
+                        match self.read_result(id) {
+                            Err(e) => return bind_frame_err(e, &working_expr),
+                            Ok(value) => {
+                                working_expr.parts[i].value = ExpressionPart::Future(value);
+                                self.free(id.index());
+                                continue;
+                            }
+                        }
                     }
+                    DispatchDep::Existing(id)
                 }
-            } else {
-                self.add_owned_edge(sub_id, NodeId(idx));
-                deps.push(sub_id);
-                part_indices.push(i);
-            }
+                PendingSub::Dispatch(sub_expr) => DispatchDep::Dispatch(sub_expr),
+                PendingSub::ListLit(items) => DispatchDep::ListLit(items),
+                PendingSub::DictLit(pairs) => DispatchDep::DictLit(pairs),
+                PendingSub::RecordLit(fields) => DispatchDep::RecordLit(fields),
+            };
+            deps.push(dep);
+            part_indices.push(i);
         }
         if deps.is_empty() {
             // Every sub was an already-resolved `Reuse` spliced inline — `working_expr` is fully
@@ -302,18 +302,12 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
             }
             finish_eager_subs(ctx, working_expr, picked, idx)
         });
-        NodeStep::Replace {
-            work: NodeWork::DispatchCombine {
-                deps,
-                park_count: 0,
-                finish,
-                dep_error_frame,
-            },
-            frame: None,
-            function: None,
-            block_entry: None,
-            body_index: 0,
-        }
+        let outcome = DispatchOutcome::Combine {
+            deps,
+            dep_error_frame,
+            finish,
+        };
+        harness::apply_dispatch_outcome(self, outcome, idx)
     }
 
     /// Standard `NodeStep::Replace` for parked-Dispatch install sites:
