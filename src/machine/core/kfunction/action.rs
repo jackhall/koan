@@ -1,12 +1,9 @@
-//! The scheduler-aware `Action` currency (WIP, gated behind the `action-harness` feature). The peer of
+//! The scheduler-aware `Action` currency. The peer of
 //! [`super::exec::ExecOutcome`]: where `ExecOutcome` is what `run_user_fn` returns (scheduler-
 //! *unaware*), `Action` is what a builtin returns and what the harness interprets (scheduler-*aware*).
 //! These are the **types only** — they reference core/model types, never `SchedulerHandle`. The
-//! interpreter that drives the scheduler from a `Action` lives one layer up in
-//! `machine::execute::harness::interpret` (the peer of `dispatch/exec.rs::invoke`).
-//!
-//! See `scratch/action-spec.md` and `scratch/action-survey{,-r2,-r3}/` for the survey + audit this shape
-//! was distilled from.
+//! interpreter that drives the scheduler from an `Action` lives one layer up in
+//! `machine::execute::harness::run_action` (the peer of `dispatch/exec.rs::invoke`).
 
 use std::rc::Rc;
 

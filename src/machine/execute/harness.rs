@@ -1,9 +1,8 @@
-//! The shared action-harness (WIP, `action-harness` feature). [`run_action`] drives the scheduler
+//! The shared action harness. [`run_action`] drives the scheduler
 //! from an [`Action`], the one place that touches `SchedulerHandle`. Both `KFunction::invoke`
 //! (lowering an `ExecOutcome → Action`) and every `Action`-authored builtin route through it. The
 //! peer of `dispatch/exec.rs::invoke`. The `Action` *types* live in
-//! [`crate::machine::core::kfunction::action`]. See `scratch/action-spec.md` for the survey + audit.
-#![allow(dead_code)]
+//! [`crate::machine::core::kfunction::action`].
 
 use std::rc::Rc;
 

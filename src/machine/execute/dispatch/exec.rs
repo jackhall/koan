@@ -158,10 +158,10 @@ pub(super) fn invoke<'run>(
     ctx.body_result_to_step(result, idx)
 }
 
-/// Lower a `Step`-harness builtin: bind its args into a `KObject::Record`, build the read-only
+/// Lower an action-harness builtin: bind its args into a `KObject::Record`, build the read-only
 /// `BodyCtx`, call the `ActionFn`, then interpret the returned `Action` through the shared
-/// `run_action`. The args-as-`Record` build is the stand-in for the eventual
-/// `ArgumentBundle → KObject::Record` migration.
+/// `run_action`. The args arrive as an `ArgumentBundle` (the call API) and are converted to the
+/// `KObject::Record` the `BodyCtx` exposes.
 fn run_action_builtin<'run>(
     ctx: &mut DispatchCtx<'run, '_>,
     f: crate::machine::core::kfunction::ActionFn,
