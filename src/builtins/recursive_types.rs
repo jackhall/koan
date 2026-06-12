@@ -22,7 +22,7 @@ use std::rc::Rc;
 
 use crate::machine::model::types::{NominalMember, RecursiveSet};
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, Frame, KError, KErrorKind, Scope};
+use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
@@ -102,7 +102,8 @@ pub fn body<'a>(
     };
     use crate::machine::model::Carried;
 
-    let group_name = crate::try_action!(require_bare_type_name(ctx.args, "name", "RECURSIVE TYPES"));
+    let group_name =
+        crate::try_action!(require_bare_type_name(ctx.args, "name", "RECURSIVE TYPES"));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "RECURSIVE TYPES", "body"));
     let members = crate::try_action!(discover_members(&body_expr));
 
@@ -130,7 +131,8 @@ pub fn body<'a>(
 
     let bind_index = ctx.bind_index();
     let finish: Cont<'a> = Box::new(move |fctx, _results| {
-        let frame = || Frame::bare("<recursive-types>", format!("RECURSIVE TYPES {group_name}"));
+        let frame =
+            || TraceFrame::bare("<recursive-types>", format!("RECURSIVE TYPES {group_name}"));
         for (index, (name, _)) in members.iter().enumerate() {
             if !set.member(index).is_filled() {
                 return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
@@ -145,9 +147,9 @@ pub fn body<'a>(
                 set: Rc::clone(&set),
                 index,
             };
-            if let Err(e) =
-                fctx.scope
-                    .register_type_upsert(name.clone(), member_ref, bind_index)
+            if let Err(e) = fctx
+                .scope
+                .register_type_upsert(name.clone(), member_ref, bind_index)
             {
                 return Action::Done(Err(e.with_frame(frame())));
             }

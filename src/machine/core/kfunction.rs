@@ -10,17 +10,17 @@ use crate::machine::core::{KError, KErrorKind, KFuture, Scope};
 use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
 use crate::machine::model::values::{ArgValue, NamedPairs};
 
+/// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
+/// `machine::execute::harness::run_action`.
+pub mod action;
 pub mod bind_by_name;
 pub mod body;
 pub mod exec;
 pub mod pick;
 pub mod scheduler_handle;
-/// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
-/// `machine::execute::harness::run_action`.
-pub mod action;
 
-pub use body::{BinderBucketFn, BinderNameFn, Body, BodyResult};
 pub use action::ActionFn;
+pub use body::{BinderBucketFn, BinderNameFn, Body, BodyResult};
 pub use pick::ClassifiedSlots;
 pub use scheduler_handle::{CatchFinish, CombineFinish, NodeId, SchedulerHandle};
 

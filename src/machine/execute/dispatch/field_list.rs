@@ -17,7 +17,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::{KType, Record};
 use crate::machine::{
-    BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, SchedulerHandle, Scope,
+    BodyResult, CombineFinish, KError, KErrorKind, NodeId, SchedulerHandle, Scope, TraceFrame,
 };
 
 /// Folds the elaborated `(name, KType)` pairs into the caller's carrier on the Combine's
@@ -42,7 +42,7 @@ pub(crate) fn defer_field_list_via_combine<'run, 's>(
     threaded: Vec<String>,
     chain: Option<Rc<LexicalFrame>>,
     pending_guard: Option<PendingBinderGuard<'run>>,
-    error_frame: Option<Frame>,
+    error_frame: Option<TraceFrame>,
     finalize: FieldListFinalize<'run>,
 ) -> BodyResult<'run> {
     let park_count = park_producers.len();
@@ -102,7 +102,7 @@ pub(crate) fn defer_field_list_action<'a>(
     threaded: Vec<String>,
     chain: Option<Rc<LexicalFrame>>,
     pending_guard: Option<PendingBinderGuard<'a>>,
-    error_frame: Option<Frame>,
+    error_frame: Option<TraceFrame>,
     finalize: FieldListFinalize<'a>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
@@ -139,11 +139,11 @@ pub(crate) fn defer_field_list_action<'a>(
                     None => error,
                 }))
             }
-            FieldListOutcome::Pending { .. } => Action::Done(Err(KError::new(
-                KErrorKind::ShapeError(format!(
+            FieldListOutcome::Pending { .. } => {
+                Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "{context}: forward type reference still unresolved after Combine wake"
-                )),
-            ))),
+                )))))
+            }
         }
     });
     Action::Combine { deps, finish }

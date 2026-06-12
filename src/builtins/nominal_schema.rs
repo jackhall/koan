@@ -14,7 +14,7 @@ use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind, KKind,
 };
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, BodyResult, Frame, KError, KErrorKind, Scope};
+use crate::machine::{BindingIndex, BodyResult, KError, KErrorKind, Scope, TraceFrame};
 
 /// Fold the sealed `(name, KType)` pairs into the declarator's carrier; shared by the synchronous
 /// and Combine-finish paths. A plain `fn` pointer (not a closure) so it rides both the eager arm
@@ -33,7 +33,7 @@ pub(crate) fn nominal_schema_action<'a>(
     kind: KKind,
     context: &'static str,
     name_kind: FieldNameKind,
-    error_frame: Frame,
+    error_frame: TraceFrame,
     finalize: SchemaFinalize<'a>,
 ) -> Action<'a> {
     let bind_index = ctx.bind_index();
@@ -54,8 +54,13 @@ pub(crate) fn nominal_schema_action<'a>(
     let mut elaborator = Elaborator::new(ctx.scope)
         .with_threaded([name.clone()])
         .with_chain(chain.clone());
-    match parse_typed_field_list_via_elaborator(&schema_expr, context, name_kind, &mut elaborator, None)
-    {
+    match parse_typed_field_list_via_elaborator(
+        &schema_expr,
+        context,
+        name_kind,
+        &mut elaborator,
+        None,
+    ) {
         FieldListOutcome::Done(fields) => {
             body_result_to_action(finalize(ctx.scope, name, fields, bind_index))
         }

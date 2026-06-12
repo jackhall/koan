@@ -23,9 +23,7 @@ use super::{arg, err, kw, sig};
 
 /// Translate a [`BodyResult`] from the shared `access_*` helpers into a `Done` [`Action`]. The ATTR
 /// helpers only ever produce `Value` / `Err`, so the tail / defer arms are unreachable.
-fn done<'a>(
-    result: BodyResult<'a>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
+fn done<'a>(result: BodyResult<'a>) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::Action;
     match result {
         BodyResult::Value(carried) => Action::Done(Ok(carried)),

@@ -6,7 +6,7 @@ use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 
 use super::super::lift::{lift_kobject, lift_ktype};
-use super::super::nodes::{Frame, LiftState, Node, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{CallFrame, LiftState, Node, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 use crate::machine::model::Carried;
 
@@ -23,7 +23,7 @@ impl<'run> Scheduler<'run> {
             // work or the in-step TCO frame reset.
             let node_scope = node.scope;
             let work = node.work;
-            let Frame {
+            let CallFrame {
                 cart,
                 reserve,
                 contract: prev_contract,
@@ -131,7 +131,7 @@ impl<'run> Scheduler<'run> {
                                 Node {
                                     work: new_work,
                                     scope: node_scope,
-                                    frame: Frame {
+                                    frame: CallFrame {
                                         cart: prev_frame,
                                         reserve: post_step_reserve,
                                         contract: next_contract,
@@ -211,7 +211,7 @@ impl<'run> Scheduler<'run> {
         }
     }
 
-    /// Frame / function are left as `None` and `block_entry: None` so the slot's
+    /// CallFrame / function are left as `None` and `block_entry: None` so the slot's
     /// existing per-call frame, function label, and chain stay attached when the
     /// Lift writes its terminal.
     ///
@@ -286,7 +286,7 @@ fn compute_done_output<'run>(
                         ReturnContract::Arm { kind, .. } => kind.to_string(),
                         ReturnContract::PerCall { func, .. } => func.summarize(),
                     };
-                    e.with_frame(crate::machine::Frame::bare(label.clone(), label))
+                    e.with_frame(crate::machine::TraceFrame::bare(label.clone(), label))
                 }
                 None => e,
             };
@@ -331,7 +331,7 @@ fn check_declared_return<'run>(
             expected,
             got: got_name(),
         })
-        .with_frame(crate::machine::Frame::bare(label.clone(), label)));
+        .with_frame(crate::machine::TraceFrame::bare(label.clone(), label)));
     }
     Ok(Some(declared))
 }
@@ -355,10 +355,9 @@ fn compute_replace_chain<'run>(
     };
     match (new_function, new_frame) {
         // `Function` and `PerCall` (a deferred FN body) both assemble the FN-body chain.
-        (
-            Some(ReturnContract::Function(_) | ReturnContract::PerCall { .. }),
-            Some(frame),
-        ) => assemble_body_chain(frame.scope(), prev_chain, body_index),
+        (Some(ReturnContract::Function(_) | ReturnContract::PerCall { .. }), Some(frame)) => {
+            assemble_body_chain(frame.scope(), prev_chain, body_index)
+        }
         _ => LexicalFrame::push(Some(prev_chain), scope_id, body_index),
     }
 }

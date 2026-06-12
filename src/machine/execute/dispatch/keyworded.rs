@@ -7,7 +7,7 @@ use crate::machine::core::kfunction::{KFunction, SchedulerHandle};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Parseable;
 use crate::machine::{
-    BindingIndex, Frame, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome,
+    BindingIndex, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, TraceFrame,
 };
 
 use super::super::nodes::{NodeOutput, NodeStep};
@@ -125,7 +125,7 @@ impl<'run> KeywordedState<'run> {
         // A bare-name arg whose producer already errored can never resolve.
         for outcome in bare_outcomes.iter().flatten() {
             if let NameOutcome::ProducerErrored(e) = outcome {
-                let frame = Frame::from_expr("<wrap-resolve>", &expr);
+                let frame = TraceFrame::from_expr("<wrap-resolve>", &expr);
                 return Ok(NodeStep::Done(NodeOutput::Err(propagate_dep_error(
                     e,
                     Some(frame),
@@ -298,7 +298,7 @@ impl<'run> KeywordedState<'run> {
         for p in producers {
             if ctx.is_result_ready(p) {
                 if let Err(e) = ctx.read_result(p) {
-                    let frame = Frame::from_expr("<dispatch-park>", &expr);
+                    let frame = TraceFrame::from_expr("<dispatch-park>", &expr);
                     return NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))));
                 }
             } else if !ctx.would_create_cycle(p, NodeId(idx)) && !to_wait.contains(&p) {

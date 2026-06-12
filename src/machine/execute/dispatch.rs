@@ -24,7 +24,7 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};
-use crate::machine::{Frame, KError, KErrorKind, NodeId, Resolution, Scope};
+use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
 
 use super::nodes::{NodeOutput, NodeStep};
 use super::scheduler::Scheduler;
@@ -201,7 +201,7 @@ pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> No
 
 /// Clone a dep's terminal error and attach a caller-chosen frame.
 /// `frame = None` is the frameless variant.
-pub(super) fn propagate_dep_error(e: &KError, frame: Option<Frame>) -> KError {
+pub(super) fn propagate_dep_error(e: &KError, frame: Option<TraceFrame>) -> KError {
     let cloned = e.clone_for_propagation();
     match frame {
         Some(f) => cloned.with_frame(f),
@@ -212,7 +212,7 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<Frame>) -> KError {
 /// Shape a dep-error terminal with the `<bind>` surface frame keyed
 /// off `working_expr`.
 pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>) -> NodeStep<'run> {
-    let frame = Frame::from_expr("<bind>", working_expr);
+    let frame = TraceFrame::from_expr("<bind>", working_expr);
     NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
 }
 

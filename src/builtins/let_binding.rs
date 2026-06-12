@@ -111,7 +111,9 @@ pub fn body<'a>(
         }
         Action::Done(Ok(Carried::Type(kt_ref)))
     } else {
-        let value = rhs.as_object().expect("value-route LET RHS is the Object arm");
+        let value = rhs
+            .as_object()
+            .expect("value-route LET RHS is the Object arm");
         if matches!(value, KObject::KFunction(f, _) if f.is_functor) {
             return done_err(KError::new(KErrorKind::ShapeError(format!(
                 "a functor must be bound to a Type-class (capitalized) name; `{name}` \
@@ -186,10 +188,22 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         )
     };
     crate::builtins::register_builtin_full(
-        scope, "LET", identifier_sig(), body, Some(binder_name), None, false,
+        scope,
+        "LET",
+        identifier_sig(),
+        body,
+        Some(binder_name),
+        None,
+        false,
     );
     crate::builtins::register_builtin_full(
-        scope, "LET", type_sig(), body, Some(binder_name), None, false,
+        scope,
+        "LET",
+        type_sig(),
+        body,
+        Some(binder_name),
+        None,
+        false,
     );
 }
 

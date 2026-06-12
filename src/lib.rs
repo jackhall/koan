@@ -2,7 +2,6 @@
 //! tests. Canonical entry points: [`machine::interpret`] and
 //! [`machine::interpret_with_writer`].
 
-
 pub mod builtins;
 pub mod machine;
 pub mod parse;

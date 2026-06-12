@@ -34,7 +34,7 @@ impl<'run> NodeOutput<'run> {
 /// memory across tail-call sequences. When `frame` is `Some`, its `scope()` becomes the
 /// slot's scope and its `arena()` owns per-call allocations; `None` keeps the existing
 /// frame and scope. `function`, when set, names the user-fn whose body the replacement is
-/// entering — any error landing on this slot gets a `Frame` appended for the trace.
+/// entering — any error landing on this slot gets a `TraceFrame` appended for the trace.
 ///
 /// `block_entry` annotates lexical-block entry. `None` keeps the slot's current
 /// `LexicalFrame` chain unchanged. `Some(scope_id)` enters a new lexical block: when
@@ -165,11 +165,11 @@ pub(super) enum NodeScope<'run> {
 /// A node's per-call frame state: the execution cart, its ping-pong reserve, and the erased
 /// return contract. Lifetime-free — the cart `Rc` pins everything its members point at, and the
 /// contract is erased ([`ErasedContract`]) and re-anchored at the Done read boundary witnessed
-/// by `cart`. Every node owns a `Frame`: the cart is the arena the slot's step runs against,
+/// by `cart`. Every node owns a `CallFrame`: the cart is the arena the slot's step runs against,
 /// falling back to the run frame at top level (see `Scheduler::submit_node`), and an invoke
 /// reuses the *reserve* rather than the active cart, so the slot's cart is never taken out from
 /// under it. `reserve` and `contract` are sparse.
-pub(super) struct Frame {
+pub(super) struct CallFrame {
     /// The cart this slot's step runs against. Cloned onto every sub-slot dispatched in the same
     /// body, so it is uniquely owned only at a TCO collapse point (the gate
     /// `CallArena::try_reset_for_tail` checks). The Rc drops on Done or Replace; its arena drops
@@ -200,8 +200,8 @@ pub(super) struct Node<'run> {
     pub(super) work: NodeWork<'run>,
     pub(super) scope: NodeScope<'run>,
     /// The slot's per-call frame state (cart + reserve + erased contract) — never absent, see
-    /// [`Frame`].
-    pub(super) frame: Frame,
+    /// [`CallFrame`].
+    pub(super) frame: CallFrame,
     /// Immutable cactus-chain naming this node's lexical position. Head frame is the
     /// innermost enclosing block; tail (`parent: None`) is top-level. See
     /// `core/lexical_frame.rs`.

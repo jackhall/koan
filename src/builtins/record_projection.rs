@@ -68,7 +68,9 @@ pub fn body<'a>(
             )))));
         }
         None => {
-            return Action::Done(Err(KError::new(KErrorKind::MissingArg("record".to_string()))));
+            return Action::Done(Err(KError::new(KErrorKind::MissingArg(
+                "record".to_string(),
+            ))));
         }
     };
 

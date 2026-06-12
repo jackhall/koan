@@ -30,7 +30,11 @@ pub(crate) fn resolve_arm_contract<'a>(
             })?,
         },
         Some(other) => other.clone(),
-        None => return Err(KError::new(KErrorKind::MissingArg("return_type".to_string()))),
+        None => {
+            return Err(KError::new(KErrorKind::MissingArg(
+                "return_type".to_string(),
+            )))
+        }
     };
     Ok(ReturnContract::Arm {
         ret: ctx.scope.arena.alloc_ktype(ret_kt),

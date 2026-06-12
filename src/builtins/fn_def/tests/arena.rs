@@ -99,7 +99,9 @@ fn tail_call_enforces_first_callers_return_contract() {
     );
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("FF"), scope);
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let err = match sched.read_result(id) {
         Err(e) => e,
         Ok(_) => panic!("FF -> Number tail-calling GG -> Str must fail FF's return contract"),

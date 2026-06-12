@@ -170,9 +170,7 @@ fn kfuture_bundle_arg_with_wrapped_field_anchors() {
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    future
-        .args
-        .insert("s".into(), ArgValue::Object(Rc::new(s)));
+    future.args.insert("s".into(), ArgValue::Object(Rc::new(s)));
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying);
 

@@ -132,8 +132,8 @@ fn display_type_class_binding_expects_type() {
 #[test]
 fn with_frame_renders_call_stack_inline() {
     let err = KError::new(KErrorKind::User("boom".into()))
-        .with_frame(Frame::bare("F", "(F 1)"))
-        .with_frame(Frame::bare("G", "(G (F 1))"));
+        .with_frame(TraceFrame::bare("F", "(F 1)"))
+        .with_frame(TraceFrame::bare("G", "(G (F 1))"));
     assert_eq!(err.to_string(), "boom\n  in (F 1) (F)\n  in (G (F 1)) (G)");
 }
 
@@ -144,7 +144,7 @@ fn frame_with_location_appends_path_line_col() {
         line: 4,
         col_utf16: 7,
     };
-    let err = KError::new(KErrorKind::User("boom".into())).with_frame(Frame {
+    let err = KError::new(KErrorKind::User("boom".into())).with_frame(TraceFrame {
         function: "F".into(),
         expression: "(F 1)".into(),
         location: Some(loc),
@@ -154,14 +154,15 @@ fn frame_with_location_appends_path_line_col() {
 
 #[test]
 fn debug_matches_display() {
-    let err = KError::new(KErrorKind::MissingArg("z".into())).with_frame(Frame::bare("F", "(F)"));
+    let err =
+        KError::new(KErrorKind::MissingArg("z".into())).with_frame(TraceFrame::bare("F", "(F)"));
     assert_eq!(format!("{:?}", err), format!("{}", err));
 }
 
 #[test]
 fn clone_for_propagation_preserves_kind_and_frames() {
     let err =
-        KError::new(KErrorKind::UnboundName("q".into())).with_frame(Frame::bare("H", "(H q)"));
+        KError::new(KErrorKind::UnboundName("q".into())).with_frame(TraceFrame::bare("H", "(H q)"));
     let copy = err.clone_for_propagation();
     assert_eq!(copy.to_string(), err.to_string());
     assert_eq!(copy.frames.len(), 1);

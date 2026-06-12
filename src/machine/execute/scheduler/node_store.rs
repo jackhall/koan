@@ -22,7 +22,7 @@ use crate::machine::model::Parseable;
 use crate::machine::KError;
 use crate::machine::NodeId;
 
-use super::super::nodes::{Frame, LiftState, Node, NodeOutput, NodeScope, NodeWork};
+use super::super::nodes::{CallFrame, LiftState, Node, NodeOutput, NodeScope, NodeWork};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -146,7 +146,7 @@ impl<'run> NodeStore<'run> {
         self.slots[id] = SlotState::PreRun(Node {
             work,
             scope: NodeScope::Yoked,
-            frame: Frame {
+            frame: CallFrame {
                 cart,
                 reserve,
                 contract,

@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
-use crate::machine::{BodyResult, CombineFinish, Frame, KError, KErrorKind, NameOutcome, NodeId};
+use crate::machine::{
+    BodyResult, CombineFinish, KError, KErrorKind, NameOutcome, NodeId, TraceFrame,
+};
 
 use super::super::dispatch::resolve_name_part;
 use super::Scheduler;
@@ -73,7 +75,7 @@ impl<'run> Scheduler<'run> {
             let val_slot = self.classify_aggregate_part(v, &mut deps, &mut park_producers, true);
             layout.push((key_slot, val_slot));
         }
-        let frame_label = || Frame::bare("<dict>", "dict literal");
+        let frame_label = || TraceFrame::bare("<dict>", "dict literal");
         let park_count = park_producers.len();
         let finish: CombineFinish<'run> = Box::new(move |_sched, results| {
             let mut map: HashMap<Box<dyn Serializable<'run> + 'run>, Held<'run>> = HashMap::new();

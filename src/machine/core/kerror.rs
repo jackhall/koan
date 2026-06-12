@@ -16,7 +16,7 @@ use crate::machine::RuntimeArena;
 #[derive(Clone)]
 pub struct KError {
     pub kind: KErrorKind,
-    pub frames: Vec<Frame>,
+    pub frames: Vec<TraceFrame>,
 }
 
 #[derive(Clone)]
@@ -78,35 +78,35 @@ pub enum KErrorKind {
 /// `summarize()` text; `location` is `Some` when the originating `KExpression`
 /// had both `span` and `file` populated.
 #[derive(Clone)]
-pub struct Frame {
+pub struct TraceFrame {
     pub function: String,
     pub expression: String,
     pub location: Option<SourceLoc>,
 }
 
-impl Frame {
+impl TraceFrame {
     /// Locationless frame for call sites without an originating `KExpression`.
-    pub fn bare(function: impl Into<String>, expression: impl Into<String>) -> Frame {
-        Frame {
+    pub fn bare(function: impl Into<String>, expression: impl Into<String>) -> TraceFrame {
+        TraceFrame {
             function: function.into(),
             expression: expression.into(),
             location: None,
         }
     }
 
-    pub fn for_call(function: &KFunction<'_>, expr: &KExpression<'_>) -> Frame {
-        Frame {
+    pub fn for_call(function: &KFunction<'_>, expr: &KExpression<'_>) -> TraceFrame {
+        TraceFrame {
             function: function.summarize(),
             expression: expr.summarize(),
             location: location_from_expr(expr),
         }
     }
 
-    /// Frame keyed off a `KExpression` but with a caller-chosen `function`
+    /// TraceFrame keyed off a `KExpression` but with a caller-chosen `function`
     /// label (e.g. `"<bind>"`) for scheduler-internal frames without a real
     /// `KFunction`.
-    pub fn from_expr(function: impl Into<String>, expr: &KExpression<'_>) -> Frame {
-        Frame {
+    pub fn from_expr(function: impl Into<String>, expr: &KExpression<'_>) -> TraceFrame {
+        TraceFrame {
             function: function.into(),
             expression: expr.summarize(),
             location: location_from_expr(expr),
@@ -145,13 +145,13 @@ impl KError {
         })
     }
 
-    pub fn with_frame(mut self, frame: Frame) -> Self {
+    pub fn with_frame(mut self, frame: TraceFrame) -> Self {
         self.frames.push(frame);
         self
     }
 
     pub fn with_call_frame(self, function: &KFunction<'_>, expr: &KExpression<'_>) -> Self {
-        self.with_frame(Frame::for_call(function, expr))
+        self.with_frame(TraceFrame::for_call(function, expr))
     }
 
     /// Spelled out (vs. `Clone`) so propagation sites read as intent.

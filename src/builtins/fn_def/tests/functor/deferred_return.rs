@@ -203,7 +203,9 @@ fn deferred_return_tail_call_stays_tco_flat() {
     );
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("AA View"), scope);
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     assert!(
         sched.read_result(id).is_ok(),
         "AA V should succeed: {:?}",
@@ -242,7 +244,9 @@ fn deferred_expression_return_tail_chain_reuses_frames() {
     );
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("AA View"), scope);
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     assert!(
         sched.read_result(id).is_ok(),
         "AA should succeed: {:?}",

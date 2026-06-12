@@ -28,7 +28,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::{Carried, KObject};
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, BodyResult, Frame, KError, KErrorKind, Resolution, Scope};
+use crate::machine::{BindingIndex, BodyResult, KError, KErrorKind, Resolution, Scope, TraceFrame};
 
 use super::{arg, err, kw, sig};
 
@@ -141,9 +141,8 @@ pub fn body<'a>(
                 // The repr names a type still finalizing in this scheduler: park on its producer
                 // and re-resolve at Combine-finish. A name with no in-flight producer is a genuine
                 // forward/unknown reference.
-                if let Resolution::Placeholder(producer) = ctx
-                    .scope
-                    .resolve_with_chain(te.as_str(), chain.as_deref())
+                if let Resolution::Placeholder(producer) =
+                    ctx.scope.resolve_with_chain(te.as_str(), chain.as_deref())
                 {
                     let chain_for_finish = chain.clone();
                     let finish: Cont<'a> = Box::new(move |fctx, _results| {
@@ -157,10 +156,9 @@ pub fn body<'a>(
                                 kt.clone(),
                                 bind_index,
                             )),
-                            None => Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                                "NEWTYPE repr slot = unknown type name `{}`",
-                                te.as_str(),
-                            ))))),
+                            None => Action::Done(Err(KError::new(KErrorKind::ShapeError(
+                                format!("NEWTYPE repr slot = unknown type name `{}`", te.as_str(),),
+                            )))),
                         }
                     });
                     return Action::Combine {
@@ -173,12 +171,9 @@ pub fn body<'a>(
                     te.as_str(),
                 )))))
             }
-            other => body_result_to_action(finalize_newtype(
-                ctx.scope,
-                name,
-                other.clone(),
-                bind_index,
-            )),
+            other => {
+                body_result_to_action(finalize_newtype(ctx.scope, name, other.clone(), bind_index))
+            }
         }
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
         defer_resolved_sigil(name, inner.clone(), bind_index)
@@ -199,9 +194,9 @@ fn defer_resolved_sigil<'a>(
     use crate::machine::core::kfunction::action::{
         body_result_to_action, Action, Cont, Dep, DepPlacement,
     };
-    let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(Box::new(
-        inner,
-    )))]);
+    let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
+        Box::new(inner),
+    ))]);
     let finish: Cont<'a> = Box::new(move |fctx, results| match results[0] {
         Carried::Type(kt) => {
             body_result_to_action(finalize_newtype(fctx.scope, name, kt.clone(), bind_index))
@@ -226,8 +221,8 @@ fn defer_resolved_sigil<'a>(
 pub fn body_record_repr<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_object, require_bare_type_name, Action};
     use super::nominal_schema::nominal_schema_action;
+    use crate::machine::core::kfunction::action::{arg_object, require_bare_type_name, Action};
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "NEWTYPE"));
     let fields = match arg_object(ctx.args, "repr") {
@@ -238,7 +233,7 @@ pub fn body_record_repr<'a>(
             ))))
         }
     };
-    let error_frame = Frame::bare("<newtype>", format!("NEWTYPE {name}"));
+    let error_frame = TraceFrame::bare("<newtype>", format!("NEWTYPE {name}"));
     nominal_schema_action(
         ctx,
         name,
@@ -291,8 +286,24 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     let binder = super::type_part_binder_name;
     // Scalar / bare-leaf repr (`= Number`, `= Foo`) and non-record sigil repr (`= :(LIST OF T)`)
     // share `body`; the record repr (`= :{…}`) routes to `body_record_repr`.
-    register_builtin_full(scope, "NEWTYPE", scalar_sig(), body, Some(binder), None, false);
-    register_builtin_full(scope, "NEWTYPE", sigil_sig(), body, Some(binder), None, false);
+    register_builtin_full(
+        scope,
+        "NEWTYPE",
+        scalar_sig(),
+        body,
+        Some(binder),
+        None,
+        false,
+    );
+    register_builtin_full(
+        scope,
+        "NEWTYPE",
+        sigil_sig(),
+        body,
+        Some(binder),
+        None,
+        false,
+    );
     register_builtin_full(
         scope,
         "NEWTYPE",

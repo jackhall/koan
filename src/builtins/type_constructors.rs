@@ -79,9 +79,7 @@ fn finalize_carrier<'a>(
 /// either folds synchronously or defers via [`defer_field_list_action`].
 mod action_bodies {
     use super::{build_carrier, CarrierKind};
-    use crate::machine::core::kfunction::action::{
-        require_ktype, BodyCtx, Action,
-    };
+    use crate::machine::core::kfunction::action::{require_ktype, Action, BodyCtx};
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::values::Carried;
     use crate::machine::model::KType;
@@ -111,7 +109,9 @@ mod action_bodies {
             KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
                 match RecursiveSet::projected_schema(set, *index) {
                     ProjectedSchema::TypeConstructor { param_names, .. } => param_names.len(),
-                    _ => unreachable!("TypeConstructor-kind member projects a TypeConstructor schema"),
+                    _ => unreachable!(
+                        "TypeConstructor-kind member projects a TypeConstructor schema"
+                    ),
                 }
             }
             other => {
@@ -170,9 +170,7 @@ fn build_carrier<'a>(
         FieldListOutcome::Done(fields) => Action::Done(Ok(Carried::Type(finalize_carrier(
             ctx.scope, fields, ret, kind,
         )))),
-        FieldListOutcome::Err(msg) => {
-            Action::Done(Err(KError::new(KErrorKind::ShapeError(msg))))
-        }
+        FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,
@@ -196,67 +194,67 @@ fn build_carrier<'a>(
 pub fn register<'a>(scope: &'a Scope<'a>) {
     use crate::builtins::register_builtin;
     register_builtin(
-            scope,
-            "LIST",
-            sig(
-                KType::OfKind(KKind::Any),
-                vec![kw("LIST"), kw("OF"), arg("elem", KType::OfKind(KKind::Any))],
-            ),
-            action_bodies::body_list_of,
-        );
-        register_builtin(
-            scope,
-            "MAP",
-            sig(
-                KType::OfKind(KKind::Any),
-                vec![
-                    kw("MAP"),
-                    arg("k", KType::OfKind(KKind::Any)),
-                    kw("->"),
-                    arg("v", KType::OfKind(KKind::Any)),
-                ],
-            ),
-            action_bodies::body_map,
-        );
-        register_builtin(
-            scope,
-            "AS",
-            sig(
-                KType::OfKind(KKind::Any),
-                vec![
-                    arg("applied", KType::OfKind(KKind::Any)),
-                    kw("AS"),
-                    arg("ctor", KType::OfKind(KKind::Any)),
-                ],
-            ),
-            action_bodies::body_apply_as,
-        );
-        register_builtin(
-            scope,
-            "FN",
-            sig(
-                KType::OfKind(KKind::Any),
-                vec![
-                    kw("FN"),
-                    arg("sig", KType::KExpression),
-                    kw("->"),
-                    arg("ret", KType::OfKind(KKind::Any)),
-                ],
-            ),
-            action_bodies::body_fn,
-        );
-        register_builtin(
-            scope,
-            "FUNCTOR",
-            sig(
-                KType::OfKind(KKind::Any),
-                vec![
-                    kw("FUNCTOR"),
-                    arg("sig", KType::KExpression),
-                    kw("->"),
-                    arg("ret", KType::OfKind(KKind::Any)),
-                ],
-            ),
+        scope,
+        "LIST",
+        sig(
+            KType::OfKind(KKind::Any),
+            vec![kw("LIST"), kw("OF"), arg("elem", KType::OfKind(KKind::Any))],
+        ),
+        action_bodies::body_list_of,
+    );
+    register_builtin(
+        scope,
+        "MAP",
+        sig(
+            KType::OfKind(KKind::Any),
+            vec![
+                kw("MAP"),
+                arg("k", KType::OfKind(KKind::Any)),
+                kw("->"),
+                arg("v", KType::OfKind(KKind::Any)),
+            ],
+        ),
+        action_bodies::body_map,
+    );
+    register_builtin(
+        scope,
+        "AS",
+        sig(
+            KType::OfKind(KKind::Any),
+            vec![
+                arg("applied", KType::OfKind(KKind::Any)),
+                kw("AS"),
+                arg("ctor", KType::OfKind(KKind::Any)),
+            ],
+        ),
+        action_bodies::body_apply_as,
+    );
+    register_builtin(
+        scope,
+        "FN",
+        sig(
+            KType::OfKind(KKind::Any),
+            vec![
+                kw("FN"),
+                arg("sig", KType::KExpression),
+                kw("->"),
+                arg("ret", KType::OfKind(KKind::Any)),
+            ],
+        ),
+        action_bodies::body_fn,
+    );
+    register_builtin(
+        scope,
+        "FUNCTOR",
+        sig(
+            KType::OfKind(KKind::Any),
+            vec![
+                kw("FUNCTOR"),
+                arg("sig", KType::KExpression),
+                kw("->"),
+                arg("ret", KType::OfKind(KKind::Any)),
+            ],
+        ),
         action_bodies::body_functor,
     );
 }

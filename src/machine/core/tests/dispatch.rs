@@ -5,11 +5,11 @@ use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::core::source::Spanned;
-use crate::machine::model::Carried;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
+use crate::machine::model::Carried;
 use crate::machine::{BindingIndex, LexicalFrame, ResolveOutcome};
 
 fn body_a<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -131,7 +131,15 @@ fn resolve_carries_placeholder_name_for_binder_function() {
             }),
         ],
     };
-    register_builtin_full(scope, "LETLIKE", sig, body_a, Some(name_extractor), None, false);
+    register_builtin_full(
+        scope,
+        "LETLIKE",
+        sig,
+        body_a,
+        Some(name_extractor),
+        None,
+        false,
+    );
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("LETLIKE".into())),
         Spanned::bare(ExpressionPart::Identifier("foo".into())),

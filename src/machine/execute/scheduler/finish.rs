@@ -1,5 +1,5 @@
 use crate::machine::model::{Carried, KObject};
-use crate::machine::{BodyResult, CatchFinish, CombineFinish, Frame, KError, NodeId};
+use crate::machine::{BodyResult, CatchFinish, CombineFinish, KError, NodeId, TraceFrame};
 
 use super::super::dispatch::{propagate_dep_error, DispatchCtx};
 use super::super::nodes::{DispatchCombineFinish, LiftState, NodeOutput, NodeStep, NodeWork};
@@ -29,7 +29,7 @@ impl<'run> Scheduler<'run> {
     ) -> NodeStep<'run> {
         // The finish closure carries its own framing (e.g. "<list>", "<dict>");
         // this generic frame is used only for dep-error propagation.
-        let make_frame = || Frame::bare("<combine>", "combine");
+        let make_frame = || TraceFrame::bare("<combine>", "combine");
         for dep in &deps {
             if let Err(e) = self.read_result(*dep) {
                 return NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(make_frame()))));

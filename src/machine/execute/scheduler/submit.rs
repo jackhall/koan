@@ -8,7 +8,7 @@ use crate::machine::{
 };
 
 use super::super::dispatch::DispatchState;
-use super::super::nodes::{work_park_producers, Frame, Node, NodeScope, NodeWork};
+use super::super::nodes::{work_park_producers, CallFrame, Node, NodeScope, NodeWork};
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
@@ -340,7 +340,7 @@ impl<'run> Scheduler<'run> {
         let id = self.store.alloc_slot(Node {
             work,
             scope: node_scope,
-            frame: Frame {
+            frame: CallFrame {
                 cart,
                 reserve: None,
                 contract: None,

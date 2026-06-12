@@ -9,9 +9,7 @@
 use super::DispatchCtx;
 use crate::machine::core::kfunction::bind_by_name::CallArgs;
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::kfunction::exec::{
-    run_user_fn, ExecOutcome, Frame as ExecFrame, PerCallReturn,
-};
+use crate::machine::core::kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
 use crate::machine::core::kfunction::{
     Body, BodyResult, CombineFinish, KFunction, SchedulerHandle,
 };
@@ -95,7 +93,10 @@ pub(super) fn invoke<'run>(
             // Empty `leading` → body_index 1 (the lone statement sits above the params); otherwise
             // dispatch the non-tail statements as siblings and tail-replace into the last at N.
             let body_index = leading.len() + 1;
-            ctx.dispatch_body_statements(&frame, leading.into_iter().map(|e| (*e).clone()).collect());
+            ctx.dispatch_body_statements(
+                &frame,
+                leading.into_iter().map(|e| (*e).clone()).collect(),
+            );
             BodyResult::tail_with_frame_contract(tail.clone(), frame, contract, body_index)
         }
         ExecOutcome::DeferredExprTail {
@@ -112,8 +113,10 @@ pub(super) fn invoke<'run>(
             let mut body_and_type = leading;
             body_and_type.push(type_expr);
             let body_index = body_and_type.len() + 1;
-            let ids =
-                ctx.dispatch_body_statements(&frame, body_and_type.into_iter().map(|e| (*e).clone()).collect());
+            let ids = ctx.dispatch_body_statements(
+                &frame,
+                body_and_type.into_iter().map(|e| (*e).clone()).collect(),
+            );
             let type_dep = *ids.last().expect("the return-type expr was dispatched");
             let tail_expr = tail.clone();
             let body_frame = frame.clone();
@@ -206,4 +209,3 @@ fn extract_carried_args<'run>(
     }
     Some(args)
 }
-

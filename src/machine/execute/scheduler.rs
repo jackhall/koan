@@ -42,7 +42,7 @@ pub struct Scheduler<'run> {
     pub(in crate::machine::execute::scheduler) queues: WorkQueues,
     pub(in crate::machine::execute::scheduler) deps: DepGraph,
     pub(in crate::machine::execute::scheduler) store: NodeStore<'run>,
-    /// Frame Rc of the slot currently being executed. See
+    /// TraceFrame Rc of the slot currently being executed. See
     /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
     pub(in crate::machine::execute::scheduler) active_frame: Option<Rc<CallArena>>,
     /// The run frame: a non-dying [`CallArena`] adopting the top-level run scope, lazily built on

@@ -53,7 +53,9 @@ enum CarrierForm<'a> {
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_object, arg_type, Action, Cont, Dep, DepPlacement};
+    use crate::machine::core::kfunction::action::{
+        arg_object, arg_type, Action, Cont, Dep, DepPlacement,
+    };
 
     let done_err = |e: KError| Action::Done(Err(e));
 
