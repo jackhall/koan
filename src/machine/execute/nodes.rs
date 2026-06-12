@@ -4,7 +4,9 @@ use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::{Carried, KObject, KType};
-use crate::machine::{CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, Scope};
+use crate::machine::{
+    CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, Scope, TraceFrame,
+};
 
 use super::dispatch::{DispatchCtx, DispatchState};
 
@@ -116,10 +118,15 @@ pub(super) enum NodeWork<'run> {
     /// head-deferred / constructor park-sites: the scheduler resolves the deps and hands the
     /// values to a dispatch finish that splices / classifies / invokes, learning nothing about
     /// the dispatch internals (the splice into a `KExpression` lives entirely in the finish).
+    ///
+    /// `dep_error_frame` is attached to a dep-error short-circuit (before the finish runs) so a
+    /// site that wants to surface the consuming call in the trace (e.g. eager-subs' `<bind>`
+    /// frame keyed off the call expression) can; `None` propagates frameless.
     DispatchCombine {
         deps: Vec<NodeId>,
         park_count: usize,
         finish: DispatchCombineFinish<'run>,
+        dep_error_frame: Option<TraceFrame>,
     },
     Lift(LiftState<'run>),
 }

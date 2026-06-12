@@ -56,11 +56,15 @@ impl<'run> Scheduler<'run> {
         deps: Vec<NodeId>,
         park_count: usize,
         finish: DispatchCombineFinish<'run>,
+        dep_error_frame: Option<TraceFrame>,
         idx: usize,
     ) -> NodeStep<'run> {
         for dep in &deps {
             if let Err(e) = self.read_result(*dep) {
-                return NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, None)));
+                return NodeStep::Done(NodeOutput::Err(propagate_dep_error(
+                    e,
+                    dep_error_frame.clone(),
+                )));
             }
         }
         let values: Vec<Carried<'run>> = deps.iter().map(|d| self.read(*d)).collect();

@@ -91,6 +91,9 @@ fn park_on_head<'run>(
             deps: vec![head_sub],
             park_count: 0,
             finish,
+            // The head sub is the only dep; a dep error propagates frameless (the resumed
+            // dispatch attaches its own frame), matching the legacy resume behaviour.
+            dep_error_frame: None,
         },
         frame: None,
         function: None,

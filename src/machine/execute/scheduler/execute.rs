@@ -48,7 +48,8 @@ impl<'run> Scheduler<'run> {
                     deps,
                     park_count,
                     finish,
-                } => self.run_dispatch_combine(deps, park_count, finish, idx),
+                    dep_error_frame,
+                } => self.run_dispatch_combine(deps, park_count, finish, dep_error_frame, idx),
                 NodeWork::Catch { from, finish } => self.run_catch(from, finish, idx),
                 NodeWork::Lift(state) => NodeStep::Done(Self::run_lift(state)),
             };

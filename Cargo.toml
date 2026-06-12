@@ -11,6 +11,14 @@ path = "src/lib.rs"
 name = "koan"
 path = "src/main.rs"
 
+[features]
+# Routes the dispatch park-sites (eager-subs, …) through the `DispatchCombine`
+# carrier instead of the legacy hand-rolled park/resume path. Off by default;
+# the new path is built off to one side and proven green under the feature
+# before it replaces the legacy path. See
+# roadmap/refactor/dispatch-effect-contract.md.
+dispatch-combine = []
+
 [dependencies]
 regex = "1.12.3"
 typed-arena = "2"
