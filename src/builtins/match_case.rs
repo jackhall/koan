@@ -19,7 +19,7 @@ use super::{arg, kw, sig};
 /// expression with `it` bound to the inner value in a per-MATCH child scope (so
 /// the binding can't leak). No matching branch → `ShapeError("inexhaustive match
 /// = no branch for `X`")`; malformed shape → `ShapeError`.
-pub fn body_action<'a>(
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use super::branch_walk::{arm_tail, resolve_arm_contract};
@@ -73,7 +73,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("branches", KType::KExpression),
         ],
     );
-    crate::builtins::register_action_builtin(scope, "MATCH", signature, body_action);
+    crate::builtins::register_builtin(scope, "MATCH", signature, body);
 }
 
 #[cfg(test)]

@@ -63,7 +63,7 @@ fn kfunction_with_foreign_runtime_does_not_anchor() {
             return_type: ReturnType::Resolved(KType::Null),
             elements: vec![SignatureElement::Keyword("__FOREIGN__".into())],
         },
-        Body::Action(|ctx| {
+        Body::Builtin(|ctx| {
             crate::machine::core::kfunction::action::Action::Done(Ok(
                 crate::machine::model::Carried::Object(ctx.scope.arena.alloc_object(KObject::Null)),
             ))

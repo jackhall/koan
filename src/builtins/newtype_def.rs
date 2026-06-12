@@ -112,8 +112,8 @@ fn finalize_record_newtype<'a>(
 
 /// A resolved repr finalizes synchronously; a bare-leaf name resolves against the scope chain,
 /// parks on an in-flight producer (a `Dep::Existing` Combine), or errors; a raw sigil repr
-/// sub-dispatches via [`defer_resolved_sigil_action`].
-pub fn body_action<'a>(
+/// sub-dispatches via [`defer_resolved_sigil`].
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
@@ -181,7 +181,7 @@ pub fn body_action<'a>(
             )),
         }
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
-        defer_resolved_sigil_action(name, inner.clone(), bind_index)
+        defer_resolved_sigil(name, inner.clone(), bind_index)
     } else {
         Action::Done(Err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE repr slot must be a type expression (e.g. `Number`, `Foo`)".to_string(),
@@ -191,7 +191,7 @@ pub fn body_action<'a>(
 
 /// A non-record sigil repr (`NEWTYPE Stream = :(LIST OF Number)`): re-wrap the captured sigil,
 /// sub-dispatch it, and seal a plain Newtype over the resolved `KType` at Combine-finish.
-fn defer_resolved_sigil_action<'a>(
+fn defer_resolved_sigil<'a>(
     name: String,
     inner: KExpression<'a>,
     bind_index: BindingIndex,
@@ -223,7 +223,7 @@ fn defer_resolved_sigil_action<'a>(
 /// Body of the record-repr overload `NEWTYPE <name> = :{…}`: elaborate the `:{…}` field list
 /// (threading the binder name + pending guard), folding via [`finalize_record_newtype`] or deferring
 /// through the shared `nominal_schema_action` field-list path.
-pub fn body_record_repr_action<'a>(
+pub fn body_record_repr<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_object, require_bare_type_name, Action};
@@ -287,17 +287,17 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         )
     };
-    use crate::builtins::register_action_builtin_full;
+    use crate::builtins::register_builtin_full;
     let binder = super::type_part_binder_name;
     // Scalar / bare-leaf repr (`= Number`, `= Foo`) and non-record sigil repr (`= :(LIST OF T)`)
-    // share `body_action`; the record repr (`= :{…}`) routes to `body_record_repr_action`.
-    register_action_builtin_full(scope, "NEWTYPE", scalar_sig(), body_action, Some(binder), None, false);
-    register_action_builtin_full(scope, "NEWTYPE", sigil_sig(), body_action, Some(binder), None, false);
-    register_action_builtin_full(
+    // share `body`; the record repr (`= :{…}`) routes to `body_record_repr`.
+    register_builtin_full(scope, "NEWTYPE", scalar_sig(), body, Some(binder), None, false);
+    register_builtin_full(scope, "NEWTYPE", sigil_sig(), body, Some(binder), None, false);
+    register_builtin_full(
         scope,
         "NEWTYPE",
         record_sig(),
-        body_record_repr_action,
+        body_record_repr,
         Some(binder),
         None,
         false,

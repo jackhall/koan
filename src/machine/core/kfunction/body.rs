@@ -310,7 +310,7 @@ pub enum Body<'a> {
     UserDefined(KExpression<'a>),
     /// A builtin authored against the `Action` harness. Runs through
     /// `machine::execute::harness::run_action`.
-    Action(super::action::ActionFn),
+    Builtin(super::action::ActionFn),
 }
 
 #[cfg(test)]

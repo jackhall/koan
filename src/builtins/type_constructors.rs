@@ -75,10 +75,10 @@ fn finalize_carrier<'a>(
 }
 
 /// `Action`-harness twins of the type-constructor bodies. LIST/MAP/AS fold resolved type args
-/// directly (`Done`); FN/FUNCTOR route the parameter list through [`build_carrier_action`], which
+/// directly (`Done`); FN/FUNCTOR route the parameter list through [`build_carrier`], which
 /// either folds synchronously or defers via [`defer_field_list_action`].
 mod action_bodies {
-    use super::{build_carrier_action, CarrierKind};
+    use super::{build_carrier, CarrierKind};
     use crate::machine::core::kfunction::action::{
         require_ktype, BodyCtx, Action,
     };
@@ -137,11 +137,11 @@ mod action_bodies {
     }
 
     pub(super) fn body_fn<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-        build_carrier_action(ctx, "sig", "ret", CarrierKind::Function)
+        build_carrier(ctx, "sig", "ret", CarrierKind::Function)
     }
 
     pub(super) fn body_functor<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-        build_carrier_action(ctx, "sig", "ret", CarrierKind::Functor)
+        build_carrier(ctx, "sig", "ret", CarrierKind::Functor)
     }
 }
 
@@ -149,7 +149,7 @@ mod action_bodies {
 /// so nested parameterized param types like `xs :(LIST OF Number)` sub-Dispatch and capitalized
 /// FUNCTOR param names like `Ty` are accepted. Folds synchronously or defers via
 /// [`defer_field_list_action`] (no self-reference binder, no pending guard).
-fn build_carrier_action<'a>(
+fn build_carrier<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
     sig_slot: &str,
     ret_slot: &str,
@@ -194,8 +194,8 @@ fn build_carrier_action<'a>(
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    use crate::builtins::register_action_builtin;
-    register_action_builtin(
+    use crate::builtins::register_builtin;
+    register_builtin(
             scope,
             "LIST",
             sig(
@@ -204,7 +204,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ),
             action_bodies::body_list_of,
         );
-        register_action_builtin(
+        register_builtin(
             scope,
             "MAP",
             sig(
@@ -218,7 +218,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ),
             action_bodies::body_map,
         );
-        register_action_builtin(
+        register_builtin(
             scope,
             "AS",
             sig(
@@ -231,7 +231,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ),
             action_bodies::body_apply_as,
         );
-        register_action_builtin(
+        register_builtin(
             scope,
             "FN",
             sig(
@@ -245,7 +245,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ),
             action_bodies::body_fn,
         );
-        register_action_builtin(
+        register_builtin(
             scope,
             "FUNCTOR",
             sig(

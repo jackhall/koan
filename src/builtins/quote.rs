@@ -8,7 +8,7 @@ use super::{arg, kw, sig};
 /// and returns it as a `KObject::KExpression` value with no evaluation, so raw ASTs can thread
 /// through eager-evaluating contexts. The `QUOTE` head-keyword is not part of the documented
 /// surface; user code goes through the `#` sigil.
-pub fn body_action<'a>(
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, Action};
@@ -23,7 +23,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         KType::KExpression,
         vec![kw("QUOTE"), arg("expr", KType::KExpression)],
     );
-    crate::builtins::register_action_builtin(scope, "QUOTE", signature, body_action);
+    crate::builtins::register_builtin(scope, "QUOTE", signature, body);
 }
 
 #[cfg(test)]

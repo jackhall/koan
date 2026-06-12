@@ -46,13 +46,13 @@ fn drain_debug_asserts_on_invariant_violation() {
     let scope = run_root_bare(&arena);
     let kfn1 = arena.alloc_function(KFunction::new(
         unit_signature(),
-        Body::Action(body_no_op),
+        Body::Builtin(body_no_op),
         scope,
     ));
     let obj1 = arena.alloc_object(KObject::KFunction(kfn1, None));
     let kfn2 = arena.alloc_function(KFunction::new(
         unit_signature(),
-        Body::Action(body_no_op),
+        Body::Builtin(body_no_op),
         scope,
     ));
     let obj2 = arena.alloc_object(KObject::KFunction(kfn2, None));
@@ -77,7 +77,7 @@ fn register_function_defers_and_drains_through_function_arm() {
     let scope = run_root_bare(&arena);
     let kfn = arena.alloc_function(KFunction::new(
         unit_signature(),
-        Body::Action(body_no_op),
+        Body::Builtin(body_no_op),
         scope,
     ));
     let obj = arena.alloc_object(KObject::KFunction(kfn, None));
@@ -125,7 +125,7 @@ fn drain_requeues_function_on_persistent_borrow_conflict() {
     let scope = run_root_bare(&arena);
     let kfn = arena.alloc_function(KFunction::new(
         unit_signature(),
-        Body::Action(body_no_op),
+        Body::Builtin(body_no_op),
         scope,
     ));
     let obj = arena.alloc_object(KObject::KFunction(kfn, None));
@@ -170,13 +170,13 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
     let scope = run_root_bare(&arena);
     let kfn1 = arena.alloc_function(KFunction::new(
         unit_signature(),
-        Body::Action(body_no_op),
+        Body::Builtin(body_no_op),
         scope,
     ));
     let obj1 = arena.alloc_object(KObject::KFunction(kfn1, None));
     let kfn2 = arena.alloc_function(KFunction::new(
         unit_signature(),
-        Body::Action(body_no_op),
+        Body::Builtin(body_no_op),
         scope,
     ));
     let obj2 = arena.alloc_object(KObject::KFunction(kfn2, None));

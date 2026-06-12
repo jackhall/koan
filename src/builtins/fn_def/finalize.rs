@@ -7,7 +7,7 @@
 //! `super::fn_def` reduces to a two-arm match.
 //!
 //! The FUNCTOR and anonymous-FN binders ride the same path, selected by the
-//! [`FnKind`] threaded through `finalize_fn_with_kind` / `defer_via_combine_action`:
+//! [`FnKind`] threaded through `finalize_fn_with_kind` / `defer_via_combine`:
 //! `Functor` flips the `KFunction::is_functor` carrier bit and gates the
 //! FUNCTOR-only return-type admissibility check; `Anonymous` (the `FN :{…}`
 //! record-schema binder) skips registration. No closure plumbing.
@@ -58,7 +58,7 @@ pub(crate) enum FnPlan<'a> {
     Combine(CombineInputs<'a>),
 }
 
-/// Inputs to [`defer_via_combine_action`]: carrier that survives the Combine boundary
+/// Inputs to [`defer_via_combine`]: carrier that survives the Combine boundary
 /// plus the two parking lists.
 pub(crate) struct CombineInputs<'a> {
     pub capture: ReturnTypeCapture<'a>,
@@ -278,7 +278,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 /// Splice protocol: each entry in `inputs.sub_dispatches` becomes a `Dep::Dispatch`;
 /// the finish closure splices each result into `signature_expr.parts[slot_idx]` as
 /// `Future(obj)` before re-running `parse_fn_param_list` against the now-final scope.
-pub(crate) fn defer_via_combine_action<'a>(
+pub(crate) fn defer_via_combine<'a>(
     signature_expr: KExpression<'a>,
     inputs: CombineInputs<'a>,
     body_expr: KExpression<'a>,

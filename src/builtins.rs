@@ -76,10 +76,10 @@ pub(crate) fn type_part_binder_name(
 
 /// Full-form builtin registration with both binder hooks and the `is_functor` flag. The `body` is
 /// an [`ActionFn`](crate::machine::core::kfunction::ActionFn) (`fn(&BodyCtx) -> Action`) installed
-/// as [`Body::Action`] — the builtin runs through `machine::execute::harness::run_action`.
+/// as [`Body::Builtin`] — the builtin runs through `machine::execute::harness::run_action`.
 /// `binder_bucket` lets FN / FUNCTOR key pending-overload entries by inner-call bucket.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn register_action_builtin_full<'a>(
+pub(crate) fn register_builtin_full<'a>(
     scope: &'a Scope<'a>,
     name: &str,
     signature: ExpressionSignature<'a>,
@@ -91,7 +91,7 @@ pub(crate) fn register_action_builtin_full<'a>(
     let arena = scope.arena;
     let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
         signature,
-        Body::Action(body),
+        Body::Builtin(body),
         scope,
         binder_name,
         binder_bucket,
@@ -101,14 +101,14 @@ pub(crate) fn register_action_builtin_full<'a>(
     let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
 }
 
-/// Common-case [`register_action_builtin_full`]: no binder hooks, not a functor.
-pub(crate) fn register_action_builtin<'a>(
+/// Common-case [`register_builtin_full`]: no binder hooks, not a functor.
+pub(crate) fn register_builtin<'a>(
     scope: &'a Scope<'a>,
     name: &str,
     signature: ExpressionSignature<'a>,
     body: crate::machine::core::kfunction::ActionFn,
 ) {
-    register_action_builtin_full(scope, name, signature, body, None, None, false);
+    register_builtin_full(scope, name, signature, body, None, None, false);
 }
 
 /// Test-only: register one overload at an explicit [`BindingIndex`]. A test uses this to
@@ -126,7 +126,7 @@ pub(crate) fn register_overload_at<'a>(
     let arena = scope.arena;
     let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
         signature,
-        Body::Action(body),
+        Body::Builtin(body),
         scope,
         None,
         None,

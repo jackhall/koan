@@ -1,6 +1,6 @@
 //! `FUNCTOR <signature:KExpression> -> <return_type:Type> = <body:KExpression>` —
 //! the user-defined functor constructor. The body shares
-//! [`crate::builtins::fn_def::build_fn_like_action`] with FN, selecting
+//! [`crate::builtins::fn_def::build_fn_like`] with FN, selecting
 //! `FnKind::Functor`; the divergences from FN are:
 //!
 //! 1. The constructed `KFunction` carries `is_functor: true`, so its
@@ -11,7 +11,7 @@
 //!    error here, before the body has a chance to surface a frames-removed
 //!    `TypeMismatch`.
 //!
-//! Both divergences key on `FnKind::Functor`: `build_fn_like_action` passes
+//! Both divergences key on `FnKind::Functor`: `build_fn_like` passes
 //! `Some(&param_type_map)` to the shared `classify_return_type`, which emits a
 //! `Rejected`/`Admissible`/`DeferredToCombine` verdict alongside classification so
 //! the carrier is walked once; the deferred arm rides Combine-finish gated by the
@@ -26,13 +26,13 @@ use crate::machine::Scope;
 use super::fn_def::finalize::FnKind;
 use super::{arg, kw, sig};
 
-/// FUNCTOR binder body. Shares [`crate::builtins::fn_def::build_fn_like_action`]
+/// FUNCTOR binder body. Shares [`crate::builtins::fn_def::build_fn_like`]
 /// with FN; `FnKind::Functor` selects the return-admissibility verdict and the
 /// `is_functor: true` flag downstream.
-pub fn body_action<'a>(
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    super::fn_def::build_fn_like_action(ctx, "FUNCTOR", FnKind::Functor)
+    super::fn_def::build_fn_like(ctx, "FUNCTOR", FnKind::Functor)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
@@ -70,10 +70,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         )
     };
-    use crate::builtins::register_action_builtin_full;
+    use crate::builtins::register_builtin_full;
     let bucket = super::fn_def::binder_bucket;
-    register_action_builtin_full(scope, "FUNCTOR", typeexpr_sig(), body_action, None, Some(bucket), false);
-    register_action_builtin_full(scope, "FUNCTOR", sigil_sig(), body_action, None, Some(bucket), false);
+    register_builtin_full(scope, "FUNCTOR", typeexpr_sig(), body, None, Some(bucket), false);
+    register_builtin_full(scope, "FUNCTOR", sigil_sig(), body, None, Some(bucket), false);
 }
 
 #[cfg(test)]

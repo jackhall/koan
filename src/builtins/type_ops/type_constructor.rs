@@ -11,7 +11,7 @@ use crate::machine::ScopeId;
 /// name and a per-call `scope_id`. Arity-1 only. Reads the `param` type cell from
 /// `BodyCtx::args`, mints the template singleton [`RecursiveSet`], and returns it as a
 /// `Carried::Type`.
-pub fn body_action<'a>(
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_held, arg_type, Action};

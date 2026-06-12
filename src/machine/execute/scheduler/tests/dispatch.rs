@@ -4,7 +4,7 @@
 
 use super::super::Scheduler;
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
-use crate::builtins::{register_action_builtin, register_overload_at};
+use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::core::source::Spanned;
 use crate::machine::model::Carried;
@@ -80,7 +80,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
             }),
         ],
     };
-    register_action_builtin(inner, "inner_loose", inner_sig, body_inner_any);
+    register_builtin(inner, "inner_loose", inner_sig, body_inner_any);
 
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("MARK".into())),
@@ -105,13 +105,13 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     use crate::machine::KErrorKind;
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    register_action_builtin(
+    register_builtin(
         scope,
         "any_first",
         one_slot_sig("v", KType::Any),
         body_marker_any,
     );
-    register_action_builtin(
+    register_builtin(
         scope,
         "ident_second",
         one_slot_sig("v", KType::Identifier),
@@ -155,7 +155,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
             }),
         ],
     };
-    register_action_builtin(scope, "FOO", sig, body_lowercase);
+    register_builtin(scope, "FOO", sig, body_lowercase);
 
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("FOO".into())),

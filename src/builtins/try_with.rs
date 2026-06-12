@@ -25,7 +25,7 @@ use super::{arg, kw, sig};
 /// Watches `expr` in a fresh `child_under` body scope, then a `Catch` finish walks the arms
 /// against the `Result` and tail-replaces into the matched arm (per-call frame with `it` bound)
 /// carrying the `-> :T` `Arm` contract, re-raising on no match.
-pub fn body_action<'a>(
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use super::branch_walk::{arm_tail, resolve_arm_contract};
@@ -89,7 +89,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("branches", KType::KExpression),
         ],
     );
-    crate::builtins::register_action_builtin(scope, "TRY", signature, body_action);
+    crate::builtins::register_builtin(scope, "TRY", signature, body);
 }
 
 #[cfg(test)]

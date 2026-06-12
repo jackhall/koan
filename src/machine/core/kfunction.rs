@@ -211,7 +211,7 @@ impl<'a> KFunction<'a> {
 mod tests {
     use super::*;
     use crate::builtins::test_support::{marker, run_root_bare};
-    use crate::builtins::{default_scope, register_action_builtin};
+    use crate::builtins::{default_scope, register_builtin};
     use crate::machine::core::{RuntimeArena, Scope};
     use crate::machine::model::ast::{KLiteral, TypeName};
     use crate::machine::model::types::{Argument, ExpressionSignature, KType, ReturnType};
@@ -261,7 +261,7 @@ mod tests {
                 }),
             ],
         };
-        register_action_builtin(scope, "OP", sig, body_any);
+        register_builtin(scope, "OP", sig, body_any);
         let expr = KExpression::new(vec![
             Spanned::bare(ExpressionPart::Keyword("OP".into())),
             Spanned::bare(ExpressionPart::Identifier("someName".into())),
@@ -294,7 +294,7 @@ mod tests {
                 }),
             ],
         };
-        register_action_builtin(scope, "ident_call_probe", sig, body_any);
+        register_builtin(scope, "ident_call_probe", sig, body_any);
         let inner = KExpression::new(vec![
             Spanned::bare(ExpressionPart::Identifier("x".into())),
             Spanned::bare(ExpressionPart::Keyword(":".into())),
@@ -351,7 +351,7 @@ mod tests {
                 }),
             ],
         };
-        register_action_builtin(scope, "OP", sig, body_any);
+        register_builtin(scope, "OP", sig, body_any);
         let expr = KExpression::new(vec![
             Spanned::bare(ExpressionPart::Keyword("OP".into())),
             Spanned::bare(ExpressionPart::Type(TypeName::leaf("IntOrd".into()))),
@@ -380,12 +380,12 @@ mod tests {
                 }),
             ],
         };
-        let plain = KFunction::with_binder_name(make_sig(), Body::Action(body_any), scope, None);
+        let plain = KFunction::with_binder_name(make_sig(), Body::Builtin(body_any), scope, None);
         let plain_obj = KObject::KFunction(arena.alloc_function(plain), None);
         assert!(matches!(plain_obj.ktype(), KType::KFunction { .. }));
         let functor = KFunction::with_binder_and_functor(
             make_sig(),
-            Body::Action(body_any),
+            Body::Builtin(body_any),
             scope,
             None,
             None,
@@ -427,7 +427,7 @@ mod tests {
         let mk_functor = || {
             let f = KFunction::with_binder_and_functor(
                 make_sig(),
-                Body::Action(body_any),
+                Body::Builtin(body_any),
                 scope,
                 None,
                 None,
@@ -492,7 +492,7 @@ mod tests {
                 }),
             ],
         };
-        register_action_builtin(scope, "OP", sig, body_any);
+        register_builtin(scope, "OP", sig, body_any);
         let expr = KExpression::new(vec![
             Spanned::bare(ExpressionPart::Keyword("OP".into())),
             Spanned::bare(ExpressionPart::Type(TypeName::leaf("Number".into()))),

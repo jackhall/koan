@@ -11,7 +11,7 @@ use super::{arg, kw, sig};
 /// `Identifier` and `TypeExprRef`. Same partition logic across both: reads its args from the
 /// `BodyCtx::args` record, writes the binding directly on `ctx.scope` (interior-mutable), and
 /// returns the bound carrier as `Action::Done`.
-pub fn body_action<'a>(
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_held, arg_object, arg_type, Action};
@@ -185,11 +185,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         )
     };
-    crate::builtins::register_action_builtin_full(
-        scope, "LET", identifier_sig(), body_action, Some(binder_name), None, false,
+    crate::builtins::register_builtin_full(
+        scope, "LET", identifier_sig(), body, Some(binder_name), None, false,
     );
-    crate::builtins::register_action_builtin_full(
-        scope, "LET", type_sig(), body_action, Some(binder_name), None, false,
+    crate::builtins::register_builtin_full(
+        scope, "LET", type_sig(), body, Some(binder_name), None, false,
     );
 }
 

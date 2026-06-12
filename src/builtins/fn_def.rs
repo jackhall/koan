@@ -58,22 +58,22 @@ fn collect_param_types<'a>(
 /// Shared FN / FUNCTOR elaboration: extract the `signature` / return / `body`
 /// slots from `BodyCtx::args`, collect param names, classify the return type,
 /// parse the param list, and route to [`finalize_fn_with_kind`] (synchronous, via
-/// `body_result_to_action`) or [`finalize::defer_via_combine_action`] (Combine).
+/// `body_result_to_action`) or [`finalize::defer_via_combine`] (Combine).
 /// `kind` is the sole behavioral fork — `FnKind::Functor` builds the param-type
 /// map and acts on the return-admissibility verdict; FN passes `None` and
 /// [`classify_return_type`] returns `Admissible`, so the `Rejected` check is a
 /// no-op. `builtin` (`"FN"` / `"FUNCTOR"`) names the surface in slot errors.
-pub(crate) fn build_fn_like_action<'a>(
+pub(crate) fn build_fn_like<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
     builtin: &str,
     kind: FnKind,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{body_result_to_action, require_kexpression, Action};
-    use finalize::defer_via_combine_action;
-    use return_type::extract_return_type_raw_action;
+    use finalize::defer_via_combine;
+    use return_type::extract_return_type_raw;
 
     let signature_expr = crate::try_action!(require_kexpression(ctx.args, builtin, "signature"));
-    let return_type_raw = crate::try_action!(extract_return_type_raw_action(ctx.args));
+    let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, builtin, "body"));
     let param_names = signature::collect_param_names_from_signature(&signature_expr);
     let param_type_map = match kind {
@@ -118,7 +118,7 @@ pub(crate) fn build_fn_like_action<'a>(
             bind_index,
         )),
         FnPlan::Combine(inputs) => {
-            defer_via_combine_action(signature_expr, inputs, body_expr, kind, bind_index)
+            defer_via_combine(signature_expr, inputs, body_expr, kind, bind_index)
         }
     }
 }
@@ -129,11 +129,11 @@ pub(crate) fn build_fn_like_action<'a>(
 /// routes through `BareIdentifier` / `BareTypeLeaf` / `LiteralPassThrough` /
 /// `TypeCall` / `FunctionValueCall` / `SigiledTypeExpr`), so the dispatcher needs
 /// a fixed token. The keyword-less `FN :{…}` record-schema form is
-/// [`body_record_schema_action`].
-pub fn body_action<'a>(
+/// [`body_record_schema`].
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    build_fn_like_action(ctx, "FN", FnKind::Function)
+    build_fn_like(ctx, "FN", FnKind::Function)
 }
 
 /// Anonymous-FN body: `FN :{<record schema>} -> ReturnType = (<body>)`.
@@ -145,14 +145,14 @@ pub fn body_action<'a>(
 /// resolved record. Each field becomes a keyword-less `Argument`; the function
 /// registers no dispatch keyword (see [`FnKind::Anonymous`]) and is reachable
 /// only through the value it returns.
-pub fn body_record_schema_action<'a>(
+pub fn body_record_schema<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
         arg_type, body_result_to_action, require_kexpression, Action,
     };
-    use finalize::defer_via_combine_action;
-    use return_type::extract_return_type_raw_action;
+    use finalize::defer_via_combine;
+    use return_type::extract_return_type_raw;
 
     let schema = match arg_type(ctx.args, "signature") {
         Some(KType::Record(record)) => record.clone(),
@@ -178,7 +178,7 @@ pub fn body_record_schema_action<'a>(
         })
         .collect();
     let param_names: Vec<String> = schema.keys().cloned().collect();
-    let return_type_raw = crate::try_action!(extract_return_type_raw_action(ctx.args));
+    let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "FN", "body"));
     let (return_type_state, _verdict) = crate::try_action!(classify_return_type(
         return_type_raw,
@@ -199,7 +199,7 @@ pub fn body_record_schema_action<'a>(
         )),
         FnPlan::Combine(mut inputs) => {
             inputs.prebuilt_elements = Some(elements);
-            defer_via_combine_action(
+            defer_via_combine(
                 crate::machine::model::ast::KExpression::new(Vec::new()),
                 inputs,
                 body_expr,
@@ -280,14 +280,14 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         )
     };
-    use crate::builtins::register_action_builtin_full;
-    register_action_builtin_full(scope, "FN", typeexpr_sig(), body_action, None, Some(binder_bucket), false);
-    register_action_builtin_full(scope, "FN", sigil_sig(), body_action, None, Some(binder_bucket), false);
-    register_action_builtin_full(
+    use crate::builtins::register_builtin_full;
+    register_builtin_full(scope, "FN", typeexpr_sig(), body, None, Some(binder_bucket), false);
+    register_builtin_full(scope, "FN", sigil_sig(), body, None, Some(binder_bucket), false);
+    register_builtin_full(
         scope,
         "FN",
         record_sig(),
-        body_record_schema_action,
+        body_record_schema,
         None,
         None,
         false,

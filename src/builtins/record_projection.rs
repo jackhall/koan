@@ -27,7 +27,7 @@ use super::{arg, kw, sig};
 /// operand is typed `:{}`, so dispatch shape-gates the slot to records and the body
 /// reads a guaranteed `KObject::Record` carrier. Reads its args from `BodyCtx::args` and
 /// returns the re-typed record as `Action::Done`.
-pub fn body_action<'a>(
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_object, require_kexpression, Action};
@@ -106,7 +106,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("record", KType::Record(Box::new(Record::new()))),
         ],
     );
-    crate::builtins::register_action_builtin(scope, "FROM", signature, body_action);
+    crate::builtins::register_builtin(scope, "FROM", signature, body);
 }
 
 #[cfg(test)]

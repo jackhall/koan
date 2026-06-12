@@ -16,13 +16,13 @@ use super::{arg, kw, sig};
 /// `<m:Module> :| <s:Signature>` — opaque ascription. Reads `m` / `s` from the
 /// `BodyCtx::args` type channel, mints on `ctx.scope.arena`, and returns the view module as
 /// `Action::Done(Ok(Carried::Type(..)))`.
-pub fn body_opaque_action<'a>(
+pub fn body_opaque<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::Action;
     use crate::machine::model::Carried;
 
-    let (m, s) = crate::try_action!(resolve_module_and_signature_action(ctx.args));
+    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args));
 
     let arena = ctx.scope.arena;
     let new_scope = arena.alloc_scope(Scope::child_under_module(
@@ -127,13 +127,13 @@ pub fn body_opaque_action<'a>(
 
 /// `<m:Module> :! <s:Signature>` — transparent ascription. Shape-checks against the source's
 /// own child scope and returns the retagged view module as `Action::Done(Ok(Carried::Type(..)))`.
-pub fn body_transparent_action<'a>(
+pub fn body_transparent<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::Action;
     use crate::machine::model::Carried;
 
-    let (m, s) = crate::try_action!(resolve_module_and_signature_action(ctx.args));
+    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args));
     if let Err(e) = shape_check(s, m.child_scope()) {
         return Action::Done(Err(e));
     }
@@ -152,7 +152,7 @@ pub fn body_transparent_action<'a>(
 
 /// Read the `m:Module` / `s:Signature` operands from the `BodyCtx::args` type channel, producing
 /// a missing / mismatch diagnostic when an operand is absent or the wrong kind.
-fn resolve_module_and_signature_action<'a>(
+fn resolve_module_and_signature<'a>(
     args: &crate::machine::model::KObject<'a>,
 ) -> Result<
     (
@@ -276,8 +276,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("s", KType::OfKind(KKind::Signature)),
         ],
     );
-    crate::builtins::register_action_builtin(scope, ":|", opaque_sig, body_opaque_action);
-    crate::builtins::register_action_builtin(scope, ":!", transparent_sig, body_transparent_action);
+    crate::builtins::register_builtin(scope, ":|", opaque_sig, body_opaque);
+    crate::builtins::register_builtin(scope, ":!", transparent_sig, body_transparent);
 }
 
 #[cfg(test)]

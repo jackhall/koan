@@ -35,7 +35,7 @@ pub(crate) enum ReturnTypeState<'a> {
     Deferred(DeferredReturn<'a>),
     /// `Expression(_)` carrier (e.g. `-> :(Mo.Ty)`) that doesn't reference any FN
     /// parameter; safe to resolve once at FN-def time. Scheduling happens via
-    /// `super::finalize::defer_via_combine_action` so all owned-sub registration lives
+    /// `super::finalize::defer_via_combine` so all owned-sub registration lives
     /// at one site.
     ExprToSubDispatch(KExpression<'a>),
 }
@@ -53,7 +53,7 @@ pub(crate) enum ReturnTypeCapture<'a> {
 /// Read the `return_type` slot from a `BodyCtx::args` record. A `Type`-arm `KType` (bare-leaf
 /// `Unresolved` → `TypeExprCarrier`, else `Resolved`), or an `Object`-arm `KObject::KExpression`
 /// (`:(…)` / dotted return → `ExprCarrier`).
-pub(crate) fn extract_return_type_raw_action<'a>(
+pub(crate) fn extract_return_type_raw<'a>(
     args: &KObject<'a>,
 ) -> Result<ReturnTypeRaw<'a>, KError> {
     use crate::machine::core::kfunction::action::{arg_object, arg_type};
@@ -79,7 +79,7 @@ pub(crate) enum AdmissibleVerdict {
     Admissible,
     /// `Pending` and `ExprToSubDispatch` carriers can't be classified until the resolved
     /// `KType` is in hand; the `is_functor: true` flag threaded through
-    /// `defer_via_combine_action` re-runs the predicate at Combine-finish.
+    /// `defer_via_combine` re-runs the predicate at Combine-finish.
     DeferredToCombine,
     /// Diagnostic is already formatted with the `FUNCTOR return-type slot` prefix.
     Rejected(KError),

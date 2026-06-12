@@ -30,7 +30,7 @@ use super::{arg, kw, sig};
 /// multi-statement body fans out one sub-dispatch per statement), forwarding the final
 /// statement's value as the USING result. The window's surfaced members resolve through
 /// [`Scope::binding_cutoff`]'s index-0 (no-cutoff) rule for a borrowed window.
-pub fn body_action<'a>(
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
@@ -100,7 +100,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ],
     );
-    crate::builtins::register_action_builtin(scope, "USING", signature, body_action);
+    crate::builtins::register_builtin(scope, "USING", signature, body);
 }
 
 #[cfg(test)]

@@ -27,12 +27,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         args: vec![KType::Any, kerror_ktype()],
     };
     let signature = sig(return_type, vec![kw("CATCH"), arg("expr", KType::KExpression)]);
-    crate::builtins::register_action_builtin(scope, "CATCH", signature, body_action);
+    crate::builtins::register_builtin(scope, "CATCH", signature, body);
 }
 
 /// Watches the captured `expr` and recovers into a `Result` carrier
 /// (`Ok(v)` / `Error(KError::to_tagged())`) via a `Catch` finish.
-pub fn body_action<'a>(
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, Action, CatchCont, Dep, DepPlacement};

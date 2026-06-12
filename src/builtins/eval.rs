@@ -12,7 +12,7 @@ use super::{arg, kw, sig};
 /// `TypeMismatch`.
 ///
 /// The `EVAL` head-keyword is not part of the surface; user code goes through the `$` sigil.
-pub fn body_action<'a>(
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_object, Action, FramePlacement};
@@ -45,7 +45,7 @@ pub fn body_action<'a>(
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let signature = sig(KType::Any, vec![kw("EVAL"), arg("expr", KType::Any)]);
-    crate::builtins::register_action_builtin(scope, "EVAL", signature, body_action);
+    crate::builtins::register_builtin(scope, "EVAL", signature, body);
 }
 
 #[cfg(test)]

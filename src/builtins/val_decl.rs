@@ -50,7 +50,7 @@ enum CarrierForm<'a> {
 /// args from `BodyCtx::args`, registers the value slot's declared type directly on a scope, and
 /// returns `Action::Done` for a structural carrier or an `Action::Combine` (one `OwnScope` type
 /// sub-dispatch) for a leaf that re-resolves against decl_scope.
-pub fn body_action<'a>(
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_object, arg_type, Action, Cont, Dep, DepPlacement};
@@ -103,7 +103,7 @@ pub fn body_action<'a>(
 
     let (te, _) = match carrier {
         CarrierForm::Direct(kt) => {
-            return finalize_val_action(ctx.scope, name, kt, bind_index);
+            return finalize_val(ctx.scope, name, kt, bind_index);
         }
         // Both leaf and raw carriers re-dispatch the leaf against decl_scope so a SIG-local
         // `LET <name> = ...` shadow wins over the builtin table. A `TypeNameRef` carrier always
@@ -128,7 +128,7 @@ pub fn body_action<'a>(
                 )))));
             }
         };
-        finalize_val_action(fctx.scope, name_for_finish.clone(), kt, bind_index)
+        finalize_val(fctx.scope, name_for_finish.clone(), kt, bind_index)
     });
     Action::Combine {
         deps: vec![Dep::Dispatch {
@@ -144,7 +144,7 @@ pub fn body_action<'a>(
 /// directly (not a boxed carrier) keeps the type table the single home for everything ascription
 /// enumerates. Uses the same infallible `register_type` path as a SIG-local `LET <TypeName> = …`
 /// abstract member.
-fn finalize_val_action<'a>(
+fn finalize_val<'a>(
     scope: &Scope<'a>,
     name: String,
     declared_kt: KType<'a>,
@@ -175,11 +175,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("ty", KType::OfKind(KKind::Proper)),
         ],
     );
-    crate::builtins::register_action_builtin_full(
+    crate::builtins::register_builtin_full(
         scope,
         "VAL",
         signature,
-        body_action,
+        body,
         Some(binder_name),
         None,
         false,

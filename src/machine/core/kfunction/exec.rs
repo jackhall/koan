@@ -150,7 +150,7 @@ pub fn run_user_fn<'ast, 'frame>(
     let body_expr = match &func.body {
         Body::UserDefined(expr) => expr,
         // Builtin bodies run through the action harness; this entry is user-defined only.
-        Body::Action(_) => {
+        Body::Builtin(_) => {
             return ExecOutcome::Errored(KError::new(crate::machine::KErrorKind::User(
                 "run_user_fn called on an action builtin body".to_string(),
             )))

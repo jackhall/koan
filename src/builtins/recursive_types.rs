@@ -94,7 +94,7 @@ fn leading_keyword<'b>(decl: &'b KExpression<'_>) -> Option<&'b str> {
 /// scope, pre-installs each member's `SetRef`, dispatches the body block (an `InScope` Combine dep
 /// that fans out per declaration), and the finish mirrors the sealed members + binds the group
 /// handle into the enclosing scope.
-pub fn body_action<'a>(
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
@@ -183,11 +183,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ],
     );
-    crate::builtins::register_action_builtin_full(
+    crate::builtins::register_builtin_full(
         scope,
         "RECURSIVE TYPES",
         signature,
-        body_action,
+        body,
         Some(super::type_part_binder_name),
         None,
         false,

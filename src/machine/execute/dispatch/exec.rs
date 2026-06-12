@@ -35,7 +35,7 @@ pub(super) fn invoke<'run>(
 ) -> NodeStep<'run> {
     // An action-harness builtin: build a read-only `BodyCtx`, get the `Action`, and lower it
     // through the shared `run_action` interpreter.
-    if let Body::Action(f) = &picked.body {
+    if let Body::Builtin(f) = &picked.body {
         let f = *f;
         let bundle = match picked.bind(working_expr) {
             Ok(future) => future.bundle,

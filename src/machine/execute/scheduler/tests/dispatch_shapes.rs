@@ -67,7 +67,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
     };
     let f = scope.arena.alloc_function(KFunction::new(
         sig,
-        crate::machine::core::kfunction::Body::Action(body_identity),
+        crate::machine::core::kfunction::Body::Builtin(body_identity),
         scope,
     ));
     let obj = scope.arena.alloc_object(KObject::KFunction(f, None));

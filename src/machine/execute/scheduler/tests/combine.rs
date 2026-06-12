@@ -102,7 +102,7 @@ fn combine_short_circuits_on_dep_error() {
 fn defer_to_lifts_slot_terminal_off_combine_id() {
     // Pins the binder-body wrap-up shape MODULE / SIG use: a body returning
     // `BodyResult::DeferTo(combine_id)` leaves its slot with the Combine's terminal.
-    use crate::builtins::{default_scope, register_action_builtin};
+    use crate::builtins::{default_scope, register_builtin};
     use crate::machine::model::ast::ExpressionPart;
     use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
     use crate::machine::core::kfunction::action::{Action, BodyCtx, Cont};
@@ -124,7 +124,7 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
 
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    register_action_builtin(
+    register_builtin(
         scope,
         "DEFERTEST",
         ExpressionSignature {

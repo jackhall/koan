@@ -58,7 +58,7 @@ fn finalize_union<'a>(
 /// Elaborate the variant schema, folding synchronously via [`finalize_union`] or deferring through
 /// the shared `nominal_schema_action` field-list path (threading the binder name and the in-flight
 /// pending guard), then install the sealed `SetRef` identity.
-pub fn body_action<'a>(
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_object, require_bare_type_name, Action};
@@ -97,11 +97,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("schema", KType::KExpression),
         ],
     );
-    crate::builtins::register_action_builtin_full(
+    crate::builtins::register_builtin_full(
         scope,
         "UNION",
         signature,
-        body_action,
+        body,
         Some(super::type_part_binder_name),
         None,
         false,

@@ -244,7 +244,7 @@ mod tests {
                 return_type: ReturnType::Resolved(KType::Null),
                 elements: vec![SignatureElement::Keyword("__SLOW__".into())],
             },
-            Body::Action(|ctx| {
+            Body::Builtin(|ctx| {
                 crate::machine::core::kfunction::action::Action::Done(Ok(
                     crate::machine::model::Carried::Object(
                         ctx.scope.arena.alloc_object(KObject::Null),

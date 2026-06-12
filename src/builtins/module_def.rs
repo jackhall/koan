@@ -18,7 +18,7 @@ use super::{arg, kw, sig};
 /// `Action`-harness twin of the legacy body: mints the child scope, dispatches the body block
 /// against it (an `InScope` Combine dep), and the finish installs the `KType::Module` identity into
 /// the parent scope.
-pub fn body_action<'a>(
+pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
@@ -92,8 +92,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ],
     );
-    crate::builtins::register_action_builtin_full(
-        scope, "MODULE", signature, body_action, Some(super::type_part_binder_name), None, false,
+    crate::builtins::register_builtin_full(
+        scope, "MODULE", signature, body, Some(super::type_part_binder_name), None, false,
     );
 }
 
