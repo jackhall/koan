@@ -12,10 +12,14 @@ use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, Frame, KError, KErrorKind, SchedulerHandle, Scope,
 };
 
-use super::{arg, err, kw, register_builtin_with_binder, sig};
+use super::{arg, err, kw, sig};
+#[cfg(not(feature = "action-harness"))]
+use super::register_builtin_with_binder;
 use crate::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_kexpression,
 };
+#[cfg(feature = "action-harness")]
+use crate::machine::execute::defer_field_list_action;
 
 /// `UNION <name:TypeExprRef> = (<schema>)` — declare a named tagged-union type.
 ///
@@ -147,19 +151,111 @@ fn finalize_union<'a>(
     }
 }
 
+/// `Action`-harness twin of [`body`]: elaborate the variant schema, folding synchronously via
+/// [`finalize_union`] or deferring through [`defer_field_list_action`] (threading the binder name
+/// and the in-flight pending guard), then install the sealed `SetRef` identity.
+#[cfg(feature = "action-harness")]
+pub fn body_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{
+        arg_object, arg_type, body_result_to_action, Action,
+    };
+    use crate::machine::core::kfunction::argument_bundle::bare_type_name;
+    use crate::machine::model::KObject;
+
+    let name = match arg_type(ctx.args, "name") {
+        Some(t) => match bare_type_name(t, "name", "UNION") {
+            Ok(n) => n,
+            Err(e) => return Action::Done(Err(e)),
+        },
+        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("name".to_string())))),
+    };
+    let schema_expr = match arg_object(ctx.args, "schema") {
+        Some(KObject::KExpression(e)) => e.clone(),
+        _ => {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+                "UNION schema slot must be a parenthesized dict literal".to_string(),
+            ))))
+        }
+    };
+    let scope_id = ctx.scope.id;
+    let pending_guard = ctx.scope.bindings().insert_pending_type(
+        name.clone(),
+        PendingTypeEntry {
+            kind: KKind::Tagged,
+            scope_id,
+            schema_expr: schema_expr.clone(),
+        },
+    );
+    let chain = ctx.chain.clone();
+    let mut elaborator = Elaborator::new(ctx.scope)
+        .with_threaded([name.clone()])
+        .with_chain(chain.clone());
+    let outcome = parse_typed_field_list_via_elaborator(
+        &schema_expr,
+        "UNION schema",
+        FieldNameKind::Type,
+        &mut elaborator,
+        None,
+    );
+    let bind_index = chain
+        .as_ref()
+        .map(|c| BindingIndex::value(c.index))
+        .unwrap_or(BindingIndex::BUILTIN);
+    match outcome {
+        FieldListOutcome::Done(fields) => {
+            body_result_to_action(finalize_union(ctx.scope, name, fields, bind_index))
+        }
+        FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
+        FieldListOutcome::Pending {
+            park_producers,
+            sub_dispatches,
+        } => {
+            let name_for_finish = name.clone();
+            defer_field_list_action(
+                schema_expr,
+                park_producers,
+                sub_dispatches,
+                "UNION schema",
+                FieldNameKind::Type,
+                vec![name.clone()],
+                chain,
+                Some(pending_guard),
+                Some(Frame::bare("<union>", format!("UNION {name} schema"))),
+                Box::new(move |scope, fields| {
+                    finalize_union(scope, name_for_finish, fields, bind_index)
+                }),
+            )
+        }
+    }
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
+    let signature = sig(
+        KType::OfKind(KKind::Any),
+        vec![
+            kw("UNION"),
+            arg("name", KType::OfKind(KKind::Proper)),
+            kw("="),
+            arg("schema", KType::KExpression),
+        ],
+    );
+    #[cfg(feature = "action-harness")]
+    crate::builtins::register_action_builtin_full(
+        scope,
+        "UNION",
+        signature,
+        body_action,
+        Some(super::type_part_binder_name),
+        None,
+        false,
+    );
+    #[cfg(not(feature = "action-harness"))]
     register_builtin_with_binder(
         scope,
         "UNION",
-        sig(
-            KType::OfKind(KKind::Any),
-            vec![
-                kw("UNION"),
-                arg("name", KType::OfKind(KKind::Proper)),
-                kw("="),
-                arg("schema", KType::KExpression),
-            ],
-        ),
+        signature,
         body,
         Some(super::type_part_binder_name),
     );

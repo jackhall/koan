@@ -21,7 +21,11 @@ use crate::machine::model::types::{
 use crate::machine::model::{KType, Record};
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
 
-use super::{arg, err, kw, register_builtin, sig};
+use super::{arg, err, kw, sig};
+#[cfg(not(feature = "action-harness"))]
+use super::register_builtin;
+#[cfg(feature = "action-harness")]
+use crate::machine::execute::defer_field_list_action;
 
 /// Which carrier the shared field-list path builds. All three ride the same parser and
 /// Combine/defer machinery; they differ only in the `KType` they fold their fields into,
@@ -241,7 +245,217 @@ fn finalize_carrier<'a>(
     scope.arena.alloc_ktype(kt)
 }
 
+/// `Action`-harness twins of the type-constructor bodies. LIST/MAP/AS fold resolved type args
+/// directly (`Done`); FN/FUNCTOR route the parameter list through [`build_carrier_action`], which
+/// either folds synchronously or defers via [`defer_field_list_action`].
+#[cfg(feature = "action-harness")]
+mod action_bodies {
+    use super::{build_carrier_action, CarrierKind};
+    use crate::machine::core::kfunction::action::{
+        require_ktype, BodyCtx, Action,
+    };
+    use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
+    use crate::machine::model::values::Carried;
+    use crate::machine::model::KType;
+    use crate::machine::{KError, KErrorKind};
+
+    pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+        let elem = match require_ktype(ctx.args, "elem") {
+            Ok(t) => t,
+            Err(e) => return Action::Done(Err(e)),
+        };
+        Action::Done(Ok(Carried::Type(
+            ctx.scope.arena.alloc_ktype(KType::List(Box::new(elem))),
+        )))
+    }
+
+    pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+        let k = match require_ktype(ctx.args, "k") {
+            Ok(t) => t,
+            Err(e) => return Action::Done(Err(e)),
+        };
+        let v = match require_ktype(ctx.args, "v") {
+            Ok(t) => t,
+            Err(e) => return Action::Done(Err(e)),
+        };
+        Action::Done(Ok(Carried::Type(
+            ctx.scope
+                .arena
+                .alloc_ktype(KType::Dict(Box::new(k), Box::new(v))),
+        )))
+    }
+
+    pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+        let applied = match require_ktype(ctx.args, "applied") {
+            Ok(t) => t,
+            Err(e) => return Action::Done(Err(e)),
+        };
+        let ctor = match require_ktype(ctx.args, "ctor") {
+            Ok(t) => t,
+            Err(e) => return Action::Done(Err(e)),
+        };
+        let param_count = match &ctor {
+            KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
+                match RecursiveSet::projected_schema(set, *index) {
+                    ProjectedSchema::TypeConstructor { param_names, .. } => param_names.len(),
+                    _ => unreachable!("TypeConstructor-kind member projects a TypeConstructor schema"),
+                }
+            }
+            other => {
+                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                    "right-hand side of `AS` must be a type constructor, got `{}`",
+                    other.name(),
+                )))))
+            }
+        };
+        if param_count != 1 {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "`{}` takes {param_count} type arguments; the `AS` form supplies one, so \
+                 multi-parameter application is not yet supported",
+                ctor.name(),
+            )))));
+        }
+        Action::Done(Ok(Carried::Type(ctx.scope.arena.alloc_ktype(
+            KType::ConstructorApply {
+                ctor: Box::new(ctor),
+                args: vec![applied],
+            },
+        ))))
+    }
+
+    pub(super) fn body_fn<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+        build_carrier_action(ctx, "sig", "ret", CarrierKind::Function)
+    }
+
+    pub(super) fn body_functor<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+        build_carrier_action(ctx, "sig", "ret", CarrierKind::Functor)
+    }
+}
+
+/// `Action`-side [`build_carrier`]: elaborate the parameter list, folding synchronously or
+/// deferring via [`defer_field_list_action`] (no self-reference binder, no pending guard).
+#[cfg(feature = "action-harness")]
+fn build_carrier_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+    sig_slot: &str,
+    ret_slot: &str,
+    kind: CarrierKind,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{require_kexpression, require_ktype, Action};
+    use crate::machine::model::values::Carried;
+    let sig_expr = match require_kexpression(ctx.args, "FN", sig_slot) {
+        Ok(e) => e,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    let ret = match require_ktype(ctx.args, ret_slot) {
+        Ok(t) => t,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    let mut elaborator = Elaborator::new(ctx.scope);
+    match parse_typed_field_list_via_elaborator(
+        &sig_expr,
+        kind.context(),
+        kind.field_name_kind(),
+        &mut elaborator,
+        None,
+    ) {
+        FieldListOutcome::Done(fields) => Action::Done(Ok(Carried::Type(finalize_carrier(
+            ctx.scope, fields, ret, kind,
+        )))),
+        FieldListOutcome::Err(msg) => {
+            Action::Done(Err(KError::new(KErrorKind::ShapeError(msg))))
+        }
+        FieldListOutcome::Pending {
+            park_producers,
+            sub_dispatches,
+        } => defer_field_list_action(
+            sig_expr,
+            park_producers,
+            sub_dispatches,
+            kind.context(),
+            kind.field_name_kind(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            Box::new(move |scope, fields| {
+                BodyResult::ktype(finalize_carrier(scope, fields, ret, kind))
+            }),
+        ),
+    }
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
+    #[cfg(feature = "action-harness")]
+    {
+        use crate::builtins::register_action_builtin;
+        register_action_builtin(
+            scope,
+            "LIST",
+            sig(
+                KType::OfKind(KKind::Any),
+                vec![kw("LIST"), kw("OF"), arg("elem", KType::OfKind(KKind::Any))],
+            ),
+            action_bodies::body_list_of,
+        );
+        register_action_builtin(
+            scope,
+            "MAP",
+            sig(
+                KType::OfKind(KKind::Any),
+                vec![
+                    kw("MAP"),
+                    arg("k", KType::OfKind(KKind::Any)),
+                    kw("->"),
+                    arg("v", KType::OfKind(KKind::Any)),
+                ],
+            ),
+            action_bodies::body_map,
+        );
+        register_action_builtin(
+            scope,
+            "AS",
+            sig(
+                KType::OfKind(KKind::Any),
+                vec![
+                    arg("applied", KType::OfKind(KKind::Any)),
+                    kw("AS"),
+                    arg("ctor", KType::OfKind(KKind::Any)),
+                ],
+            ),
+            action_bodies::body_apply_as,
+        );
+        register_action_builtin(
+            scope,
+            "FN",
+            sig(
+                KType::OfKind(KKind::Any),
+                vec![
+                    kw("FN"),
+                    arg("sig", KType::KExpression),
+                    kw("->"),
+                    arg("ret", KType::OfKind(KKind::Any)),
+                ],
+            ),
+            action_bodies::body_fn,
+        );
+        register_action_builtin(
+            scope,
+            "FUNCTOR",
+            sig(
+                KType::OfKind(KKind::Any),
+                vec![
+                    kw("FUNCTOR"),
+                    arg("sig", KType::KExpression),
+                    kw("->"),
+                    arg("ret", KType::OfKind(KKind::Any)),
+                ],
+            ),
+            action_bodies::body_functor,
+        );
+    }
+    #[cfg(not(feature = "action-harness"))]
+    {
     register_builtin(
         scope,
         "LIST",
@@ -306,6 +520,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ),
         body_functor,
     );
+    }
 }
 
 #[cfg(test)]

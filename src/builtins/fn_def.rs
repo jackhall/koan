@@ -11,7 +11,9 @@ use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, SchedulerHandle, Scope,
 };
 
-use super::{arg, err, kw, register_builtin_full, sig};
+use super::{arg, err, kw, sig};
+#[cfg(not(feature = "action-harness"))]
+use super::register_builtin_full;
 use crate::machine::core::kfunction::argument_bundle::extract_ktype;
 
 use finalize::{
@@ -262,6 +264,174 @@ pub fn body_record_schema<'a, 's>(
     }
 }
 
+/// `Action`-harness twin of [`build_fn_like`]: same elaboration, reading slots from
+/// `BodyCtx::args` and routing to [`finalize_fn_with_kind`] (synchronous, via
+/// `body_result_to_action`) or [`finalize::defer_via_combine_action`] (Combine).
+#[cfg(feature = "action-harness")]
+pub(crate) fn build_fn_like_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+    builtin: &str,
+    kind: FnKind,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{body_result_to_action, require_kexpression, Action};
+    use finalize::defer_via_combine_action;
+    use return_type::extract_return_type_raw_action;
+
+    let signature_expr = match require_kexpression(ctx.args, builtin, "signature") {
+        Ok(e) => e,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    let return_type_raw = match extract_return_type_raw_action(ctx.args) {
+        Ok(r) => r,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    let body_expr = match require_kexpression(ctx.args, builtin, "body") {
+        Ok(e) => e,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    let param_names = signature::collect_param_names_from_signature(&signature_expr);
+    let param_type_map = match kind {
+        FnKind::Functor => Some(collect_param_types(&signature_expr, ctx.scope)),
+        FnKind::Function | FnKind::Anonymous => None,
+    };
+    let mut elaborator = Elaborator::new(ctx.scope).with_chain(ctx.chain.clone());
+    let (return_type_state, verdict) = match classify_return_type(
+        return_type_raw,
+        &param_names,
+        ctx.scope,
+        ctx.chain.clone(),
+        param_type_map.as_ref(),
+    ) {
+        Ok(p) => p,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    if let AdmissibleVerdict::Rejected(e) = verdict {
+        return Action::Done(Err(e));
+    }
+    let params = match signature::parse_fn_param_list(&signature_expr, &mut elaborator) {
+        ParamListOutcome::Done(es) => ParamListResult::Done(es),
+        ParamListOutcome::Err(msg) => {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg))))
+        }
+        ParamListOutcome::Pending {
+            park_producers,
+            sub_dispatches,
+        } => ParamListResult::Pending {
+            park_producers,
+            sub_dispatches,
+        },
+    };
+    let bind_index = ctx
+        .chain
+        .as_ref()
+        .map(|chain| BindingIndex::value(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
+    match classify(return_type_state, params) {
+        FnPlan::Synchronous {
+            elements,
+            return_type,
+        } => body_result_to_action(finalize_fn_with_kind(
+            ctx.scope,
+            elements,
+            return_type,
+            body_expr,
+            kind,
+            bind_index,
+        )),
+        FnPlan::Combine(inputs) => {
+            defer_via_combine_action(signature_expr, inputs, body_expr, kind, bind_index)
+        }
+    }
+}
+
+/// `Action`-harness twin of [`body`] (keyworded FN).
+#[cfg(feature = "action-harness")]
+pub fn body_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    build_fn_like_action(ctx, "FN", FnKind::Function)
+}
+
+/// `Action`-harness twin of [`body_record_schema`] (anonymous `FN :{…}`).
+#[cfg(feature = "action-harness")]
+pub fn body_record_schema_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{
+        arg_type, body_result_to_action, require_kexpression, Action,
+    };
+    use finalize::defer_via_combine_action;
+    use return_type::extract_return_type_raw_action;
+
+    let schema = match arg_type(ctx.args, "signature") {
+        Some(KType::Record(record)) => record.clone(),
+        Some(other) => {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "anonymous FN signature must be a record schema `:{{…}}`, got `{}`",
+                other.name(),
+            )))))
+        }
+        None => {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+                "anonymous FN signature slot must be a record schema `:{…}`".to_string(),
+            ))))
+        }
+    };
+    let elements: Vec<SignatureElement<'a>> = schema
+        .iter()
+        .map(|(name, ktype)| {
+            SignatureElement::Argument(Argument {
+                name: name.clone(),
+                ktype: ktype.clone(),
+            })
+        })
+        .collect();
+    let param_names: Vec<String> = schema.keys().cloned().collect();
+    let return_type_raw = match extract_return_type_raw_action(ctx.args) {
+        Ok(r) => r,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    let body_expr = match require_kexpression(ctx.args, "FN", "body") {
+        Ok(e) => e,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    let (return_type_state, _verdict) = match classify_return_type(
+        return_type_raw,
+        &param_names,
+        ctx.scope,
+        ctx.chain.clone(),
+        None,
+    ) {
+        Ok(p) => p,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    let bind_index = ctx
+        .chain
+        .as_ref()
+        .map(|chain| BindingIndex::value(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
+    match classify(return_type_state, ParamListResult::Done(Vec::new())) {
+        FnPlan::Synchronous { return_type, .. } => body_result_to_action(finalize_fn_with_kind(
+            ctx.scope,
+            elements,
+            return_type,
+            body_expr,
+            FnKind::Anonymous,
+            bind_index,
+        )),
+        FnPlan::Combine(mut inputs) => {
+            inputs.prebuilt_elements = Some(elements);
+            defer_via_combine_action(
+                crate::machine::model::ast::KExpression::new(Vec::new()),
+                inputs,
+                body_expr,
+                FnKind::Anonymous,
+                bind_index,
+            )
+        }
+    }
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Declared return is `KType::Any`: a function's structural type only exists
     // once its signature is known. The constructed `KObject::KFunction` projects
@@ -284,9 +454,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     //
     // The final `false` is the nominal-binder flag: FN is value-side gated, so
     // `LET f = (FN ...)` does not register a sibling-visible nominal identity.
-    register_builtin_full(
-        scope,
-        "FN",
+    // `:TypeExprRef`-return keyworded overload (`-> Number` / `-> Er`).
+    let typeexpr_sig = || {
         sig(
             KType::Any,
             vec![
@@ -297,19 +466,13 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("="),
                 arg("body", KType::KExpression),
             ],
-        ),
-        body,
-        None,
-        Some(binder_bucket),
-        false,
-    );
-    // Lazy `:(...)` return carrier — a dotted/sigil return (`-> Er.Type`, `-> :(LIST OF T)`)
-    // is a `SigiledTypeExpr`; the `:SigiledTypeExpr` slot captures it raw (more specific than
+        )
+    };
+    // Lazy `:(...)` return carrier — a dotted/sigil return (`-> Er.Type`, `-> :(LIST OF T)`) is a
+    // `SigiledTypeExpr`; the `:SigiledTypeExpr` slot captures it raw (more specific than
     // `:TypeExprRef`, so it wins) and `extract_return_type_raw` defers a param-referencing one
     // per-call instead of eager-sub-dispatching it to an unbound parameter.
-    register_builtin_full(
-        scope,
-        "FN",
+    let sigil_sig = || {
         sig(
             KType::Any,
             vec![
@@ -320,20 +483,13 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("="),
                 arg("body", KType::KExpression),
             ],
-        ),
-        body,
-        None,
-        Some(binder_bucket),
-        false,
-    );
-    // Anonymous overload: a `:{…}` record-schema operand is a `RecordType` part,
-    // which the two `KExpression`-signature overloads above reject and only this
-    // `TypeExprRef`-signature overload admits (it sub-dispatches to a resolved
-    // `KType::Record`). Selection is unambiguous by operand part-kind, so it
-    // needs no `binder_bucket` park-guard.
-    register_builtin_full(
-        scope,
-        "FN",
+        )
+    };
+    // Anonymous overload: a `:{…}` record-schema operand is a `RecordType` part, which the two
+    // `KExpression`-signature overloads above reject and only this `TypeExprRef`-signature overload
+    // admits (it sub-dispatches to a resolved `KType::Record`). Selection is unambiguous by operand
+    // part-kind, so it needs no `binder_bucket` park-guard.
+    let record_sig = || {
         sig(
             KType::Any,
             vec![
@@ -344,12 +500,29 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("="),
                 arg("body", KType::KExpression),
             ],
-        ),
-        body_record_schema,
-        None,
-        None,
-        false,
-    );
+        )
+    };
+    #[cfg(feature = "action-harness")]
+    {
+        use crate::builtins::register_action_builtin_full;
+        register_action_builtin_full(scope, "FN", typeexpr_sig(), body_action, None, Some(binder_bucket), false);
+        register_action_builtin_full(scope, "FN", sigil_sig(), body_action, None, Some(binder_bucket), false);
+        register_action_builtin_full(
+            scope,
+            "FN",
+            record_sig(),
+            body_record_schema_action,
+            None,
+            None,
+            false,
+        );
+    }
+    #[cfg(not(feature = "action-harness"))]
+    {
+        register_builtin_full(scope, "FN", typeexpr_sig(), body, None, Some(binder_bucket), false);
+        register_builtin_full(scope, "FN", sigil_sig(), body, None, Some(binder_bucket), false);
+        register_builtin_full(scope, "FN", record_sig(), body_record_schema, None, None, false);
+    }
 }
 
 #[cfg(test)]

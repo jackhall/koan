@@ -368,3 +368,93 @@ pub(crate) fn defer_via_combine<'a, 's>(
     let combine_id = sched.add_combine_here(owned_subs, park_producers, finish);
     BodyResult::DeferTo(combine_id)
 }
+
+/// `Action`-harness twin of [`defer_via_combine`]: build the same Combine as an `Action` — park
+/// producers become `Dep::Existing`, the optional return-type sub and the param-type subs become
+/// `Dep::Dispatch { OwnScope }` (in that order, so the `[park ++ rt? ++ subs]` result layout the
+/// `splice_layout` / `ReturnTypeExpr { results_pos }` indices assume holds), and the finish routes
+/// the still-`BodyResult`-returning [`finalize_fn_with_kind`] through `body_result_to_action`.
+#[cfg(feature = "action-harness")]
+pub(crate) fn defer_via_combine_action<'a>(
+    signature_expr: KExpression<'a>,
+    inputs: CombineInputs<'a>,
+    body_expr: KExpression<'a>,
+    kind: FnKind,
+    bind_index: BindingIndex,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{
+        body_result_to_action, Action, Cont, Dep, DepPlacement,
+    };
+    let CombineInputs {
+        capture,
+        park_producers,
+        return_type_sub,
+        sub_dispatches,
+        prebuilt_elements,
+    } = inputs;
+    let park_count = park_producers.len();
+    let mut deps: Vec<Dep<'a>> = park_producers.iter().copied().map(Dep::Existing).collect();
+    let mut owned_count = 0usize;
+    if let Some(rt_expr) = return_type_sub {
+        deps.push(Dep::Dispatch {
+            expr: rt_expr,
+            placement: DepPlacement::OwnScope,
+        });
+        owned_count += 1;
+    }
+    let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
+    for (slot_idx, sub_expr) in sub_dispatches {
+        deps.push(Dep::Dispatch {
+            expr: sub_expr,
+            placement: DepPlacement::OwnScope,
+        });
+        splice_layout.push((slot_idx, park_count + owned_count));
+        owned_count += 1;
+    }
+    let finish: Cont<'a> = Box::new(move |fctx, results| {
+        let mut spliced_parts = signature_expr.parts.clone();
+        for &(slot_idx, results_pos) in &splice_layout {
+            let carrier = results[results_pos];
+            if !matches!(carrier, Carried::Type(_)) {
+                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                    "FN signature slot at part-index {slot_idx} expected a type expression, \
+                     got a {} value",
+                    carrier.ktype().name(),
+                )))));
+            }
+            spliced_parts[slot_idx].value = ExpressionPart::Future(carrier);
+        }
+        let spliced_signature = KExpression::new(spliced_parts);
+        let return_type: ReturnType<'a> =
+            match resolve_capture_at_finish(capture, fctx.scope, results) {
+                Ok(rt) => rt,
+                Err(e) => return Action::Done(Err(e)),
+            };
+        let elements = match prebuilt_elements {
+            Some(es) => es,
+            None => {
+                let mut elaborator = Elaborator::new(fctx.scope);
+                match parse_fn_param_list(&spliced_signature, &mut elaborator) {
+                    ParamListOutcome::Done(es) => es,
+                    ParamListOutcome::Err(msg) => {
+                        return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg))))
+                    }
+                    ParamListOutcome::Pending { .. } => {
+                        return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+                            "FN signature elaboration still pending after Combine wake".to_string(),
+                        ))))
+                    }
+                }
+            }
+        };
+        body_result_to_action(finalize_fn_with_kind(
+            fctx.scope,
+            elements,
+            return_type,
+            body_expr.clone(),
+            kind,
+            bind_index,
+        ))
+    });
+    crate::machine::core::kfunction::action::Action::Combine { deps, finish }
+}

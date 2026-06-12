@@ -25,7 +25,9 @@ use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, Scope};
 
 use super::fn_def::build_fn_like;
 use super::fn_def::finalize::FnKind;
-use super::{arg, kw, register_builtin_full, sig};
+use super::{arg, kw, sig};
+#[cfg(not(feature = "action-harness"))]
+use super::register_builtin_full;
 
 /// FUNCTOR binder body. Shares [`crate::builtins::fn_def::build_fn_like`] with FN;
 /// `FnKind::Functor` selects the return-admissibility verdict and the
@@ -37,6 +39,15 @@ pub fn body<'a, 's>(
     build_fn_like(sched, bundle, "FUNCTOR", FnKind::Functor)
 }
 
+/// `Action`-harness twin of [`body`]: shares [`crate::builtins::fn_def::build_fn_like_action`]
+/// with FN, selecting `FnKind::Functor`.
+#[cfg(feature = "action-harness")]
+pub fn body_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    super::fn_def::build_fn_like_action(ctx, "FUNCTOR", FnKind::Functor)
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Two overloads mirror FN: `TypeExprRef` for a bare `-> Number` / `-> Er`, and
     // `SigiledTypeExpr` for a `:(…)` / dotted carrier like `-> Er.Type` /
@@ -44,9 +55,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // a still-finalizing overload; sibling overloads sharing a bucket key all
     // install for it and only the first finalize wins. No `binder_name` —
     // FUNCTOR registers under `functions[bucket]`, not a value-side carrier.
-    register_builtin_full(
-        scope,
-        "FUNCTOR",
+    let typeexpr_sig = || {
         sig(
             KType::Any,
             vec![
@@ -57,17 +66,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("="),
                 arg("body", KType::KExpression),
             ],
-        ),
-        body,
-        None,
-        Some(super::fn_def::binder_bucket),
-        false,
-    );
+        )
+    };
     // Lazy `:(...)` return carrier — the FN counterpart's rationale applies: a dotted
     // `-> Er.Type` defers per-call rather than eager-sub-dispatching to an unbound parameter.
-    register_builtin_full(
-        scope,
-        "FUNCTOR",
+    let sigil_sig = || {
         sig(
             KType::Any,
             vec![
@@ -78,12 +81,21 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("="),
                 arg("body", KType::KExpression),
             ],
-        ),
-        body,
-        None,
-        Some(super::fn_def::binder_bucket),
-        false,
-    );
+        )
+    };
+    #[cfg(feature = "action-harness")]
+    {
+        use crate::builtins::register_action_builtin_full;
+        let bucket = super::fn_def::binder_bucket;
+        register_action_builtin_full(scope, "FUNCTOR", typeexpr_sig(), body_action, None, Some(bucket), false);
+        register_action_builtin_full(scope, "FUNCTOR", sigil_sig(), body_action, None, Some(bucket), false);
+    }
+    #[cfg(not(feature = "action-harness"))]
+    {
+        let bucket = super::fn_def::binder_bucket;
+        register_builtin_full(scope, "FUNCTOR", typeexpr_sig(), body, None, Some(bucket), false);
+        register_builtin_full(scope, "FUNCTOR", sigil_sig(), body, None, Some(bucket), false);
+    }
 }
 
 #[cfg(test)]

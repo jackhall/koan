@@ -10,7 +10,7 @@
 
 use std::rc::Rc;
 
-use super::body::ReturnContract;
+use super::body::{BodyResult, ReturnContract};
 use crate::machine::core::{CallArena, LexicalFrame, Scope, ScopeId};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::values::Held;
@@ -42,6 +42,34 @@ pub fn arg_held<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c Held<'a
     match args {
         KObject::Record(fields, _) => fields.get(name),
         _ => None,
+    }
+}
+
+/// Read a builtin argument's `KType` (a type-cell arg), or the canonical `require_ktype`
+/// diagnostic — `TypeMismatch{expected: "TypeExprRef"}` for an object cell, `MissingArg` when
+/// absent. The `Action`-side twin of [`ArgumentBundle::require_ktype`](super::argument_bundle::ArgumentBundle::require_ktype).
+pub fn require_ktype<'a>(args: &KObject<'a>, name: &str) -> Result<KType<'a>, KError> {
+    match arg_held(args, name) {
+        Some(Held::Type(kt)) => Ok(kt.clone()),
+        Some(Held::Object(o)) => Err(KError::new(KErrorKind::TypeMismatch {
+            arg: name.to_string(),
+            expected: "TypeExprRef".to_string(),
+            got: o.ktype().name(),
+        })),
+        None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
+    }
+}
+
+/// Convert a [`BodyResult`] into an [`Action`] for the deferral helpers that reuse the
+/// existing `BodyResult`-returning `finalize_*` functions inside an `Action` finish. Those
+/// finalizers only ever produce `Value` / `Err`; a `Tail` / `DeferTo` would be a logic error.
+pub(crate) fn body_result_to_action<'a>(result: BodyResult<'a>) -> Action<'a> {
+    match result {
+        BodyResult::Value(carried) => Action::Done(Ok(carried)),
+        BodyResult::Err(error) => Action::Done(Err(error)),
+        BodyResult::Tail { .. } | BodyResult::DeferTo(_) => {
+            unreachable!("a field-list / fn-def finalize only yields Value or Err")
+        }
     }
 }
 

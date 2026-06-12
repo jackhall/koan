@@ -77,6 +77,30 @@ pub(crate) fn extract_return_type_raw<'a>(
     }
 }
 
+/// `Action`-harness twin of [`extract_return_type_raw`]: read the `return_type` slot from a
+/// `BodyCtx::args` record rather than an `&mut ArgumentBundle`. Same channel logic — a `Type`-arm
+/// `KType` (bare-leaf `Unresolved` → `TypeExprCarrier`, else `Resolved`), or an `Object`-arm
+/// `KObject::KExpression` (`:(…)` / dotted return → `ExprCarrier`).
+#[cfg(feature = "action-harness")]
+pub(crate) fn extract_return_type_raw_action<'a>(
+    args: &KObject<'a>,
+) -> Result<ReturnTypeRaw<'a>, KError> {
+    use crate::machine::core::kfunction::action::{arg_object, arg_type};
+    if let Some(kt) = arg_type(args, "return_type") {
+        match kt {
+            KType::Unresolved(te) => Ok(ReturnTypeRaw::TypeExprCarrier(te.clone())),
+            t => Ok(ReturnTypeRaw::Resolved(t.clone())),
+        }
+    } else if let Some(KObject::KExpression(e)) = arg_object(args, "return_type") {
+        Ok(ReturnTypeRaw::ExprCarrier(e.clone()))
+    } else {
+        Err(KError::new(KErrorKind::ShapeError(
+            "FN return-type slot must be a type expression (e.g. `Number`, `:(LIST OF Str)`)"
+                .to_string(),
+        )))
+    }
+}
+
 /// FUNCTOR-return admissibility verdict. FN paths pass `functor_param_types: None` and
 /// ignore the verdict; FUNCTOR paths pass the param-name → declared-`KType` map so the
 /// deferred-arm verdict resolves in the same walk.

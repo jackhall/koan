@@ -22,6 +22,8 @@ pub use scheduler::Scheduler;
 pub(crate) use dispatch::{
     defer_field_list_via_combine, resolve_type_leaf_carrier, TypeLeafCarrier,
 };
+#[cfg(feature = "action-harness")]
+pub(crate) use dispatch::defer_field_list_action;
 pub use dispatch::{NameOutcome, ResolveOutcome, ResolveTypeExprOutcome, Resolved};
 
 #[cfg(test)]
