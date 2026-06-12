@@ -1,38 +1,29 @@
 //! Dispatch-side facade over `&mut Scheduler<'run>`.
 //!
-//! `DispatchCtx` is the typed surface every dispatch entry point sees.
-//! It names exactly the scheduler operations the dispatcher uses — slot
-//! queries, dep-graph mutations, sub-submission, the recent-wakes
-//! side-channel, and the dispatcher-only ops (`build_bare_outcomes`,
-//! `install_eager_subs`, `replace_with_parked_dispatch`) that spell the
-//! scheduler's internal fields on the dispatcher's behalf.
+//! `DispatchCtx` is the `&mut`-holding surface a dispatch step is entered with — slot queries,
+//! dep-graph mutations, sub-submission, the recent-wakes side-channel, and the dispatcher-only
+//! ops (`build_bare_outcomes`, `install_eager_subs`, `replace_with_parked_dispatch`) that spell
+//! the scheduler's internal fields on the dispatcher's behalf. It is **not** a `SchedulerHandle`:
+//! the *execution* machinery a resolved call hands off to (`exec::invoke`, `field_list`) takes the
+//! raw `&mut Scheduler` via [`Self::scheduler_mut`], so `Scheduler` is the sole `SchedulerHandle`
+//! impl.
 //!
-//! [`DispatchCx`] is the read-only peer used by a migrated handler's decide
-//! phase: it holds `&Scheduler` (never `&mut`) and returns a
+//! [`DispatchCx`] is the read-only peer used by a migrated handler's decide phase: it holds
+//! `&Scheduler` (never `&mut`) and returns a
 //! [`DispatchOutcome`](super::outcome::DispatchOutcome) the harness applies.
 //!
 //! Dispatch *shape* modules (`keyworded`, `fn_value`, `single_poll`)
 //! never name scheduler fields directly — only `ctx.foo(...)` — so a
 //! future scheduler internal rename (`active_chain` → ..., `DepGraph`
 //! split) is a single-file change inside `scheduler/`.
-//!
-//! `DispatchCtx` also implements [`SchedulerHandle`] so builtin bodies
-//! invoked through `KFunction::invoke` (e.g. `newtype_construct`) see
-//! the dispatcher's contextual frame/chain rather than a fresh borrow
-//! of the bare scheduler; the impl forwards every method to
-//! `self.sched` and the `with_active_frame` body closure re-receives
-//! the same `&mut DispatchCtx`.
 
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
-use crate::machine::core::{CallArena, ScopeId};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
-use crate::machine::{
-    CatchFinish, CombineFinish, KError, LexicalFrame, NameOutcome, NodeId, SchedulerHandle, Scope,
-};
+use crate::machine::{KError, LexicalFrame, NameOutcome, NodeId, SchedulerHandle, Scope};
 
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
@@ -97,7 +88,21 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         DispatchCx::new(self.sched)
     }
 
-    // ----- ambient state -----
+    /// `&mut` reborrow of the wrapped scheduler — the harness's hand-off to the *execution*
+    /// machinery (`exec::invoke`, `field_list`), which runs a resolved call body against the
+    /// scheduler's own `SchedulerHandle`. Execution is not dispatch decide, so it takes the raw
+    /// scheduler rather than this facade — which is why [`DispatchCtx`] is itself not a
+    /// `SchedulerHandle`.
+    pub(super) fn scheduler_mut(&mut self) -> &mut Scheduler<'run> {
+        self.sched
+    }
+
+    // ----- ambient state (reads forwarded to the scheduler) -----
+
+    /// The slot's scope — the dispatcher's primary read surface for name / type resolution.
+    pub(super) fn current_scope(&self) -> &Scope<'run> {
+        self.sched.current_scope()
+    }
 
     /// `&` borrow of the active lexical chain for name-resolution
     /// helpers; thin wrap over `Scheduler::chain_deref`.
@@ -111,10 +116,10 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         self.sched.active_chain_clone()
     }
 
-    /// Whether the executing slot is a tail call inside an established contract chain — a deferred
-    /// FN dispatched here skips resolving its own return type ([`super::exec::invoke`]).
-    pub(super) fn in_contract_chain(&self) -> bool {
-        self.sched.in_contract_chain()
+    /// Cloned `Rc` to the active lexical chain — the `record_type` field-list elaborator needs it
+    /// by value to rebuild the elaborator across a Combine deferral.
+    pub(super) fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>> {
+        self.sched.current_lexical_chain()
     }
 
     // ----- slot queries -----
@@ -147,9 +152,9 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
 
     // ----- submission / reclaim -----
     //
-    // Sub-Dispatch submission goes through the `SchedulerHandle`
-    // `add_dispatch` impl below — that path inherits `active_chain` /
-    // `active_frame` correctly via `Scheduler::add_dispatch -> add`.
+    // Each forwards to the scheduler, which inherits `active_chain` / `active_frame` correctly
+    // via its own `add` path. Fresh-`Dispatch` sub-submission (`add_dispatch_here`) lives in the
+    // harness, off `scheduler_mut()`.
 
     pub(super) fn schedule_list_literal(&mut self, items: Vec<ExpressionPart<'run>>) -> NodeId {
         self.sched.schedule_list_literal(items)
@@ -342,137 +347,9 @@ fn finish_eager_subs<'run>(
 ) -> NodeStep<'run> {
     match picked {
         Some(f) => {
-            let body = super::exec::invoke(ctx, f, working_expr);
+            let body = super::exec::invoke(ctx.scheduler_mut(), f, working_expr);
             ctx.body_result_to_step(body, idx)
         }
         None => KeywordedState::finish(ctx, working_expr, idx),
-    }
-}
-
-// =====================================================================
-// SchedulerHandle impl
-// =====================================================================
-//
-// Builtin-facing surface for closures the dispatcher hands off to
-// `KFunction::invoke`. Every method forwards to the wrapped scheduler;
-// the body of `with_active_frame` re-receives `&mut DispatchCtx`, so
-// further sub-builtins still see the dispatcher's contextual state.
-
-impl<'run, 'b, 's> SchedulerHandle<'run, 's> for DispatchCtx<'run, 'b> {
-    fn add_dispatch(&mut self, expr: KExpression<'run>, scope: &'run Scope<'run>) -> NodeId {
-        self.sched.add_dispatch(expr, scope)
-    }
-
-    fn add_combine(
-        &mut self,
-        owned_subs: Vec<NodeId>,
-        park_producers: Vec<NodeId>,
-        scope: &'run Scope<'run>,
-        finish: CombineFinish<'run>,
-    ) -> NodeId {
-        self.sched
-            .add_combine(owned_subs, park_producers, scope, finish)
-    }
-
-    fn add_catch(
-        &mut self,
-        from: NodeId,
-        scope: &'run Scope<'run>,
-        finish: CatchFinish<'run>,
-    ) -> NodeId {
-        self.sched.add_catch(from, scope, finish)
-    }
-
-    fn current_frame(&self) -> Option<Rc<CallArena>> {
-        self.sched.current_frame()
-    }
-
-    /// Pin/swap the ambient `active_frame` around `body`. The closure
-    /// receives `&mut DispatchCtx` (this same object as
-    /// `&mut dyn SchedulerHandle<'run, 's>`), so nested builtin invokes also
-    /// route through the dispatcher's facade rather than re-borrowing
-    /// the bare scheduler.
-    fn with_active_frame(
-        &mut self,
-        frame: Rc<CallArena>,
-        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'run, 's>),
-    ) {
-        let prev = self.sched.active_frame_replace(Some(frame));
-        body(self);
-        let _ = self.sched.active_frame_replace(prev);
-    }
-
-    fn acquire_tail_frame(&mut self, outer: &Scope<'_>) -> Rc<CallArena> {
-        self.sched.acquire_tail_frame(outer)
-    }
-
-    fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>> {
-        self.sched.current_lexical_chain()
-    }
-
-    fn enter_block(
-        &mut self,
-        scope_id: ScopeId,
-        statements: Vec<KExpression<'run>>,
-        scope: &'run Scope<'run>,
-    ) -> Vec<NodeId> {
-        self.sched.enter_block(scope_id, statements, scope)
-    }
-
-    fn add_dispatch_with_chain(
-        &mut self,
-        expr: KExpression<'run>,
-        scope: &'run Scope<'run>,
-        chain: Rc<LexicalFrame>,
-    ) -> NodeId {
-        self.sched.add_dispatch_with_chain(expr, scope, chain)
-    }
-
-    fn add_dispatch_with_chain_in_frame(
-        &mut self,
-        expr: KExpression<'run>,
-        chain: Rc<LexicalFrame>,
-    ) -> NodeId {
-        self.sched.add_dispatch_with_chain_in_frame(expr, chain)
-    }
-
-    fn add_dispatch_in_frame(&mut self, expr: KExpression<'run>) -> NodeId {
-        self.sched.add_dispatch_in_frame(expr)
-    }
-
-    fn add_combine_in_frame(
-        &mut self,
-        owned_subs: Vec<NodeId>,
-        park_producers: Vec<NodeId>,
-        finish: CombineFinish<'run>,
-    ) -> NodeId {
-        self.sched
-            .add_combine_in_frame(owned_subs, park_producers, finish)
-    }
-
-    fn add_catch_in_frame(&mut self, from: NodeId, finish: CatchFinish<'run>) -> NodeId {
-        self.sched.add_catch_in_frame(from, finish)
-    }
-
-    fn current_scope(&self) -> &Scope<'run> {
-        self.sched.current_scope()
-    }
-
-    fn add_dispatch_here(&mut self, expr: KExpression<'run>) -> NodeId {
-        self.sched.add_dispatch_here(expr)
-    }
-
-    fn add_combine_here(
-        &mut self,
-        owned_subs: Vec<NodeId>,
-        park_producers: Vec<NodeId>,
-        finish: CombineFinish<'run>,
-    ) -> NodeId {
-        self.sched
-            .add_combine_here(owned_subs, park_producers, finish)
-    }
-
-    fn add_catch_here(&mut self, from: NodeId, finish: CatchFinish<'run>) -> NodeId {
-        self.sched.add_catch_here(from, finish)
     }
 }

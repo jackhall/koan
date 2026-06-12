@@ -43,7 +43,7 @@ pub(in crate::machine::execute) fn initial_expr<'run>(
         ExpressionPart::Expression(boxed) => (**boxed).clone(),
         _ => unreachable!("HeadDeferred shape implies nested Expression head"),
     };
-    let head_sub = ctx.add_dispatch_here(head);
+    let head_sub = ctx.scheduler_mut().add_dispatch_here(head);
     park_on_head(ctx, expr, head_sub, false, idx)
 }
 
@@ -61,7 +61,7 @@ pub(in crate::machine::execute) fn initial_type<'run>(
         )]),
         _ => unreachable!("TypeHeadDeferred shape implies SigiledTypeExpr head"),
     };
-    let head_sub = ctx.add_dispatch_here(head);
+    let head_sub = ctx.scheduler_mut().add_dispatch_here(head);
     park_on_head(ctx, expr, head_sub, true, idx)
 }
 

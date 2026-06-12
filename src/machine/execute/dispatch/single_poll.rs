@@ -14,7 +14,7 @@ use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{KType, RecursiveSet};
-use crate::machine::{KError, KErrorKind, NodeId, Resolution, SchedulerHandle};
+use crate::machine::{KError, KErrorKind, NodeId, Resolution};
 
 use super::super::nodes::{DispatchCombineFinish, LiftState, NodeOutput, NodeStep, NodeWork};
 use super::apply_callable::{apply_callable, ResolvedCallable};
@@ -247,7 +247,7 @@ pub(super) fn record_type<'run>(
         _ => unreachable!("RecordType shape implies a single RecordType part"),
     };
     let chain = ctx.current_lexical_chain();
-    let body = super::field_list::elaborate_record_value(ctx, fields, chain);
+    let body = super::field_list::elaborate_record_value(ctx.scheduler_mut(), fields, chain);
     schedule_constructor_body(ctx, body, idx)
 }
 

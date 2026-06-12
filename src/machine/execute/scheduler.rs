@@ -344,15 +344,6 @@ impl<'run> Scheduler<'run> {
             ),
         }
     }
-
-    /// Replace the ambient `active_frame` with `new`, returning the prior
-    /// value. The `with_active_frame` body bracket goes through this.
-    pub(in crate::machine::execute) fn active_frame_replace(
-        &mut self,
-        new: Option<Rc<CallArena>>,
-    ) -> Option<Rc<CallArena>> {
-        std::mem::replace(&mut self.active_frame, new)
-    }
 }
 
 impl<'run> Default for Scheduler<'run> {

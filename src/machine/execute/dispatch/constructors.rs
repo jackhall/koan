@@ -10,7 +10,6 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::SchedulerHandle;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};

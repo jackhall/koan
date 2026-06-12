@@ -39,7 +39,7 @@ pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
                 .into_iter()
                 .map(|dep| {
                     let id = match dep {
-                        DispatchDep::Dispatch(expr) => ctx.add_dispatch_here(expr),
+                        DispatchDep::Dispatch(expr) => ctx.scheduler_mut().add_dispatch_here(expr),
                         DispatchDep::ListLit(items) => ctx.schedule_list_literal(items),
                         DispatchDep::DictLit(pairs) => ctx.schedule_dict_literal(pairs),
                         DispatchDep::RecordLit(fields) => ctx.schedule_record_literal(fields),

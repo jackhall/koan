@@ -3,7 +3,7 @@
 
 use std::marker::PhantomData;
 
-use crate::machine::core::kfunction::{KFunction, SchedulerHandle};
+use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Parseable;
 use crate::machine::{
@@ -202,7 +202,7 @@ impl<'run> KeywordedState<'run> {
         }
         if staged_subs.is_empty() {
             // The synchronous (no-eager-subs) call — the common path for builtins and simple calls.
-            let body = super::exec::invoke(ctx, resolved.function, new_expr);
+            let body = super::exec::invoke(ctx.scheduler_mut(), resolved.function, new_expr);
             return ctx.body_result_to_step(body, idx);
         }
         let _ = resolved; // discard the speculative pick.
@@ -236,7 +236,7 @@ impl<'run> KeywordedState<'run> {
         {
             // The post-eager-subs re-dispatch lands resolved calls here.
             ResolveOutcome::Resolved(r) => {
-                let body = super::exec::invoke(ctx, r.function, working_expr);
+                let body = super::exec::invoke(ctx.scheduler_mut(), r.function, working_expr);
                 ctx.body_result_to_step(body, idx)
             }
             // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs

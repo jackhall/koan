@@ -6,7 +6,7 @@
 
 use std::marker::PhantomData;
 
-use crate::machine::core::kfunction::{KFunction, SchedulerHandle};
+use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::KObject;
 use crate::machine::model::Parseable;
