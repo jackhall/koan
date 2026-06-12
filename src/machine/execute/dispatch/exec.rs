@@ -11,10 +11,14 @@ use std::rc::Rc;
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::DispatchCtx;
 use crate::machine::core::kfunction::bind_by_name::CallArgs;
-use crate::machine::core::kfunction::exec::{run_user_fn, ExecOutcome, Frame as ExecFrame};
+use crate::machine::core::kfunction::body::ReturnContract;
+use crate::machine::core::kfunction::exec::{
+    run_user_fn, ExecOutcome, Frame as ExecFrame, PerCallReturn,
+};
 use crate::machine::core::kfunction::{
     Body, BodyResult, CombineFinish, KFunction, SchedulerHandle,
 };
+use crate::machine::execute::lift::lift_ktype;
 use crate::machine::core::{assemble_body_chain, CallArena, LexicalFrame};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::KType;
@@ -79,15 +83,29 @@ pub(super) fn invoke<'run>(
         chain,
     };
     let result = match run_user_fn(picked, bound, &exec_frame) {
-        ExecOutcome::Tail { leading, tail } if leading.is_empty() => {
-            BodyResult::tail_with_frame(tail.clone(), frame, picked)
-        }
-        ExecOutcome::Tail { leading, tail } => {
-            // Multi-statement body: dispatch the non-tail statements as sibling sub-slots, then
-            // tail-replace into the last statement at body index N.
+        ExecOutcome::Tail { leading, tail, ret } => {
+            // The return contract carried on the tail-replace. A resolved return reads its type off
+            // the signature; a deferred `TypeExpr` return carries the resolved per-call type as a
+            // `PerCall` contract — checked + stamped at the lift boundary like any FN return, so the
+            // body is a proper tail call and a recursive deferred body stays TCO-flat.
+            let contract = match ret {
+                PerCallReturn::FromSignature => ReturnContract::Function(picked),
+                PerCallReturn::Resolved(kt) => {
+                    // Re-home the per-call type in the captured-scope (frame-outer) arena — a strict
+                    // ancestor the cart keeps live — so the erased contract's `ret` borrow stays
+                    // valid past the dying frame, mirroring an `Arm`'s `ret`.
+                    let ret_ref = outer.arena.alloc_ktype(lift_ktype(&kt, &frame));
+                    ReturnContract::PerCall {
+                        func: picked,
+                        ret: ret_ref,
+                    }
+                }
+            };
+            // Empty `leading` → body_index 1 (the lone statement sits above the params); otherwise
+            // dispatch the non-tail statements as siblings and tail-replace into the last at N.
             let body_index = leading.len() + 1;
             dispatch_body_statements(ctx, &frame, &exec_frame.chain, &leading);
-            BodyResult::tail_with_frame_at_index(tail.clone(), frame, picked, body_index)
+            BodyResult::tail_with_frame_contract(tail.clone(), frame, contract, body_index)
         }
         ExecOutcome::Suspend { join, resume } => {
             // Deferred return: dispatch every body statement as a Combine dep, then a Combine whose

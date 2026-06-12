@@ -82,6 +82,34 @@ fn match_driven_tail_recursion_completes() {
 
     assert_eq!(captured.borrow().as_slice(), b"done\n");
 }
+/// The caller of `FF` contracted for `FF`'s declared return type, regardless of what `FF`
+/// tail-calls internally. `FF -> Number` whose body tail-calls `GG -> Str` must reject the `Str`
+/// result against *`FF`'s* contract — not silently accept it against the tail-most `GG` contract.
+/// Pins that a tail chain keeps the **first** caller's return contract.
+#[test]
+fn tail_call_enforces_first_callers_return_contract() {
+    use crate::machine::execute::Scheduler;
+    use crate::machine::KErrorKind;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "FN (GG) -> Str = (\"hello\")\n\
+         FN (FF) -> Number = (GG)",
+    );
+    let mut sched = Scheduler::new();
+    let id = sched.add_dispatch(parse_one("FF"), scope);
+    sched.execute().expect("execute does not surface per-slot errors");
+    let err = match sched.read_result(id) {
+        Err(e) => e,
+        Ok(_) => panic!("FF -> Number tail-calling GG -> Str must fail FF's return contract"),
+    };
+    assert!(
+        matches!(err.kind, KErrorKind::TypeMismatch { ref arg, .. } if arg == "<return>"),
+        "expected a <return> TypeMismatch against FF's Number contract, got {err}",
+    );
+}
+
 #[test]
 fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
     let arena = RuntimeArena::new();

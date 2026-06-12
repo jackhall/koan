@@ -33,10 +33,10 @@ use super::KFunction;
 /// MATCH / TRY arm with `-> :T`) rides the same channel as an FN call: `Arm` carries the
 /// declared type directly, `Function` reads it off the callee's signature.
 ///
-/// `Arm`'s `ret` is arena-borrowed so the whole contract stays `Copy`, matching the
-/// `&KFunction` it sits beside. Stored erased as [`ErasedContract`] on the node's `Frame`.
-/// TCO limitation: a nested tail-call rewrites the contract to the callee, so the check
-/// fires only against the tail-most contract.
+/// `Arm`'s / `PerCall`'s `ret` is arena-borrowed so the whole contract stays `Copy`, matching the
+/// `&KFunction` it sits beside. Stored erased as [`ErasedContract`] on the node's `Frame`. A tail
+/// chain keeps the **first** contract (the `next_contract` rule in `execute::scheduler::execute`),
+/// so the check fires against the original caller's declared return, not the tail-most callee's.
 #[derive(Clone, Copy)]
 pub enum ReturnContract<'a> {
     /// An FN / builtin call: check against `signature.return_type`, label via `summarize()`.
@@ -46,12 +46,21 @@ pub enum ReturnContract<'a> {
         ret: &'a KType<'a>,
         kind: &'static str,
     },
+    /// A deferred-return FN whose per-call return type resolved to `ret`. Rides the FN-body
+    /// chain shape (`is_function` is true) so a tail-replaced deferred body assembles its
+    /// lexical chain like any FN — preserving TCO — while `check_declared_return` checks the
+    /// lifted value against the resolved `ret` (labelled "per-call return type", `func` names
+    /// the frame). `ret` is arena-borrowed like `Arm`'s, so the contract stays `Copy`.
+    PerCall {
+        func: &'a KFunction<'a>,
+        ret: &'a KType<'a>,
+    },
 }
 
 /// A [`ReturnContract`] with its lifetime erased to `'static` for storage on a lifetime-free
 /// node `Frame`. The contract's `&KFunction` / `&KType` point into the cart's frame *outer*
 /// arena (a strict ancestor — see `branch_walk::resolve_arm_return_contract` and
-/// `invoke`'s `tail_with_frame`), which the co-stored `cart: Rc<CallArena>` keeps live via its
+/// `invoke`'s `tail_with_frame_contract`), which the co-stored `cart: Rc<CallArena>` keeps live via its
 /// `outer_frame` / escape chain. So the cart is the liveness witness: while it is held, the
 /// contract's home arena cannot drop.
 ///
@@ -93,10 +102,14 @@ impl ErasedContract {
         std::mem::transmute::<ReturnContract<'static>, ReturnContract<'a>>(self.inner)
     }
 
-    /// Whether this is a [`ReturnContract::Function`] (vs an `Arm`). Reads the discriminant only
-    /// — no pointer deref — so it needs no cart witness.
+    /// Whether this contract rides the FN-body chain shape — `Function` or `PerCall` (a deferred
+    /// FN body), vs an `Arm`. Reads the discriminant only — no pointer deref — so it needs no cart
+    /// witness.
     pub fn is_function(self) -> bool {
-        matches!(self.inner, ReturnContract::Function(_))
+        matches!(
+            self.inner,
+            ReturnContract::Function(_) | ReturnContract::PerCall { .. }
+        )
     }
 }
 
@@ -144,19 +157,16 @@ impl<'a> BodyResult<'a> {
         }
     }
 
-    pub fn tail_with_frame(
+    /// FN-body tail-replace carrying an explicit `contract` and `body_index` (see
+    /// [`BodyResult::Tail`]). The `Function` form is the resolved-return call; the `PerCall` form
+    /// is a deferred-return FN whose per-call type has been resolved. Both ride the FN-body chain
+    /// shape (`contract.is_function()`), so a deferred body tail-replaces like any FN and stays
+    /// TCO-flat. `body_index` is `1` for a single-statement body (the lone statement sits above the
+    /// `idx 0` params), or `N` when tail-replacing into the last of N statements.
+    pub fn tail_with_frame_contract(
         expr: KExpression<'a>,
         frame: Rc<CallArena>,
-        function: &'a KFunction<'a>,
-    ) -> Self {
-        Self::tail_with_frame_at_index(expr, frame, function, 1)
-    }
-
-    /// FN-body tail-replace with an explicit `body_index` (see [`BodyResult::Tail`]).
-    pub fn tail_with_frame_at_index(
-        expr: KExpression<'a>,
-        frame: Rc<CallArena>,
-        function: &'a KFunction<'a>,
+        contract: ReturnContract<'a>,
         body_index: usize,
     ) -> Self {
         // Capture the scope id before `frame` moves into the variant; the reinstall
@@ -165,7 +175,7 @@ impl<'a> BodyResult<'a> {
         BodyResult::Tail {
             expr,
             frame: Some(frame),
-            function: Some(ReturnContract::Function(function)),
+            function: Some(contract),
             block_entry: Some(body_scope_id),
             body_index,
         }
@@ -340,7 +350,7 @@ mod tests {
                 assert!(matches!(ret, KType::Str));
                 assert_eq!(kind, "MATCH");
             }
-            ReturnContract::Function(_) => panic!("expected Arm"),
+            ReturnContract::Function(_) | ReturnContract::PerCall { .. } => panic!("expected Arm"),
         }
     }
 

@@ -180,6 +180,43 @@ fn functor_deferred_return_coarsens_list_carrier() {
     }
 }
 
+/// TCO across deferred returns: a deferred-return FN whose body tail-calls another deferred-return
+/// FN collapses to a **single scheduler slot**, exactly like a resolved-return tail chain. The
+/// per-call return type rides a `ReturnContract::PerCall` on the tail-replace, so the body is a
+/// proper tail call — no per-call Combine frame is held, so a recursive deferred body stays
+/// TCO-flat. (The pre-`PerCall` Combine lowering held a frame per call and would not collapse.)
+#[test]
+fn deferred_return_tail_call_stays_tco_flat() {
+    use crate::machine::execute::Scheduler;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "SIG Seq = ((LET Carrier = Number) (VAL v :Number))\n\
+         MODULE Ints = ((LET Carrier = Number) (LET v = 1))\n\
+         LET View = (Ints :! Seq)",
+    );
+    run(
+        scope,
+        "FN (BB Er :Seq) -> Er = (Er)\n\
+         FN (AA Er :Seq) -> Er = (BB Er)",
+    );
+    let mut sched = Scheduler::new();
+    let id = sched.add_dispatch(parse_one("AA View"), scope);
+    sched.execute().expect("execute does not surface per-slot errors");
+    assert!(
+        sched.read_result(id).is_ok(),
+        "AA V should succeed: {:?}",
+        sched.read_result(id).err(),
+    );
+    assert_eq!(
+        sched.len(),
+        1,
+        "deferred-return tail chain AA -> BB -> (Er) must collapse to one slot, got {}",
+        sched.len(),
+    );
+}
+
 /// Wrong-typed body for a per-call return type — Combine-finish runs the
 /// slot check against the per-call elaboration and rejects with a diagnostic
 /// mentioning "per-call return type", pinning that the rejection path is the

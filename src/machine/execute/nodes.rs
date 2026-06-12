@@ -159,14 +159,17 @@ pub(super) struct Frame {
     /// reuse a `CallArena` across iterations. See
     /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
     pub(super) reserve: Option<Rc<CallArena>>,
-    /// Return contract enforced on Done — an FN/builtin call (`Function`) or a MATCH/TRY arm's
-    /// `-> :T` (`Arm`) — erased for lifetime-free storage and re-anchored against `cart` at the
-    /// Done boundary, where it enforces the declared return type and supplies the error-frame
-    /// label. `None` for slots with no declared-return obligation. Set in lockstep with `cart`.
+    /// Return contract enforced on Done — an FN/builtin call (`Function`), a deferred FN's resolved
+    /// per-call type (`PerCall`), or a MATCH/TRY arm's `-> :T` (`Arm`) — erased for lifetime-free
+    /// storage and re-anchored against `cart` at the Done boundary, where it enforces the declared
+    /// return type and supplies the error-frame label. `None` for slots with no declared-return
+    /// obligation.
     ///
-    /// TCO limitation: when A tail-calls B, this is rewritten to B's contract, so the runtime
-    /// return-type check only fires against the tail-most contract. Sound only when intermediate
-    /// frames' types agree — to be enforced statically by the future type-check pass.
+    /// Tail chains keep the **first** contract: once set, a nested tail call does not overwrite it
+    /// (`execute.rs` `next_contract`), so the runtime check fires against the *original* caller's
+    /// declared return, not the tail-most callee's. (The kept contract's pointees stay live without
+    /// pinning the first frame — a `Function`/`PerCall` points at the `'run` callee or its
+    /// captured scope, an `Arm` is only the first contract at top level.)
     pub(super) contract: Option<ErasedContract>,
 }
 

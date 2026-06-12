@@ -79,12 +79,12 @@ impl<'run> Scheduler<'run> {
                 } => {
                     let prev_frame = post.prev_frame;
                     let post_step_reserve = post.post_step_reserve;
-                    // Erase the new live contract (if any) for storage, falling back to the prior
-                    // erased contract — the tail-call rewrite that keeps the check pointed at the
-                    // tail-most callee. `compute_replace_chain` reads `new_function` (still live)
-                    // for the chain-shape decision before it is erased.
+                    // Keep the **first** contract of a tail chain: once a contract is set, a nested
+                    // tail call does not overwrite it, so the chain checks the original caller's
+                    // declared return — not the tail-most callee's. `compute_replace_chain` reads
+                    // `new_function` (still live) for the chain-shape decision before erasure.
                     let next_contract: Option<ErasedContract> =
-                        new_function.map(ErasedContract::erase).or(prev_contract);
+                        prev_contract.or_else(|| new_function.map(ErasedContract::erase));
                     let new_chain = compute_replace_chain(
                         prev_chain_carrier,
                         block_entry,
@@ -274,6 +274,7 @@ fn compute_done_output<'run>(
                     let label = match contract {
                         ReturnContract::Function(f) => f.summarize(),
                         ReturnContract::Arm { kind, .. } => kind.to_string(),
+                        ReturnContract::PerCall { func, .. } => func.summarize(),
                     };
                     e.with_frame(crate::machine::Frame::bare(label.clone(), label))
                 }
@@ -291,26 +292,33 @@ fn compute_done_output<'run>(
 /// `satisfies` runs the channel-appropriate predicate (`matches_value` / `matches_type`)
 /// and `got_name` names the carrier for the mismatch error. Returns the declared type so
 /// the caller can re-tag against it (the `Object` arm coarsens; the `Type` arm discards
-/// it), `Ok(None)` when nothing is declared — a non-`Resolved` (e.g. `Deferred`) return is
-/// checked later at the per-call Combine finish, not here — or `Err` with the labelled
-/// `TypeMismatch`.
+/// it), `Ok(None)` when nothing is declared — a `Function` whose signature return is
+/// non-`Resolved` (a `Deferred` carrier still in its FN-def signature) has no type here —
+/// or `Err` with the labelled `TypeMismatch`. A `PerCall` carries the *resolved* per-call
+/// type and is checked + stamped here, labelled "per-call return type".
 fn check_declared_return<'run>(
     contract: Option<ReturnContract<'run>>,
     satisfies: impl FnOnce(&KType<'run>) -> bool,
     got_name: impl FnOnce() -> String,
 ) -> Result<Option<&'run KType<'run>>, KError> {
-    let (declared, label) = match contract {
+    let (declared, label, per_call) = match contract {
         Some(ReturnContract::Function(f)) => match &f.signature.return_type {
-            crate::machine::model::types::ReturnType::Resolved(d) => (d, f.summarize()),
+            crate::machine::model::types::ReturnType::Resolved(d) => (d, f.summarize(), false),
             _ => return Ok(None),
         },
-        Some(ReturnContract::Arm { ret, kind }) => (ret, kind.to_string()),
+        Some(ReturnContract::Arm { ret, kind }) => (ret, kind.to_string(), false),
+        Some(ReturnContract::PerCall { func, ret }) => (ret, func.summarize(), true),
         None => return Ok(None),
     };
     if !satisfies(declared) {
+        let expected = if per_call {
+            format!("{} (per-call return type)", declared.name())
+        } else {
+            declared.name()
+        };
         return Err(KError::new(KErrorKind::TypeMismatch {
             arg: "<return>".to_string(),
-            expected: declared.name(),
+            expected,
             got: got_name(),
         })
         .with_frame(crate::machine::Frame::bare(label.clone(), label)));
@@ -336,9 +344,11 @@ fn compute_replace_chain<'run>(
         return prev_chain;
     };
     match (new_function, new_frame) {
-        (Some(ReturnContract::Function(_)), Some(frame)) => {
-            assemble_body_chain(frame.scope(), prev_chain, body_index)
-        }
+        // `Function` and `PerCall` (a deferred FN body) both assemble the FN-body chain.
+        (
+            Some(ReturnContract::Function(_) | ReturnContract::PerCall { .. }),
+            Some(frame),
+        ) => assemble_body_chain(frame.scope(), prev_chain, body_index),
         _ => LexicalFrame::push(Some(prev_chain), scope_id, body_index),
     }
 }
