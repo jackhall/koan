@@ -46,7 +46,7 @@ pub(in crate::machine::execute) mod single_poll;
 mod tests;
 
 pub(in crate::machine::execute) use ctx::DispatchCtx;
-pub(crate) use field_list::defer_field_list_via_combine;
+pub(crate) use field_list::defer_field_list_action;
 use fn_value::FnValueState;
 use head_deferred::HeadDeferredState;
 use keyworded::KeywordedState;
@@ -322,19 +322,6 @@ pub(in crate::machine::execute) struct EagerSubsTrack<'run> {
     /// as `DispatchFailed` (non-match) rather than a bind-time
     /// `TypeMismatch`.
     pub(in crate::machine::execute) picked: Option<&'run KFunction<'run>>,
-}
-
-impl<'run> EagerSubsTrack<'run> {
-    pub(in crate::machine::execute) fn keyworded(
-        working_expr: KExpression<'run>,
-        subs: Vec<(usize, NodeId)>,
-    ) -> Self {
-        Self {
-            working_expr,
-            subs,
-            picked: None,
-        }
-    }
 }
 
 /// One variant per [`DispatchShape`], plus the pre-classification

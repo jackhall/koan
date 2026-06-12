@@ -361,51 +361,6 @@ impl RuntimeArena {
     }
 }
 
-/// Static-singleton inhabitants. `KObject` itself isn't `Sync` (some variants carry `Rc` /
-/// `Box<dyn Trait>`), but `Null` and `Bool(bool)` are unit-shaped. Typing the static
-/// storage at this unit-only enum lets the `*_HOLDER` statics derive `Sync` naturally —
-/// no `unsafe impl Sync` needed. The accessors then project a `const KObject` (inlined
-/// per use site, sidestepping `!Sync`) and re-annotate `'static → 'a`, sound because the
-/// projected variants carry no lifetime-parameterized data.
-enum StaticKValue {
-    Null,
-    Bool(bool),
-}
-
-static NULL_HOLDER: StaticKValue = StaticKValue::Null;
-static TRUE_HOLDER: StaticKValue = StaticKValue::Bool(true);
-static FALSE_HOLDER: StaticKValue = StaticKValue::Bool(false);
-
-/// Project the `KObject` view of a static `StaticKValue`. Lives at the boundary so any
-/// future addition to `StaticKValue` is forced through here. `const` items inline at the
-/// use site, so the returned reference is rvalue-promoted without requiring `KObject: Sync`.
-fn project<'a>(v: &'static StaticKValue) -> &'a KObject<'a> {
-    const NULL: KObject<'static> = KObject::Null;
-    const TRUE: KObject<'static> = KObject::Bool(true);
-    const FALSE: KObject<'static> = KObject::Bool(false);
-    let r: &'static KObject<'static> = match v {
-        StaticKValue::Null => &NULL,
-        StaticKValue::Bool(true) => &TRUE,
-        StaticKValue::Bool(false) => &FALSE,
-    };
-    // SAFETY: the projected `KObject` is `Null` or `Bool(_)` — both unit-shaped, carrying
-    // no references — so the `'static` lifetime parameter is purely phantom and `'static`
-    // → `'a` is sound.
-    unsafe { std::mem::transmute::<&'static KObject<'static>, &'a KObject<'a>>(r) }
-}
-
-pub fn null_singleton<'a>() -> &'a KObject<'a> {
-    project(&NULL_HOLDER)
-}
-
-pub fn true_singleton<'a>() -> &'a KObject<'a> {
-    project(&TRUE_HOLDER)
-}
-
-pub fn false_singleton<'a>() -> &'a KObject<'a> {
-    project(&FALSE_HOLDER)
-}
-
 /// One user-fn call's allocation frame. `Rc`-pinned so an escaping closure can extend
 /// the frame's life past slot finalize. Field order is load-bearing: `arena` drops before
 /// `outer_frame`, so inner pointers die before the outer storage they may reference.
@@ -609,12 +564,6 @@ mod tests {
     use crate::machine::model::types::KType;
     use crate::machine::BindingIndex;
 
-    #[test]
-    fn null_singleton_returns_null_kobject() {
-        let n = null_singleton();
-        assert!(matches!(n, KObject::Null));
-    }
-
     /// `scope_bounded` re-anchors the child scope with a borrow bounded by the `&Rc` witness.
     /// The good path: read it within the witness borrow. The over-anchor and covariance
     /// compile-error properties were confirmed by the C0 spike (see
@@ -629,32 +578,6 @@ mod tests {
         // Same underlying child scope as the unbounded accessors, just a shorter borrow.
         assert_eq!(bounded.id, frame.scope().id);
         assert_eq!(bounded.id, frame.scope_for_bind().id);
-    }
-
-    #[test]
-    fn bool_singletons_return_correct_values() {
-        let t = true_singleton();
-        let f = false_singleton();
-        assert!(matches!(t, KObject::Bool(true)));
-        assert!(matches!(f, KObject::Bool(false)));
-    }
-
-    /// The unsafe `'static`→`'a` re-annotation must be sound on its own, with no
-    /// `RuntimeArena` in scope at all — the singleton's storage is the static `NULL_HOLDER`.
-    #[test]
-    fn singleton_ref_independent_of_arena_lifetime() {
-        let n: &KObject<'_> = null_singleton();
-        assert!(matches!(n, KObject::Null));
-    }
-
-    /// Tree-borrows shared-read aliasing check: two simultaneous `&KObject` refs from
-    /// the same singleton, both readable.
-    #[test]
-    fn singletons_aliasable() {
-        let a = null_singleton();
-        let b = null_singleton();
-        assert!(matches!(a, KObject::Null));
-        assert!(matches!(b, KObject::Null));
     }
 
     /// `CallArena::scope`'s re-borrow stays valid when the arena is mutated through a
@@ -835,8 +758,12 @@ mod tests {
                         "DUMMY".into(),
                     )],
                 },
-                crate::machine::core::kfunction::Body::Builtin(|_, _| {
-                    crate::machine::core::kfunction::BodyResult::value(null_singleton())
+                crate::machine::core::kfunction::Body::Builtin(|ctx| {
+                    crate::machine::core::kfunction::action::Action::Done(Ok(
+                        crate::machine::model::Carried::Object(
+                            ctx.scope.arena.alloc_object(crate::machine::model::KObject::Null),
+                        ),
+                    ))
                 }),
                 scope,
             )),

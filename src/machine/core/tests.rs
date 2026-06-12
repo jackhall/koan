@@ -17,11 +17,10 @@ pub(super) fn unit_signature<'a>() -> ExpressionSignature<'a> {
     }
 }
 
-pub(super) fn body_no_op<'a, 's>(
-    sched: &mut dyn crate::machine::core::kfunction::SchedulerHandle<'a, 's>,
-    _bundle: crate::machine::core::kfunction::ArgumentBundle<'a>,
-) -> crate::machine::core::kfunction::BodyResult<'a> {
-    crate::machine::core::kfunction::BodyResult::value(
-        sched.current_scope().arena.alloc_object(KObject::Null),
-    )
+pub(super) fn body_no_op<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    crate::machine::core::kfunction::action::Action::Done(Ok(crate::machine::model::Carried::Object(
+        ctx.scope.arena.alloc_object(KObject::Null),
+    )))
 }

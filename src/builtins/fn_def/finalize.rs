@@ -17,10 +17,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{Elaborator, ReturnType};
 use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionSignature, KObject, SignatureElement};
-use crate::machine::{
-    BindingIndex, Body, BodyResult, CombineFinish, KError, KErrorKind, NodeId, SchedulerHandle,
-    Scope,
-};
+use crate::machine::{BindingIndex, Body, BodyResult, KError, KErrorKind, NodeId, Scope};
 
 use super::return_type::{
     make_capture, resolve_capture_at_finish, ReturnTypeCapture, ReturnTypeState,
@@ -269,22 +266,28 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 }
 
 /// Schedule a `Combine` over `park_producers` plus any newly scheduled
-/// sub-Dispatches for parens-wrapped parameter types, then re-run the
-/// signature elaboration in the finish closure.
+/// sub-Dispatches for parens-wrapped parameter types, then re-run the signature
+/// elaboration in the finish closure.
 ///
-/// Splice protocol: each entry in `inputs.sub_dispatches` is scheduled via
-/// `sched.add_dispatch`; the resulting `NodeId` is appended to the Combine's
-/// `deps` after the park producers. The finish closure splices each result
-/// into `signature_expr.parts[slot_idx]` as `Future(obj)` before re-running
-/// `parse_fn_param_list` against the now-final scope.
-pub(crate) fn defer_via_combine<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
+/// Build the Combine as an `Action` — park producers become `Dep::Existing`, the
+/// optional return-type sub and the param-type subs become `Dep::Dispatch { OwnScope }`
+/// (in that order, so the `[park ++ rt? ++ subs]` result layout the `splice_layout` /
+/// `ReturnTypeExpr { results_pos }` indices assume holds), and the finish routes the
+/// still-`BodyResult`-returning [`finalize_fn_with_kind`] through `body_result_to_action`.
+///
+/// Splice protocol: each entry in `inputs.sub_dispatches` becomes a `Dep::Dispatch`;
+/// the finish closure splices each result into `signature_expr.parts[slot_idx]` as
+/// `Future(obj)` before re-running `parse_fn_param_list` against the now-final scope.
+pub(crate) fn defer_via_combine<'a>(
     signature_expr: KExpression<'a>,
     inputs: CombineInputs<'a>,
     body_expr: KExpression<'a>,
     kind: FnKind,
     bind_index: BindingIndex,
-) -> BodyResult<'a> {
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{
+        body_result_to_action, Action, Cont, Dep, DepPlacement,
+    };
     let CombineInputs {
         capture,
         park_producers,
@@ -292,79 +295,66 @@ pub(crate) fn defer_via_combine<'a, 's>(
         sub_dispatches,
         prebuilt_elements,
     } = inputs;
-    // Result layout: `[park_producers ++ return_type_sub? ++ sub_dispatches...]`.
-    // Park producers are read-only (no cascade-free); the rest are owned subs.
-    // `splice_layout[k] = (slot_idx, results_pos)` indexes the combined slice;
-    // the return-type result is keyed separately by
-    // `ReturnTypeCapture::ReturnTypeExpr { results_pos }` (set in `classify`).
     let park_count = park_producers.len();
-    let mut owned_subs: Vec<NodeId> =
-        Vec::with_capacity(return_type_sub.is_some() as usize + sub_dispatches.len());
+    let mut deps: Vec<Dep<'a>> = park_producers.iter().copied().map(Dep::Existing).collect();
+    let mut owned_count = 0usize;
     if let Some(rt_expr) = return_type_sub {
-        owned_subs.push(sched.add_dispatch_here(rt_expr));
+        deps.push(Dep::Dispatch {
+            expr: rt_expr,
+            placement: DepPlacement::OwnScope,
+        });
+        owned_count += 1;
     }
     let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
     for (slot_idx, sub_expr) in sub_dispatches {
-        let id = sched.add_dispatch_here(sub_expr);
-        splice_layout.push((slot_idx, park_count + owned_subs.len()));
-        owned_subs.push(id);
+        deps.push(Dep::Dispatch {
+            expr: sub_expr,
+            placement: DepPlacement::OwnScope,
+        });
+        splice_layout.push((slot_idx, park_count + owned_count));
+        owned_count += 1;
     }
-
-    let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
+    let finish: Cont<'a> = Box::new(move |fctx, results| {
         let mut spliced_parts = signature_expr.parts.clone();
         for &(slot_idx, results_pos) in &splice_layout {
             let carrier = results[results_pos];
-            // Catch non-type results here so we can name the slot's part-index;
-            // `parse_fn_param_list` would otherwise reject in its `Future(other)`
-            // arm without that context.
             if !matches!(carrier, Carried::Type(_)) {
-                return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "FN signature slot at part-index {slot_idx} expected a type expression, \
                      got a {} value",
                     carrier.ktype().name(),
-                ))));
+                )))));
             }
             spliced_parts[slot_idx].value = ExpressionPart::Future(carrier);
         }
         let spliced_signature = KExpression::new(spliced_parts);
-
-        // Park producers have finalized — resolve against the stable scope.
-        // [`resolve_capture_at_finish`] surfaces a re-park as a structured error
-        // (every parked producer is terminal by the Combine-finish invariant).
         let return_type: ReturnType<'a> =
-            match resolve_capture_at_finish(capture, _sched.current_scope(), results) {
-                Ok(rt) => rt,
-                Err(e) => return BodyResult::Err(e),
-            };
-        // The anonymous (`FN :{…}`) path supplies its parameter list pre-built
-        // from the resolved record schema; the keyworded FN / FUNCTOR path
-        // re-elaborates the spliced signature.
+            crate::try_action!(resolve_capture_at_finish(capture, fctx.scope, results));
         let elements = match prebuilt_elements {
             Some(es) => es,
             None => {
-                let mut elaborator = Elaborator::new(_sched.current_scope());
+                let mut elaborator = Elaborator::new(fctx.scope);
                 match parse_fn_param_list(&spliced_signature, &mut elaborator) {
                     ParamListOutcome::Done(es) => es,
                     ParamListOutcome::Err(msg) => {
-                        return BodyResult::Err(KError::new(KErrorKind::ShapeError(msg)));
+                        return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg))))
                     }
                     ParamListOutcome::Pending { .. } => {
-                        return BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                        return Action::Done(Err(KError::new(KErrorKind::ShapeError(
                             "FN signature elaboration still pending after Combine wake".to_string(),
-                        )));
+                        ))))
                     }
                 }
             }
         };
-        finalize_fn_with_kind(
-            _sched.current_scope(),
+        body_result_to_action(finalize_fn_with_kind(
+            fctx.scope,
             elements,
             return_type,
             body_expr.clone(),
             kind,
             bind_index,
-        )
+        ))
     });
-    let combine_id = sched.add_combine_here(owned_subs, park_producers, finish);
-    BodyResult::DeferTo(combine_id)
+    crate::machine::core::kfunction::action::Action::Combine { deps, finish }
 }

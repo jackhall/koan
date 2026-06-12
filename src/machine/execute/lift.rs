@@ -234,8 +234,7 @@ fn kfuture_borrows_dying_arena<'run>(t: &KFuture<'run>, arena: &RuntimeArena) ->
     if expression_borrows_arena(&t.parsed, arena) {
         return true;
     }
-    t.bundle
-        .args
+    t.args
         .values()
         .any(|v| argvalue_borrows_arena(v, arena))
 }

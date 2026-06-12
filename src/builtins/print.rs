@@ -1,36 +1,28 @@
 use crate::machine::model::{KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
+use crate::machine::{KError, KErrorKind, Scope};
 
-use super::{arg, err, kw, register_builtin, sig};
+use super::{arg, kw, sig};
 
-/// `PRINT <msg:Any>` — renders the bound argument's surface form, writes it to the nearest
-/// `out` writer (via `Scope::write_out`, which walks the `outer` chain) followed by a
-/// newline, and returns the rendered string (without the trailing newline) so the call
-/// composes with enclosing expressions. The `Any` slot admits both runtime values and
-/// first-class types, so it renders either arm of the carrier.
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let rendered = match bundle.args.get("msg") {
+/// `PRINT <msg:Any>` — renders the `msg` object cell, writes it plus a newline to
+/// `ctx.scope`'s nearest `out`, and returns the rendered string as a `KObject::KString` value.
+pub fn body<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_held, Action};
+    use crate::machine::model::Carried;
+    // `msg` is an `Any` slot, so render whichever arm the carrier holds (object or type) —
+    // `Held::summarize` is the twin of the legacy `ArgValue::summarize`.
+    let rendered = match arg_held(ctx.args, "msg") {
         Some(value) => value.summarize(),
-        None => return err(KError::new(KErrorKind::MissingArg("msg".to_string()))),
+        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("msg".to_string())))),
     };
     let line = format!("{rendered}\n");
-    sched.current_scope().write_out(line.as_bytes());
-    BodyResult::value(
-        sched
-            .current_scope()
-            .arena
-            .alloc_object(KObject::KString(rendered)),
-    )
+    ctx.scope.write_out(line.as_bytes());
+    let obj = ctx.scope.arena.alloc_object(KObject::KString(rendered));
+    Action::Done(Ok(Carried::Object(obj)))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin(
-        scope,
-        "PRINT",
-        sig(KType::Str, vec![kw("PRINT"), arg("msg", KType::Any)]),
-        body,
-    );
+    let signature = sig(KType::Str, vec![kw("PRINT"), arg("msg", KType::Any)]);
+    crate::builtins::register_builtin(scope, "PRINT", signature, body);
 }

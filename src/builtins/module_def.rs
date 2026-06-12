@@ -4,124 +4,96 @@
 //!
 //! Body statements dispatch on the OUTER scheduler against a fresh child scope, so a
 //! body statement referencing an earlier sibling at the same outer block parks on the
-//! outer placeholder like any other forward reference. The MODULE slot returns
-//! `BodyResult::DeferTo(combine_id)` so the parent binding lands at Combine-finish,
+//! outer placeholder like any other forward reference. The MODULE slot returns an
+//! `Action::Combine` over those body slots, so the parent binding lands at Combine-finish,
 //! not when MODULE's body returns to the dispatcher.
 
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
-use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, SchedulerHandle, Scope,
-};
+use crate::machine::{Frame, Scope};
 
-use super::{arg, err, kw, register_builtin_with_binder, sig};
-use crate::machine::core::kfunction::argument_bundle::extract_bare_type_name;
+use super::{arg, kw, sig};
 
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    mut bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    // Parameterized name forms are rejected — module names are bare leaves.
-    let name = match extract_bare_type_name(&bundle, "name", "MODULE") {
-        Ok(n) => n,
-        Err(e) => return err(e),
+/// `Action`-harness twin of the legacy body: mints the child scope, dispatches the body block
+/// against it (an `InScope` Combine dep), and the finish installs the `KType::Module` identity into
+/// the parent scope.
+pub fn body<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{
+        require_bare_type_name, require_kexpression, Action, Cont, Dep, DepPlacement,
     };
-    let body_expr = match bundle.extract_kexpression_or_shape_error("MODULE", "body") {
-        Ok(e) => e,
-        Err(e) => return err(e),
-    };
+    use crate::machine::model::Carried;
+    use std::rc::Rc;
 
-    let arena = sched.current_scope().arena;
-    let child_scope = arena.alloc_scope(Scope::child_under_module(
-        sched.current_scope(),
-        name.clone(),
-    ));
-
-    let deps = sched.enter_body_block(child_scope, body_expr);
-
-    // Capture the active per-call frame for the produced KModule's anchor; see
-    // per-call-arena-protocol.md § Carriers and § Outer-frame chain.
-    let active_frame = sched.current_frame();
-    // Non-nominal: the MODULE name obeys source order like any other type name.
-    let bind_index = sched
-        .current_lexical_chain()
-        .map(|chain| BindingIndex::value(chain.index))
-        .unwrap_or(BindingIndex::BUILTIN);
-    let name_for_finish = name.clone();
-    let finish: CombineFinish<'a> = Box::new(move |_sched, _results| {
-        // Idempotent-finalize guard: short-circuits if a future SCC-sweep extension
-        // re-enters MODULE finalize against an already-bound name. MODULE is type-only,
-        // so the guard reads `types` (the carrier in `data` is gone).
-        let bindings = _sched.current_scope().bindings();
-        if let Some(kt) = bindings.lookup_type(&name_for_finish, None) {
-            return BodyResult::ktype(_sched.current_scope().arena.alloc_ktype(kt.clone()));
+    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "MODULE"));
+    let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", "body"));
+    let child_scope = ctx
+        .scope
+        .arena
+        .alloc_scope(Scope::child_under_module(ctx.scope, name.clone()));
+    let active_frame = ctx.frame.map(Rc::clone);
+    let bind_index = ctx.bind_index();
+    let name_for_finish = name;
+    let finish: Cont<'a> = Box::new(move |fctx, _results| {
+        // Idempotent-finalize guard: a re-bound name short-circuits.
+        if let Some(kt) = fctx.scope.bindings().lookup_type(&name_for_finish, None) {
+            return Action::Done(Ok(Carried::Type(fctx.scope.arena.alloc_ktype(kt.clone()))));
         }
-        let arena = _sched.current_scope().arena;
-        let module: &'a Module<'a> =
-            arena.alloc_module(Module::new(name_for_finish.clone(), child_scope));
-        // Mirror pure type-side bindings (entries without a value-side counterpart) into
-        // the module's `type_members` so abstract-type slots surface to dispatch-time
-        // sharing-constraint checks. Names with both `types` and `data` entries (nominal
-        // sub-declarations) are excluded — ATTR's `type_members` lookup runs ahead of
-        // its `data` lookup, so mirroring them would shadow chained `Outer.Inner.x`
-        // access via the `KModule` value-side carrier.
+        let module: &'a Module<'a> = fctx
+            .scope
+            .arena
+            .alloc_module(Module::new(name_for_finish.clone(), child_scope));
+        // Mirror pure type-side bindings into the module's `type_members`.
         {
             let bindings = child_scope.bindings();
             let data_names: std::collections::HashSet<String> =
                 bindings.iter_data().into_iter().map(|(n, _)| n).collect();
             let mut tm = module.type_members.borrow_mut();
-            for (name, kt) in bindings.iter_types() {
-                if data_names.contains(&name) {
+            for (member, kt) in bindings.iter_types() {
+                if data_names.contains(&member) {
                     continue;
                 }
-                tm.insert(name, kt.clone());
+                tm.insert(member, kt.clone());
             }
         }
         let identity = KType::Module {
             module,
             frame: active_frame.clone(),
         };
-        // Type-only install: the module's identity (carrying its `&Module` and per-call
-        // frame anchor) lives in `bindings.types`; ATTR access recovers the value-side
-        // `KTypeValue(Module)` via `resolve_type_leaf_carrier`. MODULE doesn't join an SCC
-        // type cycle (bodies park on the outer scheduler), so the upsert's overwrite arm
-        // never fires for a module — its insert-if-absent / non-equal-Rebind behaviour is
-        // what carries here, sharing the one nominal-finalize primitive.
-        let _ = arena;
-        match _sched.current_scope().register_type_upsert(
-            name_for_finish.clone(),
-            identity.clone(),
-            bind_index,
-        ) {
-            Ok(kt_ref) => {
-                BodyResult::ktype(_sched.current_scope().arena.alloc_ktype(kt_ref.clone()))
-            }
-            Err(e) => BodyResult::Err(e.with_frame(Frame::bare(
+        match fctx
+            .scope
+            .register_type_upsert(name_for_finish.clone(), identity, bind_index)
+        {
+            Ok(kt_ref) => Action::Done(Ok(Carried::Type(fctx.scope.arena.alloc_ktype(kt_ref.clone())))),
+            Err(e) => Action::Done(Err(e.with_frame(Frame::bare(
                 "<module>",
                 format!("MODULE {} body", name_for_finish),
-            ))),
+            )))),
         }
     });
-    let combine_id = sched.add_combine_here(deps, vec![], finish);
-    BodyResult::DeferTo(combine_id)
+    Action::Combine {
+        deps: vec![Dep::Dispatch {
+            expr: body_expr,
+            placement: DepPlacement::InScope(child_scope),
+        }],
+        finish,
+    }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin_with_binder(
-        scope,
-        "MODULE",
-        sig(
-            KType::OfKind(KKind::Module),
-            vec![
-                kw("MODULE"),
-                arg("name", KType::OfKind(KKind::Proper)),
-                kw("="),
-                arg("body", KType::KExpression),
-            ],
-        ),
-        body,
-        Some(super::type_part_binder_name),
+    let signature = sig(
+        KType::OfKind(KKind::Module),
+        vec![
+            kw("MODULE"),
+            arg("name", KType::OfKind(KKind::Proper)),
+            kw("="),
+            arg("body", KType::KExpression),
+        ],
+    );
+    crate::builtins::register_builtin_full(
+        scope, "MODULE", signature, body, Some(super::type_part_binder_name), None, false,
     );
 }
 

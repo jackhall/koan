@@ -1,12 +1,10 @@
-//! The dispatch-side `invoke` — the single entry that runs a resolved call. A builtin is invoked
-//! directly with its [`ArgumentBundle`]; a user-defined body runs through
-//! [`crate::machine::core::kfunction::exec::run_user_fn`] and its [`ExecOutcome`] is lowered onto
+//! The dispatch-side `invoke` — the single entry that runs a resolved call. A builtin runs through
+//! the action harness (its bound args as a `KObject::Record` `BodyCtx`); a user-defined body runs
+//! through [`crate::machine::core::kfunction::exec::run_user_fn`] and its [`ExecOutcome`] is lowered onto
 //! the scheduler — mapped to a `BodyResult` (then a `NodeStep`) using the scheduler's own
 //! primitives (`acquire_tail_frame`, the body-chain dispatch, `add_combine_in_frame`). Kept out of
 //! `ctx.rs` (the dispatcher facade) so the dispatcher core stays thin; pure body semantics live one
 //! layer down in [`crate::machine::core::kfunction::exec`].
-
-use std::rc::Rc;
 
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::DispatchCtx;
@@ -19,14 +17,12 @@ use crate::machine::core::kfunction::{
     Body, BodyResult, CombineFinish, KFunction, SchedulerHandle,
 };
 use crate::machine::execute::lift::lift_ktype;
-use crate::machine::core::{assemble_body_chain, CallArena, LexicalFrame};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
-use crate::machine::{KError, KErrorKind, NodeId};
+use crate::machine::{KError, KErrorKind};
 
 /// The single invoke entry for the dispatcher's bind sites — run a resolved call:
-/// - **builtin** → invoked directly with its `ArgumentBundle` (kept distinct from the
-///   `Record<Carried>` executor machinery; builtins keep their own I/O);
+/// - **builtin** → the action harness (`BodyCtx` → `Action` → `run_action`);
 /// - **user-defined** → the `exec` executor (`run_user_fn` + the `ExecOutcome` lowering).
 ///
 /// Every call reaches here with its value parts already `Future`/literal-resolved (the eager-subs
@@ -37,16 +33,15 @@ pub(super) fn invoke<'run>(
     working_expr: KExpression<'run>,
     idx: usize,
 ) -> NodeStep<'run> {
-    // Builtins keep their `ArgumentBundle` I/O and are called directly — the `exec` executor
-    // (`run_user_fn`, `Record<Carried>`) never sees them.
+    // An action-harness builtin: build a read-only `BodyCtx`, get the `Action`, and lower it
+    // through the shared `run_action` interpreter.
     if let Body::Builtin(f) = &picked.body {
         let f = *f;
-        let bundle = match picked.bind(working_expr) {
-            Ok(future) => future.bundle,
+        let args = match picked.bind(working_expr) {
+            Ok(future) => future.args,
             Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
         };
-        let result = f(ctx, bundle);
-        return ctx.body_result_to_step(result, idx);
+        return run_action_builtin(ctx, f, args, idx);
     }
 
     // Validate each argument against its declared parameter type before the (type-trusting)
@@ -74,12 +69,8 @@ pub(super) fn invoke<'run>(
 
     let outer = picked.captured_scope();
     let frame = ctx.acquire_tail_frame(outer);
-    let chain = ctx
-        .current_lexical_chain()
-        .expect("dispatch runs inside an active lexical chain");
     let exec_frame = ExecFrame {
         arena: frame.clone(),
-        chain,
     };
     // A deferred-return FN dispatched as a tail call inside an established contract chain skips
     // resolving its own (keep-first-discarded) return type — see `run_user_fn`.
@@ -106,7 +97,7 @@ pub(super) fn invoke<'run>(
             // Empty `leading` → body_index 1 (the lone statement sits above the params); otherwise
             // dispatch the non-tail statements as siblings and tail-replace into the last at N.
             let body_index = leading.len() + 1;
-            dispatch_body_statements(ctx, &frame, &exec_frame.chain, &leading);
+            ctx.dispatch_body_statements(&frame, leading.into_iter().map(|e| (*e).clone()).collect());
             BodyResult::tail_with_frame_contract(tail.clone(), frame, contract, body_index)
         }
         ExecOutcome::DeferredExprTail {
@@ -122,9 +113,10 @@ pub(super) fn invoke<'run>(
             // the type slot.
             let mut body_and_type = leading;
             body_and_type.push(type_expr);
-            let ids = dispatch_body_statements(ctx, &frame, &exec_frame.chain, &body_and_type);
-            let type_dep = *ids.last().expect("the return-type expr was dispatched");
             let body_index = body_and_type.len() + 1;
+            let ids =
+                ctx.dispatch_body_statements(&frame, body_and_type.into_iter().map(|e| (*e).clone()).collect());
+            let type_dep = *ids.last().expect("the return-type expr was dispatched");
             let tail_expr = tail.clone();
             let body_frame = frame.clone();
             let finish: CombineFinish<'run> = Box::new(move |_s, results| {
@@ -155,10 +147,43 @@ pub(super) fn invoke<'run>(
             BodyResult::DeferTo(combine_id.expect("combine spawns"))
         }
         ExecOutcome::Errored(e) => BodyResult::Err(e),
-        ExecOutcome::Value(_) => {
-            unreachable!("run_user_fn yields Tail or DeferredExprTail, not a bare Value")
-        }
     };
+    ctx.body_result_to_step(result, idx)
+}
+
+/// Lower an action-harness builtin: convert its resolved `args` record into the `KObject::Record`
+/// the `BodyCtx` exposes, build the read-only `BodyCtx`, call the `ActionFn`, then interpret the
+/// returned `Action` through the shared `run_action`.
+fn run_action_builtin<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    f: crate::machine::core::kfunction::ActionFn,
+    args: crate::machine::model::types::Record<crate::machine::model::values::ArgValue<'run>>,
+    idx: usize,
+) -> NodeStep<'run> {
+    use crate::machine::core::kfunction::action::BodyCtx;
+    use crate::machine::model::values::{ArgValue, Held};
+    use crate::machine::model::KObject;
+
+    let cells = args.map(|av| match av {
+        ArgValue::Object(rc) => Held::Object(rc.deep_clone()),
+        ArgValue::Type(t) => Held::Type(t.clone()),
+    });
+    let args_obj: &'run KObject<'run> = ctx
+        .current_scope()
+        .arena
+        .alloc_object(KObject::record_of_held(cells));
+    let frame = ctx.current_frame();
+    let chain = ctx.current_lexical_chain();
+    let action = {
+        let body_ctx = BodyCtx {
+            scope: ctx.current_scope(),
+            frame: frame.as_ref(),
+            chain,
+            args: args_obj,
+        };
+        f(&body_ctx)
+    };
+    let result = super::super::harness::run_action(ctx, action);
     ctx.body_result_to_step(result, idx)
 }
 
@@ -186,31 +211,3 @@ fn extract_carried_args<'run>(
     Some(args)
 }
 
-/// Dispatch a body's statements as sibling sub-slots in `frame`, each positioned by the body chain
-/// (assembled from `chain` + the frame's body scope, at the statement's index). Returns their node
-/// ids — the multi-statement `Tail` path ignores them; the `DeferredExprTail` path takes the
-/// last (the return-type expr) as its Combine dep.
-fn dispatch_body_statements<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
-    frame: &Rc<CallArena>,
-    chain: &Rc<LexicalFrame>,
-    statements: &[&KExpression<'run>],
-) -> Vec<NodeId> {
-    let body_scope_id = frame.scope_for_bind().id;
-    let body_chain_parent = assemble_body_chain(frame.scope_for_bind(), chain.clone(), 0)
-        .parent
-        .clone();
-    let mut ids = Vec::with_capacity(statements.len());
-    for (i, statement) in statements.iter().enumerate() {
-        let statement_chain = LexicalFrame::push(body_chain_parent.clone(), body_scope_id, i + 1);
-        let statement = (*statement).clone();
-        let mut bid = None;
-        ctx.with_active_frame(frame.clone(), &mut |s| {
-            bid = Some(
-                s.add_dispatch_with_chain_in_frame(statement.clone(), statement_chain.clone()),
-            );
-        });
-        ids.push(bid.expect("body dispatch spawns"));
-    }
-    ids
-}

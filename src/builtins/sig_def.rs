@@ -13,82 +13,74 @@
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::Signature;
 use crate::machine::model::KType;
-use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, SchedulerHandle, Scope,
-};
+use crate::machine::{Frame, Scope};
 
-use super::{arg, err, kw, register_builtin_with_binder, sig};
-use crate::machine::core::kfunction::argument_bundle::extract_bare_type_name;
+use super::{arg, kw, sig};
 
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    mut bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let name = match extract_bare_type_name(&bundle, "name", "SIG") {
-        Ok(n) => n,
-        Err(e) => return err(e),
+/// `Action`-harness twin of the legacy body: mints the declaration scope, dispatches the SIG body
+/// block against it (an `InScope` Combine dep), and the finish captures that scope into a
+/// [`Signature`] and installs the `KType::Signature` identity into the parent scope.
+pub fn body<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{
+        require_bare_type_name, require_kexpression, Action, Cont, Dep, DepPlacement,
     };
-    let body_expr = match bundle.extract_kexpression_or_shape_error("SIG", "body") {
-        Ok(e) => e,
-        Err(e) => return err(e),
-    };
+    use crate::machine::model::Carried;
 
-    let arena = sched.current_scope().arena;
-    let decl_scope = arena.alloc_scope(Scope::child_under_sig(sched.current_scope(), name.clone()));
+    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "SIG"));
+    let body_expr = crate::try_action!(require_kexpression(ctx.args, "SIG", "body"));
 
-    let deps = sched.enter_body_block(decl_scope, body_expr);
+    let decl_scope = ctx
+        .scope
+        .arena
+        .alloc_scope(Scope::child_under_sig(ctx.scope, name.clone()));
 
-    let bind_index = sched
-        .current_lexical_chain()
-        .map(|chain| BindingIndex::value(chain.index))
-        .unwrap_or(BindingIndex::BUILTIN);
-    let name_for_finish = name.clone();
-    let finish: CombineFinish<'a> = Box::new(move |_sched, _results| {
-        let arena = _sched.current_scope().arena;
-        let sig: &'a Signature<'a> =
-            arena.alloc_signature(Signature::new(name_for_finish.clone(), decl_scope));
-        // One unified identity in `bindings.types`: `KType::Signature { sig, pinned_slots }`
-        // is both the introspectable value (`decl_scope` via `sig`) and the dispatch
-        // constraint. A slot annotation `:OrderedSig` means "any module satisfying
-        // OrderedSig"; the signature value is recovered via `resolve_type_leaf_carrier`,
-        // which synthesizes `KTypeValue(KType::Signature { .. })`. SIG doesn't join an SCC
-        // type cycle, so the upsert's overwrite arm never fires — its insert-if-absent /
-        // non-equal-Rebind behaviour (two `SIG Foo` in one scope error) carries here.
+    let bind_index = ctx.bind_index();
+    let name_for_finish = name;
+    let finish: Cont<'a> = Box::new(move |fctx, _results| {
+        let sig: &'a Signature<'a> = fctx
+            .scope
+            .arena
+            .alloc_signature(Signature::new(name_for_finish.clone(), decl_scope));
         let identity = KType::Signature {
             sig,
             pinned_slots: Vec::new(),
         };
-        match _sched.current_scope().register_type_upsert(
-            name_for_finish.clone(),
-            identity,
-            bind_index,
-        ) {
-            Ok(kt_ref) => BodyResult::ktype(arena.alloc_ktype(kt_ref.clone())),
-            Err(e) => BodyResult::Err(e.with_frame(Frame::bare(
+        match fctx
+            .scope
+            .register_type_upsert(name_for_finish.clone(), identity, bind_index)
+        {
+            Ok(kt_ref) => {
+                Action::Done(Ok(Carried::Type(fctx.scope.arena.alloc_ktype(kt_ref.clone()))))
+            }
+            Err(e) => Action::Done(Err(e.with_frame(Frame::bare(
                 "<signature>",
                 format!("SIG {} body", name_for_finish),
-            ))),
+            )))),
         }
     });
-    let combine_id = sched.add_combine_here(deps, vec![], finish);
-    BodyResult::DeferTo(combine_id)
+    Action::Combine {
+        deps: vec![Dep::Dispatch {
+            expr: body_expr,
+            placement: DepPlacement::InScope(decl_scope),
+        }],
+        finish,
+    }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin_with_binder(
-        scope,
-        "SIG",
-        sig(
-            KType::OfKind(KKind::Signature),
-            vec![
-                kw("SIG"),
-                arg("name", KType::OfKind(KKind::Proper)),
-                kw("="),
-                arg("body", KType::KExpression),
-            ],
-        ),
-        body,
-        Some(super::type_part_binder_name),
+    let signature = sig(
+        KType::OfKind(KKind::Signature),
+        vec![
+            kw("SIG"),
+            arg("name", KType::OfKind(KKind::Proper)),
+            kw("="),
+            arg("body", KType::KExpression),
+        ],
+    );
+    crate::builtins::register_builtin_full(
+        scope, "SIG", signature, body, Some(super::type_part_binder_name), None, false,
     );
 }
 

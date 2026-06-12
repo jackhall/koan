@@ -9,29 +9,30 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
+use crate::machine::{KError, KErrorKind, Scope};
 
-use super::{arg, kw, register_builtin, sig};
+use super::{arg, kw, sig};
 
-/// `<m:Module> :| <s:Signature>` — opaque ascription.
-pub fn body_opaque<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let (m, s) = match resolve_module_and_signature(&bundle) {
-        Ok(pair) => pair,
-        Err(e) => return BodyResult::Err(e),
-    };
+/// `<m:Module> :| <s:Signature>` — opaque ascription. Reads `m` / `s` from the
+/// `BodyCtx::args` type channel, mints on `ctx.scope.arena`, and returns the view module as
+/// `Action::Done(Ok(Carried::Type(..)))`.
+pub fn body_opaque<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::Action;
+    use crate::machine::model::Carried;
 
-    let arena = sched.current_scope().arena;
+    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args));
+
+    let arena = ctx.scope.arena;
     let new_scope = arena.alloc_scope(Scope::child_under_module(
-        sched.current_scope(),
+        ctx.scope,
         format!("{} :| {}", m.path, s.path),
     ));
 
     let src = m.child_scope();
     if let Err(e) = new_scope.bindings().try_bulk_install_from(src.bindings()) {
-        return BodyResult::Err(e);
+        return Action::Done(Err(e));
     }
 
     let new_module: &'a Module<'a> = arena.alloc_module(Module::new(m.path.clone(), new_scope));
@@ -42,10 +43,6 @@ pub fn body_opaque<'a, 's>(
     {
         let sig_bindings = s.decl_scope().bindings();
         for name in abstract_type_names_of(s.decl_scope()) {
-            // A SIG-declared higher-kinded `LET Wrap = (TEMPLATE T)` is a singleton
-            // `TypeConstructor` set. Re-mint a fresh per-call singleton (new scope_id, same
-            // schema + param_names) so the higher-kinded shape survives the ascription
-            // barrier; every other slot collapses to the `AbstractType` arm.
             let kt = match sig_bindings.lookup_type(&name, None) {
                 Some(KType::SetRef { set, index })
                     if set.member(*index).kind == KKind::TypeConstructor =>
@@ -89,18 +86,10 @@ pub fn body_opaque<'a, 's>(
         }
     }
 
-    // Thread per-call slot tags: a VAL slot whose SIG-declared type is a `Sig`-rooted
-    // abstract member (`VAL zero :Carrier` where `Carrier` is a SIG-local `LET Carrier = ...`) is
-    // tagged with the per-call `type_members[member]` identity. ATTR re-tags the slot read
-    // with this identity so `(int_ord.zero)` reads as the abstract `Carrier`, not the
-    // underlying value. Structural-form slot types (`:(FN (Type, Type) -> Number)`) are
-    // out of scope — only a bare `Sig`-rooted member naming a minted type is tagged.
     {
         let tm = new_module.type_members.borrow();
         let mut tags: Vec<(String, KType<'a>)> = Vec::new();
         for (slot_name, kt) in s.decl_scope().bindings().iter_types() {
-            // Only value-slot (VAL) entries carry a slot tag; the abstract-type members
-            // themselves are Type-class names read type-side, not value-side slots.
             if is_abstract_type_name(&slot_name) {
                 continue;
             }
@@ -124,7 +113,7 @@ pub fn body_opaque<'a, 's>(
     }
 
     if let Err(e) = shape_check(s, src) {
-        return BodyResult::Err(e);
+        return Action::Done(Err(e));
     }
 
     new_module.mark_satisfies(s.sig_id());
@@ -133,23 +122,22 @@ pub fn body_opaque<'a, 's>(
         module: new_module,
         frame: None,
     });
-    BodyResult::ktype(module_obj)
+    Action::Done(Ok(Carried::Type(module_obj)))
 }
 
-/// `<m:Module> :! <s:Signature>` — transparent ascription.
-pub fn body_transparent<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let (m, s) = match resolve_module_and_signature(&bundle) {
-        Ok(pair) => pair,
-        Err(e) => return BodyResult::Err(e),
-    };
+/// `<m:Module> :! <s:Signature>` — transparent ascription. Shape-checks against the source's
+/// own child scope and returns the retagged view module as `Action::Done(Ok(Carried::Type(..)))`.
+pub fn body_transparent<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::Action;
+    use crate::machine::model::Carried;
+
+    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args));
     if let Err(e) = shape_check(s, m.child_scope()) {
-        return BodyResult::Err(e);
+        return Action::Done(Err(e));
     }
-    // Reuse the source's child scope; the new Module just retags the path as a view.
-    let arena = sched.current_scope().arena;
+    let arena = ctx.scope.arena;
     let new_module: &'a Module<'a> = arena.alloc_module(Module::new(
         format!("{} :! {}", m.path, s.path),
         m.child_scope(),
@@ -159,7 +147,46 @@ pub fn body_transparent<'a, 's>(
         module: new_module,
         frame: None,
     });
-    BodyResult::ktype(module_obj)
+    Action::Done(Ok(Carried::Type(module_obj)))
+}
+
+/// Read the `m:Module` / `s:Signature` operands from the `BodyCtx::args` type channel, producing
+/// a missing / mismatch diagnostic when an operand is absent or the wrong kind.
+fn resolve_module_and_signature<'a>(
+    args: &crate::machine::model::KObject<'a>,
+) -> Result<
+    (
+        &'a crate::machine::model::values::Module<'a>,
+        &'a crate::machine::model::values::Signature<'a>,
+    ),
+    KError,
+> {
+    use crate::machine::core::kfunction::action::{arg_held, arg_type};
+
+    fn type_mismatch_or_missing(
+        args: &crate::machine::model::KObject<'_>,
+        name: &str,
+        expected: &str,
+    ) -> KError {
+        match arg_held(args, name) {
+            Some(held) => KError::new(KErrorKind::TypeMismatch {
+                arg: name.to_string(),
+                expected: expected.to_string(),
+                got: held.ktype().name(),
+            }),
+            None => KError::new(KErrorKind::MissingArg(name.to_string())),
+        }
+    }
+
+    let m = match arg_type(args, "m") {
+        Some(KType::Module { module, .. }) => *module,
+        _ => return Err(type_mismatch_or_missing(args, "m", "Module")),
+    };
+    let s = match arg_type(args, "s") {
+        Some(KType::Signature { sig, .. }) => *sig,
+        _ => return Err(type_mismatch_or_missing(args, "s", "Signature")),
+    };
+    Ok((m, s))
 }
 
 /// Verify every non-abstract-type name in `sig` has a binding in `src_scope`.
@@ -229,50 +256,28 @@ pub(super) fn is_abstract_type_name(name: &str) -> bool {
     chars.any(|c| c.is_ascii_lowercase())
 }
 
-fn resolve_module_and_signature<'a>(
-    bundle: &ArgumentBundle<'a>,
-) -> Result<
-    (
-        &'a crate::machine::model::values::Module<'a>,
-        &'a crate::machine::model::values::Signature<'a>,
-    ),
-    KError,
-> {
-    let m = bundle.require_module("m")?;
-    let s = bundle.require_signature("s")?;
-    Ok((m, s))
-}
-
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Slots are typed `Module` / `Signature`. Bare Type-token operands
     // (`IntOrd :| OrderedSig`) ride the auto-wrap rails into a value-typed future, so
     // no parallel Type-Type overload is required.
-    register_builtin(
-        scope,
-        ":|",
-        sig(
-            KType::OfKind(KKind::Module),
-            vec![
-                arg("m", KType::OfKind(KKind::Module)),
-                kw(":|"),
-                arg("s", KType::OfKind(KKind::Signature)),
-            ],
-        ),
-        body_opaque,
+    let opaque_sig = sig(
+        KType::OfKind(KKind::Module),
+        vec![
+            arg("m", KType::OfKind(KKind::Module)),
+            kw(":|"),
+            arg("s", KType::OfKind(KKind::Signature)),
+        ],
     );
-    register_builtin(
-        scope,
-        ":!",
-        sig(
-            KType::OfKind(KKind::Module),
-            vec![
-                arg("m", KType::OfKind(KKind::Module)),
-                kw(":!"),
-                arg("s", KType::OfKind(KKind::Signature)),
-            ],
-        ),
-        body_transparent,
+    let transparent_sig = sig(
+        KType::OfKind(KKind::Module),
+        vec![
+            arg("m", KType::OfKind(KKind::Module)),
+            kw(":!"),
+            arg("s", KType::OfKind(KKind::Signature)),
+        ],
     );
+    crate::builtins::register_builtin(scope, ":|", opaque_sig, body_opaque);
+    crate::builtins::register_builtin(scope, ":!", transparent_sig, body_transparent);
 }
 
 #[cfg(test)]

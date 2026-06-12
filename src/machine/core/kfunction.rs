@@ -1,5 +1,5 @@
 //! `KFunction` — the callable Koan function value. Carries an `ExpressionSignature`,
-//! a `Body` (builtin `fn` pointer or captured user-defined `KExpression`), and the
+//! a `Body` (an action `fn` pointer or captured user-defined `KExpression`), and the
 //! lexical scope captured at definition time.
 
 use crate::machine::core::source::Spanned;
@@ -10,15 +10,17 @@ use crate::machine::core::{KError, KErrorKind, KFuture, Scope};
 use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
 use crate::machine::model::values::{ArgValue, NamedPairs};
 
-pub mod argument_bundle;
 pub mod bind_by_name;
 pub mod body;
 pub mod exec;
 pub mod pick;
 pub mod scheduler_handle;
+/// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
+/// `machine::execute::harness::run_action`.
+pub mod action;
 
-pub use argument_bundle::ArgumentBundle;
-pub use body::{BinderBucketFn, BinderNameFn, Body, BodyResult, BuiltinFn};
+pub use body::{BinderBucketFn, BinderNameFn, Body, BodyResult};
+pub use action::ActionFn;
 pub use pick::ClassifiedSlots;
 pub use scheduler_handle::{CatchFinish, CombineFinish, NodeId, SchedulerHandle};
 
@@ -163,7 +165,7 @@ impl<'a> KFunction<'a> {
         Ok(KFuture {
             parsed: expr,
             function: self,
-            bundle: ArgumentBundle { args },
+            args,
         })
     }
 
@@ -213,11 +215,10 @@ mod tests {
     use crate::machine::model::types::{Argument, ExpressionSignature, KType, ReturnType};
     use crate::machine::model::{KKind, KObject};
 
-    fn body_any<'a, 's>(
-        h: &mut dyn SchedulerHandle<'a, 's>,
-        _a: ArgumentBundle<'a>,
-    ) -> BodyResult<'a> {
-        BodyResult::value(marker(h.current_scope(), "any"))
+    fn body_any<'a>(ctx: &super::action::BodyCtx<'a, '_>) -> super::action::Action<'a> {
+        super::action::Action::Done(Ok(crate::machine::model::Carried::Object(marker(
+            ctx.scope, "any",
+        ))))
     }
 
     /// Coarse bucket-key lookup over the scope chain. Returns the first strict-shape

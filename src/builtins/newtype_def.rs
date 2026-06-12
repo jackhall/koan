@@ -19,114 +19,18 @@ use crate::machine::model::types::KKind;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::argument_bundle::{
-    extract_bare_type_name, extract_kexpression, extract_ktype,
-};
 use crate::machine::core::source::Spanned;
-use crate::machine::core::{ApplyOutcome, LexicalFrame, PendingTypeEntry};
-use crate::machine::execute::defer_field_list_via_combine;
+use crate::machine::core::ApplyOutcome;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
-    finalize_nominal_member, parse_typed_field_list_via_elaborator, seal_recursive_refs,
-    Elaborator, FieldListOutcome, FieldNameKind, NominalMember, NominalSchema, Record,
-    RecursiveSet, SchemaSealResult, SealOutcome,
+    finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalMember, NominalSchema,
+    Record, RecursiveSet, SchemaSealResult, SealOutcome,
 };
 use crate::machine::model::values::{Carried, KObject};
 use crate::machine::model::KType;
-use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, Resolution,
-    SchedulerHandle, Scope,
-};
+use crate::machine::{BindingIndex, BodyResult, Frame, KError, KErrorKind, Resolution, Scope};
 
-use super::{arg, err, kw, register_builtin_with_binder, sig};
-
-/// Body of `NEWTYPE <name> = <repr>`, shared by the scalar (`:TypeExprRef` repr) and
-/// non-record-sigil (`:SigiledTypeExpr` repr) overloads. Branches on the repr carrier: a
-/// `Type`-arm `KType` — either resolved (scalar path → [`finalize_newtype`]) or a bare-leaf
-/// [`KType::Unresolved`] name (scope-chain walk → finalize) — or an `Object`-arm
-/// `KExpression` from the `:SigiledTypeExpr` slot (a structural sigil like `:(LIST OF T)` →
-/// [`defer_resolved_sigil`]). The record repr `:{…}` is a distinct `RecordType` part routed
-/// to [`body_record_repr`]. Every path writes the sealed `SetRef` identity into
-/// `bindings.types` and yields it on the type channel.
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    mut bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let name = match extract_bare_type_name(&bundle, "name", "NEWTYPE") {
-        Ok(n) => n,
-        Err(e) => return err(e),
-    };
-    // Gated to the NEWTYPE's lexical position: a repr naming a later type is a position
-    // error, like any other forward type reference.
-    let chain = sched.current_lexical_chain();
-    let bind_index = chain
-        .as_ref()
-        .map(|c| BindingIndex::value(c.index))
-        .unwrap_or(BindingIndex::BUILTIN);
-    // A `Type`-arm carrier splits two ways: a resolved `KType` for builtin leaves /
-    // structural shapes, `KType::Unresolved` for bare-leaf names. An `Object`-arm
-    // `KExpression` is a raw-captured sigil. Peek before extracting so we route to the
-    // right helper — both consume the slot.
-    if bundle.get_type("repr").is_some() {
-        match extract_ktype(&mut bundle, "repr") {
-            // Bare-leaf carrier (`NEWTYPE Bar = Foo` where `Foo` is user-declared):
-            // walk the scope chain for the resolved identity.
-            Some(KType::Unresolved(te)) => {
-                if let Some(kt) = sched
-                    .current_scope()
-                    .resolve_type_with_chain(te.as_str(), chain.as_deref())
-                {
-                    return finalize_newtype(sched.current_scope(), name, kt.clone(), bind_index);
-                }
-                // The repr names a type that is still finalizing in this scheduler — e.g. a
-                // record-repr dependency whose `:{…}` defers its own finalize behind a
-                // sub-dispatch, so this dependent's body can run first. Park on the
-                // producer and re-resolve at Combine-finish, once its identity is in
-                // `types`. A name with no in-flight producer is a genuine forward/unknown
-                // reference — a position error.
-                if let Resolution::Placeholder(producer) = sched
-                    .current_scope()
-                    .resolve_with_chain(te.as_str(), chain.as_deref())
-                {
-                    let finish: CombineFinish<'a> = Box::new(move |_sched, _results| match _sched
-                        .current_scope()
-                        .resolve_type_with_chain(te.as_str(), chain.as_deref())
-                    {
-                        Some(kt) => {
-                            finalize_newtype(_sched.current_scope(), name, kt.clone(), bind_index)
-                        }
-                        None => err(KError::new(KErrorKind::ShapeError(format!(
-                            "NEWTYPE repr slot = unknown type name `{}`",
-                            te.as_str(),
-                        )))),
-                    });
-                    let combine_id = sched.add_combine_here(Vec::new(), vec![producer], finish);
-                    return BodyResult::DeferTo(combine_id);
-                }
-                err(KError::new(KErrorKind::ShapeError(format!(
-                    "NEWTYPE repr slot = unknown type name `{}`",
-                    te.as_str(),
-                ))))
-            }
-            Some(repr) => finalize_newtype(sched.current_scope(), name, repr, bind_index),
-            None => unreachable!("get_type(repr) then extract_ktype must succeed"),
-        }
-    } else if matches!(bundle.get("repr"), Some(KObject::KExpression(_))) {
-        // Raw-captured sigil repr from the `:SigiledTypeExpr` overload — a structural repr
-        // (`:(LIST OF Number)`) with no self-reference to thread. Sub-dispatch it to a resolved
-        // `KType` and seal a plain Newtype over it. A record repr `:{…}` is a distinct part
-        // routed to its own overload ([`body_record_repr`]), so it never reaches here.
-        let inner = match extract_kexpression(&mut bundle, "repr") {
-            Some(e) => e,
-            None => unreachable!("get(KExpression) then extract_kexpression must succeed"),
-        };
-        defer_resolved_sigil(sched, name, inner, bind_index)
-    } else {
-        err(KError::new(KErrorKind::ShapeError(
-            "NEWTYPE repr slot must be a type expression (e.g. `Number`, `Foo`)".to_string(),
-        )))
-    }
-}
+use super::{arg, err, kw, sig};
 
 /// Seal a resolved `repr` into the NEWTYPE's identity and register it. A NEWTYPE is
 /// non-recursive (its `repr` is already resolved), so it seals into a singleton set of one
@@ -156,96 +60,6 @@ fn finalize_newtype<'a>(
             "NEWTYPE `{name}` registration deferred = bindings borrow contention",
         )))),
         Err(e) => err(e),
-    }
-}
-
-/// Body of the record-repr overload `NEWTYPE <name> = :{…}`. The `:RecordType` repr slot
-/// captures the field list raw (as a `KObject::KExpression`), so the declarator owns its
-/// elaboration and threads its own binder name through a recursive `:{next :Node}` — the
-/// reason this is a distinct overload from the shared [`body`] rather than a peek inside it.
-pub fn body_record_repr<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    mut bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let name = match extract_bare_type_name(&bundle, "name", "NEWTYPE") {
-        Ok(n) => n,
-        Err(e) => return err(e),
-    };
-    let chain = sched.current_lexical_chain();
-    let bind_index = chain
-        .as_ref()
-        .map(|c| BindingIndex::value(c.index))
-        .unwrap_or(BindingIndex::BUILTIN);
-    let fields = match extract_kexpression(&mut bundle, "repr") {
-        Some(e) => e,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "NEWTYPE record repr slot must be a record type `:{…}`".to_string(),
-            )))
-        }
-    };
-    elaborate_record_repr(sched, name, fields, bind_index, chain)
-}
-
-/// Elaborate + seal a record repr (`:{…}`), threading the binder name so a self-reference
-/// (`NEWTYPE Node = :{next :Node}`) lowers to a transient `RecursiveRef` and seals to a
-/// `SetLocal`. Mirrors the retired `STRUCT` declarator, sealing `NominalSchema::Newtype(Record)`
-/// rather than `Struct`. `fields` is the bare field list (`(name :Type, …)`) carried by the
-/// `:{…}` `RecordType` part.
-fn elaborate_record_repr<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    name: String,
-    fields: KExpression<'a>,
-    bind_index: BindingIndex,
-    chain: Option<Rc<LexicalFrame>>,
-) -> BodyResult<'a> {
-    // Mark this binder in-flight so a consumer referencing it (an earlier sibling still
-    // finalizing) can park on our producer node; the guard's Drop removes the entry, and the
-    // deferred path moves it into the Combine-finish closure.
-    let pending_guard = sched.current_scope().bindings().insert_pending_type(
-        name.clone(),
-        PendingTypeEntry {
-            kind: KKind::Newtype,
-            scope_id: sched.current_scope().id,
-            schema_expr: fields.clone(),
-        },
-    );
-    let mut elaborator = Elaborator::new(sched.current_scope())
-        .with_threaded([name.clone()])
-        .with_chain(chain.clone());
-    let outcome = parse_typed_field_list_via_elaborator(
-        &fields,
-        "NEWTYPE record repr",
-        FieldNameKind::Identifier,
-        &mut elaborator,
-        None,
-    );
-    match outcome {
-        FieldListOutcome::Done(sealed) => {
-            finalize_record_newtype(sched.current_scope(), name, sealed, bind_index)
-        }
-        FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
-        FieldListOutcome::Pending {
-            park_producers,
-            sub_dispatches,
-        } => {
-            let name_for_finish = name.clone();
-            defer_field_list_via_combine(
-                sched,
-                fields,
-                park_producers,
-                sub_dispatches,
-                "NEWTYPE record repr",
-                FieldNameKind::Identifier,
-                vec![name.clone()],
-                chain,
-                Some(pending_guard),
-                Some(Frame::bare("<newtype>", format!("NEWTYPE {name}"))),
-                Box::new(move |scope, sealed| {
-                    finalize_record_newtype(scope, name_for_finish, sealed, bind_index)
-                }),
-            )
-        }
     }
 }
 
@@ -296,39 +110,151 @@ fn finalize_record_newtype<'a>(
     }
 }
 
-/// A non-record sigil repr (`NEWTYPE Stream = :(LIST OF Number)`): no self-reference to thread, so
-/// re-wrap the captured sigil and sub-dispatch it to a resolved `KType`, then seal a plain Newtype
-/// over the result at Combine-finish.
-fn defer_resolved_sigil<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
+/// A resolved repr finalizes synchronously; a bare-leaf name resolves against the scope chain,
+/// parks on an in-flight producer (a `Dep::Existing` Combine), or errors; a raw sigil repr
+/// sub-dispatches via [`defer_resolved_sigil`].
+pub fn body<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{
+        arg_object, arg_type, body_result_to_action, require_bare_type_name, Action, Cont, Dep,
+    };
+
+    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "NEWTYPE"));
+    let chain = ctx.chain.clone();
+    let bind_index = ctx.bind_index();
+    if let Some(repr_kt) = arg_type(ctx.args, "repr") {
+        match repr_kt {
+            KType::Unresolved(te) => {
+                let te = te.clone();
+                if let Some(kt) = ctx
+                    .scope
+                    .resolve_type_with_chain(te.as_str(), chain.as_deref())
+                {
+                    return body_result_to_action(finalize_newtype(
+                        ctx.scope,
+                        name,
+                        kt.clone(),
+                        bind_index,
+                    ));
+                }
+                // The repr names a type still finalizing in this scheduler: park on its producer
+                // and re-resolve at Combine-finish. A name with no in-flight producer is a genuine
+                // forward/unknown reference.
+                if let Resolution::Placeholder(producer) = ctx
+                    .scope
+                    .resolve_with_chain(te.as_str(), chain.as_deref())
+                {
+                    let chain_for_finish = chain.clone();
+                    let finish: Cont<'a> = Box::new(move |fctx, _results| {
+                        match fctx
+                            .scope
+                            .resolve_type_with_chain(te.as_str(), chain_for_finish.as_deref())
+                        {
+                            Some(kt) => body_result_to_action(finalize_newtype(
+                                fctx.scope,
+                                name,
+                                kt.clone(),
+                                bind_index,
+                            )),
+                            None => Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                                "NEWTYPE repr slot = unknown type name `{}`",
+                                te.as_str(),
+                            ))))),
+                        }
+                    });
+                    return Action::Combine {
+                        deps: vec![Dep::Existing(producer)],
+                        finish,
+                    };
+                }
+                Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                    "NEWTYPE repr slot = unknown type name `{}`",
+                    te.as_str(),
+                )))))
+            }
+            other => body_result_to_action(finalize_newtype(
+                ctx.scope,
+                name,
+                other.clone(),
+                bind_index,
+            )),
+        }
+    } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
+        defer_resolved_sigil(name, inner.clone(), bind_index)
+    } else {
+        Action::Done(Err(KError::new(KErrorKind::ShapeError(
+            "NEWTYPE repr slot must be a type expression (e.g. `Number`, `Foo`)".to_string(),
+        ))))
+    }
+}
+
+/// A non-record sigil repr (`NEWTYPE Stream = :(LIST OF Number)`): re-wrap the captured sigil,
+/// sub-dispatch it, and seal a plain Newtype over the resolved `KType` at Combine-finish.
+fn defer_resolved_sigil<'a>(
     name: String,
     inner: KExpression<'a>,
     bind_index: BindingIndex,
-) -> BodyResult<'a> {
-    let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
-        Box::new(inner),
-    ))]);
-    let sub = sched.add_dispatch_here(wrapped);
-    let finish: CombineFinish<'a> = Box::new(move |_sched, results| match results[0] {
-        Carried::Type(kt) => finalize_newtype(_sched.current_scope(), name, kt.clone(), bind_index),
-        Carried::Object(other) => BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{
+        body_result_to_action, Action, Cont, Dep, DepPlacement,
+    };
+    let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(Box::new(
+        inner,
+    )))]);
+    let finish: Cont<'a> = Box::new(move |fctx, results| match results[0] {
+        Carried::Type(kt) => {
+            body_result_to_action(finalize_newtype(fctx.scope, name, kt.clone(), bind_index))
+        }
+        Carried::Object(other) => Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE repr sigil resolved to a non-type value `{}`",
             other.ktype().name(),
-        )))),
+        ))))),
     });
-    let combine_id = sched.add_combine_here(vec![sub], Vec::new(), finish);
-    BodyResult::DeferTo(combine_id)
+    Action::Combine {
+        deps: vec![Dep::Dispatch {
+            expr: wrapped,
+            placement: DepPlacement::OwnScope,
+        }],
+        finish,
+    }
+}
+
+/// Body of the record-repr overload `NEWTYPE <name> = :{…}`: elaborate the `:{…}` field list
+/// (threading the binder name + pending guard), folding via [`finalize_record_newtype`] or deferring
+/// through the shared `nominal_schema_action` field-list path.
+pub fn body_record_repr<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_object, require_bare_type_name, Action};
+    use super::nominal_schema::nominal_schema_action;
+
+    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "NEWTYPE"));
+    let fields = match arg_object(ctx.args, "repr") {
+        Some(KObject::KExpression(e)) => e.clone(),
+        _ => {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+                "NEWTYPE record repr slot must be a record type `:{…}`".to_string(),
+            ))))
+        }
+    };
+    let error_frame = Frame::bare("<newtype>", format!("NEWTYPE {name}"));
+    nominal_schema_action(
+        ctx,
+        name,
+        fields,
+        KKind::Newtype,
+        "NEWTYPE record repr",
+        FieldNameKind::Identifier,
+        error_frame,
+        finalize_record_newtype,
+    )
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Three overloads, selected by the repr part-kind. Construction lives in the `TypeCall`
     // fast lane via `constructors::dispatch_construct_newtype`.
-    //
-    // Scalar / bare-leaf repr (`= Number`, `= Foo`): the `:TypeExprRef` slot resolves the leaf
-    // eagerly to a `KType`.
-    register_builtin_with_binder(
-        scope,
-        "NEWTYPE",
+    let scalar_sig = || {
         sig(
             KType::OfKind(KKind::Any),
             vec![
@@ -337,16 +263,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("="),
                 arg("repr", KType::OfKind(KKind::Proper)),
             ],
-        ),
-        body,
-        Some(super::type_part_binder_name),
-    );
-    // Non-record sigil repr (`= :(LIST OF T)`): a `SigiledTypeExpr` part. The `:SigiledTypeExpr`
-    // slot captures it *raw* (more specific than `:TypeExprRef`, so it wins) and `body`
-    // sub-dispatches it to a resolved `KType`.
-    register_builtin_with_binder(
-        scope,
-        "NEWTYPE",
+        )
+    };
+    let sigil_sig = || {
         sig(
             KType::OfKind(KKind::Any),
             vec![
@@ -355,16 +274,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("="),
                 arg("repr", KType::SigiledTypeExpr),
             ],
-        ),
-        body,
-        Some(super::type_part_binder_name),
-    );
-    // Record repr (`= :{…}`): a `RecordType` part. The `:RecordType` slot captures the field
-    // list raw (more specific than `:TypeExprRef`, so it wins) so `body_record_repr` owns the
-    // field-list elaboration and threads its binder name through a recursive `:{next :Node}`.
-    register_builtin_with_binder(
-        scope,
-        "NEWTYPE",
+        )
+    };
+    let record_sig = || {
         sig(
             KType::OfKind(KKind::Any),
             vec![
@@ -373,9 +285,22 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("="),
                 arg("repr", KType::RecordType),
             ],
-        ),
+        )
+    };
+    use crate::builtins::register_builtin_full;
+    let binder = super::type_part_binder_name;
+    // Scalar / bare-leaf repr (`= Number`, `= Foo`) and non-record sigil repr (`= :(LIST OF T)`)
+    // share `body`; the record repr (`= :{…}`) routes to `body_record_repr`.
+    register_builtin_full(scope, "NEWTYPE", scalar_sig(), body, Some(binder), None, false);
+    register_builtin_full(scope, "NEWTYPE", sigil_sig(), body, Some(binder), None, false);
+    register_builtin_full(
+        scope,
+        "NEWTYPE",
+        record_sig(),
         body_record_repr,
-        Some(super::type_part_binder_name),
+        Some(binder),
+        None,
+        false,
     );
 }
 

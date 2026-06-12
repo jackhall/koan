@@ -7,6 +7,8 @@
 //! [design/memory-model.md](../../design/memory-model.md).
 
 mod dispatch;
+// The shared action harness for KFunction::invoke + builtins. See harness.rs.
+mod harness;
 mod interpret;
 mod lift;
 mod nodes;
@@ -16,7 +18,8 @@ pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path
 pub use scheduler::Scheduler;
 
 pub(crate) use dispatch::{
-    defer_field_list_via_combine, resolve_type_leaf_carrier, TypeLeafCarrier,
+    defer_field_list_action, resolve_type_leaf_carrier,
+    TypeLeafCarrier,
 };
 pub use dispatch::{NameOutcome, ResolveOutcome, ResolveTypeExprOutcome, Resolved};
 

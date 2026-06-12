@@ -1,51 +1,39 @@
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
-use crate::machine::model::{ArgValue, KObject, KType};
-use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, SchedulerHandle, Scope,
-};
+use crate::machine::model::{KObject, KType};
+use crate::machine::{KError, KErrorKind, Scope};
 
-use super::{arg, err, kw, register_builtin_with_binder, sig};
+use super::{arg, kw, sig};
 
-/// `LET <name> = <value:Any>` — deep-clones the bound value into the arena and
-/// inserts it under `name`. Two overloads share this body, differing only in the
-/// `name` slot's `KType`: `Identifier` and `TypeExprRef`.
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    // Direct-body test fixtures bypass the scheduler and have no active chain;
-    // [`BindingIndex::BUILTIN`] is always-visible so rebind/dedupe properties stay
-    // testable in isolation.
-    let bind_index = sched
-        .current_lexical_chain()
-        .map(|chain| BindingIndex::value(chain.index))
-        .unwrap_or(BindingIndex::BUILTIN);
-    // The RHS rides either channel: a runtime value (including a functor `KFunction`) in
-    // the Object arm, or a type-language identity (struct / union / module / signature /
-    // Result / alias) raw in the Type arm.
-    let rhs = match bundle.args.get("value") {
+/// `LET <name> = <value:Any>` — deep-clones the bound value into the arena and inserts it
+/// under `name`. Two overloads share this body, differing only in the `name` slot's `KType`:
+/// `Identifier` and `TypeExprRef`. Same partition logic across both: reads its args from the
+/// `BodyCtx::args` record, writes the binding directly on `ctx.scope` (interior-mutable), and
+/// returns the bound carrier as `Action::Done`.
+pub fn body<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_held, arg_object, arg_type, Action};
+    use crate::machine::model::values::Held;
+    use crate::machine::model::Carried;
+
+    let done_err = |e: KError| Action::Done(Err(e));
+    let bind_index = ctx.bind_index();
+    let rhs = match arg_held(ctx.args, "value") {
         Some(v) => v,
-        None => return err(KError::new(KErrorKind::MissingArg("value".to_string()))),
+        None => return done_err(KError::new(KErrorKind::MissingArg("value".to_string()))),
     };
-    // `Some` routes the bind to `register_type` (type-side); `None` routes to
-    // `bind_value` (value-side). A type-language alias (struct / union / module / Result /
-    // signature) is always a single type-side write.
     let mut type_for_types_map: Option<KType<'a>> = None;
-    let name = match (bundle.get("name"), bundle.get_type("name")) {
-        // Identifier overload: a value-classified (lowercase-leading) binder name. The
-        // partition invariant forbids it carrying any type-language value — a type aliases
-        // only under a Type-classified name. See design/typing/elaboration.md § Binding-map
-        // partition.
+    let name = match (arg_object(ctx.args, "name"), arg_type(ctx.args, "name")) {
         (Some(KObject::KString(s)), _) => {
-            if let ArgValue::Type(kt) = rhs {
+            if let Held::Type(kt) = rhs {
                 let kind = match kt {
                     KType::Module { .. } => "module",
                     KType::Signature { .. } => "signature",
                     _ => "type",
                 };
-                return err(KError::new(KErrorKind::ShapeError(format!(
+                return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "LET binder `{name}` is value-classified but the bound value is a \
                      {kind} (a type-language carrier); rebind under a Type-classified \
                      identifier instead (uppercase-leading plus at least one lowercase \
@@ -56,8 +44,6 @@ pub fn body<'a, 's>(
             }
             s.clone()
         }
-        // `TypeExprRef` overload: the binder name rides the type channel — a bare leaf
-        // (`Unresolved`) or a builtin-leaf identity. Structural type forms are not names.
         (_, Some(name_kt)) => {
             let resolved_name = match name_kt {
                 KType::Unresolved(te) => te.render(),
@@ -67,27 +53,20 @@ pub fn body<'a, 's>(
                 | KType::KFunctor { .. }
                 | KType::SetLocal(_)
                 | KType::RecursiveRef(_) => {
-                    return err(KError::new(KErrorKind::ShapeError(format!(
+                    return done_err(KError::new(KErrorKind::ShapeError(format!(
                         "LET name must be a bare type name, got `{}`",
                         name_kt.render(),
                     ))));
                 }
                 other => other.name(),
             };
-            // A Type-class binder name admits only a type-language RHS. A Type-arm identity
-            // (struct / union / module / signature / Result / alias) registers directly: its
-            // schema (or `&Module` / `&Signature`) rides the `KType`, so a plain `types`
-            // write preserves dispatch identity. An Object-arm `is_functor` `KFunction`
-            // registers its `KType::KFunctor { body: Some(f) }` projection so the callable
-            // rides the type-table identity. A plain value rejects so `bindings.data` stays
-            // the sole home for runtime values.
             type_for_types_map = Some(match rhs {
-                ArgValue::Type(kt) => kt.clone(),
-                ArgValue::Object(o) if matches!(&**o, KObject::KFunction(f, _) if f.is_functor) => {
+                Held::Type(kt) => kt.clone(),
+                Held::Object(o) if matches!(o, KObject::KFunction(f, _) if f.is_functor) => {
                     o.ktype()
                 }
-                ArgValue::Object(o) => {
-                    return err(KError::new(KErrorKind::TypeClassBindingExpectsType {
+                Held::Object(o) => {
+                    return done_err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                         name: resolved_name,
                         got: o.ktype().name(),
                     }));
@@ -96,75 +75,45 @@ pub fn body<'a, 's>(
             resolved_name
         }
         (Some(other), None) => {
-            return err(KError::new(KErrorKind::TypeMismatch {
+            return done_err(KError::new(KErrorKind::TypeMismatch {
                 arg: "name".to_string(),
                 expected: "Identifier or TypeExprRef".to_string(),
                 got: other.ktype().name(),
             }));
         }
-        (None, None) => return err(KError::new(KErrorKind::MissingArg("name".to_string()))),
+        (None, None) => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
     };
-    // Value slots inside a SIG body must use `(VAL <name>: <Type>)`. The check
-    // fires only for the value-route so `LET Carrier = Number` and
-    // `LET MyAlias = (some_module :| Sig)` keep working.
-    if type_for_types_map.is_none() && sched.current_scope().is_in_sig_body() {
-        return err(KError::new(KErrorKind::ShapeError(format!(
+    if type_for_types_map.is_none() && ctx.scope.is_in_sig_body() {
+        return done_err(KError::new(KErrorKind::ShapeError(format!(
             "inside a SIG body, value slots must use VAL — write \
              `(VAL {name}: <Type>)` instead of `(LET {name} = <example-value>)`",
         ))));
     }
-    let arena = sched.current_scope().arena;
+    let arena = ctx.scope.arena;
     if let Some(kt) = type_for_types_map {
-        // Identity-preserving alias: `LET P2 = OrderedSig` writes `bindings.types[P2]`
-        // carrying the aliased type's original identity so `(PICK x: P2)` and
-        // `(PICK x: OrderedSig)` dispatch to the same overload. The alias binds at its
-        // own lexical position, like every other binder.
-        //
-        // A SIG-local type binding (`LET Carrier = Number` inside a SIG body) binds the
-        // name-bearing `AbstractType { source: Sig(decl_scope) }` rather than the collapsed
-        // underlying type, so a later `VAL zero :Carrier` records that `zero` *names* the
-        // abstract member. Opaque ascription threads this into the per-call module's
-        // `slot_type_tags` and ATTR re-tags the slot read (see ascribe.rs / attr.rs). Only
-        // a bare type LET inside a SIG is wrapped; outer aliases stay concrete.
-        //
-        // A higher-kinded `LET Wrap = (TEMPLATE T)` stays a `TypeConstructor`: ascription
-        // already mints a fresh per-call constructor for those members (preserving the
-        // higher-kinded shape), so collapsing it to an abstract scalar would lose the
-        // parameterization.
         let is_type_constructor = matches!(
             &kt,
             KType::SetRef { set, index }
                 if set.member(*index).kind
                     == crate::machine::model::types::KKind::TypeConstructor
         );
-        let kt = if sched.current_scope().is_in_sig_body() && !is_type_constructor {
+        let kt = if ctx.scope.is_in_sig_body() && !is_type_constructor {
             KType::AbstractType {
-                source: AbstractSource::Sig(sched.current_scope().id),
+                source: AbstractSource::Sig(ctx.scope.id),
                 name: name.clone(),
             }
         } else {
             kt
         };
         let kt_ref: &'a KType<'a> = arena.alloc_ktype(kt.clone());
-        if let Err(e) = sched
-            .current_scope()
-            .register_user_type(name, kt, bind_index)
-        {
-            return err(e);
+        if let Err(e) = ctx.scope.register_user_type(name, kt, bind_index) {
+            return done_err(e);
         }
-        BodyResult::ktype(kt_ref)
+        Action::Done(Ok(Carried::Type(kt_ref)))
     } else {
-        // The value route reaches here only for a value-classified binder name with an
-        // Object-arm RHS (a type-language RHS errored above).
-        let value = rhs
-            .as_object()
-            .expect("value-route LET RHS is the Object arm");
-        // A functor lives in the type namespace only: a value-classified binder name
-        // cannot host one (`register_type` is the sole legal home for the carried
-        // `KType::KFunctor { body: Some(f) }`). Reject so `bindings.data` stays
-        // unconditionally functor-free.
+        let value = rhs.as_object().expect("value-route LET RHS is the Object arm");
         if matches!(value, KObject::KFunction(f, _) if f.is_functor) {
-            return err(KError::new(KErrorKind::ShapeError(format!(
+            return done_err(KError::new(KErrorKind::ShapeError(format!(
                 "a functor must be bound to a Type-class (capitalized) name; `{name}` \
                  is value-class — rebind under a Type-classified identifier instead \
                  (uppercase-leading plus at least one lowercase letter, e.g. `{suggestion}`)",
@@ -172,23 +121,17 @@ pub fn body<'a, 's>(
             ))));
         }
         let allocated: &'a KObject<'a> = arena.alloc_object(value.deep_clone());
-        // An untyped LET is a resolution boundary; an empty container with no
-        // stamped element type would silently fix `List<Any>` / `Dict<Any, Any>`.
-        // Force the user to annotate or use a non-empty literal.
         if allocated.is_unstamped_empty_container() {
-            return err(KError::new(KErrorKind::ShapeError(format!(
+            return done_err(KError::new(KErrorKind::ShapeError(format!(
                 "empty container bound to `{name}` has no element type to infer; \
                  annotate the value's type (e.g. via a typed FN return) or use a \
                  non-empty literal",
             ))));
         }
-        if let Err(e) = sched
-            .current_scope()
-            .bind_value(name, allocated, bind_index)
-        {
-            return err(e);
+        if let Err(e) = ctx.scope.bind_value(name, allocated, bind_index) {
+            return done_err(e);
         }
-        BodyResult::value(allocated)
+        Action::Done(Ok(Carried::Object(allocated)))
     }
 }
 
@@ -220,9 +163,7 @@ pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin_with_binder(
-        scope,
-        "LET",
+    let identifier_sig = || {
         sig(
             KType::Any,
             vec![
@@ -231,13 +172,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("="),
                 arg("value", KType::Any),
             ],
-        ),
-        body,
-        Some(binder_name),
-    );
-    register_builtin_with_binder(
-        scope,
-        "LET",
+        )
+    };
+    let type_sig = || {
         sig(
             KType::Any,
             vec![
@@ -246,9 +183,13 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("="),
                 arg("value", KType::Any),
             ],
-        ),
-        body,
-        Some(binder_name),
+        )
+    };
+    crate::builtins::register_builtin_full(
+        scope, "LET", identifier_sig(), body, Some(binder_name), None, false,
+    );
+    crate::builtins::register_builtin_full(
+        scope, "LET", type_sig(), body, Some(binder_name), None, false,
     );
 }
 

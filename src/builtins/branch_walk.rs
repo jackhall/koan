@@ -2,33 +2,25 @@
 //! body whose tag matches a dispatched value's tag without knowing what tags mean.
 //!
 //! `TRY` opts into wildcard `_` matching for dispatcher-internal error kinds; `MATCH`'s
-//! exhaustiveness check is enforced by the caller. [`resolve_arm_return_contract`] builds
+//! exhaustiveness check is enforced by the caller. [`resolve_arm_contract`] builds
 //! the `-> :T` return contract both arms enforce on their result.
 
-use crate::builtins::fn_def::return_type::{extract_return_type_raw, ReturnTypeRaw};
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::LexicalFrame;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::KType;
-use crate::machine::{ArgumentBundle, KError, KErrorKind, ResolveTypeExprOutcome, Scope};
+use crate::machine::{KError, KErrorKind, ResolveTypeExprOutcome, Scope};
 use std::rc::Rc;
 
-/// Resolve a MATCH / TRY `-> :T` annotation slot into the [`ReturnContract::Arm`] its
-/// arms are checked against. Reuses the FN return-type extraction, then resolves the
-/// type-expression in `scope` (MATCH / TRY take no parameters, so there is no deferred or
-/// parameter-referencing case). Only a fully-resolved type is supported; a
-/// forward-referenced or non-type slot raises `ShapeError`. `kind` (`"MATCH"` / `"TRY"`)
-/// labels both the diagnostic and the error-frame appended on a return mismatch.
-pub(crate) fn resolve_arm_return_contract<'a>(
-    scope: &Scope<'a>,
-    bundle: &mut ArgumentBundle<'a>,
+/// Read the MATCH / TRY `-> :T` slot from `ctx.args` (resolving a forward-referenced bare name
+/// against the call-site scope/chain) into the [`ReturnContract::Arm`] both `MATCH` and `TRY`
+/// arms are checked against.
+pub(crate) fn resolve_arm_contract<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
     kind: &'static str,
-    chain: Option<Rc<LexicalFrame>>,
 ) -> Result<ReturnContract<'a>, KError> {
-    let kt = match extract_return_type_raw(bundle)? {
-        ReturnTypeRaw::Resolved(kt) => kt,
-        // Gated to the MATCH / TRY position — a forward type reference is a position error.
-        ReturnTypeRaw::TypeExprCarrier(te) => match scope.resolve_type_expr(&te, chain) {
+    use crate::machine::core::kfunction::action::arg_type;
+    let ret_kt = match arg_type(ctx.args, "return_type") {
+        Some(KType::Unresolved(te)) => match ctx.scope.resolve_type_expr(te, ctx.chain.clone()) {
             ResolveTypeExprOutcome::Done(kt) => kt.clone(),
             _ => KType::from_name(&te.render()).ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
@@ -37,16 +29,46 @@ pub(crate) fn resolve_arm_return_contract<'a>(
                 )))
             })?,
         },
-        ReturnTypeRaw::ExprCarrier(_) => {
-            return Err(KError::new(KErrorKind::ShapeError(format!(
-                "{kind} return type must be a type expression, not a parenthesized expression"
-            ))))
-        }
+        Some(other) => other.clone(),
+        None => return Err(KError::new(KErrorKind::MissingArg("return_type".to_string()))),
     };
     Ok(ReturnContract::Arm {
-        ret: scope.arena.alloc_ktype(kt),
+        ret: ctx.scope.arena.alloc_ktype(ret_kt),
         kind,
     })
+}
+
+/// Build the matched-arm tail shared by the `Action`-harness `MATCH` and `TRY` bodies: a fresh
+/// per-call frame (`root`-rooted, chained onto `outer_frame`) with `it` bound at idx 0,
+/// tail-replacing into the arm body's last statement (the harness dispatches the leading
+/// statements as siblings) carrying `contract`.
+pub(crate) fn arm_tail<'a>(
+    root: &Scope<'a>,
+    outer_frame: Option<Rc<crate::machine::CallArena>>,
+    it_value: crate::machine::model::KObject<'a>,
+    body_expr: KExpression<'a>,
+    contract: ReturnContract<'a>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{Action, FramePlacement};
+    use crate::machine::core::kfunction::body::split_body_statements;
+    use crate::machine::{BindingIndex, CallArena};
+    let frame: Rc<CallArena> = CallArena::new(root, outer_frame);
+    frame.with_anchored_child(|arena, child| {
+        let it_obj = arena.alloc_object(it_value);
+        let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
+    });
+    let arm_scope_id = frame.scope_for_bind().id;
+    let mut statements = split_body_statements(body_expr);
+    let tail = statements
+        .pop()
+        .expect("split_body_statements always yields at least one");
+    Action::Tail {
+        leading: statements,
+        tail,
+        contract: Some(contract),
+        frame_placement: FramePlacement::FreshChild { frame },
+        block_entry: Some(arm_scope_id),
+    }
 }
 
 /// Returns the body for the first triple whose tag matches `target_tag`, or — when

@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use crate::machine::model::ast::ExpressionPart;
 
 /// Consume-by-name view over a named-argument list. Callers `take(name)` for each
-/// declared slot and call [`into_unknown`](Self::into_unknown) at the end to surface any
-/// unconsumed name. Built from a record literal's `(name, value)` fields.
+/// declared slot; leftover names are dropped (call-by-name width drop). Built from a record
+/// literal's `(name, value)` fields.
 #[derive(Debug)]
 pub struct NamedPairs<'a> {
     map: HashMap<String, ExpressionPart<'a>>,
@@ -33,13 +33,6 @@ impl<'a> NamedPairs<'a> {
     pub fn take(&mut self, name: &str) -> Option<ExpressionPart<'a>> {
         self.map.remove(name)
     }
-
-    /// Return the name of an arbitrary unconsumed entry, or `None` if the map is empty.
-    /// Call after all declared slots have been [`take`](Self::take)n; a `Some` indicates
-    /// the caller supplied a name the declaration did not expect.
-    pub fn into_unknown(self) -> Option<String> {
-        self.map.into_keys().next()
-    }
 }
 
 #[cfg(test)]
@@ -62,15 +55,6 @@ mod tests {
             matches!(pairs.take("x"), Some(ExpressionPart::Literal(KLiteral::Number(n))) if n == 3.0)
         );
         assert!(pairs.take("y").is_none(), "second take returns None");
-        assert!(pairs.into_unknown().is_none(), "all entries consumed");
-    }
-
-    #[test]
-    fn into_unknown_reports_residual() {
-        let mut pairs =
-            NamedPairs::from_fields(vec![("x".into(), num(3.0)), ("z".into(), num(9.0))]).unwrap();
-        let _ = pairs.take("x");
-        assert_eq!(pairs.into_unknown().as_deref(), Some("z"));
     }
 
     #[test]

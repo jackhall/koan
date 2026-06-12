@@ -49,7 +49,7 @@ What's shipped that the open items below build on:
   [`build_fn_like`](../src/builtins/fn_def.rs) keyed on `FnKind`), the `finish.rs`
   `run_combine`/`run_catch` arms (one `dispatch_body_result`), the `dict_literal`
   `accept_colon`/`accept_equals` pair (one `accept_separator`), the slot-extract error
-  envelope (one [`ArgumentBundle::extract_kexpression_or_shape_error`](../src/machine/core/kfunction/argument_bundle.rs)
+  envelope (one [`require_kexpression`](../src/machine/core/kfunction/action.rs)
   owning the parenthesized-slot error text), and the scheduler `Object`/`Type` finalize
   arms (one [`check_declared_return`](../src/machine/execute/scheduler/execute.rs)
   parameterized over the lifted carrier's `matches_value`/`matches_type` predicate).

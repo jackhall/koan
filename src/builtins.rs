@@ -1,4 +1,4 @@
-use crate::machine::core::kfunction::{BinderNameFn, Body, BodyResult, BuiltinFn, KFunction};
+use crate::machine::core::kfunction::{BinderNameFn, Body, BodyResult, KFunction};
 use crate::machine::core::{BindingIndex, KError, Scope};
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::{
@@ -16,6 +16,7 @@ mod functor_def;
 mod let_binding;
 mod match_case;
 mod module_def;
+mod nominal_schema;
 pub(crate) mod newtype_def;
 mod print;
 mod quote;
@@ -62,15 +63,6 @@ pub(crate) fn sig<'a>(
     }
 }
 
-pub fn register_builtin<'a>(
-    scope: &'a Scope<'a>,
-    name: &str,
-    signature: ExpressionSignature<'a>,
-    body: BuiltinFn,
-) {
-    register_builtin_with_binder(scope, name, signature, body, None);
-}
-
 /// Shared [`BinderNameFn`] for typed-binder builtins (SIG / MODULE / UNION /
 /// RECURSIVE TYPES / NEWTYPE): the binder name is `parts[1]`'s `Type(t)` token.
 /// A free function (not the `KExpression::binder_name_from_type_part` method
@@ -82,26 +74,16 @@ pub(crate) fn type_part_binder_name(
     expr.binder_name_from_type_part()
 }
 
-/// Collisions from `register_function` are dropped: each builtin registers once at
-/// run-root construction, so a collision would be a programming error.
-pub(crate) fn register_builtin_with_binder<'a>(
-    scope: &'a Scope<'a>,
-    name: &str,
-    signature: ExpressionSignature<'a>,
-    body: BuiltinFn,
-    binder_name: Option<BinderNameFn>,
-) {
-    register_builtin_full(scope, name, signature, body, binder_name, None, false);
-}
-
-/// Full-form builtin registration with both binder hooks and the `is_functor` flag.
+/// Full-form builtin registration with both binder hooks and the `is_functor` flag. The `body` is
+/// an [`ActionFn`](crate::machine::core::kfunction::ActionFn) (`fn(&BodyCtx) -> Action`) installed
+/// as [`Body::Builtin`] — the builtin runs through `machine::execute::harness::run_action`.
 /// `binder_bucket` lets FN / FUNCTOR key pending-overload entries by inner-call bucket.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn register_builtin_full<'a>(
     scope: &'a Scope<'a>,
     name: &str,
     signature: ExpressionSignature<'a>,
-    body: BuiltinFn,
+    body: crate::machine::core::kfunction::ActionFn,
     binder_name: Option<BinderNameFn>,
     binder_bucket: Option<crate::machine::core::kfunction::BinderBucketFn>,
     is_functor: bool,
@@ -119,6 +101,16 @@ pub(crate) fn register_builtin_full<'a>(
     let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
 }
 
+/// Common-case [`register_builtin_full`]: no binder hooks, not a functor.
+pub(crate) fn register_builtin<'a>(
+    scope: &'a Scope<'a>,
+    name: &str,
+    signature: ExpressionSignature<'a>,
+    body: crate::machine::core::kfunction::ActionFn,
+) {
+    register_builtin_full(scope, name, signature, body, None, None, false);
+}
+
 /// Test-only: register one overload at an explicit [`BindingIndex`]. A test uses this to
 /// place a *user*-position (non-`BUILTIN`) overload in a root-position scope, so dispatch
 /// exercises the ordinary innermost-wins walk rather than the builtin root-first
@@ -128,7 +120,7 @@ pub(crate) fn register_overload_at<'a>(
     scope: &'a Scope<'a>,
     name: &str,
     signature: ExpressionSignature<'a>,
-    body: BuiltinFn,
+    body: crate::machine::core::kfunction::ActionFn,
     index: BindingIndex,
 ) {
     let arena = scope.arena;

@@ -1,43 +1,51 @@
 use std::rc::Rc;
 
 use crate::machine::model::KType;
-use crate::machine::{ArgumentBundle, BodyResult, CallArena, SchedulerHandle, Scope};
+use crate::machine::{CallArena, Scope};
 
-use super::{arg, err, kw, register_builtin, sig};
+use super::{arg, kw, sig};
 
-/// `EVAL <expr:Any>` — surface form `$(expr)`. Dispatches the captured AST inside a
-/// `KExpression` in a fresh per-call frame so bindings introduced by the body don't leak;
-/// the call site is the new frame's `outer`, so free names resolve against the surrounding
-/// scope. Non-`KExpression` values raise `TypeMismatch`.
+/// `EVAL <expr:Any>` — surface form `$(expr)`. Reads the evaluated `expr` (must be a
+/// `KExpression`) and tail-replaces into it in a fresh call-site frame (`FreshChild` — the UAF
+/// guard) so bindings introduced by the body don't leak; the call site is the new frame's
+/// `outer`, so free names resolve against the surrounding scope. Non-`KExpression` values raise
+/// `TypeMismatch`.
 ///
 /// The `EVAL` head-keyword is not part of the surface; user code goes through the `$` sigil.
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let inner = match bundle.require_kexpression("expr") {
-        Ok(e) => e.clone(),
-        Err(e) => return err(e),
+pub fn body<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_object, Action, FramePlacement};
+    use crate::machine::model::KObject;
+    use crate::machine::{KError, KErrorKind};
+    let inner = match arg_object(ctx.args, "expr") {
+        Some(KObject::KExpression(e)) => e.clone(),
+        Some(other) => {
+            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+                arg: "expr".to_string(),
+                expected: "KExpression".to_string(),
+                got: other.ktype().name(),
+            })))
+        }
+        None => {
+            return Action::Done(Err(KError::new(KErrorKind::MissingArg("expr".to_string()))))
+        }
     };
-    // Chain the call-site's frame Rc onto the new frame so the parent's per-call arena
-    // stays alive while the new frame's `outer`-scope pointer is in use.
-    let frame: Rc<CallArena> = CallArena::new(sched.current_scope(), sched.current_frame());
-    BodyResult::Tail {
-        expr: inner,
-        frame: Some(frame),
-        function: None,
+    // Chain the call-site frame Rc onto the new frame (keeps the parent arena alive past the
+    // new frame's `outer` pointer) — same as the legacy body.
+    let frame: Rc<CallArena> = CallArena::new(ctx.scope, ctx.frame.map(Rc::clone));
+    Action::Tail {
+        leading: vec![],
+        tail: inner,
+        contract: None,
+        frame_placement: FramePlacement::FreshChild { frame },
         block_entry: None,
-        body_index: 0,
     }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin(
-        scope,
-        "EVAL",
-        sig(KType::Any, vec![kw("EVAL"), arg("expr", KType::Any)]),
-        body,
-    );
+    let signature = sig(KType::Any, vec![kw("EVAL"), arg("expr", KType::Any)]);
+    crate::builtins::register_builtin(scope, "EVAL", signature, body);
 }
 
 #[cfg(test)]

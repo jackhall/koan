@@ -12,25 +12,20 @@ use crate::machine::model::types::Record;
 use crate::machine::model::KType;
 use crate::machine::Scope;
 
-use super::{arg, kw, register_builtin, sig};
+use super::{arg, kw, sig};
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin(
-        scope,
-        "TEMPLATE",
+    let template_sig = || {
         sig(
             KType::OfKind(KKind::Proper),
             vec![kw("TEMPLATE"), arg("param", KType::OfKind(KKind::Proper))],
-        ),
-        type_constructor::body,
-    );
+        )
+    };
     // Infix `<sig> WITH {Slot = Type, …}`. A lone binary
     // keyword classifies as `Keyworded` (leading-slot signature like `FROM` / `:|`), and
     // the record-literal `bindings` operand eager-evaluates so its `(name, KTypeValue)`
     // fields read directly — see [`with::body`].
-    register_builtin(
-        scope,
-        "WITH",
+    let with_sig = || {
         sig(
             KType::OfKind(KKind::Proper),
             vec![
@@ -38,7 +33,13 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("WITH"),
                 arg("bindings", KType::Record(Box::new(Record::new()))),
             ],
-        ),
-        with::body,
+        )
+    };
+    crate::builtins::register_builtin(
+        scope,
+        "TEMPLATE",
+        template_sig(),
+        type_constructor::body,
     );
+    crate::builtins::register_builtin(scope, "WITH", with_sig(), with::body);
 }

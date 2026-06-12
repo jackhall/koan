@@ -10,23 +10,39 @@
 use std::collections::HashSet;
 
 use crate::machine::model::{Held, KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle};
+use crate::machine::{KError, KErrorKind};
 
 use crate::builtins::ascribe::abstract_type_names_of;
-use crate::builtins::err;
 
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let s = match bundle.require_signature("sig") {
-        Ok(s) => s,
-        Err(e) => return err(e),
+/// `<sig> WITH {<Slot> = <Type>, …}`: reads the `sig` type cell and the eager-evaluated `bindings`
+/// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and
+/// returns the specialized `KType::Signature` as a `Carried::Type`.
+pub fn body<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_held, arg_object, arg_type, Action};
+    use crate::machine::model::Carried;
+
+    let done_err = |e: KError| Action::Done(Err(e));
+    let s = match arg_type(ctx.args, "sig") {
+        Some(KType::Signature { sig, .. }) => *sig,
+        other => {
+            let got = match (other, arg_held(ctx.args, "sig")) {
+                (Some(kt), _) => kt.name(),
+                (None, Some(Held::Object(object))) => object.ktype().name(),
+                (None, _) => return done_err(KError::new(KErrorKind::MissingArg("sig".to_string()))),
+            };
+            return done_err(KError::new(KErrorKind::TypeMismatch {
+                arg: "sig".to_string(),
+                expected: "Signature".to_string(),
+                got,
+            }));
+        }
     };
-    let fields = match bundle.get("bindings") {
+    let fields = match arg_object(ctx.args, "bindings") {
         Some(KObject::Record(fields, _types)) => fields,
         _ => {
-            return err(KError::new(KErrorKind::ShapeError(
+            return done_err(KError::new(KErrorKind::ShapeError(
                 "WITH bindings must be a record literal `{Slot = Type, …}`".to_string(),
             )));
         }
@@ -38,7 +54,7 @@ pub fn body<'a, 's>(
     let mut pinned: Vec<(String, KType<'a>)> = Vec::with_capacity(fields.len());
     for (name, value) in fields.iter() {
         if !known_slots.contains(name) {
-            return err(KError::new(KErrorKind::ShapeError(format!(
+            return done_err(KError::new(KErrorKind::ShapeError(format!(
                 "{} has no abstract type slot `{name}`",
                 s.path,
             ))));
@@ -46,17 +62,18 @@ pub fn body<'a, 's>(
         match value {
             Held::Type(kt) => pinned.push((name.clone(), kt.clone())),
             Held::Object(other) => {
-                return err(KError::new(KErrorKind::ShapeError(format!(
+                return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "WITH binding `{name}` value must be a type, got `{}`",
                     other.ktype().name(),
                 ))));
             }
         }
     }
-    BodyResult::ktype(sched.current_scope().arena.alloc_ktype(KType::Signature {
+    let kt = ctx.scope.arena.alloc_ktype(KType::Signature {
         sig: s,
         pinned_slots: pinned,
-    }))
+    });
+    Action::Done(Ok(Carried::Type(kt)))
 }
 
 #[cfg(test)]

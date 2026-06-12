@@ -16,24 +16,24 @@ use std::rc::Rc;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::Record;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
+use crate::machine::{KError, KErrorKind, Scope};
 
-use super::{arg, err, kw, register_builtin, sig};
+use super::{arg, kw, sig};
 
 /// `(x y) FROM <record:{}>` — re-tag the record's carried type to the named fields.
 ///
 /// The `fields` operand arrives unevaluated through a `KExpression` slot: each part
 /// must be a bare `Identifier` naming a field (never name-resolved). The `record`
 /// operand is typed `:{}`, so dispatch shape-gates the slot to records and the body
-/// reads a guaranteed `KObject::Record` carrier.
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let fields_expr = match bundle.require_kexpression("fields") {
-        Ok(e) => e,
-        Err(e) => return err(e),
-    };
+/// reads a guaranteed `KObject::Record` carrier. Reads its args from `BodyCtx::args` and
+/// returns the re-typed record as `Action::Done`.
+pub fn body<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_object, require_kexpression, Action};
+    use crate::machine::model::Carried;
+
+    let fields_expr = crate::try_action!(require_kexpression(ctx.args, "FROM", "fields"));
 
     // Extract field names from the captured expression. Each part must be a bare
     // identifier; a computed field list is out of scope by design.
@@ -42,32 +42,34 @@ pub fn body<'a, 's>(
         match &part.value {
             ExpressionPart::Identifier(name) => {
                 if names.iter().any(|n| n == name) {
-                    return err(KError::new(KErrorKind::ShapeError(format!(
+                    return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                         "FROM field list has duplicate field `{name}`",
-                    ))));
+                    )))));
                 }
                 names.push(name.clone());
             }
             other => {
-                return err(KError::new(KErrorKind::ShapeError(format!(
+                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "FROM field list must be bare field names, got `{}`",
                     other.summarize(),
-                ))));
+                )))));
             }
         }
     }
 
-    let (fields, types) = match bundle.get("record") {
+    let (fields, types) = match arg_object(ctx.args, "record") {
         Some(KObject::Record(fields, types)) => (fields, types),
         // The `:{}` slot shape-gates to records, so a non-record argument is a
         // dispatch non-match that never reaches the body. Defensive arm only.
         Some(other) => {
-            return err(KError::new(KErrorKind::ShapeError(format!(
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "FROM record operand must be a record, got `{}`",
                 other.ktype().name(),
-            ))));
+            )))));
         }
-        None => return err(KError::new(KErrorKind::MissingArg("record".to_string()))),
+        None => {
+            return Action::Done(Err(KError::new(KErrorKind::MissingArg("record".to_string()))));
+        }
     };
 
     // Each named field must exist in the record; narrow the carried type to exactly
@@ -77,16 +79,17 @@ pub fn body<'a, 's>(
         match types.get(name) {
             Some(kt) => narrowed_pairs.push((name.clone(), kt.clone())),
             None => {
-                return err(KError::new(KErrorKind::ShapeError(format!(
+                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "FROM: record has no field `{name}`",
-                ))));
+                )))));
             }
         }
     }
 
     let narrowed = Record::from_pairs(narrowed_pairs);
     let result = KObject::record_with_type(Rc::clone(fields), narrowed);
-    BodyResult::value(sched.current_scope().arena.alloc_object(result))
+    let obj = ctx.scope.arena.alloc_object(result);
+    Action::Done(Ok(Carried::Object(obj)))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
@@ -95,19 +98,15 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // declared return, so the empty `:{}` does not coarsen the body's narrowed
     // `{x,y}` carrier. The `fields` slot is `KExpression` (captured unevaluated);
     // the `record` slot is `:{}`, which shape-gates the operand to records.
-    register_builtin(
-        scope,
-        "FROM",
-        sig(
-            KType::Record(Box::new(Record::new())),
-            vec![
-                arg("fields", KType::KExpression),
-                kw("FROM"),
-                arg("record", KType::Record(Box::new(Record::new()))),
-            ],
-        ),
-        body,
+    let signature = sig(
+        KType::Record(Box::new(Record::new())),
+        vec![
+            arg("fields", KType::KExpression),
+            kw("FROM"),
+            arg("record", KType::Record(Box::new(Record::new()))),
+        ],
     );
+    crate::builtins::register_builtin(scope, "FROM", signature, body);
 }
 
 #[cfg(test)]

@@ -2,22 +2,36 @@ use std::rc::Rc;
 
 use crate::machine::model::types::{KKind, NominalMember, NominalSchema, RecursiveSet};
 use crate::machine::model::KType;
-use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, ScopeId};
-
-use crate::builtins::err;
+use crate::machine::ScopeId;
 
 /// `TEMPLATE <param:TypeExprRef>` → `TypeExprRef` carrying a template singleton
 /// [`RecursiveSet`] of one [`KKind::TypeConstructor`] member with `ScopeId::SENTINEL`
 /// and a placeholder `name` (`"_typeconstructor"`). The surrounding opaque ascription
 /// (`ascribe.rs:body_opaque`) re-mints a fresh per-call singleton with the binding's slot
-/// name and a per-call `scope_id`. Arity-1 only.
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    let param_kt = match bundle.require_ktype("param") {
-        Ok(t) => t.clone(),
-        Err(e) => return err(e),
+/// name and a per-call `scope_id`. Arity-1 only. Reads the `param` type cell from
+/// `BodyCtx::args`, mints the template singleton [`RecursiveSet`], and returns it as a
+/// `Carried::Type`.
+pub fn body<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_held, arg_type, Action};
+    use crate::machine::model::values::Held;
+    use crate::machine::model::Carried;
+    use crate::machine::{KError, KErrorKind};
+
+    let param_kt = match arg_type(ctx.args, "param") {
+        Some(kt) => kt.clone(),
+        None => {
+            let error = match arg_held(ctx.args, "param") {
+                Some(Held::Object(object)) => KError::new(KErrorKind::TypeMismatch {
+                    arg: "param".to_string(),
+                    expected: "TypeExprRef".to_string(),
+                    got: object.ktype().name(),
+                }),
+                _ => KError::new(KErrorKind::MissingArg("param".to_string())),
+            };
+            return Action::Done(Err(error));
+        }
     };
     let param = param_kt.name();
     // Abstract higher-kinded SIG slot — not a constructible union, so the variant schema
@@ -32,12 +46,11 @@ pub fn body<'a, 's>(
         param_names: vec![param],
     });
     let set = Rc::new(RecursiveSet::new(vec![member]));
-    BodyResult::ktype(
-        sched
-            .current_scope()
-            .arena
-            .alloc_ktype(KType::SetRef { set, index: 0 }),
-    )
+    let kt = ctx
+        .scope
+        .arena
+        .alloc_ktype(KType::SetRef { set, index: 0 });
+    Action::Done(Ok(Carried::Type(kt)))
 }
 
 #[cfg(test)]

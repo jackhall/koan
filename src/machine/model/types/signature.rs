@@ -301,7 +301,7 @@ pub enum SignatureElement<'a> {
     Argument(Argument<'a>),
 }
 
-/// `name` keys the slot in the `ArgumentBundle`; `ktype` gates what `ExpressionPart`s it
+/// `name` keys the slot in the bound argument record; `ktype` gates what `ExpressionPart`s it
 /// accepts. `'a` because the declared `KType` may reference arena-pinned `Module` /
 /// `Signature` carriers.
 pub struct Argument<'a> {

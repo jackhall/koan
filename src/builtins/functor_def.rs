@@ -1,7 +1,7 @@
 //! `FUNCTOR <signature:KExpression> -> <return_type:Type> = <body:KExpression>` —
 //! the user-defined functor constructor. The body shares
-//! [`crate::builtins::fn_def::build_fn_like`] with FN, selecting `FnKind::Functor`;
-//! the divergences from FN are:
+//! [`crate::builtins::fn_def::build_fn_like`] with FN, selecting
+//! `FnKind::Functor`; the divergences from FN are:
 //!
 //! 1. The constructed `KFunction` carries `is_functor: true`, so its
 //!    `function_value_ktype` projects to `KType::KFunctor`.
@@ -21,20 +21,18 @@
 
 use crate::machine::model::types::KKind;
 use crate::machine::model::KType;
-use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, Scope};
+use crate::machine::Scope;
 
-use super::fn_def::build_fn_like;
 use super::fn_def::finalize::FnKind;
-use super::{arg, kw, register_builtin_full, sig};
+use super::{arg, kw, sig};
 
-/// FUNCTOR binder body. Shares [`crate::builtins::fn_def::build_fn_like`] with FN;
-/// `FnKind::Functor` selects the return-admissibility verdict and the
+/// FUNCTOR binder body. Shares [`crate::builtins::fn_def::build_fn_like`]
+/// with FN; `FnKind::Functor` selects the return-admissibility verdict and the
 /// `is_functor: true` flag downstream.
-pub fn body<'a, 's>(
-    sched: &mut dyn SchedulerHandle<'a, 's>,
-    bundle: ArgumentBundle<'a>,
-) -> BodyResult<'a> {
-    build_fn_like(sched, bundle, "FUNCTOR", FnKind::Functor)
+pub fn body<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    super::fn_def::build_fn_like(ctx, "FUNCTOR", FnKind::Functor)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
@@ -44,9 +42,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // a still-finalizing overload; sibling overloads sharing a bucket key all
     // install for it and only the first finalize wins. No `binder_name` —
     // FUNCTOR registers under `functions[bucket]`, not a value-side carrier.
-    register_builtin_full(
-        scope,
-        "FUNCTOR",
+    let typeexpr_sig = || {
         sig(
             KType::Any,
             vec![
@@ -57,17 +53,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("="),
                 arg("body", KType::KExpression),
             ],
-        ),
-        body,
-        None,
-        Some(super::fn_def::binder_bucket),
-        false,
-    );
+        )
+    };
     // Lazy `:(...)` return carrier — the FN counterpart's rationale applies: a dotted
     // `-> Er.Type` defers per-call rather than eager-sub-dispatching to an unbound parameter.
-    register_builtin_full(
-        scope,
-        "FUNCTOR",
+    let sigil_sig = || {
         sig(
             KType::Any,
             vec![
@@ -78,12 +68,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("="),
                 arg("body", KType::KExpression),
             ],
-        ),
-        body,
-        None,
-        Some(super::fn_def::binder_bucket),
-        false,
-    );
+        )
+    };
+    use crate::builtins::register_builtin_full;
+    let bucket = super::fn_def::binder_bucket;
+    register_builtin_full(scope, "FUNCTOR", typeexpr_sig(), body, None, Some(bucket), false);
+    register_builtin_full(scope, "FUNCTOR", sigil_sig(), body, None, Some(bucket), false);
 }
 
 #[cfg(test)]

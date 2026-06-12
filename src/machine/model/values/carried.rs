@@ -69,9 +69,9 @@ impl<'a> Carried<'a> {
 /// Owned form of the value currency, for storage that must survive a [`KFuture`] lift: the
 /// `Object` arm rides an [`Rc`] (lift-stable, like the bundle's pre-existing `Rc<KObject>`),
 /// the `Type` arm is an owned [`KType`] (`Clone`-stable — recursive sets ride `Rc`, module
-/// refs carry their own frame anchor). The carrier `ArgumentBundle` holds and
-/// [`ExpressionPart::resolve_for`](crate::machine::model::ast::ExpressionPart::resolve_for)
-/// produces. The borrowed [`Carried`] is the channel currency; this is its bundle-resident dual.
+/// refs carry their own frame anchor). The form a bound argument record (`Record<ArgValue>`) holds,
+/// and that [`ExpressionPart::resolve_for`](crate::machine::model::ast::ExpressionPart::resolve_for)
+/// produces. The borrowed [`Carried`] is the channel currency; this is its owned dual.
 ///
 /// [`KFuture`]: crate::machine::core::KFuture
 pub enum ArgValue<'a> {

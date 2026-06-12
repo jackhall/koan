@@ -14,3 +14,4 @@ observe/.profraw-staging/
 *.profraw
 .claude/scheduled_tasks.lock
 .claude/plans/
+observe/miri-last-run.log

@@ -3,19 +3,20 @@
 use super::super::{RuntimeArena, Scope};
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
-use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::core::source::Spanned;
+use crate::machine::model::Carried;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
 use crate::machine::{BindingIndex, LexicalFrame, ResolveOutcome};
 
-fn body_a<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, _a: ArgumentBundle<'a>) -> BodyResult<'a> {
-    BodyResult::value(marker(h.current_scope(), "a"))
+fn body_a<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+    Action::Done(Ok(Carried::Object(marker(ctx.scope, "a"))))
 }
-fn body_b<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, _a: ArgumentBundle<'a>) -> BodyResult<'a> {
-    BodyResult::value(marker(h.current_scope(), "b"))
+fn body_b<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+    Action::Done(Ok(Carried::Object(marker(ctx.scope, "b"))))
 }
 
 fn two_slot_sig<'a>(a: KType<'a>, b: KType<'a>) -> ExpressionSignature<'a> {
@@ -106,7 +107,7 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
 /// A binder_name-bearing overload populates `placeholder_name` from its extractor.
 #[test]
 fn resolve_carries_placeholder_name_for_binder_function() {
-    use crate::builtins::register_builtin_with_binder;
+    use crate::builtins::register_builtin_full;
     fn name_extractor(expr: &KExpression<'_>) -> Option<String> {
         match expr.parts.get(1).map(|p| &p.value) {
             Some(ExpressionPart::Identifier(n)) => Some(n.clone()),
@@ -130,7 +131,7 @@ fn resolve_carries_placeholder_name_for_binder_function() {
             }),
         ],
     };
-    register_builtin_with_binder(scope, "LETLIKE", sig, body_a, Some(name_extractor));
+    register_builtin_full(scope, "LETLIKE", sig, body_a, Some(name_extractor), None, false);
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("LETLIKE".into())),
         Spanned::bare(ExpressionPart::Identifier("foo".into())),

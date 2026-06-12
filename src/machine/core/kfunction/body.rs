@@ -1,5 +1,5 @@
-//! Body-shape types: `BodyResult`, the builtin-body / binder-hook `fn`-pointer aliases,
-//! and the `Body` enum (builtin pointer vs captured `KExpression`).
+//! Body-shape types: `BodyResult`, the binder-hook `fn`-pointer aliases, and the `Body` enum
+//! (an action `fn` pointer vs a captured user-defined `KExpression`).
 
 use std::rc::Rc;
 
@@ -10,8 +10,7 @@ use crate::machine::model::types::UntypedKey;
 use crate::machine::model::values::{Carried, KObject};
 use crate::machine::model::KType;
 
-use super::argument_bundle::ArgumentBundle;
-use super::scheduler_handle::{NodeId, SchedulerHandle};
+use super::scheduler_handle::NodeId;
 use super::KFunction;
 
 /// What a builtin's body returns.
@@ -47,7 +46,7 @@ pub enum ReturnContract<'a> {
         kind: &'static str,
     },
     /// A deferred-return FN whose per-call return type resolved to `ret`. Rides the FN-body
-    /// chain shape (`is_function` is true) so a tail-replaced deferred body assembles its
+    /// chain shape (a `Function`/`PerCall` contract) so a tail-replaced deferred body assembles its
     /// lexical chain like any FN — preserving TCO — while `check_declared_return` checks the
     /// lifted value against the resolved `ret` (labelled "per-call return type", `func` names
     /// the frame). `ret` is arena-borrowed like `Arm`'s, so the contract stays `Copy`.
@@ -67,8 +66,8 @@ pub enum ReturnContract<'a> {
 /// This is the single audited owner of the contract erasure, mirroring
 /// [`ScopePtr`](crate::machine::core::scope_ptr::ScopePtr): the lifetime is forgotten for
 /// storage and re-anchored at the Done read boundary, witnessed by the cart. The `Function` /
-/// `Arm` discriminant is readable without a re-anchor ([`Self::is_function`]) for the chain-shape
-/// decision that needs the tag but not the pointee.
+/// `Arm` discriminant is readable without a re-anchor for the chain-shape decision that needs the
+/// tag but not the pointee.
 #[derive(Clone, Copy)]
 pub struct ErasedContract {
     inner: ReturnContract<'static>,
@@ -102,15 +101,6 @@ impl ErasedContract {
         std::mem::transmute::<ReturnContract<'static>, ReturnContract<'a>>(self.inner)
     }
 
-    /// Whether this contract rides the FN-body chain shape — `Function` or `PerCall` (a deferred
-    /// FN body), vs an `Arm`. Reads the discriminant only — no pointer deref — so it needs no cart
-    /// witness.
-    pub fn is_function(self) -> bool {
-        matches!(
-            self.inner,
-            ReturnContract::Function(_) | ReturnContract::PerCall { .. }
-        )
-    }
 }
 
 pub enum BodyResult<'a> {
@@ -160,7 +150,7 @@ impl<'a> BodyResult<'a> {
     /// FN-body tail-replace carrying an explicit `contract` and `body_index` (see
     /// [`BodyResult::Tail`]). The `Function` form is the resolved-return call; the `PerCall` form
     /// is a deferred-return FN whose per-call type has been resolved. Both ride the FN-body chain
-    /// shape (`contract.is_function()`), so a deferred body tail-replaces like any FN and stays
+    /// shape (a `Function`/`PerCall` contract), so a deferred body tail-replaces like any FN and stays
     /// TCO-flat. `body_index` is `1` for a single-statement body (the lone statement sits above the
     /// `idx 0` params), or `N` when tail-replacing into the last of N statements.
     pub fn tail_with_frame_contract(
@@ -287,16 +277,6 @@ pub(crate) fn body_statement_refs<'ast>(
     }
 }
 
-/// Builtin body. The body takes no scope argument: it reads the executing slot's scope on demand
-/// via [`SchedulerHandle::current_scope`], a **short** borrow re-fetched per use and never held
-/// across a `&mut` handle call. That on-demand access is what keeps the read boundary an honest
-/// bounded brand (no fabricated `&'run`): nothing holds a live scope borrow across the in-step TCO
-/// frame reset. A body re-dispatching against its own scope uses the `*_here` handle methods; a
-/// genuinely `'a`-lived scope it allocates itself (a fresh child) flows to `add_dispatch` /
-/// `enter_body_block`.
-pub type BuiltinFn =
-    for<'a, 's> fn(&mut dyn SchedulerHandle<'a, 's>, ArgumentBundle<'a>) -> BodyResult<'a>;
-
 /// Dispatch-time name extractor for a binder builtin. Returning `Some(name)` installs
 /// `placeholders[name] = NodeId(this_slot)` so a sibling looking up `name` while the
 /// body is in flight parks on this slot (see [`crate::machine::core::Scope::resolve`]).
@@ -318,8 +298,10 @@ pub type BinderBucketFn = for<'a> fn(&KExpression<'a>) -> Option<UntypedKey>;
 /// Enum (not `Box<dyn Fn>`) so `UserDefined` stays introspectable — TCO and
 /// error-frame attribution walk into the captured expression.
 pub enum Body<'a> {
-    Builtin(BuiltinFn),
     UserDefined(KExpression<'a>),
+    /// A builtin authored against the `Action` harness. Runs through
+    /// `machine::execute::harness::run_action`.
+    Builtin(super::action::ActionFn),
 }
 
 #[cfg(test)]

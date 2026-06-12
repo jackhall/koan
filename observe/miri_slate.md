@@ -1,7 +1,7 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena.rs: 17
+src/machine/core/arena.rs: 16
 src/machine/core/kfunction/body.rs: 3
 src/machine/core/scope_ptr.rs: 6
 src/machine/execute/scheduler/execute.rs: 1
@@ -37,13 +37,8 @@ unsafe and fingerprint-drift checks still fire.
 
 ## The slate
 
-23 tests, grouped by the unsafe site each pins down. Names below are the exact
+22 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
-
-**Singleton transmutes** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the `'static`→`'a`
-re-annotation on the `NULL_HOLDER` / `TRUE_HOLDER` / `FALSE_HOLDER` shared singletons.
-
-- `singleton_ref_independent_of_arena_lifetime`
 
 **`CallArena` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
 child-scope `Option<ScopePtr<'static>>` (shortened to an `&self`-bounded lifetime via the
@@ -234,9 +229,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-12: 560s — 22 tests, 0 leaks, 0 UB
 - 2026-06-11: 560.53s — 23 tests, 0 leaks, 0 UB
 - 2026-06-11: 560.14s — 23 tests, 0 leaks, 0 UB
 - 2026-06-11: 558.63s — 23 tests, 0 leaks, 0 UB
 - 2026-06-11: 558.17s — 23 tests, 0 leaks, 0 UB
-- 2026-06-10: 557.56s — 23 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

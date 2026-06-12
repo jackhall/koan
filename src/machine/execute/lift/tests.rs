@@ -40,14 +40,16 @@ pub(super) fn dispatch_for_test<'run>(
 /// discarded; the function lives until `dying`'s arena drops.
 pub(super) fn defeat_fast_path(dying: &Rc<CallArena>) {
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
-    use crate::machine::{Body, BodyResult, KFunction};
+    use crate::machine::{Body, KFunction};
     let kf = KFunction::new(
         ExpressionSignature {
             return_type: ReturnType::Resolved(KType::Null),
             elements: vec![SignatureElement::Keyword("__SLOW__".into())],
         },
-        Body::Builtin(|s, _| {
-            BodyResult::value(s.current_scope().arena.alloc_object(KObject::Null))
+        Body::Builtin(|ctx| {
+            crate::machine::core::kfunction::action::Action::Done(Ok(
+                crate::machine::model::Carried::Object(ctx.scope.arena.alloc_object(KObject::Null)),
+            ))
         }),
         dying.scope(),
     );
@@ -60,14 +62,16 @@ pub(super) fn alloc_local_kf<'run>(
     dying: &'run Rc<CallArena>,
 ) -> &'run crate::machine::KFunction<'run> {
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
-    use crate::machine::{Body, BodyResult, KFunction};
+    use crate::machine::{Body, KFunction};
     let kf = KFunction::new(
         ExpressionSignature {
             return_type: ReturnType::Resolved(KType::Null),
             elements: vec![SignatureElement::Keyword("__INNER__".into())],
         },
-        Body::Builtin(|s, _| {
-            BodyResult::value(s.current_scope().arena.alloc_object(KObject::Null))
+        Body::Builtin(|ctx| {
+            crate::machine::core::kfunction::action::Action::Done(Ok(
+                crate::machine::model::Carried::Object(ctx.scope.arena.alloc_object(KObject::Null)),
+            ))
         }),
         dying.scope(),
     );

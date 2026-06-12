@@ -87,6 +87,68 @@ pub(crate) fn defer_field_list_via_combine<'run, 's>(
     BodyResult::DeferTo(combine_id)
 }
 
+/// `Action`-harness twin of [`defer_field_list_via_combine`]: build the same Combine as an
+/// [`Action`](crate::machine::core::kfunction::action::Action) — park producers become
+/// `Dep::Existing`, sigil sub-Dispatches `Dep::Dispatch { OwnScope }`, and the finish re-walks
+/// `expr` then routes the still-`BodyResult`-returning `finalize` through `body_result_to_action`.
+/// Reuses the caller's existing finalize unchanged.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn defer_field_list_action<'a>(
+    expr: KExpression<'a>,
+    park_producers: Vec<NodeId>,
+    sub_dispatches: Vec<KExpression<'a>>,
+    context: &'static str,
+    name_kind: FieldNameKind,
+    threaded: Vec<String>,
+    chain: Option<Rc<LexicalFrame>>,
+    pending_guard: Option<PendingBinderGuard<'a>>,
+    error_frame: Option<Frame>,
+    finalize: FieldListFinalize<'a>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{
+        body_result_to_action, Action, Cont, Dep, DepPlacement,
+    };
+    // `deps` order [park ++ subs] makes the harness split owned = subs (DFS order), park =
+    // park_producers, and the scheduler feeds results as [park.. , owned..] — so the re-walk
+    // consumes `results[park_count..]`, exactly as the scheduler-side twin does.
+    let park_count = park_producers.len();
+    let mut deps: Vec<Dep<'a>> = park_producers.into_iter().map(Dep::Existing).collect();
+    deps.extend(sub_dispatches.into_iter().map(|sub| Dep::Dispatch {
+        expr: sub,
+        placement: DepPlacement::OwnScope,
+    }));
+    let finish: Cont<'a> = Box::new(move |fctx, results| {
+        // The guard's Drop clears the in-flight `pending_types` entry on every arm.
+        let _pending_guard = pending_guard;
+        let mut feed = ResultFeed::new(&results[park_count..]);
+        let mut elaborator = Elaborator::new(fctx.scope)
+            .with_threaded(threaded.iter().cloned())
+            .with_chain(chain.clone());
+        match parse_typed_field_list_via_elaborator(
+            &expr,
+            context,
+            name_kind,
+            &mut elaborator,
+            Some(&mut feed),
+        ) {
+            FieldListOutcome::Done(fields) => body_result_to_action(finalize(fctx.scope, fields)),
+            FieldListOutcome::Err(msg) => {
+                let error = KError::new(KErrorKind::ShapeError(msg));
+                Action::Done(Err(match error_frame {
+                    Some(frame) => error.with_frame(frame),
+                    None => error,
+                }))
+            }
+            FieldListOutcome::Pending { .. } => Action::Done(Err(KError::new(
+                KErrorKind::ShapeError(format!(
+                    "{context}: forward type reference still unresolved after Combine wake"
+                )),
+            ))),
+        }
+    });
+    Action::Combine { deps, finish }
+}
+
 /// Elaborate a standalone `:{…}` record type to `KObject::KTypeValue(KType::Record(_))`.
 /// The `fields` expression is the record's `(name :Type, …)` field list. A record type at a
 /// value/type position declares no binder, so the elaborator threads no self-reference; a
