@@ -110,7 +110,7 @@ impl<'run> BareTypeState<'run> {
         self,
         ctx: &mut DispatchCtx<'run, '_>,
         idx: usize,
-    ) -> Result<NodeStep<'run>, KError> {
+    ) -> NodeStep<'run> {
         let BareTypeState { park, .. } = self;
         let BareTypeParkTrack { leaf, producer } =
             park.expect("BareTypeLeaf resume only entered after a park track is installed");
@@ -118,7 +118,7 @@ impl<'run> BareTypeState<'run> {
         // the now-sealed memo rather than reading the producer's value.
         let _ = producer;
         ctx.clear_dep_edges(idx);
-        Ok(bare_type_leaf(ctx, &leaf, idx))
+        bare_type_leaf(ctx, &leaf, idx)
     }
 }
 
@@ -153,7 +153,7 @@ impl<'run> CtorState<'run> {
         self,
         ctx: &mut DispatchCtx<'run, '_>,
         idx: usize,
-    ) -> Result<NodeStep<'run>, KError> {
+    ) -> NodeStep<'run> {
         let CtorState {
             init,
             track,
@@ -167,7 +167,7 @@ impl<'run> CtorState<'run> {
             );
             let _ = producer;
             ctx.clear_dep_edges(idx);
-            return Ok(type_call(ctx, expr, idx));
+            return type_call(ctx, expr, idx);
         }
         let CtorTrack {
             subs,
@@ -183,7 +183,7 @@ impl<'run> CtorState<'run> {
                     for (_, dep_id) in &subs {
                         ctx.free(dep_id.index());
                     }
-                    return Ok(NodeStep::Done(NodeOutput::Err(err)));
+                    return NodeStep::Done(NodeOutput::Err(err));
                 }
             }
         }
@@ -193,7 +193,7 @@ impl<'run> CtorState<'run> {
         }
         let values: Vec<&'run KObject<'run>> =
             staged_values.into_iter().map(|o| o.unwrap()).collect();
-        Ok(constructors::finish(ctx.current_scope(), &kind, &values))
+        constructors::finish(ctx.current_scope(), &kind, &values)
     }
 }
 

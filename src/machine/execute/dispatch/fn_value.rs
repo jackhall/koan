@@ -70,7 +70,7 @@ impl<'run> FnValueState<'run> {
         ctx: &mut DispatchCtx<'run, '_>,
         expr: KExpression<'run>,
         idx: usize,
-    ) -> Result<NodeStep<'run>, KError> {
+    ) -> NodeStep<'run> {
         let head = match &expr.parts[0].value {
             ExpressionPart::Identifier(n) => n.clone(),
             _ => unreachable!("FunctionValueCall shape implies Identifier head"),
@@ -79,11 +79,11 @@ impl<'run> FnValueState<'run> {
         match ctx.current_scope().resolve_with_chain(&head, chain) {
             Resolution::Value(obj) => Self::dispatch_callable_value(ctx, expr, obj, idx),
             Resolution::Placeholder(producer_id) => {
-                Ok(Self::install_head_park(ctx, producer_id, expr, idx))
+                Self::install_head_park(ctx, producer_id, expr, idx)
             }
-            Resolution::UnboundName => Ok(NodeStep::Done(NodeOutput::Err(KError::new(
+            Resolution::UnboundName => NodeStep::Done(NodeOutput::Err(KError::new(
                 KErrorKind::UnboundName(head),
-            )))),
+            ))),
         }
     }
 
@@ -91,7 +91,7 @@ impl<'run> FnValueState<'run> {
         self,
         ctx: &mut DispatchCtx<'run, '_>,
         idx: usize,
-    ) -> Result<NodeStep<'run>, KError> {
+    ) -> NodeStep<'run> {
         let FnValueState {
             init,
             eager_subs,
@@ -123,20 +123,20 @@ impl<'run> FnValueState<'run> {
         expr: KExpression<'run>,
         head_obj: &'run KObject<'run>,
         idx: usize,
-    ) -> Result<NodeStep<'run>, KError> {
+    ) -> NodeStep<'run> {
         let callable = match head_obj {
             KObject::KFunction(f, _) => ResolvedCallable::Function(f),
             other => {
-                return Ok(NodeStep::Done(NodeOutput::Err(KError::new(
+                return NodeStep::Done(NodeOutput::Err(KError::new(
                     KErrorKind::TypeMismatch {
                         arg: "verb".to_string(),
                         expected: "KFunction or Type".to_string(),
                         got: other.summarize(),
                     },
-                ))))
+                )))
             }
         };
-        Ok(apply_callable(ctx, callable, &expr, idx))
+        apply_callable(ctx, callable, &expr, idx)
     }
 
     fn install_head_park(

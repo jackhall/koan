@@ -37,7 +37,7 @@ impl<'run> Scheduler<'run> {
             let step = match work {
                 NodeWork::Dispatch { expr, state } => {
                     let mut ctx = crate::machine::execute::dispatch::DispatchCtx::new(self);
-                    crate::machine::execute::dispatch::run_dispatch(&mut ctx, expr, state, idx)?
+                    crate::machine::execute::dispatch::run_dispatch(&mut ctx, expr, state, idx)
                 }
                 NodeWork::Combine {
                     deps,

@@ -186,10 +186,7 @@ fn apply_function<'run>(
 ) -> NodeStep<'run> {
     match body {
         CallBody::Named(fields) => match f.reconstruct_positional(fields) {
-            Ok(rebuilt) => match install_eager_subs_track(ctx, rebuilt, f, idx) {
-                Ok(step) => step,
-                Err(e) => NodeStep::Done(NodeOutput::Err(e)),
-            },
+            Ok(rebuilt) => install_eager_subs_track(ctx, rebuilt, f, idx),
             Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         },
         CallBody::Positional(_) => body_shape_err(expr, NAMED_ONLY),
@@ -205,7 +202,7 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
     expr: KExpression<'run>,
     picked: &'run KFunction<'run>,
     idx: usize,
-) -> Result<NodeStep<'run>, KError> {
+) -> NodeStep<'run> {
     // `picked` is already committed (the head uniquely resolved to it), so bare-name
     // value slots resolve by sub-Dispatch rather than the keyword path's pre-pick
     // `bare_outcomes` lookup — their resolved carrier then reaches `accepts_part` at bind.
@@ -214,27 +211,25 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
     let working_expr = KExpression::new(new_parts);
     #[cfg(feature = "dispatch-combine")]
     {
-        Ok(ctx.install_eager_subs_combine(working_expr, staged_subs, Some(picked), idx))
+        ctx.install_eager_subs_combine(working_expr, staged_subs, Some(picked), idx)
     }
     #[cfg(not(feature = "dispatch-combine"))]
     match ctx.install_eager_subs(working_expr, staged_subs, Some(picked), idx) {
-        EagerSubsInstall::DepError(step) => Ok(step),
+        EagerSubsInstall::DepError(step) => step,
         EagerSubsInstall::AllInline(working_expr) => {
             // All eager subs resolved inline → run the call (builtins direct, user-fns through the
             // exec executor).
             let body = super::exec::invoke(ctx, picked, working_expr);
-            Ok(ctx.body_result_to_step(body, idx))
+            ctx.body_result_to_step(body, idx)
         }
         EagerSubsInstall::Parked(track) => {
             // The function arm is non-binder; `pre_subs` is always empty.
             let init = Initialized {
                 pre_subs: Vec::new(),
             };
-            Ok(
-                ctx.replace_with_parked_dispatch(DispatchState::FunctionValueCall(Box::new(
-                    FnValueState::with_eager_subs(init, track),
-                ))),
-            )
+            ctx.replace_with_parked_dispatch(DispatchState::FunctionValueCall(Box::new(
+                FnValueState::with_eager_subs(init, track),
+            )))
         }
     }
 }

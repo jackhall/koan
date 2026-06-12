@@ -382,7 +382,7 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
     expr: KExpression<'run>,
     state: DispatchState<'run>,
     idx: usize,
-) -> Result<NodeStep<'run>, KError> {
+) -> NodeStep<'run> {
     let _wakes = ctx.take_recent_wakes(NodeId(idx));
     let init = match state {
         DispatchState::Initialized(i) => i,
@@ -404,7 +404,7 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
                 ExpressionPart::Type(t) => t.clone(),
                 _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
             };
-            Ok(single_poll::bare_type_leaf(ctx, &t, idx))
+            single_poll::bare_type_leaf(ctx, &t, idx)
         }
         DispatchShape::BareIdentifier => {
             debug_assert!(init.pre_subs.is_empty());
@@ -412,7 +412,7 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
                 ExpressionPart::Identifier(n) => n.clone(),
                 _ => unreachable!("BareIdentifier shape implies single Identifier part"),
             };
-            Ok(single_poll::bare_identifier(ctx, name, idx))
+            single_poll::bare_identifier(ctx, name, idx)
         }
         DispatchShape::FunctionValueCall => {
             debug_assert!(init.pre_subs.is_empty());
@@ -421,19 +421,19 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
         }
         DispatchShape::TypeCall => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(single_poll::type_call(ctx, expr, idx))
+            single_poll::type_call(ctx, expr, idx)
         }
         DispatchShape::HeadDeferred => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(head_deferred::initial_expr(ctx, expr, idx))
+            head_deferred::initial_expr(ctx, expr, idx)
         }
         DispatchShape::TypeHeadDeferred => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(head_deferred::initial_type(ctx, expr, idx))
+            head_deferred::initial_type(ctx, expr, idx)
         }
         // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
         // a non-callable head is a runtime error, not a fatal `execute()` abort.
-        DispatchShape::NonCallableHead => Ok(NodeStep::Done(NodeOutput::Err(KError::new(
+        DispatchShape::NonCallableHead => NodeStep::Done(NodeOutput::Err(KError::new(
             KErrorKind::DispatchFailed {
                 expr: expr.summarize(),
                 reason: format!(
@@ -444,23 +444,23 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
                         .unwrap_or_else(|| "<empty>".into())
                 ),
             },
-        )))),
+        ))),
         DispatchShape::OperatorChain => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(operator_chain::run(ctx, &expr))
+            operator_chain::run(ctx, &expr)
         }
         DispatchShape::Keyworded => KeywordedState::initial(ctx, expr, init.pre_subs, idx),
         DispatchShape::SigiledTypeExpr => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(single_poll::sigiled_type_expr(expr))
+            single_poll::sigiled_type_expr(expr)
         }
         DispatchShape::RecordType => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(single_poll::record_type(ctx, expr, idx))
+            single_poll::record_type(ctx, expr, idx)
         }
         DispatchShape::LiteralPassThrough => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(single_poll::literal_pass_through(ctx, expr, idx))
+            single_poll::literal_pass_through(ctx, expr, idx)
         }
     }
 }

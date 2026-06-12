@@ -120,16 +120,13 @@ impl<'run> KeywordedState<'run> {
         expr: KExpression<'run>,
         pre_subs: Vec<(usize, NodeId)>,
         idx: usize,
-    ) -> Result<NodeStep<'run>, KError> {
+    ) -> NodeStep<'run> {
         let bare_outcomes = ctx.build_bare_outcomes(&expr.parts);
         // A bare-name arg whose producer already errored can never resolve.
         for outcome in bare_outcomes.iter().flatten() {
             if let NameOutcome::ProducerErrored(e) = outcome {
                 let frame = TraceFrame::from_expr("<wrap-resolve>", &expr);
-                return Ok(NodeStep::Done(NodeOutput::Err(propagate_dep_error(
-                    e,
-                    Some(frame),
-                ))));
+                return NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))));
             }
         }
         let chain = ctx.chain_deref();
@@ -142,25 +139,23 @@ impl<'run> KeywordedState<'run> {
             // bare-identifier and head-deferred lanes — not a fatal `?` abort. `interpret`
             // reads each top-level slot result and re-raises, so the CLI surfacing is unchanged.
             ResolveOutcome::Ambiguous(n) => {
-                return Ok(NodeStep::Done(NodeOutput::Err(KError::new(
+                return NodeStep::Done(NodeOutput::Err(KError::new(
                     KErrorKind::AmbiguousDispatch {
                         expr: expr.summarize(),
                         candidates: n,
                     },
-                ))));
+                )));
             }
             ResolveOutcome::Unmatched => {
-                return Ok(NodeStep::Done(NodeOutput::Err(KError::new(
+                return NodeStep::Done(NodeOutput::Err(KError::new(
                     KErrorKind::DispatchFailed {
                         expr: expr.summarize(),
                         reason: "no matching function".to_string(),
                     },
-                ))));
+                )));
             }
             ResolveOutcome::UnboundName(name) => {
-                return Ok(NodeStep::Done(NodeOutput::Err(KError::new(
-                    KErrorKind::UnboundName(name),
-                ))));
+                return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))));
             }
             ResolveOutcome::Deferred => {
                 debug_assert!(
@@ -171,9 +166,7 @@ impl<'run> KeywordedState<'run> {
                 return Self::install_eager_only(ctx, expr, idx);
             }
             ResolveOutcome::ParkOnProducers(producers) => {
-                return Ok(Self::install_overload_park(
-                    ctx, producers, expr, pre_subs, idx,
-                ));
+                return Self::install_overload_park(ctx, producers, expr, pre_subs, idx);
             }
         };
         let lex_index = ctx
@@ -186,7 +179,7 @@ impl<'run> KeywordedState<'run> {
                 ctx.current_scope()
                     .install_placeholder(name.clone(), NodeId(idx), bind_index)
             {
-                return Ok(NodeStep::Done(NodeOutput::Err(e)));
+                return NodeStep::Done(NodeOutput::Err(e));
             }
         }
         if let Some(bucket) = resolved.pending_overload_bucket.as_ref() {
@@ -195,7 +188,7 @@ impl<'run> KeywordedState<'run> {
                 NodeId(idx),
                 bind_index,
             ) {
-                return Ok(NodeStep::Done(NodeOutput::Err(e)));
+                return NodeStep::Done(NodeOutput::Err(e));
             }
         }
         let walk = match part_walk(
@@ -207,7 +200,7 @@ impl<'run> KeywordedState<'run> {
             idx,
         ) {
             Ok(w) => w,
-            Err(e) => return Ok(NodeStep::Done(NodeOutput::Err(e))),
+            Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
         };
         let PartWalkResult {
             new_parts,
@@ -219,18 +212,12 @@ impl<'run> KeywordedState<'run> {
             // Park-precedence guard: drop staged_subs on the floor;
             // re-Dispatch on wake re-runs the walk and re-stages them.
             let _ = staged_subs;
-            return Ok(Self::install_bare_name_park(
-                ctx,
-                producers_to_wait,
-                new_expr,
-                pre_subs,
-                idx,
-            ));
+            return Self::install_bare_name_park(ctx, producers_to_wait, new_expr, pre_subs, idx);
         }
         if staged_subs.is_empty() {
             // The synchronous (no-eager-subs) call — the common path for builtins and simple calls.
             let body = super::exec::invoke(ctx, resolved.function, new_expr);
-            return Ok(ctx.body_result_to_step(body, idx));
+            return ctx.body_result_to_step(body, idx);
         }
         let _ = resolved; // discard the speculative pick.
         Self::install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs, idx)
@@ -241,7 +228,7 @@ impl<'run> KeywordedState<'run> {
         self,
         ctx: &mut DispatchCtx<'run, '_>,
         idx: usize,
-    ) -> Result<NodeStep<'run>, KError> {
+    ) -> NodeStep<'run> {
         let KeywordedState { init, track } = self;
         let track = track.expect("Keyworded resume is only entered after a track is installed");
         match track {
@@ -261,7 +248,7 @@ impl<'run> KeywordedState<'run> {
         ctx: &mut DispatchCtx<'run, '_>,
         working_expr: KExpression<'run>,
         idx: usize,
-    ) -> Result<NodeStep<'run>, KError> {
+    ) -> NodeStep<'run> {
         match ctx
             .current_scope()
             .resolve_dispatch(&working_expr, ctx.chain_deref(), &[])
@@ -269,32 +256,28 @@ impl<'run> KeywordedState<'run> {
             // The post-eager-subs re-dispatch lands resolved calls here.
             ResolveOutcome::Resolved(r) => {
                 let body = super::exec::invoke(ctx, r.function, working_expr);
-                Ok(ctx.body_result_to_step(body, idx))
+                ctx.body_result_to_step(body, idx)
             }
             // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
             // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
-            ResolveOutcome::Ambiguous(n) => Ok(NodeStep::Done(NodeOutput::Err(KError::new(
+            ResolveOutcome::Ambiguous(n) => NodeStep::Done(NodeOutput::Err(KError::new(
                 KErrorKind::AmbiguousDispatch {
                     expr: working_expr.summarize(),
                     candidates: n,
                 },
-            )))),
-            ResolveOutcome::Deferred | ResolveOutcome::Unmatched => Ok(NodeStep::Done(
-                NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+            ))),
+            ResolveOutcome::Deferred | ResolveOutcome::Unmatched => {
+                NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
                     expr: working_expr.summarize(),
                     reason: "no matching function".to_string(),
-                })),
-            )),
-            ResolveOutcome::ParkOnProducers(producers) => Ok(Self::install_overload_park(
-                ctx,
-                producers,
-                working_expr,
-                Vec::new(),
-                idx,
-            )),
-            ResolveOutcome::UnboundName(name) => Ok(NodeStep::Done(NodeOutput::Err(KError::new(
+                })))
+            }
+            ResolveOutcome::ParkOnProducers(producers) => {
+                Self::install_overload_park(ctx, producers, working_expr, Vec::new(), idx)
+            }
+            ResolveOutcome::UnboundName(name) => NodeStep::Done(NodeOutput::Err(KError::new(
                 KErrorKind::UnboundName(name),
-            )))),
+            ))),
         }
     }
 
@@ -342,7 +325,7 @@ impl<'run> KeywordedState<'run> {
         ctx: &mut DispatchCtx<'run, '_>,
         expr: KExpression<'run>,
         idx: usize,
-    ) -> Result<NodeStep<'run>, KError> {
+    ) -> NodeStep<'run> {
         // Deferred arm: no committed pick yet (resume re-resolves on finish), so no
         // bare-name slots to pre-resolve here.
         let (new_parts, staged_subs) = super::stage_all_eager_parts(expr.parts, &[]);
@@ -378,26 +361,24 @@ impl<'run> KeywordedState<'run> {
         staged_subs: Vec<(usize, PendingSub<'run>)>,
         pre_subs: Vec<(usize, NodeId)>,
         idx: usize,
-    ) -> Result<NodeStep<'run>, KError> {
+    ) -> NodeStep<'run> {
         // `pre_subs` rides only on the legacy parked-Keyworded state; the combine carrier
         // owns its deps directly, so the Keyworded eager-subs resume state is unused under
         // the feature (a re-Dispatch never re-enters here — the combine finish runs instead).
         #[cfg(feature = "dispatch-combine")]
         {
             let _ = pre_subs;
-            return Ok(ctx.install_eager_subs_combine(working_expr, staged_subs, None, idx));
+            return ctx.install_eager_subs_combine(working_expr, staged_subs, None, idx);
         }
         #[cfg(not(feature = "dispatch-combine"))]
         match ctx.install_eager_subs(working_expr, staged_subs, None, idx) {
-            EagerSubsInstall::DepError(step) => Ok(step),
+            EagerSubsInstall::DepError(step) => step,
             EagerSubsInstall::AllInline(working_expr) => Self::finish(ctx, working_expr, idx),
             EagerSubsInstall::Parked(track) => {
                 let init = Initialized { pre_subs };
-                Ok(
-                    ctx.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
-                        Self::with_eager_subs(init, track),
-                    ))),
-                )
+                ctx.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
+                    Self::with_eager_subs(init, track),
+                )))
             }
         }
     }

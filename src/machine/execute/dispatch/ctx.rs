@@ -359,7 +359,7 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         &mut self,
         track: EagerSubsTrack<'run>,
         idx: usize,
-    ) -> Result<NodeStep<'run>, KError> {
+    ) -> NodeStep<'run> {
         let EagerSubsTrack {
             mut working_expr,
             subs,
@@ -367,7 +367,7 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         } = track;
         for (_, sub_id) in &subs {
             if let Err(e) = self.read_result(*sub_id) {
-                return Ok(bind_frame_err(e, &working_expr));
+                return bind_frame_err(e, &working_expr);
             }
         }
         let dep_indices: Vec<usize> = subs.iter().map(|(_, d)| d.index()).collect();
@@ -384,7 +384,7 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
             // The parked subs are now all spliced, so `working_expr` is fully resolved — run the call.
             Some(f) => {
                 let body = super::exec::invoke(self, f, working_expr);
-                Ok(self.body_result_to_step(body, idx))
+                self.body_result_to_step(body, idx)
             }
         }
     }
@@ -394,8 +394,8 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
 /// the `DispatchCombine` finish and its all-inline fast path. `Some(f)` runs the committed
 /// call; `None` re-resolves dispatch via [`KeywordedState::finish`] (an element-typed
 /// `Future(_)` revealed by a sub then surfaces as a slot-terminal `DispatchFailed`). Mirrors
-/// [`DispatchCtx::resume_eager_subs`]'s `picked` routing; the `Err` arm is dead now that
-/// `KeywordedState::finish` reports dispatch failures slot-terminally, kept for signature parity.
+/// [`DispatchCtx::resume_eager_subs`]'s `picked` routing; `KeywordedState::finish` reports
+/// dispatch failures slot-terminally.
 #[cfg(feature = "dispatch-combine")]
 fn finish_eager_subs<'run>(
     ctx: &mut DispatchCtx<'run, '_>,
@@ -408,10 +408,7 @@ fn finish_eager_subs<'run>(
             let body = super::exec::invoke(ctx, f, working_expr);
             ctx.body_result_to_step(body, idx)
         }
-        None => match KeywordedState::finish(ctx, working_expr, idx) {
-            Ok(step) => step,
-            Err(e) => NodeStep::Done(NodeOutput::Err(e)),
-        },
+        None => KeywordedState::finish(ctx, working_expr, idx),
     }
 }
 
