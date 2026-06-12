@@ -35,9 +35,11 @@ mod ctx;
 mod exec;
 pub(in crate::machine) mod field_list;
 pub(in crate::machine::execute) mod fn_value;
+mod harness;
 pub(in crate::machine::execute) mod head_deferred;
 pub(in crate::machine::execute) mod keyworded;
 pub(in crate::machine::execute) mod operator_chain;
+mod outcome;
 pub(in crate::machine) mod resolve_dispatch;
 pub(in crate::machine) mod resolve_type_expr;
 pub(in crate::machine::execute) mod single_poll;
@@ -447,7 +449,8 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
         ))),
         DispatchShape::OperatorChain => {
             debug_assert!(init.pre_subs.is_empty());
-            operator_chain::run(ctx, &expr)
+            let outcome = operator_chain::run(ctx, &expr);
+            harness::apply_dispatch_outcome(ctx, outcome, idx)
         }
         DispatchShape::Keyworded => KeywordedState::initial(ctx, expr, init.pre_subs, idx),
         DispatchShape::SigiledTypeExpr => {
