@@ -3,9 +3,9 @@
 //!
 //! `exec` runs a body in its per-call frame and describes — in its *native* terms
 //! ([`KExpression`], [`Carried`]) — what should happen next, as an [`ExecOutcome`]: it failed, it
-//! produced a (still-unlifted) value, it tail-calls after some leading statements, or it suspends
-//! awaiting some sub-expressions. It names *expressions to dispatch* and a *continuation* — never a
-//! scheduler step, never the scheduler itself.
+//! produced a (still-unlifted) value, it tail-calls after some leading statements, or (a first-call
+//! deferred-`Expression` return) it resolves a return-type sub-dispatch before tail-replacing. It
+//! names *expressions to dispatch* — never a scheduler step, never the scheduler itself.
 //!
 //! The scheduler-aware shell that maps an [`ExecOutcome`] onto the scheduler is
 //! `execute::dispatch::exec::invoke`: it reuses the live dispatcher's resolution, turns the outcome
@@ -23,7 +23,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::{BindingIndex, CallArena, KError, KErrorKind, LexicalFrame, Scope};
+use crate::machine::core::{BindingIndex, CallArena, KError, LexicalFrame, Scope};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, Record, ReturnType,
@@ -53,20 +53,6 @@ impl Frame {
     }
 }
 
-/// A joined dep's resolved value, handed to a continuation ([`ExecOutcome::Suspend`]) on re-entry.
-/// An errored dep short-circuits the scheduler's Combine before the resume runs, so this is always
-/// the success value.
-pub type DepResult<'frame> = Carried<'frame>;
-
-/// The continuation of a suspended body: re-entered with the resolved join values, yielding the
-/// checked body value **paired with the resolved per-call return type** (or an error). The pairing
-/// lets the scheduler-side `CombineFinish` stamp the value to that type — the deferred-path twin of
-/// the resolved-return stamp at the lift boundary. Dep values in, `(value, return type)` out (no
-/// frame re-read).
-pub type Resume<'frame> = Box<
-    dyn FnOnce(&[DepResult<'frame>]) -> Result<(Carried<'frame>, KType<'frame>), KError> + 'frame,
->;
-
 /// **exec → scheduler.** What running a body describes next, in `exec`'s native currency. Two
 /// lifetimes, because the AST and the produced value genuinely differ: the dispatchable
 /// expressions are **borrowed** from the long-lived, immutable AST (`'ast`), while a produced
@@ -88,12 +74,15 @@ pub enum ExecOutcome<'ast, 'frame> {
         tail: &'ast KExpression<'ast>,
         ret: PerCallReturn<'frame>,
     },
-    /// Suspend: dispatch and await `join`, then re-enter `resume` with their resolved values to
-    /// produce the body's terminal outcome (the deferred-return path: `join` = body statements,
-    /// `resume` checks the body value against the per-call return type).
-    Suspend {
-        join: Vec<&'ast KExpression<'ast>>,
-        resume: Resume<'frame>,
+    /// A deferred-`Expression` return on its **first** call: resolve `type_expr` (an async
+    /// sub-dispatch — `Er.Carrier`, `sig WITH {…}`) as a single Combine dep, run `leading` as
+    /// sibling statements, then tail-replace into `tail` carrying the resolved per-call type as a
+    /// `PerCall` contract. A proper tail call once the type is known, so the recursion (whose
+    /// subsequent calls skip resolution under keep-first) stays TCO-flat.
+    DeferredExprTail {
+        type_expr: &'ast KExpression<'ast>,
+        leading: Vec<&'ast KExpression<'ast>>,
+        tail: &'ast KExpression<'ast>,
     },
 }
 
@@ -109,20 +98,23 @@ pub enum PerCallReturn<'frame> {
 
 /// The new `invoke` for a user-defined function: bind `args` into `ctx`'s scope (a frame/scope
 /// operation), then describe the body as an [`ExecOutcome`] — `Tail` of the non-tail statements +
-/// the last, or `Suspend` for a deferred return. `ctx` is **borrowed** so the caller retains it
+/// the last, or `DeferredExprTail` for a first-call deferred-`Expression` return. `ctx` is
+/// **borrowed** so the caller retains it
 /// (its `chain` positions the body's `leading` statements when the scheduler dispatches them); the
 /// carrier lifetime of `func` is free — only read. `args` is the argument record from
 /// [`super::bind_by_name`] (a `Record<Carried>`, resolved values keyed by parameter name).
 ///
 /// Pure wrt the scheduler: it mutates only `ctx`'s own scope (param binds) and, for a deferred
 /// `TypeExpr` return, elaborates the return type inline against that scope; then describes the body
-/// — `Tail` for a resolved return, `Suspend` (join = all statements, resume = the return-type
-/// check) for a deferred one. Body statements are **borrowed** from `func` (`'ast`), never cloned.
-/// (The deferred `Expression` return form needs a sub-dispatch and is excluded by the caller.)
+/// as a `Tail` (the lift boundary checks + stamps against the carried `PerCall` contract) — or, for
+/// a first-call deferred `Expression` return, a `DeferredExprTail` (the type needs a sub-dispatch).
+/// `in_contract_chain` true means this is a subsequent tail call whose own contract keep-first would
+/// discard, so it skips resolving its return type. Body statements are **borrowed** (`'ast`).
 pub fn run_user_fn<'ast, 'frame>(
     func: &'ast KFunction<'ast>,
     args: Record<Carried<'frame>>,
     ctx: &Frame,
+    in_contract_chain: bool,
 ) -> ExecOutcome<'ast, 'frame> {
     // Materialize the bound args as a record value **in the frame**, then bind each parameter to a
     // reference into the record's cell — one deep-clone per field (`Carried` → owned `Held`), and
@@ -173,37 +165,49 @@ pub fn run_user_fn<'ast, 'frame>(
                 ret: PerCallReturn::FromSignature,
             }
         }
-        // Deferred return referencing a parameter, in its surface `TypeExpr` form (a bare type name
-        // like `Er`): elaborate it inline against the per-call (param-bound) child scope and carry
-        // the resolved type on a tail-replace. A proper tail call — the lift boundary checks +
-        // stamps via the `PerCall` contract, so a recursive deferred body stays TCO-flat.
-        ReturnType::Deferred(DeferredReturn::TypeExpr(type_expr)) => {
-            let return_type = ctx.arena.with_anchored_child(|_inner_arena, child| {
-                let mut elaborator = Elaborator::new(child);
-                match elaborate_type_expr(&mut elaborator, type_expr) {
-                    ElabResult::Done(kt) => kt,
-                    // The param install + fn_def carrier scan jointly guarantee resolution; fall
-                    // back to Any so the body's own dispatch surfaces any real error.
-                    ElabResult::Park(_) | ElabResult::Unbound(_) => KType::Any,
-                }
-            });
-            let (leading, tail) = split_leading_tail(body_expr);
-            ExecOutcome::Tail {
-                leading,
-                tail,
-                ret: PerCallReturn::Resolved(return_type),
+        ReturnType::Deferred(deferred) => {
+            // A subsequent tail call already inside a contract chain: keep-first discards this
+            // call's contract, so skip resolving its return type and tail-replace the body like any
+            // resolved return (the kept first contract is what the chain's value is checked against).
+            if in_contract_chain {
+                let (leading, tail) = split_leading_tail(body_expr);
+                return ExecOutcome::Tail {
+                    leading,
+                    tail,
+                    ret: PerCallReturn::FromSignature,
+                };
             }
-        }
-        // Deferred return whose type is an *expression* computing a `KType` per-call (a dotted
-        // member like `Er.Carrier`, or `sig WITH {…}`). It has no inline `TypeName` form, so
-        // dispatch it as an extra `join` dep — reusing normal type-expression elaboration, the same
-        // path a `:SigiledTypeExpr` value takes — and read its result as the per-call return type.
-        ReturnType::Deferred(DeferredReturn::Expression(return_expr)) => {
-            let mut join = body_statement_refs(body_expr);
-            let body_terminal_idx = join.len() - 1;
-            let type_idx = join.len();
-            join.push(return_expr);
-            deferred_suspend(join, body_terminal_idx, type_idx, func.summarize())
+            match deferred {
+                // `TypeExpr` form (`-> Er`): elaborate it inline against the per-call (param-bound)
+                // child scope and carry the resolved type on the tail-replace.
+                DeferredReturn::TypeExpr(type_expr) => {
+                    let return_type = ctx.arena.with_anchored_child(|_inner_arena, child| {
+                        let mut elaborator = Elaborator::new(child);
+                        match elaborate_type_expr(&mut elaborator, type_expr) {
+                            ElabResult::Done(kt) => kt,
+                            // The param install + fn_def carrier scan jointly guarantee resolution;
+                            // fall back to Any so the body's own dispatch surfaces any real error.
+                            ElabResult::Park(_) | ElabResult::Unbound(_) => KType::Any,
+                        }
+                    });
+                    let (leading, tail) = split_leading_tail(body_expr);
+                    ExecOutcome::Tail {
+                        leading,
+                        tail,
+                        ret: PerCallReturn::Resolved(return_type),
+                    }
+                }
+                // `Expression` form (`-> Er.Carrier`, `sig WITH {…}`): the type needs a sub-dispatch,
+                // so hand it back for the lowering to resolve as a Combine dep before tail-replacing.
+                DeferredReturn::Expression(return_expr) => {
+                    let (leading, tail) = split_leading_tail(body_expr);
+                    ExecOutcome::DeferredExprTail {
+                        type_expr: return_expr,
+                        leading,
+                        tail,
+                    }
+                }
+            }
         }
     }
 }
@@ -220,59 +224,3 @@ fn split_leading_tail<'ast>(
     (leading, tail)
 }
 
-/// Build the `Expression`-form deferred-return `Suspend`: the return-type expression is dispatched
-/// as the `join` dep at `type_idx`; the resume reads it as the per-call return type, reads the
-/// body's terminal value at `body_terminal_idx`, and checks the two — handing back `(value, type)`
-/// for the scheduler-side finish to stamp (or an error). The `TypeExpr` form resolves its type
-/// synchronously and takes the [`ExecOutcome::Tail`] (`PerCall` contract) path instead.
-fn deferred_suspend<'ast, 'frame>(
-    join: Vec<&'ast KExpression<'ast>>,
-    body_terminal_idx: usize,
-    type_idx: usize,
-    summary: String,
-) -> ExecOutcome<'ast, 'frame> {
-    let resume: Resume<'frame> = Box::new(move |results: &[DepResult<'frame>]| {
-        let per_call_ret = match results[type_idx] {
-            Carried::Type(kind) => kind,
-            Carried::Object(other) => {
-                return Err(KError::new(KErrorKind::ShapeError(format!(
-                    "FN deferred return-type expression produced a non-type {} value",
-                    other.ktype().name(),
-                ))));
-            }
-        };
-        check_deferred_return(results[body_terminal_idx], per_call_ret, &summary)
-    });
-    ExecOutcome::Suspend { join, resume }
-}
-
-/// Check a deferred-return body value against the resolved per-call return type. On a pass, hand
-/// back the value paired with that type so the scheduler-side finish can stamp it (the coarsening
-/// re-tag); on a mismatch, a `<return>` `TypeMismatch`. Shared by both deferred-return arms.
-fn check_deferred_return<'frame>(
-    body_value: Carried<'frame>,
-    per_call_ret: &KType<'frame>,
-    summary: &str,
-) -> Result<(Carried<'frame>, KType<'frame>), KError> {
-    let accepted = match body_value {
-        Carried::Object(object) => per_call_ret.matches_value(object),
-        Carried::Type(kind) => per_call_ret.matches_type(kind),
-    };
-    if accepted {
-        Ok((body_value, per_call_ret.clone()))
-    } else {
-        let got = match body_value {
-            Carried::Object(object) => object.ktype().name(),
-            Carried::Type(kind) => kind.name(),
-        };
-        Err(KError::new(KErrorKind::TypeMismatch {
-            arg: "<return>".to_string(),
-            expected: format!("{} (per-call return type)", per_call_ret.name()),
-            got,
-        })
-        .with_frame(crate::machine::Frame::bare(
-            summary.to_string(),
-            summary.to_string(),
-        )))
-    }
-}

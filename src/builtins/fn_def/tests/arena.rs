@@ -110,6 +110,31 @@ fn tail_call_enforces_first_callers_return_contract() {
     );
 }
 
+/// A tail chain checks **and stamps** its result against the first caller's declared return, not
+/// the tail-most callee's. `FF -> :(LIST OF Any)` tail-calls `GG -> :(LIST OF Number)` which returns
+/// a `List<Number>`; the result coarsens to `List<Any>` (FF's contract). Under the old tail-most
+/// rule it would have kept `List<Number>` (GG's) — so the element type discriminates the two.
+#[test]
+fn tail_call_stamps_result_against_first_callers_return_contract() {
+    use crate::machine::model::{KObject, KType};
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "FN (GG) -> :(LIST OF Number) = ([1 2 3])\n\
+         FN (FF) -> :(LIST OF Any) = (GG)",
+    );
+    let result = run_one(scope, parse_one("FF"));
+    match result {
+        KObject::List(_, elem) => assert!(
+            matches!(elem.as_ref(), KType::Any),
+            "FF -> (LIST OF Any) must coarsen the tail-chain result to List<Any>, got {:?}",
+            elem,
+        ),
+        other => panic!("expected a List from FF, got {:?}", other.ktype()),
+    }
+}
+
 #[test]
 fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
     let arena = RuntimeArena::new();

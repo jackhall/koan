@@ -21,7 +21,6 @@ use crate::machine::core::kfunction::{
 use crate::machine::execute::lift::lift_ktype;
 use crate::machine::core::{assemble_body_chain, CallArena, LexicalFrame};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::KType;
 use crate::machine::model::Carried;
 use crate::machine::{KError, KErrorKind, NodeId};
 
@@ -82,7 +81,10 @@ pub(super) fn invoke<'run>(
         arena: frame.clone(),
         chain,
     };
-    let result = match run_user_fn(picked, bound, &exec_frame) {
+    // A deferred-return FN dispatched as a tail call inside an established contract chain skips
+    // resolving its own (keep-first-discarded) return type — see `run_user_fn`.
+    let in_chain = ctx.in_contract_chain();
+    let result = match run_user_fn(picked, bound, &exec_frame, in_chain) {
         ExecOutcome::Tail { leading, tail, ret } => {
             // The return contract carried on the tail-replace. A resolved return reads its type off
             // the signature; a deferred `TypeExpr` return carries the resolved per-call type as a
@@ -107,50 +109,57 @@ pub(super) fn invoke<'run>(
             dispatch_body_statements(ctx, &frame, &exec_frame.chain, &leading);
             BodyResult::tail_with_frame_contract(tail.clone(), frame, contract, body_index)
         }
-        ExecOutcome::Suspend { join, resume } => {
-            // Deferred return: dispatch every body statement as a Combine dep, then a Combine whose
-            // finish runs `resume` (the return-type check) over their resolved values. The slot
-            // defers to the Combine.
-            let body_ids = dispatch_body_statements(ctx, &frame, &exec_frame.chain, &join);
-            let finish: CombineFinish<'run> = Box::new(move |s, results| match resume(results) {
-                Ok((value, ret_ty)) => BodyResult::Value(stamp_deferred_return(s, value, &ret_ty)),
-                Err(e) => BodyResult::Err(e),
+        ExecOutcome::DeferredExprTail {
+            type_expr,
+            leading,
+            tail,
+        } => {
+            // First-call deferred `Expression` return: dispatch the leading body statements and the
+            // return-type expression as siblings (the type is the sole Combine dep); the finish
+            // builds the `PerCall` contract from the resolved type and tail-replaces into the body
+            // terminal — a proper tail call, so the recursion (subsequent calls skip resolution)
+            // stays TCO-flat. The body terminal sits above the params, the leading siblings, and
+            // the type slot.
+            let mut body_and_type = leading;
+            body_and_type.push(type_expr);
+            let ids = dispatch_body_statements(ctx, &frame, &exec_frame.chain, &body_and_type);
+            let type_dep = *ids.last().expect("the return-type expr was dispatched");
+            let body_index = body_and_type.len() + 1;
+            let tail_expr = tail.clone();
+            let body_frame = frame.clone();
+            let finish: CombineFinish<'run> = Box::new(move |_s, results| {
+                let kt = match results[0] {
+                    Carried::Type(t) => t,
+                    Carried::Object(other) => {
+                        return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                            "FN deferred return-type expression produced a non-type {} value",
+                            other.ktype().name(),
+                        ))))
+                    }
+                };
+                // The per-call type rides the captured-scope (frame-outer) arena, a strict ancestor
+                // the cart keeps live — same home as the `TypeExpr` form's `PerCall.ret`.
+                let ret_ref = picked.captured_scope().arena.alloc_ktype(kt.clone());
+                let contract = ReturnContract::PerCall {
+                    func: picked,
+                    ret: ret_ref,
+                };
+                BodyResult::tail_with_frame_contract(tail_expr, body_frame, contract, body_index)
             });
-            let mut pending = Some((body_ids, finish));
+            let mut pending = Some(finish);
             let mut combine_id = None;
             ctx.with_active_frame(frame, &mut |s| {
-                let (body_ids, finish) = pending.take().expect("body runs once");
-                combine_id = Some(s.add_combine_in_frame(body_ids, vec![], finish));
+                let finish = pending.take().expect("body runs once");
+                combine_id = Some(s.add_combine_in_frame(vec![type_dep], vec![], finish));
             });
             BodyResult::DeferTo(combine_id.expect("combine spawns"))
         }
         ExecOutcome::Errored(e) => BodyResult::Err(e),
         ExecOutcome::Value(_) => {
-            unreachable!("run_user_fn yields Tail or Suspend, not a bare Value")
+            unreachable!("run_user_fn yields Tail or DeferredExprTail, not a bare Value")
         }
     };
     ctx.body_result_to_step(result, idx)
-}
-
-/// Re-tag a deferred return's body value to its resolved per-call return type and re-allocate the
-/// coarsened object in the finish's scope arena — the deferred-path twin of the resolved-return
-/// stamp in [`super::super::scheduler`]'s `compute_done_output`. The combine ran in-frame, so this
-/// value is lifted into the surviving arena at the combine's Done boundary (the lift preserves the
-/// re-tagged `ktype`). `deep_clone` is cheap (Rc-shares payloads, preserves anchors); the type
-/// channel carries its own identity, so a `Carried::Type` passes through unchanged — mirroring that
-/// boundary's `Carried::Type` arm.
-fn stamp_deferred_return<'run>(
-    s: &mut dyn SchedulerHandle<'run, '_>,
-    value: Carried<'run>,
-    ret_ty: &KType<'run>,
-) -> Carried<'run> {
-    match value {
-        Carried::Object(object) => {
-            let stamped = object.deep_clone().stamp_type(ret_ty);
-            Carried::Object(s.current_scope().arena.alloc_object(stamped))
-        }
-        Carried::Type(_) => value,
-    }
 }
 
 /// Extract the call's resolved value arguments from `working_expr`'s parts, in order. Returns
@@ -179,7 +188,8 @@ fn extract_carried_args<'run>(
 
 /// Dispatch a body's statements as sibling sub-slots in `frame`, each positioned by the body chain
 /// (assembled from `chain` + the frame's body scope, at the statement's index). Returns their node
-/// ids — the multi-statement `Tail` path ignores them; the `Suspend`/Combine path joins on them.
+/// ids — the multi-statement `Tail` path ignores them; the `DeferredExprTail` path takes the
+/// last (the return-type expr) as its Combine dep.
 fn dispatch_body_statements<'run>(
     ctx: &mut DispatchCtx<'run, '_>,
     frame: &Rc<CallArena>,

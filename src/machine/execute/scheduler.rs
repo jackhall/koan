@@ -63,6 +63,12 @@ pub struct Scheduler<'run> {
     /// scope (a binder's decl-scope), `Yoked` for a per-call frame child — rather than the body
     /// trying (and failing) to widen its `&'frame` borrow back to `&'run`.
     pub(in crate::machine::execute::scheduler) active_node_scope: Option<NodeScope<'run>>,
+    /// Whether the slot currently executing already carries a kept return contract — i.e. it is a
+    /// tail call *within* an established chain. A deferred-return FN dispatched here is a subsequent
+    /// tail call whose own contract would be discarded by the keep-first rule, so it skips resolving
+    /// its (possibly async `Expression`-form) return type and just tail-replaces its body. Set per
+    /// step in [`Scheduler::execute`]; read via `DispatchCtx::in_contract_chain`.
+    pub(in crate::machine::execute::scheduler) active_in_contract_chain: bool,
     #[cfg(test)]
     pub(in crate::machine::execute::scheduler) tail_reuse_count: usize,
 }
@@ -177,6 +183,7 @@ impl<'run> Scheduler<'run> {
             active_node_scope: None,
             active_chain: None,
             active_reserve: None,
+            active_in_contract_chain: false,
             #[cfg(test)]
             tail_reuse_count: 0,
         }
@@ -304,6 +311,12 @@ impl<'run> Scheduler<'run> {
     /// sites that capture the chain's `index` for `BindingIndex`.
     pub(in crate::machine::execute) fn active_chain_clone(&self) -> Option<Rc<LexicalFrame>> {
         self.active_chain.clone()
+    }
+
+    /// Whether the executing slot already carries a kept return contract (a tail call inside an
+    /// established chain). See [`Self::active_in_contract_chain`].
+    pub(in crate::machine::execute) fn in_contract_chain(&self) -> bool {
+        self.active_in_contract_chain
     }
 
     /// The executing slot's scope, materialized on demand: an `Anchored` slot hands back its

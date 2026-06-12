@@ -65,6 +65,12 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         self.sched.active_chain_clone()
     }
 
+    /// Whether the executing slot is a tail call inside an established contract chain — a deferred
+    /// FN dispatched here skips resolving its own return type ([`super::exec::invoke`]).
+    pub(super) fn in_contract_chain(&self) -> bool {
+        self.sched.in_contract_chain()
+    }
+
     // ----- slot queries -----
 
     pub(super) fn is_result_ready(&self, id: NodeId) -> bool {

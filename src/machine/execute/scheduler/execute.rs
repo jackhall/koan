@@ -30,6 +30,10 @@ impl<'run> Scheduler<'run> {
             } = node.frame;
             let prev_chain_carrier = node.chain;
             let guard = self.enter_slot_step(cart, reserve, prev_chain_carrier.clone(), node_scope);
+            // Expose to the dispatch step whether this slot is a tail call within an established
+            // contract chain — a deferred-return FN dispatched here skips resolving its own return
+            // type (keep-first discards it anyway).
+            self.active_in_contract_chain = prev_contract.is_some();
             let step = match work {
                 NodeWork::Dispatch { expr, state } => {
                     let mut ctx = crate::machine::execute::dispatch::DispatchCtx::new(self);
@@ -47,6 +51,7 @@ impl<'run> Scheduler<'run> {
             // the step scope (via `post.step_scope()`), so the wrong-frame read that ambient
             // `active_frame` allowed is unspellable here.
             let post = self.exit_slot_step(guard);
+            self.active_in_contract_chain = false;
             // Drain re-entrant writes against the step scope.
             post.step_scope().drain_pending();
             match step {
