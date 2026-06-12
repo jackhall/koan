@@ -40,6 +40,10 @@ impl<'run> FnValueHeadPlaceholderTrack<'run> {
 }
 
 impl<'run> FnValueState<'run> {
+    // Under `dispatch-combine` the apply-a-callable path parks committed-pick eager
+    // subs as a `DispatchCombine`, never a `FnValueState` eager-subs track, so this
+    // constructor (and the `eager_subs` resume branch) is reachable only on the legacy path.
+    #[cfg(not(feature = "dispatch-combine"))]
     pub(in crate::machine::execute) fn with_eager_subs(
         init: Initialized,
         track: EagerSubsTrack<'run>,

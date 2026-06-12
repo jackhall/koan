@@ -251,6 +251,85 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         }
     }
 
+    /// [`NodeWork::DispatchCombine`] dual of [`Self::install_eager_subs`] for the
+    /// committed-pick (FunctionValueCall / apply-a-callable) path. A `Reuse` of an
+    /// already-resolved producer splices inline (a freshly minted sub is never terminal
+    /// in the same step); every in-flight sub becomes an owned dep of a `DispatchCombine`
+    /// whose finish splices the resolved values into `working_expr` and calls `picked`.
+    /// The `<bind>` dep-error frame rides on `dep_error_frame`, attached by
+    /// `run_dispatch_combine` at the short-circuit — same framing as the legacy
+    /// `bind_frame_err` / `resume_eager_subs` path it replaces under the feature.
+    #[cfg(feature = "dispatch-combine")]
+    pub(super) fn install_eager_subs_combine(
+        &mut self,
+        mut working_expr: KExpression<'run>,
+        staged_subs: Vec<(usize, PendingSub<'run>)>,
+        picked: &'run KFunction<'run>,
+        idx: usize,
+    ) -> NodeStep<'run> {
+        use super::super::nodes::{DispatchCombineFinish, NodeWork};
+        let mut deps: Vec<NodeId> = Vec::with_capacity(staged_subs.len());
+        let mut part_indices: Vec<usize> = Vec::with_capacity(staged_subs.len());
+        for (i, pending) in staged_subs {
+            let is_reuse = matches!(pending, PendingSub::Reuse(_));
+            let sub_id = match pending {
+                PendingSub::Reuse(id) => id,
+                PendingSub::Dispatch(sub_expr) => self.add_dispatch_here(sub_expr),
+                PendingSub::ListLit(items) => self.schedule_list_literal(items),
+                PendingSub::DictLit(pairs) => self.schedule_dict_literal(pairs),
+                PendingSub::RecordLit(fields) => self.schedule_record_literal(fields),
+            };
+            // Same eager-splice invariant as `install_eager_subs`: only a `Reuse` of an
+            // already-resolved producer can be terminal here.
+            debug_assert!(
+                is_reuse || !self.is_result_ready(sub_id),
+                "freshly-submitted sub {sub_id:?} is immediately ready — \
+                 eager-splice should only ever fire for a Reuse of a resolved producer"
+            );
+            if self.is_result_ready(sub_id) {
+                match self.read_result(sub_id) {
+                    Err(e) => return bind_frame_err(e, &working_expr),
+                    Ok(value) => {
+                        working_expr.parts[i].value = ExpressionPart::Future(value);
+                        self.free(sub_id.index());
+                    }
+                }
+            } else {
+                self.add_owned_edge(sub_id, NodeId(idx));
+                deps.push(sub_id);
+                part_indices.push(i);
+            }
+        }
+        if deps.is_empty() {
+            // Every sub was an already-resolved `Reuse` spliced inline — run the call now,
+            // matching the legacy `EagerSubsInstall::AllInline` arm.
+            let body = super::exec::invoke(self, picked, working_expr);
+            return self.body_result_to_step(body, idx);
+        }
+        let dep_error_frame = Some(crate::machine::TraceFrame::from_expr("<bind>", &working_expr));
+        let finish: DispatchCombineFinish<'run> = Box::new(move |ctx, results, idx| {
+            // The short-circuit already guaranteed every dep resolved; splice each into the
+            // slot it was staged from, then run the committed call.
+            for (slot, value) in part_indices.iter().zip(results) {
+                working_expr.parts[*slot].value = ExpressionPart::Future(*value);
+            }
+            let body = super::exec::invoke(ctx, picked, working_expr);
+            ctx.body_result_to_step(body, idx)
+        });
+        NodeStep::Replace {
+            work: NodeWork::DispatchCombine {
+                deps,
+                park_count: 0,
+                finish,
+                dep_error_frame,
+            },
+            frame: None,
+            function: None,
+            block_entry: None,
+            body_index: 0,
+        }
+    }
+
     /// Standard `NodeStep::Replace` for parked-Dispatch install sites:
     /// drops the entry expression to an empty placeholder (the state
     /// carries the evolving `working_expr` from here on).

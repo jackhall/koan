@@ -28,8 +28,10 @@ use crate::machine::{KError, KErrorKind};
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::{
     body_shape_err, constructors, extract_call_body, stage_all_eager_parts, CallBody, DispatchCtx,
-    DispatchState, EagerSubsInstall, FnValueState, Initialized, NAMED_ONLY, POSITIONAL_ONLY,
+    NAMED_ONLY, POSITIONAL_ONLY,
 };
+#[cfg(not(feature = "dispatch-combine"))]
+use super::{DispatchState, EagerSubsInstall, FnValueState, Initialized};
 
 /// A head resolved to something callable. The lane decides which arm; the tail
 /// branches on the body surface and launches.
@@ -210,6 +212,11 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
     let wrap_indices = picked.classify_for_pick(&expr).wrap_indices;
     let (new_parts, staged_subs) = stage_all_eager_parts(expr.parts, &wrap_indices);
     let working_expr = KExpression::new(new_parts);
+    #[cfg(feature = "dispatch-combine")]
+    {
+        Ok(ctx.install_eager_subs_combine(working_expr, staged_subs, picked, idx))
+    }
+    #[cfg(not(feature = "dispatch-combine"))]
     match ctx.install_eager_subs(working_expr, staged_subs, Some(picked), idx) {
         EagerSubsInstall::DepError(step) => Ok(step),
         EagerSubsInstall::AllInline(working_expr) => {
