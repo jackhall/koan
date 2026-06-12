@@ -1,7 +1,9 @@
 use crate::machine::model::{KObject, KType};
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
 
-use super::{arg, err, kw, register_builtin, sig};
+use super::{arg, err, kw, sig};
+#[cfg(not(feature = "action-harness"))]
+use super::register_builtin;
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 
 /// `QUOTE <expr:KExpression>` — surface form `#(expr)`, desugared by the parser
@@ -25,16 +27,35 @@ pub fn body<'a, 's>(
     BodyResult::value(arena.alloc_object(KObject::KExpression(expr)))
 }
 
+/// `Action`-harness twin of [`body`]: reads the unevaluated `expr` cell from `BodyCtx::args` and
+/// returns it as a `KObject::KExpression` value.
+#[cfg(feature = "action-harness")]
+pub fn body_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_object, Action};
+    use crate::machine::model::Carried;
+    let expr = match arg_object(ctx.args, "expr") {
+        Some(KObject::KExpression(e)) => e.clone(),
+        _ => {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+                "QUOTE expects a parenthesized expression body".to_string(),
+            ))))
+        }
+    };
+    let obj = ctx.scope.arena.alloc_object(KObject::KExpression(expr));
+    Action::Done(Ok(Carried::Object(obj)))
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin(
-        scope,
-        "QUOTE",
-        sig(
-            KType::KExpression,
-            vec![kw("QUOTE"), arg("expr", KType::KExpression)],
-        ),
-        body,
+    let signature = sig(
+        KType::KExpression,
+        vec![kw("QUOTE"), arg("expr", KType::KExpression)],
     );
+    #[cfg(feature = "action-harness")]
+    crate::builtins::register_action_builtin(scope, "QUOTE", signature, body_action);
+    #[cfg(not(feature = "action-harness"))]
+    register_builtin(scope, "QUOTE", signature, body);
 }
 
 #[cfg(test)]

@@ -10,7 +10,9 @@ use crate::machine::core::kerror_ktype;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{ArgumentBundle, BodyResult, CatchFinish, SchedulerHandle, Scope};
 
-use super::{arg, err, kw, register_builtin, sig};
+use super::{arg, err, kw, sig};
+#[cfg(not(feature = "action-harness"))]
+use super::register_builtin;
 
 pub fn body<'a, 's>(
     sched: &mut dyn SchedulerHandle<'a, 's>,
@@ -64,15 +66,57 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ctor: Box::new(result_ctor),
         args: vec![KType::Any, kerror_ktype()],
     };
-    register_builtin(
-        scope,
-        "CATCH",
-        sig(
-            return_type,
-            vec![kw("CATCH"), arg("expr", KType::KExpression)],
-        ),
-        body,
-    );
+    let signature = sig(return_type, vec![kw("CATCH"), arg("expr", KType::KExpression)]);
+    #[cfg(feature = "action-harness")]
+    crate::builtins::register_action_builtin(scope, "CATCH", signature, body_action);
+    #[cfg(not(feature = "action-harness"))]
+    register_builtin(scope, "CATCH", signature, body);
+}
+
+/// `Action`-harness twin of [`body`]: watches the captured `expr` and recovers into a `Result`
+/// carrier (`Ok(v)` / `Error(KError::to_tagged())`) via a `Catch` finish.
+#[cfg(feature = "action-harness")]
+pub fn body_action<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{arg_object, Action, CatchCont, Dep, DepPlacement};
+    use crate::machine::model::Carried;
+    use crate::machine::{KError, KErrorKind};
+    let expr_inner = match arg_object(ctx.args, "expr") {
+        Some(KObject::KExpression(e)) => e.clone(),
+        _ => {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+                "CATCH expects a parenthesized expression body".to_string(),
+            ))))
+        }
+    };
+    // Capture the prelude `Result` member identity at body time so the CATCH value shares the
+    // nominal identity of a `Result (...)`-constructed one.
+    let (result_set, result_index) = match ctx.scope.resolve_type("Result") {
+        Some(KType::SetRef { set, index }) => (Rc::clone(set), *index),
+        _ => panic!("Result must be registered before CATCH"),
+    };
+    let finish: CatchCont<'a> = Box::new(move |fctx, result| {
+        let (tag, payload): (&str, KObject<'a>) = match result {
+            Ok(v) => ("Ok", v.deep_clone()),
+            Err(e) => ("Error", e.to_tagged(fctx.scope.arena)),
+        };
+        let tagged = KObject::Tagged {
+            tag: tag.to_string(),
+            value: Rc::new(payload),
+            set: Rc::clone(&result_set),
+            index: result_index,
+            type_args: Rc::new(vec![]),
+        };
+        Action::Done(Ok(Carried::Object(fctx.scope.arena.alloc_object(tagged))))
+    });
+    Action::Catch {
+        watched: Dep::Dispatch {
+            expr: expr_inner,
+            placement: DepPlacement::OwnScope,
+        },
+        finish,
+    }
 }
 
 #[cfg(test)]

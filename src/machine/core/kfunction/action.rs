@@ -13,8 +13,19 @@ use std::rc::Rc;
 use super::body::ReturnContract;
 use crate::machine::core::{CallArena, LexicalFrame, Scope};
 use crate::machine::model::ast::KExpression;
+use crate::machine::model::values::Held;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::{KError, NodeId};
+
+/// Read a builtin argument's `KObject` from a `BodyCtx::args` `KObject::Record` by name. `None` if
+/// the args aren't a record or the named field is a type cell. Two lifetimes: the borrow (`'c`,
+/// `BodyCtx`'s) is shorter than the content (`'a`, the run).
+pub fn arg_object<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c KObject<'a>> {
+    match args {
+        KObject::Record(fields, _) => fields.get(name).and_then(Held::as_object),
+        _ => None,
+    }
+}
 
 /// A builtin body: `fn(&BodyCtx) -> Action`. Replaces
 /// [`BuiltinFn`](super::body::BuiltinFn)'s `fn(&mut SchedulerHandle, ArgumentBundle) -> BodyResult`.

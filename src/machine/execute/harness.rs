@@ -1,50 +1,83 @@
-//! **DESIGN SKETCH — not wired into the live call path.** The shared action-harness:
-//! [`run_action`] drives the scheduler from a [`Action`], the one place that touches
-//! `SchedulerHandle`. Both `KFunction::invoke` (lowering an `ExecOutcome → Action`) and every
-//! `Action`-authored builtin route through it. The peer of `dispatch/exec.rs::invoke`.
-//!
-//! The `Action` *types* live in [`crate::machine::core::kfunction::action`] (next to `ExecOutcome` /
-//! `Body`, since they reference only core/model types). This module is the scheduler-aware half.
-//!
-//! Interpreter bodies are `todo!()` on purpose — this pins the boundary, not the implementation.
-//! See `scratch/action-spec.md` for the survey + audit this was distilled from.
+//! The shared action-harness (WIP, `action-harness` feature). [`run_action`] drives the scheduler
+//! from an [`Action`], the one place that touches `SchedulerHandle`. Both `KFunction::invoke`
+//! (lowering an `ExecOutcome → Action`) and every `Action`-authored builtin route through it. The
+//! peer of `dispatch/exec.rs::invoke`. The `Action` *types* live in
+//! [`crate::machine::core::kfunction::action`]. See `scratch/action-spec.md` for the survey + audit.
 #![allow(dead_code)]
 
-use crate::machine::core::kfunction::action::Action;
-use crate::machine::core::kfunction::{BodyResult, SchedulerHandle};
+use std::rc::Rc;
 
-/// The one shared harness: run a [`Action`] into the scheduler's `BodyResult` currency — the
-/// only code that calls `SchedulerHandle`. `KFunction::invoke` calls it with a lowered
-/// `ExecOutcome`; a builtin call site calls the `ActionFn` to get a `Action`, then calls this. A
-/// `Cont` / `CatchCont` returned by a finish is recursed into through the same function.
-pub fn run_action<'a, 's>(
-    h: &mut dyn SchedulerHandle<'a, 's>,
-    action: Action<'a>,
-    idx: usize,
-) -> BodyResult<'a> {
-    let _ = (h, idx);
+use crate::machine::core::kfunction::action::{Action, Dep, DepPlacement, FinishCtx, FramePlacement};
+use crate::machine::core::kfunction::{BodyResult, CatchFinish, SchedulerHandle};
+use crate::machine::core::CallArena;
+use crate::machine::NodeId;
+
+/// Interpret an [`Action`] into the scheduler's `BodyResult` currency — the only code that calls
+/// `SchedulerHandle`. A `Cont` / `CatchCont` returned by a finish is recursed into through the same
+/// function. Returns a `BodyResult`; the caller maps that to a `NodeStep`.
+pub fn run_action<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, action: Action<'a>) -> BodyResult<'a> {
     match action {
         // Terminal: the value the builtin already computed (scope was mutated in place first).
         Action::Done(Ok(c)) => BodyResult::Value(c),
         Action::Done(Err(e)) => BodyResult::Err(e),
 
-        // Mint the cart per `frame_placement` (install a `FreshChild`, `acquire_tail_frame` a
-        // `ReuseReserve`), dispatch `leading` per each Dep's placement, then
-        // `tail_with_frame_contract(tail, cart, contract, body_index)`.
-        Action::Tail { .. } => todo!("Tail: install/acquire cart, dispatch leading, tail-replace"),
+        Action::Tail {
+            leading,
+            tail,
+            contract,
+            frame_placement,
+        } => {
+            // Spike: only the no-`leading`, no-block-entry shape (EVAL). Leading siblings + a fresh
+            // lexical block need an `Action::Tail` `block_entry` field — added when MATCH / the
+            // FN-body tails are ported.
+            assert!(
+                leading.is_empty(),
+                "run_action: Action::Tail with leading siblings not yet implemented"
+            );
+            let frame: Option<Rc<CallArena>> = match frame_placement {
+                FramePlacement::ReuseReserve { outer } => Some(h.acquire_tail_frame(outer)),
+                FramePlacement::FreshChild { frame } => Some(frame),
+                FramePlacement::Inherit => None,
+            };
+            BodyResult::Tail {
+                expr: tail,
+                frame,
+                function: contract,
+                block_entry: None,
+                body_index: 0,
+            }
+        }
 
-        // `Dep::Dispatch` → owned_subs (per `DepPlacement`), `Dep::Existing` → park_producers,
-        // `add_combine*` with a `CombineFinish` that builds a `FinishCtx` from the wake scope, calls
-        // the `Cont`, and `run_action`s the returned `Action`. Slot `DeferTo`s.
-        Action::Combine { .. } => todo!("Combine: dispatch deps, add_combine, finish wraps Cont→run_action"),
+        Action::Combine { .. } => {
+            todo!("run_action: Action::Combine (dispatch deps, add_combine_in_frame, finish→run_action)")
+        }
 
-        // Dispatch `watched`, `add_catch*` with a `CatchFinish` that calls the `CatchCont` and
-        // interprets the returned `Action`. Slot `DeferTo`s.
-        Action::Catch { .. } => todo!("Catch: dispatch watched, add_catch, finish wraps CatchCont→run_action"),
+        Action::Catch { watched, finish } => {
+            let from = dispatch_dep(h, watched);
+            let wrapped: CatchFinish<'a> = Box::new(move |sched, result| {
+                let fctx = FinishCtx {
+                    scope: sched.current_scope(),
+                };
+                let next = finish(&fctx, result);
+                run_action(sched, next)
+            });
+            BodyResult::DeferTo(h.add_catch_here(from, wrapped))
+        }
     }
 }
 
-// The `ExecOutcome → Action` lowering (`KFunction::invoke`'s half) is intentionally omitted: it
-// bridges `ExecOutcome`'s two lifetimes (`'ast`/`'frame`) to `Action`'s one and is the spike's first
-// compile-check. `DeferredExprTail` lowers to
-// `Action::Combine{ deps:[Dispatch{type_expr, OwnScope}], finish: |_, r| Action::Tail{..} }`.
+/// Realize a [`Dep`] to a producer `NodeId`: dispatch a `Dispatch` (per its placement) → an owned
+/// sub-slot; an `Existing` is already a producer the builtin found in scope.
+fn dispatch_dep<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, dep: Dep<'a>) -> NodeId {
+    match dep {
+        Dep::Existing(id) => id,
+        Dep::Dispatch { expr, placement } => match placement {
+            DepPlacement::OwnScope => h.add_dispatch_here(expr),
+            DepPlacement::ActiveFrame => h.add_dispatch_in_frame(expr),
+            DepPlacement::InScope(scope) => h.add_dispatch(expr, scope),
+            DepPlacement::WithChain(_) => {
+                todo!("dispatch_dep: DepPlacement::WithChain (TRY arms) not yet implemented")
+            }
+        },
+    }
+}

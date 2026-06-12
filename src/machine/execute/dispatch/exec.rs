@@ -49,6 +49,18 @@ pub(super) fn invoke<'run>(
         return ctx.body_result_to_step(result, idx);
     }
 
+    // A `Step`-harness builtin (`action-harness` feature): build a read-only `BodyCtx`, get the
+    // `Action`, and lower it through the shared `run_action` interpreter.
+    #[cfg(feature = "action-harness")]
+    if let Body::Action(f) = &picked.body {
+        let f = *f;
+        let bundle = match picked.bind(working_expr) {
+            Ok(future) => future.bundle,
+            Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+        };
+        return run_action_builtin(ctx, f, bundle, idx);
+    }
+
     // Validate each argument against its declared parameter type before the (type-trusting)
     // `bind_by_name`: a uniquely-picked call is admitted shape-only by dispatch, so a non-satisfying
     // typed argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here.
@@ -159,6 +171,44 @@ pub(super) fn invoke<'run>(
             unreachable!("run_user_fn yields Tail or DeferredExprTail, not a bare Value")
         }
     };
+    ctx.body_result_to_step(result, idx)
+}
+
+/// Lower a `Step`-harness builtin: bind its args into a `KObject::Record`, build the read-only
+/// `BodyCtx`, call the `ActionFn`, then interpret the returned `Action` through the shared
+/// `run_action`. The args-as-`Record` build is the spike's stand-in for the eventual
+/// `ArgumentBundle → KObject::Record` migration.
+#[cfg(feature = "action-harness")]
+fn run_action_builtin<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    f: crate::machine::core::kfunction::ActionFn,
+    bundle: crate::machine::core::kfunction::ArgumentBundle<'run>,
+    idx: usize,
+) -> NodeStep<'run> {
+    use crate::machine::core::kfunction::action::BodyCtx;
+    use crate::machine::model::values::{ArgValue, Held};
+    use crate::machine::model::KObject;
+
+    let cells = bundle.args.map(|av| match av {
+        ArgValue::Object(rc) => Held::Object(rc.deep_clone()),
+        ArgValue::Type(t) => Held::Type(t.clone()),
+    });
+    let args_obj: &'run KObject<'run> = ctx
+        .current_scope()
+        .arena
+        .alloc_object(KObject::record_of_held(cells));
+    let frame = ctx.current_frame();
+    let chain = ctx.current_lexical_chain();
+    let action = {
+        let body_ctx = BodyCtx {
+            scope: ctx.current_scope(),
+            frame: frame.as_ref(),
+            chain: chain.as_deref(),
+            args: args_obj,
+        };
+        f(&body_ctx)
+    };
+    let result = super::super::harness::run_action(ctx, action);
     ctx.body_result_to_step(result, idx)
 }
 
