@@ -155,6 +155,12 @@ pub fn run_user_fn<'ast, 'frame>(
                 "run_user_fn called on a builtin body".to_string(),
             )))
         }
+        #[cfg(feature = "action-harness")]
+        Body::Action(_) => {
+            return ExecOutcome::Errored(KError::new(crate::machine::KErrorKind::User(
+                "run_user_fn called on a Action builtin body".to_string(),
+            )))
+        }
     };
     match &func.signature.return_type {
         ReturnType::Resolved(_) => {

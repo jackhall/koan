@@ -320,6 +320,11 @@ pub type BinderBucketFn = for<'a> fn(&KExpression<'a>) -> Option<UntypedKey>;
 pub enum Body<'a> {
     Builtin(BuiltinFn),
     UserDefined(KExpression<'a>),
+    /// A builtin authored against the `Action` harness (WIP, `action-harness` feature). Runs through
+    /// `machine::execute::harness::interpret`, not the `BuiltinFn` path. Migrated incrementally;
+    /// `Builtin` is deleted at parity.
+    #[cfg(feature = "action-harness")]
+    Action(super::action::ActionFn),
 }
 
 #[cfg(test)]

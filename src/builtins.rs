@@ -119,6 +119,47 @@ pub(crate) fn register_builtin_full<'a>(
     let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
 }
 
+/// `Action`-harness replacement for [`register_builtin`] (WIP, `action-harness` feature). Identical
+/// contract except the `body` is a [`ActionFn`](crate::machine::core::kfunction::ActionFn)
+/// (`fn(&BodyCtx) -> Action`) installed as [`Body::Action`] — the builtin runs through
+/// `machine::execute::harness::interpret`, not the `BuiltinFn` path. `signature`, the dispatch-time
+/// `binder_name` / `binder_bucket` hooks, and `is_functor` are unchanged: only the body slot moves.
+/// Builtins migrate to this one at a time; `register_builtin` (and `Body::Builtin`) are deleted at
+/// parity.
+#[cfg(feature = "action-harness")]
+pub(crate) fn register_action_builtin_full<'a>(
+    scope: &'a Scope<'a>,
+    name: &str,
+    signature: ExpressionSignature<'a>,
+    body: crate::machine::core::kfunction::ActionFn,
+    binder_name: Option<BinderNameFn>,
+    binder_bucket: Option<crate::machine::core::kfunction::BinderBucketFn>,
+    is_functor: bool,
+) {
+    let arena = scope.arena;
+    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
+        signature,
+        Body::Action(body),
+        scope,
+        binder_name,
+        binder_bucket,
+        is_functor,
+    ));
+    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
+    let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
+}
+
+/// Common-case [`register_action_builtin_full`]: no binder hooks, not a functor.
+#[cfg(feature = "action-harness")]
+pub(crate) fn register_action_builtin<'a>(
+    scope: &'a Scope<'a>,
+    name: &str,
+    signature: ExpressionSignature<'a>,
+    body: crate::machine::core::kfunction::ActionFn,
+) {
+    register_action_builtin_full(scope, name, signature, body, None, None, false);
+}
+
 /// Test-only: register one overload at an explicit [`BindingIndex`]. A test uses this to
 /// place a *user*-position (non-`BUILTIN`) overload in a root-position scope, so dispatch
 /// exercises the ordinary innermost-wins walk rather than the builtin root-first

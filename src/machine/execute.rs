@@ -7,6 +7,10 @@
 //! [design/memory-model.md](../../design/memory-model.md).
 
 mod dispatch;
+// The shared action-harness for KFunction::invoke + builtins (design sketch / WIP). Hidden behind the
+// `action-harness` feature so it stays off the default build until the refactor lands. See harness.rs.
+#[cfg(feature = "action-harness")]
+mod harness;
 mod interpret;
 mod lift;
 mod nodes;
