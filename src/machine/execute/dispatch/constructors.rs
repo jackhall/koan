@@ -155,6 +155,15 @@ fn launch<'run>(
     for (i, part) in value_parts.into_iter().enumerate() {
         let sub_expr = KExpression::new(vec![Spanned::bare(part)]);
         let sub_id = ctx.add_dispatch_here(sub_expr);
+        // Submission is enqueue-then-drain, so a sub minted this step is never terminal
+        // yet — the inline-ready branch below is dead for fresh subs. Locking this proves
+        // the site is a hand-rolled `Combine` (deps + a finish), collapsible onto
+        // `combine_here`. Mirrors the eager-subs guard in `install_eager_subs`.
+        debug_assert!(
+            !ctx.is_result_ready(sub_id),
+            "freshly-submitted ctor sub {sub_id:?} is immediately ready — \
+             fresh subs are always parked deps"
+        );
         if ctx.is_result_ready(sub_id) {
             let outcome = ctx.read_result(sub_id);
             match outcome {

@@ -85,6 +85,15 @@ impl<'run> HeadDeferredState<'run> {
         type_only: bool,
         idx: usize,
     ) -> NodeStep<'run> {
+        // `head_sub` was dispatched this step, and submission is enqueue-then-drain, so it
+        // is never terminal yet — the inline-resume branch is dead for a fresh head sub.
+        // Locking this proves the site is a hand-rolled `Combine` (one owned dep + a resume
+        // finish), collapsible onto `combine_here`. Mirrors `install_eager_subs`.
+        debug_assert!(
+            !ctx.is_result_ready(head_sub),
+            "freshly-submitted head sub {head_sub:?} is immediately ready — \
+             a fresh head sub is always a parked dep"
+        );
         if ctx.is_result_ready(head_sub) {
             return Self {
                 expr,

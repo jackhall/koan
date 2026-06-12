@@ -356,6 +356,15 @@ fn park_on_literal_producer<'run>(
     producer: NodeId,
     idx: usize,
 ) -> NodeStep<'run> {
+    // The literal producer was scheduled this step (`schedule_*_literal`), and submission
+    // is enqueue-then-drain, so it is never terminal yet — the inline-ready branch is dead
+    // for fresh producers. Locking this proves the site is a hand-rolled `Combine` (a dep
+    // + a lift finish), collapsible onto `combine_here`. Mirrors `install_eager_subs`.
+    debug_assert!(
+        !ctx.is_result_ready(producer),
+        "freshly-scheduled literal producer {producer:?} is immediately ready — \
+         fresh producers are always parked deps"
+    );
     if ctx.is_result_ready(producer) {
         let outcome = match ctx.read_result(producer) {
             Ok(v) => NodeOutput::Value(v),
