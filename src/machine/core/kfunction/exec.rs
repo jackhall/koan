@@ -175,11 +175,12 @@ pub fn run_user_fn<'ast, 'frame>(
             });
             let join = body_statement_refs(body_expr);
             let body_terminal_idx = join.len() - 1;
-            let summary = func.summarize();
-            let resume: Resume<'frame> = Box::new(move |results: &[DepResult<'frame>]| {
-                check_deferred_return(results[body_terminal_idx], &return_type, &summary)
-            });
-            ExecOutcome::Suspend { join, resume }
+            deferred_suspend(
+                join,
+                body_terminal_idx,
+                PerCallType::Inline(return_type),
+                func.summarize(),
+            )
         }
         // Deferred return whose type is an *expression* computing a `KType` per-call (a dotted
         // member like `Er.Carrier`, or `sig WITH {…}`). It has no inline `TypeName` form, so
@@ -190,22 +191,50 @@ pub fn run_user_fn<'ast, 'frame>(
             let body_terminal_idx = join.len() - 1;
             let type_idx = join.len();
             join.push(return_expr);
-            let summary = func.summarize();
-            let resume: Resume<'frame> = Box::new(move |results: &[DepResult<'frame>]| {
-                let per_call_ret = match results[type_idx] {
-                    Carried::Type(kind) => kind,
-                    Carried::Object(other) => {
-                        return Err(KError::new(KErrorKind::ShapeError(format!(
-                            "FN deferred return-type expression produced a non-type {} value",
-                            other.ktype().name(),
-                        ))));
-                    }
-                };
-                check_deferred_return(results[body_terminal_idx], per_call_ret, &summary)
-            });
-            ExecOutcome::Suspend { join, resume }
+            deferred_suspend(
+                join,
+                body_terminal_idx,
+                PerCallType::FromDep(type_idx),
+                func.summarize(),
+            )
         }
     }
+}
+
+/// Where a deferred return's per-call type comes from. A `TypeExpr` form (`-> Er`) elaborates it
+/// inline up front; an `Expression` form (`-> Er.Carrier`) dispatches it as a `join` dep read by
+/// index at resume time. The sync/async split is the only difference between the two arms.
+enum PerCallType<'frame> {
+    Inline(KType<'frame>),
+    FromDep(usize),
+}
+
+/// Build the deferred-return `Suspend`: a resume that reads the body's terminal value at
+/// `body_terminal_idx`, obtains the per-call return type from `type_source`, and checks the two —
+/// handing back `(value, type)` for the scheduler-side finish to stamp (or an error). Shared by
+/// both deferred-return arms; they differ only in `type_source`.
+fn deferred_suspend<'ast, 'frame>(
+    join: Vec<&'ast KExpression<'ast>>,
+    body_terminal_idx: usize,
+    type_source: PerCallType<'frame>,
+    summary: String,
+) -> ExecOutcome<'ast, 'frame> {
+    let resume: Resume<'frame> = Box::new(move |results: &[DepResult<'frame>]| {
+        let per_call_ret = match &type_source {
+            PerCallType::Inline(kt) => kt,
+            PerCallType::FromDep(idx) => match results[*idx] {
+                Carried::Type(kind) => kind,
+                Carried::Object(other) => {
+                    return Err(KError::new(KErrorKind::ShapeError(format!(
+                        "FN deferred return-type expression produced a non-type {} value",
+                        other.ktype().name(),
+                    ))));
+                }
+            },
+        };
+        check_deferred_return(results[body_terminal_idx], per_call_ret, &summary)
+    });
+    ExecOutcome::Suspend { join, resume }
 }
 
 /// Check a deferred-return body value against the resolved per-call return type. On a pass, hand
