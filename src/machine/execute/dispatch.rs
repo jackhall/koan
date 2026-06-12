@@ -48,7 +48,6 @@ mod tests;
 pub(in crate::machine::execute) use ctx::DispatchCtx;
 pub(crate) use field_list::defer_field_list_action;
 use fn_value::FnValueState;
-use head_deferred::HeadDeferredState;
 use keyworded::KeywordedState;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
@@ -338,9 +337,6 @@ pub(in crate::machine::execute) enum DispatchState<'run> {
     /// `DispatchState` past clippy's `large_enum_variant` threshold.
     TypeCall(Box<CtorState<'run>>),
     FunctionValueCall(Box<FnValueState<'run>>),
-    /// Shared by the `HeadDeferred` and `TypeHeadDeferred` shapes; the state's
-    /// `type_only` flag selects the admitted-arm set on resume.
-    HeadDeferred(Box<HeadDeferredState<'run>>),
     Keyworded(Box<KeywordedState<'run>>),
 }
 
@@ -393,12 +389,12 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
         DispatchState::Keyworded(ks) => return ks.resume(ctx, idx),
         DispatchState::FunctionValueCall(fs) => return fs.resume(ctx, idx),
         DispatchState::TypeCall(cs) => return (*cs).resume(ctx, idx),
-        DispatchState::HeadDeferred(hd) => return Ok(hd.resume(ctx, idx)),
         DispatchState::BareTypeLeaf(bs) if bs.park.is_some() => return bs.resume(ctx, idx),
         _ => unreachable!(
             "remaining fast-lane stateful variants terminalize in one poll; \
-             only Keyworded, FunctionValueCall, TypeCall, HeadDeferred, and a \
-             parked BareTypeLeaf re-enter from a parked track"
+             only Keyworded, FunctionValueCall, TypeCall, and a parked BareTypeLeaf \
+             re-enter from a parked track (HeadDeferred parks as a DispatchCombine, \
+             resumed by the scheduler, not a Dispatch state)"
         ),
     };
     match expr.shape() {
@@ -429,11 +425,11 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
         }
         DispatchShape::HeadDeferred => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(HeadDeferredState::initial_expr(ctx, expr, idx))
+            Ok(head_deferred::initial_expr(ctx, expr, idx))
         }
         DispatchShape::TypeHeadDeferred => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(HeadDeferredState::initial_type(ctx, expr, idx))
+            Ok(head_deferred::initial_type(ctx, expr, idx))
         }
         DispatchShape::NonCallableHead => Err(KError::new(KErrorKind::DispatchFailed {
             expr: expr.summarize(),

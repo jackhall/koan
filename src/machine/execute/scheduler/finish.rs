@@ -1,8 +1,8 @@
 use crate::machine::model::{Carried, KObject};
 use crate::machine::{BodyResult, CatchFinish, CombineFinish, Frame, KError, NodeId};
 
-use super::super::dispatch::propagate_dep_error;
-use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
+use super::super::dispatch::{propagate_dep_error, DispatchCtx};
+use super::super::nodes::{DispatchCombineFinish, LiftState, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 
 impl<'run> Scheduler<'run> {
@@ -43,6 +43,31 @@ impl<'run> Scheduler<'run> {
         let body = finish(self, &values);
         self.reclaim_deps(idx, owned_indices);
         self.dispatch_body_result(body, idx)
+    }
+
+    /// Dispatch-side dual of [`Self::run_combine`]. Same dep short-circuit and owned-dep
+    /// reclaim, but the `finish` returns a [`NodeStep`] directly (it may re-park), so there is
+    /// no `BodyResult` lowering. Deps are reclaimed *before* the finish runs — a dispatch finish
+    /// installs its own park/replace edges on `idx`, which a post-finish `clear_dep_edges` would
+    /// wrongly wipe. Dep-error propagation is frameless; the resumed dispatch attaches its own
+    /// frame.
+    pub(super) fn run_dispatch_combine(
+        &mut self,
+        deps: Vec<NodeId>,
+        park_count: usize,
+        finish: DispatchCombineFinish<'run>,
+        idx: usize,
+    ) -> NodeStep<'run> {
+        for dep in &deps {
+            if let Err(e) = self.read_result(*dep) {
+                return NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, None)));
+            }
+        }
+        let values: Vec<Carried<'run>> = deps.iter().map(|d| self.read(*d)).collect();
+        let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
+        self.reclaim_deps(idx, owned_indices);
+        let mut ctx = DispatchCtx::new(self);
+        finish(&mut ctx, &values, idx)
     }
 
     /// Map a finished `BodyResult` to its `NodeStep`, shared by Combine and Catch:

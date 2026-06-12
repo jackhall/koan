@@ -6,7 +6,7 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::{CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, Scope};
 
-use super::dispatch::DispatchState;
+use super::dispatch::{DispatchCtx, DispatchState};
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
 /// no further write to that slot occurs until it is freed and reused.
@@ -61,6 +61,18 @@ pub(super) enum NodeStep<'run> {
     },
 }
 
+/// Host-side closure for a [`NodeWork::DispatchCombine`] slot — the dispatch-side dual of
+/// [`CombineFinish`]. Receives the dep terminals in submission order, the dispatch facade,
+/// and the slot index, and returns a [`NodeStep`] directly: unlike a builtin Combine (whose
+/// `BodyResult` finish cannot re-park), a dispatch finish may resolve, tail-redispatch, or
+/// **park again** (e.g. an overload park on a freshly resolved producer). This is why the
+/// dispatch carrier is distinct from the builtin `Combine` — it keeps the rich `NodeStep`
+/// return without disturbing the builtin combinator.
+pub(super) type DispatchCombineFinish<'run> = Box<
+    dyn for<'b> FnOnce(&mut DispatchCtx<'run, 'b>, &[Carried<'run>], usize) -> NodeStep<'run>
+        + 'run,
+>;
+
 /// What a scheduler node will run. `Lift` exists because the push/notify model
 /// assumes a single producer slot per result — see [design/execution-model.md §
 /// Lift: push/notify single-producer model](../../../design/execution-model.md#lift-pushnotify-single-producer-model).
@@ -97,6 +109,17 @@ pub(super) enum NodeWork<'run> {
     Catch {
         from: NodeId,
         finish: CatchFinish<'run>,
+    },
+    /// Dispatch-side dual of `Combine`: identical dep-resolution and edge layout
+    /// (`[park_producers..., owned_subs...]`, `park_count` the prefix), but the `finish`
+    /// returns a [`NodeStep`] so a dispatch continuation can re-park. Drives the eager-subs /
+    /// head-deferred / constructor park-sites: the scheduler resolves the deps and hands the
+    /// values to a dispatch finish that splices / classifies / invokes, learning nothing about
+    /// the dispatch internals (the splice into a `KExpression` lives entirely in the finish).
+    DispatchCombine {
+        deps: Vec<NodeId>,
+        park_count: usize,
+        finish: DispatchCombineFinish<'run>,
     },
     Lift(LiftState<'run>),
 }
@@ -197,6 +220,9 @@ pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Option<Vec<NodeId>> {
         NodeWork::Combine {
             deps, park_count, ..
         } => Some(deps[*park_count..].to_vec()),
+        NodeWork::DispatchCombine {
+            deps, park_count, ..
+        } => Some(deps[*park_count..].to_vec()),
         NodeWork::Catch { from, .. } => Some(vec![*from]),
         NodeWork::Lift(LiftState::Pending(from)) => Some(vec![*from]),
         NodeWork::Lift(LiftState::Ready(_)) => None,
@@ -209,6 +235,9 @@ pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Option<Vec<NodeId>> {
 pub(super) fn work_park_producers<'run, 'b>(work: &'b NodeWork<'run>) -> &'b [NodeId] {
     match work {
         NodeWork::Combine {
+            deps, park_count, ..
+        } => &deps[..*park_count],
+        NodeWork::DispatchCombine {
             deps, park_count, ..
         } => &deps[..*park_count],
         _ => &[],

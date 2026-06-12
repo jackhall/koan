@@ -213,6 +213,9 @@ impl<'run> NodeStore<'run> {
                     NodeWork::Combine { .. } if fallback_sample.is_none() => {
                         fallback_sample = Some("<combine>".to_string());
                     }
+                    NodeWork::DispatchCombine { .. } if fallback_sample.is_none() => {
+                        fallback_sample = Some("<dispatch-combine>".to_string());
+                    }
                     NodeWork::Catch { .. } if fallback_sample.is_none() => {
                         fallback_sample = Some("<catch>".to_string());
                     }
