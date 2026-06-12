@@ -19,8 +19,12 @@ use crate::machine::model::KObject;
 use crate::machine::{KError, KErrorKind, NodeId, Scope};
 
 use super::super::nodes::{NodeOutput, NodeStep};
-use super::single_poll::{CtorKind, CtorState, CtorTrack};
-use super::{DispatchCtx, DispatchState, Initialized};
+use super::single_poll::CtorKind;
+#[cfg(not(feature = "dispatch-combine"))]
+use super::single_poll::{CtorState, CtorTrack};
+use super::DispatchCtx;
+#[cfg(not(feature = "dispatch-combine"))]
+use super::{DispatchState, Initialized};
 
 pub(in crate::machine::execute) mod tagged_union;
 
@@ -187,17 +191,61 @@ fn launch<'run>(
             staged_values.into_iter().map(|o| o.unwrap()).collect();
         return finish(ctx.current_scope(), &kind, &values);
     }
-    let track = CtorTrack {
-        subs,
-        staged_values,
-        kind,
-    };
-    let init = Initialized {
-        pre_subs: Vec::new(),
-    };
-    ctx.replace_with_parked_dispatch(DispatchState::TypeCall(Box::new(CtorState::with_track(
-        init, track,
-    ))))
+    #[cfg(feature = "dispatch-combine")]
+    {
+        park_subs_as_combine(subs, staged_values, kind)
+    }
+    #[cfg(not(feature = "dispatch-combine"))]
+    {
+        let track = CtorTrack {
+            subs,
+            staged_values,
+            kind,
+        };
+        let init = Initialized {
+            pre_subs: Vec::new(),
+        };
+        ctx.replace_with_parked_dispatch(DispatchState::TypeCall(Box::new(CtorState::with_track(
+            init, track,
+        ))))
+    }
+}
+
+/// [`NodeWork::DispatchCombine`] dual of the legacy `CtorState`-track park. Every staged sub is
+/// already an owned dep (a fresh ctor sub is never terminal in the same step, locked by the
+/// `debug_assert!` in [`launch`]); the finish splices each resolved value into its slot of
+/// `staged_values` and tail-calls [`finish`]. Dep errors propagate frameless in
+/// `run_dispatch_combine`, matching [`CtorState::resume`]'s `clone_for_propagation` (no `<ctor>`
+/// frame), so the finish only runs once every dep resolved.
+#[cfg(feature = "dispatch-combine")]
+fn park_subs_as_combine<'run>(
+    subs: Vec<(usize, NodeId)>,
+    mut staged_values: Vec<Option<&'run KObject<'run>>>,
+    kind: CtorKind<'run>,
+) -> NodeStep<'run> {
+    use super::super::nodes::{DispatchCombineFinish, NodeWork};
+    let deps: Vec<NodeId> = subs.iter().map(|(_, id)| *id).collect();
+    let part_indices: Vec<usize> = subs.iter().map(|(i, _)| *i).collect();
+    let finish_combine: DispatchCombineFinish<'run> = Box::new(move |ctx, results, _idx| {
+        for (slot, value) in part_indices.iter().zip(results) {
+            staged_values[*slot] = Some(value.object());
+        }
+        let values: Vec<&'run KObject<'run>> =
+            staged_values.into_iter().map(|o| o.unwrap()).collect();
+        finish(ctx.current_scope(), &kind, &values)
+    });
+    NodeStep::Replace {
+        work: NodeWork::DispatchCombine {
+            deps,
+            park_count: 0,
+            finish: finish_combine,
+            dep_error_frame: None,
+        },
+        frame: None,
+        function: None,
+        block_entry: None,
+        body_index: 0,
+    }
 }
 
 /// All value subs have completed. Read each, materialize the kind-keyed
