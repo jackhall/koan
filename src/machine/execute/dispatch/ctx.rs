@@ -210,6 +210,7 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
     ) -> EagerSubsInstall<'run> {
         let mut pending_subs: Vec<(usize, NodeId)> = Vec::with_capacity(staged_subs.len());
         for (i, pending) in staged_subs {
+            let is_reuse = matches!(pending, PendingSub::Reuse(_));
             let sub_id = match pending {
                 PendingSub::Reuse(id) => id,
                 PendingSub::Dispatch(sub_expr) => self.add_dispatch_here(sub_expr),
@@ -217,6 +218,15 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
                 PendingSub::DictLit(pairs) => self.schedule_dict_literal(pairs),
                 PendingSub::RecordLit(fields) => self.schedule_record_literal(fields),
             };
+            // Eager-splice invariant: submission is enqueue-then-drain, so a freshly minted sub is
+            // never terminal in the same step — only a `Reuse` of an already-resolved producer can
+            // splice eagerly. The dispatcher-as-`Combine` rearchitecture relies on this (fresh subs
+            // are always parked deps), so lock it here.
+            debug_assert!(
+                is_reuse || !self.is_result_ready(sub_id),
+                "freshly-submitted sub {sub_id:?} is immediately ready — \
+                 eager-splice should only ever fire for a Reuse of a resolved producer"
+            );
             if self.is_result_ready(sub_id) {
                 match self.read_result(sub_id) {
                     Err(e) => return EagerSubsInstall::DepError(bind_frame_err(e, &working_expr)),

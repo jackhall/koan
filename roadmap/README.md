@@ -159,6 +159,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
+- [Pull the dispatcher out of the scheduler via a write-effect contract](refactor/dispatch-effect-contract.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
@@ -252,3 +253,7 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
+- [Pull the dispatcher out of the scheduler](refactor/dispatch-effect-contract.md) — finish
+  the scheduler-extraction arc begun by the Invoke (#24) and Builtins (#25) rewrites: dispatch
+  decides against a read-only `&Scheduler` and returns its writes as an effect, with eager-subs
+  modelled as dispatch's own `Combine`, so `Scheduler` becomes the sole `SchedulerHandle` impl.
