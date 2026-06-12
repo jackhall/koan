@@ -12,11 +12,11 @@ use crate::machine::{CallArena, KFuture, RuntimeArena};
 /// Test seam for the type-channel lift: a first-class type (e.g. a per-call `Module`
 /// carrier) lifts via [`lift_ktype`], re-anchoring its frame onto the dying arena.
 #[cfg(test)]
-pub fn lift_ktype_for_test<'b>(t: &KType<'b>, dying_frame: &Rc<CallArena>) -> KType<'b> {
+pub fn lift_ktype_for_test<'run>(t: &KType<'run>, dying_frame: &Rc<CallArena>) -> KType<'run> {
     lift_ktype(t, dying_frame)
 }
 
-pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> KObject<'b> {
+pub(super) fn lift_kobject<'run>(v: &KObject<'run>, dying_frame: &Rc<CallArena>) -> KObject<'run> {
     if dying_frame.arena().functions_is_empty() {
         return v.deep_clone();
     }
@@ -49,7 +49,7 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
         // attaches arena anchors, never changes a descendant's `ktype()`.
         KObject::List(items, elem) => {
             if items.iter().any(|x| held_needs_lift(x, dying_frame)) {
-                let lifted: Vec<Held<'b>> =
+                let lifted: Vec<Held<'run>> =
                     items.iter().map(|x| lift_held(x, dying_frame)).collect();
                 KObject::list_with_type(Rc::new(lifted), (**elem).clone())
             } else {
@@ -92,7 +92,7 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
         }
         // A `Struct` / `Wrapped` carrying a `SetRef` shares its set by `Rc::clone` (via
         // `deep_clone`); the recursive group travels as one unit with no anchor. A schema's
-        // `&'a Module` / `Signature` refs ride their own existing anchors.
+        // `&'run Module` / `Signature` refs ride their own existing anchors.
         other => other.deep_clone(),
     }
 }
@@ -101,7 +101,7 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
 /// dual of [`lift_kobject`]. A `KType::Module { frame }` re-anchors on the dying frame if its
 /// child scope was alloc'd there (mirroring the module arm of `lift_kobject`); every other
 /// `KType` is `Rc`-owned (recursive sets) or owned data, so it travels by `clone`.
-pub(super) fn lift_ktype<'b>(t: &KType<'b>, dying_frame: &Rc<CallArena>) -> KType<'b> {
+pub(super) fn lift_ktype<'run>(t: &KType<'run>, dying_frame: &Rc<CallArena>) -> KType<'run> {
     match t {
         KType::Module {
             module: m,
@@ -133,9 +133,9 @@ pub(super) fn lift_ktype<'b>(t: &KType<'b>, dying_frame: &Rc<CallArena>) -> KTyp
 ///
 /// Single source of composite-variant coverage for `needs_lift` and
 /// `kobject_borrows_arena`; they differ only in the per-leaf decision.
-fn any_descendant<'b, F>(v: &KObject<'b>, predicate: &F) -> bool
+fn any_descendant<'run, F>(v: &KObject<'run>, predicate: &F) -> bool
 where
-    F: Fn(&KObject<'b>) -> Option<bool>,
+    F: Fn(&KObject<'run>) -> Option<bool>,
 {
     if let Some(decision) = predicate(v) {
         return decision;
@@ -183,9 +183,9 @@ where
 /// by `Rc::clone`, like the retired `Struct`'s `Rc<IndexMap>` fields), and a bare
 /// `KExpression` isn't reachable as a value inside a List/Dict/Tagged at lift time in current
 /// Koan, so neither needs an arena anchor of its own.
-fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
+fn needs_lift<'run>(v: &KObject<'run>, dying_frame: &Rc<CallArena>) -> bool {
     let dying_runtime: *const RuntimeArena = dying_frame.arena();
-    any_descendant(v, &|obj: &KObject<'b>| match obj {
+    any_descendant(v, &|obj: &KObject<'run>| match obj {
         KObject::KFunction(_, Some(_)) => Some(false),
         KObject::KFunction(f, None) => {
             let captured_runtime: *const RuntimeArena = f.captured_scope().arena;
@@ -201,7 +201,7 @@ fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
 
 /// Lift an aggregate cell: the `Object` arm rides [`lift_kobject`], the `Type` arm rides
 /// [`lift_ktype`] (re-anchoring a per-call `Module`'s frame).
-fn lift_held<'b>(cell: &Held<'b>, dying_frame: &Rc<CallArena>) -> Held<'b> {
+fn lift_held<'run>(cell: &Held<'run>, dying_frame: &Rc<CallArena>) -> Held<'run> {
     match cell {
         Held::Object(o) => Held::Object(lift_kobject(o, dying_frame)),
         Held::Type(t) => Held::Type(lift_ktype(t, dying_frame)),
@@ -210,7 +210,7 @@ fn lift_held<'b>(cell: &Held<'b>, dying_frame: &Rc<CallArena>) -> Held<'b> {
 
 /// True iff lifting `cell` would attach an anchor: an `Object` arm via [`needs_lift`], or a
 /// `Type` arm holding an unanchored `Module` whose child scope rides the dying arena.
-fn held_needs_lift<'b>(cell: &Held<'b>, dying_frame: &Rc<CallArena>) -> bool {
+fn held_needs_lift<'run>(cell: &Held<'run>, dying_frame: &Rc<CallArena>) -> bool {
     match cell {
         Held::Object(o) => needs_lift(o, dying_frame),
         Held::Type(KType::Module {
@@ -224,7 +224,7 @@ fn held_needs_lift<'b>(cell: &Held<'b>, dying_frame: &Rc<CallArena>) -> bool {
 /// True iff any descendant of an unanchored `KFuture` borrows into `arena`. Three
 /// borrow sites: the function ref's captured arena, the parsed expression's
 /// `Future(Carried)` parts, and the bundle args.
-fn kfuture_borrows_dying_arena<'b>(t: &KFuture<'b>, arena: &RuntimeArena) -> bool {
+fn kfuture_borrows_dying_arena<'run>(t: &KFuture<'run>, arena: &RuntimeArena) -> bool {
     if std::ptr::eq(
         t.function.captured_scope().arena,
         arena as *const RuntimeArena,
@@ -242,7 +242,7 @@ fn kfuture_borrows_dying_arena<'b>(t: &KFuture<'b>, arena: &RuntimeArena) -> boo
 
 /// An [`ArgValue`] borrows the dying arena iff its object arm has an arena-borrowing
 /// descendant, or its type arm is a `Module` whose child scope rides the dying arena.
-fn argvalue_borrows_arena<'b>(v: &ArgValue<'b>, arena: &RuntimeArena) -> bool {
+fn argvalue_borrows_arena<'run>(v: &ArgValue<'run>, arena: &RuntimeArena) -> bool {
     match v {
         ArgValue::Object(obj) => kobject_borrows_arena(obj, arena),
         ArgValue::Type(kt) => ktype_borrows_arena(kt, arena),
@@ -256,18 +256,18 @@ fn ktype_borrows_arena(kt: &KType<'_>, arena: &RuntimeArena) -> bool {
         if std::ptr::eq(m.child_scope().arena, arena as *const RuntimeArena))
 }
 
-fn expression_borrows_arena<'b>(expr: &KExpression<'b>, arena: &RuntimeArena) -> bool {
+fn expression_borrows_arena<'run>(expr: &KExpression<'run>, arena: &RuntimeArena) -> bool {
     expr.parts
         .iter()
         .any(|p| part_borrows_arena(&p.value, arena))
 }
 
-fn part_borrows_arena<'b>(part: &ExpressionPart<'b>, arena: &RuntimeArena) -> bool {
+fn part_borrows_arena<'run>(part: &ExpressionPart<'run>, arena: &RuntimeArena) -> bool {
     match part {
         // Only a value-arm Future borrows an arena `KObject`; a type arm's `Module` rides
         // its own frame anchor, not an arena `KObject`.
         ExpressionPart::Future(Carried::Object(obj)) => {
-            arena.owns_object(*obj as *const KObject<'b>)
+            arena.owns_object(*obj as *const KObject<'run>)
         }
         ExpressionPart::Expression(e) => expression_borrows_arena(e, arena),
         // Dispatch-time splicing can introduce `Future` parts inside a SigiledTypeExpr;
@@ -288,8 +288,8 @@ fn part_borrows_arena<'b>(part: &ExpressionPart<'b>, arena: &RuntimeArena) -> bo
 /// settle as predicate leaves (their recursion is not `KObject`-shaped — parts,
 /// bundle args, function ref) so the walker doesn't double-traverse via the
 /// KExpression arm.
-fn kobject_borrows_arena<'b>(v: &KObject<'b>, arena: &RuntimeArena) -> bool {
-    any_descendant(v, &|obj: &KObject<'b>| match obj {
+fn kobject_borrows_arena<'run>(v: &KObject<'run>, arena: &RuntimeArena) -> bool {
+    any_descendant(v, &|obj: &KObject<'run>| match obj {
         KObject::KExpression(e) => Some(expression_borrows_arena(e, arena)),
         KObject::KFuture(t, _) => Some(kfuture_borrows_dying_arena(t, arena)),
         KObject::KFunction(f, _) => Some(std::ptr::eq(

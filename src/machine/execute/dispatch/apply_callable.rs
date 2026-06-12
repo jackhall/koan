@@ -33,23 +33,23 @@ use super::{
 
 /// A head resolved to something callable. The lane decides which arm; the tail
 /// branches on the body surface and launches.
-pub(in crate::machine::execute) enum ResolvedCallable<'a> {
+pub(in crate::machine::execute) enum ResolvedCallable<'run> {
     /// Build from a sealed nominal member (`KType::SetRef` — struct / tagged / newtype /
     /// `TypeConstructor`).
-    Constructor(&'a KType<'a>),
+    Constructor(&'run KType<'run>),
     /// Call a `KFunction` by name — functor or not; a functor's result is a module.
-    Function(&'a KFunction<'a>),
+    Function(&'run KFunction<'run>),
 }
 
 /// Body-shape-branch the resolved callable and launch. `expr.parts[1..]` is the
 /// call body; `extract_call_body` admits one `{name = value}` record literal
 /// (`Named`) or one `(value)` paren group (`Positional`).
-pub(in crate::machine::execute) fn apply_callable<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
-    callable: ResolvedCallable<'a>,
-    expr: &KExpression<'a>,
+pub(in crate::machine::execute) fn apply_callable<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    callable: ResolvedCallable<'run>,
+    expr: &KExpression<'run>,
     idx: usize,
-) -> NodeStep<'a> {
+) -> NodeStep<'run> {
     match callable {
         // A constructor branches on the projected schema before deciding what body shape it
         // admits; the newtype arm in particular takes the trailing parts directly (so
@@ -73,12 +73,12 @@ pub(in crate::machine::execute) fn apply_callable<'a>(
 /// a named body is a loud `DispatchFailed`. A non-constructible identity is a `TypeMismatch`.
 /// The schema is projected off the member (sibling `SetLocal`s resolved to external
 /// `SetRef`s); `(set, index)` is stamped onto a tagged value.
-fn apply_constructor<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
-    identity: &'a KType<'a>,
-    expr: &KExpression<'a>,
+fn apply_constructor<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    identity: &'run KType<'run>,
+    expr: &KExpression<'run>,
     idx: usize,
-) -> NodeStep<'a> {
+) -> NodeStep<'run> {
     let KType::SetRef { set, index } = identity else {
         return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
@@ -175,13 +175,13 @@ fn sorted_variant_names(schema: &std::collections::HashMap<String, KType<'_>>) -
 /// Call a `KFunction` by name. Named args reconstruct the exact-arity positional
 /// expression and eager-resolve the value slots before binding; a positional body
 /// is a loud `DispatchFailed` (functions and functors take `{name = value}` only).
-fn apply_function<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
-    f: &'a KFunction<'a>,
-    expr: &KExpression<'a>,
-    body: CallBody<'a>,
+fn apply_function<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    f: &'run KFunction<'run>,
+    expr: &KExpression<'run>,
+    body: CallBody<'run>,
     idx: usize,
-) -> NodeStep<'a> {
+) -> NodeStep<'run> {
     match body {
         CallBody::Named(fields) => match f.reconstruct_positional(fields) {
             Ok(rebuilt) => match install_eager_subs_track(ctx, rebuilt, f, idx) {
@@ -198,12 +198,12 @@ fn apply_function<'a>(
 /// already-terminal subs inline, and either bind `picked` directly (all inline)
 /// or park as a `FunctionValueCall` eager-subs track. Shared by the
 /// `FunctionValueCall` lane and every head-deferred / type-call function arm.
-pub(in crate::machine::execute) fn install_eager_subs_track<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
-    expr: KExpression<'a>,
-    picked: &'a KFunction<'a>,
+pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    expr: KExpression<'run>,
+    picked: &'run KFunction<'run>,
     idx: usize,
-) -> Result<NodeStep<'a>, KError> {
+) -> Result<NodeStep<'run>, KError> {
     // `picked` is already committed (the head uniquely resolved to it), so bare-name
     // value slots resolve by sub-Dispatch rather than the keyword path's pre-pick
     // `bare_outcomes` lookup — their resolved carrier then reaches `accepts_part` at bind.
@@ -212,10 +212,11 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'a>(
     let working_expr = KExpression::new(new_parts);
     match ctx.install_eager_subs(working_expr, staged_subs, Some(picked), idx) {
         EagerSubsInstall::DepError(step) => Ok(step),
-        EagerSubsInstall::AllInline(working_expr) => match picked.bind(working_expr) {
-            Ok(future) => Ok(ctx.invoke_to_step_pinned(future, idx)),
-            Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
-        },
+        EagerSubsInstall::AllInline(working_expr) => {
+            // All eager subs resolved inline → run the call (builtins direct, user-fns through the
+            // exec executor).
+            Ok(super::exec::invoke(ctx, picked, working_expr, idx))
+        }
         EagerSubsInstall::Parked(track) => {
             // The function arm is non-binder; `pre_subs` is always empty.
             let init = Initialized {

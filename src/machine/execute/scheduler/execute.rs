@@ -1,16 +1,16 @@
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::body::ReturnContract;
+use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::{assemble_body_chain, ScopeId};
 use crate::machine::model::KType;
-use crate::machine::{Frame, KError, KErrorKind, LexicalFrame, NodeId};
+use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 
 use super::super::lift::{lift_kobject, lift_ktype};
-use super::super::nodes::{LiftState, Node, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{Frame, LiftState, Node, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 use crate::machine::model::Carried;
 
-impl<'a> Scheduler<'a> {
+impl<'run> Scheduler<'run> {
     /// On `Done` with a frame, the return `Value` references the per-call arena that's
     /// about to drop, so it must be lifted into the captured scope's arena before the
     /// frame is released. See design/memory-model.md.
@@ -23,14 +23,17 @@ impl<'a> Scheduler<'a> {
             // work or the in-step TCO frame reset.
             let node_scope = node.scope;
             let work = node.work;
-            let prev_function = node.function;
+            let Frame {
+                cart,
+                reserve,
+                contract: prev_contract,
+            } = node.frame;
             let prev_chain_carrier = node.chain;
-            let guard = self.enter_slot_step(
-                node.frame,
-                node.reserve_frame,
-                prev_chain_carrier.clone(),
-                node_scope,
-            );
+            let guard = self.enter_slot_step(cart, reserve, prev_chain_carrier.clone(), node_scope);
+            // Expose to the dispatch step whether this slot is a tail call within an established
+            // contract chain — a deferred-return FN dispatched here skips resolving its own return
+            // type (keep-first discards it anyway).
+            self.active_in_contract_chain = prev_contract.is_some();
             let step = match work {
                 NodeWork::Dispatch { expr, state } => {
                     let mut ctx = crate::machine::execute::dispatch::DispatchCtx::new(self);
@@ -48,23 +51,27 @@ impl<'a> Scheduler<'a> {
             // the step scope (via `post.step_scope()`), so the wrong-frame read that ambient
             // `active_frame` allowed is unspellable here.
             let post = self.exit_slot_step(guard);
-            // Drain re-entrant writes. `step_scope()` is `None` when a tail-call took the frame —
-            // a Replace whose scope is being reset, so its pending is moot.
-            if let Some(scope) = post.step_scope() {
-                scope.drain_pending();
-            }
+            self.active_in_contract_chain = false;
+            // Drain re-entrant writes against the step scope.
+            post.step_scope().drain_pending();
             match step {
                 NodeStep::Done(output) => {
                     // Lift the terminal out of the dying per-call frame into the surviving
-                    // captured-scope arena (`dest_arena`, a genuine `&'a`). A non-dying run frame
+                    // captured-scope arena (`dest_arena`, a genuine `&'run`). A non-dying run frame
                     // (empty arena; top-level values live in the run arena) reads as frameless.
-                    let dest_arena = post.step_scope().and_then(|s| s.outer().map(|o| o.arena));
-                    let frame = post.prev_frame.as_ref().filter(|f| !f.non_dying());
+                    let dest_arena = post.step_scope().outer().map(|o| o.arena);
+                    let frame = (!post.prev_frame.non_dying()).then_some(&post.prev_frame);
+                    // Re-anchor the erased contract against the step's cart, witnessed by `frame`.
+                    // `compute_done_output` consults the contract only when `frame` is `Some` (a
+                    // real per-call frame, which is exactly when a contract is set), so a contract
+                    // on the non-dying run frame is harmlessly skipped.
+                    let prev_function = match (prev_contract, frame) {
+                        (Some(c), Some(witness)) => Some(unsafe { c.reattach(witness) }),
+                        _ => None,
+                    };
                     let result = compute_done_output(output, frame, dest_arena, prev_function);
                     if matches!(result, NodeOutput::Err(_)) {
-                        if let Some(scope) = post.step_scope() {
-                            scope.clear_placeholders_for_producer(id);
-                        }
+                        post.step_scope().clear_placeholders_for_producer(id);
                     }
                     self.finalize(idx, result);
                 }
@@ -77,7 +84,12 @@ impl<'a> Scheduler<'a> {
                 } => {
                     let prev_frame = post.prev_frame;
                     let post_step_reserve = post.post_step_reserve;
-                    let next_function = new_function.or(prev_function);
+                    // Keep the **first** contract of a tail chain: once a contract is set, a nested
+                    // tail call does not overwrite it, so the chain checks the original caller's
+                    // declared return — not the tail-most callee's. `compute_replace_chain` reads
+                    // `new_function` (still live) for the chain-shape decision before erasure.
+                    let next_contract: Option<ErasedContract> =
+                        prev_contract.or_else(|| new_function.map(ErasedContract::erase));
                     let new_chain = compute_replace_chain(
                         prev_chain_carrier,
                         block_entry,
@@ -89,32 +101,36 @@ impl<'a> Scheduler<'a> {
                         Some(f) => {
                             // Rotate the ping-pong reserve: the post-step reserve is
                             // superseded by today's post-step frame (which we park as
-                            // the new reserve). `'a`-anchoring lives in
+                            // the new reserve). `'run`-anchoring lives in
                             // `reinstall_with_frame`'s SAFETY.
                             drop(post_step_reserve);
                             // The non-dying run frame is not a reusable per-call arena; parking
                             // it as the ping-pong reserve would defer (and mis-time) a real
                             // frame's drop. Treat it as no reserve — the run scope is re-reached
                             // through the scheduler's `run_frame`, never a reset reserve.
-                            let new_reserve = prev_frame.filter(|f| !f.non_dying());
+                            let new_reserve = (!prev_frame.non_dying()).then_some(prev_frame);
                             self.store.reinstall_with_frame(
                                 id,
                                 f,
                                 new_reserve,
                                 new_work,
-                                next_function,
+                                next_contract,
                                 new_chain,
                             );
                         }
                         None => {
+                            // A frameless Replace keeps the prior cart — an invoke reuses the
+                            // reserve, never the active cart, so the slot's cart is always present.
                             self.store.reinstall(
                                 id,
                                 Node {
                                     work: new_work,
                                     scope: node_scope,
-                                    frame: prev_frame,
-                                    reserve_frame: post_step_reserve,
-                                    function: next_function,
+                                    frame: Frame {
+                                        cart: prev_frame,
+                                        reserve: post_step_reserve,
+                                        contract: next_contract,
+                                    },
                                     chain: new_chain,
                                 },
                             );
@@ -150,7 +166,7 @@ impl<'a> Scheduler<'a> {
     pub(in crate::machine::execute::scheduler) fn finalize(
         &mut self,
         idx: usize,
-        output: NodeOutput<'a>,
+        output: NodeOutput<'run>,
     ) {
         let id = NodeId(idx);
         self.store.finalize(id, output);
@@ -172,7 +188,7 @@ impl<'a> Scheduler<'a> {
     /// producers this slot merely parked on, and reclaiming a consumer must not reach
     /// across a park edge into the producer's subtree.
     ///
-    /// Idempotent and safe to call on a still-live slot. `&'a KObject` references
+    /// Idempotent and safe to call on a still-live slot. `&'run KObject` references
     /// handed out by `read` survive because the value lives in an arena.
     pub(in crate::machine::execute) fn free(&mut self, idx: usize) {
         let mut stack: Vec<NodeId> = vec![NodeId(idx)];
@@ -201,7 +217,7 @@ impl<'a> Scheduler<'a> {
         &mut self,
         idx: usize,
         bind_id: NodeId,
-    ) -> NodeStep<'a> {
+    ) -> NodeStep<'run> {
         self.deps.add_owned_edge(bind_id, NodeId(idx));
         NodeStep::Replace {
             work: NodeWork::Lift(LiftState::Pending(bind_id)),
@@ -219,12 +235,12 @@ impl<'a> Scheduler<'a> {
 /// through untouched. A failed return-type check becomes `Err` — the caller clears placeholders
 /// and finalizes. Pure: the scope-derived inputs were captured by the caller while the step's
 /// scope was still ambient, so this holds no scope borrow.
-fn compute_done_output<'a>(
-    output: NodeOutput<'a>,
+fn compute_done_output<'run>(
+    output: NodeOutput<'run>,
     frame: Option<&Rc<crate::machine::core::CallArena>>,
-    dest_arena: Option<&'a crate::machine::core::RuntimeArena>,
-    prev_function: Option<ReturnContract<'a>>,
-) -> NodeOutput<'a> {
+    dest_arena: Option<&'run crate::machine::core::RuntimeArena>,
+    prev_function: Option<ReturnContract<'run>>,
+) -> NodeOutput<'run> {
     match (output, frame) {
         (NodeOutput::Value(Carried::Object(v)), Some(frame)) => {
             let dest = dest_arena.expect("per-call scope must have an outer (its captured scope)");
@@ -263,8 +279,9 @@ fn compute_done_output<'a>(
                     let label = match contract {
                         ReturnContract::Function(f) => f.summarize(),
                         ReturnContract::Arm { kind, .. } => kind.to_string(),
+                        ReturnContract::PerCall { func, .. } => func.summarize(),
                     };
-                    e.with_frame(Frame::bare(label.clone(), label))
+                    e.with_frame(crate::machine::Frame::bare(label.clone(), label))
                 }
                 None => e,
             };
@@ -280,29 +297,36 @@ fn compute_done_output<'a>(
 /// `satisfies` runs the channel-appropriate predicate (`matches_value` / `matches_type`)
 /// and `got_name` names the carrier for the mismatch error. Returns the declared type so
 /// the caller can re-tag against it (the `Object` arm coarsens; the `Type` arm discards
-/// it), `Ok(None)` when nothing is declared — a non-`Resolved` (e.g. `Deferred`) return is
-/// checked later at the per-call Combine finish, not here — or `Err` with the labelled
-/// `TypeMismatch`.
-fn check_declared_return<'a>(
-    contract: Option<ReturnContract<'a>>,
-    satisfies: impl FnOnce(&KType<'a>) -> bool,
+/// it), `Ok(None)` when nothing is declared — a `Function` whose signature return is
+/// non-`Resolved` (a `Deferred` carrier still in its FN-def signature) has no type here —
+/// or `Err` with the labelled `TypeMismatch`. A `PerCall` carries the *resolved* per-call
+/// type and is checked + stamped here, labelled "per-call return type".
+fn check_declared_return<'run>(
+    contract: Option<ReturnContract<'run>>,
+    satisfies: impl FnOnce(&KType<'run>) -> bool,
     got_name: impl FnOnce() -> String,
-) -> Result<Option<&'a KType<'a>>, KError> {
-    let (declared, label) = match contract {
+) -> Result<Option<&'run KType<'run>>, KError> {
+    let (declared, label, per_call) = match contract {
         Some(ReturnContract::Function(f)) => match &f.signature.return_type {
-            crate::machine::model::types::ReturnType::Resolved(d) => (d, f.summarize()),
+            crate::machine::model::types::ReturnType::Resolved(d) => (d, f.summarize(), false),
             _ => return Ok(None),
         },
-        Some(ReturnContract::Arm { ret, kind }) => (ret, kind.to_string()),
+        Some(ReturnContract::Arm { ret, kind }) => (ret, kind.to_string(), false),
+        Some(ReturnContract::PerCall { func, ret }) => (ret, func.summarize(), true),
         None => return Ok(None),
     };
     if !satisfies(declared) {
+        let expected = if per_call {
+            format!("{} (per-call return type)", declared.name())
+        } else {
+            declared.name()
+        };
         return Err(KError::new(KErrorKind::TypeMismatch {
             arg: "<return>".to_string(),
-            expected: declared.name(),
+            expected,
             got: got_name(),
         })
-        .with_frame(Frame::bare(label.clone(), label)));
+        .with_frame(crate::machine::Frame::bare(label.clone(), label)));
     }
     Ok(Some(declared))
 }
@@ -314,10 +338,10 @@ fn check_declared_return<'a>(
 /// - `Some(_)` + `Function(fn)` — FN body invoke. Chain is assembled from the FN's
 ///   lexical `outer` walk so depth tracks lexical nesting, not call depth
 ///   (tail-recursive loops produce equal-depth chains each iteration).
-fn compute_replace_chain<'a>(
+fn compute_replace_chain<'run>(
     prev_chain: Rc<LexicalFrame>,
     block_entry: Option<ScopeId>,
-    new_function: Option<ReturnContract<'a>>,
+    new_function: Option<ReturnContract<'run>>,
     new_frame: Option<&crate::machine::core::CallArena>,
     body_index: usize,
 ) -> Rc<LexicalFrame> {
@@ -325,9 +349,11 @@ fn compute_replace_chain<'a>(
         return prev_chain;
     };
     match (new_function, new_frame) {
-        (Some(ReturnContract::Function(_)), Some(frame)) => {
-            assemble_body_chain(frame.scope(), prev_chain, body_index)
-        }
+        // `Function` and `PerCall` (a deferred FN body) both assemble the FN-body chain.
+        (
+            Some(ReturnContract::Function(_) | ReturnContract::PerCall { .. }),
+            Some(frame),
+        ) => assemble_body_chain(frame.scope(), prev_chain, body_index),
         _ => LexicalFrame::push(Some(prev_chain), scope_id, body_index),
     }
 }

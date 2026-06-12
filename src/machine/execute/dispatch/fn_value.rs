@@ -15,22 +15,22 @@ use super::super::nodes::{NodeOutput, NodeStep};
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::{DispatchCtx, DispatchState, EagerSubsTrack, Initialized};
 
-pub(in crate::machine::execute) struct FnValueState<'a> {
+pub(in crate::machine::execute) struct FnValueState<'run> {
     pub(in crate::machine::execute) init: Initialized,
-    pub(in crate::machine::execute) eager_subs: Option<EagerSubsTrack<'a>>,
-    pub(in crate::machine::execute) head_placeholder: Option<FnValueHeadPlaceholderTrack<'a>>,
+    pub(in crate::machine::execute) eager_subs: Option<EagerSubsTrack<'run>>,
+    pub(in crate::machine::execute) head_placeholder: Option<FnValueHeadPlaceholderTrack<'run>>,
 }
 
 /// Carries the *original* (unspliced) call expression so the resume
 /// can re-run the fast lane against it once the producer is bound.
-pub(in crate::machine::execute) struct FnValueHeadPlaceholderTrack<'a> {
-    pub(in crate::machine::execute) expr: KExpression<'a>,
+pub(in crate::machine::execute) struct FnValueHeadPlaceholderTrack<'run> {
+    pub(in crate::machine::execute) expr: KExpression<'run>,
     pub(in crate::machine::execute) producer: NodeId,
-    _ph: PhantomData<&'a KFunction<'a>>,
+    _ph: PhantomData<&'run KFunction<'run>>,
 }
 
-impl<'a> FnValueHeadPlaceholderTrack<'a> {
-    pub(in crate::machine::execute) fn new(expr: KExpression<'a>, producer: NodeId) -> Self {
+impl<'run> FnValueHeadPlaceholderTrack<'run> {
+    pub(in crate::machine::execute) fn new(expr: KExpression<'run>, producer: NodeId) -> Self {
         Self {
             expr,
             producer,
@@ -39,10 +39,10 @@ impl<'a> FnValueHeadPlaceholderTrack<'a> {
     }
 }
 
-impl<'a> FnValueState<'a> {
+impl<'run> FnValueState<'run> {
     pub(in crate::machine::execute) fn with_eager_subs(
         init: Initialized,
-        track: EagerSubsTrack<'a>,
+        track: EagerSubsTrack<'run>,
     ) -> Self {
         Self {
             init,
@@ -53,7 +53,7 @@ impl<'a> FnValueState<'a> {
 
     pub(in crate::machine::execute) fn with_head_placeholder(
         init: Initialized,
-        track: FnValueHeadPlaceholderTrack<'a>,
+        track: FnValueHeadPlaceholderTrack<'run>,
     ) -> Self {
         Self {
             init,
@@ -63,10 +63,10 @@ impl<'a> FnValueState<'a> {
     }
 
     pub(super) fn initial(
-        ctx: &mut DispatchCtx<'a, '_>,
-        expr: KExpression<'a>,
+        ctx: &mut DispatchCtx<'run, '_>,
+        expr: KExpression<'run>,
         idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
+    ) -> Result<NodeStep<'run>, KError> {
         let head = match &expr.parts[0].value {
             ExpressionPart::Identifier(n) => n.clone(),
             _ => unreachable!("FunctionValueCall shape implies Identifier head"),
@@ -85,9 +85,9 @@ impl<'a> FnValueState<'a> {
 
     pub(super) fn resume(
         self,
-        ctx: &mut DispatchCtx<'a, '_>,
+        ctx: &mut DispatchCtx<'run, '_>,
         idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
+    ) -> Result<NodeStep<'run>, KError> {
         let FnValueState {
             init,
             eager_subs,
@@ -115,11 +115,11 @@ impl<'a> FnValueState<'a> {
     /// constructor-typed head reaches dispatch through the type channel
     /// (`HeadDeferred`), never here. Anything else is a non-callable `TypeMismatch`.
     fn dispatch_callable_value(
-        ctx: &mut DispatchCtx<'a, '_>,
-        expr: KExpression<'a>,
-        head_obj: &'a KObject<'a>,
+        ctx: &mut DispatchCtx<'run, '_>,
+        expr: KExpression<'run>,
+        head_obj: &'run KObject<'run>,
         idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
+    ) -> Result<NodeStep<'run>, KError> {
         let callable = match head_obj {
             KObject::KFunction(f, _) => ResolvedCallable::Function(f),
             other => {
@@ -136,11 +136,11 @@ impl<'a> FnValueState<'a> {
     }
 
     fn install_head_park(
-        ctx: &mut DispatchCtx<'a, '_>,
+        ctx: &mut DispatchCtx<'run, '_>,
         producer: NodeId,
-        expr: KExpression<'a>,
+        expr: KExpression<'run>,
         idx: usize,
-    ) -> NodeStep<'a> {
+    ) -> NodeStep<'run> {
         ctx.add_park_edge(producer, NodeId(idx));
         let track = FnValueHeadPlaceholderTrack::new(expr, producer);
         let init = Initialized {

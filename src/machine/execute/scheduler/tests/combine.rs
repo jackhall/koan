@@ -107,12 +107,12 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
     use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
     use crate::machine::{ArgumentBundle, BodyResult, CombineFinish};
 
-    fn body<'a, 's>(
-        sched: &mut dyn crate::machine::SchedulerHandle<'a, 's>,
-        _bundle: ArgumentBundle<'a>,
-    ) -> BodyResult<'a> {
-        let finish: CombineFinish<'a> = Box::new(
-            |_sched: &mut dyn crate::machine::SchedulerHandle<'a, '_>, _results| {
+    fn body<'run, 's>(
+        sched: &mut dyn crate::machine::SchedulerHandle<'run, 's>,
+        _bundle: ArgumentBundle<'run>,
+    ) -> BodyResult<'run> {
+        let finish: CombineFinish<'run> = Box::new(
+            |_sched: &mut dyn crate::machine::SchedulerHandle<'run, '_>, _results| {
                 let v = _sched
                     .current_scope()
                     .arena

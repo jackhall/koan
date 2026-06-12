@@ -159,8 +159,10 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
+- [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
+- [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
@@ -244,3 +246,9 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md) —
   collapse the slot-only `KType::SigiledTypeExpr` / `RecordType` markers into one
   `RawTypePart(TypePartKind)`; `KExpression` stays distinct.
+- [Content-addressed type identity](refactor/type-identity-registry.md) — replace
+  `Rc::ptr_eq` nominal-type identity with a wide content-hash digest (`Copy`), with collision
+  detection and a deferred cross-epoch repair path so thread-local digests merge lock-free.
+- [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
+  admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
+  subtype check is an O(1) lookup instead of a structural walk.

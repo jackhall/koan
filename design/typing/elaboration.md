@@ -274,12 +274,16 @@ a resolved leaf it surfaces the bridge's cached `&KType` in the value channel's 
 for every type-only nominal — struct / union / module / Result *and* signature; on an
 earlier still-finalizing binder it parks; on a miss it surfaces `Unbound`.
 
-FN's deferred return-type elaboration reads the slot via
+FN's deferred return-type slot is parsed at definition time via
 [`extract_ktype`](../../src/machine/core/kfunction/argument_bundle.rs), which yields any
-`Type`-arm type — a resolved `&KType` or the `KType::Unresolved` transient — and then
-branches on `Unresolved` to drive the park-on-placeholder machinery
-([`type_identity_for`](../../src/machine/core/kfunction/invoke.rs) elaborates the transient
-against the definition scope). The sole bare-leaf resolution site for dispatch transport
+`Type`-arm type — a resolved `&KType` or the `KType::Unresolved` transient for a bare leaf —
+and branches on `Unresolved` to pick the `TypeExpr` carrier (see
+[fn_def/return_type.rs](../../src/builtins/fn_def.rs)). At call time the body executor
+[`run_user_fn`](../../src/machine/core/kfunction/exec.rs) elaborates that `TypeExpr` carrier
+inline against the per-call child scope (`elaborate_type_expr`), where the param install has
+already finalized every parameter-name identity; type-denoting parameters themselves bind via
+`register_type` from an already-resolved type argument, so there is no transient identity
+elaboration at the bind site. The sole bare-leaf resolution site for dispatch transport
 lives in
 [`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_expr.rs),
 which surfaces the bridge's resolved `&KType`. Bare leaves resolve through the same
@@ -339,16 +343,13 @@ it hot. The scope-bound resolution memo is therefore the only cache:
   finite set of consumer cutoffs, which is syntactically bounded.
 
 Consumers that need the scope-resolved identity —
-[`type_identity_for`](../../src/machine/core/kfunction/invoke.rs)
-at the dispatch boundary's per-call type-side bind,
 [`val_decl::body`](../../src/builtins/val_decl.rs)'s structural
 carrier path and its post-Combine finish, and
 [`fn_def::body`](../../src/builtins/fn_def.rs)'s return-type
 elaboration — go through `Scope::resolve_type_expr`. NEWTYPE's bare-leaf
 user-bound repr path keeps the simpler `Scope::resolve_type` lookup (it's
 intentionally non-park-aware: an unresolvable repr is a hard error, not a
-forward reference). The dispatch boundary's `type_identity_for` surfaces a
-`Park` outcome as the structured
-`KError::TypeIdentityPendingAtDispatch { param, surface, pending_on }` rather
-than silently skipping the per-call bind, so a workload that triggers it is
-debuggable from the error alone.
+forward reference). A type-denoting FN parameter binds its already-resolved type
+argument directly via `register_type` in
+[`run_user_fn`](../../src/machine/core/kfunction/exec.rs), so the per-call
+type-side bind needs no scope re-resolution and cannot park.

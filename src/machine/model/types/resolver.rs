@@ -42,8 +42,8 @@ pub enum ElabResult<'a> {
 /// - `threaded`: binder names currently being elaborated, so a self-reference becomes
 ///   `RecursiveRef` instead of parking on its own placeholder.
 /// - `chain`: the lexical position the bare-leaf resolution is gated against.
-pub struct Elaborator<'s, 'a> {
-    pub scope: &'s Scope<'a>,
+pub struct Elaborator<'b, 'a> {
+    pub scope: &'b Scope<'a>,
     pub threaded: HashSet<String>,
     /// Lexical chain the bare-leaf resolution is gated against, so a type declared
     /// lexically later than this elaboration's position is invisible. `None` is the
@@ -51,8 +51,8 @@ pub struct Elaborator<'s, 'a> {
     pub chain: Option<Rc<LexicalFrame>>,
 }
 
-impl<'s, 'a> Elaborator<'s, 'a> {
-    pub fn new(scope: &'s Scope<'a>) -> Self {
+impl<'b, 'a> Elaborator<'b, 'a> {
+    pub fn new(scope: &'b Scope<'a>) -> Self {
         Self {
             scope,
             threaded: HashSet::new(),

@@ -1,4 +1,4 @@
-//! Per-slot dependency-graph state pulled out of `Scheduler<'a>`. Each slot's
+//! Per-slot dependency-graph state pulled out of `Scheduler<'run>`. Each slot's
 //! [`DepRow`] holds the three coordinated fields (`notify`, `pending`,
 //! `edges`) that share the slot index — keeping them in one row makes Inv-A
 //! (wake-pending coherence) structural rather than enforced. See
@@ -27,7 +27,7 @@ impl DepEdge {
 
 /// Owned-edge sidecar built from `work_deps`. Park edges are installed
 /// separately via `add_park_edge`.
-pub(super) fn work_owned_edges<'a>(work: &NodeWork<'a>) -> Vec<DepEdge> {
+pub(super) fn work_owned_edges<'run>(work: &NodeWork<'run>) -> Vec<DepEdge> {
     match work_deps(work) {
         Some(ids) => ids.into_iter().map(DepEdge::Owned).collect(),
         None => Vec::new(),

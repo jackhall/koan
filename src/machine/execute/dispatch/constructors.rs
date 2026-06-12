@@ -29,12 +29,12 @@ pub(in crate::machine::execute) mod tagged_union;
 /// `(Distance 3.0)` / `Distance (3.0)` construct identically and `Distance ()` is arity-zero.
 /// The parts are launched as one value cell whose finish type-checks against the member's
 /// `repr` and wraps with `identity`.
-pub(in crate::machine::execute) fn dispatch_construct_newtype<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
-    identity: &'a KType<'a>,
-    mut value_parts: Vec<Spanned<ExpressionPart<'a>>>,
+pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    identity: &'run KType<'run>,
+    mut value_parts: Vec<Spanned<ExpressionPart<'run>>>,
     idx: usize,
-) -> NodeStep<'a> {
+) -> NodeStep<'run> {
     if let [Spanned {
         value: ExpressionPart::Expression(inner),
         ..
@@ -63,14 +63,15 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'a>(
 /// value cell per field — a literal field stages in place, so a record over literal fields
 /// binds synchronously (the property the retired struct path relied on, and which a chained
 /// `(Boxed (p))` depends on). The finish builds the `KObject::Record` and wraps it.
-pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
-    identity: &'a KType<'a>,
-    record_fields: Vec<(String, ExpressionPart<'a>)>,
+pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    identity: &'run KType<'run>,
+    record_fields: Vec<(String, ExpressionPart<'run>)>,
     idx: usize,
-) -> NodeStep<'a> {
+) -> NodeStep<'run> {
     let field_names: Vec<String> = record_fields.iter().map(|(n, _)| n.clone()).collect();
-    let value_parts: Vec<ExpressionPart<'a>> = record_fields.into_iter().map(|(_, p)| p).collect();
+    let value_parts: Vec<ExpressionPart<'run>> =
+        record_fields.into_iter().map(|(_, p)| p).collect();
     launch(
         ctx,
         value_parts,
@@ -84,10 +85,10 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'a>(
 
 /// Type-check `value` against the newtype member's projected `repr` and wrap it with
 /// `identity`, peeling any `Wrapped` layer (the single-layer collapse invariant).
-fn construct_newtype<'a>(
-    identity: &'a KType<'a>,
-    value: &KObject<'a>,
-) -> Result<KObject<'a>, KError> {
+fn construct_newtype<'run>(
+    identity: &'run KType<'run>,
+    value: &KObject<'run>,
+) -> Result<KObject<'run>, KError> {
     let (set, index) = match identity {
         KType::SetRef { set, index } => (set, *index),
         _ => unreachable!("TypeCall fast lane routed a non-SetRef identity into newtype construct"),
@@ -113,14 +114,14 @@ fn construct_newtype<'a>(
 /// `RecursiveSet` member. Shared by named UNIONs (`Tagged` kind) and the builtin `Result`
 /// constructor (`TypeConstructor` kind) — both reference a sealed member.
 #[allow(clippy::too_many_arguments)]
-pub(in crate::machine::execute) fn dispatch_construct_tagged<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
-    set: Rc<RecursiveSet<'a>>,
+pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    set: Rc<RecursiveSet<'run>>,
     index: usize,
-    schema: Rc<HashMap<String, KType<'a>>>,
-    args_parts: Vec<Spanned<ExpressionPart<'a>>>,
+    schema: Rc<HashMap<String, KType<'run>>>,
+    args_parts: Vec<Spanned<ExpressionPart<'run>>>,
     idx: usize,
-) -> NodeStep<'a> {
+) -> NodeStep<'run> {
     let (tag, value_part) = match tagged_union::prepare_args(args_parts) {
         Ok(v) => v,
         Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
@@ -142,14 +143,14 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'a>(
 /// wrapping routes through normal classification). If every sub
 /// short-circuits at install time, construct in place; otherwise park as
 /// a `CtorState` with an eager-subs track.
-fn launch<'a>(
-    ctx: &mut DispatchCtx<'a, '_>,
-    value_parts: Vec<ExpressionPart<'a>>,
-    kind: CtorKind<'a>,
+fn launch<'run>(
+    ctx: &mut DispatchCtx<'run, '_>,
+    value_parts: Vec<ExpressionPart<'run>>,
+    kind: CtorKind<'run>,
     idx: usize,
-) -> NodeStep<'a> {
+) -> NodeStep<'run> {
     let n = value_parts.len();
-    let mut staged_values: Vec<Option<&'a KObject<'a>>> = vec![None; n];
+    let mut staged_values: Vec<Option<&'run KObject<'run>>> = vec![None; n];
     let mut subs: Vec<(usize, NodeId)> = Vec::new();
     for (i, part) in value_parts.into_iter().enumerate() {
         let sub_expr = KExpression::new(vec![Spanned::bare(part)]);
@@ -173,7 +174,8 @@ fn launch<'a>(
         }
     }
     if subs.is_empty() {
-        let values: Vec<&'a KObject<'a>> = staged_values.into_iter().map(|o| o.unwrap()).collect();
+        let values: Vec<&'run KObject<'run>> =
+            staged_values.into_iter().map(|o| o.unwrap()).collect();
         return finish(ctx.current_scope(), &kind, &values);
     }
     let track = CtorTrack {
@@ -191,11 +193,11 @@ fn launch<'a>(
 
 /// All value subs have completed. Read each, materialize the kind-keyed
 /// payload, and arena-allocate the produced `KObject`.
-pub(in crate::machine::execute::dispatch) fn finish<'a>(
-    scope: &Scope<'a>,
-    kind: &CtorKind<'a>,
-    values: &[&'a KObject<'a>],
-) -> NodeStep<'a> {
+pub(in crate::machine::execute::dispatch) fn finish<'run>(
+    scope: &Scope<'run>,
+    kind: &CtorKind<'run>,
+    values: &[&'run KObject<'run>],
+) -> NodeStep<'run> {
     let result = match kind {
         CtorKind::Newtype { identity } => {
             debug_assert_eq!(values.len(), 1);

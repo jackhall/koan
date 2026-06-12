@@ -22,13 +22,13 @@ use crate::machine::model::types::KType;
 /// Outcome of [`Scope::resolve_type_expr`]. Mirrors
 /// [`crate::machine::model::types::ElabResult`] but `Done` carries an
 /// arena-allocated cache reference and `Park` carries scheduler `NodeId`s.
-pub enum ResolveTypeExprOutcome<'a> {
-    Done(&'a KType<'a>),
+pub enum ResolveTypeExprOutcome<'run> {
+    Done(&'run KType<'run>),
     Park(Vec<NodeId>),
     Unbound(String),
 }
 
-impl<'a> Scope<'a> {
+impl<'run> Scope<'run> {
     /// Layer-2 scope-bound TypeName resolution memo. On miss, runs
     /// [`crate::machine::model::types::elaborate_type_expr`] against `self`, asks a
     /// [`FinalizeGate`] whether the result is safe to share, and writes the cache
@@ -38,7 +38,7 @@ impl<'a> Scope<'a> {
         &self,
         te: &TypeName,
         chain: Option<std::rc::Rc<LexicalFrame>>,
-    ) -> ResolveTypeExprOutcome<'a> {
+    ) -> ResolveTypeExprOutcome<'run> {
         use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
         // The cutoff this scope's bindings are gated against — also the memo key, so a
         // forward and a backward consumer never share a cached verdict.
@@ -51,7 +51,7 @@ impl<'a> Scope<'a> {
             ElabResult::Done(kt) => {
                 let pending = FinalizeGate { scope: self }.pending_producers(&kt);
                 if pending.is_empty() {
-                    let kt_ref: &'a KType<'a> = self.arena.alloc_ktype(kt);
+                    let kt_ref: &'run KType<'run> = self.arena.alloc_ktype(kt);
                     self.type_expr_memo_insert(te.clone(), cutoff, kt_ref);
                     ResolveTypeExprOutcome::Done(kt_ref)
                 } else {
@@ -66,10 +66,10 @@ impl<'a> Scope<'a> {
 
 /// Outcome of [`resolve_type_leaf_carrier`] — the type-channel adaptation of
 /// [`ResolveTypeExprOutcome`] for the three bare-leaf token call sites.
-pub(crate) enum TypeLeafCarrier<'a> {
+pub(crate) enum TypeLeafCarrier<'run> {
     /// The memoized `&KType`, ready to ride the type channel (`Carried::Type`) the same
     /// dispatch transport every other body consumes.
-    Resolved(&'a KType<'a>),
+    Resolved(&'run KType<'run>),
     /// The bare leaf names a still-finalizing type; the producer `NodeId`s the caller
     /// parks on (single-producer in practice, see the module-level invariant).
     Park(Vec<NodeId>),
@@ -85,11 +85,11 @@ pub(crate) enum TypeLeafCarrier<'a> {
 /// every other body consumes. A leaf naming a not-yet-sealed type parks on the producers
 /// the bridge surfaces, so a bare leaf never observes a half-sealed identity. A miss
 /// surfaces `Unbound(name)`.
-pub(crate) fn resolve_type_leaf_carrier<'a>(
-    scope: &Scope<'a>,
+pub(crate) fn resolve_type_leaf_carrier<'run>(
+    scope: &Scope<'run>,
     t: &TypeName,
     chain: Option<Rc<LexicalFrame>>,
-) -> TypeLeafCarrier<'a> {
+) -> TypeLeafCarrier<'run> {
     match scope.resolve_type_expr(t, chain) {
         ResolveTypeExprOutcome::Done(kt) => {
             TypeLeafCarrier::Resolved(scope.arena.alloc_ktype(kt.clone()))
@@ -105,11 +105,11 @@ pub(crate) fn resolve_type_leaf_carrier<'a>(
 /// Admits a `KType` iff every top-level user-type it references is finalized in
 /// its owning scope (absent from that scope's `pending_types`); otherwise returns
 /// the producer `NodeId`s the caller parks on.
-struct FinalizeGate<'s, 'a> {
-    scope: &'s Scope<'a>,
+struct FinalizeGate<'step, 'run> {
+    scope: &'step Scope<'run>,
 }
 
-impl<'s, 'a> FinalizeGate<'s, 'a> {
+impl<'step, 'run> FinalizeGate<'step, 'run> {
     /// Producer `NodeId`s the caller must park on; empty iff the gate admits.
     fn pending_producers(&self, kt: &KType<'_>) -> Vec<NodeId> {
         let mut pending: Vec<NodeId> = Vec::new();
@@ -143,18 +143,18 @@ impl<'s, 'a> FinalizeGate<'s, 'a> {
 /// referenced member's schema, whose identity is `(set ptr, index)` and which may be
 /// cyclic. The dependency a consumer parks on is the named binder itself; its schema's own
 /// references are that binder's concern, resolved when it finalizes.
-struct KTypeUserRefs<'k, 'a> {
-    stack: Vec<&'k KType<'a>>,
+struct KTypeUserRefs<'b, 'run> {
+    stack: Vec<&'b KType<'run>>,
 }
 
-impl<'k, 'a> KTypeUserRefs<'k, 'a> {
-    fn of(kt: &'k KType<'a>) -> Self {
+impl<'b, 'run> KTypeUserRefs<'b, 'run> {
+    fn of(kt: &'b KType<'run>) -> Self {
         Self { stack: vec![kt] }
     }
 }
 
-impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
-    type Item = (ScopeId, &'k str);
+impl<'b, 'run> Iterator for KTypeUserRefs<'b, 'run> {
+    type Item = (ScopeId, &'b str);
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(kt) = self.stack.pop() {
@@ -292,7 +292,7 @@ mod tests {
     }
 
     /// A singleton record-repr newtype `SetRef` named `name` at `scope_id`.
-    fn struct_setref<'a>(name: &str, scope_id: ScopeId) -> KType<'a> {
+    fn struct_setref<'run>(name: &str, scope_id: ScopeId) -> KType<'run> {
         use crate::machine::model::types::{NominalSchema, RecursiveSet};
         use crate::machine::model::Record;
         let set = RecursiveSet::singleton(

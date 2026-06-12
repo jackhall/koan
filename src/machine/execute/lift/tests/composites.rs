@@ -10,7 +10,7 @@ use crate::machine::{CallArena, ScopeId};
 use super::{alloc_local_kf, defeat_fast_path};
 
 /// A singleton tagged set named `name`, for a lift-test carrier identity.
-fn tagged_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
+fn tagged_set<'run>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'run>> {
     RecursiveSet::singleton(
         name.into(),
         scope_id,
@@ -20,7 +20,7 @@ fn tagged_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
 
 /// A singleton record-repr newtype (ex-struct) set named `name`, for a lift-test carrier
 /// identity.
-fn record_newtype_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
+fn record_newtype_set<'run>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'run>> {
     RecursiveSet::singleton(
         name.into(),
         scope_id,
@@ -516,7 +516,7 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
 /// recursive group stays navigable (the `children` field type is the self-edge `SetLocal(0)`).
 /// Builds the value directly so the assertion targets the lift path without FN-dispatch
 /// incidentals. Unlike the retired `KObject::Struct` (which carried the set `Rc` directly and
-/// bumped its strong count on lift), the `Wrapped` reaches the set through its `&'a` `type_id`,
+/// bumped its strong count on lift), the `Wrapped` reaches the set through its `&'run` `type_id`,
 /// so lift copies that reference rather than `Rc::clone`ing the set — the assertion is
 /// navigability, not a refcount bump.
 #[test]

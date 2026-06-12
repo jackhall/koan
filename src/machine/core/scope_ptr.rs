@@ -81,19 +81,20 @@ impl<'a> ScopePtr<'a> {
         std::mem::transmute::<&Scope<'static>, &'b Scope<'b>>(self.ptr.as_ref())
     }
 
-    /// Re-attach with the borrow `'p` *bounded* by the `&'p self` receiver and the scope
-    /// content `'a` left free (`'a: 'p`, implied by `&'p Scope<'a>` well-formedness). Unlike
+    /// Re-attach with the borrow `'step` *bounded* by the `&'step self` receiver and the scope
+    /// content `'b` left free (`'b: 'step`, implied by `&'step Scope<'b>` well-formedness). Unlike
     /// [`Self::reattach_unbounded`], which collapses borrow and content into one `'b`, this
-    /// hands back a reference that **cannot outlive the receiver borrow** — re-anchoring it
-    /// longer than the pointer's witness is a compile error, not a fabrication. The free `'a`
-    /// is the residual, frame-`Rc`-pinned content claim (the same erasure
-    /// [`Self::reattach_unbounded`] already carries), reachable only behind the `'p` borrow.
+    /// splits them — `'step` for the borrow, a free `'b` for the content — and hands back a
+    /// reference that **cannot outlive the receiver borrow**: re-anchoring it longer than the
+    /// pointer's witness is a compile error, not a fabrication. The free `'b` is the residual,
+    /// frame-`Rc`-pinned content claim (the same erasure [`Self::reattach_unbounded`] already
+    /// carries), reachable only behind the `'step` borrow.
     ///
     /// SAFETY: `self.ptr` points at a live `Scope` the caller's `Rc<CallArena>` witness pins
-    /// for all of `'p`; the returned borrow is bounded to `'p`, so it cannot escape that pin.
-    /// `'p` is driven by the receiver, `'a` by the return-type annotation.
-    pub unsafe fn reattach_bounded<'p, 'c: 'p>(&'p self) -> &'p Scope<'c> {
-        std::mem::transmute::<&'p Scope<'static>, &'p Scope<'c>>(self.ptr.as_ref())
+    /// for all of `'step`; the returned borrow is bounded to `'step`, so it cannot escape that pin.
+    /// `'step` is driven by the receiver, `'b` by the return-type annotation.
+    pub unsafe fn reattach_bounded<'step, 'b: 'step>(&'step self) -> &'step Scope<'b> {
+        std::mem::transmute::<&'step Scope<'static>, &'step Scope<'b>>(self.ptr.as_ref())
     }
 }
 
@@ -115,10 +116,10 @@ pub struct BoundedScopePtr<'a> {
 
 impl<'a> BoundedScopePtr<'a> {
     /// Erase a scope of content `'a` to a bounded handle. **No** borrow==content coupling: the
-    /// witness borrow `'w` may be shorter than the content `'a`, because [`Self::get`] only ever
+    /// witness borrow `'b` may be shorter than the content `'a`, because [`Self::get`] only ever
     /// re-hands behind a reader-bounded borrow — the free `'a` is never cashed unbounded, so a
     /// shorter witness cannot fabricate a longer-lived reference. Safe by construction.
-    pub fn erase<'w>(scope: &'w Scope<'a>) -> Self {
+    pub fn erase<'b>(scope: &'b Scope<'a>) -> Self {
         #[allow(clippy::unnecessary_cast)]
         let ptr = scope as *const Scope<'_> as *const Scope<'static>;
         BoundedScopePtr {
@@ -128,15 +129,15 @@ impl<'a> BoundedScopePtr<'a> {
         }
     }
 
-    /// Re-hand the scope with the borrow **bounded** to the `&'p self` receiver, content `'a`
-    /// left free (`'a: 'p`). Re-anchoring longer than the receiver borrow is a compile error,
+    /// Re-hand the scope with the borrow **bounded** to the `&'step self` receiver, content `'a`
+    /// left free (`'a: 'step`). Re-anchoring longer than the receiver borrow is a compile error,
     /// not a fabrication.
     ///
     /// SAFETY: `self.ptr` points at a live `Scope` the owning scope chain's frame-`Rc` witness
-    /// pins for all of `'p` (a parent outlives the frame-bounded child whose `outer` holds this);
-    /// the returned borrow is capped at `'p`, so it cannot escape that pin. `'p` is driven by the
+    /// pins for all of `'step` (a parent outlives the frame-bounded child whose `outer` holds this);
+    /// the returned borrow is capped at `'step`, so it cannot escape that pin. `'step` is driven by the
     /// receiver, `'a` by the return-type annotation.
-    pub fn get<'p>(&'p self) -> &'p Scope<'a> {
-        unsafe { std::mem::transmute::<&'p Scope<'static>, &'p Scope<'a>>(self.ptr.as_ref()) }
+    pub fn get<'step>(&'step self) -> &'step Scope<'a> {
+        unsafe { std::mem::transmute::<&'step Scope<'static>, &'step Scope<'a>>(self.ptr.as_ref()) }
     }
 }

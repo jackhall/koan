@@ -150,6 +150,112 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     );
 }
 
+/// The deferred-return stamp coarsens a parameterized carrier. A body producing a
+/// `List<Number>` whose per-call return type resolves to the transparent carrier
+/// `(LIST OF Any)` lifts with the *declared* element type `Any` — the deferred-path twin
+/// of the resolved-return coarsening at the lift boundary. Without the stamp the body's
+/// incidental `Number` element type would leak through.
+#[test]
+fn functor_deferred_return_coarsens_list_carrier() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "SIG Seq = ((LET Carrier = :(LIST OF Any)) (VAL items :Carrier))\n\
+         MODULE Ints = ((LET Carrier = :(LIST OF Any)) (LET items = [1 2 3]))\n\
+         LET IntsView = (Ints :! Seq)",
+    );
+    run(scope, "FN (ITEMS Er :Seq) -> Er.Carrier = (Er.items)");
+    let result = run_one(scope, parse_one("ITEMS IntsView"));
+    match result {
+        KObject::List(_, elem) => assert!(
+            matches!(elem.as_ref(), KType::Any),
+            "deferred return stamped to (LIST OF Any) must coarsen the element type to Any, got {:?}",
+            elem,
+        ),
+        other => panic!(
+            "expected a List from (ITEMS IntsView), got {:?}",
+            other.ktype(),
+        ),
+    }
+}
+
+/// TCO across deferred returns: a deferred-return FN whose body tail-calls another deferred-return
+/// FN collapses to a **single scheduler slot**, exactly like a resolved-return tail chain. The
+/// per-call return type rides a `ReturnContract::PerCall` on the tail-replace, so the body is a
+/// proper tail call — no per-call Combine frame is held, so a recursive deferred body stays
+/// TCO-flat. (The pre-`PerCall` Combine lowering held a frame per call and would not collapse.)
+#[test]
+fn deferred_return_tail_call_stays_tco_flat() {
+    use crate::machine::execute::Scheduler;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "SIG Seq = ((LET Carrier = Number) (VAL v :Number))\n\
+         MODULE Ints = ((LET Carrier = Number) (LET v = 1))\n\
+         LET View = (Ints :! Seq)",
+    );
+    run(
+        scope,
+        "FN (BB Er :Seq) -> Er = (Er)\n\
+         FN (AA Er :Seq) -> Er = (BB Er)",
+    );
+    let mut sched = Scheduler::new();
+    let id = sched.add_dispatch(parse_one("AA View"), scope);
+    sched.execute().expect("execute does not surface per-slot errors");
+    assert!(
+        sched.read_result(id).is_ok(),
+        "AA V should succeed: {:?}",
+        sched.read_result(id).err(),
+    );
+    assert_eq!(
+        sched.len(),
+        1,
+        "deferred-return tail chain AA -> BB -> (Er) must collapse to one slot, got {}",
+        sched.len(),
+    );
+}
+
+/// A chain of deferred-`Expression` functors (`-> Er.Carrier`) stays TCO-flat. The first call
+/// resolves `Er.Carrier` once and tail-replaces into the body; each subsequent tail call skips
+/// resolution (keep-first discards its contract) and tail-replaces, so the chain reuses frames
+/// instead of accumulating a Combine per call. (The pre-`DeferredExprTail` lowering ran the body as
+/// Combine deps, making each onward call a dep — O(n).)
+#[test]
+fn deferred_expression_return_tail_chain_reuses_frames() {
+    use crate::machine::execute::Scheduler;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "SIG Seq = ((LET Carrier = Number) (VAL v :Number))\n\
+         MODULE Ints = ((LET Carrier = Number) (LET v = 7))\n\
+         LET View = (Ints :! Seq)",
+    );
+    run(
+        scope,
+        "FN (DD Er :Seq) -> Er.Carrier = (Er.v)\n\
+         FN (CC Er :Seq) -> Er.Carrier = (DD Er)\n\
+         FN (BB Er :Seq) -> Er.Carrier = (CC Er)\n\
+         FN (AA Er :Seq) -> Er.Carrier = (BB Er)",
+    );
+    let mut sched = Scheduler::new();
+    let id = sched.add_dispatch(parse_one("AA View"), scope);
+    sched.execute().expect("execute does not surface per-slot errors");
+    assert!(
+        sched.read_result(id).is_ok(),
+        "AA should succeed: {:?}",
+        sched.read_result(id).err(),
+    );
+    // Subsequent calls tail-replace and reuse per-call frames rather than each spawning a Combine.
+    assert!(
+        sched.tail_reuse_count() >= 1,
+        "deferred-Expression tail chain must reuse a frame (tail-replace), got {}",
+        sched.tail_reuse_count(),
+    );
+}
+
 /// Wrong-typed body for a per-call return type — Combine-finish runs the
 /// slot check against the per-call elaboration and rejects with a diagnostic
 /// mentioning "per-call return type", pinning that the rejection path is the

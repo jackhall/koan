@@ -34,22 +34,22 @@ use super::{DispatchCtx, DispatchState};
 
 /// Parked state for a head-deferred call. `resume` re-reads `parts[1..]` (the
 /// call body) and branches on the head sub-dispatch's resolved value.
-pub(in crate::machine::execute) struct HeadDeferredState<'a> {
+pub(in crate::machine::execute) struct HeadDeferredState<'run> {
     /// The full call expression; `parts[1..]` is the body the tail consumes.
-    expr: KExpression<'a>,
+    expr: KExpression<'run>,
     /// The parked head sub-dispatch producer (an Owned edge).
     head_sub: NodeId,
     /// `TypeHeadDeferred` prunes the plain-`Function` (non-functor) arm.
     type_only: bool,
 }
 
-impl<'a> HeadDeferredState<'a> {
+impl<'run> HeadDeferredState<'run> {
     /// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly.
     pub(in crate::machine::execute) fn initial_expr(
-        ctx: &mut DispatchCtx<'a, '_>,
-        expr: KExpression<'a>,
+        ctx: &mut DispatchCtx<'run, '_>,
+        expr: KExpression<'run>,
         idx: usize,
-    ) -> NodeStep<'a> {
+    ) -> NodeStep<'run> {
         let head = match &expr.parts[0].value {
             ExpressionPart::Expression(boxed) => (**boxed).clone(),
             _ => unreachable!("HeadDeferred shape implies nested Expression head"),
@@ -62,10 +62,10 @@ impl<'a> HeadDeferredState<'a> {
     /// `KExpression` so the type marker survives the sub-dispatch (mirrors
     /// `stage_all_eager_parts`).
     pub(in crate::machine::execute) fn initial_type(
-        ctx: &mut DispatchCtx<'a, '_>,
-        expr: KExpression<'a>,
+        ctx: &mut DispatchCtx<'run, '_>,
+        expr: KExpression<'run>,
         idx: usize,
-    ) -> NodeStep<'a> {
+    ) -> NodeStep<'run> {
         let head = match &expr.parts[0].value {
             ExpressionPart::SigiledTypeExpr(boxed) => KExpression::new(vec![Spanned::bare(
                 ExpressionPart::SigiledTypeExpr(boxed.clone()),
@@ -79,12 +79,12 @@ impl<'a> HeadDeferredState<'a> {
     /// Read the head sub inline if it is already ready, else install the Owned
     /// edge and park as a `HeadDeferred` state.
     fn park_or_resume(
-        ctx: &mut DispatchCtx<'a, '_>,
-        expr: KExpression<'a>,
+        ctx: &mut DispatchCtx<'run, '_>,
+        expr: KExpression<'run>,
         head_sub: NodeId,
         type_only: bool,
         idx: usize,
-    ) -> NodeStep<'a> {
+    ) -> NodeStep<'run> {
         if ctx.is_result_ready(head_sub) {
             return Self {
                 expr,
@@ -107,9 +107,9 @@ impl<'a> HeadDeferredState<'a> {
     /// surfaces a shape-appropriate diagnostic.
     pub(in crate::machine::execute) fn resume(
         self,
-        ctx: &mut DispatchCtx<'a, '_>,
+        ctx: &mut DispatchCtx<'run, '_>,
         idx: usize,
-    ) -> NodeStep<'a> {
+    ) -> NodeStep<'run> {
         let HeadDeferredState {
             expr,
             head_sub,
@@ -138,7 +138,10 @@ impl<'a> HeadDeferredState<'a> {
 /// `type_only` arm pruning. Returns the shape-appropriate `KError` for a
 /// non-admitted value (a type-shaped `TypeMismatch` under `type_only`, else a
 /// non-callable `DispatchFailed`).
-fn classify_head<'a>(head: Carried<'a>, type_only: bool) -> Result<ResolvedCallable<'a>, KError> {
+fn classify_head<'run>(
+    head: Carried<'run>,
+    type_only: bool,
+) -> Result<ResolvedCallable<'run>, KError> {
     match head {
         // A runtime value head. A functor (`KFunction` with `is_functor`) is admitted in
         // both modes — its result is a module, so it is the type-shaped head's only

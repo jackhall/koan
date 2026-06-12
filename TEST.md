@@ -77,6 +77,14 @@ subsequent runs are 1–3 min per test. Triage workflow (per-test re-runs,
 pinned-id allocation tracking) lives in
 [.claude/skills/miri/SKILL.md](.claude/skills/miri/SKILL.md).
 
+Read the **whole** output — never `tail` it. The slate tests live in the lib
+unit-test binary, which runs *first*; the trailing `tests/*.rs` binaries match
+none of the slate filter and each report `0 passed; N filtered out`, so the tail
+of a run looks identical to "Miri ran nothing." Confirm the lib `test result:`
+line shows `passed` ≈ the slate size (`python3 tools/observe_tests.py slate | wc -w`)
+before trusting a clean result — exit code 0 alone is not sufficient, since
+`cargo test` exits 0 when zero tests run.
+
 ### The slate
 
 The canonical slate — test names grouped by the unsafe site each pins down,

@@ -65,7 +65,22 @@ The triage pattern documented in past audit work:
 
 ## Reading the output
 
-- **Pass:** `test result: ok. <N> passed; 0 failed; ...`
+**Read the whole output — never `tail` it, and never append `| tail -N` to the command.** The
+slate's audit tests all live in the **lib unit-test binary, which `cargo test` runs *first*.** The
+binaries that run *last* are the `tests/*.rs` integration tests: each is handed the slate name-filter,
+matches none of it (the slate tests aren't there), and reports `0 passed; N filtered out`. So the
+**tail of every slate run is a wall of `0 passed` lines that looks exactly like "Miri ran nothing"** —
+when in fact the binary that ran the slate scrolled off the *top*. This is the single most common way
+a slate run is misread. Capture the full output (the background task's output file, or redirect to a
+file) and `grep` it; do not inspect only the end.
+
+**Sanity-check that the slate actually ran before trusting a clean result.** The **lib** binary's
+`test result:` line must show `passed` ≈ the slate size (`python3 tools/observe_tests.py slate | wc -w`).
+If *every* binary shows `0 passed`, the slate did **not** run — the read was truncated, or the lib test
+binary failed to build/run under Miri. Investigate; do **not** report a pass. **Exit code 0 is not
+sufficient** — `cargo test` exits 0 when 0 tests run.
+
+- **Pass:** `test result: ok. <N> passed; 0 failed; ...` — on the **lib** binary, `<N>` ≈ slate size.
 - **UB:** `error: Undefined Behavior: <kind>` — never acceptable. Stop and surface.
 - **Leaks:** `error: memory leaked: <N> allocations (<bytes> bytes) in <K> allocations` — the leak detector runs at process exit. Sum across tests for a slate-wide count.
 - **Tree-borrows-specific:** look for "protector", "activation", "disabled tag" in error messages — all are UB classes.

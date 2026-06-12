@@ -11,17 +11,17 @@ use super::Scheduler;
 /// One element of a list literal or one side of a dict-literal pair. Indices are into the
 /// Combine's results: `Park(i)` reads position `i` of the park-producer prefix; `Owned(j)`
 /// reads position `park_count + j` of the owned-sub suffix.
-enum Slot<'a> {
-    Static(Held<'a>),
+enum Slot<'run> {
+    Static(Held<'run>),
     Park(usize),
     Owned(usize),
 }
 
-impl<'a> Slot<'a> {
+impl<'run> Slot<'run> {
     /// Deep-clones `Park` / `Owned` results because the produced container owns its cells
-    /// and can't borrow a `&'a` carrier into its `Rc<…>`. A literal element may be a runtime
+    /// and can't borrow a `&'run` carrier into its `Rc<…>`. A literal element may be a runtime
     /// value *or* a first-class type, so each carrier widens to a [`Held`] cell.
-    fn materialize(self, results: &[Carried<'a>], park_count: usize) -> Held<'a> {
+    fn materialize(self, results: &[Carried<'run>], park_count: usize) -> Held<'run> {
         match self {
             Slot::Static(held) => held,
             Slot::Park(i) => Held::from_carried(results[i]),
@@ -30,12 +30,12 @@ impl<'a> Slot<'a> {
     }
 }
 
-impl<'a> Scheduler<'a> {
+impl<'run> Scheduler<'run> {
     pub(in crate::machine::execute) fn schedule_list_literal(
         &mut self,
-        items: Vec<ExpressionPart<'a>>,
+        items: Vec<ExpressionPart<'run>>,
     ) -> NodeId {
-        let mut layout: Vec<Slot<'a>> = Vec::with_capacity(items.len());
+        let mut layout: Vec<Slot<'run>> = Vec::with_capacity(items.len());
         let mut deps: Vec<NodeId> = Vec::new();
         let mut park_producers: Vec<NodeId> = Vec::new();
         for part in items {
@@ -44,12 +44,12 @@ impl<'a> Scheduler<'a> {
             layout.push(slot);
         }
         let park_count = park_producers.len();
-        let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
-            let items: Vec<Held<'a>> = layout
+        let finish: CombineFinish<'run> = Box::new(move |_sched, results| {
+            let items: Vec<Held<'run>> = layout
                 .into_iter()
                 .map(|slot| slot.materialize(results, park_count))
                 .collect();
-            let allocated: &'a KObject<'a> = _sched
+            let allocated: &'run KObject<'run> = _sched
                 .current_scope()
                 .arena
                 .alloc_object(KObject::list_of_held(items));
@@ -63,9 +63,9 @@ impl<'a> Scheduler<'a> {
     /// finish-time via the `KKey` conversion.
     pub(in crate::machine::execute) fn schedule_dict_literal(
         &mut self,
-        pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
+        pairs: Vec<(ExpressionPart<'run>, ExpressionPart<'run>)>,
     ) -> NodeId {
-        let mut layout: Vec<(Slot<'a>, Slot<'a>)> = Vec::with_capacity(pairs.len());
+        let mut layout: Vec<(Slot<'run>, Slot<'run>)> = Vec::with_capacity(pairs.len());
         let mut deps: Vec<NodeId> = Vec::new();
         let mut park_producers: Vec<NodeId> = Vec::new();
         for (k, v) in pairs {
@@ -75,8 +75,8 @@ impl<'a> Scheduler<'a> {
         }
         let frame_label = || Frame::bare("<dict>", "dict literal");
         let park_count = park_producers.len();
-        let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
-            let mut map: HashMap<Box<dyn Serializable<'a> + 'a>, Held<'a>> = HashMap::new();
+        let finish: CombineFinish<'run> = Box::new(move |_sched, results| {
+            let mut map: HashMap<Box<dyn Serializable<'run> + 'run>, Held<'run>> = HashMap::new();
             for (k_slot, v_slot) in layout {
                 let key_held = k_slot.materialize(results, park_count);
                 let value_held = v_slot.materialize(results, park_count);
@@ -102,7 +102,7 @@ impl<'a> Scheduler<'a> {
                 };
                 map.insert(Box::new(kkey), value_held);
             }
-            let allocated: &'a KObject<'a> = _sched
+            let allocated: &'run KObject<'run> = _sched
                 .current_scope()
                 .arena
                 .alloc_object(KObject::dict_of_held(map));
@@ -116,10 +116,10 @@ impl<'a> Scheduler<'a> {
     /// `KObject::Record`, which memoizes the per-field type record at construction.
     pub(in crate::machine::execute) fn schedule_record_literal(
         &mut self,
-        fields: Vec<(String, ExpressionPart<'a>)>,
+        fields: Vec<(String, ExpressionPart<'run>)>,
     ) -> NodeId {
         let mut names: Vec<String> = Vec::with_capacity(fields.len());
-        let mut layout: Vec<Slot<'a>> = Vec::with_capacity(fields.len());
+        let mut layout: Vec<Slot<'run>> = Vec::with_capacity(fields.len());
         let mut deps: Vec<NodeId> = Vec::new();
         let mut park_producers: Vec<NodeId> = Vec::new();
         for (name, value) in fields {
@@ -129,13 +129,13 @@ impl<'a> Scheduler<'a> {
             layout.push(val_slot);
         }
         let park_count = park_producers.len();
-        let finish: CombineFinish<'a> = Box::new(move |_sched, results| {
-            let record: Record<Held<'a>> = names
+        let finish: CombineFinish<'run> = Box::new(move |_sched, results| {
+            let record: Record<Held<'run>> = names
                 .into_iter()
                 .zip(layout)
                 .map(|(name, slot)| (name, slot.materialize(results, park_count)))
                 .collect();
-            let allocated: &'a KObject<'a> = _sched
+            let allocated: &'run KObject<'run> = _sched
                 .current_scope()
                 .arena
                 .alloc_object(KObject::record_of_held(record));
@@ -149,11 +149,11 @@ impl<'a> Scheduler<'a> {
     /// does not yet exist; cycles are caught post-submission against the Combine ID.
     fn classify_aggregate_part(
         &mut self,
-        part: ExpressionPart<'a>,
+        part: ExpressionPart<'run>,
         deps: &mut Vec<NodeId>,
         park_producers: &mut Vec<NodeId>,
         wrap_identifiers: bool,
-    ) -> Slot<'a> {
+    ) -> Slot<'run> {
         match part {
             ExpressionPart::ListLiteral(inner) => {
                 let nested_id = self.schedule_list_literal(inner);
@@ -205,10 +205,10 @@ impl<'a> Scheduler<'a> {
     /// short-circuit) handles them uniformly.
     fn resolve_aggregate_bare_name(
         &mut self,
-        part: &ExpressionPart<'a>,
+        part: &ExpressionPart<'run>,
         deps: &mut Vec<NodeId>,
         park_producers: &mut Vec<NodeId>,
-    ) -> Slot<'a> {
+    ) -> Slot<'run> {
         match resolve_name_part(self.current_scope(), part, self, None) {
             // An aggregate literal element may resolve to a value or a first-class type;
             // both ride into the cell as a `Held`.

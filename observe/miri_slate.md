@@ -2,7 +2,9 @@
 
 <!-- slate-fingerprint
 src/machine/core/arena.rs: 17
+src/machine/core/kfunction/body.rs: 3
 src/machine/core/scope_ptr.rs: 6
+src/machine/execute/scheduler/execute.rs: 1
 src/machine/model/values/module.rs: 1
 -->
 
@@ -35,7 +37,7 @@ unsafe and fingerprint-drift checks still fire.
 
 ## The slate
 
-22 tests, grouped by the unsafe site each pins down. Names below are the exact
+23 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **Singleton transmutes** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the `'static`→`'a`
@@ -167,6 +169,23 @@ constraint-free constructor, sound because the free content `'a` is reachable on
 scope-walking shapes already in the slate (and `scope_bounded_reanchors_within_witness_borrow`,
 which pins the line-for-line equivalent) cover it; no separate minimal test is added.
 
+**`ErasedContract` re-attach** ([src/machine/core/kfunction/body.rs](../src/machine/core/kfunction/body.rs))
+— the contract-lifetime erasure that mirrors `ScopePtr` for `ReturnContract`: `erase` forgets the
+lifetime for storage on a node's lifetime-free `Frame`, and the `unsafe` `reattach` transmutes
+`ReturnContract<'static>` back to a lifetime witnessed by the cart `Rc` that pins the contract's
+home arena (the cart's frame-outer arena — a strict ancestor). The unbounded re-attach call site
+in [src/machine/execute/scheduler/execute.rs](../src/machine/execute/scheduler/execute.rs) (the
+Done-boundary return-type check) runs the same transmute; end-to-end, `recursive_tagged_match_no_uaf`
+exercises it through a MATCH arm's `-> :T` carried across tail recursion. This test pins the
+erase → reattach round-trip directly.
+
+- `erased_contract_reattach_roundtrip`
+
+**`ErasedContract` re-attach — Done-boundary call site** ([src/machine/execute/scheduler/execute.rs](../src/machine/execute/scheduler/execute.rs))
+— the `unsafe { contract.reattach(&cart) }` in the Done arm runs the transmute defined in the
+group above; it carries no transmute of its own, so the same `erased_contract_reattach_roundtrip`
+(and end-to-end `recursive_tagged_match_no_uaf`) pins it. No separate minimal test.
+
 **`Module` interior mutation under a live `&'a Module`** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — `Module`
 mutates a `RefCell<HashMap>` (`type_members` / `slot_type_tags`) while a `&'a Module<'a>` is
 live — the opaque-ascription shape. (The scope re-attach itself is the `ScopePtr` group above;
@@ -215,9 +234,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
-- 2026-06-09: 538.53s — 22 tests, 0 leaks, 0 UB
-- 2026-06-07: 512.75s — 21 tests, 0 leaks, 0 UB
-- 2026-06-07: 515.41s — 21 tests, 0 leaks, 0 UB
-- 2026-06-04: 553.29s — 21 tests, 0 leaks, 0 UB
-- 2026-06-04: 730.21s — 29 tests, 0 leaks, 0 UB
+- 2026-06-11: 560.53s — 23 tests, 0 leaks, 0 UB
+- 2026-06-11: 560.14s — 23 tests, 0 leaks, 0 UB
+- 2026-06-11: 558.63s — 23 tests, 0 leaks, 0 UB
+- 2026-06-11: 558.17s — 23 tests, 0 leaks, 0 UB
+- 2026-06-10: 557.56s — 23 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

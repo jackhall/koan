@@ -194,7 +194,7 @@ fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, KKind)>, KErr
 }
 
 /// The first keyword token of a declaration expression (`STRUCT` / `UNION` / `NEWTYPE`).
-fn leading_keyword<'e>(decl: &'e KExpression<'_>) -> Option<&'e str> {
+fn leading_keyword<'b>(decl: &'b KExpression<'_>) -> Option<&'b str> {
     decl.parts.iter().find_map(|p| match &p.value {
         ExpressionPart::Keyword(s) => Some(s.as_str()),
         _ => None,
