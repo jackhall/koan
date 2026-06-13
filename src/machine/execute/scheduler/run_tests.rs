@@ -4,7 +4,6 @@
 use super::Scheduler;
 use crate::builtins::default_scope;
 use crate::machine::model::{KObject, KType};
-use crate::machine::SchedulerHandle;
 use crate::machine::{KErrorKind, RuntimeArena};
 use crate::parse::parse;
 

@@ -2,13 +2,11 @@ use std::rc::Rc;
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, SignatureElement};
-use crate::machine::{
-    BindingIndex, CatchFinish, CombineFinish, FunctionLookup, KFunction, LexicalFrame, NodeId,
-    Scope,
-};
+use crate::machine::{BindingIndex, FunctionLookup, KFunction, LexicalFrame, NodeId, Scope};
 
 use super::super::dispatch::DispatchState;
 use super::super::nodes::{work_park_producers, CallFrame, Node, NodeScope, NodeWork};
+use super::super::CombineFinish;
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
@@ -93,12 +91,25 @@ impl<'run> Scheduler<'run> {
         self.add(NodeWork::dispatch(expr), scope)
     }
 
-    /// Schedule a `Combine` slot. `owned_subs` are sub-Dispatches this Combine
-    /// allocated (cascade-freed on success); `park_producers` are existing
-    /// sibling slots it splices but does not own (kept alive past success via
-    /// `Notify` edges). The finish closure sees results as
-    /// `[park_producers..., owned_subs...]`.
-    pub fn add_combine(
+    /// Submit each `statement` as a fresh lexical block over `scope`. Inherent entry point for
+    /// REPL-style / test submission of a block of top-level statements, so callers need not hold
+    /// the [`SchedulerHandle`](super::super::SchedulerHandle) trait. Delegates to the trait method.
+    pub fn enter_block(
+        &mut self,
+        scope_id: crate::machine::ScopeId,
+        statements: Vec<KExpression<'run>>,
+        scope: &'run Scope<'run>,
+    ) -> Vec<NodeId> {
+        <Self as super::super::SchedulerHandle>::enter_block(self, scope_id, statements, scope)
+    }
+
+    /// Schedule a `Combine` slot against an explicit `scope`. `owned_subs` are sub-Dispatches
+    /// this Combine allocated (cascade-freed on success); `park_producers` are existing sibling
+    /// slots it splices but does not own (kept alive past success via `Notify` edges). The finish
+    /// closure sees results as `[park_producers..., owned_subs...]`. Test fixture entry point; the
+    /// run path uses [`Scheduler::combine_here`] / `add_combine_in_frame`.
+    #[cfg(test)]
+    pub(in crate::machine::execute) fn add_combine(
         &mut self,
         owned_subs: Vec<NodeId>,
         park_producers: Vec<NodeId>,
@@ -116,16 +127,6 @@ impl<'run> Scheduler<'run> {
             },
             scope,
         )
-    }
-
-    /// Schedule a `Catch` slot.
-    pub fn add_catch(
-        &mut self,
-        from: NodeId,
-        scope: &'run Scope<'run>,
-        finish: CatchFinish<'run>,
-    ) -> NodeId {
-        self.add(NodeWork::Catch { from, finish }, scope)
     }
 
     /// Inherit-from-ambient entry point. When there is no ambient chain

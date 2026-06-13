@@ -4,12 +4,11 @@ use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::{Carried, KObject, KType};
-use crate::machine::{
-    CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, Scope, TraceFrame,
-};
+use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope, TraceFrame};
 
 use super::dispatch::{DispatchState, SchedulerView};
 use super::outcome::Outcome;
+use super::{CatchFinish, CombineFinish};
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
 /// no further write to that slot occurs until it is freed and reused.
@@ -57,7 +56,7 @@ pub(super) enum NodeStep<'run> {
         function: Option<ReturnContract<'run>>,
         block_entry: Option<ScopeId>,
         /// Body-scope chain index for FN-body / MATCH-arm / TRY-arm tail-replace
-        /// (mirrors [`crate::machine::core::kfunction::body::BodyResult::Tail::body_index`]).
+        /// (mirrors [`Outcome::Continue::body_index`]).
         /// Positions the freshly-pushed block frame at index `N` for multi-statement
         /// tail-into-last; `0` is the single-statement case.
         body_index: usize,
@@ -66,8 +65,8 @@ pub(super) enum NodeStep<'run> {
 
 /// Host-side closure for a [`NodeWork::DispatchCombine`] slot — the dispatch-side dual of
 /// [`CombineFinish`]. Receives the dep terminals in submission order and a read-only
-/// [`SchedulerView`], and returns an [`Outcome`]: unlike a builtin Combine (whose `BodyResult`
-/// finish cannot re-park), a dispatch finish may resolve, tail-redispatch, or **park again** (e.g.
+/// [`SchedulerView`], and returns an [`Outcome`]: unlike a builtin Combine (whose finish lands as
+/// an applied `Outcome` and cannot re-park), a dispatch finish may resolve, tail-redispatch, or **park again** (e.g.
 /// an overload park on a freshly resolved producer), which the three-way outcome expresses. The
 /// harness applies the returned outcome, so the finish — like every decide — issues no graph write.
 pub(super) type DispatchCombineFinish<'run> = Box<

@@ -17,16 +17,17 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::Carried;
 use crate::machine::model::{KType, Record};
-use crate::machine::{
-    BodyResult, CombineFinish, KError, KErrorKind, NodeId, SchedulerHandle, Scope, TraceFrame,
-};
+use crate::machine::{KError, KErrorKind, NodeId, Scope, TraceFrame};
+
+use super::super::nodes::NodeOutput;
+use super::super::outcome::{forward_owned, Outcome};
+use super::super::{CombineFinish, SchedulerHandle};
 
 /// Folds the elaborated `(name, KType)` pairs into the caller's carrier on the Combine's
-/// `Done` arm. The scheduler-currency variant, returning `BodyResult` — used by
+/// `Done` arm. The scheduler-currency variant, returning [`Outcome`] — used by
 /// [`defer_field_list_via_combine`].
 pub(crate) type FieldListFinalize<'run> = Box<
-    dyn for<'step> FnOnce(&'step Scope<'run>, Vec<(String, KType<'run>)>) -> BodyResult<'run>
-        + 'run,
+    dyn for<'step> FnOnce(&'step Scope<'run>, Vec<(String, KType<'run>)>) -> Outcome<'run> + 'run,
 >;
 
 /// `Action`-path twin of [`FieldListFinalize`], returning `Result<Carried, KError>` — used by
@@ -56,7 +57,7 @@ pub(crate) fn defer_field_list_via_combine<'run, 's>(
     pending_guard: Option<PendingBinderGuard<'run>>,
     error_frame: Option<TraceFrame>,
     finalize: FieldListFinalize<'run>,
-) -> BodyResult<'run> {
+) -> Outcome<'run> {
     let park_count = park_producers.len();
     let owned_subs: Vec<NodeId> = sub_dispatches
         .into_iter()
@@ -81,22 +82,22 @@ pub(crate) fn defer_field_list_via_combine<'run, 's>(
             FieldListOutcome::Done(fields) => finalize(_sched.current_scope(), fields),
             FieldListOutcome::Err(msg) => {
                 let error = KError::new(KErrorKind::ShapeError(msg));
-                BodyResult::Err(match error_frame {
+                Outcome::Done(NodeOutput::Err(match error_frame {
                     Some(frame) => error.with_frame(frame),
                     None => error,
-                })
+                }))
             }
             // Every producer waited on is terminal by Combine invariant, so a second
             // park is a scheduling inconsistency rather than a recoverable forward ref.
-            FieldListOutcome::Pending { .. } => {
-                BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+            FieldListOutcome::Pending { .. } => Outcome::Done(NodeOutput::Err(KError::new(
+                KErrorKind::ShapeError(format!(
                     "{context}: forward type reference still unresolved after Combine wake"
-                ))))
-            }
+                )),
+            ))),
         }
     });
     let combine_id = sched.add_combine_here(owned_subs, park_producers, finish);
-    BodyResult::DeferTo(combine_id)
+    forward_owned(combine_id)
 }
 
 /// `Action`-harness twin of [`defer_field_list_via_combine`]: build the same Combine as an
@@ -167,10 +168,11 @@ pub(crate) fn elaborate_record_value<'run, 's>(
     sched: &mut dyn SchedulerHandle<'run, 's>,
     fields: KExpression<'run>,
     chain: Option<Rc<LexicalFrame>>,
-) -> BodyResult<'run> {
-    fn fold<'run>(scope: &Scope<'run>, pairs: Vec<(String, KType<'run>)>) -> BodyResult<'run> {
+) -> Outcome<'run> {
+    fn fold<'run>(scope: &Scope<'run>, pairs: Vec<(String, KType<'run>)>) -> Outcome<'run> {
         let record = Record::from_pairs(pairs);
-        BodyResult::ktype(scope.arena.alloc_ktype(KType::Record(Box::new(record))))
+        let kt = scope.arena.alloc_ktype(KType::Record(Box::new(record)));
+        Outcome::Done(NodeOutput::Value(Carried::Type(kt)))
     }
     let mut elaborator = Elaborator::new(sched.current_scope()).with_chain(chain.clone());
     match parse_typed_field_list_via_elaborator(
@@ -181,7 +183,9 @@ pub(crate) fn elaborate_record_value<'run, 's>(
         None,
     ) {
         FieldListOutcome::Done(pairs) => fold(sched.current_scope(), pairs),
-        FieldListOutcome::Err(msg) => BodyResult::Err(KError::new(KErrorKind::ShapeError(msg))),
+        FieldListOutcome::Err(msg) => {
+            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::ShapeError(msg))))
+        }
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,

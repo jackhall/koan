@@ -7,13 +7,13 @@
 //! applies it. The harness holds the sole `&mut Scheduler` on the dispatch side.
 
 use crate::machine::core::kfunction::action::FramePlacement;
-use crate::machine::core::kfunction::{BodyResult, SchedulerHandle};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
 use crate::machine::NodeId;
 
-use super::super::nodes::{DispatchCombineFinish, LiftState, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{DispatchCombineFinish, LiftState, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
+use super::super::SchedulerHandle;
 use super::ctx::SchedulerView;
 use super::{Continuation, DispatchDep, Outcome};
 
@@ -95,16 +95,15 @@ impl<'run> Scheduler<'run> {
                         DispatchDep::Existing(id) => id,
                     })
                     .collect();
-                // Edge install: a `Finish` owns its dep suffix (`[park_count..]`, cascade-freed on
-                // resolve) and notify-parks its prefix; a `Replay`/`Forward` notify-parks on every
-                // producer (the slot re-decides or forwards a value — it owns nothing).
-                let park_prefix = if matches!(cont, Continuation::Finish(_)) {
-                    park_count
-                } else {
-                    dep_ids.len()
-                };
+                // Edge install: the `[..park_count]` prefix is notify-parked (sibling producers
+                // the slot waits on but doesn't own); the `[park_count..]` suffix is owned
+                // (cascade-freed on resolve). Each continuation sets `park_count` to match: a
+                // dispatch `Finish` owns all its deps (`park_count: 0`); a builtin `Finish` parks
+                // its Existing prefix; `Replay` parks every producer (`park_count: len`); a
+                // bare-name `Forward` parks its one producer (`park_count: 1`) while a
+                // deferred-combine `Forward` owns it (`park_count: 0`).
                 for (i, id) in dep_ids.iter().enumerate() {
-                    if i < park_prefix {
+                    if i < park_count {
                         self.add_park_edge(*id, NodeId(idx));
                     } else {
                         self.add_owned_edge(*id, NodeId(idx));
@@ -139,16 +138,16 @@ impl<'run> Scheduler<'run> {
                 free,
             } => {
                 // The dispatch→execution hand-off: run the resolved call against the raw
-                // `&mut Scheduler` and lower its body onto the slot.
+                // `&mut Scheduler` and apply the outcome it produces onto the slot.
                 drain_free(self, free);
-                let body = super::exec::invoke(self, picked, working_expr);
-                lower_body_result(self, body, idx)
+                let oc = super::exec::invoke(self, picked, working_expr);
+                self.apply_outcome(oc, idx)
             }
             Outcome::Elaborate { fields, chain } => {
                 // Execution layer: the field-list elaborator holds `&mut Scheduler` and may defer
-                // through a Combine; lower its body onto the slot like any resolved call.
-                let body = super::field_list::elaborate_record_value(self, fields, chain);
-                lower_body_result(self, body, idx)
+                // through a Combine; apply the outcome it produces onto the slot.
+                let oc = super::field_list::elaborate_record_value(self, fields, chain);
+                self.apply_outcome(oc, idx)
             }
             Outcome::Redispatch { working_expr, free } => {
                 // Re-resolve dispatch against the now fully-spliced `working_expr` immediately
@@ -162,33 +161,5 @@ impl<'run> Scheduler<'run> {
                 self.apply_outcome(outcome, idx)
             }
         }
-    }
-}
-
-/// Lower a resolved body's [`BodyResult`] onto the slot's [`NodeStep`] — shared by the `Invoke`
-/// and `Elaborate` arms (a value/error completes the slot, a `Tail` re-dispatches, a `DeferTo`
-/// parks on the named lift).
-fn lower_body_result<'run>(
-    sched: &mut Scheduler<'run>,
-    body: BodyResult<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
-    match body {
-        BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
-        BodyResult::Tail {
-            expr,
-            frame,
-            function,
-            block_entry,
-            body_index,
-        } => NodeStep::Replace {
-            work: NodeWork::dispatch(expr),
-            frame,
-            function,
-            block_entry,
-            body_index,
-        },
-        BodyResult::DeferTo(id) => sched.defer_to_lift(idx, id),
-        BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
     }
 }

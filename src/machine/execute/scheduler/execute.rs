@@ -6,7 +6,7 @@ use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 
 use super::super::lift::{lift_kobject, lift_ktype};
-use super::super::nodes::{CallFrame, LiftState, Node, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{CallFrame, Node, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 use crate::machine::model::Carried;
 
@@ -208,28 +208,6 @@ impl<'run> Scheduler<'run> {
                 stack.push(child);
             }
             self.store.free_one(id);
-        }
-    }
-
-    /// CallFrame / function are left as `None` and `block_entry: None` so the slot's
-    /// existing per-call frame, function label, and chain stay attached when the
-    /// Lift writes its terminal.
-    ///
-    /// After a replay-park, `dep_edges[idx]` can take the mixed shape
-    /// `[Notify(producer), …, Owned(bind_id)]`; `free` handles that correctly via
-    /// its Owned-only recursion.
-    pub(in crate::machine::execute) fn defer_to_lift(
-        &mut self,
-        idx: usize,
-        bind_id: NodeId,
-    ) -> NodeStep<'run> {
-        self.deps.add_owned_edge(bind_id, NodeId(idx));
-        NodeStep::Replace {
-            work: NodeWork::Lift(LiftState::Pending(bind_id)),
-            frame: None,
-            function: None,
-            block_entry: None,
-            body_index: 0,
         }
     }
 }

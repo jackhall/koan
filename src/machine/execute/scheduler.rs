@@ -3,11 +3,10 @@ use std::rc::Rc;
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
-use crate::machine::{
-    CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, SchedulerHandle, Scope,
-};
+use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope};
 
 use super::nodes::{NodeScope, NodeWork};
+use super::{CatchFinish, CombineFinish, SchedulerHandle};
 use dep_graph::DepGraph;
 use node_store::NodeStore;
 use work_queues::WorkQueues;
@@ -201,29 +200,6 @@ impl<'run> Scheduler<'run> {
         self.store.chain_of(id)
     }
 
-    /// Run a builtin body directly against `scope` as the executing slot's scope. A body
-    /// reads its scope on demand via [`SchedulerHandle::current_scope`], so a direct-body
-    /// test installs `Anchored(scope)` for the duration of the call. The cart is a throwaway
-    /// fixture frame adopting `scope`; `Anchored` reads `scope` directly, so the cart only
-    /// satisfies the non-optional `enter_slot_step` contract.
-    #[cfg(test)]
-    pub fn run_body_against<R>(
-        &mut self,
-        scope: &'run Scope<'run>,
-        body: impl FnOnce(&mut dyn SchedulerHandle<'run, 'run>) -> R,
-    ) -> R {
-        let chain = LexicalFrame::root(scope.id, 0);
-        let guard = self.enter_slot_step(
-            CallArena::adopting(scope),
-            None,
-            chain,
-            NodeScope::Anchored(scope),
-        );
-        let out = body(self);
-        let _ = self.exit_slot_step(guard);
-        out
-    }
-
     pub fn len(&self) -> usize {
         self.store.len()
     }
@@ -322,7 +298,7 @@ impl<'run> Scheduler<'run> {
     /// stored run-lived `&Scope`; a `Yoked` slot re-projects from the live `active_frame` cart via
     /// the bounded brand. A short borrow bounded by `&self` — fetched per use, never held across a
     /// `&mut self` call — so it holds nothing across the in-step TCO frame reset. See
-    /// [`SchedulerHandle::current_scope`](crate::machine::SchedulerHandle::current_scope).
+    /// [`SchedulerHandle::current_scope`](super::SchedulerHandle::current_scope).
     pub(in crate::machine::execute) fn current_scope(&self) -> &Scope<'run> {
         self.current_scope_opt()
             .expect("a slot step installs active_node_scope (and a Yoked slot keeps its frame)")
@@ -352,29 +328,6 @@ impl<'run> Default for Scheduler<'run> {
 }
 
 impl<'run, 's> SchedulerHandle<'run, 's> for Scheduler<'run> {
-    fn add_dispatch(&mut self, expr: KExpression<'run>, scope: &'run Scope<'run>) -> NodeId {
-        Scheduler::add_dispatch(self, expr, scope)
-    }
-
-    fn add_combine(
-        &mut self,
-        owned_subs: Vec<NodeId>,
-        park_producers: Vec<NodeId>,
-        scope: &'run Scope<'run>,
-        finish: CombineFinish<'run>,
-    ) -> NodeId {
-        Scheduler::add_combine(self, owned_subs, park_producers, scope, finish)
-    }
-
-    fn add_catch(
-        &mut self,
-        from: NodeId,
-        scope: &'run Scope<'run>,
-        finish: CatchFinish<'run>,
-    ) -> NodeId {
-        Scheduler::add_catch(self, from, scope, finish)
-    }
-
     fn current_frame(&self) -> Option<Rc<CallArena>> {
         self.active_frame.clone()
     }
@@ -499,21 +452,6 @@ impl<'run, 's> SchedulerHandle<'run, 's> for Scheduler<'run> {
                 park_count,
                 finish,
             },
-            scope,
-            NodeScope::Yoked,
-            explicit_chain,
-        )
-    }
-
-    fn add_catch_in_frame(&mut self, from: NodeId, finish: CatchFinish<'run>) -> NodeId {
-        let frame = self
-            .active_frame
-            .clone()
-            .expect("in-frame catch requires an active frame");
-        let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
-        let scope = frame.scope_for_bind();
-        self.submit_node(
-            NodeWork::Catch { from, finish },
             scope,
             NodeScope::Yoked,
             explicit_chain,

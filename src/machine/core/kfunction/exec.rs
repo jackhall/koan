@@ -9,7 +9,7 @@
 //!
 //! The scheduler-aware shell that maps an [`ExecOutcome`] onto the scheduler is
 //! `execute::dispatch::exec::invoke`: it reuses the live dispatcher's resolution, turns the outcome
-//! into a `BodyResult` (`Tail → tail_with_frame_contract`, …), and lets the scheduler lift any produced
+//! into an `Outcome` (`Tail → Outcome::Continue`, …), and lets the scheduler lift any produced
 //! value at the done boundary. Keeping that out of here is what lets `exec` stay scheduler-agnostic
 //! and `'run`-free.
 //!

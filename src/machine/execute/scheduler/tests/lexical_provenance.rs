@@ -8,7 +8,7 @@ use crate::builtins::default_scope;
 use crate::builtins::test_support::parse_one;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
-use crate::machine::{RuntimeArena, SchedulerHandle};
+use crate::machine::RuntimeArena;
 
 use super::super::Scheduler;
 use super::let_expr;

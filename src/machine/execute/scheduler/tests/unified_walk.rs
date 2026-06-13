@@ -10,7 +10,6 @@ use std::rc::Rc;
 
 use crate::builtins::default_scope;
 use crate::machine::execute::Scheduler;
-use crate::machine::SchedulerHandle;
 use crate::machine::{KErrorKind, RuntimeArena};
 use crate::parse::parse;
 

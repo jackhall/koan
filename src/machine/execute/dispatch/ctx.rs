@@ -19,9 +19,10 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
-use crate::machine::{KError, LexicalFrame, NameOutcome, NodeId, SchedulerHandle, Scope};
+use crate::machine::{KError, LexicalFrame, NameOutcome, NodeId, Scope};
 
 use super::super::scheduler::Scheduler;
+use super::super::SchedulerHandle;
 use super::{bind_frame_err, park_combine, resolve_name_part, DispatchDep, Outcome, PendingSub};
 
 /// Read-only dispatch view — the decide-phase context. It holds only `&Scheduler`, never `&mut`.

@@ -85,6 +85,20 @@ pub(in crate::machine::execute) enum Outcome<'run> {
     },
 }
 
+/// Lift the slot onto a single producer the decide phase **already spawned and owns** (the
+/// builtin/exec deferred-return combine, `DeferTo`): an owned edge so the spawned node cascade-frees
+/// when this slot does, then `Forward` adopts its resolved value. The `park_count: 0` (vs
+/// [`super::dispatch::park_lift`]'s `1`) is what makes the edge owned rather than a notify park.
+pub(crate) fn forward_owned<'run>(producer: NodeId) -> Outcome<'run> {
+    Outcome::ParkThenContinue {
+        deps: vec![DispatchDep::Existing(producer)],
+        park_count: 0,
+        cont: Continuation::Forward(producer),
+        dep_error_frame: None,
+        free: Vec::new(),
+    }
+}
+
 /// What a [`Outcome::ParkThenContinue`] runs once its deps resolve. The three shapes are the
 /// closed set of "what happens on wake":
 /// - `Finish` consumes the resolved dep values and returns another [`Outcome`] (Combine).

@@ -5,7 +5,7 @@ use crate::builtins::default_scope;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::KObject;
-use crate::machine::{RuntimeArena, SchedulerHandle};
+use crate::machine::RuntimeArena;
 
 use super::let_expr;
 

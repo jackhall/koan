@@ -1,8 +1,9 @@
 use crate::machine::model::{Carried, KObject};
-use crate::machine::{BodyResult, CatchFinish, CombineFinish, KError, NodeId, TraceFrame};
+use crate::machine::{KError, NodeId, TraceFrame};
 
 use super::super::dispatch::propagate_dep_error;
-use super::super::nodes::{DispatchCombineFinish, LiftState, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{DispatchCombineFinish, LiftState, NodeOutput, NodeStep};
+use super::super::{CatchFinish, CombineFinish};
 use super::Scheduler;
 
 impl<'run> Scheduler<'run> {
@@ -40,14 +41,15 @@ impl<'run> Scheduler<'run> {
         // narrows each arm it expects.
         let values: Vec<Carried<'run>> = deps.iter().map(|d| self.read(*d)).collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
-        let body = finish(self, &values);
+        let outcome = finish(self, &values);
         self.reclaim_deps(idx, owned_indices);
-        self.dispatch_body_result(body, idx)
+        self.apply_outcome(outcome, idx)
     }
 
     /// Dispatch-side dual of [`Self::run_combine`]. Same dep short-circuit and owned-dep
-    /// reclaim, but the `finish` returns a [`NodeStep`] directly (it may re-park), so there is
-    /// no `BodyResult` lowering. Deps are reclaimed *before* the finish runs — a dispatch finish
+    /// reclaim; both finishes return an [`Outcome`] the harness applies, but the dispatch finish
+    /// runs through [`super::super::dispatch::run_dispatch_combine_finish`] (which builds the
+    /// read-only view), and its deps are reclaimed *before* the finish runs — a dispatch finish
     /// installs its own park/replace edges on `idx`, which a post-finish `clear_dep_edges` would
     /// wrongly wipe. Dep-error propagation is frameless; the resumed dispatch attaches its own
     /// frame.
@@ -73,30 +75,6 @@ impl<'run> Scheduler<'run> {
         super::super::dispatch::run_dispatch_combine_finish(self, finish, &values, idx)
     }
 
-    /// Map a finished `BodyResult` to its `NodeStep`, shared by Combine and Catch:
-    /// a value/error completes the node, a `Tail` replaces it with a fresh dispatch,
-    /// and a `DeferTo` parks on the named lift. Callers free their deps first.
-    fn dispatch_body_result(&mut self, body: BodyResult<'run>, idx: usize) -> NodeStep<'run> {
-        match body {
-            BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
-            BodyResult::Tail {
-                expr,
-                frame,
-                function,
-                block_entry,
-                body_index,
-            } => NodeStep::Replace {
-                work: NodeWork::dispatch(expr),
-                frame,
-                function,
-                block_entry,
-                body_index,
-            },
-            BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
-            BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
-        }
-    }
-
     /// Unlike Combine, an errored `from` does not short-circuit; the finish
     /// closure decides whether to recover or re-raise. `from` is freed on both paths.
     pub(super) fn run_catch(
@@ -111,9 +89,9 @@ impl<'run> Scheduler<'run> {
             // one here would double-frame.
             Err(e) => Err(propagate_dep_error(e, None)),
         };
-        let body = finish(self, result);
+        let outcome = finish(self, result);
         self.reclaim_deps(idx, vec![from.index()]);
-        self.dispatch_body_result(body, idx)
+        self.apply_outcome(outcome, idx)
     }
 
     /// Consume the stamped Lift state. By pop time the notify-walk has

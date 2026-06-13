@@ -1,18 +1,20 @@
 //! The dispatch-side `invoke` — the single entry that runs a resolved call. A builtin runs through
 //! the action harness (its bound args as a `KObject::Record` `BodyCtx`); a user-defined body runs
 //! through [`crate::machine::core::kfunction::exec::run_user_fn`] and its [`ExecOutcome`] is lowered onto
-//! the scheduler — mapped to a `BodyResult` (then a `NodeStep`) using the scheduler's own
-//! primitives (`acquire_tail_frame`, the body-chain dispatch, `add_combine_in_frame`). Kept out of
+//! the scheduler — mapped to an [`Outcome`] (then a `NodeStep` by `apply_outcome`) using the
+//! scheduler's own primitives (`acquire_tail_frame`, the body-chain dispatch, `add_combine_in_frame`). Kept out of
 //! `ctx.rs` (the dispatcher facade) so the dispatcher core stays thin; pure body semantics live one
 //! layer down in [`crate::machine::core::kfunction::exec`].
 
+use super::super::nodes::{NodeOutput, NodeWork};
+use super::super::outcome::{forward_owned, Outcome};
 use super::super::scheduler::Scheduler;
+use super::super::{CombineFinish, SchedulerHandle};
+use crate::machine::core::kfunction::action::FramePlacement;
 use crate::machine::core::kfunction::bind_by_name::CallArgs;
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
-use crate::machine::core::kfunction::{
-    Body, BodyResult, CombineFinish, KFunction, SchedulerHandle,
-};
+use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::execute::lift::lift_ktype;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
@@ -28,14 +30,14 @@ pub(super) fn invoke<'run>(
     sched: &mut Scheduler<'run>,
     picked: &'run KFunction<'run>,
     working_expr: KExpression<'run>,
-) -> BodyResult<'run> {
+) -> Outcome<'run> {
     // An action-harness builtin: build a read-only `BodyCtx`, get the `Action`, and lower it
     // through the shared `run_action` interpreter.
     if let Body::Builtin(f) = &picked.body {
         let f = *f;
         let args = match picked.bind(working_expr) {
             Ok(future) => future.args,
-            Err(e) => return BodyResult::Err(e),
+            Err(e) => return Outcome::Done(NodeOutput::Err(e)),
         };
         return run_action_builtin(sched, f, args);
     }
@@ -44,7 +46,7 @@ pub(super) fn invoke<'run>(
     // `bind_by_name`: a uniquely-picked call is admitted shape-only by dispatch, so a non-satisfying
     // typed argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here.
     if let Err(e) = picked.validate_call_args(&working_expr) {
-        return BodyResult::Err(e);
+        return Outcome::Done(NodeOutput::Err(e));
     }
 
     let args = match extract_carried_args(sched, &working_expr) {
@@ -52,15 +54,15 @@ pub(super) fn invoke<'run>(
         // Unreachable by construction (the bind sites resolve value parts to `Future`/literal
         // first); surface a diagnostic rather than silently mis-bind if that ever breaks.
         None => {
-            return BodyResult::Err(KError::new(KErrorKind::User(
+            return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::User(
                 "exec: a call argument was not a resolved value at the bind site".to_string(),
-            )))
+            ))))
         }
     };
 
     let bound = match picked.bind_by_name(CallArgs::Positional(args)) {
         Ok(record) => record,
-        Err(e) => return BodyResult::Err(e),
+        Err(e) => return Outcome::Done(NodeOutput::Err(e)),
     };
 
     let outer = picked.captured_scope();
@@ -97,7 +99,16 @@ pub(super) fn invoke<'run>(
                 &frame,
                 leading.into_iter().map(|e| (*e).clone()).collect(),
             );
-            BodyResult::tail_with_frame_contract(tail.clone(), frame, contract, body_index)
+            // Capture the body scope id before `frame` moves into `FreshChild`; the reinstall
+            // site reads it to assemble the chain.
+            let block_entry = frame.scope().id;
+            Outcome::Continue {
+                work: NodeWork::dispatch(tail.clone()),
+                frame: FramePlacement::FreshChild { frame },
+                contract: Some(contract),
+                block_entry: Some(block_entry),
+                body_index,
+            }
         }
         ExecOutcome::DeferredExprTail {
             type_expr,
@@ -124,9 +135,11 @@ pub(super) fn invoke<'run>(
                 let kt = match results[0] {
                     Carried::Type(t) => t,
                     Carried::Object(other) => {
-                        return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
-                            "FN deferred return-type expression produced a non-type {} value",
-                            other.ktype().name(),
+                        return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::ShapeError(
+                            format!(
+                                "FN deferred return-type expression produced a non-type {} value",
+                                other.ktype().name(),
+                            ),
                         ))))
                     }
                 };
@@ -137,7 +150,14 @@ pub(super) fn invoke<'run>(
                     func: picked,
                     ret: ret_ref,
                 };
-                BodyResult::tail_with_frame_contract(tail_expr, body_frame, contract, body_index)
+                let block_entry = body_frame.scope().id;
+                Outcome::Continue {
+                    work: NodeWork::dispatch(tail_expr),
+                    frame: FramePlacement::FreshChild { frame: body_frame },
+                    contract: Some(contract),
+                    block_entry: Some(block_entry),
+                    body_index,
+                }
             });
             let mut pending = Some(finish);
             let mut combine_id = None;
@@ -145,9 +165,9 @@ pub(super) fn invoke<'run>(
                 let finish = pending.take().expect("body runs once");
                 combine_id = Some(s.add_combine_in_frame(vec![type_dep], vec![], finish));
             });
-            BodyResult::DeferTo(combine_id.expect("combine spawns"))
+            forward_owned(combine_id.expect("combine spawns"))
         }
-        ExecOutcome::Errored(e) => BodyResult::Err(e),
+        ExecOutcome::Errored(e) => Outcome::Done(NodeOutput::Err(e)),
     };
     result
 }
@@ -159,7 +179,7 @@ fn run_action_builtin<'run>(
     sched: &mut Scheduler<'run>,
     f: crate::machine::core::kfunction::ActionFn,
     args: crate::machine::model::types::Record<crate::machine::model::values::ArgValue<'run>>,
-) -> BodyResult<'run> {
+) -> Outcome<'run> {
     use crate::machine::core::kfunction::action::BodyCtx;
     use crate::machine::model::values::{ArgValue, Held};
     use crate::machine::model::KObject;

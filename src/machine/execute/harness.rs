@@ -9,21 +9,24 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::action::{
     Action, Dep, DepPlacement, FinishCtx, FramePlacement,
 };
-use crate::machine::core::kfunction::{BodyResult, CatchFinish, CombineFinish, SchedulerHandle};
 use crate::machine::core::CallArena;
 use crate::machine::NodeId;
 
-/// Interpret an [`Action`] into the scheduler's `BodyResult` currency — the only code that calls
+use super::nodes::{NodeOutput, NodeWork};
+use super::outcome::{forward_owned, Outcome};
+use super::{CatchFinish, CombineFinish, SchedulerHandle};
+
+/// Interpret an [`Action`] into the scheduler's [`Outcome`] currency — the only code that calls
 /// `SchedulerHandle`. A `Cont` / `CatchCont` returned by a finish is recursed into through the same
-/// function. Returns a `BodyResult`; the caller maps that to a `NodeStep`.
-pub fn run_action<'a, 's>(
+/// function. Returns an `Outcome`; the harness applies it.
+pub(in crate::machine::execute) fn run_action<'a, 's>(
     h: &mut dyn SchedulerHandle<'a, 's>,
     action: Action<'a>,
-) -> BodyResult<'a> {
+) -> Outcome<'a> {
     match action {
         // Terminal: the value the builtin already computed (scope was mutated in place first).
-        Action::Done(Ok(c)) => BodyResult::Value(c),
-        Action::Done(Err(e)) => BodyResult::Err(e),
+        Action::Done(Ok(c)) => Outcome::Done(NodeOutput::Value(c)),
+        Action::Done(Err(e)) => Outcome::Done(NodeOutput::Err(e)),
 
         Action::Tail {
             leading,
@@ -54,10 +57,15 @@ pub fn run_action<'a, 's>(
             } else {
                 0
             };
-            BodyResult::Tail {
-                expr: tail,
-                frame,
-                function: contract,
+            // `Some(rc)` installs a fresh per-call cart; `None` keeps the slot's current cart.
+            let placement = match frame {
+                Some(frame) => FramePlacement::FreshChild { frame },
+                None => FramePlacement::Inherit,
+            };
+            Outcome::Continue {
+                work: NodeWork::dispatch(tail),
+                frame: placement,
+                contract,
                 block_entry,
                 body_index,
             }
@@ -87,7 +95,7 @@ pub fn run_action<'a, 's>(
                 let next = finish(&fctx, results);
                 run_action(sched, next)
             });
-            BodyResult::DeferTo(h.add_combine_here(owned, park, wrapped))
+            forward_owned(h.add_combine_here(owned, park, wrapped))
         }
 
         Action::Catch { watched, finish } => {
@@ -99,7 +107,7 @@ pub fn run_action<'a, 's>(
                 let next = finish(&fctx, result);
                 run_action(sched, next)
             });
-            BodyResult::DeferTo(h.add_catch_here(from, wrapped))
+            forward_owned(h.add_catch_here(from, wrapped))
         }
     }
 }

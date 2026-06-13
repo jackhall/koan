@@ -3,11 +3,12 @@ use std::collections::HashMap;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
-use crate::machine::{
-    BodyResult, CombineFinish, KError, KErrorKind, NameOutcome, NodeId, TraceFrame,
-};
+use crate::machine::{KError, KErrorKind, NameOutcome, NodeId, TraceFrame};
 
 use super::super::dispatch::resolve_name_part;
+use super::super::nodes::NodeOutput;
+use super::super::outcome::Outcome;
+use super::super::CombineFinish;
 use super::Scheduler;
 
 /// One element of a list literal or one side of a dict-literal pair. Indices are into the
@@ -55,7 +56,7 @@ impl<'run> Scheduler<'run> {
                 .current_scope()
                 .arena
                 .alloc_object(KObject::list_of_held(items));
-            BodyResult::value(allocated)
+            Outcome::Done(NodeOutput::Value(Carried::Object(allocated)))
         });
         self.combine_here(deps, park_producers, finish)
     }
@@ -86,20 +87,20 @@ impl<'run> Scheduler<'run> {
                 let key_obj = match key_held.as_object() {
                     Some(obj) => obj,
                     None => {
-                        return BodyResult::Err(
+                        return Outcome::Done(NodeOutput::Err(
                             KError::new(KErrorKind::ShapeError(
                                 "dict key must be a value, not a type".to_string(),
                             ))
                             .with_frame(frame_label()),
-                        )
+                        ))
                     }
                 };
                 let kkey = match KKey::try_from_kobject(key_obj) {
                     Ok(k) => k,
                     Err(msg) => {
-                        return BodyResult::Err(
+                        return Outcome::Done(NodeOutput::Err(
                             KError::new(KErrorKind::ShapeError(msg)).with_frame(frame_label()),
-                        )
+                        ))
                     }
                 };
                 map.insert(Box::new(kkey), value_held);
@@ -108,7 +109,7 @@ impl<'run> Scheduler<'run> {
                 .current_scope()
                 .arena
                 .alloc_object(KObject::dict_of_held(map));
-            BodyResult::value(allocated)
+            Outcome::Done(NodeOutput::Value(Carried::Object(allocated)))
         });
         self.combine_here(deps, park_producers, finish)
     }
@@ -141,7 +142,7 @@ impl<'run> Scheduler<'run> {
                 .current_scope()
                 .arena
                 .alloc_object(KObject::record_of_held(record));
-            BodyResult::value(allocated)
+            Outcome::Done(NodeOutput::Value(Carried::Object(allocated)))
         });
         self.combine_here(deps, park_producers, finish)
     }
