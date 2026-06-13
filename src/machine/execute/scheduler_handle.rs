@@ -85,14 +85,6 @@ pub(in crate::machine::execute) trait SchedulerHandle<'a, 's> {
         finish: CombineFinish<'a>,
     ) -> NodeId;
 
-    /// The executing slot's scope, materialized on demand as a **short** borrow bounded by this
-    /// `&self` call — never held across a `&mut self` scheduler call. This is the read-boundary:
-    /// an `Anchored` slot hands back its genuinely run-lived `&Scope`, a `Yoked` slot re-projects
-    /// from the live frame cart via the bounded brand. A body fetches the scope per use rather than
-    /// receiving it as a step-long argument, so no live borrow blocks the in-step TCO frame reset —
-    /// which is what lets the read boundary be a bounded brand instead of a fabricated `&'run`.
-    fn current_scope(&self) -> &Scope<'a>;
-
     /// Schedule against the **executing slot's own scope handle** — the honest
     /// re-dispatch-against-my-own-scope path. The sub-slot inherits the running slot's
     /// [`NodeScope`]: a binder's genuinely run-lived decl-scope stays `Anchored(&'a)`, a per-call
@@ -100,13 +92,6 @@ pub(in crate::machine::execute) trait SchedulerHandle<'a, 's> {
     /// cannot widen back to `&'a`). Distinct from `*_in_frame`, which forces the *active frame's*
     /// scope — wrong for a binder whose decl-scope is not that frame's child.
     fn add_dispatch_here(&mut self, expr: KExpression<'a>) -> NodeId;
-    /// `Combine` sibling of [`Self::add_dispatch_here`].
-    fn add_combine_here(
-        &mut self,
-        owned_subs: Vec<NodeId>,
-        park_producers: Vec<NodeId>,
-        finish: CombineFinish<'a>,
-    ) -> NodeId;
 
     /// Schedule each top-level statement in `body_expr` against `scope`. Routes through
     /// [`Self::enter_block`] with `scope.id` so body statements get fresh `(scope.id, i)`

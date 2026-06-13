@@ -458,27 +458,7 @@ impl<'run, 's> SchedulerHandle<'run, 's> for Scheduler<'run> {
         )
     }
 
-    fn current_scope(&self) -> &Scope<'run> {
-        Scheduler::current_scope(self)
-    }
-
     fn add_dispatch_here(&mut self, expr: KExpression<'run>) -> NodeId {
         self.submit_here(NodeWork::dispatch(expr))
-    }
-
-    fn add_combine_here(
-        &mut self,
-        owned_subs: Vec<NodeId>,
-        park_producers: Vec<NodeId>,
-        finish: CombineFinish<'run>,
-    ) -> NodeId {
-        let park_count = park_producers.len();
-        let mut deps = park_producers;
-        deps.extend(owned_subs);
-        self.submit_here(NodeWork::Combine {
-            deps,
-            park_count,
-            finish,
-        })
     }
 }

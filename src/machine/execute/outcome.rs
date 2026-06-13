@@ -13,20 +13,18 @@
 //! - [`Outcome::ParkThenContinue`] — park on deps; on resolve run a [`Continuation`] that yields
 //!   another outcome.
 //!
-//! Three variants are **transitional** and shed by later phases of the scheduler-unification arc:
-//! [`Outcome::Invoke`] / [`Outcome::Elaborate`] run a body holding `&mut Scheduler` (retired when
-//! invoke/elaborate become `read-view → Outcome` producers), and [`Outcome::Redispatch`] is an
-//! immediate dispatch-specific re-decide via
+//! Two variants are **transitional** and shed by later phases of the scheduler-unification arc:
+//! [`Outcome::Invoke`] runs a resolved call holding `&mut Scheduler` (retired when invoke becomes a
+//! `read-view + frame → Outcome` producer), and [`Outcome::Redispatch`] is an immediate
+//! dispatch-specific re-decide via
 //! [`KeywordedState::finish`](super::dispatch::keyworded::KeywordedState).
-
-use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::{Dep, DepPlacement, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::{LexicalFrame, NodeId, TraceFrame};
+use crate::machine::{NodeId, TraceFrame};
 
 use super::dispatch::DispatchState;
 use super::nodes::{DispatchCombineFinish, NodeOutput, NodeWork};
@@ -69,18 +67,12 @@ pub(in crate::machine::execute) enum Outcome<'run> {
         dep_error_frame: Option<TraceFrame>,
         free: Vec<usize>,
     },
-    /// Transitional (retired in P4): run the resolved call against `&mut Scheduler` and lower its
+    /// Transitional: run the resolved call against `&mut Scheduler` and lower its
     /// body onto the slot. `free` reclaims eager-subs `Reuse` producers consumed inline.
     Invoke {
         picked: &'run KFunction<'run>,
         working_expr: KExpression<'run>,
         free: Vec<usize>,
-    },
-    /// Transitional (retired in P4): elaborate a structural record-type field list against
-    /// `&mut Scheduler` and lower the resulting body onto the slot.
-    Elaborate {
-        fields: KExpression<'run>,
-        chain: Option<Rc<LexicalFrame>>,
     },
     /// Transitional: re-resolve dispatch against a fully-spliced `working_expr` immediately
     /// (the post-eager-subs continuation with no speculatively pre-picked function). `free`

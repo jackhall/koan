@@ -10,6 +10,7 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::core::{LexicalFrame, PendingBinderGuard};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
@@ -20,8 +21,9 @@ use crate::machine::model::{KType, Record};
 use crate::machine::{KError, KErrorKind, NodeId, Scope, TraceFrame};
 
 use super::super::nodes::NodeOutput;
-use super::super::outcome::{forward_owned, Outcome};
-use super::super::{CombineFinish, SchedulerHandle};
+use super::super::outcome::{Continuation, DispatchDep, Outcome};
+use super::super::CombineFinish;
+use super::SchedulerView;
 
 /// Folds the elaborated `(name, KType)` pairs into the caller's carrier on the Combine's
 /// `Done` arm. The scheduler-currency variant, returning [`Outcome`] — used by
@@ -40,13 +42,13 @@ pub(crate) type FieldListFinalizeAction<'run> = Box<
         + 'run,
 >;
 
-/// Schedule the sigil sub-Dispatches (in DFS order) and the Combine that re-walks `expr`
-/// once they and `park_producers` resolve. `threaded` / `chain` rebuild the elaborator for
-/// the re-walk; `pending_guard` (when present) rides into the closure so its Drop fires on
-/// every finish arm; `error_frame` is attached to the user-facing `Err` arm.
+/// Declare the sigil sub-Dispatches (in DFS order) and the Combine that re-walks `expr` once they
+/// and `park_producers` resolve, as a [`Outcome::ParkThenContinue`] — a pure decide, no write.
+/// `threaded` / `chain` rebuild the elaborator for the re-walk; `pending_guard` (when present)
+/// rides into the closure so its Drop fires on every finish arm; `error_frame` is attached to the
+/// user-facing `Err` arm.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn defer_field_list_via_combine<'run, 's>(
-    sched: &mut dyn SchedulerHandle<'run, 's>,
+pub(crate) fn defer_field_list_via_combine<'run>(
     expr: KExpression<'run>,
     park_producers: Vec<NodeId>,
     sub_dispatches: Vec<KExpression<'run>>,
@@ -59,17 +61,13 @@ pub(crate) fn defer_field_list_via_combine<'run, 's>(
     finalize: FieldListFinalize<'run>,
 ) -> Outcome<'run> {
     let park_count = park_producers.len();
-    let owned_subs: Vec<NodeId> = sub_dispatches
-        .into_iter()
-        .map(|sub| sched.add_dispatch_here(sub))
-        .collect();
-    let finish: CombineFinish<'run> = Box::new(move |_sched, results| {
+    let finish: CombineFinish<'run> = Box::new(move |view, results| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
         // `results` = `[park results.. , owned-sub results..]`; the re-walk consumes only
         // the owned-sub carriers, in the DFS order they were scheduled above.
         let mut feed = ResultFeed::new(&results[park_count..]);
-        let mut elaborator = Elaborator::new(_sched.current_scope())
+        let mut elaborator = Elaborator::new(view.current_scope())
             .with_threaded(threaded.iter().cloned())
             .with_chain(chain.clone());
         match parse_typed_field_list_via_elaborator(
@@ -79,7 +77,7 @@ pub(crate) fn defer_field_list_via_combine<'run, 's>(
             &mut elaborator,
             Some(&mut feed),
         ) {
-            FieldListOutcome::Done(fields) => finalize(_sched.current_scope(), fields),
+            FieldListOutcome::Done(fields) => finalize(view.current_scope(), fields),
             FieldListOutcome::Err(msg) => {
                 let error = KError::new(KErrorKind::ShapeError(msg));
                 Outcome::Done(NodeOutput::Err(match error_frame {
@@ -96,8 +94,21 @@ pub(crate) fn defer_field_list_via_combine<'run, 's>(
             ))),
         }
     });
-    let combine_id = sched.add_combine_here(owned_subs, park_producers, finish);
-    forward_owned(combine_id)
+    // Deps `[park_producers (Existing) ..., sigil subs (Dispatch/OwnScope) ...]`; the harness owns
+    // the `Dispatch` suffix and parks the `Existing` prefix, feeding results in that order.
+    let mut deps: Vec<DispatchDep<'run>> =
+        park_producers.into_iter().map(DispatchDep::Existing).collect();
+    deps.extend(sub_dispatches.into_iter().map(|sub| DispatchDep::Dispatch {
+        expr: sub,
+        placement: DepPlacement::OwnScope,
+    }));
+    Outcome::ParkThenContinue {
+        deps,
+        park_count,
+        cont: Continuation::Combine(finish),
+        dep_error_frame: None,
+        free: Vec::new(),
+    }
 }
 
 /// `Action`-harness twin of [`defer_field_list_via_combine`]: build the same Combine as an
@@ -165,7 +176,7 @@ pub(crate) fn defer_field_list_action<'a>(
 /// field naming a forward type parks and a sigil field type sub-dispatches, both deferred
 /// through one Combine (the field walker's own re-walk handles nested records).
 pub(crate) fn elaborate_record_value<'run, 's>(
-    sched: &mut dyn SchedulerHandle<'run, 's>,
+    view: &SchedulerView<'run, 's>,
     fields: KExpression<'run>,
     chain: Option<Rc<LexicalFrame>>,
 ) -> Outcome<'run> {
@@ -174,7 +185,7 @@ pub(crate) fn elaborate_record_value<'run, 's>(
         let kt = scope.arena.alloc_ktype(KType::Record(Box::new(record)));
         Outcome::Done(NodeOutput::Value(Carried::Type(kt)))
     }
-    let mut elaborator = Elaborator::new(sched.current_scope()).with_chain(chain.clone());
+    let mut elaborator = Elaborator::new(view.current_scope()).with_chain(chain.clone());
     match parse_typed_field_list_via_elaborator(
         &fields,
         "record fields",
@@ -182,7 +193,7 @@ pub(crate) fn elaborate_record_value<'run, 's>(
         &mut elaborator,
         None,
     ) {
-        FieldListOutcome::Done(pairs) => fold(sched.current_scope(), pairs),
+        FieldListOutcome::Done(pairs) => fold(view.current_scope(), pairs),
         FieldListOutcome::Err(msg) => {
             Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::ShapeError(msg))))
         }
@@ -190,7 +201,6 @@ pub(crate) fn elaborate_record_value<'run, 's>(
             park_producers,
             sub_dispatches,
         } => defer_field_list_via_combine(
-            sched,
             fields,
             park_producers,
             sub_dispatches,

@@ -218,7 +218,9 @@ pub(super) fn record_type<'run>(
         _ => unreachable!("RecordType shape implies a single RecordType part"),
     };
     let chain = ctx.current_lexical_chain();
-    Outcome::Elaborate { fields, chain }
+    // The field-list elaborator is a pure decide: fold the structural record type now, or declare
+    // its forward-ref/sub-dispatch deferral as a `ParkThenContinue`.
+    super::field_list::elaborate_record_value(ctx, fields, chain)
 }
 
 /// `(99)`, `("x")`, `([1 2 3])`, `((inner))` etc. — single-part

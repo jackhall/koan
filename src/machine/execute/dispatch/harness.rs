@@ -206,12 +206,6 @@ impl<'run> Scheduler<'run> {
                 let oc = super::exec::invoke(self, picked, working_expr);
                 self.apply_outcome(oc, idx)
             }
-            Outcome::Elaborate { fields, chain } => {
-                // Execution layer: the field-list elaborator holds `&mut Scheduler` and may defer
-                // through a Combine; apply the outcome it produces onto the slot.
-                let oc = super::field_list::elaborate_record_value(self, fields, chain);
-                self.apply_outcome(oc, idx)
-            }
             Outcome::Redispatch { working_expr, free } => {
                 // Re-resolve dispatch against the now fully-spliced `working_expr` immediately
                 // (the post-eager-subs continuation with no speculatively pre-picked function).
