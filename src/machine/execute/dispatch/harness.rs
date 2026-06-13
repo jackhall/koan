@@ -212,11 +212,8 @@ impl<'run> Scheduler<'run> {
                 // Re-resolve dispatch against the now fully-spliced `working_expr` immediately
                 // (the post-eager-subs continuation with no speculatively pre-picked function).
                 drain_free(self, free);
-                let outcome = super::keyworded::KeywordedState::finish(
-                    &SchedulerView::new(self),
-                    working_expr,
-                    idx,
-                );
+                let outcome =
+                    super::keyworded::finish(&SchedulerView::new(self), working_expr, idx);
                 self.apply_outcome(outcome, idx)
             }
         }

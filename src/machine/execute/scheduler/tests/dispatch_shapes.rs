@@ -688,9 +688,9 @@ fn keyworded_unchanged_with_keyword_in_body() {
 
 /// A Keyworded dispatch whose initial resolve picks an overload but whose
 /// value-cell parts need sub-Dispatch evaluation (the Resolved-with-eager-subs
-/// arm) must terminate correctly under the stateful driver. Pins that
-/// `KeywordedState::WaitingEagerSubs` resumes, re-resolves, and binds inline
-/// through `exec::invoke`.
+/// arm) must terminate correctly under the stateful driver. Pins that the
+/// eager-subs `DispatchCombine` finish re-resolves and binds inline through
+/// `exec::invoke`.
 ///
 /// Program: `LET y = (FIRST [1 2 3])`. LET picks at initial resolve; the RHS
 /// is an eager sub-Dispatch. After the sub resolves to `1`, the resume handler
@@ -746,19 +746,17 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
     }
 }
 
-/// For each Keyworded track variant: the drain-end cycle-detection guard in
-/// [`Scheduler::execute`] must read the parked slot's carrier expression from
-/// `KeywordedState`, not from the placeholder `NodeWork::Dispatch.expr` that
-/// `install_eager_subs_track` / `install_bare_name_park` / `install_overload_park`
-/// drop to `KExpression::new(Vec::new())`. With only the empty `NodeWork`
-/// expression available the deadlock sample would render as `""`;
-/// `DispatchState::parked_carrier_expr` must surface the state-carried form.
+/// A parked `Resume` slot carrying a `Some(carrier)`: the drain-end cycle-detection guard in
+/// [`Scheduler::execute`] must read the parked slot's carrier expression from the
+/// `DispatchState::Resume` carrier, not from the placeholder `NodeWork::Dispatch.expr` that
+/// `install_bare_name_park` / `install_overload_park` drop to `KExpression::new(Vec::new())`. With
+/// only the empty `NodeWork` expression available the deadlock sample would render as `""`;
+/// `DispatchState::parked_carrier_expr` must surface the carrier-carried form. A `None`-carrier
+/// resume (a bare-leaf park) and the `Initialized` birth state both fall back to the `NodeWork`
+/// expression.
 #[test]
 fn keyworded_parked_carrier_expr_reads_state() {
-    use crate::machine::execute::dispatch::keyworded::{
-        BareNameParkTrack, KeywordedState, OverloadParkTrack,
-    };
-    use crate::machine::execute::dispatch::{DispatchState, Initialized};
+    use crate::machine::execute::dispatch::DispatchState;
 
     fn carrier_expr<'run>() -> KExpression<'run> {
         // `(LIFT_BARE arg)` — a recognizable sample distinct from any other
@@ -771,47 +769,26 @@ fn keyworded_parked_carrier_expr_reads_state() {
     }
     let expected = carrier_expr().summarize();
 
-    let with_bare_name = DispatchState::Keyworded(Box::new(KeywordedState::with_bare_name_park(
-        Initialized {
-            pre_subs: Vec::new(),
-        },
-        BareNameParkTrack::new(carrier_expr()),
-    )));
+    let with_carrier = DispatchState::Resume {
+        carrier: Some(carrier_expr()),
+        resume: Box::new(|_view, _idx| unreachable!("carrier-rendering test never resumes")),
+    };
     assert_eq!(
-        with_bare_name
-            .parked_carrier_expr()
-            .map(Parseable::summarize),
-        Some(expected.clone()),
-        "bare-name-park track must surface `working_expr` as the parked sample",
-    );
-
-    let with_overload = DispatchState::Keyworded(Box::new(KeywordedState::with_overload_park(
-        Initialized {
-            pre_subs: Vec::new(),
-        },
-        OverloadParkTrack::new(carrier_expr()),
-    )));
-    assert_eq!(
-        with_overload
-            .parked_carrier_expr()
-            .map(Parseable::summarize),
+        with_carrier.parked_carrier_expr().map(Parseable::summarize),
         Some(expected),
-        "overload-park track must surface its original `expr` as the parked sample",
+        "a Some-carrier resume must surface its carrier as the parked sample",
     );
 
-    // Non-Keyworded variants — and the one-shot Keyworded path that
-    // terminalizes without installing a track — never park, so the
-    // accessor surfaces `None` and the drain-end guard falls back to
+    // A None-carrier resume (a bare-leaf park) and the `Initialized` birth state never carry a
+    // spliced expression, so the accessor surfaces `None` and the drain-end guard falls back to
     // the slot's `NodeWork::Dispatch.expr` field.
-    let untracked = DispatchState::Keyworded(Box::new(KeywordedState {
-        init: Initialized {
-            pre_subs: Vec::new(),
-        },
-        track: None,
-    }));
+    let no_carrier = DispatchState::Resume {
+        carrier: None,
+        resume: Box::new(|_view, _idx| unreachable!("carrier-rendering test never resumes")),
+    };
     assert!(
-        untracked.parked_carrier_expr().is_none(),
-        "Keyworded with no installed track must surface None (fall back to NodeWork expr)",
+        no_carrier.parked_carrier_expr().is_none(),
+        "a None-carrier resume must surface None (fall back to NodeWork expr)",
     );
     assert!(
         DispatchState::initialized(Vec::new())

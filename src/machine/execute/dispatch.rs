@@ -3,7 +3,7 @@
 //! [`run_dispatch`] classifies the slot via [`classify_dispatch_shape`]
 //! and routes by shape:
 //!
-//! - **Keyworded** (a keyword is present) → [`keyworded::KeywordedState`]
+//! - **Keyworded** (a keyword is present) → [`keyworded::initial`]
 //! - **FunctionValueCall** (lowercase Identifier head) →
 //!   [`fn_value::FnValueState`]
 //! - **HeadDeferred** / **TypeHeadDeferred** (an `Expression` or `:(…)`
@@ -51,13 +51,12 @@ pub(in crate::machine::execute) use ctx::SchedulerView;
 pub(crate) use field_list::defer_field_list_action;
 use fn_value::FnValueState;
 pub(in crate::machine::execute) use harness::run_dispatch_combine_finish;
-use keyworded::KeywordedState;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
 pub use resolve_type_expr::ResolveTypeExprOutcome;
 pub(crate) use resolve_type_expr::{resolve_type_leaf_carrier, TypeLeafCarrier};
-use single_poll::{BareTypeState, CtorState};
+use single_poll::CtorState;
 
 /// The shape classification and classifier live in
 /// [`crate::machine::model::ast`] (pure-structural, cached on the node at parse
@@ -254,6 +253,24 @@ pub(in crate::machine::execute) fn park_self<'run>(
     }
 }
 
+/// Park the slot on `producers` (notify edges) and re-run its `resume` decide on wake — the
+/// closure-carrying `ParkSelf` shape for the `Keyworded` / `BareTypeLeaf` families. `carrier` is
+/// the parked expression the deadlock summary renders (`None` for a bare leaf). The producers are
+/// the to-wait set the decide already filtered.
+pub(in crate::machine::execute) fn park_resume<'run>(
+    producers: Vec<NodeId>,
+    carrier: Option<KExpression<'run>>,
+    resume: ResumeFn<'run>,
+) -> Outcome<'run> {
+    Outcome::ParkThenContinue {
+        park_count: producers.len(),
+        deps: producers.into_iter().map(DispatchDep::Existing).collect(),
+        cont: Continuation::Replay(DispatchState::Resume { carrier, resume }),
+        dep_error_frame: None,
+        free: Vec::new(),
+    }
+}
+
 /// Park a bare-identifier slot on the single `producer` that binds its name, then *become* that
 /// producer's resolved value (the push/notify single-producer `Lift` forward).
 pub(in crate::machine::execute) fn park_lift<'run>(producer: NodeId) -> Outcome<'run> {
@@ -363,21 +380,31 @@ pub(in crate::machine::execute) struct Initialized {
     pub(in crate::machine::execute) pre_subs: Vec<(usize, NodeId)>,
 }
 
-/// One variant per [`DispatchShape`], plus the pre-classification
-/// `Initialized` birth state. `Keyworded` and `FunctionValueCall` are
-/// boxed because each carries multiple independent `Option<Track>`
-/// fields; inlining would push every `DispatchState`-carrying type
-/// past clippy's `large_enum_variant` threshold.
+/// A parked slot's resume: the `SchedulerView -> Outcome` decide a `Keyworded` or `BareTypeLeaf`
+/// slot re-runs on wake. It captures whatever its decide needs (the carried `expr` + `pre_subs`,
+/// or the bare leaf), so the router can wake it uniformly without naming the family's internals —
+/// boxed like [`DispatchCombineFinish`](super::nodes::DispatchCombineFinish) so the enum stays slim.
+pub(in crate::machine::execute) type ResumeFn<'run> =
+    Box<dyn for<'a> FnOnce(&SchedulerView<'run, 'a>, usize) -> Outcome<'run> + 'run>;
+
+/// One variant per resumable [`DispatchShape`] family, plus the pre-classification `Initialized`
+/// birth state. `Keyworded` and `BareTypeLeaf` resume through an opaque [`ResumeFn`] closure
+/// (`Resume`); `TypeCall` and `FunctionValueCall` still carry concrete park state.
 pub(in crate::machine::execute) enum DispatchState<'run> {
     Initialized(Initialized),
-    BareTypeLeaf(BareTypeState<'run>),
-    /// Boxed for the same reason as `Keyworded` / `FunctionValueCall`: the
-    /// `CtorState` carries an eager-subs `CtorTrack` (schemas, staged values) or a
-    /// head-placeholder `KExpression`, either of which would push the by-value
-    /// `DispatchState` past clippy's `large_enum_variant` threshold.
+    /// A parked `Keyworded` or `BareTypeLeaf` slot: re-run `resume` on wake. `carrier` is the
+    /// parked expression surfaced for the drain-end deadlock summary (the slot's
+    /// `NodeWork::Dispatch.expr` is dropped to an empty placeholder on park), or `None` for a
+    /// bare-leaf park that carries no spliced expression to render.
+    Resume {
+        carrier: Option<KExpression<'run>>,
+        resume: ResumeFn<'run>,
+    },
+    /// Boxed because the `CtorState` carries an eager-subs `CtorTrack` (schemas, staged values) or
+    /// a head-placeholder `KExpression`, either of which would push the by-value `DispatchState`
+    /// past clippy's `large_enum_variant` threshold.
     TypeCall(Box<CtorState<'run>>),
     FunctionValueCall(Box<FnValueState<'run>>),
-    Keyworded(Box<KeywordedState<'run>>),
 }
 
 impl<'run> DispatchState<'run> {
@@ -388,14 +415,12 @@ impl<'run> DispatchState<'run> {
         DispatchState::Initialized(Initialized { pre_subs })
     }
 
-    /// Expression carried by the state itself for parked `Keyworded`
-    /// or `FunctionValueCall` slots. Track installers drop
-    /// `NodeWork::Dispatch.expr` to an empty placeholder on park, so
-    /// the drain-end deadlock summary needs this fallback to render a
-    /// parked sample.
+    /// Expression carried by the state itself for a parked `Resume` (`Keyworded`) or
+    /// `FunctionValueCall` slot. Park installers drop `NodeWork::Dispatch.expr` to an empty
+    /// placeholder, so the drain-end deadlock summary needs this fallback to render a parked sample.
     pub(in crate::machine::execute) fn parked_carrier_expr(&self) -> Option<&KExpression<'run>> {
         match self {
-            DispatchState::Keyworded(ks) => ks.track.as_ref().map(|t| t.carrier_expr()),
+            DispatchState::Resume { carrier, .. } => carrier.as_ref(),
             DispatchState::FunctionValueCall(fs) => Some(&fs.head_placeholder.expr),
             _ => None,
         }
@@ -419,10 +444,11 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
     let init = match state {
         DispatchState::Initialized(i) => i,
         // Each parked-state resume decides against a read-only view; the router clears the
-        // resuming slot's stale dep edges (where the resume depends on it) before deciding,
-        // then applies the returned outcome — the resume itself issues no graph write.
-        DispatchState::Keyworded(ks) => {
-            let outcome = ks.resume(&SchedulerView::new(sched), idx);
+        // resuming slot's stale dep edges before deciding, then applies the returned outcome —
+        // the resume itself issues no graph write.
+        DispatchState::Resume { resume, .. } => {
+            sched.clear_dep_edges(idx);
+            let outcome = resume(&SchedulerView::new(sched), idx);
             return sched.apply_outcome(outcome, idx);
         }
         DispatchState::FunctionValueCall(fs) => {
@@ -434,17 +460,6 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
             let outcome = (*cs).resume(&SchedulerView::new(sched));
             return sched.apply_outcome(outcome, idx);
         }
-        DispatchState::BareTypeLeaf(bs) if bs.park.is_some() => {
-            sched.clear_dep_edges(idx);
-            let outcome = bs.resume(&SchedulerView::new(sched));
-            return sched.apply_outcome(outcome, idx);
-        }
-        _ => unreachable!(
-            "remaining fast-lane stateful variants terminalize in one poll; \
-             only Keyworded, FunctionValueCall, TypeCall, and a parked BareTypeLeaf \
-             re-enter from a parked track (HeadDeferred parks as a DispatchCombine, \
-             resumed by the scheduler, not a Dispatch state)"
-        ),
     };
     match expr.shape() {
         DispatchShape::BareTypeLeaf => {
@@ -507,8 +522,7 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
             sched.apply_outcome(outcome, idx)
         }
         DispatchShape::Keyworded => {
-            let outcome =
-                KeywordedState::initial(&SchedulerView::new(sched), expr, init.pre_subs, idx);
+            let outcome = keyworded::initial(&SchedulerView::new(sched), expr, init.pre_subs, idx);
             sched.apply_outcome(outcome, idx)
         }
         DispatchShape::SigiledTypeExpr => {

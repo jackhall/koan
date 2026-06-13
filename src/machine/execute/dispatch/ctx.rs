@@ -116,7 +116,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
     /// `free`; a freshly minted sub is never terminal in the same step, so it becomes an owned
     /// `Combine` dep. The finish splices the resolved values into `working_expr` and routes on
     /// `picked` — `Some(f)` calls `f` ([`Outcome::Invoke`]), `None` re-resolves
-    /// ([`Outcome::Redispatch`] → [`KeywordedState::finish`]). When every sub spliced
+    /// ([`Outcome::Redispatch`] → [`keyworded::finish`](super::keyworded::finish)). When every sub spliced
     /// inline, that routing happens now; otherwise the slot parks as a `Combine` and the routing
     /// runs in the finish. The `<bind>` dep-error frame rides on `dep_error_frame`. Read-only —
     /// every write the outcome implies is the harness's.
@@ -189,7 +189,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
 /// Route a fully-spliced eager-subs `working_expr` to its continuation — the shared tail of
 /// the `DispatchCombine` finish and its all-inline fast path. `Some(f)` names the committed
 /// call as an [`Outcome::Invoke`]; `None` defers to a [`Outcome::Redispatch`]
-/// (the harness re-resolves via [`KeywordedState::finish`], where an element-typed `Future(_)`
+/// (the harness re-resolves via [`keyworded::finish`](super::keyworded::finish), where an element-typed `Future(_)`
 /// revealed by a sub surfaces as a slot-terminal `DispatchFailed`). Pure data — no `&mut`.
 fn finish_eager_subs<'run>(
     working_expr: KExpression<'run>,

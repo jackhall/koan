@@ -17,7 +17,7 @@
 //! acquire the per-call frame (a write), so it names the call and the harness acquires the frame
 //! before running the pure `invoke` decide. [`Outcome::Redispatch`] is the one remaining
 //! **transitional** variant — an immediate dispatch-specific re-decide via
-//! [`KeywordedState::finish`](super::dispatch::keyworded::KeywordedState), shed when the
+//! [`keyworded::finish`](super::dispatch::keyworded::finish), shed when the
 //! eager-subs re-resolve folds in.
 
 use std::rc::Rc;
@@ -100,8 +100,9 @@ pub(in crate::machine::execute) enum Outcome<'run> {
 ///   `Action::Catch`): the slot becomes a `NodeWork::Catch` watching the realized `watched` dep;
 ///   the harness owns that producer. `watched`'s placement is realized at apply time (an `InScope`
 ///   watched enters a fresh single-statement block, unlike a Combine body's fan-out).
-/// - `Replay` re-runs the parked dispatch decide (the `ParkSelf` shape — its payload becomes a
-///   resume closure once `DispatchState` dissolves).
+/// - `Replay` re-runs the parked dispatch decide (the `ParkSelf` shape). Its payload is a
+///   [`DispatchState`] — a `Resume` closure for the `Keyworded` / `BareTypeLeaf` families,
+///   concrete park state for the `TypeCall` / `FunctionValueCall` families still to migrate.
 /// - `Forward` makes the slot *be* a single producer's value (the bare-name `Lift` forward).
 pub(in crate::machine::execute) enum Continuation<'run> {
     Finish(DispatchCombineFinish<'run>),

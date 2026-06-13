@@ -3,10 +3,9 @@
 //! Most terminate (or single-producer-park) in one poll. Two carry a resume:
 //! `TypeCall` parks on per-value-cell eager-subs (or a still-finalizing head
 //! binding) and resumes via [`CtorState::resume`]; `BareTypeLeaf` parks on a
-//! still-finalizing referent and re-resolves via [`BareTypeState::resume`].
+//! still-finalizing referent and re-resolves via a [`park_resume`] closure.
 
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
@@ -18,25 +17,10 @@ use crate::machine::{KError, KErrorKind, NodeId, Resolution};
 use super::super::nodes::{DispatchCombineFinish, NodeOutput};
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
-use super::{become_dispatch, park_combine, park_lift, park_self, DispatchDep, Outcome};
+use super::{
+    become_dispatch, park_combine, park_lift, park_resume, park_self, DispatchDep, Outcome,
+};
 use super::{DispatchState, Initialized};
-
-pub(in crate::machine::execute) struct BareTypeState<'run> {
-    /// Set when `bare_type_leaf` parked on a still-finalizing referent (a
-    /// `RECURSIVE TYPES` member caught mid-seal). On resume the leaf re-resolves
-    /// against the now-sealed binding through the same memoized bridge.
-    pub(in crate::machine::execute) park: Option<BareTypeParkTrack>,
-    _ph: PhantomData<&'run ()>,
-}
-
-/// Parked resolution state for a `BareTypeLeaf` whose referent was still finalizing.
-/// Carries the leaf `TypeName` so the resume re-runs the resolve once the single producer
-/// is sealed; the producer's terminal is not the type carrier, so the resume re-resolves
-/// (hitting the sealed memo) rather than lifting the producer's value.
-pub(in crate::machine::execute) struct BareTypeParkTrack {
-    pub(in crate::machine::execute) leaf: TypeName,
-    pub(in crate::machine::execute) producer: NodeId,
-}
 
 /// Parked `TypeCall` state. Ctor value subs park as a [`NodeWork::DispatchCombine`]
 /// (`constructors::launch`), so the only thing a `CtorState` carries is a still-finalizing
@@ -80,33 +64,6 @@ pub(in crate::machine::execute) enum CtorKind<'run> {
         index: usize,
         tag: String,
     },
-}
-
-impl<'run> BareTypeState<'run> {
-    pub(in crate::machine::execute) fn with_park(park: BareTypeParkTrack) -> Self {
-        Self {
-            park: Some(park),
-            _ph: PhantomData,
-        }
-    }
-
-    /// Re-run `bare_type_leaf` against the now-sealed referent. The producer's terminal is
-    /// not the type carrier (a finalize-combine returns its own value), so this re-resolves
-    /// through the memoized bridge — a hit on the sealed `type_expr_memo` — rather than
-    /// lifting the producer's value.
-    pub(in crate::machine::execute) fn resume(
-        self,
-        ctx: &SchedulerView<'run, '_>,
-    ) -> Outcome<'run> {
-        let BareTypeState { park, .. } = self;
-        let BareTypeParkTrack { leaf, producer } =
-            park.expect("BareTypeLeaf resume only entered after a park track is installed");
-        // The producer's terminal is not the type carrier; the resume re-resolves through
-        // the now-sealed memo rather than reading the producer's value. The dep edges are
-        // cleared by the router before this decide runs.
-        let _ = producer;
-        bare_type_leaf(ctx, &leaf)
-    }
 }
 
 impl<'run> CtorState<'run> {
@@ -179,13 +136,15 @@ pub(super) fn bare_type_leaf<'run>(ctx: &SchedulerView<'run, '_>, t: &TypeName) 
                 // re-resolve directly — the memoized bridge now admits.
                 return bare_type_leaf(ctx, t);
             }
-            let track = BareTypeParkTrack {
-                leaf: t.clone(),
-                producer,
-            };
-            park_self(
+            // The producer's terminal is not the type carrier (a finalize-combine returns its own
+            // value), so on wake `resume` re-resolves the leaf through the now-sealed memo rather
+            // than lifting the producer's value. No spliced expression to render, so carrier is
+            // `None`.
+            let leaf = t.clone();
+            park_resume(
                 vec![producer],
-                DispatchState::BareTypeLeaf(BareTypeState::with_park(track)),
+                None,
+                Box::new(move |ctx, _idx| bare_type_leaf(ctx, &leaf)),
             )
         }
     }
