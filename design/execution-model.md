@@ -1330,3 +1330,8 @@ for test fixtures and builtin-registration paths.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
+- **Unified scheduler interface**
+  ([roadmap/refactor/unify-scheduler-interface.md](../roadmap/refactor/unify-scheduler-interface.md)).
+  Collapse `SchedulerHandle`, `DispatchCx`, and the raw harness writes onto one read-only view
+  in / three-way `Done` · `Continue` · `ParkThenContinue` outcome out, with the harness as sole
+  graph writer; folds in the fire-and-forget-leading-statement TCO fix.

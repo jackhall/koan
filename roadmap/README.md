@@ -172,9 +172,9 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Retire `SchedulerHandle` as a trait](refactor/retire-scheduler-handle-trait.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
+- [Unify the scheduler interface around a three-way node outcome](refactor/unify-scheduler-interface.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
@@ -263,6 +263,7 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
-- [Retire `SchedulerHandle` as a trait](refactor/retire-scheduler-handle-trait.md) — now that
-  `Scheduler` is the trait's only implementor, collapse it to inherent methods or split it into
-  narrow read-only / write-capable traits so a builtin body's handle exposes only what it uses.
+- [Unify the scheduler interface around a three-way node outcome](refactor/unify-scheduler-interface.md)
+  — collapse `SchedulerHandle`, `DispatchCx`, and the raw harness writes onto one read-only view
+  in / three-way `Done` · `Continue` · `ParkThenContinue` outcome out, harness the sole graph
+  writer; folds in the fire-and-forget-leading-statement TCO fix.
