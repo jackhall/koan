@@ -10,7 +10,8 @@
 //! A [`ResolvedCallable`] has exactly two execution arms:
 //!
 //! - `Constructor(&KType)` — build a value from a type schema (struct / tagged /
-//!   newtype / `TypeConstructor` identity). Reuses `CtorState`/`CtorTrack`.
+//!   newtype / `TypeConstructor` identity). Reuses the `constructors` module
+//!   (`CtorKind` + `launch`).
 //! - `Function(&KFunction)` — call a `KFunction` by name. A functor is a
 //!   `KFunction` whose result is a module, so functor application *is* this arm;
 //!   the functor/function distinction survives only at classification (for

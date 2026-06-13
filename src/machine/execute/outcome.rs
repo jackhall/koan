@@ -29,7 +29,7 @@ use crate::machine::core::{CallArena, ScopeId};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::{NodeId, TraceFrame};
 
-use super::dispatch::DispatchState;
+use super::dispatch::ResumeFn;
 use super::nodes::{DispatchCombineFinish, NodeOutput, NodeWork};
 use super::{CatchFinish, CombineFinish};
 
@@ -60,7 +60,7 @@ pub(in crate::machine::execute) enum Outcome<'run> {
     /// Park the slot on `deps` and run `cont` when they resolve. `deps` layout is
     /// `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix length
     /// (`Notify` edges, kept alive), the suffix installs as `Owned` (cascade-freed). For a
-    /// [`Continuation::Replay`] / [`Continuation::Forward`] every dep parks (notify-only).
+    /// [`Continuation::Resume`] / [`Continuation::Forward`] every dep parks (notify-only).
     /// `dep_error_frame` is attached to a dep-error short-circuit (Combine-style) before the
     /// finish runs; `free` reclaims producers the decide phase consumed inline.
     ParkThenContinue {
@@ -100,9 +100,10 @@ pub(in crate::machine::execute) enum Outcome<'run> {
 ///   `Action::Catch`): the slot becomes a `NodeWork::Catch` watching the realized `watched` dep;
 ///   the harness owns that producer. `watched`'s placement is realized at apply time (an `InScope`
 ///   watched enters a fresh single-statement block, unlike a Combine body's fan-out).
-/// - `Replay` re-runs the parked dispatch decide (the `ParkSelf` shape). Its payload is a
-///   [`DispatchState`] — a `Resume` closure for the `Keyworded` / `BareTypeLeaf` families,
-///   concrete park state for the `TypeCall` / `FunctionValueCall` families still to migrate.
+/// - `Resume` re-runs the parked dispatch decide (the `ParkSelf` shape) through the opaque
+///   [`ResumeFn`] closure the parking decide captured; `carrier` is the parked expression the
+///   drain-end deadlock summary renders (`None` when the park carries no renderable form). On
+///   apply the slot becomes a [`NodeWork::DispatchResume`](super::nodes::NodeWork::DispatchResume).
 /// - `Forward` makes the slot *be* a single producer's value (the bare-name `Lift` forward).
 pub(in crate::machine::execute) enum Continuation<'run> {
     Finish(DispatchCombineFinish<'run>),
@@ -111,7 +112,10 @@ pub(in crate::machine::execute) enum Continuation<'run> {
         watched: Dep<'run>,
         finish: CatchFinish<'run>,
     },
-    Replay(DispatchState<'run>),
+    Resume {
+        carrier: Option<KExpression<'run>>,
+        resume: ResumeFn<'run>,
+    },
     Forward(NodeId),
 }
 

@@ -4,7 +4,6 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, SignatureElement};
 use crate::machine::{BindingIndex, FunctionLookup, KFunction, LexicalFrame, NodeId, Scope};
 
-use super::super::dispatch::DispatchState;
 use super::super::nodes::{work_park_producers, CallFrame, Node, NodeScope, NodeWork};
 use super::super::CombineFinish;
 use super::dep_graph::work_owned_edges;
@@ -293,21 +292,14 @@ impl<'run> Scheduler<'run> {
         let work = match work {
             NodeWork::Dispatch {
                 expr,
-                state: prior_state,
+                pre_subs: prior_pre_subs,
             } => {
-                let prior_pre_subs = match prior_state {
-                    DispatchState::Initialized(i) => i.pre_subs,
-                    _ => unreachable!("add_with_chain only receives Dispatch in Initialized state"),
-                };
                 debug_assert!(
                     prior_pre_subs.is_empty(),
                     "add_with_chain only receives Dispatch with empty pre_subs",
                 );
                 let _ = prior_pre_subs;
-                NodeWork::Dispatch {
-                    expr,
-                    state: DispatchState::initialized(pre_subs),
-                }
+                NodeWork::Dispatch { expr, pre_subs }
             }
             other => other,
         };

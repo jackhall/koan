@@ -19,7 +19,8 @@
 //!   a type-shaped `TypeMismatch`.
 //!
 //! The head sub-dispatch is an Owned edge; the park/resume pair mirrors
-//! `park_on_literal_producer` + `CtorState::resume`, no new scheduler primitive.
+//! `park_on_literal_producer` + the `type_call` head-placeholder resume, no new
+//! scheduler primitive.
 
 use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::core::source::Spanned;

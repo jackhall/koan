@@ -7,7 +7,6 @@
 //! applies it. The harness holds the sole `&mut Scheduler` on the dispatch side.
 
 use crate::machine::core::kfunction::action::{Dep, DepPlacement, FramePlacement};
-use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
 use crate::machine::NodeId;
 
@@ -174,12 +173,11 @@ impl<'run> Scheduler<'run> {
                         self.add_owned_edge(from, NodeId(idx));
                         NodeWork::Catch { from, finish }
                     }
-                    // The state carries the evolving `working_expr` from here on, so the entry
-                    // expression drops to an empty placeholder.
-                    Continuation::Replay(state) => NodeWork::Dispatch {
-                        expr: KExpression::new(Vec::new()),
-                        state,
-                    },
+                    // The resume closure carries the evolving `working_expr` from here on; the
+                    // `carrier` it travels with is only the deadlock-summary sample.
+                    Continuation::Resume { carrier, resume } => {
+                        NodeWork::DispatchResume { carrier, resume }
+                    }
                     Continuation::Forward(producer) => NodeWork::Lift(LiftState::Pending(producer)),
                 };
                 NodeStep::Replace {

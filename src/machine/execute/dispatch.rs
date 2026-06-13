@@ -5,7 +5,7 @@
 //!
 //! - **Keyworded** (a keyword is present) → [`keyworded::initial`]
 //! - **FunctionValueCall** (lowercase Identifier head) →
-//!   [`fn_value::FnValueState`]
+//!   [`fn_value::initial`]
 //! - **HeadDeferred** / **TypeHeadDeferred** (an `Expression` or `:(…)`
 //!   head that evaluates before dispatching on its result) →
 //!   [`head_deferred`]
@@ -49,14 +49,12 @@ mod tests;
 pub(in crate::machine::execute) use super::outcome::{Continuation, DispatchDep, Outcome};
 pub(in crate::machine::execute) use ctx::SchedulerView;
 pub(crate) use field_list::defer_field_list_action;
-use fn_value::FnValueState;
 pub(in crate::machine::execute) use harness::run_dispatch_combine_finish;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
 pub use resolve_type_expr::ResolveTypeExprOutcome;
 pub(crate) use resolve_type_expr::{resolve_type_leaf_carrier, TypeLeafCarrier};
-use single_poll::CtorState;
 
 /// The shape classification and classifier live in
 /// [`crate::machine::model::ast`] (pure-structural, cached on the node at parse
@@ -238,25 +236,10 @@ pub(in crate::machine::execute) fn park_combine<'run>(
     }
 }
 
-/// Park the slot on `producers` (notify edges) and re-run its dispatch decide on wake (the
-/// `ParkSelf` shape). The producers are the to-wait set the decide already filtered.
-pub(in crate::machine::execute) fn park_self<'run>(
-    producers: Vec<NodeId>,
-    state: DispatchState<'run>,
-) -> Outcome<'run> {
-    Outcome::ParkThenContinue {
-        park_count: producers.len(),
-        deps: producers.into_iter().map(DispatchDep::Existing).collect(),
-        cont: Continuation::Replay(state),
-        dep_error_frame: None,
-        free: Vec::new(),
-    }
-}
-
 /// Park the slot on `producers` (notify edges) and re-run its `resume` decide on wake — the
-/// closure-carrying `ParkSelf` shape for the `Keyworded` / `BareTypeLeaf` families. `carrier` is
-/// the parked expression the deadlock summary renders (`None` for a bare leaf). The producers are
-/// the to-wait set the decide already filtered.
+/// closure-carrying `ParkSelf` shape every park-and-replay family uses. `carrier` is the parked
+/// expression the deadlock summary renders (`None` when the park carries no renderable form). The
+/// producers are the to-wait set the decide already filtered.
 pub(in crate::machine::execute) fn park_resume<'run>(
     producers: Vec<NodeId>,
     carrier: Option<KExpression<'run>>,
@@ -265,7 +248,7 @@ pub(in crate::machine::execute) fn park_resume<'run>(
     Outcome::ParkThenContinue {
         park_count: producers.len(),
         deps: producers.into_iter().map(DispatchDep::Existing).collect(),
-        cont: Continuation::Replay(DispatchState::Resume { carrier, resume }),
+        cont: Continuation::Resume { carrier, resume },
         dep_error_frame: None,
         free: Vec::new(),
     }
@@ -367,103 +350,32 @@ pub(super) fn stage_all_eager_parts<'run>(
     (new_parts, staged)
 }
 
-// ---------- State carrier ----------
+// ---------- Resume closure ----------
 
-/// Universal birth state of a Dispatch slot — the shape before
-/// classification. Embedded by value in every per-variant state
-/// struct so `pre_subs` rides along structurally rather than by
-/// convention.
-pub(in crate::machine::execute) struct Initialized {
-    /// Pre-submitted sub-Dispatches keyed by their slot index in
-    /// `expr.parts`; populated by submit-time recursion for
-    /// binder-shaped expressions, empty otherwise.
-    pub(in crate::machine::execute) pre_subs: Vec<(usize, NodeId)>,
-}
-
-/// A parked slot's resume: the `SchedulerView -> Outcome` decide a `Keyworded` or `BareTypeLeaf`
-/// slot re-runs on wake. It captures whatever its decide needs (the carried `expr` + `pre_subs`,
-/// or the bare leaf), so the router can wake it uniformly without naming the family's internals —
-/// boxed like [`DispatchCombineFinish`](super::nodes::DispatchCombineFinish) so the enum stays slim.
+/// A parked slot's resume: the `SchedulerView -> Outcome` decide a dispatch slot re-runs on wake.
+/// It captures whatever its decide needs (the carried `expr` + `pre_subs`, or a bare leaf), so the
+/// router can wake any family uniformly without naming its internals — boxed like
+/// [`DispatchCombineFinish`](super::nodes::DispatchCombineFinish) so [`NodeWork::DispatchResume`]
+/// stays slim.
 pub(in crate::machine::execute) type ResumeFn<'run> =
     Box<dyn for<'a> FnOnce(&SchedulerView<'run, 'a>, usize) -> Outcome<'run> + 'run>;
 
-/// One variant per resumable [`DispatchShape`] family, plus the pre-classification `Initialized`
-/// birth state. `Keyworded` and `BareTypeLeaf` resume through an opaque [`ResumeFn`] closure
-/// (`Resume`); `TypeCall` and `FunctionValueCall` still carry concrete park state.
-pub(in crate::machine::execute) enum DispatchState<'run> {
-    Initialized(Initialized),
-    /// A parked `Keyworded` or `BareTypeLeaf` slot: re-run `resume` on wake. `carrier` is the
-    /// parked expression surfaced for the drain-end deadlock summary (the slot's
-    /// `NodeWork::Dispatch.expr` is dropped to an empty placeholder on park), or `None` for a
-    /// bare-leaf park that carries no spliced expression to render.
-    Resume {
-        carrier: Option<KExpression<'run>>,
-        resume: ResumeFn<'run>,
-    },
-    /// Boxed because the `CtorState` carries an eager-subs `CtorTrack` (schemas, staged values) or
-    /// a head-placeholder `KExpression`, either of which would push the by-value `DispatchState`
-    /// past clippy's `large_enum_variant` threshold.
-    TypeCall(Box<CtorState<'run>>),
-    FunctionValueCall(Box<FnValueState<'run>>),
-}
-
-impl<'run> DispatchState<'run> {
-    /// Construct the universal birth state. Every submission and
-    /// re-park site goes through this constructor so `pre_subs` is the
-    /// only field any caller names.
-    pub(in crate::machine::execute) fn initialized(pre_subs: Vec<(usize, NodeId)>) -> Self {
-        DispatchState::Initialized(Initialized { pre_subs })
-    }
-
-    /// Expression carried by the state itself for a parked `Resume` (`Keyworded`) or
-    /// `FunctionValueCall` slot. Park installers drop `NodeWork::Dispatch.expr` to an empty
-    /// placeholder, so the drain-end deadlock summary needs this fallback to render a parked sample.
-    pub(in crate::machine::execute) fn parked_carrier_expr(&self) -> Option<&KExpression<'run>> {
-        match self {
-            DispatchState::Resume { carrier, .. } => carrier.as_ref(),
-            DispatchState::FunctionValueCall(fs) => Some(&fs.head_placeholder.expr),
-            _ => None,
-        }
-    }
-}
-
 // ---------- Cross-shape driver ----------
 
-/// Stateful dispatch driver. Classifies the slot's shape and routes to
-/// the matching per-shape entry. Fast-lane variants terminalize (or
-/// single-producer-park) in one poll; only `Keyworded` and
-/// `FunctionValueCall` carry tracks that can re-enter via the resume
-/// arms.
+/// Stateful dispatch driver. Classifies a freshly-born slot's shape and routes to the matching
+/// per-shape entry. Fast-lane variants terminalize (or single-producer-park) in one poll; a shape
+/// that parks re-enters through [`run_dispatch_resume`] with the closure it captured, never back
+/// through here.
 pub(in crate::machine::execute) fn run_dispatch<'run>(
     sched: &mut Scheduler<'run>,
     expr: KExpression<'run>,
-    state: DispatchState<'run>,
+    pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
 ) -> NodeStep<'run> {
     let _wakes = sched.take_recent_wakes(NodeId(idx));
-    let init = match state {
-        DispatchState::Initialized(i) => i,
-        // Each parked-state resume decides against a read-only view; the router clears the
-        // resuming slot's stale dep edges before deciding, then applies the returned outcome —
-        // the resume itself issues no graph write.
-        DispatchState::Resume { resume, .. } => {
-            sched.clear_dep_edges(idx);
-            let outcome = resume(&SchedulerView::new(sched), idx);
-            return sched.apply_outcome(outcome, idx);
-        }
-        DispatchState::FunctionValueCall(fs) => {
-            let outcome = fs.resume(&SchedulerView::new(sched));
-            return sched.apply_outcome(outcome, idx);
-        }
-        DispatchState::TypeCall(cs) => {
-            sched.clear_dep_edges(idx);
-            let outcome = (*cs).resume(&SchedulerView::new(sched));
-            return sched.apply_outcome(outcome, idx);
-        }
-    };
     match expr.shape() {
         DispatchShape::BareTypeLeaf => {
-            debug_assert!(init.pre_subs.is_empty());
+            debug_assert!(pre_subs.is_empty());
             let t = match &expr.parts[0].value {
                 ExpressionPart::Type(t) => t.clone(),
                 _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
@@ -472,7 +384,7 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
             sched.apply_outcome(outcome, idx)
         }
         DispatchShape::BareIdentifier => {
-            debug_assert!(init.pre_subs.is_empty());
+            debug_assert!(pre_subs.is_empty());
             let name = match &expr.parts[0].value {
                 ExpressionPart::Identifier(n) => n.clone(),
                 _ => unreachable!("BareIdentifier shape implies single Identifier part"),
@@ -481,22 +393,21 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
             sched.apply_outcome(outcome, idx)
         }
         DispatchShape::FunctionValueCall => {
-            debug_assert!(init.pre_subs.is_empty());
-            let _ = init;
-            let outcome = FnValueState::initial(&SchedulerView::new(sched), expr);
+            debug_assert!(pre_subs.is_empty());
+            let outcome = fn_value::initial(&SchedulerView::new(sched), expr);
             sched.apply_outcome(outcome, idx)
         }
         DispatchShape::TypeCall => {
-            debug_assert!(init.pre_subs.is_empty());
+            debug_assert!(pre_subs.is_empty());
             let outcome = single_poll::type_call(&SchedulerView::new(sched), expr);
             sched.apply_outcome(outcome, idx)
         }
         DispatchShape::HeadDeferred => {
-            debug_assert!(init.pre_subs.is_empty());
+            debug_assert!(pre_subs.is_empty());
             sched.apply_outcome(head_deferred::initial_expr(expr), idx)
         }
         DispatchShape::TypeHeadDeferred => {
-            debug_assert!(init.pre_subs.is_empty());
+            debug_assert!(pre_subs.is_empty());
             sched.apply_outcome(head_deferred::initial_type(expr), idx)
         }
         // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
@@ -514,7 +425,7 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
             })))
         }
         DispatchShape::OperatorChain => {
-            debug_assert!(init.pre_subs.is_empty());
+            debug_assert!(pre_subs.is_empty());
             // Decide against a read-only view (immutable scheduler borrow), then reborrow
             // `&mut` through the harness to apply — the borrow contract the effect split rests
             // on. The `read_view` borrow ends at the `run` call (NLL), freeing `ctx` for apply.
@@ -522,22 +433,37 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
             sched.apply_outcome(outcome, idx)
         }
         DispatchShape::Keyworded => {
-            let outcome = keyworded::initial(&SchedulerView::new(sched), expr, init.pre_subs, idx);
+            let outcome = keyworded::initial(&SchedulerView::new(sched), expr, pre_subs, idx);
             sched.apply_outcome(outcome, idx)
         }
         DispatchShape::SigiledTypeExpr => {
-            debug_assert!(init.pre_subs.is_empty());
+            debug_assert!(pre_subs.is_empty());
             sched.apply_outcome(single_poll::sigiled_type_expr(expr), idx)
         }
         DispatchShape::RecordType => {
-            debug_assert!(init.pre_subs.is_empty());
+            debug_assert!(pre_subs.is_empty());
             let outcome = single_poll::record_type(&SchedulerView::new(sched), expr);
             sched.apply_outcome(outcome, idx)
         }
         DispatchShape::LiteralPassThrough => {
-            debug_assert!(init.pre_subs.is_empty());
+            debug_assert!(pre_subs.is_empty());
             let outcome = single_poll::literal_pass_through(&SchedulerView::new(sched), expr);
             sched.apply_outcome(outcome, idx)
         }
     }
+}
+
+/// Wake a parked dispatch slot. The router clears the resuming slot's stale dep edges, runs its
+/// captured `resume` decide against a read-only view, and applies the returned outcome — the
+/// resume itself issues no graph write, so every shape wakes through this one arm regardless of
+/// what its decide reads.
+pub(in crate::machine::execute) fn run_dispatch_resume<'run>(
+    sched: &mut Scheduler<'run>,
+    resume: ResumeFn<'run>,
+    idx: usize,
+) -> NodeStep<'run> {
+    let _wakes = sched.take_recent_wakes(NodeId(idx));
+    sched.clear_dep_edges(idx);
+    let outcome = resume(&SchedulerView::new(sched), idx);
+    sched.apply_outcome(outcome, idx)
 }

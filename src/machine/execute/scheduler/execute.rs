@@ -35,8 +35,11 @@ impl<'run> Scheduler<'run> {
             // type (keep-first discards it anyway).
             self.active_in_contract_chain = prev_contract.is_some();
             let step = match work {
-                NodeWork::Dispatch { expr, state } => {
-                    crate::machine::execute::dispatch::run_dispatch(self, expr, state, idx)
+                NodeWork::Dispatch { expr, pre_subs } => {
+                    crate::machine::execute::dispatch::run_dispatch(self, expr, pre_subs, idx)
+                }
+                NodeWork::DispatchResume { resume, .. } => {
+                    crate::machine::execute::dispatch::run_dispatch_resume(self, resume, idx)
                 }
                 NodeWork::Combine {
                     deps,

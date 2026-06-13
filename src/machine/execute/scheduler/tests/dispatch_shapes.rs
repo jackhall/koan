@@ -746,58 +746,6 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
     }
 }
 
-/// A parked `Resume` slot carrying a `Some(carrier)`: the drain-end cycle-detection guard in
-/// [`Scheduler::execute`] must read the parked slot's carrier expression from the
-/// `DispatchState::Resume` carrier, not from the placeholder `NodeWork::Dispatch.expr` that
-/// `install_bare_name_park` / `install_overload_park` drop to `KExpression::new(Vec::new())`. With
-/// only the empty `NodeWork` expression available the deadlock sample would render as `""`;
-/// `DispatchState::parked_carrier_expr` must surface the carrier-carried form. A `None`-carrier
-/// resume (a bare-leaf park) and the `Initialized` birth state both fall back to the `NodeWork`
-/// expression.
-#[test]
-fn keyworded_parked_carrier_expr_reads_state() {
-    use crate::machine::execute::dispatch::DispatchState;
-
-    fn carrier_expr<'run>() -> KExpression<'run> {
-        // `(LIFT_BARE arg)` — a recognizable sample distinct from any other
-        // test's expressions, so a regression that drops the carrier shows up
-        // as a `""` summary, not a coincidentally-matching sibling expression.
-        KExpression::new(vec![
-            Spanned::bare(ExpressionPart::Keyword("LIFT_BARE".into())),
-            Spanned::bare(ExpressionPart::Identifier("arg".into())),
-        ])
-    }
-    let expected = carrier_expr().summarize();
-
-    let with_carrier = DispatchState::Resume {
-        carrier: Some(carrier_expr()),
-        resume: Box::new(|_view, _idx| unreachable!("carrier-rendering test never resumes")),
-    };
-    assert_eq!(
-        with_carrier.parked_carrier_expr().map(Parseable::summarize),
-        Some(expected),
-        "a Some-carrier resume must surface its carrier as the parked sample",
-    );
-
-    // A None-carrier resume (a bare-leaf park) and the `Initialized` birth state never carry a
-    // spliced expression, so the accessor surfaces `None` and the drain-end guard falls back to
-    // the slot's `NodeWork::Dispatch.expr` field.
-    let no_carrier = DispatchState::Resume {
-        carrier: None,
-        resume: Box::new(|_view, _idx| unreachable!("carrier-rendering test never resumes")),
-    };
-    assert!(
-        no_carrier.parked_carrier_expr().is_none(),
-        "a None-carrier resume must surface None (fall back to NodeWork expr)",
-    );
-    assert!(
-        DispatchState::initialized(Vec::new())
-            .parked_carrier_expr()
-            .is_none(),
-        "Initialized must surface None (fall back to NodeWork expr)",
-    );
-}
-
 // =====================================================================
 // OperatorChain arm: classification + registry resolution. Recognition is
 // parse-cached and structural; the arm resolves the cached operator probe through

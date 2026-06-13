@@ -73,6 +73,35 @@ enum SlotState<'run> {
     Free,
 }
 
+/// The drain-end deadlock-sample contribution of one parked/pending slot's work.
+/// `unresolved` shows the first `Preferred` (a real source expression) across all stuck slots,
+/// falling back to the first `Fallback` (a generic work-shape tag) only when no slot carries an
+/// expression — so a stuck `(foo bar)` always out-renders a bare `<combine>`.
+enum DeadlockSample {
+    Preferred(String),
+    Fallback(&'static str),
+}
+
+/// Map a stuck slot's `work` to its deadlock-sample contribution. A pending `Dispatch` and a
+/// `Some`-carrier `DispatchResume` carry a renderable expression (`Preferred`); a carrier-less
+/// resume and the fixed-dep combinators carry only a generic tag (`Fallback`).
+fn work_deadlock_sample<'run>(work: &NodeWork<'run>) -> DeadlockSample {
+    match work {
+        NodeWork::Dispatch { expr, .. } => DeadlockSample::Preferred(expr.summarize()),
+        NodeWork::DispatchResume {
+            carrier: Some(carrier),
+            ..
+        } => DeadlockSample::Preferred(carrier.summarize()),
+        NodeWork::DispatchResume { carrier: None, .. } => {
+            DeadlockSample::Fallback("<dispatch-resume>")
+        }
+        NodeWork::Combine { .. } => DeadlockSample::Fallback("<combine>"),
+        NodeWork::DispatchCombine { .. } => DeadlockSample::Fallback("<dispatch-combine>"),
+        NodeWork::Catch { .. } => DeadlockSample::Fallback("<catch>"),
+        NodeWork::Lift(_) => DeadlockSample::Fallback("<lift>"),
+    }
+}
+
 pub(in crate::machine::execute::scheduler) struct NodeStore<'run> {
     slots: SlotVec<SlotState<'run>>,
     /// Reclaimed slot indices. `alloc_slot` pulls from here before
@@ -80,9 +109,9 @@ pub(in crate::machine::execute::scheduler) struct NodeStore<'run> {
     /// tail-recursive bodies.
     free_list: Vec<NodeId>,
     /// Per-consumer side-channel: producers that have fired since this
-    /// slot's last poll. Populated only for `NodeWork::Dispatch`
-    /// consumers; drained on entry to `run_dispatch`. Indexed in
-    /// lockstep with `slots`.
+    /// slot's last poll. Populated only for `NodeWork::Dispatch` /
+    /// `NodeWork::DispatchResume` consumers; drained on entry to the
+    /// dispatch driver. Indexed in lockstep with `slots`.
     recent_wakes: SlotVec<Vec<NodeId>>,
 }
 
@@ -202,25 +231,10 @@ impl<'run> NodeStore<'run> {
         for slot in self.slots.iter() {
             if let SlotState::PreRun(node) = slot {
                 count += 1;
-                match &node.work {
-                    NodeWork::Dispatch { expr, state } if expr_sample.is_none() => {
-                        // Parked `Keyworded` slots null out `expr` once a
-                        // Track installs; the working expression lives on
-                        // the state.
-                        let carrier = state.parked_carrier_expr().unwrap_or(expr);
-                        expr_sample = Some(carrier.summarize());
-                    }
-                    NodeWork::Combine { .. } if fallback_sample.is_none() => {
-                        fallback_sample = Some("<combine>".to_string());
-                    }
-                    NodeWork::DispatchCombine { .. } if fallback_sample.is_none() => {
-                        fallback_sample = Some("<dispatch-combine>".to_string());
-                    }
-                    NodeWork::Catch { .. } if fallback_sample.is_none() => {
-                        fallback_sample = Some("<catch>".to_string());
-                    }
-                    NodeWork::Lift(_) if fallback_sample.is_none() => {
-                        fallback_sample = Some("<lift>".to_string());
+                match work_deadlock_sample(&node.work) {
+                    DeadlockSample::Preferred(s) if expr_sample.is_none() => expr_sample = Some(s),
+                    DeadlockSample::Fallback(s) if fallback_sample.is_none() => {
+                        fallback_sample = Some(s.to_string());
                     }
                     _ => {}
                 }
@@ -276,13 +290,18 @@ impl<'run> NodeStore<'run> {
     }
 
     /// Record that `producer` just terminalized into the consumer slot's
-    /// `recent_wakes`. No-op unless `consumer` is `PreRun` with
-    /// `NodeWork::Dispatch` — `Combine` / `Catch` / `Lift` run a fixed
-    /// closure on counter-zero and don't need per-edge wake attribution.
+    /// `recent_wakes`. No-op unless `consumer` is `PreRun` with `NodeWork::Dispatch`
+    /// or `NodeWork::DispatchResume` (the parked-and-replaying shape) — `Combine` /
+    /// `Catch` / `Lift` run a fixed closure on counter-zero and don't need per-edge
+    /// wake attribution.
     pub(super) fn push_recent_wake(&mut self, consumer: NodeId, producer: NodeId) {
         let is_dispatch_prerun = matches!(
             &self.slots[consumer],
-            SlotState::PreRun(node) if matches!(&node.work, NodeWork::Dispatch { .. }),
+            SlotState::PreRun(node)
+                if matches!(
+                    &node.work,
+                    NodeWork::Dispatch { .. } | NodeWork::DispatchResume { .. }
+                ),
         );
         if !is_dispatch_prerun {
             return;
@@ -291,8 +310,8 @@ impl<'run> NodeStore<'run> {
     }
 
     /// Drain the producers that fired since the slot's last poll. Called by
-    /// `run_dispatch` on entry via `Scheduler::take_recent_wakes`; the
-    /// side-channel stays empty for non-`Dispatch` work by construction in
+    /// the dispatch driver on entry via `Scheduler::take_recent_wakes`; the
+    /// side-channel stays empty for non-dispatch work by construction in
     /// `push_recent_wake`.
     pub(in crate::machine::execute::scheduler) fn take_recent_wakes(
         &mut self,
@@ -340,5 +359,64 @@ impl<'run> NodeStore<'run> {
             Some(SlotState::PreRun(node)) => Some(node.chain.clone()),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::machine::core::source::Spanned;
+    use crate::machine::model::ast::{ExpressionPart, KExpression};
+
+    fn keyworded(name: &str) -> KExpression<'static> {
+        KExpression::new(vec![Spanned::bare(ExpressionPart::Keyword(name.into()))])
+    }
+
+    #[test]
+    fn pending_dispatch_prefers_its_expression() {
+        let work = NodeWork::Dispatch {
+            expr: keyworded("HEAD"),
+            pre_subs: Vec::new(),
+        };
+        assert!(
+            matches!(work_deadlock_sample(&work), DeadlockSample::Preferred(s) if s.contains("HEAD")),
+            "a pending Dispatch must surface its own expression",
+        );
+    }
+
+    #[test]
+    fn some_carrier_resume_prefers_the_carrier() {
+        let work = NodeWork::DispatchResume {
+            carrier: Some(keyworded("PARKED")),
+            resume: Box::new(|_view, _idx| unreachable!("sample test never resumes")),
+        };
+        assert!(
+            matches!(work_deadlock_sample(&work), DeadlockSample::Preferred(s) if s.contains("PARKED")),
+            "a Some-carrier resume must surface its carrier",
+        );
+    }
+
+    #[test]
+    fn carrier_less_resume_falls_back_to_a_tag() {
+        let work = NodeWork::DispatchResume {
+            carrier: None,
+            resume: Box::new(|_view, _idx| unreachable!("sample test never resumes")),
+        };
+        assert!(
+            matches!(
+                work_deadlock_sample(&work),
+                DeadlockSample::Fallback("<dispatch-resume>")
+            ),
+            "a carrier-less resume must surface a generic tag, not an empty sample",
+        );
+    }
+
+    #[test]
+    fn lift_falls_back_to_a_tag() {
+        let work = NodeWork::Lift(LiftState::Pending(NodeId(0)));
+        assert!(matches!(
+            work_deadlock_sample(&work),
+            DeadlockSample::Fallback("<lift>")
+        ));
     }
 }

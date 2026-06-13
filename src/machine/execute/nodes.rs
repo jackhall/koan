@@ -6,7 +6,7 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope, TraceFrame};
 
-use super::dispatch::{DispatchState, SchedulerView};
+use super::dispatch::{ResumeFn, SchedulerView};
 use super::outcome::Outcome;
 use super::{CatchFinish, CombineFinish};
 
@@ -80,19 +80,25 @@ pub(super) type DispatchCombineFinish<'run> = Box<
 /// `Combine` is the dual of `Bind`: a host-side N→1 combinator that waits on a
 /// fixed set of dep slots and runs a host closure over their resolved values.
 pub(super) enum NodeWork<'run> {
-    /// Resolve and schedule a single expression. `state` carries the
-    /// dispatch slot's per-variant cached state, with `Initialized` as the
-    /// universal birth state and one variant per `DispatchShape` for the
-    /// stateful driver to transition into on first classification.
-    /// `state.init.pre_subs` carries any recursively pre-submitted sub-
-    /// Dispatches keyed by their slot index in `expr.parts`, populated at
-    /// submit time for binder-shaped expressions so a nested binder's
-    /// placeholders install at the outermost submission point; empty
-    /// otherwise. Phase 4 of `run_dispatch` reuses these instead of
-    /// allocating fresh sub-Dispatches for the named slots.
+    /// Resolve and schedule a single expression — the birth state of a dispatch slot, classified
+    /// by [`run_dispatch`](super::dispatch::run_dispatch) on its first poll. `pre_subs` carries any
+    /// recursively pre-submitted sub-Dispatches keyed by their slot index in `expr.parts`,
+    /// populated at submit time for binder-shaped expressions so a nested binder's placeholders
+    /// install at the outermost submission point; empty otherwise. `run_dispatch` reuses these
+    /// instead of allocating fresh sub-Dispatches for the named slots.
     Dispatch {
         expr: KExpression<'run>,
-        state: DispatchState<'run>,
+        pre_subs: Vec<(usize, NodeId)>,
+    },
+    /// A parked dispatch slot woken to re-run its decide. `resume` is the opaque
+    /// `SchedulerView -> Outcome` closure the parking decide captured (its family's internals
+    /// stay hidden from the router); [`run_dispatch_resume`](super::dispatch::run_dispatch_resume)
+    /// clears the slot's stale dep edges and runs it. `carrier` is the parked expression surfaced
+    /// for the drain-end deadlock summary, or `None` for a park that carries no renderable
+    /// expression (it falls back to a generic tag).
+    DispatchResume {
+        carrier: Option<KExpression<'run>>,
+        resume: ResumeFn<'run>,
     },
     /// `deps` layout is `[park_producers..., owned_subs...]`. `park_count` is the
     /// size of the park-producer prefix — those slots are sibling producers this
@@ -131,13 +137,12 @@ pub(super) enum NodeWork<'run> {
 }
 
 impl<'run> NodeWork<'run> {
-    /// `Dispatch` in the `Initialized` birth state with empty `pre_subs`.
-    /// Sites that need to carry pre-submitted sub-Dispatches across a
-    /// re-Dispatch go through [`DispatchState::initialized`] directly.
+    /// `Dispatch` birth state with empty `pre_subs`. Submission rewrites `pre_subs` in place
+    /// (`add_with_chain`) for binder-shaped expressions; every other site dispatches with none.
     pub(super) fn dispatch(expr: KExpression<'run>) -> Self {
         NodeWork::Dispatch {
             expr,
-            state: DispatchState::initialized(Vec::new()),
+            pre_subs: Vec::new(),
         }
     }
 }
@@ -220,9 +225,10 @@ pub(super) struct Node<'run> {
 /// prefix is installed separately as `Notify` edges by `Scheduler::add`.
 pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Option<Vec<NodeId>> {
     match work {
-        // `pre_subs` ride along structurally on the slot's `DispatchState`; they are
-        // not read-deps of the Dispatch itself.
-        NodeWork::Dispatch { .. } => None,
+        // `pre_subs` ride along structurally on the slot; they are not read-deps of the
+        // Dispatch itself. A `DispatchResume` parks on notify-only edges (installed
+        // separately), so it owns no read-deps either.
+        NodeWork::Dispatch { .. } | NodeWork::DispatchResume { .. } => None,
         NodeWork::Combine {
             deps, park_count, ..
         } => Some(deps[*park_count..].to_vec()),

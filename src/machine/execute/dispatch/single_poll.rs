@@ -1,9 +1,10 @@
 //! Fast-lane dispatch shapes — bare identifier, bare leaf type,
 //! bare-`Type`-head call, sigiled type expression, literal pass-through.
 //! Most terminate (or single-producer-park) in one poll. Two carry a resume:
-//! `TypeCall` parks on per-value-cell eager-subs (or a still-finalizing head
-//! binding) and resumes via [`CtorState::resume`]; `BareTypeLeaf` parks on a
-//! still-finalizing referent and re-resolves via a [`park_resume`] closure.
+//! `TypeCall` parks on per-value-cell eager-subs (its value subs as a
+//! `DispatchCombine`) or on a still-finalizing head binding, re-running
+//! [`type_call`] on wake; `BareTypeLeaf` parks on a still-finalizing referent
+//! and re-resolves [`bare_type_leaf`]. Both park through a [`park_resume`] closure.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -12,34 +13,12 @@ use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{KType, RecursiveSet};
-use crate::machine::{KError, KErrorKind, NodeId, Resolution};
+use crate::machine::{KError, KErrorKind, Resolution};
 
 use super::super::nodes::{DispatchCombineFinish, NodeOutput};
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
-use super::{
-    become_dispatch, park_combine, park_lift, park_resume, park_self, DispatchDep, Outcome,
-};
-use super::{DispatchState, Initialized};
-
-/// Parked `TypeCall` state. Ctor value subs park as a [`NodeWork::DispatchCombine`]
-/// (`constructors::launch`), so the only thing a `CtorState` carries is a still-finalizing
-/// *head* binding: `type_call` parked on a `LET <Type-class> = …` placeholder (e.g. a forward
-/// functor). On resume the whole `type_call` re-runs against the now-finalized binding — the
-/// head may resolve type-side (a functor or type alias), so the keyworded resolve path is the
-/// wrong continuation.
-pub(in crate::machine::execute) struct CtorState<'run> {
-    pub(in crate::machine::execute) init: Initialized,
-    pub(in crate::machine::execute) head_placeholder: TypeCallHeadPlaceholder<'run>,
-}
-
-/// Parked head-resolution state for a `TypeCall` whose head name was a
-/// still-finalizing placeholder. Carries the original call expression so the
-/// resume re-runs the fast lane once the producer is bound.
-pub(in crate::machine::execute) struct TypeCallHeadPlaceholder<'run> {
-    pub(in crate::machine::execute) expr: KExpression<'run>,
-    pub(in crate::machine::execute) producer: NodeId,
-}
+use super::{become_dispatch, park_combine, park_lift, park_resume, DispatchDep, Outcome};
 
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
 /// slot is resolved. `(set, index)` is the sealed-member identity stamped onto the produced
@@ -64,35 +43,6 @@ pub(in crate::machine::execute) enum CtorKind<'run> {
         index: usize,
         tag: String,
     },
-}
-
-impl<'run> CtorState<'run> {
-    pub(in crate::machine::execute) fn with_head_placeholder(
-        init: Initialized,
-        head_placeholder: TypeCallHeadPlaceholder<'run>,
-    ) -> Self {
-        Self {
-            init,
-            head_placeholder,
-        }
-    }
-
-    /// Re-run `type_call` against the now-finalized head binding. Ctor value subs resolve
-    /// through their own `DispatchCombine`, so a `CtorState` only ever parks on a head
-    /// placeholder.
-    pub(in crate::machine::execute) fn resume(
-        self,
-        ctx: &SchedulerView<'run, '_>,
-    ) -> Outcome<'run> {
-        let CtorState {
-            init,
-            head_placeholder: TypeCallHeadPlaceholder { expr, producer },
-        } = self;
-        let _ = init;
-        let _ = producer;
-        // The dep edges are cleared by the router before this decide runs.
-        type_call(ctx, expr)
-    }
 }
 
 /// Surfaces `UnboundName` directly when the name has no binding and
@@ -257,16 +207,13 @@ pub(super) fn type_call<'run>(
         .resolve_with_chain(head_t.as_str(), chain)
     {
         if !ctx.is_result_ready(producer) {
-            let init = Initialized {
-                pre_subs: Vec::new(),
-            };
-            let head_placeholder = TypeCallHeadPlaceholder { expr, producer };
-            return park_self(
+            // The original call expression is the deadlock-summary sample; the resume re-runs
+            // the whole fast lane against it once the head binding finalizes.
+            let carrier = expr.clone();
+            return park_resume(
                 vec![producer],
-                DispatchState::TypeCall(Box::new(CtorState::with_head_placeholder(
-                    init,
-                    head_placeholder,
-                ))),
+                Some(carrier),
+                Box::new(move |ctx, _idx| type_call(ctx, expr)),
             );
         }
     }
