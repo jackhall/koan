@@ -27,10 +27,9 @@ use crate::machine::model::types::KType;
 use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{KError, KErrorKind};
 
-use super::super::nodes::{DispatchCombineFinish, NodeOutput, NodeStep};
+use super::super::nodes::{DispatchCombineFinish, NodeOutput};
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::outcome::{DispatchDep, DispatchOutcome};
-use super::harness;
 
 /// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly, then
 /// applied to `parts[1..]` once it resolves.
@@ -70,13 +69,12 @@ fn park_on_head<'run>(
     head: KExpression<'run>,
     type_only: bool,
 ) -> DispatchOutcome<'run> {
-    let finish: DispatchCombineFinish<'run> = Box::new(move |ctx, results, idx| {
+    let finish: DispatchCombineFinish<'run> = Box::new(move |ctx, results, _idx| {
         let callable = match classify_head(results[0], type_only) {
             Ok(c) => c,
-            Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+            Err(e) => return DispatchOutcome::Terminal(NodeOutput::Err(e)),
         };
-        let outcome = apply_callable(&ctx.read_view(), callable, &expr);
-        harness::apply_dispatch_outcome(ctx, outcome, idx)
+        apply_callable(ctx, callable, &expr)
     });
     DispatchOutcome::Combine {
         deps: vec![DispatchDep::Dispatch(head)],

@@ -28,7 +28,7 @@ use crate::machine::{KError, LexicalFrame, NameOutcome, NodeId, SchedulerHandle,
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
 use super::outcome::{DispatchDep, DispatchOutcome};
-use super::{bind_frame_err, harness, resolve_name_part, DispatchState, PendingSub};
+use super::{bind_frame_err, resolve_name_part, DispatchState, PendingSub};
 
 /// Newtype wrapping `&'b mut Scheduler<'run>`, exposing exactly the
 /// scheduler operations the dispatcher uses. `'run` is the scheduler's
@@ -174,15 +174,14 @@ impl<'run, 's> DispatchCx<'run, 's> {
             "<bind>",
             &working_expr,
         ));
-        let finish: DispatchCombineFinish<'run> = Box::new(move |ctx, results, idx| {
+        let finish: DispatchCombineFinish<'run> = Box::new(move |_ctx, results, _idx| {
             // The short-circuit already guaranteed every dep resolved; splice each into the
-            // slot it was staged from, then run the routed continuation. No inline frees remain at
+            // slot it was staged from, then route the continuation. No inline frees remain at
             // wake — those were drained when the Combine was installed.
             for (slot, value) in part_indices.iter().zip(results) {
                 working_expr.parts[*slot].value = ExpressionPart::Future(*value);
             }
-            let outcome = finish_eager_subs(working_expr, picked, Vec::new());
-            harness::apply_dispatch_outcome(ctx, outcome, idx)
+            finish_eager_subs(working_expr, picked, Vec::new())
         });
         DispatchOutcome::Combine {
             deps,
@@ -213,13 +212,6 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
     /// `SchedulerHandle`.
     pub(super) fn scheduler_mut(&mut self) -> &mut Scheduler<'run> {
         self.sched
-    }
-
-    // ----- ambient state (reads forwarded to the scheduler) -----
-
-    /// The slot's scope — the dispatcher's primary read surface for name / type resolution.
-    pub(super) fn current_scope(&self) -> &Scope<'run> {
-        self.sched.current_scope()
     }
 
     // ----- dep graph -----

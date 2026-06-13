@@ -8,14 +8,31 @@
 //! becomes the sole `&mut Scheduler` user on the dispatch side.
 
 use crate::machine::core::kfunction::SchedulerHandle;
+use crate::machine::model::Carried;
 use crate::machine::NodeId;
 
-use super::super::nodes::{LiftState, NodeStep, NodeWork};
+use super::super::nodes::{DispatchCombineFinish, LiftState, NodeStep, NodeWork};
+use super::super::scheduler::Scheduler;
 use super::outcome::{DispatchDep, DispatchOutcome};
 use super::DispatchCtx;
 
 // The park edges a `ParkSelf` adds are `Notify` (sibling producers the slot waits on), never
 // owned — `add_park_edge` is the right primitive.
+
+/// Run a [`NodeWork::DispatchCombine`] finish at wake: build the read-only view, decide, and
+/// apply the returned outcome — the bridge `run_dispatch_combine` (the scheduler wake side) calls
+/// so the `read_view` → decide → apply dance stays inside the dispatch harness. The finish sees a
+/// `&DispatchCx`, so it — like every decide — issues no graph write itself.
+pub(in crate::machine::execute) fn run_dispatch_combine_finish<'run>(
+    sched: &mut Scheduler<'run>,
+    finish: DispatchCombineFinish<'run>,
+    values: &[Carried<'run>],
+    idx: usize,
+) -> NodeStep<'run> {
+    let mut ctx = DispatchCtx::new(sched);
+    let outcome = finish(&ctx.read_view(), values, idx);
+    apply_dispatch_outcome(&mut ctx, outcome, idx)
+}
 
 /// Reclaim the producers a decide phase consumed inline (a ready `Reuse` spliced into a
 /// `working_expr`). Deferred off the decide phase so the handler stays read-only; the harness

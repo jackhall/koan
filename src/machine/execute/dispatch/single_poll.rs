@@ -15,7 +15,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{KType, RecursiveSet};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution};
 
-use super::super::nodes::{DispatchCombineFinish, NodeOutput, NodeStep};
+use super::super::nodes::{DispatchCombineFinish, NodeOutput};
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::DispatchCx;
 use super::outcome::{DispatchDep, DispatchOutcome};
@@ -258,7 +258,7 @@ pub(super) fn literal_pass_through<'run>(
 /// it; a dep error short-circuits frameless before the finish runs.
 fn park_on_literal<'run>(dep: DispatchDep<'run>) -> DispatchOutcome<'run> {
     let finish: DispatchCombineFinish<'run> =
-        Box::new(|_ctx, results, _idx| NodeStep::Done(NodeOutput::Value(results[0])));
+        Box::new(|_ctx, results, _idx| DispatchOutcome::Terminal(NodeOutput::Value(results[0])));
     DispatchOutcome::Combine {
         deps: vec![dep],
         dep_error_frame: None,

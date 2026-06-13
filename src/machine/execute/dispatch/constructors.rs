@@ -17,7 +17,7 @@ use crate::machine::model::values::NonWrappedRef;
 use crate::machine::model::KObject;
 use crate::machine::{KError, KErrorKind, Scope};
 
-use super::super::nodes::{DispatchCombineFinish, NodeOutput, NodeStep};
+use super::super::nodes::{DispatchCombineFinish, NodeOutput};
 use super::outcome::{DispatchDep, DispatchOutcome};
 use super::single_poll::CtorKind;
 
@@ -163,7 +163,7 @@ pub(in crate::machine::execute::dispatch) fn finish<'run>(
     scope: &Scope<'run>,
     kind: &CtorKind<'run>,
     values: &[&'run KObject<'run>],
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let result = match kind {
         CtorKind::Newtype { identity } => {
             debug_assert_eq!(values.len(), 1);
@@ -192,7 +192,7 @@ pub(in crate::machine::execute::dispatch) fn finish<'run>(
         }
     };
     match result {
-        Ok(obj) => NodeStep::Done(NodeOutput::value(scope.arena.alloc_object(obj))),
-        Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+        Ok(obj) => DispatchOutcome::Terminal(NodeOutput::value(scope.arena.alloc_object(obj))),
+        Err(e) => DispatchOutcome::Terminal(NodeOutput::Err(e)),
     }
 }

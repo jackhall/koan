@@ -46,8 +46,9 @@ pub(in crate::machine::execute) mod single_poll;
 #[cfg(test)]
 mod tests;
 
-pub(in crate::machine::execute) use ctx::DispatchCtx;
-use outcome::DispatchOutcome;
+pub(in crate::machine::execute) use ctx::{DispatchCtx, DispatchCx};
+pub(in crate::machine::execute) use harness::run_dispatch_combine_finish;
+pub(in crate::machine::execute) use outcome::DispatchOutcome;
 pub(crate) use field_list::defer_field_list_action;
 use fn_value::FnValueState;
 use keyworded::KeywordedState;

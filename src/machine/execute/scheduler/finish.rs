@@ -1,7 +1,7 @@
 use crate::machine::model::{Carried, KObject};
 use crate::machine::{BodyResult, CatchFinish, CombineFinish, KError, NodeId, TraceFrame};
 
-use super::super::dispatch::{propagate_dep_error, DispatchCtx};
+use super::super::dispatch::propagate_dep_error;
 use super::super::nodes::{DispatchCombineFinish, LiftState, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 
@@ -70,8 +70,7 @@ impl<'run> Scheduler<'run> {
         let values: Vec<Carried<'run>> = deps.iter().map(|d| self.read(*d)).collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
         self.reclaim_deps(idx, owned_indices);
-        let mut ctx = DispatchCtx::new(self);
-        finish(&mut ctx, &values, idx)
+        super::super::dispatch::run_dispatch_combine_finish(self, finish, &values, idx)
     }
 
     /// Map a finished `BodyResult` to its `NodeStep`, shared by Combine and Catch:
