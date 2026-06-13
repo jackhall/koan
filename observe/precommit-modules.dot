@@ -771,6 +771,7 @@ digraph {
     "koan::machine::execute::dispatch::outcome" -> "koan::machine::core::kerror" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::outcome" -> "koan::machine::core::kfunction" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::outcome" -> "koan::machine::core::kfunction::scheduler_handle" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::machine::execute::dispatch::outcome" -> "koan::machine::core::lexical_frame" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::outcome" -> "koan::machine::execute::dispatch" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::outcome" -> "koan::machine::execute::nodes" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::outcome" -> "koan::machine::model::ast" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
@@ -794,7 +795,6 @@ digraph {
     "koan::machine::execute::dispatch::resolve_type_expr" -> "koan::machine::model::types::ktype" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::core::bindings" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::core::kerror" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
-    "koan::machine::execute::dispatch::single_poll" -> "koan::machine::core::kfunction::body" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::core::kfunction::scheduler_handle" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::core::source" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::execute::dispatch" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge

@@ -107,5 +107,18 @@ pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
                 body_index: 0,
             }
         }
+        DispatchOutcome::BecomeDispatch(inner) => NodeStep::Replace {
+            work: NodeWork::dispatch(inner),
+            frame: None,
+            function: None,
+            block_entry: None,
+            body_index: 0,
+        },
+        DispatchOutcome::ElaborateRecordType { fields, chain } => {
+            // Execution layer: the field-list elaborator holds `&mut Scheduler` and may defer
+            // through a Combine; lower its body onto the slot like any resolved call.
+            let body = super::field_list::elaborate_record_value(ctx.scheduler_mut(), fields, chain);
+            ctx.body_result_to_step(body, idx)
+        }
     }
 }

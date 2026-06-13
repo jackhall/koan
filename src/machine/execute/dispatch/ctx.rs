@@ -70,6 +70,26 @@ impl<'run, 's> DispatchCx<'run, 's> {
     pub(super) fn chain_deref(&self) -> Option<&LexicalFrame> {
         self.sched.chain_deref()
     }
+
+    /// Cloned `Rc` to the active chain — the type-leaf and field-list reads that take the
+    /// chain by value.
+    pub(super) fn active_chain(&self) -> Option<Rc<LexicalFrame>> {
+        self.sched.active_chain_clone()
+    }
+
+    /// Cloned `Rc` to the active lexical chain — the `record_type` elaborator deferral needs
+    /// it by value.
+    pub(super) fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>> {
+        self.sched.current_lexical_chain()
+    }
+
+    pub(super) fn is_result_ready(&self, id: NodeId) -> bool {
+        self.sched.is_result_ready(id)
+    }
+
+    pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
+        self.sched.read_result(id)
+    }
 }
 
 impl<'run, 'b> DispatchCtx<'run, 'b> {
@@ -111,12 +131,6 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
     /// initial-resolve site that takes the chain's `index`.
     pub(super) fn active_chain(&self) -> Option<Rc<LexicalFrame>> {
         self.sched.active_chain_clone()
-    }
-
-    /// Cloned `Rc` to the active lexical chain — the `record_type` field-list elaborator needs it
-    /// by value to rebuild the elaborator across a Combine deferral.
-    pub(super) fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>> {
-        self.sched.current_lexical_chain()
     }
 
     // ----- slot queries -----
@@ -179,15 +193,6 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
 
     pub(super) fn take_recent_wakes(&mut self, consumer: NodeId) -> Vec<NodeId> {
         self.sched.take_recent_wakes(consumer)
-    }
-
-    // ----- thin forward to scheduler op shared with combinators -----
-
-    /// `Scheduler::defer_to_lift` is shared with `run_combine` /
-    /// `run_catch`; the DispatchCtx wrapper keeps the dispatch-side
-    /// surface uniform.
-    pub(super) fn defer_to_lift(&mut self, idx: usize, bind_id: NodeId) -> NodeStep<'run> {
-        self.sched.defer_to_lift(idx, bind_id)
     }
 
     // ----- relocated dispatcher-only ops (bodies were on `impl Scheduler`) -----

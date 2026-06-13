@@ -11,9 +11,11 @@
 //! returns `NodeStep` produces no dead arm); the end state is a closed set the harness
 //! interprets exhaustively.
 
+use std::rc::Rc;
+
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::{NodeId, TraceFrame};
+use crate::machine::{LexicalFrame, NodeId, TraceFrame};
 
 use super::super::nodes::{DispatchCombineFinish, NodeOutput};
 use super::DispatchState;
@@ -77,6 +79,18 @@ pub(in crate::machine::execute) enum DispatchOutcome<'run> {
     /// value directly, so there is no dispatch state to carry.
     ParkLift {
         producer: NodeId,
+    },
+    /// Replace the slot with a fresh `Dispatch` of `inner` — the decide phase reduced its
+    /// expression to a nested one to re-classify (a `(inner)` paren group, a `:(...)` sigil
+    /// unwrap). The harness builds the frameless `NodeWork::Dispatch` replace.
+    BecomeDispatch(KExpression<'run>),
+    /// Elaborate a structural record-type field list (`:{x :Number, …}`) — the harness runs
+    /// the field-list elaborator (execution layer, `&mut Scheduler`) and lowers the resulting
+    /// body onto the slot (a `Combine` deferral when a field forward-references, a value
+    /// otherwise). The decide phase only reads `chain`.
+    ElaborateRecordType {
+        fields: KExpression<'run>,
+        chain: Option<Rc<LexicalFrame>>,
     },
 }
 

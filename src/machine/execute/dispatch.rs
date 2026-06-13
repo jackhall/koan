@@ -373,7 +373,8 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
                 ExpressionPart::Type(t) => t.clone(),
                 _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
             };
-            single_poll::bare_type_leaf(ctx, &t, idx)
+            let outcome = single_poll::bare_type_leaf(&ctx.read_view(), &t);
+            harness::apply_dispatch_outcome(ctx, outcome, idx)
         }
         DispatchShape::BareIdentifier => {
             debug_assert!(init.pre_subs.is_empty());
@@ -381,7 +382,8 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
                 ExpressionPart::Identifier(n) => n.clone(),
                 _ => unreachable!("BareIdentifier shape implies single Identifier part"),
             };
-            single_poll::bare_identifier(ctx, name, idx)
+            let outcome = single_poll::bare_identifier(&ctx.read_view(), name);
+            harness::apply_dispatch_outcome(ctx, outcome, idx)
         }
         DispatchShape::FunctionValueCall => {
             debug_assert!(init.pre_subs.is_empty());
@@ -425,15 +427,17 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
         DispatchShape::Keyworded => KeywordedState::initial(ctx, expr, init.pre_subs, idx),
         DispatchShape::SigiledTypeExpr => {
             debug_assert!(init.pre_subs.is_empty());
-            single_poll::sigiled_type_expr(expr)
+            harness::apply_dispatch_outcome(ctx, single_poll::sigiled_type_expr(expr), idx)
         }
         DispatchShape::RecordType => {
             debug_assert!(init.pre_subs.is_empty());
-            single_poll::record_type(ctx, expr, idx)
+            let outcome = single_poll::record_type(&ctx.read_view(), expr);
+            harness::apply_dispatch_outcome(ctx, outcome, idx)
         }
         DispatchShape::LiteralPassThrough => {
             debug_assert!(init.pre_subs.is_empty());
-            single_poll::literal_pass_through(ctx, expr, idx)
+            let outcome = single_poll::literal_pass_through(&ctx.read_view(), expr);
+            harness::apply_dispatch_outcome(ctx, outcome, idx)
         }
     }
 }

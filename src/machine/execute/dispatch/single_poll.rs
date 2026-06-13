@@ -10,14 +10,14 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
-use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{KType, RecursiveSet};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution};
 
-use super::super::nodes::{DispatchCombineFinish, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{DispatchCombineFinish, NodeOutput, NodeStep};
 use super::apply_callable::{apply_callable, ResolvedCallable};
+use super::ctx::DispatchCx;
 use super::outcome::{DispatchDep, DispatchOutcome};
 use super::{harness, DispatchCtx, DispatchState, Initialized};
 
@@ -106,7 +106,8 @@ impl<'run> BareTypeState<'run> {
         // the now-sealed memo rather than reading the producer's value.
         let _ = producer;
         ctx.clear_dep_edges(idx);
-        bare_type_leaf(ctx, &leaf, idx)
+        let outcome = bare_type_leaf(&ctx.read_view(), &leaf);
+        harness::apply_dispatch_outcome(ctx, outcome, idx)
     }
 }
 
@@ -143,33 +144,29 @@ impl<'run> CtorState<'run> {
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
 pub(super) fn bare_identifier<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    ctx: &DispatchCx<'run, '_>,
     name: String,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     match ctx
         .current_scope()
         .resolve_with_chain(&name, ctx.chain_deref())
     {
-        Resolution::Value(obj) => NodeStep::Done(NodeOutput::value(obj)),
-        Resolution::Placeholder(producer) => {
-            harness::apply_dispatch_outcome(ctx, DispatchOutcome::ParkLift { producer }, idx)
-        }
+        Resolution::Value(obj) => DispatchOutcome::Terminal(NodeOutput::value(obj)),
+        Resolution::Placeholder(producer) => DispatchOutcome::ParkLift { producer },
         Resolution::UnboundName => {
-            NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))))
+            DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))))
         }
     }
 }
 
 pub(super) fn bare_type_leaf<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    ctx: &DispatchCx<'run, '_>,
     t: &TypeName,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     match resolve_type_leaf_carrier(ctx.current_scope(), t, ctx.active_chain()) {
-        TypeLeafCarrier::Resolved(kt) => NodeStep::Done(NodeOutput::ktype(kt)),
+        TypeLeafCarrier::Resolved(kt) => DispatchOutcome::Terminal(NodeOutput::ktype(kt)),
         TypeLeafCarrier::Unbound(n) => {
-            NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))))
+            DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))))
         }
         // A still-finalizing referent. A visible type alias has already resolved its RHS
         // through the bridge, so a bare leaf parks on exactly one producer; park on it and
@@ -178,33 +175,32 @@ pub(super) fn bare_type_leaf<'run>(
             let producer = match producers.first() {
                 Some(p) => *p,
                 None => {
-                    return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(
-                        t.render(),
-                    ))));
+                    return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
+                        KErrorKind::UnboundName(t.render()),
+                    )));
                 }
             };
             if ctx.is_result_ready(producer) {
                 if let Err(e) = ctx.read_result(producer) {
-                    return NodeStep::Done(NodeOutput::Err(e.clone_for_propagation()));
+                    return DispatchOutcome::Terminal(NodeOutput::Err(e.clone_for_propagation()));
                 }
                 // Ready-and-bound: the referent finalized between resolve and this check, so
                 // re-resolve directly — the memoized bridge now admits.
-                return bare_type_leaf(ctx, t, idx);
+                return bare_type_leaf(ctx, t);
             }
             let track = BareTypeParkTrack {
                 leaf: t.clone(),
                 producer,
             };
-            let outcome = DispatchOutcome::ParkSelf {
+            DispatchOutcome::ParkSelf {
                 producers: vec![producer],
                 state: DispatchState::BareTypeLeaf(BareTypeState::with_park(track)),
-            };
-            harness::apply_dispatch_outcome(ctx, outcome, idx)
+            }
         }
     }
 }
 
-pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> NodeStep<'run> {
+pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> DispatchOutcome<'run> {
     let inner = match expr.parts.into_iter().next() {
         Some(Spanned {
             value: ExpressionPart::SigiledTypeExpr(boxed),
@@ -212,13 +208,7 @@ pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> NodeStep<'run>
         }) => *boxed,
         _ => unreachable!("SigiledTypeExpr shape implies single SigiledTypeExpr part"),
     };
-    NodeStep::Replace {
-        work: NodeWork::dispatch(inner),
-        frame: None,
-        function: None,
-        block_entry: None,
-        body_index: 0,
-    }
+    DispatchOutcome::BecomeDispatch(inner)
 }
 
 /// `:{x :Number, y :Str}` — a single-part record-type sigil. Folds the field list straight
@@ -226,10 +216,9 @@ pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> NodeStep<'run>
 /// through a Combine when a field forward-references or sub-dispatches. No type-constructor
 /// builtin is involved — the record type is structural.
 pub(super) fn record_type<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    ctx: &DispatchCx<'run, '_>,
     expr: KExpression<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let fields = match expr.parts.into_iter().next() {
         Some(Spanned {
             value: ExpressionPart::RecordType(boxed),
@@ -238,18 +227,16 @@ pub(super) fn record_type<'run>(
         _ => unreachable!("RecordType shape implies a single RecordType part"),
     };
     let chain = ctx.current_lexical_chain();
-    let body = super::field_list::elaborate_record_value(ctx.scheduler_mut(), fields, chain);
-    schedule_constructor_body(ctx, body, idx)
+    DispatchOutcome::ElaborateRecordType { fields, chain }
 }
 
 /// `(99)`, `("x")`, `([1 2 3])`, `((inner))` etc. — single-part
 /// literal-shaped expressions. Skips the bucket lookup + builtin call
 /// the Keyworded path would otherwise route through.
 pub(super) fn literal_pass_through<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    ctx: &DispatchCx<'run, '_>,
     expr: KExpression<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let only = expr
         .parts
         .into_iter()
@@ -258,21 +245,13 @@ pub(super) fn literal_pass_through<'run>(
     match only.value {
         ExpressionPart::Literal(_) => {
             let allocated = ctx.current_scope().arena.alloc_object(only.value.resolve());
-            NodeStep::Done(NodeOutput::value(allocated))
+            DispatchOutcome::Terminal(NodeOutput::value(allocated))
         }
-        ExpressionPart::Future(c) => NodeStep::Done(NodeOutput::Value(c)),
-        ExpressionPart::Expression(boxed) => NodeStep::Replace {
-            work: NodeWork::dispatch(*boxed),
-            frame: None,
-            function: None,
-            block_entry: None,
-            body_index: 0,
-        },
-        ExpressionPart::ListLiteral(items) => park_on_literal(ctx, DispatchDep::ListLit(items), idx),
-        ExpressionPart::DictLiteral(pairs) => park_on_literal(ctx, DispatchDep::DictLit(pairs), idx),
-        ExpressionPart::RecordLiteral(fields) => {
-            park_on_literal(ctx, DispatchDep::RecordLit(fields), idx)
-        }
+        ExpressionPart::Future(c) => DispatchOutcome::Terminal(NodeOutput::Value(c)),
+        ExpressionPart::Expression(boxed) => DispatchOutcome::BecomeDispatch(*boxed),
+        ExpressionPart::ListLiteral(items) => park_on_literal(DispatchDep::ListLit(items)),
+        ExpressionPart::DictLiteral(pairs) => park_on_literal(DispatchDep::DictLit(pairs)),
+        ExpressionPart::RecordLiteral(fields) => park_on_literal(DispatchDep::RecordLit(fields)),
         _ => unreachable!("LiteralPassThrough classifier only routes Literal/Future/Expression/ListLiteral/DictLiteral/RecordLiteral"),
     }
 }
@@ -280,20 +259,15 @@ pub(super) fn literal_pass_through<'run>(
 /// Park the slot on a single literal-producer dep as a [`DispatchOutcome::Combine`] whose finish
 /// lifts the producer's resolved value straight through. The harness submits the literal and owns
 /// it; a dep error short-circuits frameless before the finish runs.
-fn park_on_literal<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
-    dep: DispatchDep<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
+fn park_on_literal<'run>(dep: DispatchDep<'run>) -> DispatchOutcome<'run> {
     let finish: DispatchCombineFinish<'run> =
         Box::new(|_ctx, results, _idx| NodeStep::Done(NodeOutput::Value(results[0])));
-    let outcome = DispatchOutcome::Combine {
+    DispatchOutcome::Combine {
         deps: vec![dep],
         dep_error_frame: None,
         finish,
         free: Vec::new(),
-    };
-    harness::apply_dispatch_outcome(ctx, outcome, idx)
+    }
 }
 
 /// Synchronous resolve-then-branch for a bare-`Type`-head call. One resolution,
@@ -383,28 +357,3 @@ pub(super) fn type_call<'run>(
     }
 }
 
-/// Decode a constructor `BodyResult` into a `NodeStep`.
-pub(super) fn schedule_constructor_body<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
-    body: BodyResult<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
-    match body {
-        BodyResult::Tail {
-            expr,
-            frame,
-            function,
-            block_entry,
-            body_index,
-        } => NodeStep::Replace {
-            work: NodeWork::dispatch(expr),
-            frame,
-            function,
-            block_entry,
-            body_index,
-        },
-        BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
-        BodyResult::DeferTo(combine_id) => ctx.defer_to_lift(idx, combine_id),
-        BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
-    }
-}
