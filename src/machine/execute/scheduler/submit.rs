@@ -90,18 +90,6 @@ impl<'run> Scheduler<'run> {
         self.add(NodeWork::dispatch(expr), scope)
     }
 
-    /// Submit each `statement` as a fresh lexical block over `scope`. Inherent entry point for
-    /// REPL-style / test submission of a block of top-level statements, so callers need not hold
-    /// the [`SchedulerHandle`](super::super::SchedulerHandle) trait. Delegates to the trait method.
-    pub fn enter_block(
-        &mut self,
-        scope_id: crate::machine::ScopeId,
-        statements: Vec<KExpression<'run>>,
-        scope: &'run Scope<'run>,
-    ) -> Vec<NodeId> {
-        <Self as super::super::SchedulerHandle>::enter_block(self, scope_id, statements, scope)
-    }
-
     /// Schedule a `Combine` slot against an explicit `scope`. `owned_subs` are sub-Dispatches
     /// this Combine allocated (cascade-freed on success); `park_producers` are existing sibling
     /// slots it splices but does not own (kept alive past success via `Notify` edges). The finish
@@ -206,15 +194,13 @@ impl<'run> Scheduler<'run> {
         }
     }
 
-    /// Dispatch `expr` against the executing slot's own scope handle. Inherent sibling of
-    /// the `SchedulerHandle::add_dispatch_here` trait method, callable from inherent
-    /// scheduler code.
+    /// Dispatch `expr` against the executing slot's own scope handle — the honest
+    /// re-dispatch-against-my-own-scope path (the `OwnScope` dep placement).
     pub(in crate::machine::execute) fn dispatch_here(&mut self, expr: KExpression<'run>) -> NodeId {
         self.submit_here(NodeWork::dispatch(expr))
     }
 
-    /// Schedule a `Combine` against the executing slot's own scope handle. Inherent sibling
-    /// of `SchedulerHandle::add_combine_here`.
+    /// Schedule a `Combine` against the executing slot's own scope handle.
     pub(in crate::machine::execute) fn combine_here(
         &mut self,
         owned_subs: Vec<NodeId>,

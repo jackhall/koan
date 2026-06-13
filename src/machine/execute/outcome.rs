@@ -27,11 +27,11 @@ use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, ScopeId};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::{NodeId, TraceFrame};
+use crate::machine::model::values::{Carried, KObject};
+use crate::machine::{KError, NodeId, TraceFrame};
 
-use super::dispatch::ResumeFn;
+use super::dispatch::{ResumeFn, SchedulerView};
 use super::nodes::{DispatchCombineFinish, NodeOutput, NodeWork};
-use super::{CatchFinish, CombineFinish};
 
 /// What a node's step wants the harness to do — the single currency every producer and finish
 /// returns. See the module docs for the taxonomy.
@@ -143,3 +143,18 @@ pub(in crate::machine::execute) enum DispatchDep<'run> {
     },
     Existing(NodeId),
 }
+
+/// Host-side closure for a [`NodeWork::Combine`] slot. Receives the dep terminals in submission
+/// order as [`Carried`] (an object or a type flowing in the type channel); static elements are
+/// captured in the closure. A value-consuming finish calls `.object()` on each; a type-resolving
+/// dep (a VAL type, an FN return type, a field type) arrives as [`Carried::Type`]. The finish
+/// decides against a read-only [`SchedulerView`] and returns an [`Outcome`] the harness applies —
+/// it issues no graph write of its own.
+pub(in crate::machine::execute) type CombineFinish<'a> =
+    Box<dyn for<'s> FnOnce(&SchedulerView<'a, 's>, &[Carried<'a>]) -> Outcome<'a> + 'a>;
+
+/// Host-side closure for a [`NodeWork::Catch`] slot. Receives the watched slot's terminal as a
+/// `Result` so the closure can branch on either outcome, plus a read-only [`SchedulerView`].
+pub(in crate::machine::execute) type CatchFinish<'a> = Box<
+    dyn for<'s> FnOnce(&SchedulerView<'a, 's>, Result<&'a KObject<'a>, KError>) -> Outcome<'a> + 'a,
+>;

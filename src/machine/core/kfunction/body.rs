@@ -88,8 +88,7 @@ impl ErasedContract {
 }
 
 /// Split an FN / MATCH-arm / TRY-arm body into top-level statements. Mirrors the
-/// all-`Expression` detection used by
-/// [`super::scheduler_handle::SchedulerHandle::enter_body_block`]; any non-`Expression`
+/// all-`Expression` detection used by `Scheduler::enter_body_block`; any non-`Expression`
 /// part or fewer than two parts leaves the body as a single statement. Always returns
 /// at least one element.
 pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpression<'a>> {

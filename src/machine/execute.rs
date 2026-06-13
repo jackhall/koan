@@ -14,13 +14,10 @@ mod lift;
 mod nodes;
 mod outcome;
 mod scheduler;
-mod scheduler_handle;
 
 pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path};
+pub(in crate::machine::execute) use outcome::{CatchFinish, CombineFinish};
 pub use scheduler::Scheduler;
-pub(in crate::machine::execute) use scheduler_handle::{
-    CatchFinish, CombineFinish, SchedulerHandle,
-};
 
 pub(crate) use dispatch::{defer_field_list_action, resolve_type_leaf_carrier, TypeLeafCarrier};
 pub use dispatch::{NameOutcome, ResolveOutcome, ResolveTypeExprOutcome, Resolved};

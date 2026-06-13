@@ -12,7 +12,6 @@ use crate::machine::NodeId;
 
 use super::super::nodes::{DispatchCombineFinish, LiftState, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
-use super::super::SchedulerHandle;
 use super::ctx::SchedulerView;
 use super::{Continuation, DispatchDep, Outcome};
 
@@ -48,7 +47,7 @@ impl<'run> Scheduler<'run> {
         match dep {
             Dep::Existing(id) => id,
             Dep::Dispatch { expr, placement } => match placement {
-                DepPlacement::OwnScope => self.add_dispatch_here(expr),
+                DepPlacement::OwnScope => self.dispatch_here(expr),
                 DepPlacement::ActiveFrame => self.add_dispatch_in_frame(expr),
                 DepPlacement::InScope(scope) => self
                     .enter_block(scope.id, vec![expr], scope)
@@ -113,7 +112,7 @@ impl<'run> Scheduler<'run> {
                 for dep in deps {
                     match dep {
                         DispatchDep::Dispatch { expr, placement } => match placement {
-                            DepPlacement::OwnScope => dep_ids.push(self.add_dispatch_here(expr)),
+                            DepPlacement::OwnScope => dep_ids.push(self.dispatch_here(expr)),
                             DepPlacement::ActiveFrame => {
                                 dep_ids.push(self.add_dispatch_in_frame(expr))
                             }

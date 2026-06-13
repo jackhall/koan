@@ -6,7 +6,7 @@
 //! `read_result`) — and the decide *returns* a
 //! [`Outcome`](super::Outcome) the [`harness`](super::harness) applies.
 //! The harness holds the only `&mut Scheduler` on the dispatch side, so no decide handler touches
-//! it; `Scheduler` is the sole `SchedulerHandle` impl.
+//! it — the scheduler's write primitives are inherent methods the harness alone calls.
 //!
 //! The dispatcher genuinely reads evolving graph state, so full scheduler-unawareness (the builtin
 //! model) is not a goal — only the *writes* defer to the harness. Dispatch *shape* modules
@@ -23,7 +23,6 @@ use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 
 use super::super::scheduler::Scheduler;
-use super::super::SchedulerHandle;
 use super::{bind_frame_err, park_combine, resolve_name_part, DispatchDep, Outcome, PendingSub};
 
 /// Read-only dispatch view — the decide-phase context. It holds only `&Scheduler`, never `&mut`.

@@ -1,12 +1,11 @@
 use std::rc::Rc;
 
-use crate::machine::core::ScopeId;
-use crate::machine::model::ast::KExpression;
+use crate::machine::core::{assemble_body_chain, ScopeId};
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope};
 
 use super::nodes::{NodeScope, NodeWork};
-use super::SchedulerHandle;
 use dep_graph::DepGraph;
 use node_store::NodeStore;
 use work_queues::WorkQueues;
@@ -297,8 +296,7 @@ impl<'run> Scheduler<'run> {
     /// The executing slot's scope, materialized on demand: an `Anchored` slot hands back its
     /// stored run-lived `&Scope`; a `Yoked` slot re-projects from the live `active_frame` cart via
     /// the bounded brand. A short borrow bounded by `&self` — fetched per use, never held across a
-    /// `&mut self` call — so it holds nothing across the in-step TCO frame reset. See
-    /// [`SchedulerHandle::current_scope`](super::SchedulerHandle::current_scope).
+    /// `&mut self` call — so it holds nothing across the in-step TCO frame reset.
     pub(in crate::machine::execute) fn current_scope(&self) -> &Scope<'run> {
         self.current_scope_opt()
             .expect("a slot step installs active_node_scope (and a Yoked slot keeps its frame)")
@@ -327,17 +325,25 @@ impl<'run> Default for Scheduler<'run> {
     }
 }
 
-impl<'run, 's> SchedulerHandle<'run, 's> for Scheduler<'run> {
-    fn current_frame(&self) -> Option<Rc<CallArena>> {
+/// The scheduler's write primitives — the graph-mutating entry points the dispatch/action harness
+/// calls to realize a decided [`Outcome`](super::outcome::Outcome). `apply_outcome` holds the sole
+/// `&mut Scheduler`, so these are plain inherent methods (no dynamic dispatch). All but
+/// [`Self::enter_block`] (the program/REPL entry point) are capped at
+/// `pub(in crate::machine::execute)`.
+impl<'run> Scheduler<'run> {
+    /// Active slot's `Rc<CallArena>`. See
+    /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
+    pub(in crate::machine::execute) fn current_frame(&self) -> Option<Rc<CallArena>> {
         self.active_frame.clone()
     }
 
-    /// Sub-slots spawned inside `body` inherit `frame` via the `Scheduler::add` site
-    /// that reads `self.active_frame`.
-    fn with_active_frame(
+    /// Run `body` with `active_frame` temporarily set to `frame`, then restore the previous.
+    /// Sub-slots spawned inside `body` inherit `frame` via the `Scheduler::add` site that reads
+    /// `self.active_frame`.
+    pub(in crate::machine::execute) fn with_active_frame(
         &mut self,
-        frame: std::rc::Rc<crate::machine::core::CallArena>,
-        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'run, 's>),
+        frame: Rc<CallArena>,
+        body: &mut dyn FnMut(&mut Scheduler<'run>),
     ) {
         let prev = self.active_frame.take();
         self.active_frame = Some(frame);
@@ -350,7 +356,10 @@ impl<'run, 's> SchedulerHandle<'run, 's> for Scheduler<'run> {
     /// slot's own cart is never emptied by an invoke — `try_reset_for_tail`'s `Rc::get_mut`
     /// gate is exactly the "no escape" uniqueness check (a cloned `Rc` would foreclose reuse).
     /// The just-finished cart is rotated back in as the next reserve by `execute`'s Replace arm.
-    fn acquire_tail_frame(&mut self, outer: &Scope<'_>) -> Rc<CallArena> {
+    pub(in crate::machine::execute) fn acquire_tail_frame(
+        &mut self,
+        outer: &Scope<'_>,
+    ) -> Rc<CallArena> {
         if let Some(mut reserve) = self.active_reserve.take() {
             if reserve.try_reset_for_tail(outer) {
                 #[cfg(test)]
@@ -363,11 +372,16 @@ impl<'run, 's> SchedulerHandle<'run, 's> for Scheduler<'run> {
         CallArena::new(outer, None)
     }
 
-    fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>> {
+    /// Active slot's lexical chain. Mirrors [`Self::current_frame`].
+    pub(in crate::machine::execute) fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>> {
         self.active_chain.clone()
     }
 
-    fn enter_block(
+    /// Submit each `statement` as a fresh lexical block over `scope`: mint a frame `(scope_id, i+1)`
+    /// per statement (parent = current `active_chain`) and dispatch each against `scope`. The
+    /// program / REPL / test entry point for a block of top-level statements — the only write
+    /// primitive that stays `pub`.
+    pub fn enter_block(
         &mut self,
         scope_id: ScopeId,
         statements: Vec<KExpression<'run>>,
@@ -386,7 +400,9 @@ impl<'run, 's> SchedulerHandle<'run, 's> for Scheduler<'run> {
             .collect()
     }
 
-    fn add_dispatch_with_chain(
+    /// Schedule `expr` against `scope` with `chain` attached explicitly. The ambient
+    /// `add_dispatch` reads `active_chain` instead; this is the only way to override that.
+    pub(in crate::machine::execute) fn add_dispatch_with_chain(
         &mut self,
         expr: KExpression<'run>,
         scope: &'run Scope<'run>,
@@ -395,7 +411,10 @@ impl<'run, 's> SchedulerHandle<'run, 's> for Scheduler<'run> {
         Scheduler::add_with_chain(self, NodeWork::dispatch(expr), scope, Some(chain))
     }
 
-    fn add_dispatch_with_chain_in_frame(
+    /// Dispatch `expr` as a sub-slot of the currently-active per-call frame, storing the slot's
+    /// scope as a `Yoked` handle re-projected from the frame cart rather than a fabricated `&'run`.
+    /// The caller must be inside [`Self::with_active_frame`].
+    pub(in crate::machine::execute) fn add_dispatch_with_chain_in_frame(
         &mut self,
         expr: KExpression<'run>,
         chain: Rc<LexicalFrame>,
@@ -416,7 +435,12 @@ impl<'run, 's> SchedulerHandle<'run, 's> for Scheduler<'run> {
         )
     }
 
-    fn add_dispatch_in_frame(&mut self, expr: KExpression<'run>) -> NodeId {
+    /// Ambient-chain sibling of [`Self::add_dispatch_with_chain_in_frame`]: dispatch `expr` in the
+    /// active frame inheriting the ambient `active_chain` (the `ActiveFrame` dep placement).
+    pub(in crate::machine::execute) fn add_dispatch_in_frame(
+        &mut self,
+        expr: KExpression<'run>,
+    ) -> NodeId {
         let frame = self
             .active_frame
             .clone()
@@ -431,7 +455,72 @@ impl<'run, 's> SchedulerHandle<'run, 's> for Scheduler<'run> {
         )
     }
 
-    fn add_dispatch_here(&mut self, expr: KExpression<'run>) -> NodeId {
-        self.submit_here(NodeWork::dispatch(expr))
+    /// Schedule each top-level statement in `body_expr` against `scope`. Routes through
+    /// [`Self::enter_block`] with `scope.id` so body statements get fresh `(scope.id, i)` frames
+    /// stacked over the call-site chain.
+    ///
+    /// A body counts as multi-statement only when *every* part is `ExpressionPart::Expression(_)`;
+    /// otherwise the whole body is dispatched as a single statement. The all-Expression rule
+    /// prevents `LET x = (FN ...)` from being mis-split (its inner `Expression` part would
+    /// otherwise look like a second statement).
+    pub(in crate::machine::execute) fn enter_body_block(
+        &mut self,
+        scope: &'run Scope<'run>,
+        body_expr: KExpression<'run>,
+    ) -> Vec<NodeId> {
+        let is_multi_statement = !body_expr.parts.is_empty()
+            && body_expr
+                .parts
+                .iter()
+                .all(|p| matches!(p.value, ExpressionPart::Expression(_)));
+
+        let statements: Vec<KExpression<'run>> = if is_multi_statement {
+            body_expr
+                .parts
+                .into_iter()
+                .filter_map(|p| match p.value {
+                    ExpressionPart::Expression(e) => Some(*e),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            vec![body_expr]
+        };
+        self.enter_block(scope.id, statements, scope)
+    }
+
+    /// Dispatch a body's non-tail `statements` as sibling sub-slots in `frame`, each positioned at
+    /// body-chain index `i + 1` (the params / `it` sit at idx 0) over the frame's body scope, with
+    /// the parent chain reconstructed from the call site via [`assemble_body_chain`]. The shared
+    /// "execute a block of expressions" primitive: a multi-statement FN body (`KFunction::invoke`),
+    /// a deferred return-type dep, and a MATCH/TRY arm body (the action harness) all use it. The
+    /// caller tail-replaces into the body's last statement separately. Returns the sub-slots' ids.
+    pub(in crate::machine::execute) fn dispatch_body_statements(
+        &mut self,
+        frame: &Rc<CallArena>,
+        statements: Vec<KExpression<'run>>,
+    ) -> Vec<NodeId> {
+        let body_scope = frame.scope_for_bind();
+        let body_scope_id = body_scope.id;
+        let parent = assemble_body_chain(
+            body_scope,
+            self.current_lexical_chain()
+                .expect("a body block runs inside an active lexical chain"),
+            0,
+        )
+        .parent
+        .clone();
+        let mut ids = Vec::with_capacity(statements.len());
+        for (i, statement) in statements.into_iter().enumerate() {
+            let statement_chain = LexicalFrame::push(parent.clone(), body_scope_id, i + 1);
+            let mut bid = None;
+            self.with_active_frame(frame.clone(), &mut |s| {
+                bid = Some(
+                    s.add_dispatch_with_chain_in_frame(statement.clone(), statement_chain.clone()),
+                );
+            });
+            ids.push(bid.expect("body dispatch spawns"));
+        }
+        ids
     }
 }

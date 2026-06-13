@@ -1,7 +1,7 @@
 //! The scheduler-aware `Action` currency. The peer of
 //! [`super::exec::ExecOutcome`]: where `ExecOutcome` is what `run_user_fn` returns (scheduler-
 //! *unaware*), `Action` is what a builtin returns and what the harness interprets (scheduler-*aware*).
-//! These are the **types only** — they reference core/model types, never `SchedulerHandle`. The
+//! These are the **types only** — they reference core/model types, never the scheduler. The
 //! interpreter that drives the scheduler from an `Action` lives one layer up in
 //! `machine::execute::harness::run_action` (the peer of `dispatch/exec.rs::invoke`).
 
@@ -180,7 +180,7 @@ pub struct FinishCtx<'a, 'c> {
 }
 
 /// A `Combine` finish: re-entered at wake with the resolved dep values, yielding another `Action` the
-/// harness recurses into. No `&mut SchedulerHandle` — exec's continuation pattern.
+/// harness recurses into. Reads only a `FinishCtx`, never the scheduler — exec's continuation pattern.
 pub type Cont<'a> = Box<dyn FnOnce(&FinishCtx<'a, '_>, &[Carried<'a>]) -> Action<'a> + 'a>;
 
 /// A `Catch` finish: re-entered with the watched slot's `Result`, yielding a `Action`.
