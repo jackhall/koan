@@ -11,6 +11,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::{Carried, KObject};
 use crate::machine::KError;
 
+use super::dispatch::SchedulerView;
 use super::outcome::Outcome;
 
 pub(in crate::machine::execute) trait SchedulerHandle<'a, 's> {
@@ -106,8 +107,6 @@ pub(in crate::machine::execute) trait SchedulerHandle<'a, 's> {
         park_producers: Vec<NodeId>,
         finish: CombineFinish<'a>,
     ) -> NodeId;
-    /// `Catch` sibling of [`Self::add_dispatch_here`].
-    fn add_catch_here(&mut self, from: NodeId, finish: CatchFinish<'a>) -> NodeId;
 
     /// Schedule each top-level statement in `body_expr` against `scope`. Routes through
     /// [`Self::enter_block`] with `scope.id` so body statements get fresh `(scope.id, i)`
@@ -183,16 +182,13 @@ pub(in crate::machine::execute) trait SchedulerHandle<'a, 's> {
 /// as [`Carried`] (an object or a type flowing in the type channel); static elements are
 /// captured in the closure. A value-consuming finish calls `.object()` on each; a
 /// type-resolving dep (a VAL type, an FN return type, a field type) arrives as
-/// [`Carried::Type`].
+/// [`Carried::Type`]. The finish decides against a read-only [`SchedulerView`] and returns an
+/// [`Outcome`] the harness applies — it issues no graph write of its own.
 pub(in crate::machine::execute) type CombineFinish<'a> =
-    Box<dyn for<'s> FnOnce(&mut dyn SchedulerHandle<'a, 's>, &[Carried<'a>]) -> Outcome<'a> + 'a>;
+    Box<dyn for<'s> FnOnce(&SchedulerView<'a, 's>, &[Carried<'a>]) -> Outcome<'a> + 'a>;
 
 /// Host-side closure for `Catch` slots. Receives the watched slot's terminal as a
-/// `Result` so the closure can branch on either outcome.
+/// `Result` so the closure can branch on either outcome, plus a read-only [`SchedulerView`].
 pub(in crate::machine::execute) type CatchFinish<'a> = Box<
-    dyn for<'s> FnOnce(
-            &mut dyn SchedulerHandle<'a, 's>,
-            Result<&'a KObject<'a>, KError>,
-        ) -> Outcome<'a>
-        + 'a,
+    dyn for<'s> FnOnce(&SchedulerView<'a, 's>, Result<&'a KObject<'a>, KError>) -> Outcome<'a> + 'a,
 >;

@@ -64,11 +64,12 @@ pub(super) enum NodeStep<'run> {
 }
 
 /// Host-side closure for a [`NodeWork::DispatchCombine`] slot — the dispatch-side dual of
-/// [`CombineFinish`]. Receives the dep terminals in submission order and a read-only
-/// [`SchedulerView`], and returns an [`Outcome`]: unlike a builtin Combine (whose finish lands as
-/// an applied `Outcome` and cannot re-park), a dispatch finish may resolve, tail-redispatch, or **park again** (e.g.
-/// an overload park on a freshly resolved producer), which the three-way outcome expresses. The
-/// harness applies the returned outcome, so the finish — like every decide — issues no graph write.
+/// [`CombineFinish`]. Receives the dep terminals in submission order, a read-only
+/// [`SchedulerView`], and the slot's own index (for an overload re-park keyed on it), and returns
+/// an [`Outcome`] — resolve, tail-redispatch, or **park again** (e.g. an overload park on a freshly
+/// resolved producer). The dispatcher genuinely reads evolving graph state, hence the extra `idx`
+/// and the dispatch-only park-sites; an action [`CombineFinish`] needs neither. The harness applies
+/// the returned outcome, so the finish — like every decide — issues no graph write.
 pub(super) type DispatchCombineFinish<'run> = Box<
     dyn for<'a> FnOnce(&SchedulerView<'run, 'a>, &[Carried<'run>], usize) -> Outcome<'run> + 'run,
 >;

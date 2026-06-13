@@ -6,7 +6,7 @@ use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope};
 
 use super::nodes::{NodeScope, NodeWork};
-use super::{CatchFinish, CombineFinish, SchedulerHandle};
+use super::{CombineFinish, SchedulerHandle};
 use dep_graph::DepGraph;
 use node_store::NodeStore;
 use work_queues::WorkQueues;
@@ -480,9 +480,5 @@ impl<'run, 's> SchedulerHandle<'run, 's> for Scheduler<'run> {
             park_count,
             finish,
         })
-    }
-
-    fn add_catch_here(&mut self, from: NodeId, finish: CatchFinish<'run>) -> NodeId {
-        self.submit_here(NodeWork::Catch { from, finish })
     }
 }

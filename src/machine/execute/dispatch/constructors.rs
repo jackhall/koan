@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
@@ -140,7 +141,10 @@ fn launch<'run>(value_parts: Vec<ExpressionPart<'run>>, kind: CtorKind<'run>) ->
     );
     let deps: Vec<DispatchDep<'run>> = value_parts
         .into_iter()
-        .map(|part| DispatchDep::Dispatch(KExpression::new(vec![Spanned::bare(part)])))
+        .map(|part| DispatchDep::Dispatch {
+            expr: KExpression::new(vec![Spanned::bare(part)]),
+            placement: DepPlacement::OwnScope,
+        })
         .collect();
     let combine_finish: DispatchCombineFinish<'run> = Box::new(move |ctx, results, _idx| {
         let values: Vec<&'run KObject<'run>> = results.iter().map(|c| c.object()).collect();

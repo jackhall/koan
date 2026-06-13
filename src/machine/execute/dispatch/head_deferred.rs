@@ -21,6 +21,7 @@
 //! The head sub-dispatch is an Owned edge; the park/resume pair mirrors
 //! `park_on_literal_producer` + `CtorState::resume`, no new scheduler primitive.
 
+use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::KType;
@@ -74,7 +75,15 @@ fn park_on_head<'run>(
     });
     // The head sub is the only dep; a dep error propagates frameless (the resumed dispatch
     // attaches its own frame), matching the resume behaviour.
-    park_combine(vec![DispatchDep::Dispatch(head)], None, finish, Vec::new())
+    park_combine(
+        vec![DispatchDep::Dispatch {
+            expr: head,
+            placement: DepPlacement::OwnScope,
+        }],
+        None,
+        finish,
+        Vec::new(),
+    )
 }
 
 /// Branch a resumed head value into a [`ResolvedCallable`], honoring the

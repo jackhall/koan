@@ -21,7 +21,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::action::FramePlacement;
+use crate::machine::core::kfunction::action::{Dep, DepPlacement, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::ScopeId;
@@ -30,6 +30,7 @@ use crate::machine::{LexicalFrame, NodeId, TraceFrame};
 
 use super::dispatch::DispatchState;
 use super::nodes::{DispatchCombineFinish, NodeOutput, NodeWork};
+use super::{CatchFinish, CombineFinish};
 
 /// What a node's step wants the harness to do — the single currency every producer and finish
 /// returns. See the module docs for the taxonomy.
@@ -104,14 +105,27 @@ pub(crate) fn forward_owned<'run>(producer: NodeId) -> Outcome<'run> {
     }
 }
 
-/// What a [`Outcome::ParkThenContinue`] runs once its deps resolve. The three shapes are the
-/// closed set of "what happens on wake":
-/// - `Finish` consumes the resolved dep values and returns another [`Outcome`] (Combine).
+/// What a [`Outcome::ParkThenContinue`] runs once its deps resolve. The shapes are the closed set
+/// of "what happens on wake":
+/// - `Finish` consumes the resolved dep values and returns another [`Outcome`] — a dispatch decide
+///   re-park/splice (its finish may itself re-park, so it lands as `NodeWork::DispatchCombine`).
+/// - `Combine` is the action-harness combine ([`run_action`](super::harness::run_action)'s
+///   `Action::Combine`): the slot becomes a `NodeWork::Combine` and its finish runs against a
+///   read-only [`SchedulerView`].
+/// - `Catch` is the action-harness catch ([`run_action`](super::harness::run_action)'s
+///   `Action::Catch`): the slot becomes a `NodeWork::Catch` watching the realized `watched` dep;
+///   the harness owns that producer. `watched`'s placement is realized at apply time (an `InScope`
+///   watched enters a fresh single-statement block, unlike a Combine body's fan-out).
 /// - `Replay` re-runs the parked dispatch decide (the `ParkSelf` shape — its payload becomes a
 ///   resume closure once `DispatchState` dissolves).
 /// - `Forward` makes the slot *be* a single producer's value (the bare-name `Lift` forward).
 pub(in crate::machine::execute) enum Continuation<'run> {
     Finish(DispatchCombineFinish<'run>),
+    Combine(CombineFinish<'run>),
+    Catch {
+        watched: Dep<'run>,
+        finish: CatchFinish<'run>,
+    },
     Replay(DispatchState<'run>),
     Forward(NodeId),
 }
@@ -119,9 +133,13 @@ pub(in crate::machine::execute) enum Continuation<'run> {
 /// A dependency a [`Outcome::ParkThenContinue`] declares. `Dispatch`/`*Lit` are fresh sub-slots
 /// the harness submits (and owns); `Existing` is a pre-existing producer the decide phase found
 /// that the slot merely parks on. Deps resolve in declaration order, so a finish reads
-/// `results[k]` for the k-th dep.
+/// `results[k]` for the k-th dep — except an `InScope`-placed `Dispatch`, whose multi-statement
+/// body fans out to one resolved producer per statement (the harness `extend`s them in order).
 pub(in crate::machine::execute) enum DispatchDep<'run> {
-    Dispatch(KExpression<'run>),
+    Dispatch {
+        expr: KExpression<'run>,
+        placement: DepPlacement<'run>,
+    },
     ListLit(Vec<ExpressionPart<'run>>),
     DictLit(Vec<(ExpressionPart<'run>, ExpressionPart<'run>)>),
     RecordLit(Vec<(String, ExpressionPart<'run>)>),

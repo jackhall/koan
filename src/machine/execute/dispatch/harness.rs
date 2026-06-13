@@ -6,7 +6,7 @@
 //! against a read-only [`SchedulerView`](super::ctx::SchedulerView) and returns an outcome; this
 //! applies it. The harness holds the sole `&mut Scheduler` on the dispatch side.
 
-use crate::machine::core::kfunction::action::FramePlacement;
+use crate::machine::core::kfunction::action::{Dep, DepPlacement, FramePlacement};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
 use crate::machine::NodeId;
@@ -41,6 +41,25 @@ fn drain_free(sched: &mut Scheduler<'_>, free: Vec<usize>) {
 }
 
 impl<'run> Scheduler<'run> {
+    /// Realize a [`Catch`](Continuation::Catch)'s single watched [`Dep`] to a producer `NodeId`.
+    /// Unlike a Combine body, an `InScope` watched expr enters a fresh **single-statement** block
+    /// (TRY's `child_under` body scope) so an inner `LET` stays local; `Existing` is already a
+    /// producer the builtin found in scope.
+    fn realize_catch_dep(&mut self, dep: Dep<'run>) -> NodeId {
+        match dep {
+            Dep::Existing(id) => id,
+            Dep::Dispatch { expr, placement } => match placement {
+                DepPlacement::OwnScope => self.add_dispatch_here(expr),
+                DepPlacement::ActiveFrame => self.add_dispatch_in_frame(expr),
+                DepPlacement::InScope(scope) => self
+                    .enter_block(scope.id, vec![expr], scope)
+                    .into_iter()
+                    .next()
+                    .expect("enter_block of one statement yields one node"),
+            },
+        }
+    }
+
     /// Interpret an [`Outcome`] into the scheduler effect it names and return the slot's
     /// [`NodeStep`]. This is the sole graph writer the dispatch side reaches — a decide handler
     /// never holds `&mut Scheduler`.
@@ -95,24 +114,43 @@ impl<'run> Scheduler<'run> {
                 // deps.
                 drain_free(self, free);
                 // Submit each fresh dep (an `Existing` is already in the graph). Submission order
-                // is preserved, so a finish reads `results[k]` for the k-th declared dep.
-                let dep_ids: Vec<NodeId> = deps
-                    .into_iter()
-                    .map(|dep| match dep {
-                        DispatchDep::Dispatch(expr) => self.add_dispatch_here(expr),
-                        DispatchDep::ListLit(items) => self.schedule_list_literal(items),
-                        DispatchDep::DictLit(pairs) => self.schedule_dict_literal(pairs),
-                        DispatchDep::RecordLit(fields) => self.schedule_record_literal(fields),
-                        DispatchDep::Existing(id) => id,
-                    })
-                    .collect();
+                // is preserved, so a finish reads `results[k]` for the k-th declared dep — except
+                // an `InScope`-placed `Dispatch`, whose multi-statement body fans out to one
+                // producer per statement (the only one-dep-to-many case, so this is a loop not a
+                // `map`).
+                let mut dep_ids: Vec<NodeId> = Vec::with_capacity(deps.len());
+                for dep in deps {
+                    match dep {
+                        DispatchDep::Dispatch { expr, placement } => match placement {
+                            DepPlacement::OwnScope => dep_ids.push(self.add_dispatch_here(expr)),
+                            DepPlacement::ActiveFrame => {
+                                dep_ids.push(self.add_dispatch_in_frame(expr))
+                            }
+                            DepPlacement::InScope(scope) => {
+                                dep_ids.extend(self.enter_body_block(scope, expr))
+                            }
+                        },
+                        DispatchDep::ListLit(items) => {
+                            dep_ids.push(self.schedule_list_literal(items))
+                        }
+                        DispatchDep::DictLit(pairs) => {
+                            dep_ids.push(self.schedule_dict_literal(pairs))
+                        }
+                        DispatchDep::RecordLit(fields) => {
+                            dep_ids.push(self.schedule_record_literal(fields))
+                        }
+                        DispatchDep::Existing(id) => dep_ids.push(id),
+                    }
+                }
                 // Edge install: the `[..park_count]` prefix is notify-parked (sibling producers
                 // the slot waits on but doesn't own); the `[park_count..]` suffix is owned
                 // (cascade-freed on resolve). Each continuation sets `park_count` to match: a
-                // dispatch `Finish` owns all its deps (`park_count: 0`); a builtin `Finish` parks
-                // its Existing prefix; `Replay` parks every producer (`park_count: len`); a
-                // bare-name `Forward` parks its one producer (`park_count: 1`) while a
-                // deferred-combine `Forward` owns it (`park_count: 0`).
+                // dispatch `Finish` owns all its deps (`park_count: 0`); an action `Combine` parks
+                // its `Existing` prefix and owns its `Dispatch` suffix; `Replay` parks every
+                // producer (`park_count: len`); a bare-name `Forward` parks its one producer
+                // (`park_count: 1`) while a deferred-combine `Forward` owns it (`park_count: 0`).
+                // (`Catch` declares no deps here — it realizes and owns its single watched dep in
+                // the `cont` match below.)
                 for (i, id) in dep_ids.iter().enumerate() {
                     if i < park_count {
                         self.add_park_edge(*id, NodeId(idx));
@@ -127,6 +165,20 @@ impl<'run> Scheduler<'run> {
                         finish,
                         dep_error_frame,
                     },
+                    // The action-harness combine: the slot becomes a `NodeWork::Combine` over the
+                    // realized deps (its edges already installed by the loop above).
+                    Continuation::Combine(finish) => NodeWork::Combine {
+                        deps: dep_ids,
+                        park_count,
+                        finish,
+                    },
+                    // The action-harness catch carries its single watched dep unrealized (its
+                    // placement differs from a Combine body's fan-out); realize and own it here.
+                    Continuation::Catch { watched, finish } => {
+                        let from = self.realize_catch_dep(watched);
+                        self.add_owned_edge(from, NodeId(idx));
+                        NodeWork::Catch { from, finish }
+                    }
                     // The state carries the evolving `working_expr` from here on, so the entry
                     // expression drops to an empty placeholder.
                     Continuation::Replay(state) => NodeWork::Dispatch {

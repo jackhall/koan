@@ -15,6 +15,7 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -36,7 +37,7 @@ pub(in crate::machine::execute) struct SchedulerView<'run, 's> {
 }
 
 impl<'run, 's> SchedulerView<'run, 's> {
-    pub(super) fn new(sched: &'s Scheduler<'run>) -> Self {
+    pub(in crate::machine::execute) fn new(sched: &'s Scheduler<'run>) -> Self {
         Self { sched }
     }
 
@@ -45,7 +46,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
     // (`is_result_ready`, `would_create_cycle`, `read_result`) all forward to the borrowed
     // scheduler.
 
-    pub(super) fn current_scope(&self) -> &Scope<'run> {
+    pub(in crate::machine::execute) fn current_scope(&self) -> &Scope<'run> {
         self.sched.current_scope()
     }
 
@@ -138,7 +139,10 @@ impl<'run, 's> SchedulerView<'run, 's> {
                     }
                     DispatchDep::Existing(id)
                 }
-                PendingSub::Dispatch(sub_expr) => DispatchDep::Dispatch(sub_expr),
+                PendingSub::Dispatch(sub_expr) => DispatchDep::Dispatch {
+                    expr: sub_expr,
+                    placement: DepPlacement::OwnScope,
+                },
                 PendingSub::ListLit(items) => DispatchDep::ListLit(items),
                 PendingSub::DictLit(pairs) => DispatchDep::DictLit(pairs),
                 PendingSub::RecordLit(fields) => DispatchDep::RecordLit(fields),
