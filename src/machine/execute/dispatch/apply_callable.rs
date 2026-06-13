@@ -110,13 +110,13 @@ fn apply_constructor<'run>(
             {
                 let tag = t.render();
                 if !schema.contains_key(&tag) {
-                    return Outcome::Done(NodeOutput::Err(KError::new(
-                        KErrorKind::ShapeError(format!(
+                    return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::ShapeError(
+                        format!(
                             "`{tag}` is not a variant of `{}` (variants: {})",
                             set.member(*index).name,
                             sorted_variant_names(&schema),
-                        )),
-                    )));
+                        ),
+                    ))));
                 }
                 let variant = KType::Variant {
                     set: Rc::clone(set),

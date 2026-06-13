@@ -16,7 +16,7 @@ use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
 };
 use crate::machine::model::{KType, Record};
-use crate::machine::{BodyResult, KError, KErrorKind, Scope};
+use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
 use crate::machine::execute::defer_field_list_action;
@@ -185,7 +185,7 @@ fn build_carrier<'a>(
             None,
             None,
             Box::new(move |scope, fields| {
-                BodyResult::ktype(finalize_carrier(scope, fields, ret, kind))
+                Ok(Carried::Type(finalize_carrier(scope, fields, ret, kind)))
             }),
         ),
     }

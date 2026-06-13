@@ -5,10 +5,11 @@ use crate::machine::model::types::{
     finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalSchema, SchemaSealResult,
     SealOutcome,
 };
+use crate::machine::model::values::Carried;
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, BodyResult, KError, KErrorKind, Scope, TraceFrame};
+use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
 
-use super::{arg, err, kw, sig};
+use super::{arg, kw, sig};
 
 /// Seal the elaborated variant schema into the UNION's [`RecursiveSet`] member and install
 /// the `SetRef` identity into `bindings.types` — type-only, no value-side carrier.
@@ -19,9 +20,9 @@ fn finalize_union<'a>(
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
-) -> BodyResult<'a> {
+) -> Result<Carried<'a>, KError> {
     if fields.is_empty() {
-        return err(KError::new(KErrorKind::ShapeError(
+        return Err(KError::new(KErrorKind::ShapeError(
             "UNION schema must have at least one tag".to_string(),
         )));
     }
@@ -47,11 +48,11 @@ fn finalize_union<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => BodyResult::ktype(scope.arena.alloc_ktype(kt_ref.clone())),
-        SealOutcome::DanglingRef(missing) => err(KError::new(KErrorKind::ShapeError(format!(
+        SealOutcome::Sealed(kt_ref) => Ok(Carried::Type(scope.arena.alloc_ktype(kt_ref.clone()))),
+        SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "UNION `{name}` schema references unsealed type `{missing}`",
         )))),
-        SealOutcome::Rebind(e) => err(e),
+        SealOutcome::Rebind(e) => Err(e),
     }
 }
 
@@ -110,6 +111,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
+    use super::Carried;
     use crate::builtins::test_support::{parse_one, run_one_err, run_one_type, run_root_silent};
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::KType;
@@ -246,7 +248,7 @@ mod tests {
             vec![("Some".into(), KType::Number)],
             BindingIndex::value(0),
         );
-        assert!(matches!(first, crate::machine::BodyResult::Value(_)));
+        assert!(first.is_ok());
         // The member of the *pre-installed* set is now filled in place.
         assert!(pre_set.member(0).is_filled());
         let schema = tagged_schema(scope, "Maybe");
@@ -258,12 +260,10 @@ mod tests {
             BindingIndex::value(0),
         );
         match second {
-            crate::machine::BodyResult::Value(crate::machine::model::values::Carried::Type(
-                KType::SetRef { set, index },
-            )) => {
+            Ok(Carried::Type(KType::SetRef { set, index })) => {
                 assert_eq!(set.member(*index).name, "Maybe");
             }
-            _ => panic!("expected short-circuit Value(Type(SetRef)) from finalize_union"),
+            _ => panic!("expected short-circuit Ok(Type(SetRef)) from finalize_union"),
         }
         assert!(
             scope.bindings().data().get("Maybe").is_none(),

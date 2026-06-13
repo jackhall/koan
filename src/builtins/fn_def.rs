@@ -54,7 +54,7 @@ fn collect_param_types<'a>(
 /// Shared FN / FUNCTOR elaboration: extract the `signature` / return / `body`
 /// slots from `BodyCtx::args`, collect param names, classify the return type,
 /// parse the param list, and route to [`finalize_fn_with_kind`] (synchronous, via
-/// `body_result_to_action`) or [`finalize::defer_via_combine`] (Combine).
+/// `Action::Done`) or [`finalize::defer_via_combine`] (Combine).
 /// `kind` is the sole behavioral fork — `FnKind::Functor` builds the param-type
 /// map and acts on the return-admissibility verdict; FN passes `None` and
 /// [`classify_return_type`] returns `Admissible`, so the `Rejected` check is a
@@ -64,9 +64,7 @@ pub(crate) fn build_fn_like<'a>(
     builtin: &str,
     kind: FnKind,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{
-        body_result_to_action, require_kexpression, Action,
-    };
+    use crate::machine::core::kfunction::action::{require_kexpression, Action};
     use finalize::defer_via_combine;
     use return_type::extract_return_type_raw;
 
@@ -107,7 +105,7 @@ pub(crate) fn build_fn_like<'a>(
         FnPlan::Synchronous {
             elements,
             return_type,
-        } => body_result_to_action(finalize_fn_with_kind(
+        } => Action::Done(finalize_fn_with_kind(
             ctx.scope,
             elements,
             return_type,
@@ -146,9 +144,7 @@ pub fn body<'a>(
 pub fn body_record_schema<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{
-        arg_type, body_result_to_action, require_kexpression, Action,
-    };
+    use crate::machine::core::kfunction::action::{arg_type, require_kexpression, Action};
     use finalize::defer_via_combine;
     use return_type::extract_return_type_raw;
 
@@ -187,7 +183,7 @@ pub fn body_record_schema<'a>(
     ));
     let bind_index = ctx.bind_index();
     match classify(return_type_state, ParamListResult::Done(Vec::new())) {
-        FnPlan::Synchronous { return_type, .. } => body_result_to_action(finalize_fn_with_kind(
+        FnPlan::Synchronous { return_type, .. } => Action::Done(finalize_fn_with_kind(
             ctx.scope,
             elements,
             return_type,

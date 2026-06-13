@@ -133,10 +133,7 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
 /// terminal in the same step (submission is enqueue-then-drain), so there is no inline-ready case —
 /// the slot always parks as a [`Outcome::ParkThenContinue`]. The finish reads the resolved deps in
 /// declaration order and materializes the value via [`finish`]; dep errors propagate frameless.
-fn launch<'run>(
-    value_parts: Vec<ExpressionPart<'run>>,
-    kind: CtorKind<'run>,
-) -> Outcome<'run> {
+fn launch<'run>(value_parts: Vec<ExpressionPart<'run>>, kind: CtorKind<'run>) -> Outcome<'run> {
     debug_assert!(
         !value_parts.is_empty(),
         "launch requires at least one value part (arity-zero is rejected upstream)"

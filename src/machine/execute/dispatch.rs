@@ -46,11 +46,11 @@ pub(in crate::machine::execute) mod single_poll;
 #[cfg(test)]
 mod tests;
 
-pub(in crate::machine::execute) use ctx::SchedulerView;
-pub(in crate::machine::execute) use harness::run_dispatch_combine_finish;
 pub(in crate::machine::execute) use super::outcome::{Continuation, DispatchDep, Outcome};
+pub(in crate::machine::execute) use ctx::SchedulerView;
 pub(crate) use field_list::defer_field_list_action;
 use fn_value::FnValueState;
+pub(in crate::machine::execute) use harness::run_dispatch_combine_finish;
 use keyworded::KeywordedState;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
@@ -214,10 +214,7 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<TraceFrame>) -> KErr
 
 /// Shape a dep-error terminal with the `<bind>` surface frame keyed
 /// off `working_expr`.
-pub(super) fn bind_frame_err<'run>(
-    e: &KError,
-    working_expr: &KExpression<'run>,
-) -> Outcome<'run> {
+pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>) -> Outcome<'run> {
     let frame = TraceFrame::from_expr("<bind>", working_expr);
     Outcome::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
 }
@@ -271,7 +268,9 @@ pub(in crate::machine::execute) fn park_lift<'run>(producer: NodeId) -> Outcome<
 
 /// Replace the slot with a fresh frameless `Dispatch` of `inner` — the decide reduced its
 /// expression to a nested one to re-classify (`(inner)`, `:(...)` unwrap).
-pub(in crate::machine::execute) fn become_dispatch<'run>(inner: KExpression<'run>) -> Outcome<'run> {
+pub(in crate::machine::execute) fn become_dispatch<'run>(
+    inner: KExpression<'run>,
+) -> Outcome<'run> {
     Outcome::Continue {
         work: NodeWork::dispatch(inner),
         frame: FramePlacement::Inherit,
@@ -508,7 +507,8 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
             sched.apply_outcome(outcome, idx)
         }
         DispatchShape::Keyworded => {
-            let outcome = KeywordedState::initial(&SchedulerView::new(sched), expr, init.pre_subs, idx);
+            let outcome =
+                KeywordedState::initial(&SchedulerView::new(sched), expr, init.pre_subs, idx);
             sched.apply_outcome(outcome, idx)
         }
         DispatchShape::SigiledTypeExpr => {

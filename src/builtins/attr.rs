@@ -15,23 +15,18 @@
 use crate::machine::execute::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
+use crate::machine::model::values::Carried;
 use crate::machine::model::values::{Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
-use crate::machine::{BodyResult, KError, KErrorKind, Resolution, Scope};
+use crate::machine::{KError, KErrorKind, Resolution, Scope};
 
-use super::{arg, err, kw, sig};
+use super::{arg, kw, sig};
 
-/// Translate a [`BodyResult`] from the shared `access_*` helpers into a `Done` [`Action`]. The ATTR
-/// helpers only ever produce `Value` / `Err`, so the tail / defer arms are unreachable.
-fn done<'a>(result: BodyResult<'a>) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::Action;
-    match result {
-        BodyResult::Value(carried) => Action::Done(Ok(carried)),
-        BodyResult::Err(e) => Action::Done(Err(e)),
-        BodyResult::Tail { .. } | BodyResult::DeferTo(_) => {
-            unreachable!("ATTR access helpers only produce Value / Err")
-        }
-    }
+/// Wrap an `access_*` helper's `Result<Carried, KError>` as a `Done` [`Action`].
+fn done<'a>(
+    result: Result<Carried<'a>, KError>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    crate::machine::core::kfunction::action::Action::Done(result)
 }
 
 /// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the
@@ -182,19 +177,23 @@ pub fn body_module<'a>(
 /// Project `field` off a Type-channel lhs: a module / signature / opaque-abstract identity.
 /// A `SetRef` (struct / union name) and every other type has no members and falls through to
 /// the same TypeMismatch a static struct field access produces.
-fn access_type_member<'a>(scope: &Scope<'a>, kt: &KType<'a>, field: &str) -> BodyResult<'a> {
+fn access_type_member<'a>(
+    scope: &Scope<'a>,
+    kt: &KType<'a>,
+    field: &str,
+) -> Result<Carried<'a>, KError> {
     match kt {
         KType::Module { module: m, .. } => access_module_member(m, field),
         // ATTR over a first-class signature value — reverse-lookup against the decl scope.
         KType::Signature { sig: s, .. } => {
             let decl = s.decl_scope();
             if let Some(Resolution::Value(obj)) = decl.bindings().lookup_value(field, None) {
-                return BodyResult::value(obj);
+                return Ok(Carried::Object(obj));
             }
             if let Some(kt) = decl.resolve_type(field) {
-                return BodyResult::ktype(scope.arena.alloc_ktype(kt.clone()));
+                return Ok(Carried::Type(scope.arena.alloc_ktype(kt.clone())));
             }
-            err(KError::new(KErrorKind::ShapeError(format!(
+            Err(KError::new(KErrorKind::ShapeError(format!(
                 "signature `{}` has no member `{}`",
                 s.path, field
             ))))
@@ -205,7 +204,7 @@ fn access_type_member<'a>(scope: &Scope<'a>, kt: &KType<'a>, field: &str) -> Bod
             source: AbstractSource::Module(m),
             ..
         } => access_module_member(m, field),
-        other => err(KError::new(KErrorKind::TypeMismatch {
+        other => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
             expected: "a type with members".to_string(),
             got: other.name(),
@@ -213,7 +212,11 @@ fn access_type_member<'a>(scope: &Scope<'a>, kt: &KType<'a>, field: &str) -> Bod
     }
 }
 
-fn access_field<'a>(scope: &Scope<'a>, target: &KObject<'a>, field: &str) -> BodyResult<'a> {
+fn access_field<'a>(
+    scope: &Scope<'a>,
+    target: &KObject<'a>,
+    field: &str,
+) -> Result<Carried<'a>, KError> {
     match target {
         // NEWTYPE fall-through. A record-repr newtype (an ex-struct) wraps a
         // `KObject::Record`; read the field straight off it, naming the nominal type in the
@@ -223,11 +226,11 @@ fn access_field<'a>(scope: &Scope<'a>, target: &KObject<'a>, field: &str) -> Bod
         // has no fields) falls to the `other` arm.
         KObject::Wrapped { inner, type_id } => match inner.get() {
             KObject::Record(values, _) => match values.get(field) {
-                Some(Held::Object(value)) => {
-                    BodyResult::value(scope.arena.alloc_object(value.deep_clone()))
-                }
-                Some(Held::Type(kt)) => BodyResult::ktype(scope.arena.alloc_ktype(kt.clone())),
-                None => err(KError::new(KErrorKind::ShapeError(format!(
+                Some(Held::Object(value)) => Ok(Carried::Object(
+                    scope.arena.alloc_object(value.deep_clone()),
+                )),
+                Some(Held::Type(kt)) => Ok(Carried::Type(scope.arena.alloc_ktype(kt.clone()))),
+                None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",
                     type_id.name(),
                     field
@@ -235,7 +238,7 @@ fn access_field<'a>(scope: &Scope<'a>, target: &KObject<'a>, field: &str) -> Bod
             },
             inner => access_field(scope, inner, field),
         },
-        other => err(KError::new(KErrorKind::TypeMismatch {
+        other => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
             expected: "a value with fields".to_string(),
             got: other.ktype().name().to_string(),
@@ -264,25 +267,27 @@ fn access_field<'a>(scope: &Scope<'a>, target: &KObject<'a>, field: &str) -> Bod
 /// scope is a per-call arena. The module and its `slot_type_tags` are declaration-stable,
 /// so the module arena is the right home; both `inner` (the slot value) and `type_id`
 /// (the abstract tag, which references the module) then live there together.
-fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
+fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<Carried<'a>, KError> {
     let module_scope = m.child_scope();
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
-        return BodyResult::ktype(module_scope.arena.alloc_ktype(kt));
+        return Ok(Carried::Type(module_scope.arena.alloc_ktype(kt)));
     }
     if let Some(Resolution::Value(obj)) = module_scope.bindings().lookup_value(field, None) {
         if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
             let type_id = module_scope.arena.alloc_ktype(tag);
-            return BodyResult::value(module_scope.arena.alloc_object(KObject::Wrapped {
-                inner: NonWrappedRef::peel(obj),
-                type_id,
-            }));
+            return Ok(Carried::Object(module_scope.arena.alloc_object(
+                KObject::Wrapped {
+                    inner: NonWrappedRef::peel(obj),
+                    type_id,
+                },
+            )));
         }
-        return BodyResult::value(obj);
+        return Ok(Carried::Object(obj));
     }
     if let Some(kt) = module_scope.resolve_type(field) {
-        return BodyResult::ktype(module_scope.arena.alloc_ktype(kt.clone()));
+        return Ok(Carried::Type(module_scope.arena.alloc_ktype(kt.clone())));
     }
-    err(KError::new(KErrorKind::ShapeError(format!(
+    Err(KError::new(KErrorKind::ShapeError(format!(
         "module `{}` has no member `{}`",
         m.path, field
     ))))

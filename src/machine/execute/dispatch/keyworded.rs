@@ -114,10 +114,7 @@ impl<'run> KeywordedState<'run> {
         for outcome in bare_outcomes.iter().flatten() {
             if let NameOutcome::ProducerErrored(e) = outcome {
                 let frame = TraceFrame::from_expr("<wrap-resolve>", &expr);
-                return Outcome::Done(NodeOutput::Err(propagate_dep_error(
-                    e,
-                    Some(frame),
-                )));
+                return Outcome::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))));
             }
         }
         let chain = ctx.chain_deref();
@@ -138,17 +135,13 @@ impl<'run> KeywordedState<'run> {
                 )));
             }
             ResolveOutcome::Unmatched => {
-                return Outcome::Done(NodeOutput::Err(KError::new(
-                    KErrorKind::DispatchFailed {
-                        expr: expr.summarize(),
-                        reason: "no matching function".to_string(),
-                    },
-                )));
+                return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+                    expr: expr.summarize(),
+                    reason: "no matching function".to_string(),
+                })));
             }
             ResolveOutcome::UnboundName(name) => {
-                return Outcome::Done(NodeOutput::Err(KError::new(
-                    KErrorKind::UnboundName(name),
-                )));
+                return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))));
             }
             ResolveOutcome::Deferred => {
                 debug_assert!(
@@ -250,12 +243,12 @@ impl<'run> KeywordedState<'run> {
             },
             // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
             // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
-            ResolveOutcome::Ambiguous(n) => Outcome::Done(NodeOutput::Err(
-                KError::new(KErrorKind::AmbiguousDispatch {
+            ResolveOutcome::Ambiguous(n) => Outcome::Done(NodeOutput::Err(KError::new(
+                KErrorKind::AmbiguousDispatch {
                     expr: working_expr.summarize(),
                     candidates: n,
-                }),
-            )),
+                },
+            ))),
             ResolveOutcome::Deferred | ResolveOutcome::Unmatched => {
                 Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
                     expr: working_expr.summarize(),
@@ -287,22 +280,17 @@ impl<'run> KeywordedState<'run> {
             if ctx.is_result_ready(p) {
                 if let Err(e) = ctx.read_result(p) {
                     let frame = TraceFrame::from_expr("<dispatch-park>", &expr);
-                    return Outcome::Done(NodeOutput::Err(propagate_dep_error(
-                        e,
-                        Some(frame),
-                    )));
+                    return Outcome::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))));
                 }
             } else if !ctx.would_create_cycle(p, NodeId(idx)) && !to_wait.contains(&p) {
                 to_wait.push(p);
             }
         }
         if to_wait.is_empty() {
-            return Outcome::Done(NodeOutput::Err(KError::new(
-                KErrorKind::DispatchFailed {
-                    expr: expr.summarize(),
-                    reason: "no matching function".to_string(),
-                },
-            )));
+            return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+                expr: expr.summarize(),
+                reason: "no matching function".to_string(),
+            })));
         }
         let track = OverloadParkTrack::new(expr);
         let init = Initialized { pre_subs };
@@ -314,10 +302,7 @@ impl<'run> KeywordedState<'run> {
 
     /// `ResolveOutcome::Deferred` arm: stage every eager part and park
     /// on them, with no speculative function pick captured.
-    fn install_eager_only(
-        ctx: &SchedulerView<'run, '_>,
-        expr: KExpression<'run>,
-    ) -> Outcome<'run> {
+    fn install_eager_only(ctx: &SchedulerView<'run, '_>, expr: KExpression<'run>) -> Outcome<'run> {
         // Deferred arm: no committed pick yet (resume re-resolves on finish), so no
         // bare-name slots to pre-resolve here.
         let (new_parts, staged_subs) = super::stage_all_eager_parts(expr.parts, &[]);

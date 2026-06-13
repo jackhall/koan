@@ -55,10 +55,7 @@ impl<'run> FnValueState<'run> {
         }
     }
 
-    pub(super) fn initial(
-        ctx: &SchedulerView<'run, '_>,
-        expr: KExpression<'run>,
-    ) -> Outcome<'run> {
+    pub(super) fn initial(ctx: &SchedulerView<'run, '_>, expr: KExpression<'run>) -> Outcome<'run> {
         let head = match &expr.parts[0].value {
             ExpressionPart::Identifier(n) => n.clone(),
             _ => unreachable!("FunctionValueCall shape implies Identifier head"),
@@ -98,13 +95,11 @@ impl<'run> FnValueState<'run> {
         let callable = match head_obj {
             KObject::KFunction(f, _) => ResolvedCallable::Function(f),
             other => {
-                return Outcome::Done(NodeOutput::Err(KError::new(
-                    KErrorKind::TypeMismatch {
-                        arg: "verb".to_string(),
-                        expected: "KFunction or Type".to_string(),
-                        got: other.summarize(),
-                    },
-                )))
+                return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+                    arg: "verb".to_string(),
+                    expected: "KFunction or Type".to_string(),
+                    got: other.summarize(),
+                })))
             }
         };
         apply_callable(ctx, callable, &expr)

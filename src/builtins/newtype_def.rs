@@ -28,9 +28,9 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::{Carried, KObject};
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, BodyResult, KError, KErrorKind, Resolution, Scope, TraceFrame};
+use crate::machine::{BindingIndex, KError, KErrorKind, Resolution, Scope, TraceFrame};
 
-use super::{arg, err, kw, sig};
+use super::{arg, kw, sig};
 
 /// Seal a resolved `repr` into the NEWTYPE's identity and register it. A NEWTYPE is
 /// non-recursive (its `repr` is already resolved), so it seals into a singleton set of one
@@ -41,7 +41,7 @@ fn finalize_newtype<'a>(
     name: String,
     repr: KType<'a>,
     bind_index: BindingIndex,
-) -> BodyResult<'a> {
+) -> Result<Carried<'a>, KError> {
     let scope_id = scope.id;
     let member = NominalMember::pending(name.clone(), scope_id, KKind::Newtype);
     member.fill(NominalSchema::Newtype(Box::new(repr)));
@@ -52,14 +52,14 @@ fn finalize_newtype<'a>(
         .bindings()
         .try_register_type(&name, kt_ref, bind_index)
     {
-        Ok(ApplyOutcome::Applied) => BodyResult::ktype(scope.arena.alloc_ktype(kt_ref.clone())),
+        Ok(ApplyOutcome::Applied) => Ok(Carried::Type(scope.arena.alloc_ktype(kt_ref.clone()))),
         // Finalize sites run post-Combine outside the re-entrant hot path, so borrow
         // contention here is a programming error. Surface as a structured error rather
         // than panicking — a future re-entrant caller still gets a recoverable diag.
-        Ok(ApplyOutcome::Conflict) => err(KError::new(KErrorKind::ShapeError(format!(
+        Ok(ApplyOutcome::Conflict) => Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE `{name}` registration deferred = bindings borrow contention",
         )))),
-        Err(e) => err(e),
+        Err(e) => Err(e),
     }
 }
 
@@ -73,9 +73,9 @@ fn finalize_record_newtype<'a>(
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
-) -> BodyResult<'a> {
+) -> Result<Carried<'a>, KError> {
     if fields.is_empty() {
-        return err(KError::new(KErrorKind::ShapeError(
+        return Err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE record repr must have at least one field".to_string(),
         )));
     }
@@ -102,11 +102,11 @@ fn finalize_record_newtype<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => BodyResult::ktype(scope.arena.alloc_ktype(kt_ref.clone())),
-        SealOutcome::DanglingRef(missing) => err(KError::new(KErrorKind::ShapeError(format!(
+        SealOutcome::Sealed(kt_ref) => Ok(Carried::Type(scope.arena.alloc_ktype(kt_ref.clone()))),
+        SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE `{name}` record repr references unsealed type `{missing}`",
         )))),
-        SealOutcome::Rebind(e) => err(e),
+        SealOutcome::Rebind(e) => Err(e),
     }
 }
 
@@ -117,7 +117,7 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        arg_object, arg_type, body_result_to_action, require_bare_type_name, Action, Cont, Dep,
+        arg_object, arg_type, require_bare_type_name, Action, Cont, Dep,
     };
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "NEWTYPE"));
@@ -131,12 +131,7 @@ pub fn body<'a>(
                     .scope
                     .resolve_type_with_chain(te.as_str(), chain.as_deref())
                 {
-                    return body_result_to_action(finalize_newtype(
-                        ctx.scope,
-                        name,
-                        kt.clone(),
-                        bind_index,
-                    ));
+                    return Action::Done(finalize_newtype(ctx.scope, name, kt.clone(), bind_index));
                 }
                 // The repr names a type still finalizing in this scheduler: park on its producer
                 // and re-resolve at Combine-finish. A name with no in-flight producer is a genuine
@@ -150,7 +145,7 @@ pub fn body<'a>(
                             .scope
                             .resolve_type_with_chain(te.as_str(), chain_for_finish.as_deref())
                         {
-                            Some(kt) => body_result_to_action(finalize_newtype(
+                            Some(kt) => Action::Done(finalize_newtype(
                                 fctx.scope,
                                 name,
                                 kt.clone(),
@@ -171,9 +166,7 @@ pub fn body<'a>(
                     te.as_str(),
                 )))))
             }
-            other => {
-                body_result_to_action(finalize_newtype(ctx.scope, name, other.clone(), bind_index))
-            }
+            other => Action::Done(finalize_newtype(ctx.scope, name, other.clone(), bind_index)),
         }
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
         defer_resolved_sigil(name, inner.clone(), bind_index)
@@ -191,15 +184,13 @@ fn defer_resolved_sigil<'a>(
     inner: KExpression<'a>,
     bind_index: BindingIndex,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{
-        body_result_to_action, Action, Cont, Dep, DepPlacement,
-    };
+    use crate::machine::core::kfunction::action::{Action, Cont, Dep, DepPlacement};
     let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
         Box::new(inner),
     ))]);
     let finish: Cont<'a> = Box::new(move |fctx, results| match results[0] {
         Carried::Type(kt) => {
-            body_result_to_action(finalize_newtype(fctx.scope, name, kt.clone(), bind_index))
+            Action::Done(finalize_newtype(fctx.scope, name, kt.clone(), bind_index))
         }
         Carried::Object(other) => Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE repr sigil resolved to a non-type value `{}`",

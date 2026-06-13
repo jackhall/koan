@@ -140,10 +140,7 @@ impl<'run> CtorState<'run> {
 
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
-pub(super) fn bare_identifier<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    name: String,
-) -> Outcome<'run> {
+pub(super) fn bare_identifier<'run>(ctx: &SchedulerView<'run, '_>, name: String) -> Outcome<'run> {
     match ctx
         .current_scope()
         .resolve_with_chain(&name, ctx.chain_deref())
@@ -156,10 +153,7 @@ pub(super) fn bare_identifier<'run>(
     }
 }
 
-pub(super) fn bare_type_leaf<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    t: &TypeName,
-) -> Outcome<'run> {
+pub(super) fn bare_type_leaf<'run>(ctx: &SchedulerView<'run, '_>, t: &TypeName) -> Outcome<'run> {
     match resolve_type_leaf_carrier(ctx.current_scope(), t, ctx.active_chain()) {
         TypeLeafCarrier::Resolved(kt) => Outcome::Done(NodeOutput::ktype(kt)),
         TypeLeafCarrier::Unbound(n) => {
@@ -172,9 +166,9 @@ pub(super) fn bare_type_leaf<'run>(
             let producer = match producers.first() {
                 Some(p) => *p,
                 None => {
-                    return Outcome::Done(NodeOutput::Err(KError::new(
-                        KErrorKind::UnboundName(t.render()),
-                    )));
+                    return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(
+                        t.render(),
+                    ))));
                 }
             };
             if ctx.is_result_ready(producer) {
@@ -325,9 +319,9 @@ pub(super) fn type_call<'run>(
     {
         Some(kt) => kt,
         None => {
-            return Outcome::Done(NodeOutput::Err(KError::new(
-                KErrorKind::UnboundName(head_t.render()),
-            )));
+            return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(
+                head_t.render(),
+            ))));
         }
     };
     match identity {
@@ -346,4 +340,3 @@ pub(super) fn type_call<'run>(
         _ => apply_callable(ctx, ResolvedCallable::Constructor(identity), &expr),
     }
 }
-

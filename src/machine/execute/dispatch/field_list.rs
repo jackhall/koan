@@ -15,15 +15,27 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
 };
+use crate::machine::model::values::Carried;
 use crate::machine::model::{KType, Record};
 use crate::machine::{
     BodyResult, CombineFinish, KError, KErrorKind, NodeId, SchedulerHandle, Scope, TraceFrame,
 };
 
 /// Folds the elaborated `(name, KType)` pairs into the caller's carrier on the Combine's
-/// `Done` arm.
+/// `Done` arm. The scheduler-currency variant, returning `BodyResult` — used by
+/// [`defer_field_list_via_combine`].
 pub(crate) type FieldListFinalize<'run> = Box<
     dyn for<'step> FnOnce(&'step Scope<'run>, Vec<(String, KType<'run>)>) -> BodyResult<'run>
+        + 'run,
+>;
+
+/// `Action`-path twin of [`FieldListFinalize`], returning `Result<Carried, KError>` — used by
+/// [`defer_field_list_action`], whose finish wraps the result in `Action::Done`.
+pub(crate) type FieldListFinalizeAction<'run> = Box<
+    dyn for<'step> FnOnce(
+            &'step Scope<'run>,
+            Vec<(String, KType<'run>)>,
+        ) -> Result<Carried<'run>, KError>
         + 'run,
 >;
 
@@ -90,8 +102,7 @@ pub(crate) fn defer_field_list_via_combine<'run, 's>(
 /// `Action`-harness twin of [`defer_field_list_via_combine`]: build the same Combine as an
 /// [`Action`](crate::machine::core::kfunction::action::Action) — park producers become
 /// `Dep::Existing`, sigil sub-Dispatches `Dep::Dispatch { OwnScope }`, and the finish re-walks
-/// `expr` then routes the still-`BodyResult`-returning `finalize` through `body_result_to_action`.
-/// Reuses the caller's existing finalize unchanged.
+/// `expr` then wraps the `finalize` result in `Action::Done`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn defer_field_list_action<'a>(
     expr: KExpression<'a>,
@@ -103,11 +114,9 @@ pub(crate) fn defer_field_list_action<'a>(
     chain: Option<Rc<LexicalFrame>>,
     pending_guard: Option<PendingBinderGuard<'a>>,
     error_frame: Option<TraceFrame>,
-    finalize: FieldListFinalize<'a>,
+    finalize: FieldListFinalizeAction<'a>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{
-        body_result_to_action, Action, Cont, Dep, DepPlacement,
-    };
+    use crate::machine::core::kfunction::action::{Action, Cont, Dep, DepPlacement};
     // `deps` order [park ++ subs] makes the harness split owned = subs (DFS order), park =
     // park_producers, and the scheduler feeds results as [park.. , owned..] — so the re-walk
     // consumes `results[park_count..]`, exactly as the scheduler-side twin does.
@@ -131,7 +140,7 @@ pub(crate) fn defer_field_list_action<'a>(
             &mut elaborator,
             Some(&mut feed),
         ) {
-            FieldListOutcome::Done(fields) => body_result_to_action(finalize(fctx.scope, fields)),
+            FieldListOutcome::Done(fields) => Action::Done(finalize(fctx.scope, fields)),
             FieldListOutcome::Err(msg) => {
                 let error = KError::new(KErrorKind::ShapeError(msg));
                 Action::Done(Err(match error_frame {

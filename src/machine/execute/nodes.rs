@@ -71,8 +71,7 @@ pub(super) enum NodeStep<'run> {
 /// an overload park on a freshly resolved producer), which the three-way outcome expresses. The
 /// harness applies the returned outcome, so the finish — like every decide — issues no graph write.
 pub(super) type DispatchCombineFinish<'run> = Box<
-    dyn for<'a> FnOnce(&SchedulerView<'run, 'a>, &[Carried<'run>], usize) -> Outcome<'run>
-        + 'run,
+    dyn for<'a> FnOnce(&SchedulerView<'run, 'a>, &[Carried<'run>], usize) -> Outcome<'run> + 'run,
 >;
 
 /// What a scheduler node will run. `Lift` exists because the push/notify model

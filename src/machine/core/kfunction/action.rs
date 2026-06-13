@@ -7,7 +7,7 @@
 
 use std::rc::Rc;
 
-use super::body::{BodyResult, ReturnContract};
+use super::body::ReturnContract;
 use crate::machine::core::{CallArena, LexicalFrame, Scope, ScopeId};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::KType;
@@ -122,19 +122,6 @@ fn bare_type_name<'a>(t: &KType<'a>, name: &str, surface: &str) -> Result<String
             "{surface} {name} must be a bare type name, got `{}`",
             t.render(),
         )))),
-    }
-}
-
-/// Convert a [`BodyResult`] into an [`Action`] for the deferral helpers that reuse the
-/// existing `BodyResult`-returning `finalize_*` functions inside an `Action` finish. Those
-/// finalizers only ever produce `Value` / `Err`; a `Tail` / `DeferTo` would be a logic error.
-pub(crate) fn body_result_to_action<'a>(result: BodyResult<'a>) -> Action<'a> {
-    match result {
-        BodyResult::Value(carried) => Action::Done(Ok(carried)),
-        BodyResult::Err(error) => Action::Done(Err(error)),
-        BodyResult::Tail { .. } | BodyResult::DeferTo(_) => {
-            unreachable!("a field-list / fn-def finalize only yields Value or Err")
-        }
     }
 }
 
