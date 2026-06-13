@@ -191,11 +191,13 @@ pub type CatchCont<'a> =
 pub enum Action<'a> {
     /// Produce a value / error for this slot (after any direct scope mutation the builtin did).
     Done(Result<Carried<'a>, KError>),
-    /// Tail-replace into `tail` (after the `leading` body statements, dispatched as siblings),
-    /// carrying `contract`, in a cart per `frame_placement`. `block_entry` is the body/arm scope id
-    /// when the tail enters a fresh lexical block (MATCH / TRY arms, FN-body tails) — `None` for a
-    /// frameless / current-block continuation (EVAL). The harness derives the body-statement chains
-    /// and the tail's `body_index` from `block_entry` + `leading`.
+    /// Tail-replace into `tail`, carrying `contract`, in a cart per `frame_placement`. When
+    /// `leading` (the body's non-tail statements) is non-empty the slot first parks on them as
+    /// owned deps and tail-replaces only once they resolve — so they run, and cascade-free, before
+    /// the tail continues (a leading-carrying arm always mints a `FreshChild` frame). `block_entry`
+    /// is the body/arm scope id when the tail enters a fresh lexical block (MATCH / TRY arms,
+    /// FN-body tails) — `None` for a frameless / current-block continuation (EVAL). The harness
+    /// derives the body-statement chains and the tail's `body_index` from `block_entry` + `leading`.
     Tail {
         leading: Vec<KExpression<'a>>,
         tail: KExpression<'a>,

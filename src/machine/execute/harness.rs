@@ -4,7 +4,7 @@
 //! route through it. The peer of `dispatch/exec.rs::invoke`. The `Action` *types* live in
 //! [`crate::machine::core::kfunction::action`].
 
-use crate::machine::core::kfunction::action::{Action, Dep, FinishCtx};
+use crate::machine::core::kfunction::action::{Action, Dep, FinishCtx, FramePlacement};
 
 use super::nodes::{NodeOutput, NodeWork};
 use super::outcome::{Continuation, DispatchDep, Outcome};
@@ -29,20 +29,50 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
             block_entry,
         } => {
             // A block-entering tail sits above the params (`1`) or the leading siblings (`N`); a
-            // frameless continuation keeps the slot's block at index `0`. The harness resolves
-            // `frame_placement` to a cart and dispatches `leading` against it.
+            // frameless continuation keeps the slot's block at index `0`.
             let body_index = if block_entry.is_some() {
                 leading.len() + 1
             } else {
                 0
             };
-            Outcome::Continue {
+            if leading.is_empty() {
+                // No leading statements: tail-replace directly into the arm body.
+                return Outcome::Continue {
+                    work: NodeWork::dispatch(tail),
+                    frame: frame_placement,
+                    contract,
+                    block_entry,
+                    body_index,
+                };
+            }
+            // Leading statements become owned siblings in the arm's frame (one `BodyBlock` dep);
+            // the slot parks on them so they run — and cascade-free — before the tail continues,
+            // keeping the side-effect order and the frame uniqueness TCO reuse needs. An arm that
+            // carries leading statements always mints its own `FreshChild` frame (`branch_walk`),
+            // so the placement resolves to a concrete cart here without a scheduler write.
+            let frame = match frame_placement {
+                FramePlacement::FreshChild { frame } => frame,
+                _ => unreachable!(
+                    "an action Tail with leading statements always carries a FreshChild frame"
+                ),
+            };
+            let body_frame = frame.clone();
+            let finish: CombineFinish<'run> = Box::new(move |_view, _results| Outcome::Continue {
                 work: NodeWork::dispatch(tail),
-                frame: frame_placement,
+                frame: FramePlacement::FreshChild { frame: body_frame },
                 contract,
                 block_entry,
-                leading,
                 body_index,
+            });
+            Outcome::ParkThenContinue {
+                deps: vec![DispatchDep::BodyBlock {
+                    frame,
+                    statements: leading,
+                }],
+                park_count: 0,
+                cont: Continuation::Combine(finish),
+                dep_error_frame: None,
+                free: Vec::new(),
             }
         }
 

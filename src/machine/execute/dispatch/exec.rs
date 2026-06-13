@@ -101,19 +101,43 @@ pub(super) fn invoke<'run>(
                 }
             };
             // Empty `leading` → body_index 1 (the lone statement sits above the params); otherwise
-            // the harness dispatches the non-tail statements as siblings (the `leading` field) and
-            // tail-replaces into the last at N.
+            // the leading statements sit at indices `1..=N` and the tail replaces in at `N + 1`.
             let body_index = leading.len() + 1;
-            // Capture the body scope id before `frame` moves into `FreshChild`; the reinstall
-            // site reads it to assemble the chain.
+            // Capture the body scope id before `frame` moves; the reinstall site reads it to
+            // assemble the chain.
             let block_entry = frame.scope().id;
-            Outcome::Continue {
-                work: NodeWork::dispatch(tail.clone()),
-                frame: FramePlacement::FreshChild { frame },
+            let tail_expr = tail.clone();
+            if leading.is_empty() {
+                // No leading statements: tail-replace directly into the body terminal.
+                return Outcome::Continue {
+                    work: NodeWork::dispatch(tail_expr),
+                    frame: FramePlacement::FreshChild { frame },
+                    contract: Some(contract),
+                    block_entry: Some(block_entry),
+                    body_index,
+                };
+            }
+            // Leading statements become owned siblings in `frame` (one `BodyBlock` dep); the slot
+            // parks on them so they cascade-free before the tail continues, restoring the frame's
+            // uniqueness so the next call's `try_reset_for_tail` reuses (TCO stays flat). The
+            // resolving finish — having waited out every leading statement — emits the tail
+            // `Continue`.
+            let statements: Vec<KExpression<'run>> =
+                leading.into_iter().map(|e| (*e).clone()).collect();
+            let body_frame = frame.clone();
+            let finish: CombineFinish<'run> = Box::new(move |_view, _results| Outcome::Continue {
+                work: NodeWork::dispatch(tail_expr),
+                frame: FramePlacement::FreshChild { frame: body_frame },
                 contract: Some(contract),
                 block_entry: Some(block_entry),
-                leading: leading.into_iter().map(|e| (*e).clone()).collect(),
                 body_index,
+            });
+            Outcome::ParkThenContinue {
+                deps: vec![DispatchDep::BodyBlock { frame, statements }],
+                park_count: 0,
+                cont: Continuation::Combine(finish),
+                dep_error_frame: None,
+                free: Vec::new(),
             }
         }
         ExecOutcome::DeferredExprTail {
@@ -161,7 +185,6 @@ pub(super) fn invoke<'run>(
                     frame: FramePlacement::FreshChild { frame: body_frame },
                     contract: Some(contract),
                     block_entry: Some(block_entry),
-                    leading: Vec::new(),
                     body_index,
                 }
             });

@@ -45,16 +45,16 @@ pub(in crate::machine::execute) enum Outcome<'run> {
     /// The node lives: install `work` and run again immediately (no park). `frame` rotates the
     /// per-call cart (`Inherit` keeps it; `ReuseReserve`/`FreshChild` install a new one — the
     /// harness resolves the placement to a cart); `contract` / `block_entry` / `body_index` carry
-    /// the tail-call chain payload, all keep-first. `leading` are the body's non-tail statements:
-    /// the harness dispatches them as siblings against the resolved frame before the tail-replace
-    /// (so a decide stays write-free). Non-empty `leading` requires a `frame` that resolves to a
-    /// cart; `body_index` already accounts for their count.
+    /// the tail-call chain payload, all keep-first. A body's non-tail (leading) statements are NOT
+    /// carried here: a producer with leading statements parks on them as owned deps (a
+    /// [`DispatchDep::BodyBlock`]) and emits this `Continue` only from the resolving finish, so the
+    /// leading siblings cascade-free before the tail-replace — restoring frame uniqueness for TCO
+    /// reuse. `body_index` already accounts for their count.
     Continue {
         work: NodeWork<'run>,
         frame: FramePlacement<'run>,
         contract: Option<ReturnContract<'run>>,
         block_entry: Option<ScopeId>,
-        leading: Vec<KExpression<'run>>,
         body_index: usize,
     },
     /// Park the slot on `deps` and run `cont` when they resolve. `deps` layout is

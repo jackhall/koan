@@ -431,7 +431,6 @@ impl<'run, 's> SchedulerHandle<'run, 's> for Scheduler<'run> {
         )
     }
 
-
     fn add_dispatch_here(&mut self, expr: KExpression<'run>) -> NodeId {
         self.submit_here(NodeWork::dispatch(expr))
     }

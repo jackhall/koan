@@ -75,26 +75,18 @@ impl<'run> Scheduler<'run> {
                 frame,
                 contract,
                 block_entry,
-                leading,
                 body_index,
             } => {
                 // Resolve the frame placement to the cart the Replace installs: reuse the slot's
-                // ping-pong reserve, take a builtin-minted cart, or keep the current cart.
+                // ping-pong reserve, take a builtin-minted cart, or keep the current cart. The
+                // body's leading statements are never dispatched here — a producer with leading
+                // statements parks on them as owned `BodyBlock` deps and emits this `Continue` only
+                // from the resolving finish (see `dispatch/exec.rs` and `execute/harness.rs`).
                 let frame = match frame {
                     FramePlacement::ReuseReserve { outer } => Some(self.acquire_tail_frame(outer)),
                     FramePlacement::FreshChild { frame } => Some(frame),
                     FramePlacement::Inherit => None,
                 };
-                // The body's non-tail statements dispatch as siblings against the resolved cart via
-                // the shared `dispatch_body_statements` primitive; the slot tail-replaces into the
-                // last statement separately below. A decide that carries `leading` issues no write
-                // itself — the submission lands here.
-                if !leading.is_empty() {
-                    let cart = frame
-                        .clone()
-                        .expect("a Continue with leading statements requires a frame");
-                    self.dispatch_body_statements(&cart, leading);
-                }
                 NodeStep::Replace {
                     work,
                     frame,
@@ -212,7 +204,8 @@ impl<'run> Scheduler<'run> {
                     crate::machine::core::kfunction::Body::Builtin(_) => None,
                     _ => Some(self.acquire_tail_frame(picked.captured_scope())),
                 };
-                let oc = super::exec::invoke(&SchedulerView::new(self), frame, picked, working_expr);
+                let oc =
+                    super::exec::invoke(&SchedulerView::new(self), frame, picked, working_expr);
                 self.apply_outcome(oc, idx)
             }
             Outcome::Redispatch { working_expr, free } => {

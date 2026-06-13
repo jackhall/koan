@@ -59,6 +59,75 @@ fn chained_tail_calls_reuse_frames() {
     );
 }
 
+/// Side-effect ordering across a tail chain whose bodies each open with a value-discarded
+/// leading `PRINT`. The leading statements are owned deps the slot parks on, so they run — and
+/// finish — strictly before the tail continues: `a, b, c, d` (the leading PRINTs, in call order)
+/// then `ok` (DD's body terminal). A fire-and-forget leading would race the tail chain and emit
+/// the terminal first (`ok, a, b, c, d`).
+#[test]
+fn leading_statements_run_before_tail_across_chain() {
+    let arena = RuntimeArena::new();
+    let (scope, captured) = run_root_with_buf(&arena);
+
+    run(
+        scope,
+        "FN (DD) -> Str = ((PRINT \"d\") (PRINT \"ok\"))\n\
+         FN (CC) -> Str = ((PRINT \"c\") (DD))\n\
+         FN (BB) -> Str = ((PRINT \"b\") (CC))\n\
+         FN (AA) -> Str = ((PRINT \"a\") (BB))",
+    );
+
+    let mut sched = Scheduler::new();
+    sched.add_dispatch(parse_one("AA"), scope);
+    sched.execute().expect("AA should run");
+
+    assert_eq!(
+        String::from_utf8_lossy(&captured.borrow()),
+        "a\nb\nc\nd\nok\n",
+        "leading PRINTs must run in call order, each before its tail call continues",
+    );
+}
+
+/// Tail chain whose bodies each carry a value-discarded leading `PRINT` stays TCO-flat: the
+/// leading statements are owned deps that cascade-free as each call resolves, so the per-call
+/// frame stays uniquely owned and `try_reset_for_tail` keeps reusing it. The chain peaks at two
+/// slots — the tail-replaced main slot plus a single leading-PRINT slot recycled through the
+/// free-list across all four calls — and frame reuse still kicks in. Fire-and-forget leading
+/// would instead leave one orphan PRINT slot per call aliasing its frame (`sched.len()` would
+/// climb to 5) and block reuse (`tail_reuse_count` would stay 0).
+#[test]
+fn chained_tail_calls_with_leading_stay_tco_flat() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+
+    run(
+        scope,
+        "FN (DD) -> Str = ((PRINT \"d\") (PRINT \"ok\"))\n\
+         FN (CC) -> Str = ((PRINT \"c\") (DD))\n\
+         FN (BB) -> Str = ((PRINT \"b\") (CC))\n\
+         FN (AA) -> Str = ((PRINT \"a\") (BB))",
+    );
+
+    let mut sched = Scheduler::new();
+    sched.add_dispatch(parse_one("AA"), scope);
+    sched.execute().expect("AA should run");
+
+    assert_eq!(
+        sched.len(),
+        2,
+        "leading statements are owned and cascade-free, so each PRINT slot is recycled via the \
+         free-list rather than orphaned — the chain peaks at the main slot plus one reused \
+         leading slot (a leak would climb to 5), got {}",
+        sched.len(),
+    );
+    assert!(
+        sched.tail_reuse_count() >= 2,
+        "leading statements cascade-free before each tail continues, so the frame stays unique \
+         and reuse still kicks in across AA -> BB -> CC -> DD, got {}",
+        sched.tail_reuse_count(),
+    );
+}
+
 /// Recursive tail-call through a `MATCH` arm. Pins the refcount-driven reuse
 /// refusal one step out, resume one step later; see
 /// [per-call-arena-protocol.md § MATCH frame lifetime under tail recursion](../../../../design/per-call-arena-protocol.md#match-frame-lifetime-under-tail-recursion).
@@ -81,6 +150,36 @@ fn match_driven_tail_recursion_completes() {
     sched.execute().expect("HOP should run");
 
     assert_eq!(captured.borrow().as_slice(), b"done\n");
+}
+
+/// A MATCH arm whose body opens with a value-discarded leading `PRINT` before a tail-recursive
+/// call. The arm runs through the action harness (`branch_walk` mints a `FreshChild` frame and
+/// emits an `Action::Tail` carrying the leading statement), so this pins that the harness routes
+/// arm-body leading statements through the same owned-dep park: the leading `PRINT` runs before
+/// the recursion continues, giving `hop` (the One arm) then `done` (the Zero arm) in order.
+#[test]
+fn match_arm_leading_statement_runs_before_tail_recursion() {
+    let arena = RuntimeArena::new();
+    let (scope, captured) = run_root_with_buf(&arena);
+
+    run(
+        scope,
+        "UNION Bit = (One :Null Zero :Null)\n\
+         FN (HOP b :Any) -> Any = (MATCH (b) -> :Str WITH (\
+             One -> ((PRINT \"hop\") (HOP (Bit (Zero null))))\
+             Zero -> (PRINT \"done\")\
+         ))",
+    );
+
+    let mut sched = Scheduler::new();
+    sched.add_dispatch(parse_one("HOP (Bit (One null))"), scope);
+    sched.execute().expect("HOP should run");
+
+    assert_eq!(
+        String::from_utf8_lossy(&captured.borrow()),
+        "hop\ndone\n",
+        "the One arm's leading PRINT must run before its tail call into the Zero arm",
+    );
 }
 /// The caller of `FF` contracted for `FF`'s declared return type, regardless of what `FF`
 /// tail-calls internally. `FF -> Number` whose body tail-calls `GG -> Str` must reject the `Str`

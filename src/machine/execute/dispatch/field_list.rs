@@ -96,8 +96,10 @@ pub(crate) fn defer_field_list_via_combine<'run>(
     });
     // Deps `[park_producers (Existing) ..., sigil subs (Dispatch/OwnScope) ...]`; the harness owns
     // the `Dispatch` suffix and parks the `Existing` prefix, feeding results in that order.
-    let mut deps: Vec<DispatchDep<'run>> =
-        park_producers.into_iter().map(DispatchDep::Existing).collect();
+    let mut deps: Vec<DispatchDep<'run>> = park_producers
+        .into_iter()
+        .map(DispatchDep::Existing)
+        .collect();
     deps.extend(sub_dispatches.into_iter().map(|sub| DispatchDep::Dispatch {
         expr: sub,
         placement: DepPlacement::OwnScope,
