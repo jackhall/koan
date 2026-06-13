@@ -359,10 +359,27 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
     let _wakes = ctx.take_recent_wakes(NodeId(idx));
     let init = match state {
         DispatchState::Initialized(i) => i,
-        DispatchState::Keyworded(ks) => return ks.resume(ctx, idx),
-        DispatchState::FunctionValueCall(fs) => return fs.resume(ctx, idx),
-        DispatchState::TypeCall(cs) => return (*cs).resume(ctx, idx),
-        DispatchState::BareTypeLeaf(bs) if bs.park.is_some() => return bs.resume(ctx, idx),
+        // Each parked-state resume decides against a read-only view; the router clears the
+        // resuming slot's stale dep edges (where the resume depends on it) before deciding,
+        // then applies the returned outcome — the resume itself issues no graph write.
+        DispatchState::Keyworded(ks) => {
+            let outcome = ks.resume(&ctx.read_view(), idx);
+            return harness::apply_dispatch_outcome(ctx, outcome, idx);
+        }
+        DispatchState::FunctionValueCall(fs) => {
+            let outcome = fs.resume(&ctx.read_view());
+            return harness::apply_dispatch_outcome(ctx, outcome, idx);
+        }
+        DispatchState::TypeCall(cs) => {
+            ctx.clear_dep_edges(idx);
+            let outcome = (*cs).resume(&ctx.read_view());
+            return harness::apply_dispatch_outcome(ctx, outcome, idx);
+        }
+        DispatchState::BareTypeLeaf(bs) if bs.park.is_some() => {
+            ctx.clear_dep_edges(idx);
+            let outcome = bs.resume(&ctx.read_view());
+            return harness::apply_dispatch_outcome(ctx, outcome, idx);
+        }
         _ => unreachable!(
             "remaining fast-lane stateful variants terminalize in one poll; \
              only Keyworded, FunctionValueCall, TypeCall, and a parked BareTypeLeaf \

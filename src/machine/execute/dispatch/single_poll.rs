@@ -19,7 +19,7 @@ use super::super::nodes::{DispatchCombineFinish, NodeOutput, NodeStep};
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::DispatchCx;
 use super::outcome::{DispatchDep, DispatchOutcome};
-use super::{harness, DispatchCtx, DispatchState, Initialized};
+use super::{DispatchState, Initialized};
 
 pub(in crate::machine::execute) struct BareTypeState<'run> {
     /// Set when `bare_type_leaf` parked on a still-finalizing referent (a
@@ -96,18 +96,16 @@ impl<'run> BareTypeState<'run> {
     /// lifting the producer's value.
     pub(in crate::machine::execute) fn resume(
         self,
-        ctx: &mut DispatchCtx<'run, '_>,
-        idx: usize,
-    ) -> NodeStep<'run> {
+        ctx: &DispatchCx<'run, '_>,
+    ) -> DispatchOutcome<'run> {
         let BareTypeState { park, .. } = self;
         let BareTypeParkTrack { leaf, producer } =
             park.expect("BareTypeLeaf resume only entered after a park track is installed");
         // The producer's terminal is not the type carrier; the resume re-resolves through
-        // the now-sealed memo rather than reading the producer's value.
+        // the now-sealed memo rather than reading the producer's value. The dep edges are
+        // cleared by the router before this decide runs.
         let _ = producer;
-        ctx.clear_dep_edges(idx);
-        let outcome = bare_type_leaf(&ctx.read_view(), &leaf);
-        harness::apply_dispatch_outcome(ctx, outcome, idx)
+        bare_type_leaf(ctx, &leaf)
     }
 }
 
@@ -127,18 +125,16 @@ impl<'run> CtorState<'run> {
     /// placeholder.
     pub(in crate::machine::execute) fn resume(
         self,
-        ctx: &mut DispatchCtx<'run, '_>,
-        idx: usize,
-    ) -> NodeStep<'run> {
+        ctx: &DispatchCx<'run, '_>,
+    ) -> DispatchOutcome<'run> {
         let CtorState {
             init,
             head_placeholder: TypeCallHeadPlaceholder { expr, producer },
         } = self;
         let _ = init;
         let _ = producer;
-        ctx.clear_dep_edges(idx);
-        let outcome = type_call(&ctx.read_view(), expr);
-        harness::apply_dispatch_outcome(ctx, outcome, idx)
+        // The dep edges are cleared by the router before this decide runs.
+        type_call(ctx, expr)
     }
 }
 

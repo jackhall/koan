@@ -12,11 +12,11 @@ use crate::machine::model::KObject;
 use crate::machine::model::Parseable;
 use crate::machine::{KError, KErrorKind, NodeId, Resolution};
 
-use super::super::nodes::{NodeOutput, NodeStep};
+use super::super::nodes::NodeOutput;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::DispatchCx;
 use super::outcome::DispatchOutcome;
-use super::{harness, DispatchCtx, DispatchState, Initialized};
+use super::{DispatchState, Initialized};
 
 /// Parked `FunctionValueCall` state. Eager subs park as a [`NodeWork::DispatchCombine`]
 /// (`apply_callable::install_eager_subs_track`), so the only thing a `FnValueState` carries is a
@@ -73,7 +73,7 @@ impl<'run> FnValueState<'run> {
         }
     }
 
-    pub(super) fn resume(self, ctx: &mut DispatchCtx<'run, '_>, idx: usize) -> NodeStep<'run> {
+    pub(super) fn resume(self, ctx: &DispatchCx<'run, '_>) -> DispatchOutcome<'run> {
         let FnValueState {
             init,
             head_placeholder,
@@ -81,8 +81,7 @@ impl<'run> FnValueState<'run> {
         let _ = init;
         let FnValueHeadPlaceholderTrack { expr, producer, .. } = head_placeholder;
         let _ = producer;
-        let outcome = Self::initial(&ctx.read_view(), expr);
-        harness::apply_dispatch_outcome(ctx, outcome, idx)
+        Self::initial(ctx, expr)
     }
 
     /// Resolve the already-bound head value to a [`ResolvedCallable`] and hand

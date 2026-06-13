@@ -10,12 +10,11 @@ use crate::machine::{
     BindingIndex, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, TraceFrame,
 };
 
-use super::super::nodes::{NodeOutput, NodeStep};
-use super::outcome::DispatchOutcome;
+use super::super::nodes::NodeOutput;
 use super::ctx::DispatchCx;
+use super::outcome::DispatchOutcome;
 use super::{
-    bare_name_of, harness, propagate_dep_error, DispatchCtx, DispatchState, Initialized,
-    PartWalkResult, PendingSub,
+    bare_name_of, propagate_dep_error, DispatchState, Initialized, PartWalkResult, PendingSub,
 };
 
 pub(in crate::machine::execute) struct KeywordedState<'run> {
@@ -221,15 +220,14 @@ impl<'run> KeywordedState<'run> {
     }
 
     /// Resume entry, dispatched on the installed `ParkTrack` variant.
-    pub(super) fn resume(self, ctx: &mut DispatchCtx<'run, '_>, idx: usize) -> NodeStep<'run> {
+    pub(super) fn resume(self, ctx: &DispatchCx<'run, '_>, idx: usize) -> DispatchOutcome<'run> {
         let KeywordedState { init, track } = self;
         let track = track.expect("Keyworded resume is only entered after a track is installed");
         let expr = match track {
             ParkTrack::Overload(OverloadParkTrack { expr, .. }) => expr,
             ParkTrack::BareName(BareNameParkTrack { working_expr, .. }) => working_expr,
         };
-        let outcome = Self::initial(&ctx.read_view(), expr, init.pre_subs, idx);
-        harness::apply_dispatch_outcome(ctx, outcome, idx)
+        Self::initial(ctx, expr, init.pre_subs, idx)
     }
 
     /// Re-resolve dispatch against the (now fully spliced) `working_expr`
