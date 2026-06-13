@@ -93,7 +93,8 @@ pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
         }
         DispatchOutcome::Redispatch { working_expr, free } => {
             drain_free(ctx, free);
-            super::keyworded::KeywordedState::finish(ctx, working_expr, idx)
+            let outcome = super::keyworded::KeywordedState::finish(&ctx.read_view(), working_expr, idx);
+            apply_dispatch_outcome(ctx, outcome, idx)
         }
         DispatchOutcome::ParkLift { producer } => {
             // Notify edge, not Owned: the producer is a sibling slot we only wait on. The slot

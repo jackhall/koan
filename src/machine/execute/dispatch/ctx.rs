@@ -91,6 +91,30 @@ impl<'run, 's> DispatchCx<'run, 's> {
         self.sched.read_result(id)
     }
 
+    pub(super) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
+        self.sched.would_create_cycle(producer, consumer)
+    }
+
+    /// Build the per-part `bare_outcomes` cache: one `resolve_name_part` per bare-name part,
+    /// `None` otherwise. `consumer = None` defers cycle detection to the splice walk.
+    pub(super) fn build_bare_outcomes(
+        &self,
+        parts: &[Spanned<ExpressionPart<'run>>],
+    ) -> Vec<Option<NameOutcome<'run>>> {
+        parts
+            .iter()
+            .map(|p| match &p.value {
+                ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => Some(resolve_name_part(
+                    self.current_scope(),
+                    &p.value,
+                    self.sched,
+                    None,
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Stage each `PendingSub` and decide the eager-subs outcome. A `Reuse` of an already-resolved
     /// producer splices inline (a read of a static-over-this-step slot) and rides on the outcome's
     /// `free`; a freshly minted sub is never terminal in the same step, so it becomes an owned
@@ -198,28 +222,6 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         self.sched.current_scope()
     }
 
-    /// `&` borrow of the active lexical chain for name-resolution
-    /// helpers; thin wrap over `Scheduler::chain_deref`.
-    pub(super) fn chain_deref(&self) -> Option<&LexicalFrame> {
-        self.sched.chain_deref()
-    }
-
-    /// Cloned `Rc` to the active chain — read by the `KeywordedState`
-    /// initial-resolve site that takes the chain's `index`.
-    pub(super) fn active_chain(&self) -> Option<Rc<LexicalFrame>> {
-        self.sched.active_chain_clone()
-    }
-
-    // ----- slot queries -----
-
-    pub(super) fn is_result_ready(&self, id: NodeId) -> bool {
-        self.sched.is_result_ready(id)
-    }
-
-    pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
-        self.sched.read_result(id)
-    }
-
     // ----- dep graph -----
 
     pub(super) fn add_park_edge(&mut self, producer: NodeId, consumer: NodeId) {
@@ -228,10 +230,6 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
 
     pub(super) fn add_owned_edge(&mut self, producer: NodeId, consumer: NodeId) {
         self.sched.add_owned_edge(producer, consumer);
-    }
-
-    pub(super) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
-        self.sched.would_create_cycle(producer, consumer)
     }
 
     pub(super) fn clear_dep_edges(&mut self, idx: usize) {
@@ -300,27 +298,6 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
             BodyResult::DeferTo(id) => self.sched.defer_to_lift(idx, id),
             BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         }
-    }
-
-    /// Build the per-part `bare_outcomes` cache: one `resolve_name_part`
-    /// per bare-name part, `None` otherwise. `consumer = None` defers
-    /// cycle detection to the splice walk.
-    pub(super) fn build_bare_outcomes(
-        &self,
-        parts: &[Spanned<ExpressionPart<'run>>],
-    ) -> Vec<Option<NameOutcome<'run>>> {
-        parts
-            .iter()
-            .map(|p| match &p.value {
-                ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => Some(resolve_name_part(
-                    self.current_scope(),
-                    &p.value,
-                    self.sched,
-                    None,
-                )),
-                _ => None,
-            })
-            .collect()
     }
 
     /// Standard `NodeStep::Replace` for parked-Dispatch install sites:

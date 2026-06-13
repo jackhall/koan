@@ -430,7 +430,10 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
             let outcome = operator_chain::run(&ctx.read_view(), &expr);
             harness::apply_dispatch_outcome(ctx, outcome, idx)
         }
-        DispatchShape::Keyworded => KeywordedState::initial(ctx, expr, init.pre_subs, idx),
+        DispatchShape::Keyworded => {
+            let outcome = KeywordedState::initial(&ctx.read_view(), expr, init.pre_subs, idx);
+            harness::apply_dispatch_outcome(ctx, outcome, idx)
+        }
         DispatchShape::SigiledTypeExpr => {
             debug_assert!(init.pre_subs.is_empty());
             harness::apply_dispatch_outcome(ctx, single_poll::sigiled_type_expr(expr), idx)
