@@ -202,8 +202,11 @@ impl<'run> KeywordedState<'run> {
         }
         if staged_subs.is_empty() {
             // The synchronous (no-eager-subs) call — the common path for builtins and simple calls.
-            let body = super::exec::invoke(ctx.scheduler_mut(), resolved.function, new_expr);
-            return ctx.body_result_to_step(body, idx);
+            let outcome = DispatchOutcome::Invoke {
+                picked: resolved.function,
+                working_expr: new_expr,
+            };
+            return harness::apply_dispatch_outcome(ctx, outcome, idx);
         }
         let _ = resolved; // discard the speculative pick.
         Self::install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs, idx)

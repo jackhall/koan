@@ -28,10 +28,7 @@ use crate::machine::{KError, LexicalFrame, NameOutcome, NodeId, SchedulerHandle,
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
 use super::outcome::{DispatchDep, DispatchOutcome};
-use super::{
-    bind_frame_err, harness, keyworded::KeywordedState, resolve_name_part, DispatchState,
-    PendingSub,
-};
+use super::{bind_frame_err, harness, resolve_name_part, DispatchState, PendingSub};
 
 /// Newtype wrapping `&'b mut Scheduler<'run>`, exposing exactly the
 /// scheduler operations the dispatcher uses. `'run` is the scheduler's
@@ -293,7 +290,8 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         if deps.is_empty() {
             // Every sub was an already-resolved `Reuse` spliced inline — `working_expr` is fully
             // resolved, so continue to the finish now instead of parking on a Combine.
-            return finish_eager_subs(self, working_expr, picked, idx);
+            let outcome = finish_eager_subs(working_expr, picked);
+            return harness::apply_dispatch_outcome(self, outcome, idx);
         }
         let dep_error_frame = Some(crate::machine::TraceFrame::from_expr(
             "<bind>",
@@ -305,7 +303,8 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
             for (slot, value) in part_indices.iter().zip(results) {
                 working_expr.parts[*slot].value = ExpressionPart::Future(*value);
             }
-            finish_eager_subs(ctx, working_expr, picked, idx)
+            let outcome = finish_eager_subs(working_expr, picked);
+            harness::apply_dispatch_outcome(ctx, outcome, idx)
         });
         let outcome = DispatchOutcome::Combine {
             deps,
@@ -336,20 +335,19 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
 }
 
 /// Route a fully-spliced eager-subs `working_expr` to its continuation — the shared tail of
-/// the `DispatchCombine` finish and its all-inline fast path. `Some(f)` runs the committed
-/// call; `None` re-resolves dispatch via [`KeywordedState::finish`] (an element-typed
-/// `Future(_)` revealed by a sub then surfaces as a slot-terminal `DispatchFailed`).
+/// the `DispatchCombine` finish and its all-inline fast path. `Some(f)` names the committed
+/// call as an [`DispatchOutcome::Invoke`]; `None` defers to a [`DispatchOutcome::Redispatch`]
+/// (the harness re-resolves via [`KeywordedState::finish`], where an element-typed `Future(_)`
+/// revealed by a sub surfaces as a slot-terminal `DispatchFailed`). Pure data — no `&mut`.
 fn finish_eager_subs<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
     working_expr: KExpression<'run>,
     picked: Option<&'run KFunction<'run>>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     match picked {
-        Some(f) => {
-            let body = super::exec::invoke(ctx.scheduler_mut(), f, working_expr);
-            ctx.body_result_to_step(body, idx)
-        }
-        None => KeywordedState::finish(ctx, working_expr, idx),
+        Some(f) => DispatchOutcome::Invoke {
+            picked: f,
+            working_expr,
+        },
+        None => DispatchOutcome::Redispatch { working_expr },
     }
 }

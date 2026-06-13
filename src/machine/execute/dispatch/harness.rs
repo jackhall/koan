@@ -68,5 +68,17 @@ pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
             }
             ctx.replace_with_parked_dispatch(state)
         }
+        DispatchOutcome::Invoke {
+            picked,
+            working_expr,
+        } => {
+            // The dispatch→execution hand-off: run the resolved call against the raw
+            // `&mut Scheduler` and lower its body onto the slot.
+            let body = super::exec::invoke(ctx.scheduler_mut(), picked, working_expr);
+            ctx.body_result_to_step(body, idx)
+        }
+        DispatchOutcome::Redispatch { working_expr } => {
+            super::keyworded::KeywordedState::finish(ctx, working_expr, idx)
+        }
     }
 }

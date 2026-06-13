@@ -11,6 +11,7 @@
 //! returns `NodeStep` produces no dead arm); the end state is a closed set the harness
 //! interprets exhaustively.
 
+use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::{NodeId, TraceFrame};
 
@@ -41,6 +42,23 @@ pub(in crate::machine::execute) enum DispatchOutcome<'run> {
     ParkSelf {
         producers: Vec<NodeId>,
         state: DispatchState<'run>,
+    },
+    /// Run a resolved call — the head uniquely picked `picked` and every value part of
+    /// `working_expr` is already `Future`/literal-resolved. The harness hands it to
+    /// [`exec::invoke`](super::exec::invoke) (the execution sink that holds `&mut Scheduler`)
+    /// and lowers the resulting body onto the slot. This is the dispatch→execution boundary:
+    /// a decide names the call; the harness runs it.
+    Invoke {
+        picked: &'run KFunction<'run>,
+        working_expr: KExpression<'run>,
+    },
+    /// Re-resolve dispatch against a now fully-spliced `working_expr` — the post-eager-subs
+    /// continuation when no function was speculatively pre-picked. The harness re-enters
+    /// [`KeywordedState::finish`](super::keyworded::KeywordedState::finish), which re-runs
+    /// resolution on the resolved expr and routes the result (a revealed element-typed
+    /// `Future` then surfaces as a slot-terminal `DispatchFailed`).
+    Redispatch {
+        working_expr: KExpression<'run>,
     },
 }
 
