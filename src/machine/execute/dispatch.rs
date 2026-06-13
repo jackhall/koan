@@ -47,6 +47,7 @@ pub(in crate::machine::execute) mod single_poll;
 mod tests;
 
 pub(in crate::machine::execute) use ctx::DispatchCtx;
+use outcome::DispatchOutcome;
 pub(crate) use field_list::defer_field_list_action;
 use fn_value::FnValueState;
 use keyworded::KeywordedState;
@@ -193,8 +194,8 @@ pub(super) const POSITIONAL_ONLY: &str =
     "positional construction takes `(value)`, not a record literal `{name = value}`";
 
 /// Loud non-match for a call body whose surface shape the resolved carrier doesn't admit.
-pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> NodeStep<'run> {
-    NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> DispatchOutcome<'run> {
+    DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
         expr: expr.summarize(),
         reason: reason.to_string(),
     })))
@@ -212,9 +213,12 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<TraceFrame>) -> KErr
 
 /// Shape a dep-error terminal with the `<bind>` surface frame keyed
 /// off `working_expr`.
-pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>) -> NodeStep<'run> {
+pub(super) fn bind_frame_err<'run>(
+    e: &KError,
+    working_expr: &KExpression<'run>,
+) -> DispatchOutcome<'run> {
     let frame = TraceFrame::from_expr("<bind>", working_expr);
-    NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
+    DispatchOutcome::Terminal(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
 }
 
 /// Walk raw parts emitting an `Identifier("")` placeholder at every
@@ -388,11 +392,13 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
         DispatchShape::FunctionValueCall => {
             debug_assert!(init.pre_subs.is_empty());
             let _ = init;
-            FnValueState::initial(ctx, expr, idx)
+            let outcome = FnValueState::initial(&ctx.read_view(), expr);
+            harness::apply_dispatch_outcome(ctx, outcome, idx)
         }
         DispatchShape::TypeCall => {
             debug_assert!(init.pre_subs.is_empty());
-            single_poll::type_call(ctx, expr, idx)
+            let outcome = single_poll::type_call(&ctx.read_view(), expr);
+            harness::apply_dispatch_outcome(ctx, outcome, idx)
         }
         DispatchShape::HeadDeferred => {
             debug_assert!(init.pre_subs.is_empty());

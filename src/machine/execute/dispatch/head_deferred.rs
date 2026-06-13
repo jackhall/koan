@@ -81,7 +81,8 @@ fn park_on_head<'run>(
             Ok(c) => c,
             Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
         };
-        apply_callable(ctx, callable, &expr, idx)
+        let outcome = apply_callable(&ctx.read_view(), callable, &expr);
+        harness::apply_dispatch_outcome(ctx, outcome, idx)
     });
     let outcome = DispatchOutcome::Combine {
         deps: vec![DispatchDep::Dispatch(head)],

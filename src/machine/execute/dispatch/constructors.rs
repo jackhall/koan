@@ -20,7 +20,6 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::super::nodes::{DispatchCombineFinish, NodeOutput, NodeStep};
 use super::outcome::{DispatchDep, DispatchOutcome};
 use super::single_poll::CtorKind;
-use super::{harness, DispatchCtx};
 
 pub(in crate::machine::execute) mod tagged_union;
 
@@ -30,11 +29,9 @@ pub(in crate::machine::execute) mod tagged_union;
 /// The parts are launched as one value cell whose finish type-checks against the member's
 /// `repr` and wraps with `identity`.
 pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
     identity: &'run KType<'run>,
     mut value_parts: Vec<Spanned<ExpressionPart<'run>>>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     if let [Spanned {
         value: ExpressionPart::Expression(inner),
         ..
@@ -43,7 +40,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
         value_parts = inner.parts.clone();
     }
     if value_parts.is_empty() {
-        return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::ArityMismatch {
+        return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::ArityMismatch {
             expected: 1,
             got: 0,
         })));
@@ -56,7 +53,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
     } else {
         ExpressionPart::Expression(Box::new(KExpression::new(value_parts)))
     };
-    launch(ctx, vec![value_cell], CtorKind::Newtype { identity }, idx)
+    launch(vec![value_cell], CtorKind::Newtype { identity })
 }
 
 /// Direct-construct a record-repr newtype from a named record-literal body. Launches one
@@ -64,22 +61,18 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
 /// binds synchronously (the property the retired struct path relied on, and which a chained
 /// `(Boxed (p))` depends on). The finish builds the `KObject::Record` and wraps it.
 pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
     identity: &'run KType<'run>,
     record_fields: Vec<(String, ExpressionPart<'run>)>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let field_names: Vec<String> = record_fields.iter().map(|(n, _)| n.clone()).collect();
     let value_parts: Vec<ExpressionPart<'run>> =
         record_fields.into_iter().map(|(_, p)| p).collect();
     launch(
-        ctx,
         value_parts,
         CtorKind::RecordNewtype {
             identity,
             field_names,
         },
-        idx,
     )
 }
 
@@ -115,19 +108,16 @@ fn construct_newtype<'run>(
 /// constructor (`TypeConstructor` kind) — both reference a sealed member.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
     set: Rc<RecursiveSet<'run>>,
     index: usize,
     schema: Rc<HashMap<String, KType<'run>>>,
     args_parts: Vec<Spanned<ExpressionPart<'run>>>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let (tag, value_part) = match tagged_union::prepare_args(args_parts) {
         Ok(v) => v,
-        Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+        Err(e) => return DispatchOutcome::Terminal(NodeOutput::Err(e)),
     };
     launch(
-        ctx,
         vec![value_part],
         CtorKind::Tagged {
             schema,
@@ -135,7 +125,6 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
             index,
             tag,
         },
-        idx,
     )
 }
 
@@ -145,11 +134,9 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
 /// the slot always parks as a [`DispatchOutcome::Combine`]. The finish reads the resolved deps in
 /// declaration order and materializes the value via [`finish`]; dep errors propagate frameless.
 fn launch<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
     value_parts: Vec<ExpressionPart<'run>>,
     kind: CtorKind<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     debug_assert!(
         !value_parts.is_empty(),
         "launch requires at least one value part (arity-zero is rejected upstream)"
@@ -162,13 +149,12 @@ fn launch<'run>(
         let values: Vec<&'run KObject<'run>> = results.iter().map(|c| c.object()).collect();
         finish(ctx.current_scope(), &kind, &values)
     });
-    let outcome = DispatchOutcome::Combine {
+    DispatchOutcome::Combine {
         deps,
         dep_error_frame: None,
         finish: combine_finish,
         free: Vec::new(),
-    };
-    harness::apply_dispatch_outcome(ctx, outcome, idx)
+    }
 }
 
 /// All value subs have completed. Read each, materialize the kind-keyed

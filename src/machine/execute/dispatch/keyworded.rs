@@ -349,7 +349,8 @@ impl<'run> KeywordedState<'run> {
         // never re-entered (a re-Dispatch never lands here — the combine finish runs instead),
         // so `pre_subs` is unused on this path.
         let _ = pre_subs;
-        ctx.install_eager_subs(working_expr, staged_subs, None, idx)
+        let outcome = ctx.read_view().install_eager_subs(working_expr, staged_subs, None);
+        harness::apply_dispatch_outcome(ctx, outcome, idx)
     }
 }
 

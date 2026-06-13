@@ -14,6 +14,7 @@ use crate::machine::{KError, KErrorKind, NodeId, Resolution};
 
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::apply_callable::{apply_callable, ResolvedCallable};
+use super::ctx::DispatchCx;
 use super::outcome::DispatchOutcome;
 use super::{harness, DispatchCtx, DispatchState, Initialized};
 
@@ -55,22 +56,19 @@ impl<'run> FnValueState<'run> {
     }
 
     pub(super) fn initial(
-        ctx: &mut DispatchCtx<'run, '_>,
+        ctx: &DispatchCx<'run, '_>,
         expr: KExpression<'run>,
-        idx: usize,
-    ) -> NodeStep<'run> {
+    ) -> DispatchOutcome<'run> {
         let head = match &expr.parts[0].value {
             ExpressionPart::Identifier(n) => n.clone(),
             _ => unreachable!("FunctionValueCall shape implies Identifier head"),
         };
         let chain = ctx.chain_deref();
         match ctx.current_scope().resolve_with_chain(&head, chain) {
-            Resolution::Value(obj) => Self::dispatch_callable_value(ctx, expr, obj, idx),
-            Resolution::Placeholder(producer_id) => {
-                Self::install_head_park(ctx, producer_id, expr, idx)
-            }
+            Resolution::Value(obj) => Self::dispatch_callable_value(ctx, expr, obj),
+            Resolution::Placeholder(producer_id) => Self::install_head_park(producer_id, expr),
             Resolution::UnboundName => {
-                NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(head))))
+                DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::UnboundName(head))))
             }
         }
     }
@@ -83,7 +81,8 @@ impl<'run> FnValueState<'run> {
         let _ = init;
         let FnValueHeadPlaceholderTrack { expr, producer, .. } = head_placeholder;
         let _ = producer;
-        Self::initial(ctx, expr, idx)
+        let outcome = Self::initial(&ctx.read_view(), expr);
+        harness::apply_dispatch_outcome(ctx, outcome, idx)
     }
 
     /// Resolve the already-bound head value to a [`ResolvedCallable`] and hand
@@ -93,40 +92,35 @@ impl<'run> FnValueState<'run> {
     /// constructor-typed head reaches dispatch through the type channel
     /// (`HeadDeferred`), never here. Anything else is a non-callable `TypeMismatch`.
     fn dispatch_callable_value(
-        ctx: &mut DispatchCtx<'run, '_>,
+        ctx: &DispatchCx<'run, '_>,
         expr: KExpression<'run>,
         head_obj: &'run KObject<'run>,
-        idx: usize,
-    ) -> NodeStep<'run> {
+    ) -> DispatchOutcome<'run> {
         let callable = match head_obj {
             KObject::KFunction(f, _) => ResolvedCallable::Function(f),
             other => {
-                return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
-                    arg: "verb".to_string(),
-                    expected: "KFunction or Type".to_string(),
-                    got: other.summarize(),
-                })))
+                return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
+                    KErrorKind::TypeMismatch {
+                        arg: "verb".to_string(),
+                        expected: "KFunction or Type".to_string(),
+                        got: other.summarize(),
+                    },
+                )))
             }
         };
-        apply_callable(ctx, callable, &expr, idx)
+        apply_callable(ctx, callable, &expr)
     }
 
-    fn install_head_park(
-        ctx: &mut DispatchCtx<'run, '_>,
-        producer: NodeId,
-        expr: KExpression<'run>,
-        idx: usize,
-    ) -> NodeStep<'run> {
+    fn install_head_park(producer: NodeId, expr: KExpression<'run>) -> DispatchOutcome<'run> {
         let track = FnValueHeadPlaceholderTrack::new(expr, producer);
         let init = Initialized {
             pre_subs: Vec::new(),
         };
-        let outcome = DispatchOutcome::ParkSelf {
+        DispatchOutcome::ParkSelf {
             producers: vec![producer],
             state: DispatchState::FunctionValueCall(Box::new(Self::with_head_placeholder(
                 init, track,
             ))),
-        };
-        harness::apply_dispatch_outcome(ctx, outcome, idx)
+        }
     }
 }

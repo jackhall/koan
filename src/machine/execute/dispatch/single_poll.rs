@@ -137,7 +137,8 @@ impl<'run> CtorState<'run> {
         let _ = init;
         let _ = producer;
         ctx.clear_dep_edges(idx);
-        type_call(ctx, expr, idx)
+        let outcome = type_call(&ctx.read_view(), expr);
+        harness::apply_dispatch_outcome(ctx, outcome, idx)
     }
 }
 
@@ -290,10 +291,9 @@ fn park_on_literal<'run>(dep: DispatchDep<'run>) -> DispatchOutcome<'run> {
 /// A name with no producer and no binding is `UnboundName` (genuine absence only —
 /// pending names are already parked in step 1).
 pub(super) fn type_call<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    ctx: &DispatchCx<'run, '_>,
     expr: KExpression<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let head_t = match &expr.parts[0].value {
         ExpressionPart::Type(t) => t.clone(),
         _ => unreachable!("TypeCall shape implies leaf Type head"),
@@ -315,14 +315,13 @@ pub(super) fn type_call<'run>(
                 pre_subs: Vec::new(),
             };
             let head_placeholder = TypeCallHeadPlaceholder { expr, producer };
-            let outcome = DispatchOutcome::ParkSelf {
+            return DispatchOutcome::ParkSelf {
                 producers: vec![producer],
                 state: DispatchState::TypeCall(Box::new(CtorState::with_head_placeholder(
                     init,
                     head_placeholder,
                 ))),
             };
-            return harness::apply_dispatch_outcome(ctx, outcome, idx);
         }
     }
     // Fresh `types[name]` lookup at construction time. A sealed nominal type's identity is
@@ -335,25 +334,25 @@ pub(super) fn type_call<'run>(
     {
         Some(kt) => kt,
         None => {
-            return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(
-                head_t.render(),
-            ))));
+            return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
+                KErrorKind::UnboundName(head_t.render()),
+            )));
         }
     };
     match identity {
         // A bound functor's result is a module — the `Function` arm calls it.
         KType::KFunctor { body: Some(f), .. } => {
-            apply_callable(ctx, ResolvedCallable::Function(f), &expr, idx)
+            apply_callable(ctx, ResolvedCallable::Function(f), &expr)
         }
         // A bare `:(FUNCTOR …)` type annotation has no callable to invoke.
         KType::KFunctor { body: None, .. } => {
-            NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+            DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "constructible Type or bound functor".to_string(),
                 got: identity.name(),
             })))
         }
-        _ => apply_callable(ctx, ResolvedCallable::Constructor(identity), &expr, idx),
+        _ => apply_callable(ctx, ResolvedCallable::Constructor(identity), &expr),
     }
 }
 

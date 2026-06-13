@@ -640,6 +640,7 @@ digraph {
     "koan::machine::execute::dispatch" -> "koan::machine::execute::dispatch::keyworded" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch" -> "koan::machine::execute::dispatch::operator_chain" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::machine::execute::dispatch" -> "koan::machine::execute::dispatch::outcome" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
+    "koan::machine::execute::dispatch" -> "koan::machine::execute::dispatch::outcome" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch" -> "koan::machine::execute::dispatch::resolve_dispatch" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::machine::execute::dispatch" -> "koan::machine::execute::dispatch::resolve_dispatch" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch" -> "koan::machine::execute::dispatch::resolve_type_expr" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
@@ -657,6 +658,7 @@ digraph {
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::dispatch" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::dispatch::constructors" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::dispatch::ctx" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::dispatch::outcome" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::nodes" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::model::ast" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::model::types::ktype" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
@@ -665,8 +667,6 @@ digraph {
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::core::scope" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::core::source" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::dispatch::constructors::tagged_union" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
-    "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::dispatch::ctx" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
-    "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::dispatch::harness" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::dispatch::outcome" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::dispatch::single_poll" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::nodes" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
