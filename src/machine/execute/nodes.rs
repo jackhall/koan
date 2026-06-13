@@ -8,7 +8,8 @@ use crate::machine::{
     CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, Scope, TraceFrame,
 };
 
-use super::dispatch::{DispatchCx, DispatchOutcome, DispatchState};
+use super::dispatch::{DispatchState, SchedulerView};
+use super::outcome::Outcome;
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
 /// no further write to that slot occurs until it is freed and reused.
@@ -64,13 +65,13 @@ pub(super) enum NodeStep<'run> {
 }
 
 /// Host-side closure for a [`NodeWork::DispatchCombine`] slot — the dispatch-side dual of
-/// [`CombineFinish`]. Receives the dep terminals in submission order and a read-only dispatch
-/// view, and returns a [`DispatchOutcome`]: unlike a builtin Combine (whose `BodyResult` finish
-/// cannot re-park), a dispatch finish may resolve, tail-redispatch, or **park again** (e.g. an
-/// overload park on a freshly resolved producer), which the richer outcome expresses. The harness
-/// applies the returned outcome, so the finish — like every decide — issues no graph write itself.
+/// [`CombineFinish`]. Receives the dep terminals in submission order and a read-only
+/// [`SchedulerView`], and returns an [`Outcome`]: unlike a builtin Combine (whose `BodyResult`
+/// finish cannot re-park), a dispatch finish may resolve, tail-redispatch, or **park again** (e.g.
+/// an overload park on a freshly resolved producer), which the three-way outcome expresses. The
+/// harness applies the returned outcome, so the finish — like every decide — issues no graph write.
 pub(super) type DispatchCombineFinish<'run> = Box<
-    dyn for<'a> FnOnce(&DispatchCx<'run, 'a>, &[Carried<'run>], usize) -> DispatchOutcome<'run>
+    dyn for<'a> FnOnce(&SchedulerView<'run, 'a>, &[Carried<'run>], usize) -> Outcome<'run>
         + 'run,
 >;
 

@@ -65,7 +65,7 @@ and is the sole place that holds `&mut Scheduler`. The three pieces:
   scheduler internal rename (`active_chain` → ..., `DepGraph` split) is a
   single-file change inside `scheduler/`.
 - **The effect** —
-  [`DispatchOutcome<'run>`](../src/machine/execute/dispatch/outcome.rs) is
+  [`Outcome<'run>`](../src/machine/execute/outcome.rs) is
   the closed set of effects a decide can name (the peer of
   [`Action`](../src/machine/core/kfunction/action.rs)): `Terminal`,
   `Combine` (declare deps + a splice finish), `ParkSelf`, `ParkLift`,

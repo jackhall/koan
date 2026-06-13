@@ -16,8 +16,8 @@
 //!   `DispatchFailed` raise carrying the offending head
 //!
 //! State and transitions live with their shape; this file keeps the cross-shape glue. Every
-//! per-shape handler *decides* against a read-only [`DispatchCx`] and returns a
-//! [`DispatchOutcome`] the [`harness`] applies — the router and harness hold the only
+//! per-shape handler *decides* against a read-only [`SchedulerView`] and returns a
+//! [`Outcome`] the [`harness`] applies — the router and harness hold the only
 //! `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field names).
 
 use crate::machine::core::source::Spanned;
@@ -25,8 +25,9 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
 
-use super::nodes::{NodeOutput, NodeStep};
+use super::nodes::{DispatchCombineFinish, NodeOutput, NodeStep, NodeWork};
 use super::scheduler::Scheduler;
+use crate::machine::core::kfunction::action::FramePlacement;
 
 pub(in crate::machine::execute) mod apply_callable;
 mod constructors;
@@ -38,7 +39,6 @@ mod harness;
 pub(in crate::machine::execute) mod head_deferred;
 pub(in crate::machine::execute) mod keyworded;
 pub(in crate::machine::execute) mod operator_chain;
-mod outcome;
 pub(in crate::machine) mod resolve_dispatch;
 pub(in crate::machine) mod resolve_type_expr;
 pub(in crate::machine::execute) mod single_poll;
@@ -46,9 +46,9 @@ pub(in crate::machine::execute) mod single_poll;
 #[cfg(test)]
 mod tests;
 
-pub(in crate::machine::execute) use ctx::DispatchCx;
+pub(in crate::machine::execute) use ctx::SchedulerView;
 pub(in crate::machine::execute) use harness::run_dispatch_combine_finish;
-pub(in crate::machine::execute) use outcome::DispatchOutcome;
+pub(in crate::machine::execute) use super::outcome::{Continuation, DispatchDep, Outcome};
 pub(crate) use field_list::defer_field_list_action;
 use fn_value::FnValueState;
 use keyworded::KeywordedState;
@@ -195,8 +195,8 @@ pub(super) const POSITIONAL_ONLY: &str =
     "positional construction takes `(value)`, not a record literal `{name = value}`";
 
 /// Loud non-match for a call body whose surface shape the resolved carrier doesn't admit.
-pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> DispatchOutcome<'run> {
-    DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> Outcome<'run> {
+    Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
         expr: expr.summarize(),
         reason: reason.to_string(),
     })))
@@ -217,9 +217,68 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<TraceFrame>) -> KErr
 pub(super) fn bind_frame_err<'run>(
     e: &KError,
     working_expr: &KExpression<'run>,
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     let frame = TraceFrame::from_expr("<bind>", working_expr);
-    DispatchOutcome::Terminal(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
+    Outcome::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
+}
+
+// ---------- Outcome constructors (the dispatch-currency → Outcome mapping) ----------
+
+/// Park the slot on `deps` as a [`NodeWork::DispatchCombine`](super::nodes::NodeWork) whose
+/// `finish` runs over their resolved values (the dispatch Combine — short-circuits on dep error).
+/// Every dep is owned (`park_count: 0`); `free` reclaims `Reuse` producers consumed inline.
+pub(in crate::machine::execute) fn park_combine<'run>(
+    deps: Vec<DispatchDep<'run>>,
+    dep_error_frame: Option<TraceFrame>,
+    finish: DispatchCombineFinish<'run>,
+    free: Vec<usize>,
+) -> Outcome<'run> {
+    Outcome::ParkThenContinue {
+        deps,
+        park_count: 0,
+        cont: Continuation::Finish(finish),
+        dep_error_frame,
+        free,
+    }
+}
+
+/// Park the slot on `producers` (notify edges) and re-run its dispatch decide on wake (the
+/// `ParkSelf` shape). The producers are the to-wait set the decide already filtered.
+pub(in crate::machine::execute) fn park_self<'run>(
+    producers: Vec<NodeId>,
+    state: DispatchState<'run>,
+) -> Outcome<'run> {
+    Outcome::ParkThenContinue {
+        park_count: producers.len(),
+        deps: producers.into_iter().map(DispatchDep::Existing).collect(),
+        cont: Continuation::Replay(state),
+        dep_error_frame: None,
+        free: Vec::new(),
+    }
+}
+
+/// Park a bare-identifier slot on the single `producer` that binds its name, then *become* that
+/// producer's resolved value (the push/notify single-producer `Lift` forward).
+pub(in crate::machine::execute) fn park_lift<'run>(producer: NodeId) -> Outcome<'run> {
+    Outcome::ParkThenContinue {
+        deps: vec![DispatchDep::Existing(producer)],
+        park_count: 1,
+        cont: Continuation::Forward(producer),
+        dep_error_frame: None,
+        free: Vec::new(),
+    }
+}
+
+/// Replace the slot with a fresh frameless `Dispatch` of `inner` — the decide reduced its
+/// expression to a nested one to re-classify (`(inner)`, `:(...)` unwrap).
+pub(in crate::machine::execute) fn become_dispatch<'run>(inner: KExpression<'run>) -> Outcome<'run> {
+    Outcome::Continue {
+        work: NodeWork::dispatch(inner),
+        frame: FramePlacement::Inherit,
+        contract: None,
+        block_entry: None,
+        body_index: 0,
+    }
 }
 
 /// Walk raw parts emitting an `Identifier("")` placeholder at every
@@ -364,22 +423,22 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
         // resuming slot's stale dep edges (where the resume depends on it) before deciding,
         // then applies the returned outcome — the resume itself issues no graph write.
         DispatchState::Keyworded(ks) => {
-            let outcome = ks.resume(&DispatchCx::new(sched), idx);
-            return harness::apply_dispatch_outcome(sched, outcome, idx);
+            let outcome = ks.resume(&SchedulerView::new(sched), idx);
+            return sched.apply_outcome(outcome, idx);
         }
         DispatchState::FunctionValueCall(fs) => {
-            let outcome = fs.resume(&DispatchCx::new(sched));
-            return harness::apply_dispatch_outcome(sched, outcome, idx);
+            let outcome = fs.resume(&SchedulerView::new(sched));
+            return sched.apply_outcome(outcome, idx);
         }
         DispatchState::TypeCall(cs) => {
             sched.clear_dep_edges(idx);
-            let outcome = (*cs).resume(&DispatchCx::new(sched));
-            return harness::apply_dispatch_outcome(sched, outcome, idx);
+            let outcome = (*cs).resume(&SchedulerView::new(sched));
+            return sched.apply_outcome(outcome, idx);
         }
         DispatchState::BareTypeLeaf(bs) if bs.park.is_some() => {
             sched.clear_dep_edges(idx);
-            let outcome = bs.resume(&DispatchCx::new(sched));
-            return harness::apply_dispatch_outcome(sched, outcome, idx);
+            let outcome = bs.resume(&SchedulerView::new(sched));
+            return sched.apply_outcome(outcome, idx);
         }
         _ => unreachable!(
             "remaining fast-lane stateful variants terminalize in one poll; \
@@ -395,8 +454,8 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
                 ExpressionPart::Type(t) => t.clone(),
                 _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
             };
-            let outcome = single_poll::bare_type_leaf(&DispatchCx::new(sched), &t);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
+            let outcome = single_poll::bare_type_leaf(&SchedulerView::new(sched), &t);
+            sched.apply_outcome(outcome, idx)
         }
         DispatchShape::BareIdentifier => {
             debug_assert!(init.pre_subs.is_empty());
@@ -404,27 +463,27 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
                 ExpressionPart::Identifier(n) => n.clone(),
                 _ => unreachable!("BareIdentifier shape implies single Identifier part"),
             };
-            let outcome = single_poll::bare_identifier(&DispatchCx::new(sched), name);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
+            let outcome = single_poll::bare_identifier(&SchedulerView::new(sched), name);
+            sched.apply_outcome(outcome, idx)
         }
         DispatchShape::FunctionValueCall => {
             debug_assert!(init.pre_subs.is_empty());
             let _ = init;
-            let outcome = FnValueState::initial(&DispatchCx::new(sched), expr);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
+            let outcome = FnValueState::initial(&SchedulerView::new(sched), expr);
+            sched.apply_outcome(outcome, idx)
         }
         DispatchShape::TypeCall => {
             debug_assert!(init.pre_subs.is_empty());
-            let outcome = single_poll::type_call(&DispatchCx::new(sched), expr);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
+            let outcome = single_poll::type_call(&SchedulerView::new(sched), expr);
+            sched.apply_outcome(outcome, idx)
         }
         DispatchShape::HeadDeferred => {
             debug_assert!(init.pre_subs.is_empty());
-            harness::apply_dispatch_outcome(sched, head_deferred::initial_expr(expr), idx)
+            sched.apply_outcome(head_deferred::initial_expr(expr), idx)
         }
         DispatchShape::TypeHeadDeferred => {
             debug_assert!(init.pre_subs.is_empty());
-            harness::apply_dispatch_outcome(sched, head_deferred::initial_type(expr), idx)
+            sched.apply_outcome(head_deferred::initial_type(expr), idx)
         }
         // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
         // a non-callable head is a runtime error, not a fatal `execute()` abort.
@@ -445,26 +504,26 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
             // Decide against a read-only view (immutable scheduler borrow), then reborrow
             // `&mut` through the harness to apply — the borrow contract the effect split rests
             // on. The `read_view` borrow ends at the `run` call (NLL), freeing `ctx` for apply.
-            let outcome = operator_chain::run(&DispatchCx::new(sched), &expr);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
+            let outcome = operator_chain::run(&SchedulerView::new(sched), &expr);
+            sched.apply_outcome(outcome, idx)
         }
         DispatchShape::Keyworded => {
-            let outcome = KeywordedState::initial(&DispatchCx::new(sched), expr, init.pre_subs, idx);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
+            let outcome = KeywordedState::initial(&SchedulerView::new(sched), expr, init.pre_subs, idx);
+            sched.apply_outcome(outcome, idx)
         }
         DispatchShape::SigiledTypeExpr => {
             debug_assert!(init.pre_subs.is_empty());
-            harness::apply_dispatch_outcome(sched, single_poll::sigiled_type_expr(expr), idx)
+            sched.apply_outcome(single_poll::sigiled_type_expr(expr), idx)
         }
         DispatchShape::RecordType => {
             debug_assert!(init.pre_subs.is_empty());
-            let outcome = single_poll::record_type(&DispatchCx::new(sched), expr);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
+            let outcome = single_poll::record_type(&SchedulerView::new(sched), expr);
+            sched.apply_outcome(outcome, idx)
         }
         DispatchShape::LiteralPassThrough => {
             debug_assert!(init.pre_subs.is_empty());
-            let outcome = single_poll::literal_pass_through(&DispatchCx::new(sched), expr);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
+            let outcome = single_poll::literal_pass_through(&SchedulerView::new(sched), expr);
+            sched.apply_outcome(outcome, idx)
         }
     }
 }

@@ -17,8 +17,8 @@ use crate::machine::{KError, KErrorKind, NodeId, Resolution};
 
 use super::super::nodes::{DispatchCombineFinish, NodeOutput};
 use super::apply_callable::{apply_callable, ResolvedCallable};
-use super::ctx::DispatchCx;
-use super::outcome::{DispatchDep, DispatchOutcome};
+use super::ctx::SchedulerView;
+use super::{become_dispatch, park_combine, park_lift, park_self, DispatchDep, Outcome};
 use super::{DispatchState, Initialized};
 
 pub(in crate::machine::execute) struct BareTypeState<'run> {
@@ -96,8 +96,8 @@ impl<'run> BareTypeState<'run> {
     /// lifting the producer's value.
     pub(in crate::machine::execute) fn resume(
         self,
-        ctx: &DispatchCx<'run, '_>,
-    ) -> DispatchOutcome<'run> {
+        ctx: &SchedulerView<'run, '_>,
+    ) -> Outcome<'run> {
         let BareTypeState { park, .. } = self;
         let BareTypeParkTrack { leaf, producer } =
             park.expect("BareTypeLeaf resume only entered after a park track is installed");
@@ -125,8 +125,8 @@ impl<'run> CtorState<'run> {
     /// placeholder.
     pub(in crate::machine::execute) fn resume(
         self,
-        ctx: &DispatchCx<'run, '_>,
-    ) -> DispatchOutcome<'run> {
+        ctx: &SchedulerView<'run, '_>,
+    ) -> Outcome<'run> {
         let CtorState {
             init,
             head_placeholder: TypeCallHeadPlaceholder { expr, producer },
@@ -141,29 +141,29 @@ impl<'run> CtorState<'run> {
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
 pub(super) fn bare_identifier<'run>(
-    ctx: &DispatchCx<'run, '_>,
+    ctx: &SchedulerView<'run, '_>,
     name: String,
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     match ctx
         .current_scope()
         .resolve_with_chain(&name, ctx.chain_deref())
     {
-        Resolution::Value(obj) => DispatchOutcome::Terminal(NodeOutput::value(obj)),
-        Resolution::Placeholder(producer) => DispatchOutcome::ParkLift { producer },
+        Resolution::Value(obj) => Outcome::Done(NodeOutput::value(obj)),
+        Resolution::Placeholder(producer) => park_lift(producer),
         Resolution::UnboundName => {
-            DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))))
+            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))))
         }
     }
 }
 
 pub(super) fn bare_type_leaf<'run>(
-    ctx: &DispatchCx<'run, '_>,
+    ctx: &SchedulerView<'run, '_>,
     t: &TypeName,
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     match resolve_type_leaf_carrier(ctx.current_scope(), t, ctx.active_chain()) {
-        TypeLeafCarrier::Resolved(kt) => DispatchOutcome::Terminal(NodeOutput::ktype(kt)),
+        TypeLeafCarrier::Resolved(kt) => Outcome::Done(NodeOutput::ktype(kt)),
         TypeLeafCarrier::Unbound(n) => {
-            DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))))
+            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))))
         }
         // A still-finalizing referent. A visible type alias has already resolved its RHS
         // through the bridge, so a bare leaf parks on exactly one producer; park on it and
@@ -172,14 +172,14 @@ pub(super) fn bare_type_leaf<'run>(
             let producer = match producers.first() {
                 Some(p) => *p,
                 None => {
-                    return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
+                    return Outcome::Done(NodeOutput::Err(KError::new(
                         KErrorKind::UnboundName(t.render()),
                     )));
                 }
             };
             if ctx.is_result_ready(producer) {
                 if let Err(e) = ctx.read_result(producer) {
-                    return DispatchOutcome::Terminal(NodeOutput::Err(e.clone_for_propagation()));
+                    return Outcome::Done(NodeOutput::Err(e.clone_for_propagation()));
                 }
                 // Ready-and-bound: the referent finalized between resolve and this check, so
                 // re-resolve directly — the memoized bridge now admits.
@@ -189,15 +189,15 @@ pub(super) fn bare_type_leaf<'run>(
                 leaf: t.clone(),
                 producer,
             };
-            DispatchOutcome::ParkSelf {
-                producers: vec![producer],
-                state: DispatchState::BareTypeLeaf(BareTypeState::with_park(track)),
-            }
+            park_self(
+                vec![producer],
+                DispatchState::BareTypeLeaf(BareTypeState::with_park(track)),
+            )
         }
     }
 }
 
-pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> DispatchOutcome<'run> {
+pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> Outcome<'run> {
     let inner = match expr.parts.into_iter().next() {
         Some(Spanned {
             value: ExpressionPart::SigiledTypeExpr(boxed),
@@ -205,7 +205,7 @@ pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> DispatchOutcom
         }) => *boxed,
         _ => unreachable!("SigiledTypeExpr shape implies single SigiledTypeExpr part"),
     };
-    DispatchOutcome::BecomeDispatch(inner)
+    become_dispatch(inner)
 }
 
 /// `:{x :Number, y :Str}` — a single-part record-type sigil. Folds the field list straight
@@ -213,9 +213,9 @@ pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> DispatchOutcom
 /// through a Combine when a field forward-references or sub-dispatches. No type-constructor
 /// builtin is involved — the record type is structural.
 pub(super) fn record_type<'run>(
-    ctx: &DispatchCx<'run, '_>,
+    ctx: &SchedulerView<'run, '_>,
     expr: KExpression<'run>,
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     let fields = match expr.parts.into_iter().next() {
         Some(Spanned {
             value: ExpressionPart::RecordType(boxed),
@@ -224,16 +224,16 @@ pub(super) fn record_type<'run>(
         _ => unreachable!("RecordType shape implies a single RecordType part"),
     };
     let chain = ctx.current_lexical_chain();
-    DispatchOutcome::ElaborateRecordType { fields, chain }
+    Outcome::Elaborate { fields, chain }
 }
 
 /// `(99)`, `("x")`, `([1 2 3])`, `((inner))` etc. — single-part
 /// literal-shaped expressions. Skips the bucket lookup + builtin call
 /// the Keyworded path would otherwise route through.
 pub(super) fn literal_pass_through<'run>(
-    ctx: &DispatchCx<'run, '_>,
+    ctx: &SchedulerView<'run, '_>,
     expr: KExpression<'run>,
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     let only = expr
         .parts
         .into_iter()
@@ -242,10 +242,10 @@ pub(super) fn literal_pass_through<'run>(
     match only.value {
         ExpressionPart::Literal(_) => {
             let allocated = ctx.current_scope().arena.alloc_object(only.value.resolve());
-            DispatchOutcome::Terminal(NodeOutput::value(allocated))
+            Outcome::Done(NodeOutput::value(allocated))
         }
-        ExpressionPart::Future(c) => DispatchOutcome::Terminal(NodeOutput::Value(c)),
-        ExpressionPart::Expression(boxed) => DispatchOutcome::BecomeDispatch(*boxed),
+        ExpressionPart::Future(c) => Outcome::Done(NodeOutput::Value(c)),
+        ExpressionPart::Expression(boxed) => become_dispatch(*boxed),
         ExpressionPart::ListLiteral(items) => park_on_literal(DispatchDep::ListLit(items)),
         ExpressionPart::DictLiteral(pairs) => park_on_literal(DispatchDep::DictLit(pairs)),
         ExpressionPart::RecordLiteral(fields) => park_on_literal(DispatchDep::RecordLit(fields)),
@@ -253,18 +253,13 @@ pub(super) fn literal_pass_through<'run>(
     }
 }
 
-/// Park the slot on a single literal-producer dep as a [`DispatchOutcome::Combine`] whose finish
+/// Park the slot on a single literal-producer dep as a [`Outcome::ParkThenContinue`] whose finish
 /// lifts the producer's resolved value straight through. The harness submits the literal and owns
 /// it; a dep error short-circuits frameless before the finish runs.
-fn park_on_literal<'run>(dep: DispatchDep<'run>) -> DispatchOutcome<'run> {
+fn park_on_literal<'run>(dep: DispatchDep<'run>) -> Outcome<'run> {
     let finish: DispatchCombineFinish<'run> =
-        Box::new(|_ctx, results, _idx| DispatchOutcome::Terminal(NodeOutput::Value(results[0])));
-    DispatchOutcome::Combine {
-        deps: vec![dep],
-        dep_error_frame: None,
-        finish,
-        free: Vec::new(),
-    }
+        Box::new(|_ctx, results, _idx| Outcome::Done(NodeOutput::Value(results[0])));
+    park_combine(vec![dep], None, finish, Vec::new())
 }
 
 /// Synchronous resolve-then-branch for a bare-`Type`-head call. One resolution,
@@ -287,9 +282,9 @@ fn park_on_literal<'run>(dep: DispatchDep<'run>) -> DispatchOutcome<'run> {
 /// A name with no producer and no binding is `UnboundName` (genuine absence only —
 /// pending names are already parked in step 1).
 pub(super) fn type_call<'run>(
-    ctx: &DispatchCx<'run, '_>,
+    ctx: &SchedulerView<'run, '_>,
     expr: KExpression<'run>,
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     let head_t = match &expr.parts[0].value {
         ExpressionPart::Type(t) => t.clone(),
         _ => unreachable!("TypeCall shape implies leaf Type head"),
@@ -311,13 +306,13 @@ pub(super) fn type_call<'run>(
                 pre_subs: Vec::new(),
             };
             let head_placeholder = TypeCallHeadPlaceholder { expr, producer };
-            return DispatchOutcome::ParkSelf {
-                producers: vec![producer],
-                state: DispatchState::TypeCall(Box::new(CtorState::with_head_placeholder(
+            return park_self(
+                vec![producer],
+                DispatchState::TypeCall(Box::new(CtorState::with_head_placeholder(
                     init,
                     head_placeholder,
                 ))),
-            };
+            );
         }
     }
     // Fresh `types[name]` lookup at construction time. A sealed nominal type's identity is
@@ -330,7 +325,7 @@ pub(super) fn type_call<'run>(
     {
         Some(kt) => kt,
         None => {
-            return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
+            return Outcome::Done(NodeOutput::Err(KError::new(
                 KErrorKind::UnboundName(head_t.render()),
             )));
         }
@@ -342,7 +337,7 @@ pub(super) fn type_call<'run>(
         }
         // A bare `:(FUNCTOR …)` type annotation has no callable to invoke.
         KType::KFunctor { body: None, .. } => {
-            DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "constructible Type or bound functor".to_string(),
                 got: identity.name(),

@@ -1,10 +1,10 @@
 //! Read-only dispatch view.
 //!
-//! [`DispatchCx`] is the surface every dispatch *decide* runs against: it holds `&Scheduler`
+//! [`SchedulerView`] is the surface every dispatch *decide* runs against: it holds `&Scheduler`
 //! (never `&mut`) for its reads — the static-over-the-step ones (`current_scope`, `chain_deref`,
 //! …) and the live reads of *pre-existing* producers (`is_result_ready`, `would_create_cycle`,
 //! `read_result`) — and the decide *returns* a
-//! [`DispatchOutcome`](super::outcome::DispatchOutcome) the [`harness`](super::harness) applies.
+//! [`Outcome`](super::Outcome) the [`harness`](super::harness) applies.
 //! The harness holds the only `&mut Scheduler` on the dispatch side, so no decide handler touches
 //! it; `Scheduler` is the sole `SchedulerHandle` impl.
 //!
@@ -22,20 +22,19 @@ use crate::machine::model::Carried;
 use crate::machine::{KError, LexicalFrame, NameOutcome, NodeId, SchedulerHandle, Scope};
 
 use super::super::scheduler::Scheduler;
-use super::outcome::{DispatchDep, DispatchOutcome};
-use super::{bind_frame_err, resolve_name_part, PendingSub};
+use super::{bind_frame_err, park_combine, resolve_name_part, DispatchDep, Outcome, PendingSub};
 
 /// Read-only dispatch view — the decide-phase context. It holds only `&Scheduler`, never `&mut`.
 /// A shape handler decides against this and *returns* a
-/// [`DispatchOutcome`](super::outcome::DispatchOutcome); the harness reborrows the scheduler
-/// mutably to apply the writes. The borrow contract: a `DispatchCx` lives only for the decide
+/// [`Outcome`](super::Outcome); the harness reborrows the scheduler
+/// mutably to apply the writes. The borrow contract: a `SchedulerView` lives only for the decide
 /// call, the handler returns an owned outcome, and the immutable borrow ends before the harness
 /// takes `&mut` — so decide and apply never overlap.
-pub(in crate::machine::execute) struct DispatchCx<'run, 's> {
+pub(in crate::machine::execute) struct SchedulerView<'run, 's> {
     sched: &'s Scheduler<'run>,
 }
 
-impl<'run, 's> DispatchCx<'run, 's> {
+impl<'run, 's> SchedulerView<'run, 's> {
     pub(super) fn new(sched: &'s Scheduler<'run>) -> Self {
         Self { sched }
     }
@@ -101,8 +100,8 @@ impl<'run, 's> DispatchCx<'run, 's> {
     /// producer splices inline (a read of a static-over-this-step slot) and rides on the outcome's
     /// `free`; a freshly minted sub is never terminal in the same step, so it becomes an owned
     /// `Combine` dep. The finish splices the resolved values into `working_expr` and routes on
-    /// `picked` — `Some(f)` calls `f` ([`DispatchOutcome::Invoke`]), `None` re-resolves
-    /// ([`DispatchOutcome::Redispatch`] → [`KeywordedState::finish`]). When every sub spliced
+    /// `picked` — `Some(f)` calls `f` ([`Outcome::Invoke`]), `None` re-resolves
+    /// ([`Outcome::Redispatch`] → [`KeywordedState::finish`]). When every sub spliced
     /// inline, that routing happens now; otherwise the slot parks as a `Combine` and the routing
     /// runs in the finish. The `<bind>` dep-error frame rides on `dep_error_frame`. Read-only —
     /// every write the outcome implies is the harness's.
@@ -111,7 +110,7 @@ impl<'run, 's> DispatchCx<'run, 's> {
         mut working_expr: KExpression<'run>,
         staged_subs: Vec<(usize, PendingSub<'run>)>,
         picked: Option<&'run KFunction<'run>>,
-    ) -> DispatchOutcome<'run> {
+    ) -> Outcome<'run> {
         use super::super::nodes::DispatchCombineFinish;
         let mut deps: Vec<DispatchDep<'run>> = Vec::with_capacity(staged_subs.len());
         let mut part_indices: Vec<usize> = Vec::with_capacity(staged_subs.len());
@@ -165,31 +164,26 @@ impl<'run, 's> DispatchCx<'run, 's> {
             }
             finish_eager_subs(working_expr, picked, Vec::new())
         });
-        DispatchOutcome::Combine {
-            deps,
-            dep_error_frame,
-            finish,
-            free,
-        }
+        park_combine(deps, dep_error_frame, finish, free)
     }
 }
 
 /// Route a fully-spliced eager-subs `working_expr` to its continuation — the shared tail of
 /// the `DispatchCombine` finish and its all-inline fast path. `Some(f)` names the committed
-/// call as an [`DispatchOutcome::Invoke`]; `None` defers to a [`DispatchOutcome::Redispatch`]
+/// call as an [`Outcome::Invoke`]; `None` defers to a [`Outcome::Redispatch`]
 /// (the harness re-resolves via [`KeywordedState::finish`], where an element-typed `Future(_)`
 /// revealed by a sub surfaces as a slot-terminal `DispatchFailed`). Pure data — no `&mut`.
 fn finish_eager_subs<'run>(
     working_expr: KExpression<'run>,
     picked: Option<&'run KFunction<'run>>,
     free: Vec<usize>,
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     match picked {
-        Some(f) => DispatchOutcome::Invoke {
+        Some(f) => Outcome::Invoke {
             picked: f,
             working_expr,
             free,
         },
-        None => DispatchOutcome::Redispatch { working_expr, free },
+        None => Outcome::Redispatch { working_expr, free },
     }
 }

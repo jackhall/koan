@@ -14,8 +14,8 @@ use crate::machine::{KError, KErrorKind, NodeId, Resolution};
 
 use super::super::nodes::NodeOutput;
 use super::apply_callable::{apply_callable, ResolvedCallable};
-use super::ctx::DispatchCx;
-use super::outcome::DispatchOutcome;
+use super::ctx::SchedulerView;
+use super::{park_self, Outcome};
 use super::{DispatchState, Initialized};
 
 /// Parked `FunctionValueCall` state. Eager subs park as a [`NodeWork::DispatchCombine`]
@@ -56,9 +56,9 @@ impl<'run> FnValueState<'run> {
     }
 
     pub(super) fn initial(
-        ctx: &DispatchCx<'run, '_>,
+        ctx: &SchedulerView<'run, '_>,
         expr: KExpression<'run>,
-    ) -> DispatchOutcome<'run> {
+    ) -> Outcome<'run> {
         let head = match &expr.parts[0].value {
             ExpressionPart::Identifier(n) => n.clone(),
             _ => unreachable!("FunctionValueCall shape implies Identifier head"),
@@ -68,12 +68,12 @@ impl<'run> FnValueState<'run> {
             Resolution::Value(obj) => Self::dispatch_callable_value(ctx, expr, obj),
             Resolution::Placeholder(producer_id) => Self::install_head_park(producer_id, expr),
             Resolution::UnboundName => {
-                DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::UnboundName(head))))
+                Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(head))))
             }
         }
     }
 
-    pub(super) fn resume(self, ctx: &DispatchCx<'run, '_>) -> DispatchOutcome<'run> {
+    pub(super) fn resume(self, ctx: &SchedulerView<'run, '_>) -> Outcome<'run> {
         let FnValueState {
             init,
             head_placeholder,
@@ -91,14 +91,14 @@ impl<'run> FnValueState<'run> {
     /// constructor-typed head reaches dispatch through the type channel
     /// (`HeadDeferred`), never here. Anything else is a non-callable `TypeMismatch`.
     fn dispatch_callable_value(
-        ctx: &DispatchCx<'run, '_>,
+        ctx: &SchedulerView<'run, '_>,
         expr: KExpression<'run>,
         head_obj: &'run KObject<'run>,
-    ) -> DispatchOutcome<'run> {
+    ) -> Outcome<'run> {
         let callable = match head_obj {
             KObject::KFunction(f, _) => ResolvedCallable::Function(f),
             other => {
-                return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
+                return Outcome::Done(NodeOutput::Err(KError::new(
                     KErrorKind::TypeMismatch {
                         arg: "verb".to_string(),
                         expected: "KFunction or Type".to_string(),
@@ -110,16 +110,14 @@ impl<'run> FnValueState<'run> {
         apply_callable(ctx, callable, &expr)
     }
 
-    fn install_head_park(producer: NodeId, expr: KExpression<'run>) -> DispatchOutcome<'run> {
+    fn install_head_park(producer: NodeId, expr: KExpression<'run>) -> Outcome<'run> {
         let track = FnValueHeadPlaceholderTrack::new(expr, producer);
         let init = Initialized {
             pre_subs: Vec::new(),
         };
-        DispatchOutcome::ParkSelf {
-            producers: vec![producer],
-            state: DispatchState::FunctionValueCall(Box::new(Self::with_head_placeholder(
-                init, track,
-            ))),
-        }
+        park_self(
+            vec![producer],
+            DispatchState::FunctionValueCall(Box::new(Self::with_head_placeholder(init, track))),
+        )
     }
 }

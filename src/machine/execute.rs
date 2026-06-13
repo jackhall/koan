@@ -12,6 +12,7 @@ mod harness;
 mod interpret;
 mod lift;
 mod nodes;
+mod outcome;
 mod scheduler;
 
 pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path};

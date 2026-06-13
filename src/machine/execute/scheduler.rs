@@ -250,7 +250,7 @@ impl<'run> Scheduler<'run> {
     // ----- Narrow dispatcher-facing surface (pub(in execute)) -----
     //
     // These methods are the dispatcher's named contract with the scheduler:
-    // the read view (`DispatchCx`) and the write harness route through them,
+    // the read view (`SchedulerView`) and the write harness route through them,
     // so the storage layout (`deps` / `store` / `queues` / `active_*` fields)
     // stays scheduler-internal.
 

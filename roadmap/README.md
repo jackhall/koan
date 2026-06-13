@@ -150,7 +150,7 @@ What's shipped that the open items below build on:
 - *Dispatcher pulled out of the scheduler via a write-effect contract.* The dispatch tree now
   mirrors the builtin `Action` / `run_action` split: a shape handler *decides* against a
   read-only [`DispatchCx`](../src/machine/execute/dispatch/ctx.rs) and *returns* its scheduler
-  mutations as a [`DispatchOutcome`](../src/machine/execute/dispatch/outcome.rs) effect that a
+  mutations as an [`Outcome`](../src/machine/execute/outcome.rs) effect that a
   [harness](../src/machine/execute/dispatch/harness.rs) interprets — so `Scheduler` is the **sole**
   `SchedulerHandle` impl and no dispatch handler holds `&mut Scheduler`. Eager-subs is modelled
   as the dispatcher's own `DispatchCombine`: deps declared, the `Future`-cell splice lives in the
