@@ -7,9 +7,8 @@
 //! scheduler graph. This is the contract that lets `Scheduler` become the only
 //! `SchedulerHandle` impl — a handler never reaches `&mut Scheduler` directly.
 //!
-//! The enum grows one variant per migrated handler (so an un-migrated handler that still
-//! returns `NodeStep` produces no dead arm); the end state is a closed set the harness
-//! interprets exhaustively.
+//! The variants are the closed set of effects a decide can name; the harness interprets them
+//! exhaustively.
 
 use std::rc::Rc;
 

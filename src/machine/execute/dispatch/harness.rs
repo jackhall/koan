@@ -3,9 +3,8 @@
 //!
 //! [`apply_dispatch_outcome`] is the one place that turns a decided [`DispatchOutcome`]
 //! into the scheduler graph writes it implies and the terminal [`NodeStep`]. A shape
-//! handler decides; this applies. During the incremental migration it threads the writes
-//! through the still-`&mut` [`DispatchCtx`] shim; once every handler returns an outcome it
-//! becomes the sole `&mut Scheduler` user on the dispatch side.
+//! handler decides against a read-only [`DispatchCx`](super::ctx::DispatchCx) and returns an
+//! outcome; this applies it. The harness holds the sole `&mut Scheduler` on the dispatch side.
 
 use crate::machine::core::kfunction::{BodyResult, SchedulerHandle};
 use crate::machine::model::ast::KExpression;

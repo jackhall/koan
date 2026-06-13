@@ -40,10 +40,10 @@ impl<'run, 's> DispatchCx<'run, 's> {
         Self { sched }
     }
 
-    // Read surface (forwards on `&self`). This grows one method per migrated handler — the
-    // static-over-the-step reads (`current_scope`, `chain_deref`, `active_chain`,
-    // `in_contract_chain`) and the live reads of pre-existing producers (`is_result_ready`,
-    // `would_create_cycle`, `read_result`) all forward to the borrowed scheduler.
+    // Read surface (forwards on `&self`) — the static-over-the-step reads (`current_scope`,
+    // `chain_deref`, `active_chain`) and the live reads of pre-existing producers
+    // (`is_result_ready`, `would_create_cycle`, `read_result`) all forward to the borrowed
+    // scheduler.
 
     pub(super) fn current_scope(&self) -> &Scope<'run> {
         self.sched.current_scope()

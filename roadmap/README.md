@@ -147,6 +147,16 @@ What's shipped that the open items below build on:
   documentary `:(Result Any KError)` rather than a nominal-family wildcard. See
   [design/typing/ktype.md](../design/typing/ktype.md) and
   [design/typing/user-types.md](../design/typing/user-types.md).
+- *Dispatcher pulled out of the scheduler via a write-effect contract.* The dispatch tree now
+  mirrors the builtin `Action` / `run_action` split: a shape handler *decides* against a
+  read-only [`DispatchCx`](../src/machine/execute/dispatch/ctx.rs) and *returns* its scheduler
+  mutations as a [`DispatchOutcome`](../src/machine/execute/dispatch/outcome.rs) effect that a
+  [harness](../src/machine/execute/dispatch/harness.rs) interprets — so `Scheduler` is the **sole**
+  `SchedulerHandle` impl and no dispatch handler holds `&mut Scheduler`. Eager-subs is modelled
+  as the dispatcher's own `DispatchCombine`: deps declared, the `Future`-cell splice lives in the
+  finish, and the scheduler stays splice-unaware. A builtin invoked mid-dispatch routes through
+  the shared action harness, reading the dispatcher's ambient frame/chain off the raw scheduler.
+  See [design/execution-model.md § The dispatcher / scheduler boundary](../design/execution-model.md#the-dispatcher--scheduler-boundary).
 
 ## Next items
 
@@ -159,10 +169,10 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
-- [Pull the dispatcher out of the scheduler via a write-effect contract](refactor/dispatch-effect-contract.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
+- [Retire `SchedulerHandle` as a trait](refactor/retire-scheduler-handle-trait.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
@@ -253,7 +263,6 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
-- [Pull the dispatcher out of the scheduler](refactor/dispatch-effect-contract.md) — finish
-  the scheduler-extraction arc begun by the Invoke (#24) and Builtins (#25) rewrites: dispatch
-  decides against a read-only `&Scheduler` and returns its writes as an effect, with eager-subs
-  modelled as dispatch's own `Combine`, so `Scheduler` becomes the sole `SchedulerHandle` impl.
+- [Retire `SchedulerHandle` as a trait](refactor/retire-scheduler-handle-trait.md) — now that
+  `Scheduler` is the trait's only implementor, collapse it to inherent methods or split it into
+  narrow read-only / write-capable traits so a builtin body's handle exposes only what it uses.

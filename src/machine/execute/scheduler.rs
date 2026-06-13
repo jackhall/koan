@@ -67,7 +67,7 @@ pub struct Scheduler<'run> {
     /// tail call *within* an established chain. A deferred-return FN dispatched here is a subsequent
     /// tail call whose own contract would be discarded by the keep-first rule, so it skips resolving
     /// its (possibly async `Expression`-form) return type and just tail-replaces its body. Set per
-    /// step in [`Scheduler::execute`]; read via `DispatchCtx::in_contract_chain`.
+    /// step in [`Scheduler::execute`]; read via `Scheduler::in_contract_chain`.
     pub(in crate::machine::execute::scheduler) active_in_contract_chain: bool,
     #[cfg(test)]
     pub(in crate::machine::execute::scheduler) tail_reuse_count: usize,
@@ -250,10 +250,9 @@ impl<'run> Scheduler<'run> {
     // ----- Narrow dispatcher-facing surface (pub(in execute)) -----
     //
     // These methods are the dispatcher's named contract with the scheduler:
-    // every `DispatchCtx` touch routes through one of them, so the storage
-    // layout (`deps` / `store` / `queues` / `active_*` fields) stays
-    // scheduler-internal. Order mirrors `DispatchCtx`'s method groups in
-    // `dispatch/ctx.rs` for cross-reference.
+    // the read view (`DispatchCx`) and the write harness route through them,
+    // so the storage layout (`deps` / `store` / `queues` / `active_*` fields)
+    // stays scheduler-internal.
 
     /// Atomic +1 on the consumer's pending count, edges list, and the
     /// producer's notify list (`DepGraph::add_park_edge`).
