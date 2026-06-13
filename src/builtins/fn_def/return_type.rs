@@ -53,9 +53,7 @@ pub(crate) enum ReturnTypeCapture<'a> {
 /// Read the `return_type` slot from a `BodyCtx::args` record. A `Type`-arm `KType` (bare-leaf
 /// `Unresolved` → `TypeExprCarrier`, else `Resolved`), or an `Object`-arm `KObject::KExpression`
 /// (`:(…)` / dotted return → `ExprCarrier`).
-pub(crate) fn extract_return_type_raw<'a>(
-    args: &KObject<'a>,
-) -> Result<ReturnTypeRaw<'a>, KError> {
+pub(crate) fn extract_return_type_raw<'a>(args: &KObject<'a>) -> Result<ReturnTypeRaw<'a>, KError> {
     use crate::machine::core::kfunction::action::{arg_object, arg_type};
     if let Some(kt) = arg_type(args, "return_type") {
         match kt {

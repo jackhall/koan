@@ -127,7 +127,7 @@ fn forward_keyword_function_reference_is_unbound() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    sched.enter_block(
+    let ids = sched.enter_block(
         scope.id,
         parse_all(
             "LET out = (DOUBLE 7)\n\
@@ -135,9 +135,13 @@ fn forward_keyword_function_reference_is_unbound() {
         ),
         scope,
     );
-    let err = sched
+    sched
         .execute()
-        .expect_err("forward-FN call should fail dispatch");
+        .expect("a forward-FN dispatch failure is slot-terminal");
+    let err = sched
+        .read_result(ids[0])
+        .err()
+        .expect("forward-FN call should fail dispatch");
     assert!(
         matches!(
             &err.kind,
@@ -196,23 +200,31 @@ fn replay_park_minimal_program_for_miri() {
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0));
 }
 
-/// A producer that errors at dispatch time aborts `execute` via `?` propagation
-/// rather than routing the failure into the consumer's slot.
+/// A producer that errors at dispatch time finalizes its slot with the error
+/// (slot-terminal); the consumer parked on it inherits the error rather than
+/// `execute` aborting.
 #[test]
 fn replay_park_propagates_producer_error() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    for e in parse_all(
+    let ids: Vec<_> = parse_all(
         "LET y = (x)\n\
          LET x = (UNDEFINED_FN)",
-    ) {
-        sched.add_dispatch(e, scope);
-    }
-    let exec_result = sched.execute();
+    )
+    .into_iter()
+    .map(|e| sched.add_dispatch(e, scope))
+    .collect();
+    sched
+        .execute()
+        .expect("a producer error routes into the slot, not a fatal execute abort");
     assert!(
-        exec_result.is_err(),
-        "UNDEFINED_FN dispatch failure should surface via execute",
+        sched.read_result(ids[1]).is_err(),
+        "the UNDEFINED_FN producer call must error",
+    );
+    assert!(
+        sched.read_result(ids[0]).is_err(),
+        "y must inherit its dependency's error",
     );
     assert!(
         scope.lookup("y").is_none(),

@@ -42,7 +42,7 @@ pub struct Scheduler<'run> {
     pub(in crate::machine::execute::scheduler) queues: WorkQueues,
     pub(in crate::machine::execute::scheduler) deps: DepGraph,
     pub(in crate::machine::execute::scheduler) store: NodeStore<'run>,
-    /// Frame Rc of the slot currently being executed. See
+    /// TraceFrame Rc of the slot currently being executed. See
     /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
     pub(in crate::machine::execute::scheduler) active_frame: Option<Rc<CallArena>>,
     /// The run frame: a non-dying [`CallArena`] adopting the top-level run scope, lazily built on
@@ -67,7 +67,7 @@ pub struct Scheduler<'run> {
     /// tail call *within* an established chain. A deferred-return FN dispatched here is a subsequent
     /// tail call whose own contract would be discarded by the keep-first rule, so it skips resolving
     /// its (possibly async `Expression`-form) return type and just tail-replaces its body. Set per
-    /// step in [`Scheduler::execute`]; read via `DispatchCtx::in_contract_chain`.
+    /// step in [`Scheduler::execute`]; read via `Scheduler::in_contract_chain`.
     pub(in crate::machine::execute::scheduler) active_in_contract_chain: bool,
     #[cfg(test)]
     pub(in crate::machine::execute::scheduler) tail_reuse_count: usize,
@@ -250,10 +250,9 @@ impl<'run> Scheduler<'run> {
     // ----- Narrow dispatcher-facing surface (pub(in execute)) -----
     //
     // These methods are the dispatcher's named contract with the scheduler:
-    // every `DispatchCtx` touch routes through one of them, so the storage
-    // layout (`deps` / `store` / `queues` / `active_*` fields) stays
-    // scheduler-internal. Order mirrors `DispatchCtx`'s method groups in
-    // `dispatch/ctx.rs` for cross-reference.
+    // the read view (`DispatchCx`) and the write harness route through them,
+    // so the storage layout (`deps` / `store` / `queues` / `active_*` fields)
+    // stays scheduler-internal.
 
     /// Atomic +1 on the consumer's pending count, edges list, and the
     /// producer's notify list (`DepGraph::add_park_edge`).
@@ -343,15 +342,6 @@ impl<'run> Scheduler<'run> {
                     .scope_bounded(),
             ),
         }
-    }
-
-    /// Replace the ambient `active_frame` with `new`, returning the prior
-    /// value. The `with_active_frame` body bracket goes through this.
-    pub(in crate::machine::execute) fn active_frame_replace(
-        &mut self,
-        new: Option<Rc<CallArena>>,
-    ) -> Option<Rc<CallArena>> {
-        std::mem::replace(&mut self.active_frame, new)
     }
 }
 

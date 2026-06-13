@@ -15,16 +15,15 @@
 //! - **NonCallableHead** (a literal/empty/lazy head) → a direct
 //!   `DispatchFailed` raise carrying the offending head
 //!
-//! State and transitions live with their shape; this file keeps the
-//! cross-shape glue. Every per-shape handler takes a
-//! [`DispatchCtx`] — the typed facade over `&mut Scheduler<'run>` — so the
-//! shape modules never spell scheduler field names.
+//! State and transitions live with their shape; this file keeps the cross-shape glue. Every
+//! per-shape handler *decides* against a read-only [`DispatchCx`] and returns a
+//! [`DispatchOutcome`] the [`harness`] applies — the router and harness hold the only
+//! `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field names).
 
-use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};
-use crate::machine::{Frame, KError, KErrorKind, NodeId, Resolution, Scope};
+use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
 
 use super::nodes::{NodeOutput, NodeStep};
 use super::scheduler::Scheduler;
@@ -35,9 +34,11 @@ mod ctx;
 mod exec;
 pub(in crate::machine) mod field_list;
 pub(in crate::machine::execute) mod fn_value;
+mod harness;
 pub(in crate::machine::execute) mod head_deferred;
 pub(in crate::machine::execute) mod keyworded;
 pub(in crate::machine::execute) mod operator_chain;
+mod outcome;
 pub(in crate::machine) mod resolve_dispatch;
 pub(in crate::machine) mod resolve_type_expr;
 pub(in crate::machine::execute) mod single_poll;
@@ -45,10 +46,11 @@ pub(in crate::machine::execute) mod single_poll;
 #[cfg(test)]
 mod tests;
 
-pub(in crate::machine::execute) use ctx::DispatchCtx;
+pub(in crate::machine::execute) use ctx::DispatchCx;
+pub(in crate::machine::execute) use harness::run_dispatch_combine_finish;
+pub(in crate::machine::execute) use outcome::DispatchOutcome;
 pub(crate) use field_list::defer_field_list_action;
 use fn_value::FnValueState;
-use head_deferred::HeadDeferredState;
 use keyworded::KeywordedState;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
@@ -193,8 +195,8 @@ pub(super) const POSITIONAL_ONLY: &str =
     "positional construction takes `(value)`, not a record literal `{name = value}`";
 
 /// Loud non-match for a call body whose surface shape the resolved carrier doesn't admit.
-pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> NodeStep<'run> {
-    NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> DispatchOutcome<'run> {
+    DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
         expr: expr.summarize(),
         reason: reason.to_string(),
     })))
@@ -202,7 +204,7 @@ pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> No
 
 /// Clone a dep's terminal error and attach a caller-chosen frame.
 /// `frame = None` is the frameless variant.
-pub(super) fn propagate_dep_error(e: &KError, frame: Option<Frame>) -> KError {
+pub(super) fn propagate_dep_error(e: &KError, frame: Option<TraceFrame>) -> KError {
     let cloned = e.clone_for_propagation();
     match frame {
         Some(f) => cloned.with_frame(f),
@@ -212,9 +214,12 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<Frame>) -> KError {
 
 /// Shape a dep-error terminal with the `<bind>` surface frame keyed
 /// off `working_expr`.
-pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>) -> NodeStep<'run> {
-    let frame = Frame::from_expr("<bind>", working_expr);
-    NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
+pub(super) fn bind_frame_err<'run>(
+    e: &KError,
+    working_expr: &KExpression<'run>,
+) -> DispatchOutcome<'run> {
+    let frame = TraceFrame::from_expr("<bind>", working_expr);
+    DispatchOutcome::Terminal(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
 }
 
 /// Walk raw parts emitting an `Identifier("")` placeholder at every
@@ -287,13 +292,6 @@ pub(super) fn stage_all_eager_parts<'run>(
     (new_parts, staged)
 }
 
-/// Outcome of [`DispatchCtx::install_eager_subs`].
-pub(in crate::machine::execute::dispatch) enum EagerSubsInstall<'run> {
-    AllInline(KExpression<'run>),
-    Parked(EagerSubsTrack<'run>),
-    DepError(NodeStep<'run>),
-}
-
 // ---------- State carrier ----------
 
 /// Universal birth state of a Dispatch slot — the shape before
@@ -305,23 +303,6 @@ pub(in crate::machine::execute) struct Initialized {
     /// `expr.parts`; populated by submit-time recursion for
     /// binder-shaped expressions, empty otherwise.
     pub(in crate::machine::execute) pre_subs: Vec<(usize, NodeId)>,
-}
-
-/// Track state for the eager-subs sub-Dispatches a Keyworded or
-/// FunctionValueCall slot is parked on. Each `(part_idx, sub_id)` is
-/// the slot index in `working_expr.parts` to splice into at track
-/// completion plus the sub NodeId (the Owned dep this slot installed
-/// at park-install time).
-pub(in crate::machine::execute) struct EagerSubsTrack<'run> {
-    pub(in crate::machine::execute) working_expr: KExpression<'run>,
-    pub(in crate::machine::execute) subs: Vec<(usize, NodeId)>,
-    /// `Some(f)` is the FunctionValueCall install; resume binds `f`
-    /// directly. `None` is the Keyworded install; resume re-runs
-    /// `resolve_dispatch` — re-resolve is authoritative so
-    /// an element-typed `Future(_)` revealed by an eager sub surfaces
-    /// as `DispatchFailed` (non-match) rather than a bind-time
-    /// `TypeMismatch`.
-    pub(in crate::machine::execute) picked: Option<&'run KFunction<'run>>,
 }
 
 /// One variant per [`DispatchShape`], plus the pre-classification
@@ -338,9 +319,6 @@ pub(in crate::machine::execute) enum DispatchState<'run> {
     /// `DispatchState` past clippy's `large_enum_variant` threshold.
     TypeCall(Box<CtorState<'run>>),
     FunctionValueCall(Box<FnValueState<'run>>),
-    /// Shared by the `HeadDeferred` and `TypeHeadDeferred` shapes; the state's
-    /// `type_only` flag selects the admitted-arm set on resume.
-    HeadDeferred(Box<HeadDeferredState<'run>>),
     Keyworded(Box<KeywordedState<'run>>),
 }
 
@@ -360,15 +338,7 @@ impl<'run> DispatchState<'run> {
     pub(in crate::machine::execute) fn parked_carrier_expr(&self) -> Option<&KExpression<'run>> {
         match self {
             DispatchState::Keyworded(ks) => ks.track.as_ref().map(|t| t.carrier_expr()),
-            DispatchState::FunctionValueCall(fs) => {
-                if let Some(track) = &fs.eager_subs {
-                    return Some(&track.working_expr);
-                }
-                if let Some(track) = &fs.head_placeholder {
-                    return Some(&track.expr);
-                }
-                None
-            }
+            DispatchState::FunctionValueCall(fs) => Some(&fs.head_placeholder.expr),
             _ => None,
         }
     }
@@ -382,23 +352,40 @@ impl<'run> DispatchState<'run> {
 /// `FunctionValueCall` carry tracks that can re-enter via the resume
 /// arms.
 pub(in crate::machine::execute) fn run_dispatch<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    sched: &mut Scheduler<'run>,
     expr: KExpression<'run>,
     state: DispatchState<'run>,
     idx: usize,
-) -> Result<NodeStep<'run>, KError> {
-    let _wakes = ctx.take_recent_wakes(NodeId(idx));
+) -> NodeStep<'run> {
+    let _wakes = sched.take_recent_wakes(NodeId(idx));
     let init = match state {
         DispatchState::Initialized(i) => i,
-        DispatchState::Keyworded(ks) => return ks.resume(ctx, idx),
-        DispatchState::FunctionValueCall(fs) => return fs.resume(ctx, idx),
-        DispatchState::TypeCall(cs) => return (*cs).resume(ctx, idx),
-        DispatchState::HeadDeferred(hd) => return Ok(hd.resume(ctx, idx)),
-        DispatchState::BareTypeLeaf(bs) if bs.park.is_some() => return bs.resume(ctx, idx),
+        // Each parked-state resume decides against a read-only view; the router clears the
+        // resuming slot's stale dep edges (where the resume depends on it) before deciding,
+        // then applies the returned outcome — the resume itself issues no graph write.
+        DispatchState::Keyworded(ks) => {
+            let outcome = ks.resume(&DispatchCx::new(sched), idx);
+            return harness::apply_dispatch_outcome(sched, outcome, idx);
+        }
+        DispatchState::FunctionValueCall(fs) => {
+            let outcome = fs.resume(&DispatchCx::new(sched));
+            return harness::apply_dispatch_outcome(sched, outcome, idx);
+        }
+        DispatchState::TypeCall(cs) => {
+            sched.clear_dep_edges(idx);
+            let outcome = (*cs).resume(&DispatchCx::new(sched));
+            return harness::apply_dispatch_outcome(sched, outcome, idx);
+        }
+        DispatchState::BareTypeLeaf(bs) if bs.park.is_some() => {
+            sched.clear_dep_edges(idx);
+            let outcome = bs.resume(&DispatchCx::new(sched));
+            return harness::apply_dispatch_outcome(sched, outcome, idx);
+        }
         _ => unreachable!(
             "remaining fast-lane stateful variants terminalize in one poll; \
-             only Keyworded, FunctionValueCall, TypeCall, HeadDeferred, and a \
-             parked BareTypeLeaf re-enter from a parked track"
+             only Keyworded, FunctionValueCall, TypeCall, and a parked BareTypeLeaf \
+             re-enter from a parked track (HeadDeferred parks as a DispatchCombine, \
+             resumed by the scheduler, not a Dispatch state)"
         ),
     };
     match expr.shape() {
@@ -408,7 +395,8 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
                 ExpressionPart::Type(t) => t.clone(),
                 _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
             };
-            Ok(single_poll::bare_type_leaf(ctx, &t, idx))
+            let outcome = single_poll::bare_type_leaf(&DispatchCx::new(sched), &t);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
         }
         DispatchShape::BareIdentifier => {
             debug_assert!(init.pre_subs.is_empty());
@@ -416,51 +404,67 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
                 ExpressionPart::Identifier(n) => n.clone(),
                 _ => unreachable!("BareIdentifier shape implies single Identifier part"),
             };
-            Ok(single_poll::bare_identifier(ctx, name, idx))
+            let outcome = single_poll::bare_identifier(&DispatchCx::new(sched), name);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
         }
         DispatchShape::FunctionValueCall => {
             debug_assert!(init.pre_subs.is_empty());
             let _ = init;
-            FnValueState::initial(ctx, expr, idx)
+            let outcome = FnValueState::initial(&DispatchCx::new(sched), expr);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
         }
         DispatchShape::TypeCall => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(single_poll::type_call(ctx, expr, idx))
+            let outcome = single_poll::type_call(&DispatchCx::new(sched), expr);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
         }
         DispatchShape::HeadDeferred => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(HeadDeferredState::initial_expr(ctx, expr, idx))
+            harness::apply_dispatch_outcome(sched, head_deferred::initial_expr(expr), idx)
         }
         DispatchShape::TypeHeadDeferred => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(HeadDeferredState::initial_type(ctx, expr, idx))
+            harness::apply_dispatch_outcome(sched, head_deferred::initial_type(expr), idx)
         }
-        DispatchShape::NonCallableHead => Err(KError::new(KErrorKind::DispatchFailed {
-            expr: expr.summarize(),
-            reason: format!(
-                "head is not callable: `{}`",
-                expr.parts
-                    .first()
-                    .map(|p| p.value.summarize())
-                    .unwrap_or_else(|| "<empty>".into())
-            ),
-        })),
+        // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
+        // a non-callable head is a runtime error, not a fatal `execute()` abort.
+        DispatchShape::NonCallableHead => {
+            NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+                expr: expr.summarize(),
+                reason: format!(
+                    "head is not callable: `{}`",
+                    expr.parts
+                        .first()
+                        .map(|p| p.value.summarize())
+                        .unwrap_or_else(|| "<empty>".into())
+                ),
+            })))
+        }
         DispatchShape::OperatorChain => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(operator_chain::run(ctx, &expr))
+            // Decide against a read-only view (immutable scheduler borrow), then reborrow
+            // `&mut` through the harness to apply — the borrow contract the effect split rests
+            // on. The `read_view` borrow ends at the `run` call (NLL), freeing `ctx` for apply.
+            let outcome = operator_chain::run(&DispatchCx::new(sched), &expr);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
         }
-        DispatchShape::Keyworded => KeywordedState::initial(ctx, expr, init.pre_subs, idx),
+        DispatchShape::Keyworded => {
+            let outcome = KeywordedState::initial(&DispatchCx::new(sched), expr, init.pre_subs, idx);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
+        }
         DispatchShape::SigiledTypeExpr => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(single_poll::sigiled_type_expr(expr))
+            harness::apply_dispatch_outcome(sched, single_poll::sigiled_type_expr(expr), idx)
         }
         DispatchShape::RecordType => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(single_poll::record_type(ctx, expr, idx))
+            let outcome = single_poll::record_type(&DispatchCx::new(sched), expr);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
         }
         DispatchShape::LiteralPassThrough => {
             debug_assert!(init.pre_subs.is_empty());
-            Ok(single_poll::literal_pass_through(ctx, expr, idx))
+            let outcome = single_poll::literal_pass_through(&DispatchCx::new(sched), expr);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
         }
     }
 }

@@ -6,7 +6,7 @@ use crate::machine::model::types::{
     SealOutcome,
 };
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, BodyResult, Frame, KError, KErrorKind, Scope};
+use crate::machine::{BindingIndex, BodyResult, KError, KErrorKind, Scope, TraceFrame};
 
 use super::{arg, err, kw, sig};
 
@@ -61,9 +61,9 @@ fn finalize_union<'a>(
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
+    use super::nominal_schema::nominal_schema_action;
     use crate::machine::core::kfunction::action::{arg_object, require_bare_type_name, Action};
     use crate::machine::model::KObject;
-    use super::nominal_schema::nominal_schema_action;
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "UNION"));
     let schema_expr = match arg_object(ctx.args, "schema") {
@@ -74,7 +74,7 @@ pub fn body<'a>(
             ))))
         }
     };
-    let error_frame = Frame::bare("<union>", format!("UNION {name} schema"));
+    let error_frame = TraceFrame::bare("<union>", format!("UNION {name} schema"));
     nominal_schema_action(
         ctx,
         name,
@@ -172,10 +172,14 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let mut sched = Scheduler::new();
-        sched.add_dispatch(parse_one("UNION (Ok :Number Err :Str)"), scope);
-        let err = sched
+        let root = sched.add_dispatch(parse_one("UNION (Ok :Number Err :Str)"), scope);
+        sched
             .execute()
-            .expect_err("a bare anonymous UNION (...) must fail dispatch");
+            .expect("a dispatch failure is slot-terminal, not a fatal execute error");
+        let err = sched
+            .read_result(root)
+            .err()
+            .expect("a bare anonymous UNION (...) must fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed on bare UNION (...) (matches no UNION overload); got {err}",

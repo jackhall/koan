@@ -201,7 +201,9 @@ pub trait SchedulerHandle<'a, 's> {
             let statement_chain = LexicalFrame::push(parent.clone(), body_scope_id, i + 1);
             let mut bid = None;
             self.with_active_frame(frame.clone(), &mut |s| {
-                bid = Some(s.add_dispatch_with_chain_in_frame(statement.clone(), statement_chain.clone()));
+                bid = Some(
+                    s.add_dispatch_with_chain_in_frame(statement.clone(), statement_chain.clone()),
+                );
             });
             ids.push(bid.expect("body dispatch spawns"));
         }

@@ -29,7 +29,9 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use super::branch_walk::{arm_tail, resolve_arm_contract};
-    use crate::machine::core::kfunction::action::{require_kexpression, Action, CatchCont, Dep, DepPlacement};
+    use crate::machine::core::kfunction::action::{
+        require_kexpression, Action, CatchCont, Dep, DepPlacement,
+    };
 
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "TRY", "expr"));
     let contract = crate::try_action!(resolve_arm_contract(ctx, "TRY"));

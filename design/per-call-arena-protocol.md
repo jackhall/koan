@@ -276,14 +276,13 @@ To supply one, the slot carries a per-iteration **reserve frame** in
   that frame was the active cart two iterations ago, `Rc::get_mut`
   refuses and `acquire_tail_frame` allocates fresh instead.
 
-The dispatcher reaches the slot's reserve / active-frame state through
-the narrow [`DispatchCtx`](../src/machine/execute/dispatch/ctx.rs)
-facade (see [execution-model.md § The dispatcher / scheduler
-boundary](execution-model.md#the-dispatcher--scheduler-boundary)) —
-`dispatch::exec::invoke` calls `acquire_tail_frame` through its
-`SchedulerHandle`. The `active_frame` / `active_reserve` fields
-themselves stay `pub(in execute::scheduler)`; the accessor surface is
-what dispatch sees.
+The dispatcher reaches the slot's reserve / active-frame state from the
+execution layer (see [execution-model.md § The dispatcher / scheduler
+boundary](execution-model.md#the-dispatcher--scheduler-boundary)):
+`dispatch::exec::invoke` runs against the `&mut Scheduler` the dispatch
+harness holds and calls `acquire_tail_frame` through its `SchedulerHandle`.
+The `active_frame` / `active_reserve` fields themselves stay
+`pub(in execute::scheduler)`; the accessor surface is what dispatch sees.
 
 The two-iteration gap is the safety witness: when iteration N consumes
 the reserve, the reserve's scope was the active scope on iteration
@@ -332,7 +331,7 @@ The post-step loop in `Scheduler::execute` reads the just-finished step's scope 
 `PostStep` token returned by `exit_slot_step`, derived from the slot's *returned* frame
 (`prev_frame`) rather than the ambient `active_frame` — an in-step invoke can swap the ambient
 frame, so the returned value is the authoritative source. A within-step frame lifetime `'s`
-(`'a: 's`) threads `run_dispatch` → `DispatchCtx` → `BuiltinFn` → `SchedulerHandle`, lifting to
+(`'a: 's`) threads `run_dispatch` → `DispatchCx` → `BuiltinFn` → `SchedulerHandle`, lifting to
 the run `'a` only at the `lift_kobject` Done boundary.
 
 ## Seed-side re-anchor

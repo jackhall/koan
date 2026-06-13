@@ -761,7 +761,9 @@ mod tests {
                 crate::machine::core::kfunction::Body::Builtin(|ctx| {
                     crate::machine::core::kfunction::action::Action::Done(Ok(
                         crate::machine::model::Carried::Object(
-                            ctx.scope.arena.alloc_object(crate::machine::model::KObject::Null),
+                            ctx.scope
+                                .arena
+                                .alloc_object(crate::machine::model::KObject::Null),
                         ),
                     ))
                 }),

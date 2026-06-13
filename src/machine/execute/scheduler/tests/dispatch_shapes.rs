@@ -758,7 +758,7 @@ fn keyworded_parked_carrier_expr_reads_state() {
     use crate::machine::execute::dispatch::keyworded::{
         BareNameParkTrack, KeywordedState, OverloadParkTrack,
     };
-    use crate::machine::execute::dispatch::{DispatchState, EagerSubsTrack, Initialized};
+    use crate::machine::execute::dispatch::{DispatchState, Initialized};
 
     fn carrier_expr<'run>() -> KExpression<'run> {
         // `(LIFT_BARE arg)` — a recognizable sample distinct from any other
@@ -770,24 +770,6 @@ fn keyworded_parked_carrier_expr_reads_state() {
         ])
     }
     let expected = carrier_expr().summarize();
-
-    let with_eager_subs = DispatchState::Keyworded(Box::new(KeywordedState::with_eager_subs(
-        Initialized {
-            pre_subs: Vec::new(),
-        },
-        EagerSubsTrack {
-            working_expr: carrier_expr(),
-            subs: Vec::new(),
-            picked: None,
-        },
-    )));
-    assert_eq!(
-        with_eager_subs
-            .parked_carrier_expr()
-            .map(Parseable::summarize),
-        Some(expected.clone()),
-        "eager-subs track must surface `working_expr` as the parked sample",
-    );
 
     let with_bare_name = DispatchState::Keyworded(Box::new(KeywordedState::with_bare_name_park(
         Initialized {
@@ -1113,8 +1095,8 @@ fn type_call_on_functor_annotation_type_mismatches() {
 }
 
 /// `NonCallableHead`. A literal / list head in a multi-part expression is not
-/// callable; the dispatch entry raises a `DispatchFailed` directly (not a node
-/// terminal), so it surfaces through `execute()`. The reason embeds the head
+/// callable; the dispatch entry finalizes the slot with a `DispatchFailed`
+/// (slot-terminal, TRY-catchable), read from the slot. The reason embeds the head
 /// summary.
 #[test]
 fn non_callable_list_head_errors() {
@@ -1123,10 +1105,14 @@ fn non_callable_list_head_errors() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let mut sched = Scheduler::new();
-    sched.add_dispatch(parse_one("[1 2 3] x"), scope);
-    let err = sched
+    let root = sched.add_dispatch(parse_one("[1 2 3] x"), scope);
+    sched
         .execute()
-        .expect_err("a non-callable head must raise from the dispatch entry");
+        .expect("a non-callable head is slot-terminal, not a fatal execute error");
+    let err = sched
+        .read_result(root)
+        .err()
+        .expect("a non-callable head must finalize the slot with an error");
     match &err.kind {
         KErrorKind::DispatchFailed { reason, .. } => assert!(
             reason.contains("head is not callable") && reason.contains("[1 2 3]"),

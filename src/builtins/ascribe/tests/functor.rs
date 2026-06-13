@@ -133,10 +133,14 @@ fn functor_rejects_unascribed_module_argument() {
     // partition).
     run(scope, "LET Unascribed = IntOrd");
     let mut sched = Scheduler::new();
-    sched.add_dispatch(parse_one("MAKESET Unascribed"), scope);
-    let err = sched
+    let root = sched.add_dispatch(parse_one("MAKESET Unascribed"), scope);
+    sched
         .execute()
-        .expect_err("expected DispatchFailed at execute boundary");
+        .expect("a dispatch failure is slot-terminal, not a fatal execute error");
+    let err = sched
+        .read_result(root)
+        .err()
+        .expect("expected a DispatchFailed in the dispatch slot");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed, got {err}",

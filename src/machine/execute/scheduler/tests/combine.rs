@@ -103,10 +103,10 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
     // Pins the binder-body wrap-up shape MODULE / SIG use: a body returning
     // `BodyResult::DeferTo(combine_id)` leaves its slot with the Combine's terminal.
     use crate::builtins::{default_scope, register_builtin};
-    use crate::machine::model::ast::ExpressionPart;
-    use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
     use crate::machine::core::kfunction::action::{Action, BodyCtx, Cont};
+    use crate::machine::model::ast::ExpressionPart;
     use crate::machine::model::Carried;
+    use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
 
     fn body<'run>(_ctx: &BodyCtx<'run, '_>) -> Action<'run> {
         let finish: Cont<'run> = Box::new(|fctx, _results| {

@@ -20,7 +20,7 @@ pub(super) fn unit_signature<'a>() -> ExpressionSignature<'a> {
 pub(super) fn body_no_op<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    crate::machine::core::kfunction::action::Action::Done(Ok(crate::machine::model::Carried::Object(
-        ctx.scope.arena.alloc_object(KObject::Null),
-    )))
+    crate::machine::core::kfunction::action::Action::Done(Ok(
+        crate::machine::model::Carried::Object(ctx.scope.arena.alloc_object(KObject::Null)),
+    ))
 }

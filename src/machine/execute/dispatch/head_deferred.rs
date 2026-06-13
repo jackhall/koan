@@ -1,9 +1,9 @@
 //! Head-deferred dispatch shapes — `HeadDeferred` and `TypeHeadDeferred`.
 //!
-//! Both evaluate the head (`parts[0]`) first, then apply the resulting value to
-//! `parts[1..]` via the shared apply-a-callable tail. They share one boxed
-//! [`HeadDeferredState`]; the `type_only` flag selects the admitted arm set on
-//! resume:
+//! Both evaluate the head (`parts[0]`) first as a sub-dispatch, parking the slot
+//! on it as a single-dep [`NodeWork::DispatchCombine`](super::super::nodes::NodeWork);
+//! once it resolves, the finish applies the value to `parts[1..]` via the shared
+//! apply-a-callable tail. The `type_only` flag selects the admitted arm set:
 //!
 //! - `HeadDeferred` (head is a nested `Expression`, `type_only = false`): the
 //!   resumed value may be a `KFunction` (functor or not — the `Function` arm), a
@@ -21,116 +21,68 @@
 //! The head sub-dispatch is an Owned edge; the park/resume pair mirrors
 //! `park_on_literal_producer` + `CtorState::resume`, no new scheduler primitive.
 
-use crate::machine::core::kfunction::SchedulerHandle;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::KType;
 use crate::machine::model::{Carried, KObject, Parseable};
-use crate::machine::{KError, KErrorKind, NodeId};
+use crate::machine::{KError, KErrorKind};
 
-use super::super::nodes::{NodeOutput, NodeStep};
+use super::super::nodes::{DispatchCombineFinish, NodeOutput};
 use super::apply_callable::{apply_callable, ResolvedCallable};
-use super::{DispatchCtx, DispatchState};
+use super::outcome::{DispatchDep, DispatchOutcome};
 
-/// Parked state for a head-deferred call. `resume` re-reads `parts[1..]` (the
-/// call body) and branches on the head sub-dispatch's resolved value.
-pub(in crate::machine::execute) struct HeadDeferredState<'run> {
-    /// The full call expression; `parts[1..]` is the body the tail consumes.
+/// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly, then
+/// applied to `parts[1..]` once it resolves.
+pub(in crate::machine::execute) fn initial_expr<'run>(
     expr: KExpression<'run>,
-    /// The parked head sub-dispatch producer (an Owned edge).
-    head_sub: NodeId,
-    /// `TypeHeadDeferred` prunes the plain-`Function` (non-functor) arm.
-    type_only: bool,
+) -> DispatchOutcome<'run> {
+    let head = match &expr.parts[0].value {
+        ExpressionPart::Expression(boxed) => (**boxed).clone(),
+        _ => unreachable!("HeadDeferred shape implies nested Expression head"),
+    };
+    park_on_head(expr, head, false)
 }
 
-impl<'run> HeadDeferredState<'run> {
-    /// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly.
-    pub(in crate::machine::execute) fn initial_expr(
-        ctx: &mut DispatchCtx<'run, '_>,
-        expr: KExpression<'run>,
-        idx: usize,
-    ) -> NodeStep<'run> {
-        let head = match &expr.parts[0].value {
-            ExpressionPart::Expression(boxed) => (**boxed).clone(),
-            _ => unreachable!("HeadDeferred shape implies nested Expression head"),
-        };
-        let head_sub = ctx.add_dispatch_here(head);
-        Self::park_or_resume(ctx, expr, head_sub, false, idx)
-    }
+/// `TypeHeadDeferred` entry: head is a `:(...)` sigil. Wrap it as a one-part
+/// `KExpression` so the type marker survives the sub-dispatch (mirrors
+/// `stage_all_eager_parts`).
+pub(in crate::machine::execute) fn initial_type<'run>(
+    expr: KExpression<'run>,
+) -> DispatchOutcome<'run> {
+    let head = match &expr.parts[0].value {
+        ExpressionPart::SigiledTypeExpr(boxed) => KExpression::new(vec![Spanned::bare(
+            ExpressionPart::SigiledTypeExpr(boxed.clone()),
+        )]),
+        _ => unreachable!("TypeHeadDeferred shape implies SigiledTypeExpr head"),
+    };
+    park_on_head(expr, head, true)
+}
 
-    /// `TypeHeadDeferred` entry: head is a `:(...)` sigil. Wrap it as a one-part
-    /// `KExpression` so the type marker survives the sub-dispatch (mirrors
-    /// `stage_all_eager_parts`).
-    pub(in crate::machine::execute) fn initial_type(
-        ctx: &mut DispatchCtx<'run, '_>,
-        expr: KExpression<'run>,
-        idx: usize,
-    ) -> NodeStep<'run> {
-        let head = match &expr.parts[0].value {
-            ExpressionPart::SigiledTypeExpr(boxed) => KExpression::new(vec![Spanned::bare(
-                ExpressionPart::SigiledTypeExpr(boxed.clone()),
-            )]),
-            _ => unreachable!("TypeHeadDeferred shape implies SigiledTypeExpr head"),
-        };
-        let head_sub = ctx.add_dispatch_here(head);
-        Self::park_or_resume(ctx, expr, head_sub, true, idx)
-    }
-
-    /// Read the head sub inline if it is already ready, else install the Owned
-    /// edge and park as a `HeadDeferred` state.
-    fn park_or_resume(
-        ctx: &mut DispatchCtx<'run, '_>,
-        expr: KExpression<'run>,
-        head_sub: NodeId,
-        type_only: bool,
-        idx: usize,
-    ) -> NodeStep<'run> {
-        if ctx.is_result_ready(head_sub) {
-            return Self {
-                expr,
-                head_sub,
-                type_only,
-            }
-            .resume(ctx, idx);
-        }
-        ctx.add_owned_edge(head_sub, NodeId(idx));
-        let state = HeadDeferredState {
-            expr,
-            head_sub,
-            type_only,
-        };
-        ctx.replace_with_parked_dispatch(DispatchState::HeadDeferred(Box::new(state)))
-    }
-
-    /// Read the resumed head value, free the head sub, and branch into the shared
-    /// apply-a-callable tail. A dep error propagates; a non-admitted value
-    /// surfaces a shape-appropriate diagnostic.
-    pub(in crate::machine::execute) fn resume(
-        self,
-        ctx: &mut DispatchCtx<'run, '_>,
-        idx: usize,
-    ) -> NodeStep<'run> {
-        let HeadDeferredState {
-            expr,
-            head_sub,
-            type_only,
-        } = self;
-        let head = match ctx.read_result(head_sub) {
-            Ok(v) => v,
-            Err(e) => {
-                let err = e.clone_for_propagation();
-                ctx.clear_dep_edges(idx);
-                ctx.free(head_sub.index());
-                return NodeStep::Done(NodeOutput::Err(err));
-            }
-        };
-        ctx.clear_dep_edges(idx);
-        ctx.free(head_sub.index());
-        let callable = match classify_head(head, type_only) {
+/// Park the slot on the head sub-dispatch as a single-dep [`DispatchOutcome::Combine`]: the
+/// harness submits `head` as an owned dep and parks the slot on it. When the head resolves, the
+/// finish classifies it into a [`ResolvedCallable`] and hands off to the shared apply-a-callable
+/// tail — which may itself resolve, park, or error, so the `NodeStep`-returning dispatch finish is
+/// required (a `BodyResult` Combine finish could not re-park). A dep error short-circuits frameless
+/// in `run_dispatch_combine`, so the finish only runs on a resolved head.
+fn park_on_head<'run>(
+    expr: KExpression<'run>,
+    head: KExpression<'run>,
+    type_only: bool,
+) -> DispatchOutcome<'run> {
+    let finish: DispatchCombineFinish<'run> = Box::new(move |ctx, results, _idx| {
+        let callable = match classify_head(results[0], type_only) {
             Ok(c) => c,
-            Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+            Err(e) => return DispatchOutcome::Terminal(NodeOutput::Err(e)),
         };
-        apply_callable(ctx, callable, &expr, idx)
+        apply_callable(ctx, callable, &expr)
+    });
+    DispatchOutcome::Combine {
+        deps: vec![DispatchDep::Dispatch(head)],
+        // The head sub is the only dep; a dep error propagates frameless (the resumed dispatch
+        // attaches its own frame), matching the resume behaviour.
+        dep_error_frame: None,
+        finish,
+        free: Vec::new(),
     }
 }
 

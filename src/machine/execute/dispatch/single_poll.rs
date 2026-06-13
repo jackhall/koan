@@ -9,17 +9,17 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use super::constructors;
 use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
-use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
-use crate::machine::model::{KObject, KType, RecursiveSet};
-use crate::machine::{KError, KErrorKind, NodeId, Resolution, SchedulerHandle};
+use crate::machine::model::{KType, RecursiveSet};
+use crate::machine::{KError, KErrorKind, NodeId, Resolution};
 
-use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{DispatchCombineFinish, NodeOutput};
 use super::apply_callable::{apply_callable, ResolvedCallable};
-use super::{DispatchCtx, DispatchState, Initialized};
+use super::ctx::DispatchCx;
+use super::outcome::{DispatchDep, DispatchOutcome};
+use super::{DispatchState, Initialized};
 
 pub(in crate::machine::execute) struct BareTypeState<'run> {
     /// Set when `bare_type_leaf` parked on a still-finalizing referent (a
@@ -38,15 +38,15 @@ pub(in crate::machine::execute) struct BareTypeParkTrack {
     pub(in crate::machine::execute) producer: NodeId,
 }
 
+/// Parked `TypeCall` state. Ctor value subs park as a [`NodeWork::DispatchCombine`]
+/// (`constructors::launch`), so the only thing a `CtorState` carries is a still-finalizing
+/// *head* binding: `type_call` parked on a `LET <Type-class> = …` placeholder (e.g. a forward
+/// functor). On resume the whole `type_call` re-runs against the now-finalized binding — the
+/// head may resolve type-side (a functor or type alias), so the keyworded resolve path is the
+/// wrong continuation.
 pub(in crate::machine::execute) struct CtorState<'run> {
     pub(in crate::machine::execute) init: Initialized,
-    pub(in crate::machine::execute) track: Option<CtorTrack<'run>>,
-    /// Set when `type_call` parked on a still-finalizing head binding (a
-    /// `LET <Type-class> = …` placeholder, e.g. a forward functor). On resume
-    /// the whole `type_call` re-runs against the now-finalized binding — the
-    /// head may resolve type-side (a functor or type alias), so the keyworded
-    /// resolve path is the wrong continuation. Mutually exclusive with `track`.
-    pub(in crate::machine::execute) head_placeholder: Option<TypeCallHeadPlaceholder<'run>>,
+    pub(in crate::machine::execute) head_placeholder: TypeCallHeadPlaceholder<'run>,
 }
 
 /// Parked head-resolution state for a `TypeCall` whose head name was a
@@ -55,18 +55,6 @@ pub(in crate::machine::execute) struct CtorState<'run> {
 pub(in crate::machine::execute) struct TypeCallHeadPlaceholder<'run> {
     pub(in crate::machine::execute) expr: KExpression<'run>,
     pub(in crate::machine::execute) producer: NodeId,
-}
-
-/// Pending eager-subs for a parked `TypeCall`. `staged_values`
-/// already holds the slots whose dispatch short-circuited at install
-/// time (an arena-resident `&KObject`); `subs` carries `(slot_index,
-/// sub_id)` for the remaining parked slots. The resume reads each
-/// sub's terminal, fills the slot, and tail-calls
-/// [`constructors::finish`].
-pub(in crate::machine::execute) struct CtorTrack<'run> {
-    pub(in crate::machine::execute) subs: Vec<(usize, NodeId)>,
-    pub(in crate::machine::execute) staged_values: Vec<Option<&'run KObject<'run>>>,
-    pub(in crate::machine::execute) kind: CtorKind<'run>,
 }
 
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
@@ -108,134 +96,74 @@ impl<'run> BareTypeState<'run> {
     /// lifting the producer's value.
     pub(in crate::machine::execute) fn resume(
         self,
-        ctx: &mut DispatchCtx<'run, '_>,
-        idx: usize,
-    ) -> Result<NodeStep<'run>, KError> {
+        ctx: &DispatchCx<'run, '_>,
+    ) -> DispatchOutcome<'run> {
         let BareTypeState { park, .. } = self;
         let BareTypeParkTrack { leaf, producer } =
             park.expect("BareTypeLeaf resume only entered after a park track is installed");
         // The producer's terminal is not the type carrier; the resume re-resolves through
-        // the now-sealed memo rather than reading the producer's value.
+        // the now-sealed memo rather than reading the producer's value. The dep edges are
+        // cleared by the router before this decide runs.
         let _ = producer;
-        ctx.clear_dep_edges(idx);
-        Ok(bare_type_leaf(ctx, &leaf, idx))
+        bare_type_leaf(ctx, &leaf)
     }
 }
 
 impl<'run> CtorState<'run> {
-    pub(in crate::machine::execute) fn with_track(
-        init: Initialized,
-        track: CtorTrack<'run>,
-    ) -> Self {
-        Self {
-            init,
-            track: Some(track),
-            head_placeholder: None,
-        }
-    }
-
     pub(in crate::machine::execute) fn with_head_placeholder(
         init: Initialized,
         head_placeholder: TypeCallHeadPlaceholder<'run>,
     ) -> Self {
         Self {
             init,
-            track: None,
-            head_placeholder: Some(head_placeholder),
+            head_placeholder,
         }
     }
 
-    /// Drain the parked subs into `staged_values` and tail-call
-    /// `constructors::finish` once every slot is bound. Errors on a
-    /// dep terminate the resume with that error. A `head_placeholder` resume
-    /// instead re-runs `type_call` against the now-finalized head binding.
+    /// Re-run `type_call` against the now-finalized head binding. Ctor value subs resolve
+    /// through their own `DispatchCombine`, so a `CtorState` only ever parks on a head
+    /// placeholder.
     pub(in crate::machine::execute) fn resume(
         self,
-        ctx: &mut DispatchCtx<'run, '_>,
-        idx: usize,
-    ) -> Result<NodeStep<'run>, KError> {
+        ctx: &DispatchCx<'run, '_>,
+    ) -> DispatchOutcome<'run> {
         let CtorState {
             init,
-            track,
-            head_placeholder,
+            head_placeholder: TypeCallHeadPlaceholder { expr, producer },
         } = self;
         let _ = init;
-        if let Some(TypeCallHeadPlaceholder { expr, producer }) = head_placeholder {
-            debug_assert!(
-                track.is_none(),
-                "head_placeholder and eager-subs track are mutually exclusive",
-            );
-            let _ = producer;
-            ctx.clear_dep_edges(idx);
-            return Ok(type_call(ctx, expr, idx));
-        }
-        let CtorTrack {
-            subs,
-            mut staged_values,
-            kind,
-        } = track.expect("TypeCall resume only entered after a track is installed");
-        for (slot_idx, sub_id) in &subs {
-            match ctx.read_result(*sub_id) {
-                Ok(v) => staged_values[*slot_idx] = Some(v.object()),
-                Err(e) => {
-                    let err = e.clone_for_propagation();
-                    ctx.clear_dep_edges(idx);
-                    for (_, dep_id) in &subs {
-                        ctx.free(dep_id.index());
-                    }
-                    return Ok(NodeStep::Done(NodeOutput::Err(err)));
-                }
-            }
-        }
-        ctx.clear_dep_edges(idx);
-        for (_, dep_id) in &subs {
-            ctx.free(dep_id.index());
-        }
-        let values: Vec<&'run KObject<'run>> =
-            staged_values.into_iter().map(|o| o.unwrap()).collect();
-        Ok(constructors::finish(ctx.current_scope(), &kind, &values))
+        let _ = producer;
+        // The dep edges are cleared by the router before this decide runs.
+        type_call(ctx, expr)
     }
 }
 
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
 pub(super) fn bare_identifier<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    ctx: &DispatchCx<'run, '_>,
     name: String,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     match ctx
         .current_scope()
         .resolve_with_chain(&name, ctx.chain_deref())
     {
-        Resolution::Value(obj) => NodeStep::Done(NodeOutput::value(obj)),
-        Resolution::Placeholder(producer) => {
-            // Notify edge, not Owned: producer is a sibling slot, we
-            // only park for the wake.
-            ctx.add_park_edge(producer, NodeId(idx));
-            NodeStep::Replace {
-                work: NodeWork::Lift(LiftState::Pending(producer)),
-                frame: None,
-                function: None,
-                block_entry: None,
-                body_index: 0,
-            }
-        }
+        Resolution::Value(obj) => DispatchOutcome::Terminal(NodeOutput::value(obj)),
+        Resolution::Placeholder(producer) => DispatchOutcome::ParkLift { producer },
         Resolution::UnboundName => {
-            NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))))
+            DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))))
         }
     }
 }
 
 pub(super) fn bare_type_leaf<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    ctx: &DispatchCx<'run, '_>,
     t: &TypeName,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     match resolve_type_leaf_carrier(ctx.current_scope(), t, ctx.active_chain()) {
-        TypeLeafCarrier::Resolved(kt) => NodeStep::Done(NodeOutput::ktype(kt)),
+        TypeLeafCarrier::Resolved(kt) => DispatchOutcome::Terminal(NodeOutput::ktype(kt)),
         TypeLeafCarrier::Unbound(n) => {
-            NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))))
+            DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))))
         }
         // A still-finalizing referent. A visible type alias has already resolved its RHS
         // through the bridge, so a bare leaf parks on exactly one producer; park on it and
@@ -244,32 +172,32 @@ pub(super) fn bare_type_leaf<'run>(
             let producer = match producers.first() {
                 Some(p) => *p,
                 None => {
-                    return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(
-                        t.render(),
-                    ))));
+                    return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
+                        KErrorKind::UnboundName(t.render()),
+                    )));
                 }
             };
             if ctx.is_result_ready(producer) {
                 if let Err(e) = ctx.read_result(producer) {
-                    return NodeStep::Done(NodeOutput::Err(e.clone_for_propagation()));
+                    return DispatchOutcome::Terminal(NodeOutput::Err(e.clone_for_propagation()));
                 }
                 // Ready-and-bound: the referent finalized between resolve and this check, so
                 // re-resolve directly — the memoized bridge now admits.
-                return bare_type_leaf(ctx, t, idx);
+                return bare_type_leaf(ctx, t);
             }
-            ctx.add_park_edge(producer, NodeId(idx));
             let track = BareTypeParkTrack {
                 leaf: t.clone(),
                 producer,
             };
-            ctx.replace_with_parked_dispatch(DispatchState::BareTypeLeaf(BareTypeState::with_park(
-                track,
-            )))
+            DispatchOutcome::ParkSelf {
+                producers: vec![producer],
+                state: DispatchState::BareTypeLeaf(BareTypeState::with_park(track)),
+            }
         }
     }
 }
 
-pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> NodeStep<'run> {
+pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> DispatchOutcome<'run> {
     let inner = match expr.parts.into_iter().next() {
         Some(Spanned {
             value: ExpressionPart::SigiledTypeExpr(boxed),
@@ -277,13 +205,7 @@ pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> NodeStep<'run>
         }) => *boxed,
         _ => unreachable!("SigiledTypeExpr shape implies single SigiledTypeExpr part"),
     };
-    NodeStep::Replace {
-        work: NodeWork::dispatch(inner),
-        frame: None,
-        function: None,
-        block_entry: None,
-        body_index: 0,
-    }
+    DispatchOutcome::BecomeDispatch(inner)
 }
 
 /// `:{x :Number, y :Str}` — a single-part record-type sigil. Folds the field list straight
@@ -291,10 +213,9 @@ pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> NodeStep<'run>
 /// through a Combine when a field forward-references or sub-dispatches. No type-constructor
 /// builtin is involved — the record type is structural.
 pub(super) fn record_type<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    ctx: &DispatchCx<'run, '_>,
     expr: KExpression<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let fields = match expr.parts.into_iter().next() {
         Some(Spanned {
             value: ExpressionPart::RecordType(boxed),
@@ -303,18 +224,16 @@ pub(super) fn record_type<'run>(
         _ => unreachable!("RecordType shape implies a single RecordType part"),
     };
     let chain = ctx.current_lexical_chain();
-    let body = super::field_list::elaborate_record_value(ctx, fields, chain);
-    schedule_constructor_body(ctx, body, idx)
+    DispatchOutcome::ElaborateRecordType { fields, chain }
 }
 
 /// `(99)`, `("x")`, `([1 2 3])`, `((inner))` etc. — single-part
 /// literal-shaped expressions. Skips the bucket lookup + builtin call
 /// the Keyworded path would otherwise route through.
 pub(super) fn literal_pass_through<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    ctx: &DispatchCx<'run, '_>,
     expr: KExpression<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let only = expr
         .parts
         .into_iter()
@@ -323,54 +242,28 @@ pub(super) fn literal_pass_through<'run>(
     match only.value {
         ExpressionPart::Literal(_) => {
             let allocated = ctx.current_scope().arena.alloc_object(only.value.resolve());
-            NodeStep::Done(NodeOutput::value(allocated))
+            DispatchOutcome::Terminal(NodeOutput::value(allocated))
         }
-        ExpressionPart::Future(c) => NodeStep::Done(NodeOutput::Value(c)),
-        ExpressionPart::Expression(boxed) => NodeStep::Replace {
-            work: NodeWork::dispatch(*boxed),
-            frame: None,
-            function: None,
-            block_entry: None,
-            body_index: 0,
-        },
-        ExpressionPart::ListLiteral(items) => {
-            let producer = ctx.schedule_list_literal(items);
-            park_on_literal_producer(ctx, producer, idx)
-        }
-        ExpressionPart::DictLiteral(pairs) => {
-            let producer = ctx.schedule_dict_literal(pairs);
-            park_on_literal_producer(ctx, producer, idx)
-        }
-        ExpressionPart::RecordLiteral(fields) => {
-            let producer = ctx.schedule_record_literal(fields);
-            park_on_literal_producer(ctx, producer, idx)
-        }
+        ExpressionPart::Future(c) => DispatchOutcome::Terminal(NodeOutput::Value(c)),
+        ExpressionPart::Expression(boxed) => DispatchOutcome::BecomeDispatch(*boxed),
+        ExpressionPart::ListLiteral(items) => park_on_literal(DispatchDep::ListLit(items)),
+        ExpressionPart::DictLiteral(pairs) => park_on_literal(DispatchDep::DictLit(pairs)),
+        ExpressionPart::RecordLiteral(fields) => park_on_literal(DispatchDep::RecordLit(fields)),
         _ => unreachable!("LiteralPassThrough classifier only routes Literal/Future/Expression/ListLiteral/DictLiteral/RecordLiteral"),
     }
 }
 
-/// Either lift the producer's already-ready value, or park on it via a
-/// `Lift(Pending)`. Owned-edge install mirrors `install_eager_subs`.
-fn park_on_literal_producer<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
-    producer: NodeId,
-    idx: usize,
-) -> NodeStep<'run> {
-    if ctx.is_result_ready(producer) {
-        let outcome = match ctx.read_result(producer) {
-            Ok(v) => NodeOutput::Value(v),
-            Err(e) => NodeOutput::Err(e.clone_for_propagation()),
-        };
-        ctx.free(producer.index());
-        return NodeStep::Done(outcome);
-    }
-    ctx.add_owned_edge(producer, NodeId(idx));
-    NodeStep::Replace {
-        work: NodeWork::Lift(LiftState::Pending(producer)),
-        frame: None,
-        function: None,
-        block_entry: None,
-        body_index: 0,
+/// Park the slot on a single literal-producer dep as a [`DispatchOutcome::Combine`] whose finish
+/// lifts the producer's resolved value straight through. The harness submits the literal and owns
+/// it; a dep error short-circuits frameless before the finish runs.
+fn park_on_literal<'run>(dep: DispatchDep<'run>) -> DispatchOutcome<'run> {
+    let finish: DispatchCombineFinish<'run> =
+        Box::new(|_ctx, results, _idx| DispatchOutcome::Terminal(NodeOutput::Value(results[0])));
+    DispatchOutcome::Combine {
+        deps: vec![dep],
+        dep_error_frame: None,
+        finish,
+        free: Vec::new(),
     }
 }
 
@@ -394,10 +287,9 @@ fn park_on_literal_producer<'run>(
 /// A name with no producer and no binding is `UnboundName` (genuine absence only —
 /// pending names are already parked in step 1).
 pub(super) fn type_call<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    ctx: &DispatchCx<'run, '_>,
     expr: KExpression<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let head_t = match &expr.parts[0].value {
         ExpressionPart::Type(t) => t.clone(),
         _ => unreachable!("TypeCall shape implies leaf Type head"),
@@ -415,14 +307,17 @@ pub(super) fn type_call<'run>(
         .resolve_with_chain(head_t.as_str(), chain)
     {
         if !ctx.is_result_ready(producer) {
-            ctx.add_park_edge(producer, NodeId(idx));
             let init = Initialized {
                 pre_subs: Vec::new(),
             };
             let head_placeholder = TypeCallHeadPlaceholder { expr, producer };
-            return ctx.replace_with_parked_dispatch(DispatchState::TypeCall(Box::new(
-                CtorState::with_head_placeholder(init, head_placeholder),
-            )));
+            return DispatchOutcome::ParkSelf {
+                producers: vec![producer],
+                state: DispatchState::TypeCall(Box::new(CtorState::with_head_placeholder(
+                    init,
+                    head_placeholder,
+                ))),
+            };
         }
     }
     // Fresh `types[name]` lookup at construction time. A sealed nominal type's identity is
@@ -435,50 +330,25 @@ pub(super) fn type_call<'run>(
     {
         Some(kt) => kt,
         None => {
-            return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(
-                head_t.render(),
-            ))));
+            return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
+                KErrorKind::UnboundName(head_t.render()),
+            )));
         }
     };
     match identity {
         // A bound functor's result is a module — the `Function` arm calls it.
         KType::KFunctor { body: Some(f), .. } => {
-            apply_callable(ctx, ResolvedCallable::Function(f), &expr, idx)
+            apply_callable(ctx, ResolvedCallable::Function(f), &expr)
         }
         // A bare `:(FUNCTOR …)` type annotation has no callable to invoke.
         KType::KFunctor { body: None, .. } => {
-            NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+            DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "constructible Type or bound functor".to_string(),
                 got: identity.name(),
             })))
         }
-        _ => apply_callable(ctx, ResolvedCallable::Constructor(identity), &expr, idx),
+        _ => apply_callable(ctx, ResolvedCallable::Constructor(identity), &expr),
     }
 }
 
-/// Decode a constructor `BodyResult` into a `NodeStep`.
-pub(super) fn schedule_constructor_body<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
-    body: BodyResult<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
-    match body {
-        BodyResult::Tail {
-            expr,
-            frame,
-            function,
-            block_entry,
-            body_index,
-        } => NodeStep::Replace {
-            work: NodeWork::dispatch(expr),
-            frame,
-            function,
-            block_entry,
-            body_index,
-        },
-        BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
-        BodyResult::DeferTo(combine_id) => ctx.defer_to_lift(idx, combine_id),
-        BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
-    }
-}

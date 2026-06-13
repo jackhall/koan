@@ -10,8 +10,8 @@ use std::rc::Rc;
 use super::body::{BodyResult, ReturnContract};
 use crate::machine::core::{CallArena, LexicalFrame, Scope, ScopeId};
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::values::Held;
 use crate::machine::model::types::KType;
+use crate::machine::model::values::Held;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::{BindingIndex, KError, KErrorKind, NodeId};
 
@@ -25,9 +25,7 @@ macro_rules! try_action {
     ($expr:expr) => {
         match $expr {
             Ok(value) => value,
-            Err(error) => {
-                return $crate::machine::core::kfunction::action::Action::Done(Err(error))
-            }
+            Err(error) => return $crate::machine::core::kfunction::action::Action::Done(Err(error)),
         }
     };
 }
@@ -219,16 +217,25 @@ pub enum Action<'a> {
         block_entry: Option<ScopeId>,
     },
     /// Dispatch `deps`, then `finish` over their resolved values yields the next `Action`.
-    Combine { deps: Vec<Dep<'a>>, finish: Cont<'a> },
+    Combine {
+        deps: Vec<Dep<'a>>,
+        finish: Cont<'a>,
+    },
     /// Watch `watched`, recover via `finish`.
-    Catch { watched: Dep<'a>, finish: CatchCont<'a> },
+    Catch {
+        watched: Dep<'a>,
+        finish: CatchCont<'a>,
+    },
 }
 
 /// A Combine/Tail dependency. `Dispatch` → an owned sub-slot the harness dispatches; `Existing` → a
 /// producer NodeId the builtin already found in scope (a forward-ref / pending type) kept alive as
 /// a park-producer.
 pub enum Dep<'a> {
-    Dispatch { expr: KExpression<'a>, placement: DepPlacement<'a> },
+    Dispatch {
+        expr: KExpression<'a>,
+        placement: DepPlacement<'a>,
+    },
     Existing(NodeId),
 }
 

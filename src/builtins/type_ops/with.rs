@@ -30,7 +30,9 @@ pub fn body<'a>(
             let got = match (other, arg_held(ctx.args, "sig")) {
                 (Some(kt), _) => kt.name(),
                 (None, Some(Held::Object(object))) => object.ktype().name(),
-                (None, _) => return done_err(KError::new(KErrorKind::MissingArg("sig".to_string()))),
+                (None, _) => {
+                    return done_err(KError::new(KErrorKind::MissingArg("sig".to_string())))
+                }
             };
             return done_err(KError::new(KErrorKind::TypeMismatch {
                 arg: "sig".to_string(),

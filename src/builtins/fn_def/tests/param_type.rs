@@ -43,10 +43,14 @@ fn fn_typed_param_rejects_mismatched_call() {
     let scope = run_root_silent(&arena);
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
     let mut sched = Scheduler::new();
-    let _ = sched.add_dispatch(parse_one("DOUBLE \"hi\""), scope);
-    let err = sched
+    let root = sched.add_dispatch(parse_one("DOUBLE \"hi\""), scope);
+    sched
         .execute()
-        .expect_err("DOUBLE \"hi\" should fail dispatch");
+        .expect("a dispatch failure is slot-terminal, not a fatal execute error");
+    let err = sched
+        .read_result(root)
+        .err()
+        .expect("DOUBLE \"hi\" should fail dispatch");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed for type-mismatched DOUBLE call, got {err}",

@@ -33,7 +33,7 @@ use super::KFunction;
 /// declared type directly, `Function` reads it off the callee's signature.
 ///
 /// `Arm`'s / `PerCall`'s `ret` is arena-borrowed so the whole contract stays `Copy`, matching the
-/// `&KFunction` it sits beside. Stored erased as [`ErasedContract`] on the node's `Frame`. A tail
+/// `&KFunction` it sits beside. Stored erased as [`ErasedContract`] on the node's `TraceFrame`. A tail
 /// chain keeps the **first** contract (the `next_contract` rule in `execute::scheduler::execute`),
 /// so the check fires against the original caller's declared return, not the tail-most callee's.
 #[derive(Clone, Copy)]
@@ -57,7 +57,7 @@ pub enum ReturnContract<'a> {
 }
 
 /// A [`ReturnContract`] with its lifetime erased to `'static` for storage on a lifetime-free
-/// node `Frame`. The contract's `&KFunction` / `&KType` point into the cart's frame *outer*
+/// node `CallFrame`. The contract's `&KFunction` / `&KType` point into the cart's frame *outer*
 /// arena (a strict ancestor — see `branch_walk::resolve_arm_return_contract` and
 /// `invoke`'s `tail_with_frame_contract`), which the co-stored `cart: Rc<CallArena>` keeps live via its
 /// `outer_frame` / escape chain. So the cart is the liveness witness: while it is held, the
@@ -89,7 +89,7 @@ impl ErasedContract {
     }
 
     /// Re-anchor the contract to a caller-chosen `'a`, witnessed by the cart `Rc` co-stored with
-    /// it on the node's `Frame`. The single fabrication for this carrier — mirrors
+    /// it on the node's `TraceFrame`. The single fabrication for this carrier — mirrors
     /// [`CallArena::scope`](crate::machine::core::CallArena::scope)'s unbounded re-attach.
     ///
     /// SAFETY: `_witness` is the cart that pins the contract's home arena (a strict ancestor of
@@ -100,7 +100,6 @@ impl ErasedContract {
     pub unsafe fn reattach<'a>(self, _witness: &Rc<CallArena>) -> ReturnContract<'a> {
         std::mem::transmute::<ReturnContract<'static>, ReturnContract<'a>>(self.inner)
     }
-
 }
 
 pub enum BodyResult<'a> {
@@ -110,7 +109,7 @@ pub enum BodyResult<'a> {
     Tail {
         expr: KExpression<'a>,
         frame: Option<Rc<CallArena>>,
-        /// Return contract the slot's Done arm enforces, and the source of the `Frame`
+        /// Return contract the slot's Done arm enforces, and the source of the `TraceFrame`
         /// label appended to errors. `Function` is an FN / builtin call (checks
         /// `signature.return_type`, labels with `summarize()`); `Arm` is a MATCH / TRY
         /// arm whose `-> :T` declares a return type with no backing `&KFunction`. `None`

@@ -11,7 +11,7 @@
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
-use crate::machine::{Frame, Scope};
+use crate::machine::{Scope, TraceFrame};
 
 use super::{arg, kw, sig};
 
@@ -66,8 +66,10 @@ pub fn body<'a>(
             .scope
             .register_type_upsert(name_for_finish.clone(), identity, bind_index)
         {
-            Ok(kt_ref) => Action::Done(Ok(Carried::Type(fctx.scope.arena.alloc_ktype(kt_ref.clone())))),
-            Err(e) => Action::Done(Err(e.with_frame(Frame::bare(
+            Ok(kt_ref) => Action::Done(Ok(Carried::Type(
+                fctx.scope.arena.alloc_ktype(kt_ref.clone()),
+            ))),
+            Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                 "<module>",
                 format!("MODULE {} body", name_for_finish),
             )))),
@@ -93,7 +95,13 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ],
     );
     crate::builtins::register_builtin_full(
-        scope, "MODULE", signature, body, Some(super::type_part_binder_name), None, false,
+        scope,
+        "MODULE",
+        signature,
+        body,
+        Some(super::type_part_binder_name),
+        None,
+        false,
     );
 }
 

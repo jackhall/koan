@@ -72,8 +72,24 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     };
     use crate::builtins::register_builtin_full;
     let bucket = super::fn_def::binder_bucket;
-    register_builtin_full(scope, "FUNCTOR", typeexpr_sig(), body, None, Some(bucket), false);
-    register_builtin_full(scope, "FUNCTOR", sigil_sig(), body, None, Some(bucket), false);
+    register_builtin_full(
+        scope,
+        "FUNCTOR",
+        typeexpr_sig(),
+        body,
+        None,
+        Some(bucket),
+        false,
+    );
+    register_builtin_full(
+        scope,
+        "FUNCTOR",
+        sigil_sig(),
+        body,
+        None,
+        Some(bucket),
+        false,
+    );
 }
 
 #[cfg(test)]

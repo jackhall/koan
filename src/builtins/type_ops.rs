@@ -35,11 +35,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         )
     };
-    crate::builtins::register_builtin(
-        scope,
-        "TEMPLATE",
-        template_sig(),
-        type_constructor::body,
-    );
+    crate::builtins::register_builtin(scope, "TEMPLATE", template_sig(), type_constructor::body);
     crate::builtins::register_builtin(scope, "WITH", with_sig(), with::body);
 }

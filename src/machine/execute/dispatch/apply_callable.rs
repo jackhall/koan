@@ -19,16 +19,18 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::{KFunction, SchedulerHandle};
+use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::{KError, KErrorKind};
 
-use super::super::nodes::{NodeOutput, NodeStep};
+use super::super::nodes::NodeOutput;
+use super::ctx::DispatchCx;
+use super::outcome::DispatchOutcome;
 use super::{
-    body_shape_err, constructors, extract_call_body, stage_all_eager_parts, CallBody, DispatchCtx,
-    DispatchState, EagerSubsInstall, FnValueState, Initialized, NAMED_ONLY, POSITIONAL_ONLY,
+    body_shape_err, constructors, extract_call_body, stage_all_eager_parts, CallBody, NAMED_ONLY,
+    POSITIONAL_ONLY,
 };
 
 /// A head resolved to something callable. The lane decides which arm; the tail
@@ -45,23 +47,22 @@ pub(in crate::machine::execute) enum ResolvedCallable<'run> {
 /// call body; `extract_call_body` admits one `{name = value}` record literal
 /// (`Named`) or one `(value)` paren group (`Positional`).
 pub(in crate::machine::execute) fn apply_callable<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    ctx: &DispatchCx<'run, '_>,
     callable: ResolvedCallable<'run>,
     expr: &KExpression<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     match callable {
         // A constructor branches on the projected schema before deciding what body shape it
         // admits; the newtype arm in particular takes the trailing parts directly (so
         // `(Point r)` works), so body extraction lives per-arm inside `apply_constructor`
         // rather than here.
-        ResolvedCallable::Constructor(identity) => apply_constructor(ctx, identity, expr, idx),
+        ResolvedCallable::Constructor(identity) => apply_constructor(ctx, identity, expr),
         ResolvedCallable::Function(f) => {
             let body = match extract_call_body(expr) {
                 Ok(b) => b,
-                Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+                Err(e) => return DispatchOutcome::Terminal(NodeOutput::Err(e)),
             };
-            apply_function(ctx, f, expr, body, idx)
+            apply_function(ctx, f, expr, body)
         }
     }
 }
@@ -74,13 +75,12 @@ pub(in crate::machine::execute) fn apply_callable<'run>(
 /// The schema is projected off the member (sibling `SetLocal`s resolved to external
 /// `SetRef`s); `(set, index)` is stamped onto a tagged value.
 fn apply_constructor<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    ctx: &DispatchCx<'run, '_>,
     identity: &'run KType<'run>,
     expr: &KExpression<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let KType::SetRef { set, index } = identity else {
-        return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+        return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
             expected: "constructible Type".to_string(),
             got: identity.name(),
@@ -96,15 +96,8 @@ fn apply_constructor<'run>(
                     value: ExpressionPart::RecordLiteral(fields),
                     ..
                 }],
-            ) => {
-                constructors::dispatch_construct_record_newtype(ctx, identity, fields.clone(), idx)
-            }
-            _ => constructors::dispatch_construct_newtype(
-                ctx,
-                identity,
-                expr.parts[1..].to_vec(),
-                idx,
-            ),
+            ) => constructors::dispatch_construct_record_newtype(identity, fields.clone()),
+            _ => constructors::dispatch_construct_newtype(identity, expr.parts[1..].to_vec()),
         },
         // A bare variant-tag token with no payload (`Maybe Some`) names the variant
         // *type*, reached through its union — distinct from construction `Maybe (Some v)`,
@@ -117,20 +110,20 @@ fn apply_constructor<'run>(
             {
                 let tag = t.render();
                 if !schema.contains_key(&tag) {
-                    return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::ShapeError(
-                        format!(
+                    return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
+                        KErrorKind::ShapeError(format!(
                             "`{tag}` is not a variant of `{}` (variants: {})",
                             set.member(*index).name,
                             sorted_variant_names(&schema),
-                        ),
-                    ))));
+                        )),
+                    )));
                 }
                 let variant = KType::Variant {
                     set: Rc::clone(set),
                     index: *index,
                     tag,
                 };
-                return NodeStep::Done(NodeOutput::ktype(
+                return DispatchOutcome::Terminal(NodeOutput::ktype(
                     ctx.current_scope().arena.alloc_ktype(variant),
                 ));
             }
@@ -138,28 +131,24 @@ fn apply_constructor<'run>(
             // unions and higher-kinded `TypeConstructor`s both construct positionally.
             match extract_call_body(expr) {
                 Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
-                    ctx,
                     Rc::clone(set),
                     *index,
                     Rc::new(schema),
                     parts,
-                    idx,
                 ),
                 Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
-                Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+                Err(e) => DispatchOutcome::Terminal(NodeOutput::Err(e)),
             }
         }
         ProjectedSchema::TypeConstructor { schema, .. } => match extract_call_body(expr) {
             Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
-                ctx,
                 Rc::clone(set),
                 *index,
                 Rc::new(schema),
                 parts,
-                idx,
             ),
             Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
-            Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+            Err(e) => DispatchOutcome::Terminal(NodeOutput::Err(e)),
         },
     }
 }
@@ -176,57 +165,34 @@ fn sorted_variant_names(schema: &std::collections::HashMap<String, KType<'_>>) -
 /// expression and eager-resolve the value slots before binding; a positional body
 /// is a loud `DispatchFailed` (functions and functors take `{name = value}` only).
 fn apply_function<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    ctx: &DispatchCx<'run, '_>,
     f: &'run KFunction<'run>,
     expr: &KExpression<'run>,
     body: CallBody<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     match body {
         CallBody::Named(fields) => match f.reconstruct_positional(fields) {
-            Ok(rebuilt) => match install_eager_subs_track(ctx, rebuilt, f, idx) {
-                Ok(step) => step,
-                Err(e) => NodeStep::Done(NodeOutput::Err(e)),
-            },
-            Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+            Ok(rebuilt) => install_eager_subs_track(ctx, rebuilt, f),
+            Err(e) => DispatchOutcome::Terminal(NodeOutput::Err(e)),
         },
         CallBody::Positional(_) => body_shape_err(expr, NAMED_ONLY),
     }
 }
 
-/// Stage every eager part of the reconstructed call as a sub-Dispatch, splice
-/// already-terminal subs inline, and either bind `picked` directly (all inline)
-/// or park as a `FunctionValueCall` eager-subs track. Shared by the
-/// `FunctionValueCall` lane and every head-deferred / type-call function arm.
+/// Stage every eager part of the reconstructed call as a sub-Dispatch, splice already-terminal
+/// subs inline, and park the slot on the in-flight ones as a `DispatchCombine` whose finish binds
+/// `picked`. Shared by the `FunctionValueCall` lane and every head-deferred / type-call function
+/// arm.
 pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    ctx: &DispatchCx<'run, '_>,
     expr: KExpression<'run>,
     picked: &'run KFunction<'run>,
-    idx: usize,
-) -> Result<NodeStep<'run>, KError> {
+) -> DispatchOutcome<'run> {
     // `picked` is already committed (the head uniquely resolved to it), so bare-name
     // value slots resolve by sub-Dispatch rather than the keyword path's pre-pick
     // `bare_outcomes` lookup — their resolved carrier then reaches `accepts_part` at bind.
     let wrap_indices = picked.classify_for_pick(&expr).wrap_indices;
     let (new_parts, staged_subs) = stage_all_eager_parts(expr.parts, &wrap_indices);
     let working_expr = KExpression::new(new_parts);
-    match ctx.install_eager_subs(working_expr, staged_subs, Some(picked), idx) {
-        EagerSubsInstall::DepError(step) => Ok(step),
-        EagerSubsInstall::AllInline(working_expr) => {
-            // All eager subs resolved inline → run the call (builtins direct, user-fns through the
-            // exec executor).
-            Ok(super::exec::invoke(ctx, picked, working_expr, idx))
-        }
-        EagerSubsInstall::Parked(track) => {
-            // The function arm is non-binder; `pre_subs` is always empty.
-            let init = Initialized {
-                pre_subs: Vec::new(),
-            };
-            Ok(
-                ctx.replace_with_parked_dispatch(DispatchState::FunctionValueCall(Box::new(
-                    FnValueState::with_eager_subs(init, track),
-                ))),
-            )
-        }
-    }
+    ctx.install_eager_subs(working_expr, staged_subs, Some(picked))
 }

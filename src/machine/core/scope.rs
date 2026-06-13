@@ -315,7 +315,7 @@ impl<'a> Scope<'a> {
     /// True iff `name` is a builtin type. The builtins live once in the immutable
     /// run-global root, so a user type declaration colliding with one is a `Rebind` at
     /// any depth — the consult hits the root directly rather than each layer of the
-    /// `outer` chain. Frame-local bindings (FN parameters, MATCH/TRY `it`) live below
+    /// `outer` chain. TraceFrame-local bindings (FN parameters, MATCH/TRY `it`) live below
     /// the root, so ordinary user-vs-user cross-scope shadowing is unaffected.
     fn shadows_builtin_type(&self, name: &str) -> bool {
         self.root_scope().bindings().has_builtin_type(name)
@@ -603,7 +603,11 @@ impl<'a> Scope<'a> {
 
     pub fn resolve_with_chain(&self, name: &str, chain: Option<&LexicalFrame>) -> Resolution<'a> {
         self.ancestors()
-            .find_map(|scope| scope.bindings().lookup_value(name, scope.binding_cutoff(chain)))
+            .find_map(|scope| {
+                scope
+                    .bindings()
+                    .lookup_value(name, scope.binding_cutoff(chain))
+            })
             .unwrap_or(Resolution::UnboundName)
     }
 
@@ -684,8 +688,11 @@ impl<'a> Scope<'a> {
         if root.bindings().has_builtin_type(name) {
             return root.bindings().lookup_type(name, None);
         }
-        self.ancestors()
-            .find_map(|scope| scope.bindings().lookup_type(name, scope.binding_cutoff(chain)))
+        self.ancestors().find_map(|scope| {
+            scope
+                .bindings()
+                .lookup_type(name, scope.binding_cutoff(chain))
+        })
     }
 
     /// Resolve a chain's operator-group probe against this scope and the `outer`

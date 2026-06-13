@@ -10,17 +10,16 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::SchedulerHandle;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::NonWrappedRef;
 use crate::machine::model::KObject;
-use crate::machine::{KError, KErrorKind, NodeId, Scope};
+use crate::machine::{KError, KErrorKind, Scope};
 
-use super::super::nodes::{NodeOutput, NodeStep};
-use super::single_poll::{CtorKind, CtorState, CtorTrack};
-use super::{DispatchCtx, DispatchState, Initialized};
+use super::super::nodes::{DispatchCombineFinish, NodeOutput};
+use super::outcome::{DispatchDep, DispatchOutcome};
+use super::single_poll::CtorKind;
 
 pub(in crate::machine::execute) mod tagged_union;
 
@@ -30,11 +29,9 @@ pub(in crate::machine::execute) mod tagged_union;
 /// The parts are launched as one value cell whose finish type-checks against the member's
 /// `repr` and wraps with `identity`.
 pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
     identity: &'run KType<'run>,
     mut value_parts: Vec<Spanned<ExpressionPart<'run>>>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     if let [Spanned {
         value: ExpressionPart::Expression(inner),
         ..
@@ -43,7 +40,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
         value_parts = inner.parts.clone();
     }
     if value_parts.is_empty() {
-        return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::ArityMismatch {
+        return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::ArityMismatch {
             expected: 1,
             got: 0,
         })));
@@ -56,7 +53,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
     } else {
         ExpressionPart::Expression(Box::new(KExpression::new(value_parts)))
     };
-    launch(ctx, vec![value_cell], CtorKind::Newtype { identity }, idx)
+    launch(vec![value_cell], CtorKind::Newtype { identity })
 }
 
 /// Direct-construct a record-repr newtype from a named record-literal body. Launches one
@@ -64,22 +61,18 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
 /// binds synchronously (the property the retired struct path relied on, and which a chained
 /// `(Boxed (p))` depends on). The finish builds the `KObject::Record` and wraps it.
 pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
     identity: &'run KType<'run>,
     record_fields: Vec<(String, ExpressionPart<'run>)>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let field_names: Vec<String> = record_fields.iter().map(|(n, _)| n.clone()).collect();
     let value_parts: Vec<ExpressionPart<'run>> =
         record_fields.into_iter().map(|(_, p)| p).collect();
     launch(
-        ctx,
         value_parts,
         CtorKind::RecordNewtype {
             identity,
             field_names,
         },
-        idx,
     )
 }
 
@@ -115,19 +108,16 @@ fn construct_newtype<'run>(
 /// constructor (`TypeConstructor` kind) — both reference a sealed member.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
     set: Rc<RecursiveSet<'run>>,
     index: usize,
     schema: Rc<HashMap<String, KType<'run>>>,
     args_parts: Vec<Spanned<ExpressionPart<'run>>>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let (tag, value_part) = match tagged_union::prepare_args(args_parts) {
         Ok(v) => v,
-        Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+        Err(e) => return DispatchOutcome::Terminal(NodeOutput::Err(e)),
     };
     launch(
-        ctx,
         vec![value_part],
         CtorKind::Tagged {
             schema,
@@ -135,60 +125,36 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
             index,
             tag,
         },
-        idx,
     )
 }
 
-/// Stage each value part as a sub-Dispatch (single-part `Expression`
-/// wrapping routes through normal classification). If every sub
-/// short-circuits at install time, construct in place; otherwise park as
-/// a `CtorState` with an eager-subs track.
+/// Decide a constructor park: every value part is a fresh sub-Dispatch dep (a single-part
+/// `Expression` wrapping routes through normal classification), and a freshly-minted sub is never
+/// terminal in the same step (submission is enqueue-then-drain), so there is no inline-ready case —
+/// the slot always parks as a [`DispatchOutcome::Combine`]. The finish reads the resolved deps in
+/// declaration order and materializes the value via [`finish`]; dep errors propagate frameless.
 fn launch<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
     value_parts: Vec<ExpressionPart<'run>>,
     kind: CtorKind<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
-    let n = value_parts.len();
-    let mut staged_values: Vec<Option<&'run KObject<'run>>> = vec![None; n];
-    let mut subs: Vec<(usize, NodeId)> = Vec::new();
-    for (i, part) in value_parts.into_iter().enumerate() {
-        let sub_expr = KExpression::new(vec![Spanned::bare(part)]);
-        let sub_id = ctx.add_dispatch_here(sub_expr);
-        if ctx.is_result_ready(sub_id) {
-            let outcome = ctx.read_result(sub_id);
-            match outcome {
-                Ok(v) => {
-                    staged_values[i] = Some(v.object());
-                    ctx.free(sub_id.index());
-                }
-                Err(e) => {
-                    let err = e.clone_for_propagation();
-                    ctx.free(sub_id.index());
-                    return NodeStep::Done(NodeOutput::Err(err));
-                }
-            }
-        } else {
-            ctx.add_owned_edge(sub_id, NodeId(idx));
-            subs.push((i, sub_id));
-        }
+) -> DispatchOutcome<'run> {
+    debug_assert!(
+        !value_parts.is_empty(),
+        "launch requires at least one value part (arity-zero is rejected upstream)"
+    );
+    let deps: Vec<DispatchDep<'run>> = value_parts
+        .into_iter()
+        .map(|part| DispatchDep::Dispatch(KExpression::new(vec![Spanned::bare(part)])))
+        .collect();
+    let combine_finish: DispatchCombineFinish<'run> = Box::new(move |ctx, results, _idx| {
+        let values: Vec<&'run KObject<'run>> = results.iter().map(|c| c.object()).collect();
+        finish(ctx.current_scope(), &kind, &values)
+    });
+    DispatchOutcome::Combine {
+        deps,
+        dep_error_frame: None,
+        finish: combine_finish,
+        free: Vec::new(),
     }
-    if subs.is_empty() {
-        let values: Vec<&'run KObject<'run>> =
-            staged_values.into_iter().map(|o| o.unwrap()).collect();
-        return finish(ctx.current_scope(), &kind, &values);
-    }
-    let track = CtorTrack {
-        subs,
-        staged_values,
-        kind,
-    };
-    let init = Initialized {
-        pre_subs: Vec::new(),
-    };
-    ctx.replace_with_parked_dispatch(DispatchState::TypeCall(Box::new(CtorState::with_track(
-        init, track,
-    ))))
 }
 
 /// All value subs have completed. Read each, materialize the kind-keyed
@@ -197,7 +163,7 @@ pub(in crate::machine::execute::dispatch) fn finish<'run>(
     scope: &Scope<'run>,
     kind: &CtorKind<'run>,
     values: &[&'run KObject<'run>],
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let result = match kind {
         CtorKind::Newtype { identity } => {
             debug_assert_eq!(values.len(), 1);
@@ -226,7 +192,7 @@ pub(in crate::machine::execute::dispatch) fn finish<'run>(
         }
     };
     match result {
-        Ok(obj) => NodeStep::Done(NodeOutput::value(scope.arena.alloc_object(obj))),
-        Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+        Ok(obj) => DispatchOutcome::Terminal(NodeOutput::value(scope.arena.alloc_object(obj))),
+        Err(e) => DispatchOutcome::Terminal(NodeOutput::Err(e)),
     }
 }

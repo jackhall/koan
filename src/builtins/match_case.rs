@@ -38,7 +38,11 @@ pub fn body<'a>(
                 got: other.ktype().name(),
             })))
         }
-        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("value".to_string())))),
+        None => {
+            return Action::Done(Err(KError::new(KErrorKind::MissingArg(
+                "value".to_string(),
+            ))))
+        }
     };
     let contract = crate::try_action!(resolve_arm_contract(ctx, "MATCH"));
     let branches_expr = crate::try_action!(require_kexpression(ctx.args, "MATCH", "branches"));

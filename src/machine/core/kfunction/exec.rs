@@ -37,7 +37,7 @@ use super::KFunction;
 /// lifetime; the body re-projects its scope from the arena on demand. The arena rides forward via
 /// the `Rc` — no borrow is stored.
 #[derive(Clone)]
-pub struct Frame {
+pub struct ExecFrame {
     /// The per-call arena the body executes in: it backs allocations, and its child scope is the
     /// body's scope. Owned — supplied (and, for TCO, reset) by the scheduler.
     pub arena: Rc<CallArena>,
@@ -99,7 +99,7 @@ pub enum PerCallReturn<'frame> {
 pub fn run_user_fn<'ast, 'frame>(
     func: &'ast KFunction<'ast>,
     args: Record<Carried<'frame>>,
-    ctx: &Frame,
+    ctx: &ExecFrame,
     in_contract_chain: bool,
 ) -> ExecOutcome<'ast, 'frame> {
     // Materialize the bound args as a record value **in the frame**, then bind each parameter to a
@@ -209,4 +209,3 @@ fn split_leading_tail<'ast>(
         .expect("body_statement_refs always yields at least one");
     (leading, tail)
 }
-

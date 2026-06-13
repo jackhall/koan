@@ -27,9 +27,7 @@ pub fn body<'a>(
                 got: other.ktype().name(),
             })))
         }
-        None => {
-            return Action::Done(Err(KError::new(KErrorKind::MissingArg("expr".to_string()))))
-        }
+        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("expr".to_string())))),
     };
     // Chain the call-site frame Rc onto the new frame (keeps the parent arena alive past the
     // new frame's `outer` pointer) — same as the legacy body.

@@ -4,9 +4,11 @@ use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::{Carried, KObject, KType};
-use crate::machine::{CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, Scope};
+use crate::machine::{
+    CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, Scope, TraceFrame,
+};
 
-use super::dispatch::DispatchState;
+use super::dispatch::{DispatchCx, DispatchOutcome, DispatchState};
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
 /// no further write to that slot occurs until it is freed and reused.
@@ -34,7 +36,7 @@ impl<'run> NodeOutput<'run> {
 /// memory across tail-call sequences. When `frame` is `Some`, its `scope()` becomes the
 /// slot's scope and its `arena()` owns per-call allocations; `None` keeps the existing
 /// frame and scope. `function`, when set, names the user-fn whose body the replacement is
-/// entering — any error landing on this slot gets a `Frame` appended for the trace.
+/// entering — any error landing on this slot gets a `TraceFrame` appended for the trace.
 ///
 /// `block_entry` annotates lexical-block entry. `None` keeps the slot's current
 /// `LexicalFrame` chain unchanged. `Some(scope_id)` enters a new lexical block: when
@@ -60,6 +62,17 @@ pub(super) enum NodeStep<'run> {
         body_index: usize,
     },
 }
+
+/// Host-side closure for a [`NodeWork::DispatchCombine`] slot — the dispatch-side dual of
+/// [`CombineFinish`]. Receives the dep terminals in submission order and a read-only dispatch
+/// view, and returns a [`DispatchOutcome`]: unlike a builtin Combine (whose `BodyResult` finish
+/// cannot re-park), a dispatch finish may resolve, tail-redispatch, or **park again** (e.g. an
+/// overload park on a freshly resolved producer), which the richer outcome expresses. The harness
+/// applies the returned outcome, so the finish — like every decide — issues no graph write itself.
+pub(super) type DispatchCombineFinish<'run> = Box<
+    dyn for<'a> FnOnce(&DispatchCx<'run, 'a>, &[Carried<'run>], usize) -> DispatchOutcome<'run>
+        + 'run,
+>;
 
 /// What a scheduler node will run. `Lift` exists because the push/notify model
 /// assumes a single producer slot per result — see [design/execution-model.md §
@@ -97,6 +110,22 @@ pub(super) enum NodeWork<'run> {
     Catch {
         from: NodeId,
         finish: CatchFinish<'run>,
+    },
+    /// Dispatch-side dual of `Combine`: identical dep-resolution and edge layout
+    /// (`[park_producers..., owned_subs...]`, `park_count` the prefix), but the `finish`
+    /// returns a [`NodeStep`] so a dispatch continuation can re-park. Drives the eager-subs /
+    /// head-deferred / constructor park-sites: the scheduler resolves the deps and hands the
+    /// values to a dispatch finish that splices / classifies / invokes, learning nothing about
+    /// the dispatch internals (the splice into a `KExpression` lives entirely in the finish).
+    ///
+    /// `dep_error_frame` is attached to a dep-error short-circuit (before the finish runs) so a
+    /// site that wants to surface the consuming call in the trace (e.g. eager-subs' `<bind>`
+    /// frame keyed off the call expression) can; `None` propagates frameless.
+    DispatchCombine {
+        deps: Vec<NodeId>,
+        park_count: usize,
+        finish: DispatchCombineFinish<'run>,
+        dep_error_frame: Option<TraceFrame>,
     },
     Lift(LiftState<'run>),
 }
@@ -142,11 +171,11 @@ pub(super) enum NodeScope<'run> {
 /// A node's per-call frame state: the execution cart, its ping-pong reserve, and the erased
 /// return contract. Lifetime-free — the cart `Rc` pins everything its members point at, and the
 /// contract is erased ([`ErasedContract`]) and re-anchored at the Done read boundary witnessed
-/// by `cart`. Every node owns a `Frame`: the cart is the arena the slot's step runs against,
+/// by `cart`. Every node owns a `CallFrame`: the cart is the arena the slot's step runs against,
 /// falling back to the run frame at top level (see `Scheduler::submit_node`), and an invoke
 /// reuses the *reserve* rather than the active cart, so the slot's cart is never taken out from
 /// under it. `reserve` and `contract` are sparse.
-pub(super) struct Frame {
+pub(super) struct CallFrame {
     /// The cart this slot's step runs against. Cloned onto every sub-slot dispatched in the same
     /// body, so it is uniquely owned only at a TCO collapse point (the gate
     /// `CallArena::try_reset_for_tail` checks). The Rc drops on Done or Replace; its arena drops
@@ -177,8 +206,8 @@ pub(super) struct Node<'run> {
     pub(super) work: NodeWork<'run>,
     pub(super) scope: NodeScope<'run>,
     /// The slot's per-call frame state (cart + reserve + erased contract) — never absent, see
-    /// [`Frame`].
-    pub(super) frame: Frame,
+    /// [`CallFrame`].
+    pub(super) frame: CallFrame,
     /// Immutable cactus-chain naming this node's lexical position. Head frame is the
     /// innermost enclosing block; tail (`parent: None`) is top-level. See
     /// `core/lexical_frame.rs`.
@@ -197,6 +226,9 @@ pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Option<Vec<NodeId>> {
         NodeWork::Combine {
             deps, park_count, ..
         } => Some(deps[*park_count..].to_vec()),
+        NodeWork::DispatchCombine {
+            deps, park_count, ..
+        } => Some(deps[*park_count..].to_vec()),
         NodeWork::Catch { from, .. } => Some(vec![*from]),
         NodeWork::Lift(LiftState::Pending(from)) => Some(vec![*from]),
         NodeWork::Lift(LiftState::Ready(_)) => None,
@@ -209,6 +241,9 @@ pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Option<Vec<NodeId>> {
 pub(super) fn work_park_producers<'run, 'b>(work: &'b NodeWork<'run>) -> &'b [NodeId] {
     match work {
         NodeWork::Combine {
+            deps, park_count, ..
+        } => &deps[..*park_count],
+        NodeWork::DispatchCombine {
             deps, park_count, ..
         } => &deps[..*park_count],
         _ => &[],

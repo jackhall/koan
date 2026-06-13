@@ -6,7 +6,9 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::action::{Action, Dep, DepPlacement, FinishCtx, FramePlacement};
+use crate::machine::core::kfunction::action::{
+    Action, Dep, DepPlacement, FinishCtx, FramePlacement,
+};
 use crate::machine::core::kfunction::{BodyResult, CatchFinish, CombineFinish, SchedulerHandle};
 use crate::machine::core::CallArena;
 use crate::machine::NodeId;
@@ -14,7 +16,10 @@ use crate::machine::NodeId;
 /// Interpret an [`Action`] into the scheduler's `BodyResult` currency — the only code that calls
 /// `SchedulerHandle`. A `Cont` / `CatchCont` returned by a finish is recursed into through the same
 /// function. Returns a `BodyResult`; the caller maps that to a `NodeStep`.
-pub fn run_action<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, action: Action<'a>) -> BodyResult<'a> {
+pub fn run_action<'a, 's>(
+    h: &mut dyn SchedulerHandle<'a, 's>,
+    action: Action<'a>,
+) -> BodyResult<'a> {
     match action {
         // Terminal: the value the builtin already computed (scope was mutated in place first).
         Action::Done(Ok(c)) => BodyResult::Value(c),
@@ -67,7 +72,9 @@ pub fn run_action<'a, 's>(h: &mut dyn SchedulerHandle<'a, 's>, action: Action<'a
                 match dep {
                     Dep::Existing(id) => park.push(id),
                     Dep::Dispatch { expr, placement } => match placement {
-                        DepPlacement::InScope(scope) => owned.extend(h.enter_body_block(scope, expr)),
+                        DepPlacement::InScope(scope) => {
+                            owned.extend(h.enter_body_block(scope, expr))
+                        }
                         DepPlacement::OwnScope => owned.push(h.add_dispatch_here(expr)),
                         DepPlacement::ActiveFrame => owned.push(h.add_dispatch_in_frame(expr)),
                     },

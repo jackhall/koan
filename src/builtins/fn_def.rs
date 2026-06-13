@@ -11,9 +11,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
 
-use finalize::{
-    classify, finalize_fn_with_kind, FnKind, FnPlan, ParamListResult,
-};
+use finalize::{classify, finalize_fn_with_kind, FnKind, FnPlan, ParamListResult};
 use return_type::{classify_return_type, AdmissibleVerdict};
 use signature::ParamListOutcome;
 
@@ -66,7 +64,9 @@ pub(crate) fn build_fn_like<'a>(
     builtin: &str,
     kind: FnKind,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{body_result_to_action, require_kexpression, Action};
+    use crate::machine::core::kfunction::action::{
+        body_result_to_action, require_kexpression, Action,
+    };
     use finalize::defer_via_combine;
     use return_type::extract_return_type_raw;
 
@@ -279,8 +279,24 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         )
     };
     use crate::builtins::register_builtin_full;
-    register_builtin_full(scope, "FN", typeexpr_sig(), body, None, Some(binder_bucket), false);
-    register_builtin_full(scope, "FN", sigil_sig(), body, None, Some(binder_bucket), false);
+    register_builtin_full(
+        scope,
+        "FN",
+        typeexpr_sig(),
+        body,
+        None,
+        Some(binder_bucket),
+        false,
+    );
+    register_builtin_full(
+        scope,
+        "FN",
+        sigil_sig(),
+        body,
+        None,
+        Some(binder_bucket),
+        false,
+    );
     register_builtin_full(
         scope,
         "FN",

@@ -220,12 +220,12 @@ invariant (every forward edge in `notify_list[p]` matched by a backward
 surface rather than by convention.
 
 Transient-node reclamation runs through `Scheduler::reclaim_deps` from
-each of the three dep-consuming steps: `resume_eager_subs` (after
-splicing dep results into `working_expr.parts` as
-`ExpressionPart::Future`, *before* re-resolving and dispatching the
-bound expression — so the dispatched body's `add()` can recycle the
-freed indices immediately), `run_combine` (after the finish closure
-returns), and `run_catch` (after its finish handles the watched slot's
+each of the three dep-consuming steps: a `DispatchCombine` finish (which
+splices dep results into `working_expr.parts` as
+`ExpressionPart::Future`, with reclamation running *before* the finish
+re-resolves and dispatches the bound expression — so the dispatched body's
+`add()` can recycle the freed indices immediately), `run_combine` (after the
+finish closure returns), and `run_catch` (after its finish handles the watched slot's
 terminal). `reclaim_deps` clears `dep_edges[idx]` and
 invokes `Scheduler::free` per dep index; the walk follows `DepGraph::owned_children`,
 which only yields `DepEdge::Owned` arms (`Notify` arms are filtered

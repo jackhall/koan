@@ -6,13 +6,10 @@
 //! `ctx.rs` (the dispatcher facade) so the dispatcher core stays thin; pure body semantics live one
 //! layer down in [`crate::machine::core::kfunction::exec`].
 
-use super::super::nodes::{NodeOutput, NodeStep};
-use super::DispatchCtx;
+use super::super::scheduler::Scheduler;
 use crate::machine::core::kfunction::bind_by_name::CallArgs;
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::kfunction::exec::{
-    run_user_fn, ExecOutcome, Frame as ExecFrame, PerCallReturn,
-};
+use crate::machine::core::kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
 use crate::machine::core::kfunction::{
     Body, BodyResult, CombineFinish, KFunction, SchedulerHandle,
 };
@@ -28,53 +25,52 @@ use crate::machine::{KError, KErrorKind};
 /// Every call reaches here with its value parts already `Future`/literal-resolved (the eager-subs
 /// and synchronous bind paths splice them first), so there is no fall-through.
 pub(super) fn invoke<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    sched: &mut Scheduler<'run>,
     picked: &'run KFunction<'run>,
     working_expr: KExpression<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> BodyResult<'run> {
     // An action-harness builtin: build a read-only `BodyCtx`, get the `Action`, and lower it
     // through the shared `run_action` interpreter.
     if let Body::Builtin(f) = &picked.body {
         let f = *f;
         let args = match picked.bind(working_expr) {
             Ok(future) => future.args,
-            Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+            Err(e) => return BodyResult::Err(e),
         };
-        return run_action_builtin(ctx, f, args, idx);
+        return run_action_builtin(sched, f, args);
     }
 
     // Validate each argument against its declared parameter type before the (type-trusting)
     // `bind_by_name`: a uniquely-picked call is admitted shape-only by dispatch, so a non-satisfying
     // typed argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here.
     if let Err(e) = picked.validate_call_args(&working_expr) {
-        return NodeStep::Done(NodeOutput::Err(e));
+        return BodyResult::Err(e);
     }
 
-    let args = match extract_carried_args(ctx, &working_expr) {
+    let args = match extract_carried_args(sched, &working_expr) {
         Some(args) => args,
         // Unreachable by construction (the bind sites resolve value parts to `Future`/literal
         // first); surface a diagnostic rather than silently mis-bind if that ever breaks.
         None => {
-            return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::User(
+            return BodyResult::Err(KError::new(KErrorKind::User(
                 "exec: a call argument was not a resolved value at the bind site".to_string(),
-            ))))
+            )))
         }
     };
 
     let bound = match picked.bind_by_name(CallArgs::Positional(args)) {
         Ok(record) => record,
-        Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+        Err(e) => return BodyResult::Err(e),
     };
 
     let outer = picked.captured_scope();
-    let frame = ctx.acquire_tail_frame(outer);
+    let frame = sched.acquire_tail_frame(outer);
     let exec_frame = ExecFrame {
         arena: frame.clone(),
     };
     // A deferred-return FN dispatched as a tail call inside an established contract chain skips
     // resolving its own (keep-first-discarded) return type — see `run_user_fn`.
-    let in_chain = ctx.in_contract_chain();
+    let in_chain = sched.in_contract_chain();
     let result = match run_user_fn(picked, bound, &exec_frame, in_chain) {
         ExecOutcome::Tail { leading, tail, ret } => {
             // The return contract carried on the tail-replace. A resolved return reads its type off
@@ -97,7 +93,10 @@ pub(super) fn invoke<'run>(
             // Empty `leading` → body_index 1 (the lone statement sits above the params); otherwise
             // dispatch the non-tail statements as siblings and tail-replace into the last at N.
             let body_index = leading.len() + 1;
-            ctx.dispatch_body_statements(&frame, leading.into_iter().map(|e| (*e).clone()).collect());
+            sched.dispatch_body_statements(
+                &frame,
+                leading.into_iter().map(|e| (*e).clone()).collect(),
+            );
             BodyResult::tail_with_frame_contract(tail.clone(), frame, contract, body_index)
         }
         ExecOutcome::DeferredExprTail {
@@ -114,8 +113,10 @@ pub(super) fn invoke<'run>(
             let mut body_and_type = leading;
             body_and_type.push(type_expr);
             let body_index = body_and_type.len() + 1;
-            let ids =
-                ctx.dispatch_body_statements(&frame, body_and_type.into_iter().map(|e| (*e).clone()).collect());
+            let ids = sched.dispatch_body_statements(
+                &frame,
+                body_and_type.into_iter().map(|e| (*e).clone()).collect(),
+            );
             let type_dep = *ids.last().expect("the return-type expr was dispatched");
             let tail_expr = tail.clone();
             let body_frame = frame.clone();
@@ -140,7 +141,7 @@ pub(super) fn invoke<'run>(
             });
             let mut pending = Some(finish);
             let mut combine_id = None;
-            ctx.with_active_frame(frame, &mut |s| {
+            sched.with_active_frame(frame, &mut |s| {
                 let finish = pending.take().expect("body runs once");
                 combine_id = Some(s.add_combine_in_frame(vec![type_dep], vec![], finish));
             });
@@ -148,18 +149,17 @@ pub(super) fn invoke<'run>(
         }
         ExecOutcome::Errored(e) => BodyResult::Err(e),
     };
-    ctx.body_result_to_step(result, idx)
+    result
 }
 
 /// Lower an action-harness builtin: convert its resolved `args` record into the `KObject::Record`
 /// the `BodyCtx` exposes, build the read-only `BodyCtx`, call the `ActionFn`, then interpret the
 /// returned `Action` through the shared `run_action`.
 fn run_action_builtin<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    sched: &mut Scheduler<'run>,
     f: crate::machine::core::kfunction::ActionFn,
     args: crate::machine::model::types::Record<crate::machine::model::values::ArgValue<'run>>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> BodyResult<'run> {
     use crate::machine::core::kfunction::action::BodyCtx;
     use crate::machine::model::values::{ArgValue, Held};
     use crate::machine::model::KObject;
@@ -168,30 +168,29 @@ fn run_action_builtin<'run>(
         ArgValue::Object(rc) => Held::Object(rc.deep_clone()),
         ArgValue::Type(t) => Held::Type(t.clone()),
     });
-    let args_obj: &'run KObject<'run> = ctx
+    let args_obj: &'run KObject<'run> = sched
         .current_scope()
         .arena
         .alloc_object(KObject::record_of_held(cells));
-    let frame = ctx.current_frame();
-    let chain = ctx.current_lexical_chain();
+    let frame = sched.current_frame();
+    let chain = sched.current_lexical_chain();
     let action = {
         let body_ctx = BodyCtx {
-            scope: ctx.current_scope(),
+            scope: sched.current_scope(),
             frame: frame.as_ref(),
             chain,
             args: args_obj,
         };
         f(&body_ctx)
     };
-    let result = super::super::harness::run_action(ctx, action);
-    ctx.body_result_to_step(result, idx)
+    super::super::harness::run_action(sched, action)
 }
 
 /// Extract the call's resolved value arguments from `working_expr`'s parts, in order. Returns
 /// `None` if any value part isn't a resolved `Carried` (a `Future`-splice or a literal) — the
 /// signal to fall through to the legacy binder. Keyword parts are the signature's own literals.
 fn extract_carried_args<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    sched: &mut Scheduler<'run>,
     working_expr: &KExpression<'run>,
 ) -> Option<Vec<Carried<'run>>> {
     let mut args = Vec::new();
@@ -202,7 +201,10 @@ fn extract_carried_args<'run>(
             // A literal value part isn't `Future`-spliced; resolve it into the run arena now
             // (mirrors `literal_pass_through`) so it joins the args as a `'run` `Carried`.
             ExpressionPart::Literal(_) => {
-                let object = ctx.current_scope().arena.alloc_object(part.value.resolve());
+                let object = sched
+                    .current_scope()
+                    .arena
+                    .alloc_object(part.value.resolve());
                 args.push(Carried::Object(object));
             }
             _ => return None,
@@ -210,4 +212,3 @@ fn extract_carried_args<'run>(
     }
     Some(args)
 }
-

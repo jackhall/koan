@@ -26,7 +26,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ctor: Box::new(result_ctor),
         args: vec![KType::Any, kerror_ktype()],
     };
-    let signature = sig(return_type, vec![kw("CATCH"), arg("expr", KType::KExpression)]);
+    let signature = sig(
+        return_type,
+        vec![kw("CATCH"), arg("expr", KType::KExpression)],
+    );
     crate::builtins::register_builtin(scope, "CATCH", signature, body);
 }
 
@@ -35,7 +38,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{require_kexpression, Action, CatchCont, Dep, DepPlacement};
+    use crate::machine::core::kfunction::action::{
+        require_kexpression, Action, CatchCont, Dep, DepPlacement,
+    };
     use crate::machine::model::Carried;
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", "expr"));
     // Capture the prelude `Result` member identity at body time so the CATCH value shares the
