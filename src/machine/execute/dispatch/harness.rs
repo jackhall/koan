@@ -17,6 +17,15 @@ use super::DispatchCtx;
 // The park edges a `ParkSelf` adds are `Notify` (sibling producers the slot waits on), never
 // owned — `add_park_edge` is the right primitive.
 
+/// Reclaim the producers a decide phase consumed inline (a ready `Reuse` spliced into a
+/// `working_expr`). Deferred off the decide phase so the handler stays read-only; the harness
+/// is the sole writer, so the free lands here.
+fn drain_free(ctx: &mut DispatchCtx<'_, '_>, free: Vec<usize>) {
+    for id in free {
+        ctx.free(id);
+    }
+}
+
 /// Interpret a handler's [`DispatchOutcome`] into the scheduler effect it names and return
 /// the slot's [`NodeStep`]. Grows one arm per migrated handler.
 pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
@@ -30,7 +39,10 @@ pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
             deps,
             dep_error_frame,
             finish,
+            free,
         } => {
+            // Reclaim the Reuse producers the decide phase consumed inline before declaring deps.
+            drain_free(ctx, free);
             // Submit each fresh dep (an `Existing` is already in the graph), install it as an
             // owned edge so it cascade-frees on resolve, and park the slot on the lot as a
             // `DispatchCombine`. Submission order is preserved, so `finish` reads `results[k]`
@@ -71,13 +83,16 @@ pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
         DispatchOutcome::Invoke {
             picked,
             working_expr,
+            free,
         } => {
             // The dispatch→execution hand-off: run the resolved call against the raw
             // `&mut Scheduler` and lower its body onto the slot.
+            drain_free(ctx, free);
             let body = super::exec::invoke(ctx.scheduler_mut(), picked, working_expr);
             ctx.body_result_to_step(body, idx)
         }
-        DispatchOutcome::Redispatch { working_expr } => {
+        DispatchOutcome::Redispatch { working_expr, free } => {
+            drain_free(ctx, free);
             super::keyworded::KeywordedState::finish(ctx, working_expr, idx)
         }
         DispatchOutcome::ParkLift { producer } => {

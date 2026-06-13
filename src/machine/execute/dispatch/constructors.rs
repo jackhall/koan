@@ -166,6 +166,7 @@ fn launch<'run>(
         deps,
         dep_error_frame: None,
         finish: combine_finish,
+        free: Vec::new(),
     };
     harness::apply_dispatch_outcome(ctx, outcome, idx)
 }

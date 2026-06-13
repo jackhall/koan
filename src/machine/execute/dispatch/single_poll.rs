@@ -291,6 +291,7 @@ fn park_on_literal<'run>(
         deps: vec![dep],
         dep_error_frame: None,
         finish,
+        free: Vec::new(),
     };
     harness::apply_dispatch_outcome(ctx, outcome, idx)
 }

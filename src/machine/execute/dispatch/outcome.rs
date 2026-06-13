@@ -33,6 +33,10 @@ pub(in crate::machine::execute) enum DispatchOutcome<'run> {
         deps: Vec<DispatchDep<'run>>,
         dep_error_frame: Option<TraceFrame>,
         finish: DispatchCombineFinish<'run>,
+        /// Pre-existing producers the decide phase consumed inline (a ready `Reuse` whose value
+        /// was already spliced into the finish's `working_expr`) — the harness reclaims them
+        /// before submitting deps. Empty for every non-eager-subs Combine.
+        free: Vec<usize>,
     },
     /// Park the slot on `producers` (pre-existing sibling producers it merely waits on, via
     /// `Notify` edges — never owned) and stash `state` so the slot re-decides on resume. The
@@ -51,6 +55,9 @@ pub(in crate::machine::execute) enum DispatchOutcome<'run> {
     Invoke {
         picked: &'run KFunction<'run>,
         working_expr: KExpression<'run>,
+        /// Reuse producers consumed inline during eager-subs splicing — drained by the harness
+        /// before the call runs. Empty for a synchronous call with no eager subs.
+        free: Vec<usize>,
     },
     /// Re-resolve dispatch against a now fully-spliced `working_expr` — the post-eager-subs
     /// continuation when no function was speculatively pre-picked. The harness re-enters
@@ -59,6 +66,9 @@ pub(in crate::machine::execute) enum DispatchOutcome<'run> {
     /// `Future` then surfaces as a slot-terminal `DispatchFailed`).
     Redispatch {
         working_expr: KExpression<'run>,
+        /// Reuse producers consumed inline during eager-subs splicing — drained by the harness
+        /// before the re-resolve. Empty when nothing was spliced inline.
+        free: Vec<usize>,
     },
     /// Park a bare-identifier slot on the single `producer` that will bind its name, then
     /// *become* that value via [`NodeWork::Lift`](super::super::nodes::NodeWork): the harness

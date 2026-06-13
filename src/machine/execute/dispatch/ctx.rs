@@ -259,6 +259,9 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         use super::super::nodes::DispatchCombineFinish;
         let mut deps: Vec<DispatchDep<'run>> = Vec::with_capacity(staged_subs.len());
         let mut part_indices: Vec<usize> = Vec::with_capacity(staged_subs.len());
+        // Reuse producers consumed inline (spliced into `working_expr`); the harness reclaims
+        // them so the decide phase issues no `free` write.
+        let mut free: Vec<usize> = Vec::new();
         for (i, pending) in staged_subs {
             // A `Reuse` is a pre-existing producer the pre-pick found: splice it inline if it has
             // already resolved (a read of a static-over-this-step slot), else park on it as an
@@ -272,7 +275,7 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
                             Err(e) => return bind_frame_err(e, &working_expr),
                             Ok(value) => {
                                 working_expr.parts[i].value = ExpressionPart::Future(value);
-                                self.free(id.index());
+                                free.push(id.index());
                                 continue;
                             }
                         }
@@ -289,8 +292,9 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         }
         if deps.is_empty() {
             // Every sub was an already-resolved `Reuse` spliced inline — `working_expr` is fully
-            // resolved, so continue to the finish now instead of parking on a Combine.
-            let outcome = finish_eager_subs(working_expr, picked);
+            // resolved, so continue to the finish now instead of parking on a Combine; the inline
+            // frees ride on the resulting Invoke/Redispatch outcome.
+            let outcome = finish_eager_subs(working_expr, picked, free);
             return harness::apply_dispatch_outcome(self, outcome, idx);
         }
         let dep_error_frame = Some(crate::machine::TraceFrame::from_expr(
@@ -299,17 +303,19 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
         ));
         let finish: DispatchCombineFinish<'run> = Box::new(move |ctx, results, idx| {
             // The short-circuit already guaranteed every dep resolved; splice each into the
-            // slot it was staged from, then run the routed continuation.
+            // slot it was staged from, then run the routed continuation. No inline frees remain at
+            // wake — those were drained when the Combine was installed.
             for (slot, value) in part_indices.iter().zip(results) {
                 working_expr.parts[*slot].value = ExpressionPart::Future(*value);
             }
-            let outcome = finish_eager_subs(working_expr, picked);
+            let outcome = finish_eager_subs(working_expr, picked, Vec::new());
             harness::apply_dispatch_outcome(ctx, outcome, idx)
         });
         let outcome = DispatchOutcome::Combine {
             deps,
             dep_error_frame,
             finish,
+            free,
         };
         harness::apply_dispatch_outcome(self, outcome, idx)
     }
@@ -342,12 +348,14 @@ impl<'run, 'b> DispatchCtx<'run, 'b> {
 fn finish_eager_subs<'run>(
     working_expr: KExpression<'run>,
     picked: Option<&'run KFunction<'run>>,
+    free: Vec<usize>,
 ) -> DispatchOutcome<'run> {
     match picked {
         Some(f) => DispatchOutcome::Invoke {
             picked: f,
             working_expr,
+            free,
         },
-        None => DispatchOutcome::Redispatch { working_expr },
+        None => DispatchOutcome::Redispatch { working_expr, free },
     }
 }

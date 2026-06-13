@@ -205,6 +205,7 @@ impl<'run> KeywordedState<'run> {
             let outcome = DispatchOutcome::Invoke {
                 picked: resolved.function,
                 working_expr: new_expr,
+                free: Vec::new(),
             };
             return harness::apply_dispatch_outcome(ctx, outcome, idx);
         }

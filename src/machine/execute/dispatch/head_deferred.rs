@@ -89,6 +89,7 @@ fn park_on_head<'run>(
         // attaches its own frame), matching the resume behaviour.
         dep_error_frame: None,
         finish,
+        free: Vec::new(),
     };
     harness::apply_dispatch_outcome(ctx, outcome, idx)
 }
