@@ -24,7 +24,7 @@ echo 'PRINT "hello"' | cargo run
 
 The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, `MATCH <value> WITH (<branches>)`, `TRY (<expr>) WITH (<branches>)`, and `FN <signature> -> <ReturnType> = <body>` — one file per builtin under [src/builtins/](src/builtins), pulled together by [default_scope](src/builtins.rs). See [TUTORIAL.md](TUTORIAL.md) for the full builtin reference.
 
-User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF T)`, `:(MAP K -> V)`, `:(FN (args) -> R)`, `Type`, `Tagged`, `Struct`, `Module`, `Signature`, `KExpression`, and `Any`. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
+User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF T)`, `:(MAP K -> V)`, `:(FN (args) -> R)`, `Type`, `Module`, `Signature`, `KExpression`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
 
 Example:
 
@@ -57,7 +57,7 @@ source ──▶ parse ──▶ dispatch ──▶ execute
         KExpression   KFuture      KObject
 ```
 
-`parse`, `builtins`, and `machine` are sibling crate-top modules; `machine` owns dispatch and execute. [src/main.rs](src/main.rs) wires the stages: read source, build a `default_scope` of builtins, hand the source to `interpret`.
+`parse`, `builtins`, and `machine` are sibling crate-top modules; `machine` owns dispatch and execute. [src/main.rs](src/main.rs) reads the source and hands it to `interpret_with_writer_path`, which builds a `default_scope` of builtins and drains the scheduler.
 
 ### parse — text → `KExpression` tree
 
@@ -73,7 +73,7 @@ The output is one [`KExpression`](src/machine/model/ast.rs) per top-level line: 
 
 ### dispatch — `KExpression` → `KFuture` against a `Scope`
 
-A [`Scope`](src/machine/core/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. `Scope::resolve_dispatch` walks the scope chain in a single pass and returns a [`ResolveOutcome`](src/machine/core/scope.rs) — `Resolved` (a unique pick, classified per slot), `Ambiguous(n)` (strict-mode tie), `Deferred` (no match yet but nested subs may unblock one), or `Unmatched` (a real dispatch failure). [`ExpressionSignature`](src/machine/model/types/signature.rs)s mix fixed `Token`s and typed `Argument` slots; on `Resolved` the scheduler `bind`s the resolved function into a [`KFuture`](src/machine/core/scope.rs) — the function plus its `ArgumentBundle`, ready to run but not yet executed.
+A [`Scope`](src/machine/core/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. [`resolve_dispatch`](src/machine/execute/dispatch/resolve_dispatch.rs) walks the scope chain in a single pass and returns a [`ResolveOutcome`](src/machine/execute/dispatch/resolve_dispatch.rs) — `Resolved` (a unique pick, classified per slot), `Ambiguous(n)` (strict-mode tie), `Deferred` (no match yet but nested subs may unblock one), or `Unmatched` (a real dispatch failure). [`ExpressionSignature`](src/machine/model/types/signature.rs)s mix fixed `Token`s and typed `Argument` slots; on `Resolved` the resolved function binds its arguments, ready to run but not yet executed.
 
 Runtime values are [`KObject`](src/machine/model/values/kobject.rs) (scalars, collections, expressions, futures, function references); cross-cutting traits (`Parseable`, `Executable`, `Serializable`, `Monadic`, …) live in [ktraits.rs](src/machine/model/types/ktraits.rs). Builtins are registered in [builtins.rs](src/builtins.rs) and produce the default root scope.
 
@@ -81,9 +81,9 @@ Errors are first-class via [`KError`](src/machine/core/kerror.rs) — a `BodyRes
 
 ### execute — run the DAG
 
-[`Scheduler`](src/machine/execute/scheduler.rs) holds a slot table of in-flight work plus a push/notify dependency graph. Callers submit top-level `KExpression`s via `add_dispatch(expr, scope)`; each slot's `run_dispatch` spawns sub-Dispatches for the expression's nested parts and parks the parent as a `Bind` until its deps terminalize. When a producer writes its terminal, a single `finalize` step drains the producer's notify-list and wakes any consumer whose `pending_deps` counter hits zero — no polling, no result-table sweep. Tail returns (`BodyResult::Tail`) rewrite the slot's own work in place rather than allocating a new slot. See [design/execution-model.md](design/execution-model.md).
+[`Scheduler`](src/machine/execute/scheduler.rs) holds a slot table of in-flight work plus a push/notify dependency graph. Callers submit a top-level block via `enter_block` (and nested parts via `add_dispatch`); each slot's `run_dispatch` spawns sub-Dispatches for the expression's nested parts and parks the parent as a `Bind` until its deps terminalize. When a producer writes its terminal, a single `finalize` step drains the producer's notify-list and wakes any consumer whose `pending_deps` counter hits zero — no polling, no result-table sweep. Tail returns (`BodyResult::Tail`) rewrite the slot's own work in place rather than allocating a new slot. See [design/execution-model.md](design/execution-model.md).
 
-[`interpret`](src/machine/execute/interpret.rs) is the glue: parse the source, `add_dispatch` each top-level expression against the root scope, then drain the scheduler. The caller keeps ownership of the `Scope` so output and post-run bindings are inspectable — that's how the tests in [interpret.rs](src/machine/execute/interpret.rs) capture `PRINT` output and assert on `LET` bindings.
+[`interpret`](src/machine/execute/interpret.rs) is the glue: parse the source, hand the top-level block to `enter_block` against a root `default_scope`, drain the scheduler, then `read_result` each top-level node. `PRINT` output flows through the scope's pluggable writer (default stdout; tests swap in a shared `Vec<u8>` buffer to read it back), and every value the program allocated dies with the per-run `RuntimeArena` when `interpret` returns.
 
 ## Source layout
 
@@ -93,13 +93,13 @@ file per builtin), and [machine/](src/machine) (the execution engine that
 consumes a `KExpression`). `machine` further
 splits into [model/](src/machine/model) (the value/type vocabulary —
 [ast.rs](src/machine/model/ast.rs) for the parsed-expression types,
-[types/](src/machine/model/types) for `KType`/signatures/traits, and
-[values/](src/machine/model/values) for `KObject`/`KKey`/`Module`),
+[types/](src/machine/model/types) for `KType`/`KKind`/signatures/traits, and
+[values/](src/machine/model/values) for `KObject`/`Carried`/`KKey`/`Module`),
 [core/](src/machine/core) (arenas, `Scope`, `KError`, plus the
-`kfunction` submodule that owns `KFunction`/`Body`/`ArgumentBundle` — overload
-resolution is one `Scope::resolve_dispatch` method that returns a
-`ResolveOutcome`), and [execute/](src/machine/execute) (the scheduler
-and the `interpret` glue).
+`kfunction` submodule that owns `KFunction`/`Body` and the body executor), and
+[execute/](src/machine/execute) (the scheduler, the `dispatch` shape router —
+where overload resolution lives as `resolve_dispatch` returning a
+`ResolveOutcome` — and the `interpret` glue).
 
 Within those sub-modules, the `k`-prefix marks files built around a single
 eponymous Koan-runtime type: [kobject.rs](src/machine/model/values/kobject.rs) defines `KObject`,
@@ -110,11 +110,10 @@ eponymous Koan-runtime type: [kobject.rs](src/machine/model/values/kobject.rs) d
 [ktraits.rs](src/machine/model/types/ktraits.rs) holds the `K*`-typed core traits.
 Files without the prefix are infrastructure that don't introduce a single namesake type:
 [arena.rs](src/machine/core/arena.rs) (allocation),
-[scope.rs](src/machine/core/scope.rs) (lexical environment plus the
-`Scope::resolve_dispatch` overload-resolution walk and `Resolved` /
-`ResolveOutcome` types),
-[signature.rs](src/machine/model/types/signature.rs) (dispatch shapes and specificity,
-including `ExpressionSignature::most_specific` for the per-bucket tournament),
+[scope.rs](src/machine/core/scope.rs) (lexical environment and `KFuture`),
+[resolve_dispatch.rs](src/machine/execute/dispatch/resolve_dispatch.rs) (the
+overload-resolution walk returning a `ResolveOutcome`),
+[signature.rs](src/machine/model/types/signature.rs) (dispatch shapes and specificity),
 [recursive_set.rs](src/machine/model/types/recursive_set.rs) (`RecursiveSet`, the
 `Rc`-owned unit of nominal identity, allocation, and lift),
 [builtins.rs](src/builtins.rs) (registry),
@@ -123,7 +122,7 @@ including `ExpressionSignature::most_specific` for the per-bucket tournament),
 
 ```
 src/
-├── main.rs              CLI entry point — re-imports through lib.rs
+├── main.rs              CLI entry point — reads source, calls interpret_with_writer_path
 ├── lib.rs               library facade — declares `parse`, `builtins`, and `machine` so integration tests under tests/ link against the same module graph
 ├── parse.rs             pub mod parse; …
 ├── parse/
@@ -136,14 +135,16 @@ src/
 │   ├── triple_list.rs      helper for triple-list parsing
 │   ├── tokens.rs           classify tokens, compound-operator desugaring
 │   └── operators.rs        operator registry
-├── builtins.rs          try_args!, register_builtin, default_scope()
+├── builtins.rs          register_builtin, default_scope()
 ├── builtins/            one file per builtin (body + register paired)
 │   ├── let_binding.rs
 │   ├── print.rs
-│   ├── value_pass.rs
 │   ├── attr.rs
-│   ├── fn_def.rs
-│   ├── fn_def/signature.rs   parameter-list parsing for FN
+│   ├── fn_def.rs             FN — user function definition
+│   ├── fn_def/signature.rs      parameter-list parsing for FN
+│   ├── fn_def/return_type.rs    return-type slot elaboration
+│   ├── fn_def/param_refs.rs     parameter-reference resolution
+│   ├── fn_def/finalize.rs       seal the function once its slots resolve
 │   ├── match_case.rs
 │   ├── try_with.rs           TRY (<expr>) WITH (<branches>) — catch runtime errors
 │   ├── catch.rs              CATCH — error-handling primitive
@@ -151,10 +152,13 @@ src/
 │   ├── result.rs             Result tagged-union builtin
 │   ├── type_constructors.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
 │   ├── type_ops.rs           TEMPLATE / WITH
-│   ├── union.rs
+│   ├── type_ops/type_constructor.rs   TEMPLATE — parameterized type constructor
+│   ├── type_ops/with.rs               WITH — type-constructor application
+│   ├── union.rs              UNION — tagged-union declaration
 │   ├── record_projection.rs  FROM — `(x y) FROM r` re-tags a record value's carried type to the named fields
-│   ├── tagged_union.rs       shared tagged-union representation
+│   ├── nominal_schema.rs     shared Action-harness field-list elaboration for UNION / NEWTYPE record repr
 │   ├── newtype_def.rs        NEWTYPE — scalar repr and the `:{…}` record repr (the product-side nominal form)
+│   ├── recursive_types.rs    RECURSIVE TYPES — co-declare a mutually-recursive nominal group
 │   ├── module_def.rs         MODULE
 │   ├── sig_def.rs            SIG
 │   ├── functor_def.rs        FUNCTOR — modules parameterized by modules
@@ -168,20 +172,24 @@ src/
 └── machine/
     ├── model.rs            re-exports from model::types and model::values
     ├── model/
-    │   ├── ast.rs                 parsed-expression types (KExpression, ExpressionPart, KLiteral, TypeName)
+    │   ├── ast.rs                 parsed-expression types (KExpression, ExpressionPart, KLiteral, TypeName); classify_dispatch_shape
+    │   ├── operators.rs           OperatorGroup registry record — chainable-operator precedence/associativity
     │   ├── types.rs
     │   ├── types/
     │   │   ├── ktype.rs           KType — type tag for slots, return types, and runtime values
+    │   │   ├── kkind.rs           KKind — the shallow dispatch *kind* of a type (the OfKind expectation)
     │   │   ├── record.rs          Record<V> — ordered identifier-keyed map backing struct schemas and FN/FUNCTOR parameter identity
     │   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
     │   │   ├── ktype_resolution.rs   surface-name and TypeName elaboration (from_name, from_type_expr, join)
     │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking and per-scope resolution memo
+    │   │   ├── recursive_set.rs   RecursiveSet — Rc-owned unit of nominal identity, allocation, and lift
     │   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
     │   │   ├── ktraits.rs         Parseable / Executable / Iterable / Serializable / Monadic
     │   │   └── typed_field_list.rs  shared parser for `(name :Type ...)` schemas
     │   ├── values.rs
     │   └── values/
     │       ├── kobject.rs         runtime value type
+    │       ├── carried.rs         Carried — the scheduler's value currency (Object | Type)
     │       ├── kkey.rs            KKey — hashable scalar wrapper for dict keys
     │       ├── named_pairs.rs     shared (name, value) ordered-list helper
     │       └── module.rs          Module / Signature — first-class module values
@@ -189,28 +197,30 @@ src/
     ├── core/
     │   ├── arena.rs       RuntimeArena, CallArena — per-run and per-call allocation
     │   ├── bindings.rs    Bindings façade — five-map (data/functions/placeholders/types/pending_overloads) with the validated try_apply write path, try_register_type for nominal type identity, and the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)])
+    │   ├── bindings/pending.rs   per-binding pending-overload state
     │   ├── kerror.rs      KError, KErrorKind, Frame — structured runtime errors
     │   ├── pending.rs     PendingQueue — deferred re-entrant writes, drained between dispatch nodes
     │   ├── scope.rs       Scope, KFuture — lexical environment and dispatch-result handle
-    │   ├── resolve_dispatch.rs   Scope::resolve_dispatch — overload-resolution surface; returns Resolved / ResolveOutcome
-    │   ├── resolve_type_expr.rs  type-name elaboration entry point
+    │   ├── scope_ptr.rs   ScopePtr — the single audited owner of Scope lifetime-erasure for arena-stored carriers
     │   ├── source.rs      source-span and provenance carrier for errors
     │   ├── scope_id.rs    ScopeId — counter-minted nominal scope identity for per-declaration types
     │   ├── lexical_frame.rs  LexicalFrame — immutable cactus-chain (scope_id, index, parent) attached to every dispatched node
     │   ├── kfunction.rs   KFunction, Body, BodyResult — body shapes plus the dispatch-to-execute bridge
     │   └── kfunction/
-    │       ├── argument_bundle.rs   ArgumentBundle — resolved-slot carrier
-    │       ├── body.rs
-    │       ├── invoke.rs            KFunction::invoke — runtime side of the bind/apply pipeline
+    │       ├── body.rs              Body / BodyResult / ReturnContract
+    │       ├── bind_by_name.rs      bind a user call's resolved args to params by name
+    │       ├── exec.rs              run_user_fn — innermost body executor; returns a scheduler-unaware ExecOutcome
+    │       ├── action.rs            Action — the scheduler-aware currency a builtin returns (types only)
     │       ├── pick.rs              per-bucket tournament selecting the most-specific overload
     │       └── scheduler_handle.rs
     ├── execute.rs
     └── execute/
-        ├── scheduler.rs   Scheduler struct, execute loop, KFunction::invoke bridge; dep_graph/, node_store/, submit/, work_queues/, finish/, literal/, tests under it
+        ├── scheduler.rs   Scheduler struct, execute loop; dep_graph/, node_store/, submit/, work_queues/, finish/, execute/, literal/ submodules, tests under it
         ├── nodes.rs       node types (NodeWork / NodeOutput / NodeStep / Node) + work_deps
-        ├── dispatch.rs    run_dispatch router + classify_dispatch_shape + DispatchState; outcome/ (DispatchOutcome effect enum), harness/ (write applier), ctx/ (DispatchCx read view + exec::invoke), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/ (shared callable tail) submodules
+        ├── harness.rs     run_action — drives the scheduler from an Action; the one place that touches SchedulerHandle
+        ├── dispatch.rs    run_dispatch router + classify_dispatch_shape; outcome/ (DispatchOutcome effect enum), harness/ (write applier), ctx/ (DispatchCx read view), exec/ (dispatch-side invoke), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/, operator_chain/, field_list/, constructors/, resolve_dispatch/, resolve_type_expr/ submodules
         ├── lift.rs        lift_kobject — rebuild values across per-call arena boundaries
-        └── interpret.rs   parse → dispatch → schedule → execute
+        └── interpret.rs   parse → enter_block → execute
 ```
 
 ## Design and roadmap
