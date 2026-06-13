@@ -10,7 +10,7 @@
 use crate::machine::core::kfunction::SchedulerHandle;
 use crate::machine::NodeId;
 
-use super::super::nodes::{NodeStep, NodeWork};
+use super::super::nodes::{LiftState, NodeStep, NodeWork};
 use super::outcome::{DispatchDep, DispatchOutcome};
 use super::DispatchCtx;
 
@@ -79,6 +79,18 @@ pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
         }
         DispatchOutcome::Redispatch { working_expr } => {
             super::keyworded::KeywordedState::finish(ctx, working_expr, idx)
+        }
+        DispatchOutcome::ParkLift { producer } => {
+            // Notify edge, not Owned: the producer is a sibling slot we only wait on. The slot
+            // then becomes a pending `Lift`, which adopts the producer's resolved value directly.
+            ctx.add_park_edge(producer, NodeId(idx));
+            NodeStep::Replace {
+                work: NodeWork::Lift(LiftState::Pending(producer)),
+                frame: None,
+                function: None,
+                block_entry: None,
+                body_index: 0,
+            }
         }
     }
 }

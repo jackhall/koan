@@ -16,7 +16,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{KType, RecursiveSet};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution};
 
-use super::super::nodes::{DispatchCombineFinish, LiftState, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{DispatchCombineFinish, NodeOutput, NodeStep, NodeWork};
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::outcome::{DispatchDep, DispatchOutcome};
 use super::{harness, DispatchCtx, DispatchState, Initialized};
@@ -153,16 +153,7 @@ pub(super) fn bare_identifier<'run>(
     {
         Resolution::Value(obj) => NodeStep::Done(NodeOutput::value(obj)),
         Resolution::Placeholder(producer) => {
-            // Notify edge, not Owned: producer is a sibling slot, we
-            // only park for the wake.
-            ctx.add_park_edge(producer, NodeId(idx));
-            NodeStep::Replace {
-                work: NodeWork::Lift(LiftState::Pending(producer)),
-                frame: None,
-                function: None,
-                block_entry: None,
-                body_index: 0,
-            }
+            harness::apply_dispatch_outcome(ctx, DispatchOutcome::ParkLift { producer }, idx)
         }
         Resolution::UnboundName => {
             NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))))

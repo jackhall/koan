@@ -60,6 +60,14 @@ pub(in crate::machine::execute) enum DispatchOutcome<'run> {
     Redispatch {
         working_expr: KExpression<'run>,
     },
+    /// Park a bare-identifier slot on the single `producer` that will bind its name, then
+    /// *become* that value via [`NodeWork::Lift`](super::super::nodes::NodeWork): the harness
+    /// adds the `Notify` park edge and replaces the slot with a pending `Lift`. Distinct from
+    /// `ParkSelf` (which re-decides on resume): a `Lift` slot adopts the producer's resolved
+    /// value directly, so there is no dispatch state to carry.
+    ParkLift {
+        producer: NodeId,
+    },
 }
 
 /// A dependency a [`DispatchOutcome::Combine`] declares. `Dispatch`/`*Lit` are fresh sub-slots

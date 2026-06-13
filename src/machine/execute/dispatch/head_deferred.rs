@@ -21,16 +21,16 @@
 //! The head sub-dispatch is an Owned edge; the park/resume pair mirrors
 //! `park_on_literal_producer` + `CtorState::resume`, no new scheduler primitive.
 
-use crate::machine::core::kfunction::SchedulerHandle;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::KType;
 use crate::machine::model::{Carried, KObject, Parseable};
-use crate::machine::{KError, KErrorKind, NodeId};
+use crate::machine::{KError, KErrorKind};
 
-use super::super::nodes::{DispatchCombineFinish, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{DispatchCombineFinish, NodeOutput, NodeStep};
 use super::apply_callable::{apply_callable, ResolvedCallable};
-use super::DispatchCtx;
+use super::outcome::{DispatchDep, DispatchOutcome};
+use super::{harness, DispatchCtx};
 
 /// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly, then
 /// applied to `parts[1..]` once it resolves.
@@ -43,8 +43,7 @@ pub(in crate::machine::execute) fn initial_expr<'run>(
         ExpressionPart::Expression(boxed) => (**boxed).clone(),
         _ => unreachable!("HeadDeferred shape implies nested Expression head"),
     };
-    let head_sub = ctx.scheduler_mut().add_dispatch_here(head);
-    park_on_head(ctx, expr, head_sub, false, idx)
+    park_on_head(ctx, expr, head, false, idx)
 }
 
 /// `TypeHeadDeferred` entry: head is a `:(...)` sigil. Wrap it as a one-part
@@ -61,24 +60,22 @@ pub(in crate::machine::execute) fn initial_type<'run>(
         )]),
         _ => unreachable!("TypeHeadDeferred shape implies SigiledTypeExpr head"),
     };
-    let head_sub = ctx.scheduler_mut().add_dispatch_here(head);
-    park_on_head(ctx, expr, head_sub, true, idx)
+    park_on_head(ctx, expr, head, true, idx)
 }
 
-/// Park the slot on the head sub-dispatch as a single-owned-dep [`NodeWork::DispatchCombine`].
-/// When the head resolves, the finish classifies it into a [`ResolvedCallable`] and hands off
-/// to the shared apply-a-callable tail — which may itself resolve, park, or error, so the
-/// `NodeStep`-returning dispatch finish is required (a `BodyResult` Combine finish could not
-/// re-park). A dep error short-circuits frameless in `run_dispatch_combine`, so the finish only
-/// runs on a resolved head.
+/// Park the slot on the head sub-dispatch as a single-dep [`DispatchOutcome::Combine`]: the
+/// harness submits `head` as an owned dep and parks the slot on it. When the head resolves, the
+/// finish classifies it into a [`ResolvedCallable`] and hands off to the shared apply-a-callable
+/// tail — which may itself resolve, park, or error, so the `NodeStep`-returning dispatch finish is
+/// required (a `BodyResult` Combine finish could not re-park). A dep error short-circuits frameless
+/// in `run_dispatch_combine`, so the finish only runs on a resolved head.
 fn park_on_head<'run>(
     ctx: &mut DispatchCtx<'run, '_>,
     expr: KExpression<'run>,
-    head_sub: NodeId,
+    head: KExpression<'run>,
     type_only: bool,
     idx: usize,
 ) -> NodeStep<'run> {
-    ctx.add_owned_edge(head_sub, NodeId(idx));
     let finish: DispatchCombineFinish<'run> = Box::new(move |ctx, results, idx| {
         let callable = match classify_head(results[0], type_only) {
             Ok(c) => c,
@@ -86,20 +83,14 @@ fn park_on_head<'run>(
         };
         apply_callable(ctx, callable, &expr, idx)
     });
-    NodeStep::Replace {
-        work: NodeWork::DispatchCombine {
-            deps: vec![head_sub],
-            park_count: 0,
-            finish,
-            // The head sub is the only dep; a dep error propagates frameless (the resumed
-            // dispatch attaches its own frame), matching the legacy resume behaviour.
-            dep_error_frame: None,
-        },
-        frame: None,
-        function: None,
-        block_entry: None,
-        body_index: 0,
-    }
+    let outcome = DispatchOutcome::Combine {
+        deps: vec![DispatchDep::Dispatch(head)],
+        // The head sub is the only dep; a dep error propagates frameless (the resumed dispatch
+        // attaches its own frame), matching the resume behaviour.
+        dep_error_frame: None,
+        finish,
+    };
+    harness::apply_dispatch_outcome(ctx, outcome, idx)
 }
 
 /// Branch a resumed head value into a [`ResolvedCallable`], honoring the
