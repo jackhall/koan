@@ -107,6 +107,7 @@ pub(super) fn invoke<'run>(
                 frame: FramePlacement::FreshChild { frame },
                 contract: Some(contract),
                 block_entry: Some(block_entry),
+                leading: Vec::new(),
                 body_index,
             }
         }
@@ -156,6 +157,7 @@ pub(super) fn invoke<'run>(
                     frame: FramePlacement::FreshChild { frame: body_frame },
                     contract: Some(contract),
                     block_entry: Some(block_entry),
+                    leading: Vec::new(),
                     body_index,
                 }
             });

@@ -56,6 +56,7 @@ impl<'run> Scheduler<'run> {
                 frame,
                 contract,
                 block_entry,
+                leading,
                 body_index,
             } => {
                 // Resolve the frame placement to the cart the Replace installs: reuse the slot's
@@ -65,6 +66,16 @@ impl<'run> Scheduler<'run> {
                     FramePlacement::FreshChild { frame } => Some(frame),
                     FramePlacement::Inherit => None,
                 };
+                // The body's non-tail statements dispatch as siblings against the resolved cart via
+                // the shared `dispatch_body_statements` primitive; the slot tail-replaces into the
+                // last statement separately below. A decide that carries `leading` issues no write
+                // itself — the submission lands here.
+                if !leading.is_empty() {
+                    let cart = frame
+                        .clone()
+                        .expect("a Continue with leading statements requires a frame");
+                    self.dispatch_body_statements(&cart, leading);
+                }
                 NodeStep::Replace {
                     work,
                     frame,

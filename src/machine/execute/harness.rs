@@ -4,12 +4,7 @@
 //! peer of `dispatch/exec.rs::invoke`. The `Action` *types* live in
 //! [`crate::machine::core::kfunction::action`].
 
-use std::rc::Rc;
-
-use crate::machine::core::kfunction::action::{
-    Action, Dep, DepPlacement, FinishCtx, FramePlacement,
-};
-use crate::machine::core::CallArena;
+use crate::machine::core::kfunction::action::{Action, Dep, DepPlacement, FinishCtx};
 use crate::machine::NodeId;
 
 use super::nodes::{NodeOutput, NodeWork};
@@ -35,38 +30,21 @@ pub(in crate::machine::execute) fn run_action<'a, 's>(
             frame_placement,
             block_entry,
         } => {
-            let frame: Option<Rc<CallArena>> = match frame_placement {
-                FramePlacement::ReuseReserve { outer } => Some(h.acquire_tail_frame(outer)),
-                FramePlacement::FreshChild { frame } => Some(frame),
-                FramePlacement::Inherit => None,
-            };
-            let n_leading = leading.len();
-            // The body's non-tail statements dispatch as siblings via the shared
-            // `SchedulerHandle::dispatch_body_statements` — the same primitive `KFunction::invoke`
-            // uses. The caller (here) tail-replaces into the last statement separately.
-            if !leading.is_empty() {
-                let cart = frame
-                    .clone()
-                    .expect("Action::Tail with leading requires a frame");
-                h.dispatch_body_statements(&cart, leading);
-            }
             // A block-entering tail sits above the params (`1`) or the leading siblings (`N`); a
-            // frameless continuation keeps the slot's block at index `0`.
+            // frameless continuation keeps the slot's block at index `0`. The harness resolves
+            // `frame_placement` to a cart and dispatches `leading` against it — this decide names
+            // the work but issues no write.
             let body_index = if block_entry.is_some() {
-                n_leading + 1
+                leading.len() + 1
             } else {
                 0
             };
-            // `Some(rc)` installs a fresh per-call cart; `None` keeps the slot's current cart.
-            let placement = match frame {
-                Some(frame) => FramePlacement::FreshChild { frame },
-                None => FramePlacement::Inherit,
-            };
             Outcome::Continue {
                 work: NodeWork::dispatch(tail),
-                frame: placement,
+                frame: frame_placement,
                 contract,
                 block_entry,
+                leading,
                 body_index,
             }
         }

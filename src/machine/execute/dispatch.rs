@@ -276,6 +276,7 @@ pub(in crate::machine::execute) fn become_dispatch<'run>(
         frame: FramePlacement::Inherit,
         contract: None,
         block_entry: None,
+        leading: Vec::new(),
         body_index: 0,
     }
 }
