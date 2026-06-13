@@ -15,10 +15,10 @@
 //! - **NonCallableHead** (a literal/empty/lazy head) → a direct
 //!   `DispatchFailed` raise carrying the offending head
 //!
-//! State and transitions live with their shape; this file keeps the
-//! cross-shape glue. Every per-shape handler takes a
-//! [`DispatchCtx`] — the typed facade over `&mut Scheduler<'run>` — so the
-//! shape modules never spell scheduler field names.
+//! State and transitions live with their shape; this file keeps the cross-shape glue. Every
+//! per-shape handler *decides* against a read-only [`DispatchCx`] and returns a
+//! [`DispatchOutcome`] the [`harness`] applies — the router and harness hold the only
+//! `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field names).
 
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -46,7 +46,7 @@ pub(in crate::machine::execute) mod single_poll;
 #[cfg(test)]
 mod tests;
 
-pub(in crate::machine::execute) use ctx::{DispatchCtx, DispatchCx};
+pub(in crate::machine::execute) use ctx::DispatchCx;
 pub(in crate::machine::execute) use harness::run_dispatch_combine_finish;
 pub(in crate::machine::execute) use outcome::DispatchOutcome;
 pub(crate) use field_list::defer_field_list_action;
@@ -352,34 +352,34 @@ impl<'run> DispatchState<'run> {
 /// `FunctionValueCall` carry tracks that can re-enter via the resume
 /// arms.
 pub(in crate::machine::execute) fn run_dispatch<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    sched: &mut Scheduler<'run>,
     expr: KExpression<'run>,
     state: DispatchState<'run>,
     idx: usize,
 ) -> NodeStep<'run> {
-    let _wakes = ctx.take_recent_wakes(NodeId(idx));
+    let _wakes = sched.take_recent_wakes(NodeId(idx));
     let init = match state {
         DispatchState::Initialized(i) => i,
         // Each parked-state resume decides against a read-only view; the router clears the
         // resuming slot's stale dep edges (where the resume depends on it) before deciding,
         // then applies the returned outcome — the resume itself issues no graph write.
         DispatchState::Keyworded(ks) => {
-            let outcome = ks.resume(&ctx.read_view(), idx);
-            return harness::apply_dispatch_outcome(ctx, outcome, idx);
+            let outcome = ks.resume(&DispatchCx::new(sched), idx);
+            return harness::apply_dispatch_outcome(sched, outcome, idx);
         }
         DispatchState::FunctionValueCall(fs) => {
-            let outcome = fs.resume(&ctx.read_view());
-            return harness::apply_dispatch_outcome(ctx, outcome, idx);
+            let outcome = fs.resume(&DispatchCx::new(sched));
+            return harness::apply_dispatch_outcome(sched, outcome, idx);
         }
         DispatchState::TypeCall(cs) => {
-            ctx.clear_dep_edges(idx);
-            let outcome = (*cs).resume(&ctx.read_view());
-            return harness::apply_dispatch_outcome(ctx, outcome, idx);
+            sched.clear_dep_edges(idx);
+            let outcome = (*cs).resume(&DispatchCx::new(sched));
+            return harness::apply_dispatch_outcome(sched, outcome, idx);
         }
         DispatchState::BareTypeLeaf(bs) if bs.park.is_some() => {
-            ctx.clear_dep_edges(idx);
-            let outcome = bs.resume(&ctx.read_view());
-            return harness::apply_dispatch_outcome(ctx, outcome, idx);
+            sched.clear_dep_edges(idx);
+            let outcome = bs.resume(&DispatchCx::new(sched));
+            return harness::apply_dispatch_outcome(sched, outcome, idx);
         }
         _ => unreachable!(
             "remaining fast-lane stateful variants terminalize in one poll; \
@@ -395,8 +395,8 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
                 ExpressionPart::Type(t) => t.clone(),
                 _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
             };
-            let outcome = single_poll::bare_type_leaf(&ctx.read_view(), &t);
-            harness::apply_dispatch_outcome(ctx, outcome, idx)
+            let outcome = single_poll::bare_type_leaf(&DispatchCx::new(sched), &t);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
         }
         DispatchShape::BareIdentifier => {
             debug_assert!(init.pre_subs.is_empty());
@@ -404,27 +404,27 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
                 ExpressionPart::Identifier(n) => n.clone(),
                 _ => unreachable!("BareIdentifier shape implies single Identifier part"),
             };
-            let outcome = single_poll::bare_identifier(&ctx.read_view(), name);
-            harness::apply_dispatch_outcome(ctx, outcome, idx)
+            let outcome = single_poll::bare_identifier(&DispatchCx::new(sched), name);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
         }
         DispatchShape::FunctionValueCall => {
             debug_assert!(init.pre_subs.is_empty());
             let _ = init;
-            let outcome = FnValueState::initial(&ctx.read_view(), expr);
-            harness::apply_dispatch_outcome(ctx, outcome, idx)
+            let outcome = FnValueState::initial(&DispatchCx::new(sched), expr);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
         }
         DispatchShape::TypeCall => {
             debug_assert!(init.pre_subs.is_empty());
-            let outcome = single_poll::type_call(&ctx.read_view(), expr);
-            harness::apply_dispatch_outcome(ctx, outcome, idx)
+            let outcome = single_poll::type_call(&DispatchCx::new(sched), expr);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
         }
         DispatchShape::HeadDeferred => {
             debug_assert!(init.pre_subs.is_empty());
-            harness::apply_dispatch_outcome(ctx, head_deferred::initial_expr(expr), idx)
+            harness::apply_dispatch_outcome(sched, head_deferred::initial_expr(expr), idx)
         }
         DispatchShape::TypeHeadDeferred => {
             debug_assert!(init.pre_subs.is_empty());
-            harness::apply_dispatch_outcome(ctx, head_deferred::initial_type(expr), idx)
+            harness::apply_dispatch_outcome(sched, head_deferred::initial_type(expr), idx)
         }
         // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
         // a non-callable head is a runtime error, not a fatal `execute()` abort.
@@ -445,26 +445,26 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
             // Decide against a read-only view (immutable scheduler borrow), then reborrow
             // `&mut` through the harness to apply — the borrow contract the effect split rests
             // on. The `read_view` borrow ends at the `run` call (NLL), freeing `ctx` for apply.
-            let outcome = operator_chain::run(&ctx.read_view(), &expr);
-            harness::apply_dispatch_outcome(ctx, outcome, idx)
+            let outcome = operator_chain::run(&DispatchCx::new(sched), &expr);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
         }
         DispatchShape::Keyworded => {
-            let outcome = KeywordedState::initial(&ctx.read_view(), expr, init.pre_subs, idx);
-            harness::apply_dispatch_outcome(ctx, outcome, idx)
+            let outcome = KeywordedState::initial(&DispatchCx::new(sched), expr, init.pre_subs, idx);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
         }
         DispatchShape::SigiledTypeExpr => {
             debug_assert!(init.pre_subs.is_empty());
-            harness::apply_dispatch_outcome(ctx, single_poll::sigiled_type_expr(expr), idx)
+            harness::apply_dispatch_outcome(sched, single_poll::sigiled_type_expr(expr), idx)
         }
         DispatchShape::RecordType => {
             debug_assert!(init.pre_subs.is_empty());
-            let outcome = single_poll::record_type(&ctx.read_view(), expr);
-            harness::apply_dispatch_outcome(ctx, outcome, idx)
+            let outcome = single_poll::record_type(&DispatchCx::new(sched), expr);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
         }
         DispatchShape::LiteralPassThrough => {
             debug_assert!(init.pre_subs.is_empty());
-            let outcome = single_poll::literal_pass_through(&ctx.read_view(), expr);
-            harness::apply_dispatch_outcome(ctx, outcome, idx)
+            let outcome = single_poll::literal_pass_through(&DispatchCx::new(sched), expr);
+            harness::apply_dispatch_outcome(sched, outcome, idx)
         }
     }
 }

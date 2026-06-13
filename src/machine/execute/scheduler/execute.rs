@@ -36,8 +36,7 @@ impl<'run> Scheduler<'run> {
             self.active_in_contract_chain = prev_contract.is_some();
             let step = match work {
                 NodeWork::Dispatch { expr, state } => {
-                    let mut ctx = crate::machine::execute::dispatch::DispatchCtx::new(self);
-                    crate::machine::execute::dispatch::run_dispatch(&mut ctx, expr, state, idx)
+                    crate::machine::execute::dispatch::run_dispatch(self, expr, state, idx)
                 }
                 NodeWork::Combine {
                     deps,

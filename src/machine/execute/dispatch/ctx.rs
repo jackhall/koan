@@ -1,21 +1,17 @@
-//! Dispatch-side facade over `&mut Scheduler<'run>`.
+//! Read-only dispatch view.
 //!
-//! `DispatchCtx` is the `&mut`-holding surface a dispatch step is entered with — slot queries,
-//! dep-graph mutations, sub-submission, the recent-wakes side-channel, and the dispatcher-only
-//! ops (`build_bare_outcomes`, `install_eager_subs`, `replace_with_parked_dispatch`) that spell
-//! the scheduler's internal fields on the dispatcher's behalf. It is **not** a `SchedulerHandle`:
-//! the *execution* machinery a resolved call hands off to (`exec::invoke`, `field_list`) takes the
-//! raw `&mut Scheduler` via [`Self::scheduler_mut`], so `Scheduler` is the sole `SchedulerHandle`
-//! impl.
+//! [`DispatchCx`] is the surface every dispatch *decide* runs against: it holds `&Scheduler`
+//! (never `&mut`) for its reads — the static-over-the-step ones (`current_scope`, `chain_deref`,
+//! …) and the live reads of *pre-existing* producers (`is_result_ready`, `would_create_cycle`,
+//! `read_result`) — and the decide *returns* a
+//! [`DispatchOutcome`](super::outcome::DispatchOutcome) the [`harness`](super::harness) applies.
+//! The harness holds the only `&mut Scheduler` on the dispatch side, so no decide handler touches
+//! it; `Scheduler` is the sole `SchedulerHandle` impl.
 //!
-//! [`DispatchCx`] is the read-only peer used by a migrated handler's decide phase: it holds
-//! `&Scheduler` (never `&mut`) and returns a
-//! [`DispatchOutcome`](super::outcome::DispatchOutcome) the harness applies.
-//!
-//! Dispatch *shape* modules (`keyworded`, `fn_value`, `single_poll`)
-//! never name scheduler fields directly — only `ctx.foo(...)` — so a
-//! future scheduler internal rename (`active_chain` → ..., `DepGraph`
-//! split) is a single-file change inside `scheduler/`.
+//! The dispatcher genuinely reads evolving graph state, so full scheduler-unawareness (the builtin
+//! model) is not a goal — only the *writes* defer to the harness. Dispatch *shape* modules
+//! (`keyworded`, `fn_value`, `single_poll`) never name scheduler fields directly — only
+//! `cx.foo(...)` — so a future scheduler internal rename is a single-file change inside `scheduler/`.
 
 use std::rc::Rc;
 
@@ -25,30 +21,16 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
 use crate::machine::{KError, LexicalFrame, NameOutcome, NodeId, SchedulerHandle, Scope};
 
-use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
 use super::outcome::{DispatchDep, DispatchOutcome};
-use super::{bind_frame_err, resolve_name_part, DispatchState, PendingSub};
+use super::{bind_frame_err, resolve_name_part, PendingSub};
 
-/// Newtype wrapping `&'b mut Scheduler<'run>`, exposing exactly the
-/// scheduler operations the dispatcher uses. `'run` is the scheduler's
-/// arena lifetime; `'b` is the borrow lifetime of the scheduler the
-/// dispatcher holds for the duration of one Dispatch step.
-pub(in crate::machine::execute) struct DispatchCtx<'run, 'b> {
-    sched: &'b mut Scheduler<'run>,
-}
-
-/// Read-only dispatch view — the decide-phase peer of [`DispatchCtx`] that holds only
-/// `&Scheduler`, never `&mut`. A migrated shape handler decides against this and *returns*
-/// a [`DispatchOutcome`](super::outcome::DispatchOutcome); the harness reborrows the
-/// scheduler mutably to apply the writes. The borrow contract: a `DispatchCx` lives only
-/// for the decide call, the handler returns an owned outcome, and the immutable borrow ends
-/// before the harness takes `&mut` — so decide and apply never overlap.
-///
-/// The static-over-the-step reads (`current_scope`, `chain_deref`, …) and the live reads of
-/// *pre-existing* producers (`is_result_ready`, `would_create_cycle`, `read_result`) both
-/// forward to the borrowed scheduler; the dispatcher genuinely reads evolving graph state, so
-/// full scheduler-unawareness (the builtin model) is not a goal — only the *writes* defer.
+/// Read-only dispatch view — the decide-phase context. It holds only `&Scheduler`, never `&mut`.
+/// A shape handler decides against this and *returns* a
+/// [`DispatchOutcome`](super::outcome::DispatchOutcome); the harness reborrows the scheduler
+/// mutably to apply the writes. The borrow contract: a `DispatchCx` lives only for the decide
+/// call, the handler returns an owned outcome, and the immutable borrow ends before the harness
+/// takes `&mut` — so decide and apply never overlap.
 pub(in crate::machine::execute) struct DispatchCx<'run, 's> {
     sched: &'s Scheduler<'run>,
 }
@@ -188,126 +170,6 @@ impl<'run, 's> DispatchCx<'run, 's> {
             dep_error_frame,
             finish,
             free,
-        }
-    }
-}
-
-impl<'run, 'b> DispatchCtx<'run, 'b> {
-    pub(in crate::machine::execute) fn new(sched: &'b mut Scheduler<'run>) -> Self {
-        Self { sched }
-    }
-
-    /// Immutable reborrow of the wrapped scheduler — the bridge that lets a still-`&mut`
-    /// router build a read-only [`DispatchCx`] for a migrated handler, decide, then reborrow
-    /// `&mut self` for the harness. The returned `DispatchCx` must be dropped (last-used)
-    /// before the harness call, which NLL enforces.
-    pub(super) fn read_view(&self) -> DispatchCx<'run, '_> {
-        DispatchCx::new(self.sched)
-    }
-
-    /// `&mut` reborrow of the wrapped scheduler — the harness's hand-off to the *execution*
-    /// machinery (`exec::invoke`, `field_list`), which runs a resolved call body against the
-    /// scheduler's own `SchedulerHandle`. Execution is not dispatch decide, so it takes the raw
-    /// scheduler rather than this facade — which is why [`DispatchCtx`] is itself not a
-    /// `SchedulerHandle`.
-    pub(super) fn scheduler_mut(&mut self) -> &mut Scheduler<'run> {
-        self.sched
-    }
-
-    // ----- dep graph -----
-
-    pub(super) fn add_park_edge(&mut self, producer: NodeId, consumer: NodeId) {
-        self.sched.add_park_edge(producer, consumer);
-    }
-
-    pub(super) fn add_owned_edge(&mut self, producer: NodeId, consumer: NodeId) {
-        self.sched.add_owned_edge(producer, consumer);
-    }
-
-    pub(super) fn clear_dep_edges(&mut self, idx: usize) {
-        self.sched.clear_dep_edges(idx);
-    }
-
-    // ----- submission / reclaim -----
-    //
-    // Each forwards to the scheduler, which inherits `active_chain` / `active_frame` correctly
-    // via its own `add` path. Fresh-`Dispatch` sub-submission (`add_dispatch_here`) lives in the
-    // harness, off `scheduler_mut()`.
-
-    pub(super) fn schedule_list_literal(&mut self, items: Vec<ExpressionPart<'run>>) -> NodeId {
-        self.sched.schedule_list_literal(items)
-    }
-
-    pub(super) fn schedule_dict_literal(
-        &mut self,
-        pairs: Vec<(ExpressionPart<'run>, ExpressionPart<'run>)>,
-    ) -> NodeId {
-        self.sched.schedule_dict_literal(pairs)
-    }
-
-    pub(super) fn schedule_record_literal(
-        &mut self,
-        fields: Vec<(String, ExpressionPart<'run>)>,
-    ) -> NodeId {
-        self.sched.schedule_record_literal(fields)
-    }
-
-    pub(super) fn free(&mut self, idx: usize) {
-        self.sched.free(idx);
-    }
-
-    // ----- recent wakes side channel -----
-
-    pub(super) fn take_recent_wakes(&mut self, consumer: NodeId) -> Vec<NodeId> {
-        self.sched.take_recent_wakes(consumer)
-    }
-
-    // ----- relocated dispatcher-only ops (bodies were on `impl Scheduler`) -----
-
-    /// Map a body's [`BodyResult`] onto the scheduler's [`NodeStep`]. Shared by the builtin-call and
-    /// user-fn `exec` paths in `dispatch::exec`, so both land a body's outcome identically.
-    pub(super) fn body_result_to_step(
-        &mut self,
-        result: crate::machine::core::kfunction::BodyResult<'run>,
-        idx: usize,
-    ) -> NodeStep<'run> {
-        use crate::machine::core::kfunction::BodyResult;
-        match result {
-            BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
-            BodyResult::Tail {
-                expr,
-                frame,
-                function,
-                block_entry,
-                body_index,
-            } => NodeStep::Replace {
-                work: NodeWork::dispatch(expr),
-                frame,
-                function,
-                block_entry,
-                body_index,
-            },
-            BodyResult::DeferTo(id) => self.sched.defer_to_lift(idx, id),
-            BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
-        }
-    }
-
-    /// Standard `NodeStep::Replace` for parked-Dispatch install sites:
-    /// drops the entry expression to an empty placeholder (the state
-    /// carries the evolving `working_expr` from here on).
-    pub(super) fn replace_with_parked_dispatch(
-        &self,
-        state: DispatchState<'run>,
-    ) -> NodeStep<'run> {
-        NodeStep::Replace {
-            work: NodeWork::Dispatch {
-                expr: KExpression::new(Vec::new()),
-                state,
-            },
-            frame: None,
-            function: None,
-            block_entry: None,
-            body_index: 0,
         }
     }
 }

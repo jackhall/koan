@@ -7,14 +7,16 @@
 //! through the still-`&mut` [`DispatchCtx`] shim; once every handler returns an outcome it
 //! becomes the sole `&mut Scheduler` user on the dispatch side.
 
-use crate::machine::core::kfunction::SchedulerHandle;
+use crate::machine::core::kfunction::{BodyResult, SchedulerHandle};
+use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
 use crate::machine::NodeId;
 
-use super::super::nodes::{DispatchCombineFinish, LiftState, NodeStep, NodeWork};
+use super::super::nodes::{DispatchCombineFinish, LiftState, NodeOutput, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
+use super::ctx::DispatchCx;
 use super::outcome::{DispatchDep, DispatchOutcome};
-use super::DispatchCtx;
+use super::DispatchState;
 
 // The park edges a `ParkSelf` adds are `Notify` (sibling producers the slot waits on), never
 // owned — `add_park_edge` is the right primitive.
@@ -29,24 +31,24 @@ pub(in crate::machine::execute) fn run_dispatch_combine_finish<'run>(
     values: &[Carried<'run>],
     idx: usize,
 ) -> NodeStep<'run> {
-    let mut ctx = DispatchCtx::new(sched);
-    let outcome = finish(&ctx.read_view(), values, idx);
-    apply_dispatch_outcome(&mut ctx, outcome, idx)
+    let outcome = finish(&DispatchCx::new(sched), values, idx);
+    apply_dispatch_outcome(sched, outcome, idx)
 }
 
 /// Reclaim the producers a decide phase consumed inline (a ready `Reuse` spliced into a
 /// `working_expr`). Deferred off the decide phase so the handler stays read-only; the harness
 /// is the sole writer, so the free lands here.
-fn drain_free(ctx: &mut DispatchCtx<'_, '_>, free: Vec<usize>) {
+fn drain_free(sched: &mut Scheduler<'_>, free: Vec<usize>) {
     for id in free {
-        ctx.free(id);
+        sched.free(id);
     }
 }
 
-/// Interpret a handler's [`DispatchOutcome`] into the scheduler effect it names and return
-/// the slot's [`NodeStep`]. Grows one arm per migrated handler.
+/// Interpret a handler's [`DispatchOutcome`] into the scheduler effect it names and return the
+/// slot's [`NodeStep`]. This is the dispatch-side write owner: it holds the `&mut Scheduler`, so a
+/// decide handler never does. Grows one arm per outcome variant.
 pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
+    sched: &mut Scheduler<'run>,
     outcome: DispatchOutcome<'run>,
     idx: usize,
 ) -> NodeStep<'run> {
@@ -59,7 +61,7 @@ pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
             free,
         } => {
             // Reclaim the Reuse producers the decide phase consumed inline before declaring deps.
-            drain_free(ctx, free);
+            drain_free(sched, free);
             // Submit each fresh dep (an `Existing` is already in the graph), install it as an
             // owned edge so it cascade-frees on resolve, and park the slot on the lot as a
             // `DispatchCombine`. Submission order is preserved, so `finish` reads `results[k]`
@@ -68,13 +70,13 @@ pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
                 .into_iter()
                 .map(|dep| {
                     let id = match dep {
-                        DispatchDep::Dispatch(expr) => ctx.scheduler_mut().add_dispatch_here(expr),
-                        DispatchDep::ListLit(items) => ctx.schedule_list_literal(items),
-                        DispatchDep::DictLit(pairs) => ctx.schedule_dict_literal(pairs),
-                        DispatchDep::RecordLit(fields) => ctx.schedule_record_literal(fields),
+                        DispatchDep::Dispatch(expr) => sched.add_dispatch_here(expr),
+                        DispatchDep::ListLit(items) => sched.schedule_list_literal(items),
+                        DispatchDep::DictLit(pairs) => sched.schedule_dict_literal(pairs),
+                        DispatchDep::RecordLit(fields) => sched.schedule_record_literal(fields),
                         DispatchDep::Existing(id) => id,
                     };
-                    ctx.add_owned_edge(id, NodeId(idx));
+                    sched.add_owned_edge(id, NodeId(idx));
                     id
                 })
                 .collect();
@@ -93,9 +95,9 @@ pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
         }
         DispatchOutcome::ParkSelf { producers, state } => {
             for producer in producers {
-                ctx.add_park_edge(producer, NodeId(idx));
+                sched.add_park_edge(producer, NodeId(idx));
             }
-            ctx.replace_with_parked_dispatch(state)
+            replace_with_parked_dispatch(state)
         }
         DispatchOutcome::Invoke {
             picked,
@@ -104,19 +106,20 @@ pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
         } => {
             // The dispatch→execution hand-off: run the resolved call against the raw
             // `&mut Scheduler` and lower its body onto the slot.
-            drain_free(ctx, free);
-            let body = super::exec::invoke(ctx.scheduler_mut(), picked, working_expr);
-            ctx.body_result_to_step(body, idx)
+            drain_free(sched, free);
+            let body = super::exec::invoke(sched, picked, working_expr);
+            lower_body_result(sched, body, idx)
         }
         DispatchOutcome::Redispatch { working_expr, free } => {
-            drain_free(ctx, free);
-            let outcome = super::keyworded::KeywordedState::finish(&ctx.read_view(), working_expr, idx);
-            apply_dispatch_outcome(ctx, outcome, idx)
+            drain_free(sched, free);
+            let outcome =
+                super::keyworded::KeywordedState::finish(&DispatchCx::new(sched), working_expr, idx);
+            apply_dispatch_outcome(sched, outcome, idx)
         }
         DispatchOutcome::ParkLift { producer } => {
             // Notify edge, not Owned: the producer is a sibling slot we only wait on. The slot
             // then becomes a pending `Lift`, which adopts the producer's resolved value directly.
-            ctx.add_park_edge(producer, NodeId(idx));
+            sched.add_park_edge(producer, NodeId(idx));
             NodeStep::Replace {
                 work: NodeWork::Lift(LiftState::Pending(producer)),
                 frame: None,
@@ -135,8 +138,51 @@ pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
         DispatchOutcome::ElaborateRecordType { fields, chain } => {
             // Execution layer: the field-list elaborator holds `&mut Scheduler` and may defer
             // through a Combine; lower its body onto the slot like any resolved call.
-            let body = super::field_list::elaborate_record_value(ctx.scheduler_mut(), fields, chain);
-            ctx.body_result_to_step(body, idx)
+            let body = super::field_list::elaborate_record_value(sched, fields, chain);
+            lower_body_result(sched, body, idx)
         }
+    }
+}
+
+/// Lower a resolved body's [`BodyResult`] onto the slot's [`NodeStep`] — shared by the `Invoke`
+/// and `ElaborateRecordType` arms (a value/error completes the slot, a `Tail` re-dispatches, a
+/// `DeferTo` parks on the named lift).
+fn lower_body_result<'run>(
+    sched: &mut Scheduler<'run>,
+    body: BodyResult<'run>,
+    idx: usize,
+) -> NodeStep<'run> {
+    match body {
+        BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
+        BodyResult::Tail {
+            expr,
+            frame,
+            function,
+            block_entry,
+            body_index,
+        } => NodeStep::Replace {
+            work: NodeWork::dispatch(expr),
+            frame,
+            function,
+            block_entry,
+            body_index,
+        },
+        BodyResult::DeferTo(id) => sched.defer_to_lift(idx, id),
+        BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+    }
+}
+
+/// Replace a slot with a parked `Dispatch` carrying `state`: drop the entry expression to an empty
+/// placeholder (the state carries the evolving `working_expr` from here on).
+fn replace_with_parked_dispatch<'run>(state: DispatchState<'run>) -> NodeStep<'run> {
+    NodeStep::Replace {
+        work: NodeWork::Dispatch {
+            expr: KExpression::new(Vec::new()),
+            state,
+        },
+        frame: None,
+        function: None,
+        block_entry: None,
+        body_index: 0,
     }
 }
