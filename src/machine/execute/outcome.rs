@@ -13,16 +13,19 @@
 //! - [`Outcome::ParkThenContinue`] — park on deps; on resolve run a [`Continuation`] that yields
 //!   another outcome.
 //!
-//! Two variants are **transitional** and shed by later phases of the scheduler-unification arc:
-//! [`Outcome::Invoke`] runs a resolved call holding `&mut Scheduler` (retired when invoke becomes a
-//! `read-view + frame → Outcome` producer), and [`Outcome::Redispatch`] is an immediate
-//! dispatch-specific re-decide via
-//! [`KeywordedState::finish`](super::dispatch::keyworded::KeywordedState).
+//! [`Outcome::Invoke`] is the dispatch→execution trigger: a decide picks a function but can't
+//! acquire the per-call frame (a write), so it names the call and the harness acquires the frame
+//! before running the pure `invoke` decide. [`Outcome::Redispatch`] is the one remaining
+//! **transitional** variant — an immediate dispatch-specific re-decide via
+//! [`KeywordedState::finish`](super::dispatch::keyworded::KeywordedState), shed when the
+//! eager-subs re-resolve folds in.
+
+use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::{Dep, DepPlacement, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::ScopeId;
+use crate::machine::core::{CallArena, ScopeId};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::{NodeId, TraceFrame};
 
@@ -67,8 +70,11 @@ pub(in crate::machine::execute) enum Outcome<'run> {
         dep_error_frame: Option<TraceFrame>,
         free: Vec<usize>,
     },
-    /// Transitional: run the resolved call against `&mut Scheduler` and lower its
-    /// body onto the slot. `free` reclaims eager-subs `Reuse` producers consumed inline.
+    /// Run a resolved call. The dispatch→execution trigger: a decide that picks a function can't
+    /// acquire the per-call frame (a write), so it names the call here and the harness acquires the
+    /// frame (for a user fn) before calling the pure `invoke` decide. `free` reclaims eager-subs
+    /// `Reuse` producers consumed inline. Not transitional — frame acquisition is an irreducible
+    /// harness write, and this is its trigger.
     Invoke {
         picked: &'run KFunction<'run>,
         working_expr: KExpression<'run>,
@@ -81,20 +87,6 @@ pub(in crate::machine::execute) enum Outcome<'run> {
         working_expr: KExpression<'run>,
         free: Vec<usize>,
     },
-}
-
-/// Lift the slot onto a single producer the decide phase **already spawned and owns** (the
-/// builtin/exec deferred-return combine, `DeferTo`): an owned edge so the spawned node cascade-frees
-/// when this slot does, then `Forward` adopts its resolved value. The `park_count: 0` (vs
-/// [`super::dispatch::park_lift`]'s `1`) is what makes the edge owned rather than a notify park.
-pub(crate) fn forward_owned<'run>(producer: NodeId) -> Outcome<'run> {
-    Outcome::ParkThenContinue {
-        deps: vec![DispatchDep::Existing(producer)],
-        park_count: 0,
-        cont: Continuation::Forward(producer),
-        dep_error_frame: None,
-        free: Vec::new(),
-    }
 }
 
 /// What a [`Outcome::ParkThenContinue`] runs once its deps resolve. The shapes are the closed set
@@ -135,5 +127,14 @@ pub(in crate::machine::execute) enum DispatchDep<'run> {
     ListLit(Vec<ExpressionPart<'run>>),
     DictLit(Vec<(ExpressionPart<'run>, ExpressionPart<'run>)>),
     RecordLit(Vec<(String, ExpressionPart<'run>)>),
+    /// A deferred-return FN's first-call body: dispatch `statements` (its non-tail body + the
+    /// return-type expression, in that order) as body-chain siblings in the freshly acquired
+    /// per-call `frame`, fanning out to one owned producer per statement. The combine reads the
+    /// last (the resolved return type) to build the `PerCall` contract; the earlier statements'
+    /// scope binds feed the tail body. The only dep that carries its own frame.
+    BodyBlock {
+        frame: Rc<CallArena>,
+        statements: Vec<KExpression<'run>>,
+    },
     Existing(NodeId),
 }

@@ -107,7 +107,7 @@ impl<'run> Scheduler<'run> {
     /// this Combine allocated (cascade-freed on success); `park_producers` are existing sibling
     /// slots it splices but does not own (kept alive past success via `Notify` edges). The finish
     /// closure sees results as `[park_producers..., owned_subs...]`. Test fixture entry point; the
-    /// run path uses [`Scheduler::combine_here`] / `add_combine_in_frame`.
+    /// run path uses [`Scheduler::combine_here`].
     #[cfg(test)]
     pub(in crate::machine::execute) fn add_combine(
         &mut self,

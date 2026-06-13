@@ -20,7 +20,7 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
-use crate::machine::{KError, LexicalFrame, NameOutcome, NodeId, Scope};
+use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 
 use super::super::scheduler::Scheduler;
 use super::super::SchedulerHandle;
@@ -64,6 +64,19 @@ impl<'run, 's> SchedulerView<'run, 's> {
     /// it by value.
     pub(super) fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>> {
         self.sched.current_lexical_chain()
+    }
+
+    /// Cloned `Rc` to the active per-call frame — the `invoke` decide reads it to build a
+    /// builtin's `BodyCtx`. `None` only outside any frame (top-level builtins).
+    pub(in crate::machine::execute) fn current_frame(&self) -> Option<Rc<CallArena>> {
+        self.sched.current_frame()
+    }
+
+    /// Whether the executing slot already carries a kept return contract (a tail call within an
+    /// established chain) — `invoke` reads it so a deferred-return FN skips re-resolving its
+    /// keep-first-discarded return type.
+    pub(in crate::machine::execute) fn in_contract_chain(&self) -> bool {
+        self.sched.in_contract_chain()
     }
 
     pub(super) fn is_result_ready(&self, id: NodeId) -> bool {

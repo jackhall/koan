@@ -139,6 +139,9 @@ impl<'run> Scheduler<'run> {
                         DispatchDep::RecordLit(fields) => {
                             dep_ids.push(self.schedule_record_literal(fields))
                         }
+                        DispatchDep::BodyBlock { frame, statements } => {
+                            dep_ids.extend(self.dispatch_body_statements(&frame, statements))
+                        }
                         DispatchDep::Existing(id) => dep_ids.push(id),
                     }
                 }
@@ -200,10 +203,16 @@ impl<'run> Scheduler<'run> {
                 working_expr,
                 free,
             } => {
-                // The dispatch→execution hand-off: run the resolved call against the raw
-                // `&mut Scheduler` and apply the outcome it produces onto the slot.
+                // The dispatch→execution hand-off. A user fn runs in a freshly acquired per-call
+                // frame (the harness's irreducible write — TCO reuse mutates the reserve); a
+                // builtin runs in the current frame. `invoke` is a pure decide that reads that
+                // frame, so the harness acquires it here and applies the outcome `invoke` returns.
                 drain_free(self, free);
-                let oc = super::exec::invoke(self, picked, working_expr);
+                let frame = match &picked.body {
+                    crate::machine::core::kfunction::Body::Builtin(_) => None,
+                    _ => Some(self.acquire_tail_frame(picked.captured_scope())),
+                };
+                let oc = super::exec::invoke(&SchedulerView::new(self), frame, picked, working_expr);
                 self.apply_outcome(oc, idx)
             }
             Outcome::Redispatch { working_expr, free } => {

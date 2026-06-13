@@ -102,8 +102,8 @@ fn combine_short_circuits_on_dep_error() {
 
 #[test]
 fn defer_to_lifts_slot_terminal_off_combine_id() {
-    // Pins the binder-body wrap-up shape MODULE / SIG use: a body returning
-    // `forward_owned(combine_id)` leaves its slot with the Combine's terminal.
+    // Pins the binder-body wrap-up shape MODULE / SIG use: an `Action::Combine` body parks the
+    // slot as a Combine and leaves it with the Combine's terminal.
     use crate::builtins::{default_scope, register_builtin};
     use crate::machine::core::kfunction::action::{Action, BodyCtx, Cont};
     use crate::machine::model::ast::ExpressionPart;

@@ -69,21 +69,8 @@ pub(in crate::machine::execute) trait SchedulerHandle<'a, 's> {
     ) -> NodeId;
 
     /// Ambient-chain sibling of [`Self::add_dispatch_with_chain_in_frame`]: dispatch `expr`
-    /// in the active frame inheriting the ambient `active_chain`. Used by the FN deferred
-    /// return-type expression sub-Dispatch.
+    /// in the active frame inheriting the ambient `active_chain`. The `ActiveFrame` dep placement.
     fn add_dispatch_in_frame(&mut self, expr: KExpression<'a>) -> NodeId;
-
-    /// Schedule a `Combine` whose scope is the active frame's child, stored `Yoked`
-    /// (re-projected from the frame cart) rather than a fabricated `&'a`. Used by the FN
-    /// deferred return-type Combine. `owned_subs` are sub-Dispatches this Combine allocated
-    /// (cascade-freed at success); `park_producers` are existing sibling slots it reads but
-    /// does not own; `finish` sees results in `[park_producers..., owned_subs...]` order.
-    fn add_combine_in_frame(
-        &mut self,
-        owned_subs: Vec<NodeId>,
-        park_producers: Vec<NodeId>,
-        finish: CombineFinish<'a>,
-    ) -> NodeId;
 
     /// Schedule against the **executing slot's own scope handle** — the honest
     /// re-dispatch-against-my-own-scope path. The sub-slot inherits the running slot's

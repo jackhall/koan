@@ -6,7 +6,7 @@ use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope};
 
 use super::nodes::{NodeScope, NodeWork};
-use super::{CombineFinish, SchedulerHandle};
+use super::SchedulerHandle;
 use dep_graph::DepGraph;
 use node_store::NodeStore;
 use work_queues::WorkQueues;
@@ -431,32 +431,6 @@ impl<'run, 's> SchedulerHandle<'run, 's> for Scheduler<'run> {
         )
     }
 
-    fn add_combine_in_frame(
-        &mut self,
-        owned_subs: Vec<NodeId>,
-        park_producers: Vec<NodeId>,
-        finish: CombineFinish<'run>,
-    ) -> NodeId {
-        let park_count = park_producers.len();
-        let mut deps = park_producers;
-        deps.extend(owned_subs);
-        let frame = self
-            .active_frame
-            .clone()
-            .expect("in-frame combine requires an active frame");
-        let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
-        let scope = frame.scope_for_bind();
-        self.submit_node(
-            NodeWork::Combine {
-                deps,
-                park_count,
-                finish,
-            },
-            scope,
-            NodeScope::Yoked,
-            explicit_chain,
-        )
-    }
 
     fn add_dispatch_here(&mut self, expr: KExpression<'run>) -> NodeId {
         self.submit_here(NodeWork::dispatch(expr))
