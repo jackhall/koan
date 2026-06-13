@@ -133,7 +133,7 @@ state live on `Scheduler`:
 
 - **`active_frame: Option<Rc<CallArena>>`** — frame of the slot
   currently being executed. Read through
-  [`SchedulerHandle::current_frame`](../src/machine/core/kfunction/scheduler_handle.rs);
+  [`Scheduler::current_frame`](../src/machine/execute/scheduler.rs);
   written only by `enter_slot_step` / `exit_slot_step` (the RAII
   bracket around every iteration of `Scheduler::execute`) and the
   `with_active_frame` body bracket. An invoke never takes it (tail
@@ -143,7 +143,7 @@ state live on `Scheduler`:
   frame, drained from `Node`'s `Frame::reserve` through
   `enter_slot_step` and consumed by `acquire_tail_frame` (see
   [§ Ping-pong reserve frame](#ping-pong-reserve-frame)).
-- **`SchedulerHandle::with_active_frame(frame, f)`** — temporarily
+- **`Scheduler::with_active_frame(frame, f)`** — temporarily
   installs `frame` as `active_frame` for the duration of a closure
   call. Used by `dispatch::exec::invoke` to spawn a deferred return-type
   sub-Dispatch under the per-call frame so the sub-Dispatch's scope
@@ -224,9 +224,9 @@ Two structural invariants make the reset sound:
 Frame reuse is what makes deep tail recursion truly constant-memory —
 both in the scheduler's slot table (the `Tail` rewrite alone) and on
 the heap (the reset turns over arena storage in place rather than
-allocating per step). `dispatch::exec::invoke` acquires the body's frame
-through `SchedulerHandle::acquire_tail_frame(outer)`, which reuses the
-slot's **reserve** cart — resetting it in place when uniquely owned —
+allocating per step). The harness acquires the body's frame for the pure
+`dispatch::exec::invoke` decide through `Scheduler::acquire_tail_frame(outer)`,
+which reuses the slot's **reserve** cart — resetting it in place when uniquely owned —
 and otherwise allocates a fresh `CallArena::new`. Reuse draws from the
 reserve, never the live active frame, so an invoke never empties the
 slot's own cart. A reserve carrying an escaped closure (or any other
@@ -276,12 +276,13 @@ To supply one, the slot carries a per-iteration **reserve frame** in
   that frame was the active cart two iterations ago, `Rc::get_mut`
   refuses and `acquire_tail_frame` allocates fresh instead.
 
-The dispatcher reaches the slot's reserve / active-frame state from the
+The dispatcher reads the slot's reserve / active-frame state from the
 execution layer (see [execution-model.md § The dispatcher / scheduler
 boundary](execution-model.md#the-dispatcher--scheduler-boundary)):
-`dispatch::exec::invoke` runs against the `&mut Scheduler` the dispatch
-harness holds and calls `acquire_tail_frame` through its `SchedulerHandle`.
-The `active_frame` / `active_reserve` fields themselves stay
+`dispatch::exec::invoke` is a pure decide against a `SchedulerView`, and the
+harness `apply_outcome` arm acquires the cart via `Scheduler::acquire_tail_frame`
+(an inherent write primitive) before handing it to the decide. The
+`active_frame` / `active_reserve` fields themselves stay
 `pub(in execute::scheduler)`; the accessor surface is what dispatch sees.
 
 The two-iteration gap is the safety witness: when iteration N consumes
@@ -331,8 +332,8 @@ The post-step loop in `Scheduler::execute` reads the just-finished step's scope 
 `PostStep` token returned by `exit_slot_step`, derived from the slot's *returned* frame
 (`prev_frame`) rather than the ambient `active_frame` — an in-step invoke can swap the ambient
 frame, so the returned value is the authoritative source. A within-step frame lifetime `'s`
-(`'a: 's`) threads `run_dispatch` → `DispatchCx` → `BuiltinFn` → `SchedulerHandle`, lifting to
-the run `'a` only at the `lift_kobject` Done boundary.
+(`'a: 's`) threads `run_dispatch` → `SchedulerView` → `BuiltinFn` → the scheduler's write
+primitives, lifting to the run `'a` only at the `lift_kobject` Done boundary.
 
 ## Seed-side re-anchor
 
@@ -344,7 +345,7 @@ free `'a` (the C0-irreducible re-exposure: an `'a`-typed value must land in an `
 and the frame `Rc` the caller holds heap-pins it) and its child scope re-handed through the
 witness-bounded `scope_bounded` brand — so the scope half is *not* fabricated free, only the
 arena half is. This is the sole surviving free re-exposure in the protocol.
-Arm and body statements then dispatch through the framed `SchedulerHandle` methods
+Arm and body statements then dispatch through the framed scheduler write primitives
 (`add_dispatch_with_chain_in_frame`, `add_dispatch_in_frame`, `add_combine_in_frame`), which
 derive the scope from the active frame and store `Yoked`, so the seed itself persists no
 fabricated `&'a`.

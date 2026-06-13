@@ -20,8 +20,8 @@ The scheduler models dispatch itself as a node type — `Dispatch(KExpression)`.
 [`schedule_expr`](../src/machine/execute/interpret.rs) collapses to "add a `Dispatch`
 node per top-level expression"; the rest is dynamic. At run time a `Dispatch`
 walks its expression's parts, spawns sub-`Dispatch`/`Bind`/`Combine` nodes for
-nested sub-expressions, and a builtin body holding `&mut dyn SchedulerHandle`
-can also add `Dispatch` nodes.
+nested sub-expressions, and a builtin body can declare further `Dispatch`
+nodes as deps of the `Outcome` it returns.
 
 `Combine` is the host-side dual of `Bind`: an N→1 combinator that waits on a
 fixed set of dep slots and then runs an arbitrary host closure
@@ -46,61 +46,67 @@ that picks the matching branch by tag.
 The dispatch tree
 ([`execute/dispatch/`](../src/machine/execute/dispatch.rs)) is a sibling
 of [`execute/scheduler/`](../src/machine/execute/scheduler.rs), not
-nested inside it. The two communicate through a **decide → outcome →
-apply** contract — the dispatch-side peer of the builtin
-`Action` / `run_action` split (see [`BodyResult`](#bodyresult--the-three-return-shapes)
-below). A dispatch shape handler *decides* against a read-only view and
-*returns* its scheduler mutations as data; a harness interprets that data
-and is the sole place that holds `&mut Scheduler`. The three pieces:
+nested inside it. Every scheduler-facing step — a dispatch decide, a
+finish, a builtin body, an invoke — flows through one **decide → outcome →
+apply** contract: it decides against a read-only view, *returns* the
+scheduler mutations it wants as data, and a single harness method applies
+them. The three pieces:
 
 - **The read view** —
-  [`DispatchCx<'run, 's>`](../src/machine/execute/dispatch/ctx.rs) wraps
-  `&'s Scheduler<'run>` (never `&mut`). It exposes only the dispatcher's
-  reads: the static-over-the-step ones (`current_scope`, `chain_deref`,
+  [`SchedulerView<'run, 's>`](../src/machine/execute/dispatch/ctx.rs) wraps
+  `&'s Scheduler<'run>` (never `&mut`). It exposes only the reads a decide
+  needs: the static-over-the-step ones (`current_scope`, `chain_deref`,
   `active_chain`, `build_bare_outcomes`) and the live reads of
   *pre-existing* producers (`is_result_ready`, `would_create_cycle`,
-  `read_result`). The `DepGraph`, `NodeStore`, and active-frame fields stay
+  `read_result`). It permits scope binding (interior-mutable `&Scope`) but
+  no graph write. The `DepGraph`, `NodeStore`, and active-frame fields stay
   `pub(in execute::scheduler)`; the dispatch shape modules (`keyworded`,
   `fn_value`, `single_poll`) never name scheduler fields directly. A future
   scheduler internal rename (`active_chain` → ..., `DepGraph` split) is a
   single-file change inside `scheduler/`.
 - **The effect** —
-  [`Outcome<'run>`](../src/machine/execute/outcome.rs) is
-  the closed set of effects a decide can name (the peer of
-  [`Action`](../src/machine/core/kfunction/action.rs)): `Terminal`,
-  `Combine` (declare deps + a splice finish), `ParkSelf`, `ParkLift`,
-  `Invoke` (run a resolved call), `Redispatch`, `BecomeDispatch`,
-  `ElaborateRecordType`. Each is pure data — no `&mut Scheduler` is
-  captured.
+  [`Outcome<'run>`](../src/machine/execute/outcome.rs) is the one currency
+  every producer and finish returns (the dispatch-side peer of the builtin
+  [`Action`](../src/machine/core/kfunction/action.rs)). Three taxonomic
+  variants — `Done` (a value to lift, or an error), `Continue` (replace this
+  slot's work and frame, re-run, no park), and `ParkThenContinue` (park on
+  deps, then run a [`Continuation`](../src/machine/execute/outcome.rs) that
+  yields another outcome) — plus two execution triggers: `Invoke` (the
+  dispatch→execution trigger; frame acquisition is an irreducible harness
+  write, so a decide that picks a call names it here and the harness acquires
+  the per-call frame before running the pure `invoke` decide) and
+  `Redispatch` (the one remaining transitional variant — an immediate
+  dispatch-specific re-resolve, shed when the eager-subs re-resolve folds in).
+  Each is pure data — no `&mut Scheduler` is captured.
 - **The write harness** —
-  [`apply_dispatch_outcome`](../src/machine/execute/dispatch/harness.rs)
+  [`Scheduler::apply_outcome`](../src/machine/execute/scheduler.rs)
   interprets a returned outcome into graph writes and the slot's
-  `NodeStep`. It holds the only `&mut Scheduler` on the dispatch side, so no
-  decide handler does. The router (`run_dispatch`) builds a `DispatchCx` per
-  decide, runs the handler, and hands the outcome to the harness; the
-  recent-wakes side-channel drain stays in the router, the legitimate `&mut`
-  boundary.
+  `NodeStep`. It holds the **only** `&mut Scheduler`, so no decide handler
+  does — decide and apply never overlap. The router (`run_dispatch` /
+  `run_dispatch_resume`) builds a `SchedulerView` per decide, runs the
+  handler, and hands the outcome to `apply_outcome`; the recent-wakes
+  side-channel drain stays in the router, the legitimate `&mut` boundary.
 
-This contract makes `Scheduler` the **sole**
-[`SchedulerHandle`](../src/machine/core/kfunction/scheduler_handle.rs)
-impl. A builtin invoked mid-dispatch (e.g. `newtype_construct`) routes
-through the shared `run_action` harness: `exec::invoke` runs against the raw
-`&mut Scheduler` and reads the dispatcher's ambient `current_frame` /
-`current_lexical_chain` off it directly to build the builtin's `BodyCtx` —
-no `SchedulerHandle` forward, no facade re-borrow.
+No trait wraps `Scheduler`: the graph-write methods are inherent write
+primitives on `Scheduler`, capped `pub(in crate::machine::execute)` so only the
+execute tree's harness reaches them. A builtin invoked mid-dispatch
+(e.g. `newtype_construct`) routes through the shared
+[`run_action`](../src/machine/execute/harness.rs) harness as a pure
+`Action → Outcome` lowering; `exec::invoke` reads the dispatcher's ambient
+`current_frame` / `current_lexical_chain` off the view to build the builtin's
+`BodyCtx`.
 
-## `BodyResult` — the three return shapes
+## Callable result — the `Outcome` return shapes
 
-A builtin body returns one of:
+A builtin or user-fn body, like every other step, returns an
+[`Outcome`](../src/machine/execute/outcome.rs):
 
-```rust
-BodyResult { Value(&KObject) | Tail(KExpression) | Err(KError) }
-```
-
-- `Value` — the body produced a final value; the slot finalizes.
-- `Tail` — the body wants to dispatch a fresh expression in its own slot (TCO,
-  see below).
-- `Err` — structured failure; see [error-handling.md](error-handling.md).
+- `Done(Value)` — the body produced a final value; the slot finalizes.
+- `Done(Err)` — structured failure; see [error-handling.md](error-handling.md).
+- `Continue` — the body wants to dispatch a fresh expression in its own slot
+  (TCO, see below); when the body has leading (non-tail) statements they
+  become owned deps the slot parks on, and the `Continue` fires only from the
+  resolving finish.
 
 When a body cannot produce its result inline — its expression has nested
 sub-expressions whose own evaluation hasn't run yet — the slot's work is
@@ -129,17 +135,16 @@ rather than restated at each call site. Consumers arrive on the run-set
 only when actually ready; there is no poll-and-requeue.
 
 A second fan-out runs alongside the counter-decrement. Each drained
-consumer whose work is `NodeWork::Dispatch` (any `DispatchState`
-variant) gets the producer's `NodeId` appended to its
+consumer whose work is `NodeWork::Dispatch` or `NodeWork::DispatchResume`
+gets the producer's `NodeId` appended to its
 `recent_wakes: Vec<NodeId>` side-channel before the counter is
 inspected. `Bind` / `Combine` / `Catch` / `Lift` consumers skip the
 append — they run a fixed closure on counter-zero and have no
 per-edge wake attribution to track. The dispatch driver drains its
 slot's `recent_wakes` on entry so the side-channel never grows stale
-across re-park; the keyworded and `FunctionValueCall` resume handlers
-read the installed track's `subs` Vec directly rather than the wakes
-side-channel — at pop time `pending_deps` is zero, so every recorded
-sub is terminal. `DepGraph::drain_notify` returns the per-consumer
+across re-park; a resume reads its resolved deps off the view by index
+rather than the wakes side-channel — at pop time `pending_deps` is zero, so
+every dep is terminal. `DepGraph::drain_notify` returns the per-consumer
 `hit_zero` flag so the fan-out (always-append plus conditional
 stamp-and-enqueue) runs off a single drain.
 
@@ -209,12 +214,12 @@ The scheduler dispatches each expression by mutating an **owned working
 copy** of it. `run_dispatch` extracts every nested sub-expression out of
 the parent's `parts` (replacing each with a placeholder `Identifier`) and
 declares them as the deps of a
-[`DispatchOutcome::Combine`](#the-dispatcher--scheduler-boundary) — its
-own dual of a builtin `Combine`. The harness submits each dep as a
-sub-Dispatch and parks the parent on a
-[`NodeWork::DispatchCombine`](../src/machine/execute/nodes.rs) carrying a
-*splice finish* (`KeywordedState` / `FnValueState` ride along as the finish
-carrier). When the deps terminalize, that finish runs and writes each
+[`ParkThenContinue`](#the-dispatcher--scheduler-boundary) whose continuation
+is a `Continuation::Finish` — its own dual of a builtin `Combine`. The
+harness submits each dep as a sub-Dispatch and parks the parent on a
+[`NodeWork::DispatchCombine`](../src/machine/execute/nodes.rs) carrying that
+*splice finish* (a [`DispatchCombineFinish`](../src/machine/execute/nodes.rs)
+closure). When the deps terminalize, that finish runs and writes each
 resolved value back into the working copy:
 `working_expr.parts[part_idx] = ExpressionPart::Future(value)`. The splice
 lives **entirely inside the finish** — the scheduler resolves deps and hands
@@ -238,13 +243,20 @@ per nested `(...)` — and what it buys are detailed in
 
 ## Tail-call optimization
 
-[`BodyResult::Tail(KExpression)`](../src/machine/core/kfunction.rs) makes a tail
-return rewrite the **current scheduler slot's work** to a fresh
+An [`Action::Tail`](../src/machine/core/kfunction/action.rs), lowered to an
+[`Outcome::Continue`](../src/machine/execute/outcome.rs) by `run_action`,
+makes a tail return rewrite the **current scheduler slot's work** to a fresh
 `Dispatch(expr)` and re-run in place — no new node allocated. Both deferring
 builtins (`match_case`, and `run_user_fn` for user-fns) are tail by
 construction. A chain of tail calls (`A → B → PRINT`, or unbounded
 `LOOP → LOOP`) reuses one slot end-to-end. Verified by two slot-count
-assertions in the test suite.
+assertions in the test suite. When a body has leading (non-tail) statements,
+they become owned deps the slot parks on (one `DispatchDep::BodyBlock`) and
+the `Continue` tail fires only from the resolving finish — so the leading
+siblings run, and cascade-free, before the tail-replace, restoring frame
+uniqueness so [`try_reset_for_tail`](per-call-arena-protocol.md#tco-frame-reuse)
+reuses the cart and TCO stays flat even for side-effecting multi-statement
+bodies.
 
 The slot's `Rc<CallArena>` is held in exactly one place during each step,
 which is what lets the tail-reuse path detect "nothing escaped" and reset
@@ -648,9 +660,10 @@ The rails the dispatch driver feeds:
 
   - `BareIdentifier` (`(some_var)`) — `single_poll::bare_identifier` consults
     `Scope::resolve_with_chain` against the consumer's `LexicalFrame`:
-    `Value` returns a `Terminal` outcome inline, `Placeholder` returns a
-    `ParkLift` outcome whose harness rewrites the slot's work to
-    `Lift(LiftState::Pending(producer_id))` (the same shim `BodyResult::Tail`
+    `Value` returns a `Done` outcome inline, `Placeholder` returns a
+    `ParkThenContinue` over a single producer with a `Continuation::Forward`,
+    whose harness rewrites the slot's work to
+    `Lift(LiftState::Pending(producer_id))` (the same shim the Lift forward
     uses for sub-Bind waits), `UnboundName` falls through to the keyworded
     path so `value_lookup`'s body produces the structured error.
   - `BareTypeLeaf` (`(Number)`, `(IntOrd)`) — `bare_type_leaf`
@@ -812,17 +825,15 @@ The rails the dispatch driver feeds:
   **Park-precedence guard.** Sub-Dispatch and aggregate scheduling are
   staged into a `PendingSub` vec rather than submitted eagerly during the
   walk. After the loop, if `producers_to_wait` is non-empty the decide
-  returns through `KeywordedState::install_bare_name_park` as a
-  `DispatchOutcome::ParkSelf` — the harness installs the park edges as
-  `Notify` (via `add_park_edge`) and transitions the slot to
-  `KeywordedState` with the bare-name-park track set, dropping
-  `NodeWork::Dispatch.expr` to a placeholder so the state-carried
-  `working_expr` becomes the source of truth on wake — **without**
-  submitting any staged subs. Eager submission would
-  leak the sub-nodes on the re-Dispatch wake path, where the new
-  `run_dispatch` invocation would re-stage them.
-  Multi-name forward references compose as one combined park rather than
-  N independent sub-Dispatches.
+  returns a `ParkThenContinue` whose continuation is a `Continuation::Resume`
+  (carrying a `ResumeFn` closure over the partly-spliced `working_expr`) — the
+  harness installs the park edges as `Notify` (via `add_park_edge`) and
+  transitions the slot to `NodeWork::DispatchResume`, so the captured
+  `working_expr` becomes the source of truth on wake — **without** submitting
+  any staged subs. Eager submission would leak the sub-nodes on the re-resume
+  wake path, where the closure would re-stage them. Multi-name forward
+  references compose as one combined park rather than N independent
+  sub-Dispatches.
 
   If no producer parked, the driver applies each `PendingSub`: `Reuse(id)`
   for slots already pre-submitted recursively at outermost-submission time
@@ -830,16 +841,18 @@ The rails the dispatch driver feeds:
   sub-Dispatch](#submission-time-binder-install-and-recursive-sub-dispatch)),
   `Dispatch(sub_expr)` for a fresh sub-Dispatch, and `ListLit` / `DictLit`
   for the aggregate. With no subs to schedule the driver binds the picked
-  function directly: the decide returns a `DispatchOutcome::Invoke` whose
-  harness runs `dispatch::exec::invoke` (a wrap-slot-only call like
-  `MAKESET IntOrd` resolves bare names in Step 4, leaves no eager parts, and
-  binds in one step — no Combine detour). Otherwise the decide returns a
-  `DispatchOutcome::Combine` declaring the fresh subs as deps with a splice
-  finish; the harness parks the slot as a `DispatchCombine` carrying the
-  finish on its `KeywordedState`. At dep completion the finish re-resolves
+  function directly: the decide returns an `Outcome::Invoke` whose
+  harness acquires the per-call frame and runs `dispatch::exec::invoke`
+  (a wrap-slot-only call like `MAKESET IntOrd` resolves bare names in Step 4,
+  leaves no eager parts, and binds in one step — no Combine detour). Otherwise
+  the decide returns a `ParkThenContinue` with a `Continuation::Finish`
+  declaring the fresh subs as deps with a splice finish; the harness parks the
+  slot as a `DispatchCombine` carrying the finish. At dep completion the finish
+  re-resolves
   the spliced `working_expr` and routes it — `Invoke` on the
   speculatively-picked function, or `Redispatch` through
-  `KeywordedState::finish` when none was pre-picked.
+  [`keyworded::finish`](../src/machine/execute/dispatch/keyworded.rs) when
+  none was pre-picked.
 
   Dict and list literals (`classify_aggregate_part` in
   [`scheduler/literal.rs`](../src/machine/execute/scheduler/literal.rs))
@@ -869,8 +882,9 @@ Type-LHS cycles surface with the same error kind without a special case
 in the elaborator.
 
 The fast-lane handlers (`single_poll::bare_identifier`, the `fn_value`
-`FunctionValueCall` head) and the eager-resolve pass return park outcomes
-(`ParkLift` / `ParkSelf`) whose harness calls
+`FunctionValueCall` head) and the eager-resolve pass return
+`ParkThenContinue` outcomes (a `Continuation::Forward` for a Lift, a
+`Continuation::Resume` for a re-resolve) whose harness calls
 `DepGraph::add_park_edge`, which records a `DepEdge::Notify(producer)` in
 the consumer's `dep_edges` entry alongside the `DepEdge::Owned(child)`
 entries that mark sub-slots the consumer owns. `add_park_edge` and its
@@ -918,128 +932,71 @@ the top-level result read panic on an unresolved slot. `sample` is the
 source expression of the first parked `Dispatch`/`Bind` node, so the
 diagnostic points at code the reader can act on.
 
-### `DispatchState` — per-variant state envelope
+### Dispatch birth and resume
 
-Every `NodeWork::Dispatch` slot carries a
-[`DispatchState`](../src/machine/execute/dispatch.rs) value
-that records where the slot is in the per-shape state machine. The enum
-has one variant per `DispatchShape` plus a pre-classification birth
-state:
+A dispatch slot has exactly two work shapes — there is no per-shape state
+envelope. **Birth** is [`NodeWork::Dispatch { expr, pre_subs }`](../src/machine/execute/nodes.rs):
+[`run_dispatch`](../src/machine/execute/dispatch.rs) classifies `expr` via
+`classify_dispatch_shape` on first poll and decides against a
+`SchedulerView`, returning an `Outcome`. `pre_subs` carries any recursively
+pre-submitted sub-Dispatches keyed by their slot index in `expr.parts`,
+populated at submit time for binder-shaped expressions so a nested binder's
+placeholders install at the outermost submission point; `run_dispatch` reuses
+these instead of allocating fresh sub-Dispatches.
 
-```text
-DispatchState ::= Initialized(Initialized)
-                | BareIdentifier(BareIdState)
-                | BareTypeLeaf(BareTypeState)
-                | TypeCall(Box<CtorState>)
-                | FunctionValueCall(Box<FnValueState>)
-                | HeadDeferred(Box<HeadDeferredState>)
-                | LiteralPassThrough(LitState)
-                | SigiledTypeExpr(SigilState)
-                | Keyworded(Box<KeywordedState>)
-```
+When a decide must wait — a keyworded resolve that found bare-name or
+overload producers, a `FunctionValueCall` head still resolving to a
+`Placeholder`, a `TypeCall` parked on a still-finalizing head — it returns a
+`ParkThenContinue` whose continuation is a `Continuation::Resume` carrying an
+opaque [`ResumeFn`](../src/machine/execute/dispatch.rs) closure
+(`SchedulerView -> Outcome`, built by `park_resume`). The harness parks the
+slot's edges and transitions it to **resume**,
+[`NodeWork::DispatchResume { carrier, resume }`](../src/machine/execute/nodes.rs).
+On wake, [`run_dispatch_resume`](../src/machine/execute/dispatch.rs) clears
+the slot's stale dep edges, runs the captured closure against a fresh
+`SchedulerView`, and applies its `Outcome` — **one uniform arm** for every
+shape, so the scheduler never switches on dispatch-internal state. Clearing
+on resume is uniform and safe: a dispatch park installs only `Notify` edges
+(sibling forward references, never children), which drop at free, so a resume
+re-deriving its producers from the rebuilt scope cannot drop a live wake.
 
-`HeadDeferred` is shared by the `HeadDeferred` and `TypeHeadDeferred` shapes —
-the state's `type_only` flag selects the admitted-arm set on resume.
+Each family's closure captures exactly what its decide needs and re-runs it
+against the now-populated scope:
 
-Every per-variant struct embeds the `Initialized` birth state by value
-as its `init` field, so any state-carried data (today only `pre_subs`
-from the recursive-binder-submission optimization) rides along
-structurally without each variant restating the field. The submission
-walk hands `Initialized { pre_subs }` to the slot at install time;
-`run_dispatch` reads the field on first entry, classifies via
-`classify_dispatch_shape`, and transitions to the matching per-variant
-struct via a `from_init` / `with_*` constructor that consumes the
-birth state. Variants that don't yet carry borrowed state hold the
-lifetime with a `PhantomData<&'a _>` marker so additional fields can be
-added without churning every pattern site in `execute.rs` /
-`submit.rs` / `dispatch.rs`.
-
-The single-poll fast-lane variants (`BareIdentifier`, `BareTypeLeaf`,
-`SigiledTypeExpr`, `LiteralPassThrough`) terminalize or single-producer-park in
-one poll, so their state structs carry no post-classification tracks. The
-variants that re-enter from a parked track — `Keyworded`, `FunctionValueCall`,
-`TypeCall` (parked on eager-subs or a still-finalizing head), and `HeadDeferred`
-(parked on its head sub-dispatch) — carry the per-shape track they resume from.
-`Keyworded` and `FunctionValueCall` hold an `Option<Track>` field per park shape;
-the `with_*` constructors install exactly one. These variants are boxed because their multi-track shapes
-would otherwise push every `DispatchState`-carrying type
-(`NodeWork::Dispatch`, `NodeStep::Replace`, `Node`, `SlotState`) past
-clippy's `large_enum_variant` threshold; boxing costs one allocation
-per parked slot — a rare path, since the fast-lane variants never
-construct these and one-shot paths terminalize without installing a
-track.
-
-`Keyworded` carries `init` plus an `Option<ParkTrack>` — `None` on
-initial entry, `Some` once the slot parks. `ParkTrack` is an enum of two
-mutually-exclusive park reasons (a single resolve either parks on producers
-before the part walk, or runs the walk and discovers bare-name producers).
-**Eager subs do not park here**: a `Deferred`/eager-subs resolve returns a
-[`DispatchOutcome::Combine`](#the-dispatcher--scheduler-boundary) and parks
-as a `DispatchCombine` whose finish re-resolves the spliced expression — so
-a `Keyworded` resume never re-enters for them. Re-resolve in the finish is
-authoritative: an element-typed `Future(_)` that narrows a typed-slot
-admission rules a speculative initial pick out, and the call surfaces
-`DispatchFailed` (non-match) rather than committing and surfacing a bind-time
-`TypeMismatch`.
-
-- **`ParkTrack::BareName(BareNameParkTrack)`** — installed by
-  `KeywordedState::install_bare_name_park` when the part walk discovers ≥1
-  `NameOutcome::Parked(producer)` on a wrap or ref-name slot. Park
-  edges are installed as `Notify` (via `add_park_edge`) — the
-  producers are sibling forward references, not children of this
-  slot, so the slot's reclaim walk must not transit into them. Resume
-  re-enters `initial` against the carried (partly-spliced) `working_expr`;
-  the bare names now resolve through `scope.resolve_with_chain` to
-  bound values, so the rebuilt `bare_outcomes` picks them up and the
+- A **keyworded** bare-name park re-enters against the carried (partly-spliced)
+  `working_expr`; the bare names now resolve through `scope.resolve_with_chain`
+  to bound values, so the rebuilt `bare_outcomes` picks them up and the
   wrap-slot splice fires `Future(obj)` on the second pass.
-- **`ParkTrack::Overload(OverloadParkTrack)`** — installed by
-  `KeywordedState::install_overload_park` when
-  `resolve_dispatch_with_chain` returns `ParkOnProducers` before the
-  part walk runs — either because a bare-name arg resolved to a
-  still-pending `Placeholder`, or because an innermost-visible
-  `pending_overloads[key]` entry from a sibling FN / FUNCTOR binder
-  is in flight. The track carries the original (unspliced)
-  expression, which resume hands back to `initial` on wake to rebuild
-  `bare_outcomes` and re-run the resolve against the now-populated
-  bucket.
-
-`FunctionValueCall` (`FnValueState`) carries only a head-placeholder park
-track — its eager subs route through the shared
-`apply_callable::install_eager_subs_track`, which returns a Combine outcome
-carrying the picked `KFunction` from the head `Resolution::Value` arm
-directly. `FunctionValueCall` is non-overload-set (the head resolves to a
-single carrier, not a candidate bucket), so a typed `Future(_)` an eager sub
-reveals can't narrow to a more specific pick, and the finish binds `picked`
-without re-running `resolve_dispatch`. The head-placeholder park itself is
-installed by `fn_value`'s `install_head_park` (a `ParkSelf` outcome) when
-the head identifier resolves to `Resolution::Placeholder(producer)`; its
-state carries the original (unspliced) call expression, and resume re-runs
-the fast lane against it once `scope.resolve_with_chain` lands in the
-`Resolution::Value` arm.
+- A keyworded **overload** park carries the original (unspliced) expression and
+  re-runs the resolve against the now-populated `pending_overloads` bucket.
+  **Eager subs never park here**: a `Deferred`/eager-subs resolve returns a
+  `ParkThenContinue` with a `Continuation::Finish` and parks as a
+  `DispatchCombine` whose finish re-resolves the spliced expression — so a
+  keyworded resume never re-enters for them. Re-resolve in the finish is
+  authoritative: an element-typed `Future(_)` that narrows a typed-slot
+  admission rules a speculative initial pick out, and the call surfaces
+  `DispatchFailed` (non-match) rather than committing to a bind-time
+  `TypeMismatch`.
+- A **`FunctionValueCall`** head-placeholder park (`fn_value::install_head_park`)
+  carries the original call expression and re-runs the fast lane once
+  `scope.resolve_with_chain` lands in the `Resolution::Value` arm. Its eager
+  subs route through `apply_callable::install_eager_subs_track`, which returns
+  a `DispatchCombine` carrying the picked `KFunction` from the head directly;
+  `FunctionValueCall` is non-overload-set, so a typed `Future(_)` an eager sub
+  reveals can't narrow the pick and the finish binds `picked` without
+  re-resolving.
 
 **Park exclusivity holds by construction.** A single resolve reaches exactly
-one park installer: the overload park installs from a resolve failure
-*before* the part walk runs, so no sibling track has been staged; the
-bare-name park installs *before* any eager sub could stage, because the part
-walk's park-precedence guard runs first (eager submission on the park path
-would leak sub-nodes on the re-Dispatch wake). Eager subs never park as a
-`Keyworded`/`FnValue` track at all — they take the `DispatchCombine` route —
-so the `Option<ParkTrack>` carries at most one reason per slot.
+one park installer: the overload park installs from a resolve failure *before*
+the part walk runs; the bare-name park installs *before* any eager sub could
+stage, because the part walk's park-precedence guard runs first; eager subs
+take the `DispatchCombine` route rather than a resume. So a slot's resume
+carries exactly one park reason.
 
-The state is `pub(in crate::machine::execute)` rather than `pub(super)`
-because `nodes.rs` (which carries the `NodeWork::Dispatch { state }`
-variant) lives at `crate::machine::execute::nodes`, sibling to the
-`dispatch/` and `scheduler/` subtrees. The wider visibility is the
-minimum needed for `NodeWork` to name `DispatchState`; no caller
-outside the execute tree sees the carrier.
-
-The drain-end cycle-detection guard (`NodeStore::unresolved`)
-summarizes parked slots from the state-carried expression rather than
-`NodeWork::Dispatch.expr`. The Track installers drop the `Dispatch.expr`
-field to an empty placeholder once the slot transitions to a parked
-variant, so `DispatchState::parked_carrier_expr` walks each variant's
-`Option<Track>` fields in install-precedence order to return the
-expression the user-facing diagnostic should sample.
+The drain-end cycle-detection guard (`NodeStore::unresolved`) summarizes
+parked slots from the `DispatchResume.carrier` — the parked expression the
+decide captured (`None` falls back to a generic `<dispatch-resume>` tag) —
+selected by a testable `work_deadlock_sample` helper in `node_store`.
 
 ## `KObject` and the model/core boundary
 
@@ -1131,9 +1088,9 @@ recursive tree-walker can't get cheaply.
   steady-state recursive body reuses the same slot indices across
   iterations; `body_subexpression_slots_recycle_across_calls` pins the
   bound at ≤3 net slots/call.
-- **Tail-call slot rewrite.** `BodyResult::Tail` rewrites the current
-  slot's work in place rather than allocating a new one — one slot
-  for an arbitrarily deep tail-call chain.
+- **Tail-call slot rewrite.** An `Action::Tail` (lowered to
+  `Outcome::Continue`) rewrites the current slot's work in place rather than
+  allocating a new one — one slot for an arbitrarily deep tail-call chain.
 - **Tail-step frame reuse.** When the prev step's `CallArena` is
   uniquely owned, `try_reset_for_tail` swaps its inner `RuntimeArena`
   for a fresh one and re-binds — no `Rc<CallArena>` box allocation,
@@ -1202,18 +1159,18 @@ statements as dispatch nodes:
   ([`interpret`](../src/machine/execute/interpret.rs)) enter through
   `enter_block(root.id, exprs, root)` against an empty parent chain.
 - `MODULE` and `SIG` bodies enter through
-  [`enter_body_block`](../src/machine/core/kfunction/scheduler_handle.rs),
+  [`Scheduler::enter_body_block`](../src/machine/execute/scheduler.rs),
   which delegates to `enter_block`.
 - FN, FUNCTOR, MATCH-arm, and TRY-arm bodies split via the shared
   [`split_body_statements`](../src/machine/core/kfunction/body.rs) helper
-  (same all-`Expression` rule that `enter_body_block` uses) — the first
-  N-1 statements submit as siblings into the body / arm scope at chain
-  indices `1..N-1`, and the FN-slot / MATCH-slot / TRY-slot tail-replaces
-  into the last statement at index `N` via
-  [`BodyResult::tail_with_frame_at_index`](../src/machine/core/kfunction/body.rs)
-  or [`BodyResult::tail_with_block_at_index`](../src/machine/core/kfunction/body.rs).
-  TCO is preserved on the last statement. Single-statement bodies pass
-  through at index 0.
+  (same all-`Expression` rule that `enter_body_block` uses): the body's
+  non-tail statements ride along as the `leading` field of an
+  [`Action::Tail`](../src/machine/core/kfunction/action.rs), and the slot
+  parks on them as owned deps before tail-replacing into the last statement.
+  Its `block_entry` names the body/arm scope; the harness derives the chain
+  indices and the tail's `body_index` from `block_entry` + `leading`. TCO is
+  preserved on the last statement. Single-statement bodies carry empty
+  `leading` and tail-replace directly.
 - FN bodies route through `run_user_fn` (see below — the chain
   shape is special because the call site's chain is not the body's
   lexical chain).
@@ -1244,8 +1201,9 @@ sets allow it. Backward references across siblings work — a `LET b =
 (a)` at index `i` sees a `LET a = …` at index `j < i` — because the
 visibility predicate admits the earlier sibling's binding at the
 consumer's cutoff. `match_case` arms and `TRY` arms ride the same split
-through `BodyResult::tail_with_frame_at_index` /
-`tail_with_block_at_index` (see [Single entry point: `Scheduler::enter_block`](#single-entry-point-schedulerenter_block) above).
+through the `Action::Tail { leading, block_entry }` shape (see
+[Single entry point: `Scheduler::enter_block`](#single-entry-point-schedulerenter_block)
+above).
 
 ### FN-body chain assembly
 
@@ -1330,8 +1288,3 @@ for test fixtures and builtin-registration paths.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
-- **Unified scheduler interface**
-  ([roadmap/refactor/unify-scheduler-interface.md](../roadmap/refactor/unify-scheduler-interface.md)).
-  Collapse `SchedulerHandle`, `DispatchCx`, and the raw harness writes onto one read-only view
-  in / three-way `Done` · `Continue` · `ParkThenContinue` outcome out, with the harness as sole
-  graph writer; folds in the fire-and-forget-leading-statement TCO fix.

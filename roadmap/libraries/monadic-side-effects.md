@@ -51,9 +51,10 @@ is scaffolding without a building.
 
 ## Dependencies
 
-Soft ordering: this is the third `BodyResult` revision sweeping every builtin in
-[builtins/](../../src/builtins) (after TCO's `Value | Tail` and the error item's `Err`
-arm), so fold it into the eventual static-typing/JIT pass if their schedules align.
+Soft ordering: this is another currency revision sweeping every builtin in
+[builtins/](../../src/builtins) (after the `Outcome` unification folded TCO, error,
+and park shapes into one return type), so fold it into the eventual static-typing/JIT
+pass if their schedules align.
 
 **Requires:**
 

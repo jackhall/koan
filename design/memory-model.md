@@ -182,7 +182,7 @@ Several "must hold" rules are encoded in types rather than checked at runtime:
 - `Scope::arena: &'a RuntimeArena` is non-optional; `test_sink()` takes a
   caller-supplied arena.
 - `KFunction::captured_scope() -> &'a Scope<'a>` is non-optional.
-- The running scope passes through `SchedulerHandle::add_dispatch(expr, scope)`
+- The running scope passes through `Scheduler::add_dispatch(expr, scope)`
   directly, so dispatch sites carry their scope explicitly.
 - [`RuntimeArena::alloc_function`](../src/machine/core/arena.rs) `debug_assert`s
   arena-identity between the function and its captured scope, catching a
