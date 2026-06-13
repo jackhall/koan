@@ -30,37 +30,33 @@ use crate::machine::{KError, KErrorKind};
 use super::super::nodes::{DispatchCombineFinish, NodeOutput, NodeStep};
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::outcome::{DispatchDep, DispatchOutcome};
-use super::{harness, DispatchCtx};
+use super::harness;
 
 /// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly, then
 /// applied to `parts[1..]` once it resolves.
 pub(in crate::machine::execute) fn initial_expr<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
     expr: KExpression<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let head = match &expr.parts[0].value {
         ExpressionPart::Expression(boxed) => (**boxed).clone(),
         _ => unreachable!("HeadDeferred shape implies nested Expression head"),
     };
-    park_on_head(ctx, expr, head, false, idx)
+    park_on_head(expr, head, false)
 }
 
 /// `TypeHeadDeferred` entry: head is a `:(...)` sigil. Wrap it as a one-part
 /// `KExpression` so the type marker survives the sub-dispatch (mirrors
 /// `stage_all_eager_parts`).
 pub(in crate::machine::execute) fn initial_type<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
     expr: KExpression<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let head = match &expr.parts[0].value {
         ExpressionPart::SigiledTypeExpr(boxed) => KExpression::new(vec![Spanned::bare(
             ExpressionPart::SigiledTypeExpr(boxed.clone()),
         )]),
         _ => unreachable!("TypeHeadDeferred shape implies SigiledTypeExpr head"),
     };
-    park_on_head(ctx, expr, head, true, idx)
+    park_on_head(expr, head, true)
 }
 
 /// Park the slot on the head sub-dispatch as a single-dep [`DispatchOutcome::Combine`]: the
@@ -70,12 +66,10 @@ pub(in crate::machine::execute) fn initial_type<'run>(
 /// required (a `BodyResult` Combine finish could not re-park). A dep error short-circuits frameless
 /// in `run_dispatch_combine`, so the finish only runs on a resolved head.
 fn park_on_head<'run>(
-    ctx: &mut DispatchCtx<'run, '_>,
     expr: KExpression<'run>,
     head: KExpression<'run>,
     type_only: bool,
-    idx: usize,
-) -> NodeStep<'run> {
+) -> DispatchOutcome<'run> {
     let finish: DispatchCombineFinish<'run> = Box::new(move |ctx, results, idx| {
         let callable = match classify_head(results[0], type_only) {
             Ok(c) => c,
@@ -84,15 +78,14 @@ fn park_on_head<'run>(
         let outcome = apply_callable(&ctx.read_view(), callable, &expr);
         harness::apply_dispatch_outcome(ctx, outcome, idx)
     });
-    let outcome = DispatchOutcome::Combine {
+    DispatchOutcome::Combine {
         deps: vec![DispatchDep::Dispatch(head)],
         // The head sub is the only dep; a dep error propagates frameless (the resumed dispatch
         // attaches its own frame), matching the resume behaviour.
         dep_error_frame: None,
         finish,
         free: Vec::new(),
-    };
-    harness::apply_dispatch_outcome(ctx, outcome, idx)
+    }
 }
 
 /// Branch a resumed head value into a [`ResolvedCallable`], honoring the

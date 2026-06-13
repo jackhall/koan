@@ -402,11 +402,11 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
         }
         DispatchShape::HeadDeferred => {
             debug_assert!(init.pre_subs.is_empty());
-            head_deferred::initial_expr(ctx, expr, idx)
+            harness::apply_dispatch_outcome(ctx, head_deferred::initial_expr(expr), idx)
         }
         DispatchShape::TypeHeadDeferred => {
             debug_assert!(init.pre_subs.is_empty());
-            head_deferred::initial_type(ctx, expr, idx)
+            harness::apply_dispatch_outcome(ctx, head_deferred::initial_type(expr), idx)
         }
         // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
         // a non-callable head is a runtime error, not a fatal `execute()` abort.
