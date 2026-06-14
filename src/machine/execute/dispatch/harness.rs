@@ -7,6 +7,7 @@
 //! applies it. The harness holds the sole `&mut Scheduler` on the dispatch side.
 
 use crate::machine::core::kfunction::action::{Dep, DepPlacement, FramePlacement};
+use crate::machine::core::kfunction::body::split_body_statements;
 use crate::machine::{NodeId, TraceFrame};
 
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
@@ -116,7 +117,8 @@ impl<'run> Scheduler<'run> {
                                 dep_ids.push(self.add_dispatch_in_frame(expr))
                             }
                             DepPlacement::InScope(scope) => {
-                                dep_ids.extend(self.enter_body_block(scope, expr))
+                                let statements = split_body_statements(expr);
+                                dep_ids.extend(self.enter_block(scope.id, statements, scope))
                             }
                         },
                         DispatchDep::ListLit(items) => {

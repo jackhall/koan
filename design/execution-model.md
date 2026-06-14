@@ -1200,12 +1200,17 @@ statements as dispatch nodes:
 - Top-level statements
   ([`interpret`](../src/machine/execute/interpret.rs)) enter through
   `enter_block(root.id, exprs, root)` against an empty parent chain.
-- `MODULE` and `SIG` bodies enter through
-  [`Scheduler::enter_body_block`](../src/machine/execute/scheduler.rs),
-  which delegates to `enter_block`.
-- FN, FUNCTOR, MATCH-arm, and TRY-arm bodies split via the shared
+- `MODULE` and `SIG` bodies enter through the dispatch harness's `InScope`
+  fan-out
+  ([`apply_outcome`](../src/machine/execute/dispatch/harness.rs)), which splits
+  via the shared
+  [`split_body_statements`](../src/machine/core/kfunction/body.rs) helper and
+  submits each statement through `enter_block`. The scheduler itself never
+  inspects AST shape — `split_body_statements` is the single source of truth for
+  the split.
+- FN, FUNCTOR, MATCH-arm, and TRY-arm bodies split via that same
   [`split_body_statements`](../src/machine/core/kfunction/body.rs) helper
-  (same all-`Expression` rule that `enter_body_block` uses): the body's
+  (the all-`Expression` rule): the body's
   non-tail statements ride along as the `leading` field of an
   [`Action::Tail`](../src/machine/core/kfunction/action.rs), and the slot
   parks on them as owned deps before tail-replacing into the last statement.

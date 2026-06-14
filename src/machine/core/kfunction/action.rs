@@ -236,8 +236,8 @@ pub enum DepPlacement<'a> {
     ActiveFrame,
     /// A builtin-minted child scope (module/sig/recursive/using body), carried by reference. In a
     /// `Combine` a multi-statement body fans out one sub-dispatch per top-level statement
-    /// (`enter_body_block`); in a `Catch` a single watched expr enters a fresh lexical block
-    /// (`enter_block`).
+    /// (`split_body_statements` + `enter_block`); in a `Catch` a single watched expr enters a
+    /// fresh lexical block (`enter_block`).
     InScope(&'a Scope<'a>),
 }
 

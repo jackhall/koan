@@ -87,10 +87,11 @@ impl ErasedContract {
     }
 }
 
-/// Split an FN / MATCH-arm / TRY-arm body into top-level statements. Mirrors the
-/// all-`Expression` detection used by `Scheduler::enter_body_block`; any non-`Expression`
-/// part or fewer than two parts leaves the body as a single statement. Always returns
-/// at least one element.
+/// Split an FN / MATCH-arm / TRY-arm body into top-level statements. The single source of
+/// truth for the all-`Expression` multi-statement detection: any non-`Expression` part or
+/// fewer than two parts leaves the body as a single statement. Always returns at least one
+/// element. The scheduler's `InScope` body fan-out (`dispatch::harness`) routes through here
+/// before `enter_block`, so the scheduler never inspects AST shape itself.
 pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpression<'a>> {
     let is_multi = body.parts.len() >= 2
         && body
@@ -188,6 +189,49 @@ mod tests {
                 assert_eq!(kind, "MATCH");
             }
             ReturnContract::Function(_) | ReturnContract::PerCall { .. } => panic!("expected Arm"),
+        }
+    }
+
+    /// Pins the parser invariant [`split_body_statements`]'s `len() >= 2` guard relies on: a
+    /// real, parser-produced body is never a lone `[Expression(_)]`. That shape is the one case
+    /// where `len() >= 2` would treat a body differently from an `!is_empty()` guard, so were it
+    /// reachable the guard would mis-split a single-statement body. It is unreachable because
+    /// `peel_redundant` collapses redundant parens at every nesting level, so a body captured as
+    /// a `(...)` argument arrives already peeled. If a parser change ever lets a real body surface
+    /// as a lone `[Expression(_)]`, this fails.
+    #[test]
+    fn parser_never_yields_lone_expression_body() {
+        use crate::parse::parse;
+
+        // Each input captures a body as the trailing `(...)` argument of `FOO`; we extract that
+        // body (the inner of the trailing `Expression` part) and assert it is never a lone
+        // `[Expression(_)]`. Covers single-statement, multi-token, and genuine multi-statement
+        // forms, each with a redundant outer paren the peeler must strip.
+        for src in [
+            "FOO ((a))",
+            "FOO ((a b))",
+            "FOO ((a)(b))",
+            "FOO (a)",
+            "FOO ((a) (b) (c))",
+        ] {
+            let body = parse(src)
+                .expect("parse")
+                .into_iter()
+                .next()
+                .expect("one statement")
+                .parts
+                .into_iter()
+                .find_map(|p| match p.value {
+                    ExpressionPart::Expression(e) => Some(*e),
+                    _ => None,
+                })
+                .expect("captured body");
+            let lone_expression = body.parts.len() == 1
+                && matches!(body.parts[0].value, ExpressionPart::Expression(_));
+            assert!(
+                !lone_expression,
+                "parser produced a lone [Expression(_)] body for {src:?}; the split fork has reopened"
+            );
         }
     }
 }

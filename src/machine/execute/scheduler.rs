@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::machine::core::{assemble_body_chain, ScopeId};
-use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope};
 
@@ -431,40 +431,6 @@ impl<'run> Scheduler<'run> {
             NodeScope::Yoked,
             explicit_chain,
         )
-    }
-
-    /// Schedule each top-level statement in `body_expr` against `scope`. Routes through
-    /// [`Self::enter_block`] with `scope.id` so body statements get fresh `(scope.id, i)` frames
-    /// stacked over the call-site chain.
-    ///
-    /// A body counts as multi-statement only when *every* part is `ExpressionPart::Expression(_)`;
-    /// otherwise the whole body is dispatched as a single statement. The all-Expression rule
-    /// prevents `LET x = (FN ...)` from being mis-split (its inner `Expression` part would
-    /// otherwise look like a second statement).
-    pub(in crate::machine::execute) fn enter_body_block(
-        &mut self,
-        scope: &'run Scope<'run>,
-        body_expr: KExpression<'run>,
-    ) -> Vec<NodeId> {
-        let is_multi_statement = !body_expr.parts.is_empty()
-            && body_expr
-                .parts
-                .iter()
-                .all(|p| matches!(p.value, ExpressionPart::Expression(_)));
-
-        let statements: Vec<KExpression<'run>> = if is_multi_statement {
-            body_expr
-                .parts
-                .into_iter()
-                .filter_map(|p| match p.value {
-                    ExpressionPart::Expression(e) => Some(*e),
-                    _ => None,
-                })
-                .collect()
-        } else {
-            vec![body_expr]
-        };
-        self.enter_block(scope.id, statements, scope)
     }
 
     /// Dispatch a body's non-tail `statements` as sibling sub-slots in `frame`, each positioned at

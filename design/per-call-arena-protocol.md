@@ -326,7 +326,7 @@ the frame is a compile error rather than a fabrication; `Scope<'a>` invariance r
 on the returned `Scope<'a>`, so the brand needs no separate struct. Bodies / finishes / the
 dispatch engine no longer thread a `scope` parameter — they call `current_scope()`; the genuine
 run-scope methods (`add_dispatch` / `add_combine` / `add_catch` / `enter_block` /
-`enter_body_block` / `submit_node`) keep their `&'a Scope` argument.
+`submit_node`) keep their `&'a Scope` argument.
 
 The post-step loop in `Scheduler::execute` reads the just-finished step's scope through a
 `PostStep` token returned by `exit_slot_step`, derived from the slot's *returned* frame

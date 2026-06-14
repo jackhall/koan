@@ -29,7 +29,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use super::{arg, kw, sig};
 
 /// Discover each member declaration's `(name, kind)` from the block body, using the same
-/// multi-statement split `enter_body_block` applies. Rejects a body with no declarations, a
+/// multi-statement split `split_body_statements` applies. Rejects a body with no declarations, a
 /// non-`STRUCT`/`UNION`/`NEWTYPE` statement, or a duplicate member name.
 fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, KKind)>, KError> {
     let is_multi = !body.parts.is_empty()
