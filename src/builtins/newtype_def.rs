@@ -588,7 +588,7 @@ mod tests {
 
     /// `Distance` and `Number` are observably distinct at dispatch.
     ///
-    /// Rejection lands as `DispatchFailed` out of `Scheduler::execute` (the per-slot
+    /// Rejection lands as `DispatchFailed` out of `KoanHarness::execute` (the per-slot
     /// type check filters the only candidate, scope chain runs out without a match)
     /// — drive the scheduler directly rather than `run_one_err`, which expects a
     /// per-slot Err result.

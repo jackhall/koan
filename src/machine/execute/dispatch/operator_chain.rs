@@ -29,7 +29,7 @@ use super::Outcome;
 ///
 /// This handler issues no scheduler write — every path is a terminal — so it decides
 /// against a read-only [`SchedulerView`] and returns a [`Outcome::Done`]; the
-/// router applies it through [`Scheduler::apply_outcome`](super::super::scheduler::Scheduler).
+/// router applies it through [`KoanHarness::apply_outcome`](super::super::harness::KoanHarness).
 pub(in crate::machine::execute) fn run<'run>(
     ctx: &SchedulerView<'run, '_>,
     expr: &KExpression<'run>,

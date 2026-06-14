@@ -10,7 +10,7 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, RuntimeArena, Scope};
 
-/// Tolerates the error surfacing either from `Scheduler::execute()` (resolve
+/// Tolerates the error surfacing either from `KoanHarness::execute()` (resolve
 /// rejects at admission) or from `read_result` (auto-wrap committed and bind
 /// later refused). Compare `test_support::run_one_err`, which panics on the
 /// first path.

@@ -2,7 +2,7 @@
 //!
 //! Every node step — a fresh dispatch decide, a finish, a builtin body, an invoke — decides
 //! against a read-only [`SchedulerView`](super::dispatch::SchedulerView) and **returns** an
-//! [`Outcome`]; [`Scheduler::apply_outcome`](super::scheduler::Scheduler) is the sole place that
+//! [`Outcome`]; [`KoanHarness::apply_outcome`](super::harness::KoanHarness) is the sole place that
 //! turns an outcome into the scheduler-graph writes it implies and the terminal
 //! [`NodeStep`](super::nodes::NodeStep). The scheduler never learns *what* a step ran (dispatch /
 //! invoke / builtin) nor *whether* it ran before — only a read view in and an outcome out.

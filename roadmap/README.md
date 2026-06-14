@@ -163,7 +163,7 @@ What's shipped that the open items below build on:
   [`Outcome`](../src/machine/execute/outcome.rs) (`Done` / `Continue` / `ParkThenContinue` /
   `Forward` — no variant names a `KFunction` or `KExpression`; the dispatch→execution hand-off
   folds into a dep-free `Continue` whose frame placement installs the per-call cart), with
-  [`Scheduler::apply_outcome`](../src/machine/execute/scheduler.rs)
+  [`apply_outcome`](../src/machine/execute/harness.rs)
   the sole graph writer. The `SchedulerHandle` trait, `BodyResult`, `DispatchOutcome`, and the
   per-shape `DispatchState` envelope are gone — the scheduler's write methods are inherent and
   private to the execute tree. A multi-statement FN body's leading statements are now owned deps
@@ -186,8 +186,8 @@ What's shipped that the open items below build on:
   `scheduler/literal.rs` to [`dispatch/literal.rs`](../src/machine/execute/dispatch/literal.rs),
   next to the harness that drives it. It was the one file in the scheduler subtree that
   name-resolved and built values from an `ExpressionPart`, so the "scheduler names no AST"
-  invariant now holds structurally across `scheduler/**`. The methods stay inherent on
-  `Scheduler`, reached through its public surface (`combine_here` / `dispatch_here` /
+  invariant now holds structurally across `scheduler/**`. The methods are `&mut self` on
+  `KoanHarness` (below), reached through the scheduler's public surface (`submit_here` /
   `current_scope`). See [design/execution-model.md](../design/execution-model.md#the-dispatcher--scheduler-boundary).
 - *Dep-request enum made AST-free at the source.* The six-arm dep enum a
   `ParkThenContinue` declares (`Dispatch` / `ListLit` / `DictLit` / `RecordLit` / `BodyBlock` /
@@ -197,6 +197,17 @@ What's shipped that the open items below build on:
   `ExpressionPart`), and the harness `match` still does every `&mut Scheduler` write. The win:
   `outcome.rs` imports no `crate::machine::model::ast` and carries `DepRequest` as an opaque
   type, so the decide phase stays read-only and the scheduler-step currency names no AST.
+- *`KoanHarness` owns the scheduler.* A
+  [`KoanHarness<'run>`](../src/machine/execute/harness.rs) owns the `Scheduler` by composition
+  (a `sched` field) and is the **sole** holder of `&mut Scheduler` across the execute tree. The
+  execute loop, `apply_outcome` (the one graph writer), `submit_dispatch`, the aggregate-literal
+  lowering, and the AST-aware submission wrappers (`enter_block`, `dispatch_here`,
+  `add_dispatch_in_frame`, `dispatch_body_statements`, `combine_here`) are all `&mut self`
+  methods on it. `Scheduler` keeps the AST-free read views and low-level write primitives, so a
+  dispatch decide sees only a read-only `SchedulerView` / `&Scheduler` — "everything outside the
+  harness is read-only" is now structurally enforced by the type, not a naming convention. The
+  `apply_outcome` cluster migrated up to `execute/harness.rs` (the old `dispatch/harness.rs` is
+  gone), unifying "the harness" at the `execute/` level above both `dispatch/` and `scheduler/`.
 
 ## Next items
 
@@ -209,7 +220,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
-- [KoanHarness owns the scheduler](refactor/koan-harness-owns-scheduler.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
@@ -291,9 +301,6 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [KoanHarness owns the scheduler](refactor/koan-harness-owns-scheduler.md) — a
-  `KoanHarness<'run>` that owns the `Scheduler` becomes the sole `&mut Scheduler` holder,
-  making the dispatch decide read-only and the scheduler's surface AST-free by construction.
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md) —
   collapse `ElabResult` / `ResolveTypeExprOutcome` / `TypeLeafCarrier` into one generic
   `ResolveOutcome<T>` with a `map_done` lift.

@@ -5,8 +5,9 @@
 //! …) and the live reads of *pre-existing* producers (`is_result_ready`, `would_create_cycle`,
 //! `read_result`) — and the decide *returns* a
 //! [`Outcome`](super::Outcome) the [`harness`](super::harness) applies.
-//! The harness holds the only `&mut Scheduler` on the dispatch side, so no decide handler touches
-//! it — the scheduler's write primitives are inherent methods the harness alone calls.
+//! [`KoanHarness`](super::harness::KoanHarness) owns the scheduler and is the sole holder of `&mut
+//! Scheduler` across the execute tree, so no decide handler touches it — the scheduler's write
+//! primitives are inherent methods the harness alone calls.
 //!
 //! The dispatcher genuinely reads evolving graph state, so full scheduler-unawareness (the builtin
 //! model) is not a goal — only the *writes* defer to the harness. Dispatch *shape* modules

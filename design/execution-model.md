@@ -95,17 +95,30 @@ them. The three pieces:
   variant carries the call's AST. Each is pure data — no `&mut Scheduler` is
   captured.
 - **The write harness** —
-  [`Scheduler::apply_outcome`](../src/machine/execute/scheduler.rs)
-  interprets a returned outcome into graph writes and the slot's
-  `NodeStep`. It holds the **only** `&mut Scheduler`, so no decide handler
-  does — decide and apply never overlap. The unified node handler
+  [`KoanHarness<'run>`](../src/machine/execute/harness.rs) owns the `Scheduler`
+  by composition (a `sched` field, not a `&mut` borrow) and is the **sole**
+  holder of `&mut Scheduler` across the execute tree. Its
+  [`apply_outcome`](../src/machine/execute/harness.rs) interprets a returned
+  outcome into graph writes and the slot's `NodeStep`. Because only the harness
+  reborrows the scheduler mutably, no decide handler holds `&mut Scheduler` —
+  decide (against a read-only view) and apply (against `&mut self`) never
+  overlap, and that separation is structurally enforced by the type rather than
+  a naming convention. The execute loop, the AST-aware submission wrappers
+  (`enter_block`, `dispatch_here`, `add_dispatch_in_frame`,
+  `dispatch_body_statements`, `combine_here`), `submit_dispatch`, and the
+  aggregate-literal lowering are all `&mut self` methods on `KoanHarness`. The
+  unified node handler
   ([`run_wait`](../src/machine/execute/scheduler/finish.rs)) collects the slot's
   resolved dep terminals, builds a `SchedulerView`, runs the `cont` closure,
   reclaims the owned-dep suffix, and hands the outcome to `apply_outcome`.
 
-No trait wraps `Scheduler`: the graph-write methods are inherent write
-primitives on `Scheduler`, capped `pub(in crate::machine::execute)` so only the
-execute tree's harness reaches them. A builtin invoked mid-dispatch
+`Scheduler`'s own surface is AST-free: it exposes read views plus the low-level
+write primitives (`submit_node`, `alloc_slot`, `add_owned_edge` /
+`add_park_edge`, `acquire_tail_frame`, `free`, `resolve_node_scope`,
+`ensure_run_frame`, scope / chain reads) — no method signature names a
+`KExpression` or an AST type. No trait wraps `Scheduler`: those graph-write
+primitives are inherent methods capped `pub(in crate::machine::execute)`, so
+only the harness reaches them. A builtin invoked mid-dispatch
 (e.g. `newtype_construct`) routes through the shared
 [`run_action`](../src/machine/execute/harness.rs) harness as a pure
 `Action → Outcome` lowering; `exec::invoke` reads the dispatcher's ambient
@@ -570,7 +583,7 @@ field of the parked state, and `KeywordedState::resume` hands it back to
 not re-allocate the pre-submitted children.
 
 Statement indices are per-`enter_block` call: each call to
-[`Scheduler::enter_block`](../src/machine/execute/scheduler.rs) mints
+[`KoanHarness::enter_block`](../src/machine/execute/scheduler.rs) mints
 chain frames at indices `1..N` for the N statements it submits. A REPL
 or test fixture that submits without an ambient chain (the
 [`Scheduler::add`](../src/machine/execute/scheduler/submit.rs) auto-root
@@ -1189,10 +1202,10 @@ a top-level statement. Sibling statements in the same block share their
 `parent` `Rc` (cactus sharing), so the chain is constant-space per
 sibling on top of the shared spine.
 
-### Single entry point: `Scheduler::enter_block`
+### Single entry point: `KoanHarness::enter_block`
 
 Every dispatched node has a chain because every new lexical block is
-entered through one primitive. `Scheduler::enter_block(scope_id,
+entered through one primitive. `KoanHarness::enter_block(scope_id,
 statements, scope)` prepends a frame `(scope_id, i)` for each
 statement `i` onto the current ambient chain and submits the
 statements as dispatch nodes:
@@ -1248,7 +1261,7 @@ sets allow it. Backward references across siblings work — a `LET b =
 visibility predicate admits the earlier sibling's binding at the
 consumer's cutoff. `match_case` arms and `TRY` arms ride the same split
 through the `Action::Tail { leading, block_entry }` shape (see
-[Single entry point: `Scheduler::enter_block`](#single-entry-point-schedulerenter_block)
+[Single entry point: `KoanHarness::enter_block`](#single-entry-point-koanharnessenter_block)
 above).
 
 ### FN-body chain assembly
@@ -1334,10 +1347,3 @@ for test fixtures and builtin-registration paths.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
-- **KoanHarness owns the scheduler**
-  ([roadmap/koan-harness-owns-scheduler.md](../roadmap/refactor/koan-harness-owns-scheduler.md)).
-  Today `apply_outcome` is the named sole `&mut Scheduler` writer, but `submit_dispatch` and
-  the literal lowering hold `&mut Scheduler` outside it, and six scheduler methods still name
-  `KExpression`. A `KoanHarness<'run>` that owns the `Scheduler` becomes the one `&mut`
-  holder, making the dispatch decide read-only and the scheduler's surface AST-free by
-  construction.
