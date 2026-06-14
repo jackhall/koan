@@ -1334,3 +1334,10 @@ for test fixtures and builtin-registration paths.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
+- **KoanHarness owns the scheduler**
+  ([roadmap/koan-harness-owns-scheduler.md](../roadmap/refactor/koan-harness-owns-scheduler.md)).
+  Today `apply_outcome` is the named sole `&mut Scheduler` writer, but `submit_dispatch` and
+  the literal lowering hold `&mut Scheduler` outside it, and six scheduler methods still name
+  `KExpression`. A `KoanHarness<'run>` that owns the `Scheduler` becomes the one `&mut`
+  holder, making the dispatch decide read-only and the scheduler's surface AST-free by
+  construction.
