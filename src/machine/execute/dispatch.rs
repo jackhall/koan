@@ -218,8 +218,8 @@ pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>)
 
 // ---------- Outcome constructors (the dispatch-currency → Outcome mapping) ----------
 
-/// Park the slot on `deps` as a [`NodeWork::DispatchCombine`](super::nodes::NodeWork) whose
-/// `finish` runs over their resolved values (the dispatch Combine — short-circuits on dep error).
+/// Park the slot on `deps` as a [`NodeWork::Combine`](super::nodes::NodeWork::Combine) whose
+/// `finish` runs over their resolved values (the dispatch combine — short-circuits on dep error).
 /// Every dep is owned (`park_count: 0`); `free` reclaims `Reuse` producers consumed inline.
 pub(in crate::machine::execute) fn park_combine<'run>(
     deps: Vec<DispatchDep<'run>>,

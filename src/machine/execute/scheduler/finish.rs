@@ -17,41 +17,18 @@ impl<'run> Scheduler<'run> {
         }
     }
 
-    /// Only the `deps[park_count..]` owned-sub suffix is eagerly freed on the
-    /// success path; the `[..park_count]` park-producer prefix is kept alive
-    /// (sibling producers the Combine merely read at finish-time). The error
-    /// path leaves edges in `dep_edges[idx]` for chain-free at slot drop.
+    /// Resolve a parked [`Combine`](super::super::nodes::NodeWork::Combine): short-circuit on a dep
+    /// error (labelled with the carried `dep_error_frame` — `<combine>` for an action/literal
+    /// combine, the consuming call's frame or `None` frameless for a dispatch site), collect the
+    /// resolved values, run `finish` to an [`Outcome`], reclaim the owned deps, then apply. The
+    /// finish sees a read-only [`SchedulerView`] and issues no graph write, so the reclaim lands
+    /// after it and before the apply that installs the continuation's edges.
+    ///
+    /// Only the `deps[park_count..]` owned-sub suffix is eagerly freed on the success path; the
+    /// `[..park_count]` park-producer prefix is kept alive (sibling producers the Combine merely
+    /// read at finish-time). The error path leaves edges in `dep_edges[idx]` for chain-free at slot
+    /// drop.
     pub(super) fn run_combine(
-        &mut self,
-        deps: Vec<NodeId>,
-        park_count: usize,
-        finish: CombineFinish<'run>,
-        idx: usize,
-    ) -> NodeStep<'run> {
-        // The finish closure carries its own framing (e.g. "<list>", "<dict>");
-        // this generic frame is used only for dep-error propagation.
-        let make_frame = || TraceFrame::bare("<combine>", "combine");
-        for dep in &deps {
-            if let Err(e) = self.read_result(*dep) {
-                return NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(make_frame()))));
-            }
-        }
-        // Pre-collect carriers so `finish` (which takes `&mut self`) doesn't reborrow for
-        // reads. A type-resolving dep arrives as `Carried::Type`; the finish closure
-        // narrows each arm it expects.
-        let values: Vec<Carried<'run>> = deps.iter().map(|d| self.read(*d)).collect();
-        let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
-        let outcome = finish(&SchedulerView::new(self), &values);
-        self.reclaim_deps(idx, owned_indices);
-        self.apply_outcome(outcome, idx)
-    }
-
-    /// Dispatch-side dual of [`Self::run_combine`], with the same shape: short-circuit on a dep
-    /// error (frameless or via the carried `dep_error_frame`), collect the resolved values, run the
-    /// finish to an [`Outcome`], reclaim the owned deps, then apply. The finish sees a read-only
-    /// [`SchedulerView`] and issues no graph write, so the reclaim lands after it and before the
-    /// apply that installs the continuation's edges.
-    pub(super) fn run_dispatch_combine(
         &mut self,
         deps: Vec<NodeId>,
         park_count: usize,
@@ -67,6 +44,9 @@ impl<'run> Scheduler<'run> {
                 )));
             }
         }
+        // Pre-collect carriers so `finish` (which takes `&mut self`) doesn't reborrow for
+        // reads. A type-resolving dep arrives as `Carried::Type`; the finish closure
+        // narrows each arm it expects.
         let values: Vec<Carried<'run>> = deps.iter().map(|d| self.read(*d)).collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
         let outcome = finish(&SchedulerView::new(self), &values);

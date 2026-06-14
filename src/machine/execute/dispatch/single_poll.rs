@@ -2,7 +2,7 @@
 //! bare-`Type`-head call, sigiled type expression, literal pass-through.
 //! Most terminate (or single-producer-park) in one poll. Two carry a resume:
 //! `TypeCall` parks on per-value-cell eager-subs (its value subs as a
-//! `DispatchCombine`) or on a still-finalizing head binding, re-running
+//! `Combine`) or on a still-finalizing head binding, re-running
 //! [`type_call`] on wake; `BareTypeLeaf` parks on a still-finalizing referent
 //! and re-resolves [`bare_type_leaf`]. Both park through a [`park_resume`] closure.
 

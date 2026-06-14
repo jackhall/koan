@@ -88,15 +88,26 @@ pub(super) enum NodeWork<'run> {
         carrier: Option<KExpression<'run>>,
         resume: ResumeFn<'run>,
     },
-    /// `deps` layout is `[park_producers..., owned_subs...]`. `park_count` is the
-    /// size of the park-producer prefix — those slots are sibling producers this
-    /// Combine merely reads at finish-time and does NOT own. Only the
-    /// `deps[park_count..]` suffix gets installed as `DepEdge::Owned` and
-    /// cascade-freed at success; the prefix installs as `Notify` (park) edges.
+    /// An N→1 combinator: wait on a fixed set of dep slots, then run `finish` over their resolved
+    /// values to an [`Outcome`](super::outcome::Outcome) the harness applies. `deps` layout is
+    /// `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix length —
+    /// sibling producers this Combine reads at finish-time but does NOT own. Only the
+    /// `deps[park_count..]` suffix installs as `DepEdge::Owned` (cascade-freed at success); the
+    /// prefix installs as `Notify` (park) edges.
+    ///
+    /// Both the action-harness combine (`Action::Combine`, list/dict/record literals, MATCH/TRY
+    /// leading statements) and the dispatcher's park-sites (eager-subs / head-deferred /
+    /// constructor) install this one shape: the dispatch `finish` may itself re-park (returning a
+    /// fresh `Outcome::ParkThenContinue`, e.g. an overload park on a just-resolved producer),
+    /// splice into a `KExpression`, classify, or invoke — the slot learns nothing of those
+    /// internals. `dep_error_frame` labels a dep-error short-circuit (before the finish runs): an
+    /// action/literal combine carries `<combine>`; a dispatch site carries its consuming call's
+    /// frame (e.g. eager-subs' `<bind>`) or `None` to propagate frameless.
     Combine {
         deps: Vec<NodeId>,
         park_count: usize,
         finish: CombineFinish<'run>,
+        dep_error_frame: Option<TraceFrame>,
     },
     /// Catching dual of a single-dep `Combine`: waits on `from` and hands its terminal
     /// (Value or Err) to `finish`. `Combine` short-circuits on dep-error before its
@@ -104,24 +115,6 @@ pub(super) enum NodeWork<'run> {
     Catch {
         from: NodeId,
         finish: CatchFinish<'run>,
-    },
-    /// Dispatch-side dual of `Combine`: identical dep-resolution and edge layout
-    /// (`[park_producers..., owned_subs...]`, `park_count` the prefix), and its finish returns the
-    /// same [`Outcome`](super::outcome::Outcome) currency — which may itself re-park (a fresh
-    /// `Outcome::ParkThenContinue`,
-    /// e.g. an overload park on a just-resolved producer). Drives the eager-subs /
-    /// head-deferred / constructor park-sites: the scheduler resolves the deps and hands the
-    /// values to a dispatch finish that splices / classifies / invokes, learning nothing about
-    /// the dispatch internals (the splice into a `KExpression` lives entirely in the finish).
-    ///
-    /// `dep_error_frame` is attached to a dep-error short-circuit (before the finish runs) so a
-    /// site that wants to surface the consuming call in the trace (e.g. eager-subs' `<bind>`
-    /// frame keyed off the call expression) can; `None` propagates frameless.
-    DispatchCombine {
-        deps: Vec<NodeId>,
-        park_count: usize,
-        finish: CombineFinish<'run>,
-        dep_error_frame: Option<TraceFrame>,
     },
     Lift(LiftState<'run>),
 }
@@ -222,9 +215,6 @@ pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Option<Vec<NodeId>> {
         NodeWork::Combine {
             deps, park_count, ..
         } => Some(deps[*park_count..].to_vec()),
-        NodeWork::DispatchCombine {
-            deps, park_count, ..
-        } => Some(deps[*park_count..].to_vec()),
         NodeWork::Catch { from, .. } => Some(vec![*from]),
         NodeWork::Lift(LiftState::Pending(from)) => Some(vec![*from]),
         NodeWork::Lift(LiftState::Ready(_)) => None,
@@ -237,9 +227,6 @@ pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Option<Vec<NodeId>> {
 pub(super) fn work_park_producers<'run, 'b>(work: &'b NodeWork<'run>) -> &'b [NodeId] {
     match work {
         NodeWork::Combine {
-            deps, park_count, ..
-        } => &deps[..*park_count],
-        NodeWork::DispatchCombine {
             deps, park_count, ..
         } => &deps[..*park_count],
         _ => &[],

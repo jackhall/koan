@@ -96,7 +96,6 @@ fn work_deadlock_sample<'run>(work: &NodeWork<'run>) -> DeadlockSample {
             DeadlockSample::Fallback("<dispatch-resume>")
         }
         NodeWork::Combine { .. } => DeadlockSample::Fallback("<combine>"),
-        NodeWork::DispatchCombine { .. } => DeadlockSample::Fallback("<dispatch-combine>"),
         NodeWork::Catch { .. } => DeadlockSample::Fallback("<catch>"),
         NodeWork::Lift(_) => DeadlockSample::Fallback("<lift>"),
     }

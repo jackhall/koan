@@ -7,7 +7,7 @@
 //! applies it. The harness holds the sole `&mut Scheduler` on the dispatch side.
 
 use crate::machine::core::kfunction::action::{Dep, DepPlacement, FramePlacement};
-use crate::machine::NodeId;
+use crate::machine::{NodeId, TraceFrame};
 
 use super::super::nodes::{LiftState, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
@@ -137,18 +137,21 @@ impl<'run> Scheduler<'run> {
                     }
                 }
                 let work = match cont {
-                    Continuation::Finish(finish) => NodeWork::DispatchCombine {
+                    // A dispatch finish carries its own dep-error frame (the consuming call's, or
+                    // `None` frameless); an action/literal combine is labelled `<combine>` — the
+                    // one place that policy lives. Both install the same `NodeWork::Combine` over
+                    // the realized deps (edges already installed by the loop above).
+                    Continuation::Finish(finish) => NodeWork::Combine {
                         deps: dep_ids,
                         park_count,
                         finish,
                         dep_error_frame,
                     },
-                    // The action-harness combine: the slot becomes a `NodeWork::Combine` over the
-                    // realized deps (its edges already installed by the loop above).
                     Continuation::Combine(finish) => NodeWork::Combine {
                         deps: dep_ids,
                         park_count,
                         finish,
+                        dep_error_frame: Some(TraceFrame::bare("<combine>", "combine")),
                     },
                     // The action-harness catch carries its single watched dep unrealized (its
                     // placement differs from a Combine body's fan-out); realize and own it here.

@@ -186,7 +186,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
 }
 
 /// Route a fully-spliced eager-subs `working_expr` to its continuation — the shared tail of
-/// the `DispatchCombine` finish and its all-inline fast path. `Some(f)` names the committed
+/// the `Combine` finish and its all-inline fast path. `Some(f)` names the committed
 /// call as an [`Outcome::Invoke`]; `None` defers to a [`Outcome::Redispatch`]
 /// (the harness re-resolves via [`keyworded::finish`](super::keyworded::finish), where an element-typed `Future(_)`
 /// revealed by a sub surfaces as a slot-terminal `DispatchFailed`). Pure data — no `&mut`.

@@ -91,11 +91,14 @@ pub(in crate::machine::execute) enum Outcome<'run> {
 
 /// What a [`Outcome::ParkThenContinue`] runs once its deps resolve. The shapes are the closed set
 /// of "what happens on wake":
-/// - `Finish` consumes the resolved dep values and returns another [`Outcome`] — a dispatch decide
-///   re-park/splice (its finish may itself re-park, so it lands as `NodeWork::DispatchCombine`).
+/// `Finish` and `Combine` both install a [`NodeWork::Combine`](super::nodes::NodeWork::Combine) —
+/// they differ only in the dep-error frame the harness attaches:
+/// - `Finish` is a dispatch decide's re-park/splice; its finish consumes the resolved dep values
+///   and returns another [`Outcome`] (it may itself re-park), carrying its own `dep_error_frame`
+///   (the consuming call's, or `None` frameless).
 /// - `Combine` is the action-harness combine ([`run_action`](super::harness::run_action)'s
-///   `Action::Combine`): the slot becomes a `NodeWork::Combine` and its finish runs against a
-///   read-only [`SchedulerView`].
+///   `Action::Combine`) and the literal builders; the harness labels its dep errors `<combine>`.
+///   Its finish runs against a read-only [`SchedulerView`].
 /// - `Catch` is the action-harness catch ([`run_action`](super::harness::run_action)'s
 ///   `Action::Catch`): the slot becomes a `NodeWork::Catch` watching the realized `watched` dep;
 ///   the harness owns that producer. `watched`'s placement is realized at apply time (an `InScope`

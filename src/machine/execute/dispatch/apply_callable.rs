@@ -181,7 +181,7 @@ fn apply_function<'run>(
 }
 
 /// Stage every eager part of the reconstructed call as a sub-Dispatch, splice already-terminal
-/// subs inline, and park the slot on the in-flight ones as a `DispatchCombine` whose finish binds
+/// subs inline, and park the slot on the in-flight ones as a `Combine` whose finish binds
 /// `picked`. Shared by the `FunctionValueCall` lane and every head-deferred / type-call function
 /// arm.
 pub(in crate::machine::execute) fn install_eager_subs_track<'run>(

@@ -2,7 +2,9 @@ use std::rc::Rc;
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, SignatureElement};
-use crate::machine::{BindingIndex, FunctionLookup, KFunction, LexicalFrame, NodeId, Scope};
+use crate::machine::{
+    BindingIndex, FunctionLookup, KFunction, LexicalFrame, NodeId, Scope, TraceFrame,
+};
 
 use super::super::nodes::{work_park_producers, CallFrame, Node, NodeScope, NodeWork};
 use super::super::CombineFinish;
@@ -111,6 +113,7 @@ impl<'run> Scheduler<'run> {
                 deps,
                 park_count,
                 finish,
+                dep_error_frame: Some(TraceFrame::bare("<combine>", "combine")),
             },
             scope,
         )
@@ -214,6 +217,7 @@ impl<'run> Scheduler<'run> {
             deps,
             park_count,
             finish,
+            dep_error_frame: Some(TraceFrame::bare("<combine>", "combine")),
         })
     }
 

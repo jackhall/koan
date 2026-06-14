@@ -689,7 +689,7 @@ fn keyworded_unchanged_with_keyword_in_body() {
 /// A Keyworded dispatch whose initial resolve picks an overload but whose
 /// value-cell parts need sub-Dispatch evaluation (the Resolved-with-eager-subs
 /// arm) must terminate correctly under the stateful driver. Pins that the
-/// eager-subs `DispatchCombine` finish re-resolves and binds inline through
+/// eager-subs `Combine` finish re-resolves and binds inline through
 /// `exec::invoke`.
 ///
 /// Program: `LET y = (FIRST [1 2 3])`. LET picks at initial resolve; the RHS

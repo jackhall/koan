@@ -1,7 +1,7 @@
 //! Head-deferred dispatch shapes — `HeadDeferred` and `TypeHeadDeferred`.
 //!
 //! Both evaluate the head (`parts[0]`) first as a sub-dispatch, parking the slot
-//! on it as a single-dep [`NodeWork::DispatchCombine`](super::super::nodes::NodeWork);
+//! on it as a single-dep [`NodeWork::Combine`](super::super::nodes::NodeWork::Combine);
 //! once it resolves, the finish applies the value to `parts[1..]` via the shared
 //! apply-a-callable tail. The `type_only` flag selects the admitted arm set:
 //!
@@ -62,7 +62,7 @@ pub(in crate::machine::execute) fn initial_type<'run>(expr: KExpression<'run>) -
 /// finish classifies it into a [`ResolvedCallable`] and hands off to the shared apply-a-callable
 /// tail — which may itself resolve, park, or error, so the re-park-capable dispatch finish (its
 /// `Outcome` may be a fresh `ParkThenContinue`/`Redispatch`) is required. A dep error short-circuits
-/// frameless in `run_dispatch_combine`, so the finish only runs on a resolved head.
+/// frameless in `run_combine`, so the finish only runs on a resolved head.
 fn park_on_head<'run>(
     expr: KExpression<'run>,
     head: KExpression<'run>,
