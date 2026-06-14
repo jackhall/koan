@@ -260,21 +260,6 @@ impl<'run> Scheduler<'run> {
         self.deps.would_create_cycle(producer, consumer)
     }
 
-    /// Success-path eager free for the slot's owned edges
-    /// (`DepGraph::clear_dep_edges`).
-    pub(in crate::machine::execute) fn clear_dep_edges(&mut self, idx: usize) {
-        self.deps.clear_dep_edges(idx);
-    }
-
-    /// Drain producers that fired since this slot's last poll
-    /// (`NodeStore::take_recent_wakes`).
-    pub(in crate::machine::execute) fn take_recent_wakes(
-        &mut self,
-        consumer: NodeId,
-    ) -> Vec<NodeId> {
-        self.store.take_recent_wakes(consumer)
-    }
-
     /// Borrow the ambient lexical chain (`&self.active_chain.as_deref()`).
     /// Name-resolution helpers read this to apply chain-aware visibility.
     pub(in crate::machine::execute) fn chain_deref(&self) -> Option<&LexicalFrame> {

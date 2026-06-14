@@ -1,6 +1,6 @@
 //! Dispatch shape router, classifier, and shared spine.
 //!
-//! [`run_dispatch`] classifies the slot via [`classify_dispatch_shape`]
+//! [`classify_dispatch`] classifies the slot via [`classify_dispatch_shape`]
 //! and routes by shape:
 //!
 //! - **Keyworded** (a keyword is present) → [`keyworded::initial`]
@@ -25,9 +25,9 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
 
-use super::nodes::{NodeOutput, NodeStep, NodeWork};
-use super::CombineFinish;
+use super::nodes::{NodeOutput, NodeWork};
 use super::scheduler::Scheduler;
+use super::{ignore_results, CombineFinish};
 use crate::machine::core::kfunction::action::FramePlacement;
 
 pub(in crate::machine::execute) mod apply_callable;
@@ -220,7 +220,7 @@ pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>)
 
 // ---------- Outcome constructors (the dispatch-currency → Outcome mapping) ----------
 
-/// Park the slot on `deps` as a [`NodeWork::Combine`](super::nodes::NodeWork::Combine) whose
+/// Park the slot on `deps` as a [`NodeWork::Wait`](super::nodes::NodeWork::Wait) whose
 /// `finish` runs over their resolved values (the dispatch combine — short-circuits on dep error).
 /// Every dep is owned (`park_count: 0`); `free` reclaims `Reuse` producers consumed inline.
 pub(in crate::machine::execute) fn park_combine<'run>(
@@ -355,31 +355,37 @@ pub(super) fn stage_all_eager_parts<'run>(
 
 // ---------- Resume closure ----------
 
-/// A dispatch slot's decide — the `SchedulerView -> Outcome` closure a [`NodeWork::Decide`] runs.
+/// A dispatch slot's decide — the `SchedulerView -> Outcome` closure a dispatch [`NodeWork::Wait`](super::nodes::NodeWork::Wait) runs.
 /// A birth decide classifies the carried `expr` (+ `pre_subs`) and routes; a park's resume re-runs
 /// the decide its park captured (a bare leaf, an evolving `working_expr`). Boxing keeps the router
-/// blind to which family it is — every `Decide` wakes through [`run_decide`] uniformly.
+/// blind to which family it is — every `Wait` wakes through `run_wait` uniformly.
 pub(in crate::machine::execute) type ResumeFn<'run> =
     Box<dyn for<'a> FnOnce(&SchedulerView<'run, 'a>, usize) -> Outcome<'run> + 'run>;
 
 // ---------- Cross-shape driver ----------
 
-/// Build a birth [`NodeWork::Decide`] for `expr` with empty `pre_subs` — the dispatch-layer
+/// Build a birth dispatch [`NodeWork::Wait`](super::nodes::NodeWork::Wait) for `expr` with empty `pre_subs` — the dispatch-layer
 /// constructor every tail-replace / re-dispatch site uses instead of a raw work literal. The
 /// captured closure classifies `expr` on first poll; `carrier` is its deadlock-summary.
 pub(in crate::machine::execute) fn decide<'run>(expr: KExpression<'run>) -> NodeWork<'run> {
     decide_with_presubs(expr, Vec::new())
 }
 
-/// Birth [`NodeWork::Decide`] carrying the dispatch layer's pre-submitted nested sub-Dispatches
+/// Birth dispatch [`NodeWork::Wait`](super::nodes::NodeWork::Wait) carrying the dispatch layer's pre-submitted nested sub-Dispatches
 /// (computed by [`submit_dispatch`]).
 pub(in crate::machine::execute) fn decide_with_presubs<'run>(
     expr: KExpression<'run>,
     pre_subs: Vec<(usize, NodeId)>,
 ) -> NodeWork<'run> {
     let carrier = expr.summarize();
-    NodeWork::Decide {
-        run: Box::new(move |view, idx| classify_dispatch(view, expr, pre_subs, idx)),
+    // A birth decide waits on no deps and ignores the (empty) results slice; it runs on first poll,
+    // classifies, and routes. `ignore_results` adapts the decide closure to the unified `NodeCont`.
+    NodeWork::Wait {
+        deps: Vec::new(),
+        park_count: 0,
+        cont: ignore_results(Box::new(move |view, idx| {
+            classify_dispatch(view, expr, pre_subs, idx)
+        })),
         carrier: Some(carrier),
     }
 }
@@ -387,7 +393,7 @@ pub(in crate::machine::execute) fn decide_with_presubs<'run>(
 /// Classify a freshly-born dispatch expression's shape and route to the matching per-shape decide,
 /// returning the [`Outcome`] for the harness to apply. Fast-lane shapes terminalize or
 /// single-producer-park in one poll; a shape that parks returns a `ParkThenContinue` whose resume
-/// closure re-enters [`run_decide`], never back through here.
+/// closure re-enters [`run_wait`], never back through here.
 fn classify_dispatch<'run>(
     view: &SchedulerView<'run, '_>,
     expr: KExpression<'run>,
@@ -461,17 +467,3 @@ fn classify_dispatch<'run>(
     }
 }
 
-/// Run a [`NodeWork::Decide`] slot: drain stale wakes, clear the slot's stale dep edges (a no-op on
-/// a fresh birth, which owns none), run the captured decide against a read-only view, and apply the
-/// returned [`Outcome`]. Birth and resume wake through this one arm, so the scheduler never learns
-/// which dispatch family the slot is.
-pub(in crate::machine::execute) fn run_decide<'run>(
-    sched: &mut Scheduler<'run>,
-    run: ResumeFn<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
-    let _wakes = sched.take_recent_wakes(NodeId(idx));
-    sched.clear_dep_edges(idx);
-    let outcome = run(&SchedulerView::new(sched), idx);
-    sched.apply_outcome(outcome, idx)
-}

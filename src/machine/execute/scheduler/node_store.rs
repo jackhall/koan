@@ -81,18 +81,16 @@ enum DeadlockSample {
     Fallback(&'static str),
 }
 
-/// Map a stuck slot's `work` to its deadlock-sample contribution. A `Some`-carrier `Decide` (birth
-/// or resume) carries a renderable expression summary (`Preferred`); a carrier-less decide and the
-/// fixed-dep combinators carry only a generic tag (`Fallback`).
+/// Map a stuck slot's `work` to its deadlock-sample contribution. A `Some`-carrier `Wait` (a
+/// dispatch decide) carries a renderable expression summary (`Preferred`); a carrier-less wait
+/// (combine / catch) and a `Lift` carry only a generic tag (`Fallback`).
 fn work_deadlock_sample<'run>(work: &NodeWork<'run>) -> DeadlockSample {
     match work {
-        NodeWork::Decide {
+        NodeWork::Wait {
             carrier: Some(carrier),
             ..
         } => DeadlockSample::Preferred(carrier.clone()),
-        NodeWork::Decide { carrier: None, .. } => DeadlockSample::Fallback("<decide>"),
-        NodeWork::Combine { .. } => DeadlockSample::Fallback("<combine>"),
-        NodeWork::Catch { .. } => DeadlockSample::Fallback("<catch>"),
+        NodeWork::Wait { carrier: None, .. } => DeadlockSample::Fallback("<wait>"),
         NodeWork::Lift(_) => DeadlockSample::Fallback("<lift>"),
     }
 }
@@ -103,10 +101,6 @@ pub(in crate::machine::execute::scheduler) struct NodeStore<'run> {
     /// extending `slots`, giving constant scheduler memory across
     /// tail-recursive bodies.
     free_list: Vec<NodeId>,
-    /// Per-consumer side-channel: producers that have fired since this
-    /// slot's last poll. Populated only for `NodeWork::Decide` consumers;
-    /// drained on entry to the dispatch driver. Indexed in lockstep with `slots`.
-    recent_wakes: SlotVec<Vec<NodeId>>,
 }
 
 impl<'run> NodeStore<'run> {
@@ -114,7 +108,6 @@ impl<'run> NodeStore<'run> {
         Self {
             slots: SlotVec::new(),
             free_list: Vec::new(),
-            recent_wakes: SlotVec::new(),
         }
     }
 
@@ -130,9 +123,6 @@ impl<'run> NodeStore<'run> {
             None => {
                 let id = NodeId(self.slots.len());
                 self.slots.push(SlotState::PreRun(node));
-                // Grow the wake side-channel in lockstep with `slots` so
-                // every live `NodeId` indexes a valid inner Vec.
-                self.recent_wakes.push(Vec::new());
                 id
             }
         }
@@ -189,7 +179,6 @@ impl<'run> NodeStore<'run> {
     /// `dep_edges[id]` free-time clears in `DepGraph`.
     pub(super) fn free_one(&mut self, id: NodeId) {
         self.slots[id] = SlotState::Free;
-        self.recent_wakes[id].clear();
         self.free_list.push(id);
     }
 
@@ -283,32 +272,6 @@ impl<'run> NodeStore<'run> {
         }
     }
 
-    /// Record that `producer` just terminalized into the consumer slot's
-    /// `recent_wakes`. No-op unless `consumer` is `PreRun` with a `NodeWork::Decide`
-    /// (the birth / parked-and-replaying shape) — `Combine` / `Catch` / `Lift` run a
-    /// fixed closure on counter-zero and don't need per-edge wake attribution.
-    pub(super) fn push_recent_wake(&mut self, consumer: NodeId, producer: NodeId) {
-        let is_dispatch_prerun = matches!(
-            &self.slots[consumer],
-            SlotState::PreRun(node)
-                if matches!(&node.work, NodeWork::Decide { .. }),
-        );
-        if !is_dispatch_prerun {
-            return;
-        }
-        self.recent_wakes[consumer].push(producer);
-    }
-
-    /// Drain the producers that fired since the slot's last poll. Called by
-    /// the dispatch driver on entry via `Scheduler::take_recent_wakes`; the
-    /// side-channel stays empty for non-dispatch work by construction in
-    /// `push_recent_wake`.
-    pub(in crate::machine::execute::scheduler) fn take_recent_wakes(
-        &mut self,
-        consumer: NodeId,
-    ) -> Vec<NodeId> {
-        std::mem::take(&mut self.recent_wakes[consumer])
-    }
 
     // --- Test-only helpers for synthetic-state setup. ---
 
@@ -356,30 +319,33 @@ impl<'run> NodeStore<'run> {
 mod tests {
     use super::*;
 
+    fn sample_wait<'r>(carrier: Option<String>) -> NodeWork<'r> {
+        NodeWork::Wait {
+            deps: Vec::new(),
+            park_count: 0,
+            cont: Box::new(|_view, _results, _idx| unreachable!("sample test never runs")),
+            carrier,
+        }
+    }
+
     #[test]
-    fn some_carrier_decide_prefers_the_carrier() {
-        let work = NodeWork::Decide {
-            carrier: Some("PARKED-EXPR".to_string()),
-            run: Box::new(|_view, _idx| unreachable!("sample test never resumes")),
-        };
+    fn some_carrier_wait_prefers_the_carrier() {
+        let work = sample_wait(Some("PARKED-EXPR".to_string()));
         assert!(
             matches!(work_deadlock_sample(&work), DeadlockSample::Preferred(s) if s.contains("PARKED")),
-            "a Some-carrier Decide (birth or resume) must surface its carrier",
+            "a Some-carrier Wait (a dispatch decide) must surface its carrier",
         );
     }
 
     #[test]
-    fn carrier_less_decide_falls_back_to_a_tag() {
-        let work = NodeWork::Decide {
-            carrier: None,
-            run: Box::new(|_view, _idx| unreachable!("sample test never resumes")),
-        };
+    fn carrier_less_wait_falls_back_to_a_tag() {
+        let work = sample_wait(None);
         assert!(
             matches!(
                 work_deadlock_sample(&work),
-                DeadlockSample::Fallback("<decide>")
+                DeadlockSample::Fallback("<wait>")
             ),
-            "a carrier-less Decide must surface a generic tag, not an empty sample",
+            "a carrier-less Wait must surface a generic tag, not an empty sample",
         );
     }
 

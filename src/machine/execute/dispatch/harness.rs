@@ -10,6 +10,7 @@ use crate::machine::core::kfunction::action::{Dep, DepPlacement, FramePlacement}
 use crate::machine::{NodeId, TraceFrame};
 
 use super::super::nodes::{LiftState, NodeStep, NodeWork};
+use super::super::{catch_cont, ignore_results, short_circuit};
 use super::super::scheduler::Scheduler;
 use super::ctx::SchedulerView;
 use super::{Continuation, DispatchDep, Outcome};
@@ -139,31 +140,41 @@ impl<'run> Scheduler<'run> {
                 let work = match cont {
                     // A dispatch finish carries its own dep-error frame (the consuming call's, or
                     // `None` frameless); an action/literal combine is labelled `<combine>` — the
-                    // one place that policy lives. Both install the same `NodeWork::Combine` over
-                    // the realized deps (edges already installed by the loop above).
-                    Continuation::Finish(finish) => NodeWork::Combine {
+                    // one place that policy lives. Both install the same `Wait` over the realized
+                    // deps (edges already installed by the loop above), the short-circuit baked into
+                    // the continuation by `short_circuit`.
+                    Continuation::Finish(finish) => NodeWork::Wait {
                         deps: dep_ids,
                         park_count,
-                        finish,
-                        dep_error_frame,
+                        cont: short_circuit(dep_error_frame, finish),
+                        carrier: None,
                     },
-                    Continuation::Combine(finish) => NodeWork::Combine {
+                    Continuation::Combine(finish) => NodeWork::Wait {
                         deps: dep_ids,
                         park_count,
-                        finish,
-                        dep_error_frame: Some(TraceFrame::bare("<combine>", "combine")),
+                        cont: short_circuit(Some(TraceFrame::bare("<combine>", "combine")), finish),
+                        carrier: None,
                     },
                     // The action-harness catch carries its single watched dep unrealized (its
                     // placement differs from a Combine body's fan-out); realize and own it here.
+                    // `catch_cont` runs the finish without short-circuiting on a dep error.
                     Continuation::Catch { watched, finish } => {
                         let from = self.realize_catch_dep(watched);
                         self.add_owned_edge(from, NodeId(idx));
-                        NodeWork::Catch { from, finish }
+                        NodeWork::Wait {
+                            deps: vec![from],
+                            park_count: 0,
+                            cont: catch_cont(finish),
+                            carrier: None,
+                        }
                     }
                     // The resume closure carries the evolving `working_expr` from here on; the
-                    // `carrier` it travels with is only the deadlock-summary sample.
-                    Continuation::Resume { carrier, resume } => NodeWork::Decide {
-                        run: resume,
+                    // `carrier` it travels with is only the deadlock-summary sample. A decide takes
+                    // no dep values, so `ignore_results` drops the (park-only) results slice.
+                    Continuation::Resume { carrier, resume } => NodeWork::Wait {
+                        deps: dep_ids,
+                        park_count,
+                        cont: ignore_results(resume),
                         carrier,
                     },
                     Continuation::Forward(producer) => NodeWork::Lift(LiftState::Pending(producer)),

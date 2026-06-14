@@ -35,16 +35,12 @@ impl<'run> Scheduler<'run> {
             // type (keep-first discards it anyway).
             self.active_in_contract_chain = prev_contract.is_some();
             let step = match work {
-                NodeWork::Decide { run, .. } => {
-                    crate::machine::execute::dispatch::run_decide(self, run, idx)
-                }
-                NodeWork::Combine {
+                NodeWork::Wait {
                     deps,
                     park_count,
-                    finish,
-                    dep_error_frame,
-                } => self.run_combine(deps, park_count, finish, dep_error_frame, idx),
-                NodeWork::Catch { from, finish } => self.run_catch(from, finish, idx),
+                    cont,
+                    ..
+                } => self.run_wait(deps, park_count, cont, idx),
                 NodeWork::Lift(state) => NodeStep::Done(Self::run_lift(state)),
             };
             // The post-step token owns the slot's frame at step end and is the *only* source of
@@ -173,7 +169,6 @@ impl<'run> Scheduler<'run> {
         let drained = self.deps.drain_notify(idx);
         let mut woken: Vec<usize> = Vec::new();
         for (consumer, hit_zero) in drained {
-            self.store.push_recent_wake(NodeId(consumer), id);
             if hit_zero {
                 self.store.stamp_lift_ready(NodeId(consumer), id);
                 woken.push(consumer);

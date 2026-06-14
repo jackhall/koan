@@ -1,5 +1,5 @@
 //! End-to-end coverage for the bare-name short-circuit, auto-wrap pass, and
-//! replay-park routing in `run_dispatch` (see
+//! replay-park routing in `classify_dispatch` (see
 //! [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders)).
 use super::Scheduler;
 use crate::builtins::default_scope;

@@ -4,7 +4,7 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::{LexicalFrame, NodeId, Scope, TraceFrame};
 
 use super::super::nodes::{work_park_producers, CallFrame, Node, NodeScope, NodeWork};
-use super::super::CombineFinish;
+use super::super::{short_circuit, CombineFinish};
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
@@ -39,11 +39,11 @@ impl<'run> Scheduler<'run> {
         let mut deps = park_producers;
         deps.extend(owned_subs);
         self.add(
-            NodeWork::Combine {
+            NodeWork::Wait {
                 deps,
                 park_count,
-                finish,
-                dep_error_frame: Some(TraceFrame::bare("<combine>", "combine")),
+                cont: short_circuit(Some(TraceFrame::bare("<combine>", "combine")), finish),
+                carrier: None,
             },
             scope,
         )
@@ -169,11 +169,11 @@ impl<'run> Scheduler<'run> {
         let park_count = park_producers.len();
         let mut deps = park_producers;
         deps.extend(owned_subs);
-        self.submit_here(NodeWork::Combine {
+        self.submit_here(NodeWork::Wait {
             deps,
             park_count,
-            finish,
-            dep_error_frame: Some(TraceFrame::bare("<combine>", "combine")),
+            cont: short_circuit(Some(TraceFrame::bare("<combine>", "combine")), finish),
+            carrier: None,
         })
     }
 

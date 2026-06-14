@@ -1,9 +1,9 @@
-use crate::machine::model::{Carried, KObject};
-use crate::machine::{KError, NodeId, TraceFrame};
+use crate::machine::model::Carried;
+use crate::machine::{KError, NodeId};
 
-use super::super::dispatch::{propagate_dep_error, SchedulerView};
+use super::super::dispatch::SchedulerView;
 use super::super::nodes::{LiftState, NodeOutput, NodeStep};
-use super::super::{CatchFinish, CombineFinish};
+use super::super::NodeCont;
 use super::Scheduler;
 
 impl<'run> Scheduler<'run> {
@@ -17,59 +17,25 @@ impl<'run> Scheduler<'run> {
         }
     }
 
-    /// Resolve a parked [`Combine`](super::super::nodes::NodeWork::Combine): short-circuit on a dep
-    /// error (labelled with the carried `dep_error_frame` — `<combine>` for an action/literal
-    /// combine, the consuming call's frame or `None` frameless for a dispatch site), collect the
-    /// resolved values, run `finish` to an [`Outcome`], reclaim the owned deps, then apply. The
-    /// finish sees a read-only [`SchedulerView`] and issues no graph write, so the reclaim lands
-    /// after it and before the apply that installs the continuation's edges.
-    ///
-    /// Only the `deps[park_count..]` owned-sub suffix is eagerly freed on the success path; the
-    /// `[..park_count]` park-producer prefix is kept alive (sibling producers the Combine merely
-    /// read at finish-time). The error path leaves edges in `dep_edges[idx]` for chain-free at slot
-    /// drop.
-    pub(super) fn run_combine(
+    /// The unified node handler: collect the resolved dep terminals (as owned `Result`s — an
+    /// errored dep is handed through, the continuation decides), run `cont` against a read-only
+    /// [`SchedulerView`], reclaim the owned-dep suffix, then apply. The continuation issues no
+    /// graph write, so the reclaim lands after it and before the apply that installs the
+    /// continuation's edges. Carried values survive the reclaim (they live in arenas, not slots).
+    pub(super) fn run_wait(
         &mut self,
         deps: Vec<NodeId>,
         park_count: usize,
-        finish: CombineFinish<'run>,
-        dep_error_frame: Option<TraceFrame>,
+        cont: NodeCont<'run>,
         idx: usize,
     ) -> NodeStep<'run> {
-        for dep in &deps {
-            if let Err(e) = self.read_result(*dep) {
-                return NodeStep::Done(NodeOutput::Err(propagate_dep_error(
-                    e,
-                    dep_error_frame.clone(),
-                )));
-            }
-        }
-        // Pre-collect carriers so `finish` (which takes `&mut self`) doesn't reborrow for
-        // reads. A type-resolving dep arrives as `Carried::Type`; the finish closure
-        // narrows each arm it expects.
-        let values: Vec<Carried<'run>> = deps.iter().map(|d| self.read(*d)).collect();
+        let results: Vec<Result<Carried<'run>, KError>> = deps
+            .iter()
+            .map(|d| self.read_result(*d).map_err(|e| e.clone()))
+            .collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
-        let outcome = finish(&SchedulerView::new(self), &values);
+        let outcome = cont(&SchedulerView::new(self), &results, idx);
         self.reclaim_deps(idx, owned_indices);
-        self.apply_outcome(outcome, idx)
-    }
-
-    /// Unlike Combine, an errored `from` does not short-circuit; the finish
-    /// closure decides whether to recover or re-raise. `from` is freed on both paths.
-    pub(super) fn run_catch(
-        &mut self,
-        from: NodeId,
-        finish: CatchFinish<'run>,
-        idx: usize,
-    ) -> NodeStep<'run> {
-        let result: Result<&'run KObject<'run>, KError> = match self.read_result(from) {
-            Ok(v) => Ok(v.object()),
-            // Frameless: the recovery-site dispatch attaches its own frame; adding
-            // one here would double-frame.
-            Err(e) => Err(propagate_dep_error(e, None)),
-        };
-        let outcome = finish(&SchedulerView::new(self), result);
-        self.reclaim_deps(idx, vec![from.index()]);
         self.apply_outcome(outcome, idx)
     }
 

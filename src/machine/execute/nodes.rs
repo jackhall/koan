@@ -3,10 +3,9 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::ScopeId;
 use crate::machine::model::{Carried, KObject, KType};
-use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope, TraceFrame};
+use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope};
 
-use super::dispatch::ResumeFn;
-use super::{CatchFinish, CombineFinish};
+use super::NodeCont;
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
 /// no further write to that slot occurs until it is freed and reused.
@@ -67,46 +66,21 @@ pub(super) enum NodeStep<'run> {
 /// `Combine` is the dual of `Bind`: a host-side N→1 combinator that waits on a
 /// fixed set of dep slots and runs a host closure over their resolved values.
 pub(super) enum NodeWork<'run> {
-    /// A dispatch slot's decide — both the birth state (the closure classifies the expression and
-    /// routes) and a parked slot's resume (the closure re-runs the decide its park captured) — run
-    /// identically: [`run_decide`](super::dispatch::run_decide) clears the slot's stale dep edges
-    /// and runs `run` against a read-only [`SchedulerView`](super::dispatch::SchedulerView). The
-    /// closure captures whatever its decide needs (the birth `expr` + `pre_subs`, a park's evolving
-    /// `working_expr`) so the scheduler holds no AST — it never learns which dispatch family the
-    /// slot is. `carrier` is the decide expression's pre-rendered summary for the drain-end
-    /// deadlock report, or `None` for a form with no renderable shape (falls back to a generic tag).
-    /// Built only by the dispatch layer (`dispatch::decide` / `submit_dispatch` / the park sites).
-    Decide {
-        run: ResumeFn<'run>,
-        carrier: Option<String>,
-    },
-    /// An N→1 combinator: wait on a fixed set of dep slots, then run `finish` over their resolved
-    /// values to an [`Outcome`](super::outcome::Outcome) the harness applies. `deps` layout is
-    /// `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix length —
-    /// sibling producers this Combine reads at finish-time but does NOT own. Only the
-    /// `deps[park_count..]` suffix installs as `DepEdge::Owned` (cascade-freed at success); the
-    /// prefix installs as `Notify` (park) edges.
-    ///
-    /// Both the action-harness combine (`Action::Combine`, list/dict/record literals, MATCH/TRY
-    /// leading statements) and the dispatcher's park-sites (eager-subs / head-deferred /
-    /// constructor) install this one shape: the dispatch `finish` may itself re-park (returning a
-    /// fresh `Outcome::ParkThenContinue`, e.g. an overload park on a just-resolved producer),
-    /// splice into a `KExpression`, classify, or invoke — the slot learns nothing of those
-    /// internals. `dep_error_frame` labels a dep-error short-circuit (before the finish runs): an
-    /// action/literal combine carries `<combine>`; a dispatch site carries its consuming call's
-    /// frame (e.g. eager-subs' `<bind>`) or `None` to propagate frameless.
-    Combine {
+    /// The unified node: wait on `deps`, then run `cont` over their resolved terminals (passed as
+    /// `Result`s — the continuation, not the handler, decides short-circuit vs recover). `deps`
+    /// layout is `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix
+    /// (`Notify` edges, kept alive), the suffix installs `Owned` (cascade-freed at success). A
+    /// dispatch decide (birth or resume) waits on no owned deps and ignores the results; a combine
+    /// reads its dep values; a catch reads its single dep's `Result`. `carrier` is the
+    /// deadlock-report sample (a decide's expression summary, else `None`). The per-family behavior
+    /// lives in `cont`, built by the [`short_circuit`](super::outcome::short_circuit) /
+    /// [`catch_cont`](super::outcome::catch_cont) / [`ignore_results`](super::outcome::ignore_results)
+    /// combinators, so the node itself never branches and names no AST.
+    Wait {
         deps: Vec<NodeId>,
         park_count: usize,
-        finish: CombineFinish<'run>,
-        dep_error_frame: Option<TraceFrame>,
-    },
-    /// Catching dual of a single-dep `Combine`: waits on `from` and hands its terminal
-    /// (Value or Err) to `finish`. `Combine` short-circuits on dep-error before its
-    /// finish runs; `Catch`'s finish always runs so the closure can decide to recover.
-    Catch {
-        from: NodeId,
-        finish: CatchFinish<'run>,
+        cont: NodeCont<'run>,
+        carrier: Option<String>,
     },
     Lift(LiftState<'run>),
 }
@@ -183,30 +157,24 @@ pub(super) struct Node<'run> {
     pub(super) chain: Rc<LexicalFrame>,
 }
 
-/// Owned `NodeId`s a node must read before running, or `None` if it has no
-/// owned read-deps. `Dispatch` spawns rather than reads, so returns `None`. For
-/// `Combine`, only the `deps[park_count..]` suffix is owned; the park-producer
-/// prefix is installed separately as `Notify` edges by `Scheduler::add`.
+/// Owned `NodeId`s a node must read before running, or `None` if it has no owned read-deps. For a
+/// `Wait`, only the `deps[park_count..]` suffix is owned; the park-producer prefix is installed
+/// separately as `Notify` edges. A `Lift` owns its single producer.
 pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Option<Vec<NodeId>> {
     match work {
-        // A `Decide` spawns sub-slots / parks on notify-only edges rather than reading owned deps,
-        // so it owns no read-deps.
-        NodeWork::Decide { .. } => None,
-        NodeWork::Combine {
+        NodeWork::Wait {
             deps, park_count, ..
         } => Some(deps[*park_count..].to_vec()),
-        NodeWork::Catch { from, .. } => Some(vec![*from]),
         NodeWork::Lift(LiftState::Pending(from)) => Some(vec![*from]),
         NodeWork::Lift(LiftState::Ready(_)) => None,
     }
 }
 
-/// Park-producer prefix for a `Combine` (sibling slots whose values it splices
-/// but does not own). Empty for every other work shape. The caller installs
-/// each entry as a `Notify` edge separately from the Owned-edge install path.
+/// Park-producer prefix for a `Wait` (sibling slots whose values it reads but does not own). Empty
+/// for a `Lift`. The caller installs each entry as a `Notify` edge separately from the Owned path.
 pub(super) fn work_park_producers<'run, 'b>(work: &'b NodeWork<'run>) -> &'b [NodeId] {
     match work {
-        NodeWork::Combine {
+        NodeWork::Wait {
             deps, park_count, ..
         } => &deps[..*park_count],
         _ => &[],
