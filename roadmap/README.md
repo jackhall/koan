@@ -159,9 +159,11 @@ What's shipped that the open items below build on:
   See [design/execution-model.md § The dispatcher / scheduler boundary](../design/execution-model.md#the-dispatcher--scheduler-boundary).
 - *Unified scheduler interface.* Every scheduler-facing step — a dispatch decide, a finish, a
   builtin body, an invoke — decides against one read-only
-  [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) and returns one
-  [`Outcome`](../src/machine/execute/outcome.rs) (`Done` / `Continue` / `ParkThenContinue`, plus
-  the `Invoke` frame-acquisition trigger), with [`Scheduler::apply_outcome`](../src/machine/execute/scheduler.rs)
+  [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) and returns one AST-free
+  [`Outcome`](../src/machine/execute/outcome.rs) (`Done` / `Continue` / `ParkThenContinue` /
+  `Forward` — no variant names a `KFunction` or `KExpression`; the dispatch→execution hand-off
+  folds into a dep-free `Continue` whose frame placement installs the per-call cart), with
+  [`Scheduler::apply_outcome`](../src/machine/execute/scheduler.rs)
   the sole graph writer. The `SchedulerHandle` trait, `BodyResult`, `DispatchOutcome`, and the
   per-shape `DispatchState` envelope are gone — the scheduler's write methods are inherent and
   private to the execute tree. A multi-statement FN body's leading statements are now owned deps

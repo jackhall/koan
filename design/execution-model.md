@@ -79,20 +79,21 @@ them. The three pieces:
 - **The effect** —
   [`Outcome<'run>`](../src/machine/execute/outcome.rs) is the one currency
   every producer and finish returns (the dispatch-side peer of the builtin
-  [`Action`](../src/machine/core/kfunction/action.rs)). Three taxonomic
-  variants — `Done` (a value to lift, or an error), `Continue` (replace this
-  slot's work and frame, re-run, no park), and `ParkThenContinue` (park on
-  deps, then run a [`Continuation`](../src/machine/execute/outcome.rs) that
-  yields another outcome) — plus three triggers: `Invoke` (the
-  dispatch→execution trigger; frame acquisition is an irreducible harness
-  write, so a decide that picks a call names it here and the harness acquires
-  the per-call frame before running the pure `invoke` decide), `Forward`
-  (the slot's result *is* a named producer's — the harness splices the slot out
-  as an alias of that producer rather than installing a forwarding node; see
-  [Bare-name forward splice](#bare-name-forward-splice)), and `Redispatch`
-  (the one remaining transitional variant — an immediate dispatch-specific
-  re-resolve, shed when the eager-subs re-resolve folds in). Each is pure data —
-  no `&mut Scheduler` is captured.
+  [`Action`](../src/machine/core/kfunction/action.rs)). It is AST-free — no
+  variant names a `KFunction` or a `KExpression`. Four variants: `Done` (a
+  value to lift, or an error), `Continue` (replace this slot's work and frame,
+  re-run, no park), `ParkThenContinue` (park on deps, then run a
+  [`Continuation`](../src/machine/execute/outcome.rs) that yields another
+  outcome), and `Forward` (the slot's result *is* a named producer's — the
+  harness splices the slot out as an alias of that producer rather than
+  installing a forwarding node; see
+  [Bare-name forward splice](#bare-name-forward-splice)). The dispatch→execution
+  hand-off is itself a dep-free `Continue`: a decide that picks a call folds the
+  resolved call into a `Continue` whose frame placement installs the per-call
+  cart (a user fn's `ReuseReserve`, a builtin's `Inherit`) and whose `work`
+  re-decides via the folded `invoke` / re-resolve closure on the next pop, so no
+  variant carries the call's AST. Each is pure data — no `&mut Scheduler` is
+  captured.
 - **The write harness** —
   [`Scheduler::apply_outcome`](../src/machine/execute/scheduler.rs)
   interprets a returned outcome into graph writes and the slot's
@@ -869,17 +870,19 @@ The rails the dispatch driver feeds:
   sub-Dispatch](#submission-time-binder-install-and-recursive-sub-dispatch)),
   `Dispatch(sub_expr)` for a fresh sub-Dispatch, and `ListLit` / `DictLit`
   for the aggregate. With no subs to schedule the driver binds the picked
-  function directly: the decide returns an `Outcome::Invoke` whose
-  harness acquires the per-call frame and runs `dispatch::exec::invoke`
+  function directly: the decide folds the resolved call into a dep-free
+  `Outcome::Continue` (via `dispatch::exec::invoke_continue`) whose frame
+  placement installs the per-call cart and whose `work` re-decides via
+  `dispatch::exec::invoke` on the next pop
   (a wrap-slot-only call like `MAKESET IntOrd` resolves bare names in Step 4,
   leaves no eager parts, and binds in one step — no Combine detour). Otherwise
   the decide returns a `ParkThenContinue` with a `Continuation::Finish`
   declaring the fresh subs as deps with a splice finish; the harness parks the
   slot as a `Combine` carrying the finish. At dep completion the finish
-  re-resolves
-  the spliced `working_expr` and routes it — `Invoke` on the
-  speculatively-picked function, or `Redispatch` through
-  [`keyworded::finish`](../src/machine/execute/dispatch/keyworded.rs) when
+  re-resolves the spliced `working_expr` and folds it into a `Continue` — via
+  `invoke_continue` on the speculatively-picked function, or via
+  `redispatch_continue` (re-running
+  [`keyworded::finish`](../src/machine/execute/dispatch/keyworded.rs)) when
   none was pre-picked.
 
   Dict and list literals (`classify_aggregate_part` in
