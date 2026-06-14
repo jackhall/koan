@@ -230,8 +230,8 @@ Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
 - 2026-06-13: 538s — 22 tests, 0 leaks, 0 UB
+- 2026-06-13: 538s — 22 tests, 0 leaks, 0 UB
 - 2026-06-13: 1015s — 22 tests, 0 leaks, 0 UB
 - 2026-06-13: 544s — 22 tests, 0 leaks, 0 UB
 - 2026-06-13: 535s — 22 tests, 0 leaks, 0 UB
-- 2026-06-13: 753s — 22 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

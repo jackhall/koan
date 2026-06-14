@@ -164,12 +164,20 @@ What's shipped that the open items below build on:
   the `Invoke` frame-acquisition trigger), with [`Scheduler::apply_outcome`](../src/machine/execute/scheduler.rs)
   the sole graph writer. The `SchedulerHandle` trait, `BodyResult`, `DispatchOutcome`, and the
   per-shape `DispatchState` envelope are gone — the scheduler's write methods are inherent and
-  private to the execute tree, and a parked dispatch is `NodeWork::DispatchResume` carrying an
-  opaque `SchedulerView -> Outcome` resume closure (one uniform wake arm). A multi-statement FN
-  body's leading statements are now owned deps the activation parks on, so they sequence and
-  cascade-free before the tail reuses the frame — tail recursion with side-effecting statements
-  runs in constant frame space. See
+  private to the execute tree. A multi-statement FN body's leading statements are now owned deps
+  the activation parks on, so they sequence and cascade-free before the tail reuses the frame —
+  tail recursion with side-effecting statements runs in constant frame space. See
   [design/execution-model.md § The dispatcher / scheduler boundary](../design/execution-model.md#the-dispatcher--scheduler-boundary).
+- *`NodeWork` carries no AST.* The scheduler's slot-work enum collapsed to its essence: the
+  `Combine` / `DispatchCombine` pair merged to one `Combine` (one finish type, the `<combine>`
+  dep-error label now harness policy), and `Dispatch` / `DispatchResume` merged to one
+  [`NodeWork::Decide`](../src/machine/execute/nodes.rs) — a captured `SchedulerView -> Outcome`
+  closure (birth and resume run through one `run_decide` arm) plus a pre-rendered deadlock-summary
+  string. Binder-install and the recursive eager-sub pre-submission moved out of `Scheduler::submit_node`
+  into a dispatch-layer [`submit_dispatch`](../src/machine/execute/dispatch/submit.rs) chokepoint,
+  so the scheduler never introspects a `KExpression` — `submit_node` is a generic slot allocator
+  and no `NodeWork` variant names an AST. See
+  [design/execution-model.md § Dispatch birth and resume](../design/execution-model.md#dispatch-birth-and-resume).
 
 ## Next items
 
@@ -182,7 +190,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
-- [Dispatch submission owns binder-install; merge the dispatch node variants](refactor/dispatch-owns-submission.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
@@ -264,10 +271,6 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Dispatch submission owns binder-install; merge the dispatch node variants](refactor/dispatch-owns-submission.md) —
-  hoist binder-install + recursive pre-submission out of `Scheduler::submit_node` into a
-  dispatch-layer chokepoint so no `NodeWork` variant holds a `KExpression`, then collapse
-  `Dispatch` / `DispatchResume` into one closure-carrying `Decide`.
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md) —
   collapse `ElabResult` / `ResolveTypeExprOutcome` / `TypeLeafCarrier` into one generic
   `ResolveOutcome<T>` with a `map_done` lift.
