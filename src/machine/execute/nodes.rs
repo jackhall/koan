@@ -3,9 +3,9 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::ScopeId;
 use crate::machine::model::{Carried, KObject, KType};
-use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope};
+use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope, TraceFrame};
 
-use super::NodeCont;
+use super::{short_circuit, CombineFinish, NodeCont};
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
 /// no further write to that slot occurs until it is freed and reused.
@@ -79,6 +79,25 @@ pub(super) struct NodeWork<'run> {
     pub(in crate::machine::execute) park_count: usize,
     pub(in crate::machine::execute) cont: NodeCont<'run>,
     pub(in crate::machine::execute) carrier: Option<String>,
+}
+
+impl<'run> NodeWork<'run> {
+    /// The combine work shared by the action/literal harness, `combine_here`, and the test
+    /// fixture: wait on `deps` (a `park_count`-long park prefix, owned suffix), short-circuit on
+    /// the first errored dep under the `<combine>` label, else hand the resolved values to
+    /// `finish`. The one place the combine label / short-circuit policy lives.
+    pub(in crate::machine::execute) fn combine(
+        deps: Vec<NodeId>,
+        park_count: usize,
+        finish: CombineFinish<'run>,
+    ) -> Self {
+        NodeWork {
+            deps,
+            park_count,
+            cont: short_circuit(Some(TraceFrame::bare("<combine>", "combine")), finish),
+            carrier: None,
+        }
+    }
 }
 
 /// Slot-stored scope handle. `Anchored` holds a run-lifetime borrow directly — a genuinely

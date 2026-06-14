@@ -8,7 +8,7 @@
 
 use crate::machine::core::kfunction::action::{Dep, DepPlacement, FramePlacement};
 use crate::machine::core::kfunction::body::split_body_statements;
-use crate::machine::{NodeId, TraceFrame};
+use crate::machine::NodeId;
 
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
@@ -34,7 +34,10 @@ impl<'run> Scheduler<'run> {
             Dep::Existing(id) => id,
             Dep::Dispatch { expr, placement } => match placement {
                 DepPlacement::OwnScope => self.dispatch_here(expr),
-                DepPlacement::ActiveFrame => self.add_dispatch_in_frame(expr),
+                DepPlacement::ActiveFrame => {
+                    let chain = self.ambient_or_detached_chain();
+                    self.add_dispatch_in_frame(expr, chain)
+                }
                 DepPlacement::InScope(scope) => self
                     .enter_block(scope.id, vec![expr], scope)
                     .into_iter()
@@ -113,7 +116,8 @@ impl<'run> Scheduler<'run> {
                         DepRequest::Dispatch { expr, placement } => match placement {
                             DepPlacement::OwnScope => dep_ids.push(self.dispatch_here(expr)),
                             DepPlacement::ActiveFrame => {
-                                dep_ids.push(self.add_dispatch_in_frame(expr))
+                                let chain = self.ambient_or_detached_chain();
+                                dep_ids.push(self.add_dispatch_in_frame(expr, chain))
                             }
                             DepPlacement::InScope(scope) => {
                                 let statements = split_body_statements(expr);
@@ -153,22 +157,17 @@ impl<'run> Scheduler<'run> {
                 }
                 let work = match cont {
                     // A dispatch finish carries its own dep-error frame (the consuming call's, or
-                    // `None` frameless); an action/literal combine is labelled `<combine>` — the
-                    // one place that policy lives. Both install the same `Wait` over the realized
-                    // deps (edges already installed by the loop above), the short-circuit baked into
-                    // the continuation by `short_circuit`.
+                    // `None` frameless); an action/literal combine is labelled `<combine>` by
+                    // [`NodeWork::combine`], where that policy lives. Both install the same `Wait`
+                    // over the realized deps (edges already installed by the loop above), the
+                    // short-circuit baked into the continuation by `short_circuit`.
                     Continuation::Finish(finish) => NodeWork {
                         deps: dep_ids,
                         park_count,
                         cont: short_circuit(dep_error_frame, finish),
                         carrier: None,
                     },
-                    Continuation::Combine(finish) => NodeWork {
-                        deps: dep_ids,
-                        park_count,
-                        cont: short_circuit(Some(TraceFrame::bare("<combine>", "combine")), finish),
-                        carrier: None,
-                    },
+                    Continuation::Combine(finish) => NodeWork::combine(dep_ids, park_count, finish),
                     // The action-harness catch carries its single watched dep unrealized (its
                     // placement differs from a Combine body's fan-out); realize and own it here.
                     // `catch_cont` runs the finish without short-circuiting on a dep error.

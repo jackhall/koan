@@ -389,11 +389,13 @@ impl<'run> Scheduler<'run> {
 
     /// Dispatch `expr` as a sub-slot of the currently-active per-call frame, storing the slot's
     /// scope as a `Yoked` handle re-projected from the frame cart rather than a fabricated `&'run`.
-    /// The caller must be inside [`Self::with_active_frame`].
-    pub(in crate::machine::execute) fn add_dispatch_with_chain_in_frame(
+    /// The caller must be inside [`Self::with_active_frame`]. `chain` is the explicit lexical chain
+    /// (`Some` for an `enter_block`-routed body statement; the ambient-inheriting `ActiveFrame`
+    /// placement passes [`Self::ambient_or_detached_chain`]).
+    pub(in crate::machine::execute) fn add_dispatch_in_frame(
         &mut self,
         expr: KExpression<'run>,
-        chain: Rc<LexicalFrame>,
+        chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
         let frame = self
             .active_frame
@@ -408,28 +410,7 @@ impl<'run> Scheduler<'run> {
             expr,
             scope,
             NodeScope::Yoked,
-            Some(chain),
-        )
-    }
-
-    /// Ambient-chain sibling of [`Self::add_dispatch_with_chain_in_frame`]: dispatch `expr` in the
-    /// active frame inheriting the ambient `active_chain` (the `ActiveFrame` dep placement).
-    pub(in crate::machine::execute) fn add_dispatch_in_frame(
-        &mut self,
-        expr: KExpression<'run>,
-    ) -> NodeId {
-        let frame = self
-            .active_frame
-            .clone()
-            .expect("in-frame dispatch requires an active frame");
-        let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
-        let scope = frame.scope_for_bind();
-        crate::machine::execute::dispatch::submit_dispatch(
-            self,
-            expr,
-            scope,
-            NodeScope::Yoked,
-            explicit_chain,
+            chain,
         )
     }
 
@@ -460,7 +441,7 @@ impl<'run> Scheduler<'run> {
             let mut bid = None;
             self.with_active_frame(frame.clone(), &mut |s| {
                 bid = Some(
-                    s.add_dispatch_with_chain_in_frame(statement.clone(), statement_chain.clone()),
+                    s.add_dispatch_in_frame(statement.clone(), Some(statement_chain.clone())),
                 );
             });
             ids.push(bid.expect("body dispatch spawns"));

@@ -1,22 +1,27 @@
 use std::rc::Rc;
 
 use crate::machine::model::ast::KExpression;
-use crate::machine::{LexicalFrame, NodeId, Scope, TraceFrame};
+use crate::machine::{LexicalFrame, NodeId, Scope};
 
 use super::super::nodes::{work_park_producers, CallFrame, Node, NodeScope, NodeWork};
-use super::super::{short_circuit, CombineFinish};
+use super::super::CombineFinish;
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
 impl<'run> Scheduler<'run> {
+    /// The explicit chain a submission passes when there is no ambient `active_chain`: a detached
+    /// chain so the visibility predicate treats every scope as "complete" (test fixtures /
+    /// top-level), else `None` to inherit the ambient one.
+    pub(in crate::machine::execute) fn ambient_or_detached_chain(
+        &self,
+    ) -> Option<Rc<LexicalFrame>> {
+        self.active_chain.is_none().then(LexicalFrame::detached)
+    }
+
     /// Submit an unresolved expression for the scheduler to dispatch + execute
     /// against `scope`. The only public way to add work.
     pub fn add_dispatch(&mut self, expr: KExpression<'run>, scope: &'run Scope<'run>) -> NodeId {
-        let explicit_chain = if self.active_chain.is_some() {
-            None
-        } else {
-            Some(LexicalFrame::detached())
-        };
+        let explicit_chain = self.ambient_or_detached_chain();
         self.ensure_run_frame(scope);
         let node_scope = self.resolve_node_scope(scope);
         crate::machine::execute::dispatch::submit_dispatch(
@@ -44,15 +49,7 @@ impl<'run> Scheduler<'run> {
         let park_count = park_producers.len();
         let mut deps = park_producers;
         deps.extend(owned_subs);
-        self.add(
-            NodeWork {
-                deps,
-                park_count,
-                cont: short_circuit(Some(TraceFrame::bare("<combine>", "combine")), finish),
-                carrier: None,
-            },
-            scope,
-        )
+        self.add(NodeWork::combine(deps, park_count, finish), scope)
     }
 
     /// Generic ambient-chain submission for any `NodeWork` — a test fixture entry point. When
@@ -66,11 +63,8 @@ impl<'run> Scheduler<'run> {
         work: NodeWork<'run>,
         scope: &'run Scope<'run>,
     ) -> NodeId {
-        if self.active_chain.is_some() {
-            self.add_with_chain(work, scope, None)
-        } else {
-            self.add_with_chain(work, scope, Some(LexicalFrame::detached()))
-        }
+        let explicit_chain = self.ambient_or_detached_chain();
+        self.add_with_chain(work, scope, explicit_chain)
     }
 
     /// Run-lifetime submission funnel. `explicit_chain` is `Some` for
@@ -126,7 +120,7 @@ impl<'run> Scheduler<'run> {
         let node_scope = self
             .active_node_scope
             .expect("a slot step installs active_node_scope before the body submits");
-        let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
+        let explicit_chain = self.ambient_or_detached_chain();
         self.submit_node(work, node_scope, explicit_chain)
     }
 
@@ -139,7 +133,7 @@ impl<'run> Scheduler<'run> {
         let node_scope = self
             .active_node_scope
             .expect("a slot step installs active_node_scope before the body submits");
-        let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
+        let explicit_chain = self.ambient_or_detached_chain();
         match node_scope {
             NodeScope::Anchored(scope) => crate::machine::execute::dispatch::submit_dispatch(
                 self,
@@ -175,16 +169,11 @@ impl<'run> Scheduler<'run> {
         let park_count = park_producers.len();
         let mut deps = park_producers;
         deps.extend(owned_subs);
-        self.submit_here(NodeWork {
-            deps,
-            park_count,
-            cont: short_circuit(Some(TraceFrame::bare("<combine>", "combine")), finish),
-            carrier: None,
-        })
+        self.submit_here(NodeWork::combine(deps, park_count, finish))
     }
 
     /// Node-creation core, shared by the run-lifetime [`Self::add_with_chain`] and the framed
-    /// [`Self::add_dispatch_with_chain_in_frame`]. `scope` is read only transiently
+    /// [`Self::add_dispatch_in_frame`]. `scope` is read only transiently
     /// (binder-install, placeholder install, `pre_subs` recursion) and never retained — the
     /// node keeps a `NodeScope<'run>` handle, not this borrow — so it is clamped to a `'step`
     /// read: a run scope and a `scope_for_bind` re-projection both shorten into it.
