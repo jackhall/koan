@@ -1,8 +1,8 @@
 //! Basic dispatch ordering and inter-expression lookup.
 
-use crate::machine::execute::KoanHarness;
 use crate::builtins::default_scope;
 use crate::machine::core::source::Spanned;
+use crate::machine::execute::KoanHarness;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::KObject;
 use crate::machine::RuntimeArena;

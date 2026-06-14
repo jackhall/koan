@@ -6,7 +6,7 @@ read-only" becomes structurally enforced rather than a naming convention.
 
 **Problem.** The "write harness" is diffuse. The
 [decide → outcome → apply contract](../../design/execution-model.md#the-dispatcher--scheduler-boundary)
-names [`apply_outcome`](../../src/machine/execute/dispatch/harness.rs) as the sole `&mut
+names [`apply_outcome`](../../src/machine/execute/harness.rs) as the sole `&mut
 Scheduler` writer, but two other AST-aware `&mut Scheduler` surfaces live on the dispatch
 side outside it:
 

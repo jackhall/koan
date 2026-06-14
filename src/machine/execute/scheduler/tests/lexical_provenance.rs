@@ -10,8 +10,8 @@ use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::RuntimeArena;
 
-use crate::machine::execute::KoanHarness;
 use super::let_expr;
+use crate::machine::execute::KoanHarness;
 
 fn lit<'run>(name: &str) -> KExpression<'run> {
     KExpression::new(vec![Spanned::bare(ExpressionPart::Keyword(name.into()))])

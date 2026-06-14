@@ -1,8 +1,8 @@
 //! End-to-end coverage for the bare-name short-circuit, auto-wrap pass, and
 //! replay-park routing in `classify_dispatch` (see
 //! [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders)).
-use crate::machine::execute::KoanHarness;
 use crate::builtins::default_scope;
+use crate::machine::execute::KoanHarness;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, RuntimeArena};
 use crate::parse::parse;

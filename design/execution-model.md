@@ -1202,7 +1202,7 @@ statements as dispatch nodes:
   `enter_block(root.id, exprs, root)` against an empty parent chain.
 - `MODULE` and `SIG` bodies enter through the dispatch harness's `InScope`
   fan-out
-  ([`apply_outcome`](../src/machine/execute/dispatch/harness.rs)), which splits
+  ([`apply_outcome`](../src/machine/execute/harness.rs)), which splits
   via the shared
   [`split_body_statements`](../src/machine/core/kfunction/body.rs) helper and
   submits each statement through `enter_block`. The scheduler itself never

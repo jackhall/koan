@@ -151,7 +151,7 @@ What's shipped that the open items below build on:
   mirrors the builtin `Action` / `run_action` split: a shape handler *decides* against a
   read-only view and *returns* its scheduler mutations as an
   [`Outcome`](../src/machine/execute/outcome.rs) effect that a
-  [harness](../src/machine/execute/dispatch/harness.rs) interprets — so no dispatch handler
+  [harness](../src/machine/execute/harness.rs) interprets — so no dispatch handler
   holds `&mut Scheduler`. Eager-subs is modelled as the dispatcher's own `Combine` (the same
   N→1 shape the action harness installs): deps declared, the `Future`-cell splice lives in the
   finish, and the scheduler stays splice-unaware. A builtin invoked mid-dispatch routes through the shared action harness,

@@ -17,8 +17,9 @@
 //!
 //! State and transitions live with their shape; this file keeps the cross-shape glue. Every
 //! per-shape handler *decides* against a read-only [`SchedulerView`] and returns a
-//! [`Outcome`] the [`harness`] applies — the router and harness hold the only
-//! `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field names).
+//! [`Outcome`] that [`KoanHarness`](super::harness::KoanHarness) applies — the harness holds the
+//! only `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field
+//! names).
 
 use std::rc::Rc;
 
@@ -39,7 +40,6 @@ mod ctx;
 mod exec;
 pub(in crate::machine) mod field_list;
 pub(in crate::machine::execute) mod fn_value;
-mod harness;
 pub(in crate::machine::execute) mod head_deferred;
 pub(in crate::machine::execute) mod keyworded;
 mod literal;
@@ -60,7 +60,6 @@ pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_
 pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
 pub use resolve_type_expr::ResolveTypeExprOutcome;
 pub(crate) use resolve_type_expr::{resolve_type_leaf_carrier, TypeLeafCarrier};
-pub(in crate::machine::execute) use submit::submit_dispatch;
 
 /// The shape classification and classifier live in
 /// [`crate::machine::model::ast`] (pure-structural, cached on the node at parse

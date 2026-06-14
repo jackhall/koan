@@ -5,19 +5,20 @@ use crate::machine::core::{assemble_body_chain, ScopeId};
 use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 
+use super::super::harness::KoanHarness;
 use super::super::lift::{lift_kobject, lift_ktype};
 use super::super::nodes::{CallFrame, Node, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 use crate::machine::model::Carried;
 
-impl<'run> Scheduler<'run> {
+impl<'run> KoanHarness<'run> {
     /// On `Done` with a frame, the return `Value` references the per-call arena that's
     /// about to drop, so it must be lifted into the captured scope's arena before the
     /// frame is released. See design/memory-model.md.
     pub fn execute(&mut self) -> Result<(), KError> {
-        while let Some(idx) = self.queues.pop_next() {
+        while let Some(idx) = self.sched.queues.pop_next() {
             let id = NodeId(idx);
-            let node = self.store.take_for_run(id);
+            let node = self.sched.store.take_for_run(id);
             // The step reads its scope on demand (`current_scope`), and the post-step uses below
             // re-acquire it per use, so nothing holds a scope borrow across the step's `&mut self`
             // work or the in-step TCO frame reset.
@@ -29,11 +30,13 @@ impl<'run> Scheduler<'run> {
                 contract: prev_contract,
             } = node.frame;
             let prev_chain_carrier = node.chain;
-            let guard = self.enter_slot_step(cart, reserve, prev_chain_carrier.clone(), node_scope);
+            let guard =
+                self.sched
+                    .enter_slot_step(cart, reserve, prev_chain_carrier.clone(), node_scope);
             // Expose to the dispatch step whether this slot is a tail call within an established
             // contract chain — a deferred-return FN dispatched here skips resolving its own return
             // type (keep-first discards it anyway).
-            self.active_in_contract_chain = prev_contract.is_some();
+            self.sched.active_in_contract_chain = prev_contract.is_some();
             let NodeWork {
                 deps,
                 park_count,
@@ -44,8 +47,8 @@ impl<'run> Scheduler<'run> {
             // The post-step token owns the slot's frame at step end and is the *only* source of
             // the step scope (via `post.step_scope()`), so the wrong-frame read that ambient
             // `active_frame` allowed is unspellable here.
-            let post = self.exit_slot_step(guard);
-            self.active_in_contract_chain = false;
+            let post = self.sched.exit_slot_step(guard);
+            self.sched.active_in_contract_chain = false;
             // Drain re-entrant writes against the step scope.
             post.step_scope().drain_pending();
             match step {
@@ -67,7 +70,7 @@ impl<'run> Scheduler<'run> {
                     if matches!(result, NodeOutput::Err(_)) {
                         post.step_scope().clear_placeholders_for_producer(id);
                     }
-                    self.finalize(idx, result);
+                    self.sched.finalize(idx, result);
                 }
                 NodeStep::Replace {
                     work: new_work,
@@ -108,7 +111,7 @@ impl<'run> Scheduler<'run> {
                             // frame's drop. Treat it as no reserve — the run scope is re-reached
                             // through the scheduler's `run_frame`, never a reset reserve.
                             let new_reserve = (!prev_frame.non_dying()).then_some(prev_frame);
-                            self.store.reinstall_with_frame(
+                            self.sched.store.reinstall_with_frame(
                                 id,
                                 f,
                                 new_reserve,
@@ -120,7 +123,7 @@ impl<'run> Scheduler<'run> {
                         None => {
                             // A frameless Replace keeps the prior cart — an invoke reuses the
                             // reserve, never the active cart, so the slot's cart is always present.
-                            self.store.reinstall(
+                            self.sched.store.reinstall(
                                 id,
                                 Node {
                                     work: new_work,
@@ -138,8 +141,8 @@ impl<'run> Scheduler<'run> {
                     // Replace return sites install their own edges (or clear
                     // `dep_edges[idx]` for tail rewrites), so `pending_count` is
                     // authoritative here.
-                    if self.deps.pending_count(idx) == 0 {
-                        self.queues.push_after_replace(idx);
+                    if self.sched.deps.pending_count(idx) == 0 {
+                        self.sched.queues.push_after_replace(idx);
                     }
                 }
                 NodeStep::Alias(producer) => {
@@ -147,14 +150,14 @@ impl<'run> Scheduler<'run> {
                     // `producer` and alias it for reads. The slot is not re-queued; `producer`'s
                     // fire wakes the moved consumers, and late parkers resolve the alias when they
                     // wire in. See `scheduler::splice`.
-                    self.splice_forward(id, producer);
+                    self.sched.splice_forward(id, producer);
                 }
             }
         }
         // Any slot still `PreRun` after drain is parked on a dependency that can
         // no longer fire — surface the cycle rather than panic on the caller's
         // top-level result read.
-        if let Some((pending, sample)) = self.store.unresolved() {
+        if let Some((pending, sample)) = self.sched.store.unresolved() {
             return Err(KError::new(KErrorKind::SchedulerDeadlock {
                 pending,
                 sample,
@@ -162,7 +165,9 @@ impl<'run> Scheduler<'run> {
         }
         Ok(())
     }
+}
 
+impl<'run> Scheduler<'run> {
     /// Invariant: every consumer drained here is parked with a non-zero counter;
     /// freed slots are scrubbed from every producer's `notify_list` before the
     /// producer drains.

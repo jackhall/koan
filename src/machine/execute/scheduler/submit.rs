@@ -3,6 +3,7 @@ use std::rc::Rc;
 use crate::machine::model::ast::KExpression;
 use crate::machine::{LexicalFrame, NodeId, Scope};
 
+use super::super::harness::KoanHarness;
 use super::super::nodes::{work_park_producers, CallFrame, Node, NodeScope, NodeWork};
 use super::super::CombineFinish;
 use super::dep_graph::work_owned_edges;
@@ -18,26 +19,11 @@ impl<'run> Scheduler<'run> {
         self.active_chain.is_none().then(LexicalFrame::detached)
     }
 
-    /// Submit an unresolved expression for the scheduler to dispatch + execute
-    /// against `scope`. The only public way to add work.
-    pub fn add_dispatch(&mut self, expr: KExpression<'run>, scope: &'run Scope<'run>) -> NodeId {
-        let explicit_chain = self.ambient_or_detached_chain();
-        self.ensure_run_frame(scope);
-        let node_scope = self.resolve_node_scope(scope);
-        crate::machine::execute::dispatch::submit_dispatch(
-            self,
-            expr,
-            scope,
-            node_scope,
-            explicit_chain,
-        )
-    }
-
     /// Schedule a `Combine` slot against an explicit `scope`. `owned_subs` are sub-Dispatches
     /// this Combine allocated (cascade-freed on success); `park_producers` are existing sibling
     /// slots it splices but does not own (kept alive past success via `Notify` edges). The finish
     /// closure sees results as `[park_producers..., owned_subs...]`. Test fixture entry point; the
-    /// run path uses [`Scheduler::combine_here`].
+    /// run path uses [`KoanHarness::combine_here`](super::super::harness::KoanHarness::combine_here).
     #[cfg(test)]
     pub(in crate::machine::execute) fn add_combine(
         &mut self,
@@ -55,8 +41,8 @@ impl<'run> Scheduler<'run> {
     /// Generic ambient-chain submission for any `NodeWork` — a test fixture entry point. When
     /// there is no ambient chain (test fixtures) it synthesizes a detached chain so the visibility
     /// predicate treats every scope as "complete". The run path submits a `Dispatch` through
-    /// [`dispatch::submit_dispatch`](crate::machine::execute::dispatch) (binder-aware) and a
-    /// `Combine`/`Catch` through [`Self::combine_here`] / the harness.
+    /// [`KoanHarness::submit_dispatch`](super::super::harness::KoanHarness::submit_dispatch)
+    /// (binder-aware) and a `Combine`/`Catch` through `KoanHarness::combine_here` / the harness.
     #[cfg(test)]
     pub(in crate::machine::execute::scheduler) fn add(
         &mut self,
@@ -73,7 +59,7 @@ impl<'run> Scheduler<'run> {
     /// `self.active_chain`). Decides the slot's [`NodeScope`] handle — `Yoked` when this
     /// runs inside the per-call frame whose own child is `scope` (re-projected from the
     /// cart), else `Root` — then hands off to [`Self::submit_node`]. Test fixture entry; the run
-    /// path routes a `Dispatch` through `dispatch::submit_dispatch`.
+    /// path routes a `Dispatch` through `KoanHarness::submit_dispatch`.
     #[cfg(test)]
     pub(super) fn add_with_chain(
         &mut self,
@@ -124,56 +110,9 @@ impl<'run> Scheduler<'run> {
         self.submit_node(work, node_scope, explicit_chain)
     }
 
-    /// Dispatch `expr` against the executing slot's own scope handle — the honest
-    /// re-dispatch-against-my-own-scope path (the `OwnScope` dep placement). Routes through
-    /// `dispatch::submit_dispatch` so a binder spliced here still installs its placeholder; the
-    /// concrete scope is materialized from the handle (`Anchored`'s borrow / a `Yoked` frame's
-    /// `scope_for_bind`).
-    pub(in crate::machine::execute) fn dispatch_here(&mut self, expr: KExpression<'run>) -> NodeId {
-        let node_scope = self
-            .active_node_scope
-            .expect("a slot step installs active_node_scope before the body submits");
-        let explicit_chain = self.ambient_or_detached_chain();
-        match node_scope {
-            NodeScope::Anchored(scope) => crate::machine::execute::dispatch::submit_dispatch(
-                self,
-                expr,
-                scope,
-                node_scope,
-                explicit_chain,
-            ),
-            NodeScope::Yoked => {
-                let frame = self
-                    .active_frame
-                    .clone()
-                    .expect("a Yoked slot step has an active frame");
-                let scope = frame.scope_for_bind();
-                crate::machine::execute::dispatch::submit_dispatch(
-                    self,
-                    expr,
-                    scope,
-                    NodeScope::Yoked,
-                    explicit_chain,
-                )
-            }
-        }
-    }
-
-    /// Schedule a `Combine` against the executing slot's own scope handle.
-    pub(in crate::machine::execute) fn combine_here(
-        &mut self,
-        owned_subs: Vec<NodeId>,
-        park_producers: Vec<NodeId>,
-        finish: CombineFinish<'run>,
-    ) -> NodeId {
-        let park_count = park_producers.len();
-        let mut deps = park_producers;
-        deps.extend(owned_subs);
-        self.submit_here(NodeWork::combine(deps, park_count, finish))
-    }
-
     /// Node-creation core, shared by the run-lifetime [`Self::add_with_chain`] and the framed
-    /// [`Self::add_dispatch_in_frame`]. `scope` is read only transiently
+    /// [`KoanHarness::add_dispatch_in_frame`](super::super::harness::KoanHarness::add_dispatch_in_frame).
+    /// `scope` is read only transiently
     /// (binder-install, placeholder install, `pre_subs` recursion) and never retained — the
     /// node keeps a `NodeScope<'run>` handle, not this borrow — so it is clamped to a `'step`
     /// read: a run scope and a `scope_for_bind` re-projection both shorten into it.
@@ -236,5 +175,57 @@ impl<'run> Scheduler<'run> {
             }
         }
         id
+    }
+}
+
+impl<'run> KoanHarness<'run> {
+    /// Submit an unresolved expression for the scheduler to dispatch + execute
+    /// against `scope`. The only public way to add work.
+    pub fn add_dispatch(&mut self, expr: KExpression<'run>, scope: &'run Scope<'run>) -> NodeId {
+        let explicit_chain = self.sched.ambient_or_detached_chain();
+        self.sched.ensure_run_frame(scope);
+        let node_scope = self.sched.resolve_node_scope(scope);
+        self.submit_dispatch(expr, scope, node_scope, explicit_chain)
+    }
+
+    /// Dispatch `expr` against the executing slot's own scope handle — the honest
+    /// re-dispatch-against-my-own-scope path (the `OwnScope` dep placement). Routes through
+    /// [`Self::submit_dispatch`] so a binder spliced here still installs its placeholder; the
+    /// concrete scope is materialized from the handle (`Anchored`'s borrow / a `Yoked` frame's
+    /// `scope_for_bind`).
+    pub(in crate::machine::execute) fn dispatch_here(&mut self, expr: KExpression<'run>) -> NodeId {
+        let node_scope = self
+            .sched
+            .active_node_scope
+            .expect("a slot step installs active_node_scope before the body submits");
+        let explicit_chain = self.sched.ambient_or_detached_chain();
+        match node_scope {
+            NodeScope::Anchored(scope) => {
+                self.submit_dispatch(expr, scope, node_scope, explicit_chain)
+            }
+            NodeScope::Yoked => {
+                let frame = self
+                    .sched
+                    .active_frame
+                    .clone()
+                    .expect("a Yoked slot step has an active frame");
+                let scope = frame.scope_for_bind();
+                self.submit_dispatch(expr, scope, NodeScope::Yoked, explicit_chain)
+            }
+        }
+    }
+
+    /// Schedule a `Combine` against the executing slot's own scope handle.
+    pub(in crate::machine::execute) fn combine_here(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        finish: CombineFinish<'run>,
+    ) -> NodeId {
+        let park_count = park_producers.len();
+        let mut deps = park_producers;
+        deps.extend(owned_subs);
+        self.sched
+            .submit_here(NodeWork::combine(deps, park_count, finish))
     }
 }

@@ -2,8 +2,8 @@
 
 use super::super::super::nodes::NodeOutput;
 use super::super::dep_graph::DepEdge;
-use crate::machine::execute::KoanHarness;
 use crate::builtins::default_scope;
+use crate::machine::execute::KoanHarness;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::KObject;
 use crate::machine::RuntimeArena;

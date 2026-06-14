@@ -12,7 +12,7 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{KObject, KType};
-use koan::machine::{RuntimeArena, Scheduler, Scope};
+use koan::machine::{KoanHarness, RuntimeArena, Scope};
 use koan::parse::parse;
 
 /// Scaffolding: spin up a fresh arena + default scope, run `source` end-to-end through
@@ -31,7 +31,7 @@ fn run<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>, source: &str
     }
     let scope = default_scope(arena, Box::new(SharedBuf(captured)));
     let exprs = parse(source).expect("parse should succeed");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     sched.enter_block(scope.id, exprs, scope);
     let _ = sched.execute();
     scope
@@ -52,7 +52,7 @@ fn run_collecting_first_err(source: &str) -> Option<koan::machine::KError> {
     }
     let scope = default_scope(&arena, Box::new(Sink));
     let exprs = parse(source).expect("parse should succeed");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let ids: Vec<_> = sched.enter_block(scope.id, exprs, scope);
     if let Err(e) = sched.execute() {
         return Some(e);
@@ -348,7 +348,7 @@ fn producer_error_propagates_to_parked_consumer() {
          LET y = (x)",
     )
     .expect("parse should succeed");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let ids: Vec<_> = exprs
         .into_iter()
         .map(|e| sched.add_dispatch(e, scope))

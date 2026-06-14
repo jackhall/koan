@@ -15,8 +15,8 @@ use crate::machine::model::types::UntypedKey;
 use crate::machine::model::{KType, SignatureElement};
 use crate::machine::{BindingIndex, FunctionLookup, KFunction, LexicalFrame, NodeId, Scope};
 
+use super::super::harness::KoanHarness;
 use super::super::nodes::NodeScope;
-use super::super::scheduler::Scheduler;
 
 /// Submission-time binder-install info — see the module docs for the per-bucket eager-slot mask
 /// rules.
@@ -94,63 +94,65 @@ fn extract_binder_install<'run, 'step>(
     None
 }
 
-/// Submit `expr` as a dispatch slot against `scope` (with handle `node_scope` and `explicit_chain`,
-/// resolved by the calling scheduler entry). Computes binder-install, pre-submits the eager
-/// argument slots as sub-dispatches (so a nested binder's placeholder installs at the same
-/// outermost step), allocates the slot via [`Scheduler::submit_node`], then stamps the binder's
-/// placeholder on the scope — before the slot is ever popped, so a later sibling parks rather than
-/// surfacing `UnboundName` / `DispatchFailed`.
-pub(in crate::machine::execute) fn submit_dispatch<'run, 'step>(
-    sched: &mut Scheduler<'run>,
-    expr: KExpression<'run>,
-    scope: &'step Scope<'step>,
-    node_scope: NodeScope<'run>,
-    explicit_chain: Option<std::rc::Rc<LexicalFrame>>,
-) -> NodeId {
-    // Resolve the chain once so the recursive pre-subs inherit the parent's lexical chain (and
-    // therefore its visibility index); pass it back to `submit_node` explicitly so it does not
-    // re-derive a detached one.
-    let chain = explicit_chain
-        .or_else(|| sched.active_chain_clone())
+impl<'run> KoanHarness<'run> {
+    /// Submit `expr` as a dispatch slot against `scope` (with handle `node_scope` and
+    /// `explicit_chain`, resolved by the calling submission wrapper). Computes binder-install,
+    /// pre-submits the eager argument slots as sub-dispatches (so a nested binder's placeholder
+    /// installs at the same outermost step), allocates the slot via [`Scheduler::submit_node`], then
+    /// stamps the binder's placeholder on the scope — before the slot is ever popped, so a later
+    /// sibling parks rather than surfacing `UnboundName` / `DispatchFailed`.
+    pub(in crate::machine::execute) fn submit_dispatch<'step>(
+        &mut self,
+        expr: KExpression<'run>,
+        scope: &'step Scope<'step>,
+        node_scope: NodeScope<'run>,
+        explicit_chain: Option<std::rc::Rc<LexicalFrame>>,
+    ) -> NodeId {
+        // Resolve the chain once so the recursive pre-subs inherit the parent's lexical chain (and
+        // therefore its visibility index); pass it back to `submit_node` explicitly so it does not
+        // re-derive a detached one.
+        let chain = explicit_chain
+        .or_else(|| self.sched.active_chain_clone())
         .expect("every dispatched node has a chain — submission outside enter_block / ambient active_chain is a bug");
-    let install = extract_binder_install(&expr, scope);
-    let pre_subs: Vec<(usize, NodeId)> = match &install {
-        Some(install) => {
-            let mut subs = Vec::new();
-            for (i, part) in expr.parts.iter().enumerate() {
-                if !install.eager_slot_mask.get(i).copied().unwrap_or(false) {
-                    continue;
+        let install = extract_binder_install(&expr, scope);
+        let pre_subs: Vec<(usize, NodeId)> = match &install {
+            Some(install) => {
+                let mut subs = Vec::new();
+                for (i, part) in expr.parts.iter().enumerate() {
+                    if !install.eager_slot_mask.get(i).copied().unwrap_or(false) {
+                        continue;
+                    }
+                    let ExpressionPart::Expression(boxed) = &part.value else {
+                        continue;
+                    };
+                    let sub_expr = (**boxed).clone();
+                    let sub_id =
+                        self.submit_dispatch(sub_expr, scope, node_scope, Some(chain.clone()));
+                    subs.push((i, sub_id));
                 }
-                let ExpressionPart::Expression(boxed) = &part.value else {
-                    continue;
-                };
-                let sub_expr = (**boxed).clone();
-                let sub_id =
-                    submit_dispatch(sched, sub_expr, scope, node_scope, Some(chain.clone()));
-                subs.push((i, sub_id));
+                subs
             }
-            subs
-        }
-        None => Vec::new(),
-    };
-    let id = sched.submit_node(
-        super::decide_with_presubs(expr, pre_subs),
-        node_scope,
-        Some(chain.clone()),
-    );
-    if let Some(install) = install {
-        // Stamp the placeholder at the binder's lexical position — the SAME `BindingIndex` the
-        // eventual `register_*` call at finalize installs. Installs are best-effort: lenient when
-        // `data[name]` is already a KFunction or the same slot re-installs.
-        let bind_index = BindingIndex::value(chain.index);
-        match install.key {
-            BinderKey::Name(name) => {
-                let _ = scope.install_placeholder(name, id, bind_index);
-            }
-            BinderKey::Bucket(bucket) => {
-                let _ = scope.install_pending_overload(bucket, id, bind_index);
+            None => Vec::new(),
+        };
+        let id = self.sched.submit_node(
+            super::decide_with_presubs(expr, pre_subs),
+            node_scope,
+            Some(chain.clone()),
+        );
+        if let Some(install) = install {
+            // Stamp the placeholder at the binder's lexical position — the SAME `BindingIndex` the
+            // eventual `register_*` call at finalize installs. Installs are best-effort: lenient when
+            // `data[name]` is already a KFunction or the same slot re-installs.
+            let bind_index = BindingIndex::value(chain.index);
+            match install.key {
+                BinderKey::Name(name) => {
+                    let _ = scope.install_placeholder(name, id, bind_index);
+                }
+                BinderKey::Bucket(bucket) => {
+                    let _ = scope.install_pending_overload(bucket, id, bind_index);
+                }
             }
         }
+        id
     }
-    id
 }

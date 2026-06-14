@@ -2,8 +2,8 @@
 
 use super::super::super::nodes::NodeOutput;
 use super::super::super::outcome::Outcome;
-use crate::machine::execute::KoanHarness;
 use crate::builtins::default_scope;
+use crate::machine::execute::KoanHarness;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::ReturnType;
 use crate::machine::model::{Carried, KObject};

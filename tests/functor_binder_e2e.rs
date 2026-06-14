@@ -23,7 +23,7 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{KObject, KType, SignatureElement};
-use koan::machine::{KFunction, RuntimeArena, Scheduler, Scope};
+use koan::machine::{KFunction, KoanHarness, RuntimeArena, Scope};
 use koan::parse::parse;
 
 /// Shared `Write` adapter — every test here drops PRINT output (the smoke
@@ -44,7 +44,7 @@ fn run<'a>(arena: &'a RuntimeArena, src: &str) -> &'a Scope<'a> {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = default_scope(arena, Box::new(SharedBuf(captured)));
     let exprs = parse(src).expect("parse should succeed");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     for e in exprs {
         sched.add_dispatch(e, scope);
     }
