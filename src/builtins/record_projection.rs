@@ -96,7 +96,7 @@ pub fn body<'a>(
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Return type `:{}` is contract-only ("FROM returns a record"): a native
-    // `BodyResult::Value` flows straight to Done without being stamped against the
+    // `Outcome::Done(Value)` flows straight to Done without being stamped against the
     // declared return, so the empty `:{}` does not coarsen the body's narrowed
     // `{x,y}` carrier. The `fields` slot is `KExpression` (captured unevaluated);
     // the `record` slot is `:{}`, which shape-gates the operand to records.

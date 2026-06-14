@@ -38,8 +38,8 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
 fn let_t_cycle_errors() {
     use crate::builtins::default_scope;
     use crate::machine::execute::Scheduler;
+    use crate::machine::KErrorKind;
     use crate::machine::RuntimeArena;
-    use crate::machine::{KErrorKind, SchedulerHandle};
     use crate::parse::parse;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));

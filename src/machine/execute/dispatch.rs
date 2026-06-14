@@ -1,11 +1,11 @@
 //! Dispatch shape router, classifier, and shared spine.
 //!
-//! [`run_dispatch`] classifies the slot via [`classify_dispatch_shape`]
+//! [`classify_dispatch`] classifies the slot via [`classify_dispatch_shape`]
 //! and routes by shape:
 //!
-//! - **Keyworded** (a keyword is present) → [`keyworded::KeywordedState`]
+//! - **Keyworded** (a keyword is present) → [`keyworded::initial`]
 //! - **FunctionValueCall** (lowercase Identifier head) →
-//!   [`fn_value::FnValueState`]
+//!   [`fn_value::initial`]
 //! - **HeadDeferred** / **TypeHeadDeferred** (an `Expression` or `:(…)`
 //!   head that evaluates before dispatching on its result) →
 //!   [`head_deferred`]
@@ -16,8 +16,8 @@
 //!   `DispatchFailed` raise carrying the offending head
 //!
 //! State and transitions live with their shape; this file keeps the cross-shape glue. Every
-//! per-shape handler *decides* against a read-only [`DispatchCx`] and returns a
-//! [`DispatchOutcome`] the [`harness`] applies — the router and harness hold the only
+//! per-shape handler *decides* against a read-only [`SchedulerView`] and returns a
+//! [`Outcome`] the [`harness`] applies — the router and harness hold the only
 //! `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field names).
 
 use crate::machine::core::source::Spanned;
@@ -25,8 +25,10 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
 
-use super::nodes::{NodeOutput, NodeStep};
+use super::nodes::{NodeOutput, NodeWork};
 use super::scheduler::Scheduler;
+use super::{ignore_results, CombineFinish};
+use crate::machine::core::kfunction::action::FramePlacement;
 
 pub(in crate::machine::execute) mod apply_callable;
 mod constructors;
@@ -38,26 +40,23 @@ mod harness;
 pub(in crate::machine::execute) mod head_deferred;
 pub(in crate::machine::execute) mod keyworded;
 pub(in crate::machine::execute) mod operator_chain;
-mod outcome;
 pub(in crate::machine) mod resolve_dispatch;
 pub(in crate::machine) mod resolve_type_expr;
 pub(in crate::machine::execute) mod single_poll;
+mod submit;
 
 #[cfg(test)]
 mod tests;
 
-pub(in crate::machine::execute) use ctx::DispatchCx;
-pub(in crate::machine::execute) use harness::run_dispatch_combine_finish;
-pub(in crate::machine::execute) use outcome::DispatchOutcome;
+pub(in crate::machine::execute) use super::outcome::{Continuation, DispatchDep, Outcome};
+pub(in crate::machine::execute) use ctx::SchedulerView;
 pub(crate) use field_list::defer_field_list_action;
-use fn_value::FnValueState;
-use keyworded::KeywordedState;
+pub(in crate::machine::execute) use submit::submit_dispatch;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
 pub use resolve_type_expr::ResolveTypeExprOutcome;
 pub(crate) use resolve_type_expr::{resolve_type_leaf_carrier, TypeLeafCarrier};
-use single_poll::{BareTypeState, CtorState};
 
 /// The shape classification and classifier live in
 /// [`crate::machine::model::ast`] (pure-structural, cached on the node at parse
@@ -195,8 +194,8 @@ pub(super) const POSITIONAL_ONLY: &str =
     "positional construction takes `(value)`, not a record literal `{name = value}`";
 
 /// Loud non-match for a call body whose surface shape the resolved carrier doesn't admit.
-pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> DispatchOutcome<'run> {
-    DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> Outcome<'run> {
+    Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
         expr: expr.summarize(),
         reason: reason.to_string(),
     })))
@@ -214,12 +213,68 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<TraceFrame>) -> KErr
 
 /// Shape a dep-error terminal with the `<bind>` surface frame keyed
 /// off `working_expr`.
-pub(super) fn bind_frame_err<'run>(
-    e: &KError,
-    working_expr: &KExpression<'run>,
-) -> DispatchOutcome<'run> {
+pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>) -> Outcome<'run> {
     let frame = TraceFrame::from_expr("<bind>", working_expr);
-    DispatchOutcome::Terminal(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
+    Outcome::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
+}
+
+// ---------- Outcome constructors (the dispatch-currency → Outcome mapping) ----------
+
+/// Park the slot on `deps` as a [`NodeWork`](super::nodes::NodeWork) whose
+/// `finish` runs over their resolved values (the dispatch combine — short-circuits on dep error).
+/// Every dep is owned (`park_count: 0`); `free` reclaims `Reuse` producers consumed inline.
+pub(in crate::machine::execute) fn park_combine<'run>(
+    deps: Vec<DispatchDep<'run>>,
+    dep_error_frame: Option<TraceFrame>,
+    finish: CombineFinish<'run>,
+    free: Vec<usize>,
+) -> Outcome<'run> {
+    Outcome::ParkThenContinue {
+        deps,
+        park_count: 0,
+        cont: Continuation::Finish(finish),
+        dep_error_frame,
+        free,
+    }
+}
+
+/// Park the slot on `producers` (notify edges) and re-run its `resume` decide on wake — the
+/// closure-carrying `ParkSelf` shape every park-and-replay family uses. `carrier` is the parked
+/// expression's pre-rendered summary the deadlock report surfaces (`None` when the park carries no
+/// renderable form); rendering it here keeps the AST out of the scheduler. The producers are the
+/// to-wait set the decide already filtered.
+pub(in crate::machine::execute) fn park_resume<'run>(
+    producers: Vec<NodeId>,
+    carrier: Option<String>,
+    resume: ResumeFn<'run>,
+) -> Outcome<'run> {
+    Outcome::ParkThenContinue {
+        park_count: producers.len(),
+        deps: producers.into_iter().map(DispatchDep::Existing).collect(),
+        cont: Continuation::Resume { carrier, resume },
+        dep_error_frame: None,
+        free: Vec::new(),
+    }
+}
+
+/// A bare-identifier slot whose name binds to `producer`: the slot's result *is* `producer`'s
+/// result, so the harness splices the slot out (no forwarding node) — see [`Outcome::Forward`].
+pub(in crate::machine::execute) fn park_lift<'run>(producer: NodeId) -> Outcome<'run> {
+    Outcome::Forward(producer)
+}
+
+/// Replace the slot with a fresh frameless `Dispatch` of `inner` — the decide reduced its
+/// expression to a nested one to re-classify (`(inner)`, `:(...)` unwrap).
+pub(in crate::machine::execute) fn become_dispatch<'run>(
+    inner: KExpression<'run>,
+) -> Outcome<'run> {
+    Outcome::Continue {
+        work: decide(inner),
+        frame: FramePlacement::Inherit,
+        contract: None,
+        block_entry: None,
+        body_index: 0,
+    }
 }
 
 /// Walk raw parts emitting an `Identifier("")` placeholder at every
@@ -292,144 +347,90 @@ pub(super) fn stage_all_eager_parts<'run>(
     (new_parts, staged)
 }
 
-// ---------- State carrier ----------
+// ---------- Resume closure ----------
 
-/// Universal birth state of a Dispatch slot — the shape before
-/// classification. Embedded by value in every per-variant state
-/// struct so `pre_subs` rides along structurally rather than by
-/// convention.
-pub(in crate::machine::execute) struct Initialized {
-    /// Pre-submitted sub-Dispatches keyed by their slot index in
-    /// `expr.parts`; populated by submit-time recursion for
-    /// binder-shaped expressions, empty otherwise.
-    pub(in crate::machine::execute) pre_subs: Vec<(usize, NodeId)>,
-}
-
-/// One variant per [`DispatchShape`], plus the pre-classification
-/// `Initialized` birth state. `Keyworded` and `FunctionValueCall` are
-/// boxed because each carries multiple independent `Option<Track>`
-/// fields; inlining would push every `DispatchState`-carrying type
-/// past clippy's `large_enum_variant` threshold.
-pub(in crate::machine::execute) enum DispatchState<'run> {
-    Initialized(Initialized),
-    BareTypeLeaf(BareTypeState<'run>),
-    /// Boxed for the same reason as `Keyworded` / `FunctionValueCall`: the
-    /// `CtorState` carries an eager-subs `CtorTrack` (schemas, staged values) or a
-    /// head-placeholder `KExpression`, either of which would push the by-value
-    /// `DispatchState` past clippy's `large_enum_variant` threshold.
-    TypeCall(Box<CtorState<'run>>),
-    FunctionValueCall(Box<FnValueState<'run>>),
-    Keyworded(Box<KeywordedState<'run>>),
-}
-
-impl<'run> DispatchState<'run> {
-    /// Construct the universal birth state. Every submission and
-    /// re-park site goes through this constructor so `pre_subs` is the
-    /// only field any caller names.
-    pub(in crate::machine::execute) fn initialized(pre_subs: Vec<(usize, NodeId)>) -> Self {
-        DispatchState::Initialized(Initialized { pre_subs })
-    }
-
-    /// Expression carried by the state itself for parked `Keyworded`
-    /// or `FunctionValueCall` slots. Track installers drop
-    /// `NodeWork::Dispatch.expr` to an empty placeholder on park, so
-    /// the drain-end deadlock summary needs this fallback to render a
-    /// parked sample.
-    pub(in crate::machine::execute) fn parked_carrier_expr(&self) -> Option<&KExpression<'run>> {
-        match self {
-            DispatchState::Keyworded(ks) => ks.track.as_ref().map(|t| t.carrier_expr()),
-            DispatchState::FunctionValueCall(fs) => Some(&fs.head_placeholder.expr),
-            _ => None,
-        }
-    }
-}
+/// A dispatch slot's decide — the `SchedulerView -> Outcome` closure a dispatch [`NodeWork`](super::nodes::NodeWork) runs.
+/// A birth decide classifies the carried `expr` (+ `pre_subs`) and routes; a park's resume re-runs
+/// the decide its park captured (a bare leaf, an evolving `working_expr`). Boxing keeps the router
+/// blind to which family it is — every `Wait` wakes through `run_wait` uniformly.
+pub(in crate::machine::execute) type ResumeFn<'run> =
+    Box<dyn for<'a> FnOnce(&SchedulerView<'run, 'a>, usize) -> Outcome<'run> + 'run>;
 
 // ---------- Cross-shape driver ----------
 
-/// Stateful dispatch driver. Classifies the slot's shape and routes to
-/// the matching per-shape entry. Fast-lane variants terminalize (or
-/// single-producer-park) in one poll; only `Keyworded` and
-/// `FunctionValueCall` carry tracks that can re-enter via the resume
-/// arms.
-pub(in crate::machine::execute) fn run_dispatch<'run>(
-    sched: &mut Scheduler<'run>,
+/// Build a birth dispatch [`NodeWork`](super::nodes::NodeWork) for `expr` with empty `pre_subs` — the dispatch-layer
+/// constructor every tail-replace / re-dispatch site uses instead of a raw work literal. The
+/// captured closure classifies `expr` on first poll; `carrier` is its deadlock-summary.
+pub(in crate::machine::execute) fn decide<'run>(expr: KExpression<'run>) -> NodeWork<'run> {
+    decide_with_presubs(expr, Vec::new())
+}
+
+/// Birth dispatch [`NodeWork`](super::nodes::NodeWork) carrying the dispatch layer's pre-submitted nested sub-Dispatches
+/// (computed by [`submit_dispatch`]).
+pub(in crate::machine::execute) fn decide_with_presubs<'run>(
     expr: KExpression<'run>,
-    state: DispatchState<'run>,
+    pre_subs: Vec<(usize, NodeId)>,
+) -> NodeWork<'run> {
+    let carrier = expr.summarize();
+    // A birth decide waits on no deps and ignores the (empty) results slice; it runs on first poll,
+    // classifies, and routes. `ignore_results` adapts the decide closure to the unified `NodeCont`.
+    NodeWork {
+        deps: Vec::new(),
+        park_count: 0,
+        cont: ignore_results(Box::new(move |view, idx| {
+            classify_dispatch(view, expr, pre_subs, idx)
+        })),
+        carrier: Some(carrier),
+    }
+}
+
+/// Classify a freshly-born dispatch expression's shape and route to the matching per-shape decide,
+/// returning the [`Outcome`] for the harness to apply. Fast-lane shapes terminalize or
+/// single-producer-park in one poll; a shape that parks returns a `ParkThenContinue` whose resume
+/// closure re-enters [`run_wait`], never back through here.
+fn classify_dispatch<'run>(
+    view: &SchedulerView<'run, '_>,
+    expr: KExpression<'run>,
+    pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
-) -> NodeStep<'run> {
-    let _wakes = sched.take_recent_wakes(NodeId(idx));
-    let init = match state {
-        DispatchState::Initialized(i) => i,
-        // Each parked-state resume decides against a read-only view; the router clears the
-        // resuming slot's stale dep edges (where the resume depends on it) before deciding,
-        // then applies the returned outcome — the resume itself issues no graph write.
-        DispatchState::Keyworded(ks) => {
-            let outcome = ks.resume(&DispatchCx::new(sched), idx);
-            return harness::apply_dispatch_outcome(sched, outcome, idx);
-        }
-        DispatchState::FunctionValueCall(fs) => {
-            let outcome = fs.resume(&DispatchCx::new(sched));
-            return harness::apply_dispatch_outcome(sched, outcome, idx);
-        }
-        DispatchState::TypeCall(cs) => {
-            sched.clear_dep_edges(idx);
-            let outcome = (*cs).resume(&DispatchCx::new(sched));
-            return harness::apply_dispatch_outcome(sched, outcome, idx);
-        }
-        DispatchState::BareTypeLeaf(bs) if bs.park.is_some() => {
-            sched.clear_dep_edges(idx);
-            let outcome = bs.resume(&DispatchCx::new(sched));
-            return harness::apply_dispatch_outcome(sched, outcome, idx);
-        }
-        _ => unreachable!(
-            "remaining fast-lane stateful variants terminalize in one poll; \
-             only Keyworded, FunctionValueCall, TypeCall, and a parked BareTypeLeaf \
-             re-enter from a parked track (HeadDeferred parks as a DispatchCombine, \
-             resumed by the scheduler, not a Dispatch state)"
-        ),
-    };
+) -> Outcome<'run> {
     match expr.shape() {
         DispatchShape::BareTypeLeaf => {
-            debug_assert!(init.pre_subs.is_empty());
+            debug_assert!(pre_subs.is_empty());
             let t = match &expr.parts[0].value {
                 ExpressionPart::Type(t) => t.clone(),
                 _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
             };
-            let outcome = single_poll::bare_type_leaf(&DispatchCx::new(sched), &t);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
+            single_poll::bare_type_leaf(view, &t)
         }
         DispatchShape::BareIdentifier => {
-            debug_assert!(init.pre_subs.is_empty());
+            debug_assert!(pre_subs.is_empty());
             let name = match &expr.parts[0].value {
                 ExpressionPart::Identifier(n) => n.clone(),
                 _ => unreachable!("BareIdentifier shape implies single Identifier part"),
             };
-            let outcome = single_poll::bare_identifier(&DispatchCx::new(sched), name);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
+            single_poll::bare_identifier(view, name)
         }
         DispatchShape::FunctionValueCall => {
-            debug_assert!(init.pre_subs.is_empty());
-            let _ = init;
-            let outcome = FnValueState::initial(&DispatchCx::new(sched), expr);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
+            debug_assert!(pre_subs.is_empty());
+            fn_value::initial(view, expr)
         }
         DispatchShape::TypeCall => {
-            debug_assert!(init.pre_subs.is_empty());
-            let outcome = single_poll::type_call(&DispatchCx::new(sched), expr);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
+            debug_assert!(pre_subs.is_empty());
+            single_poll::type_call(view, expr)
         }
         DispatchShape::HeadDeferred => {
-            debug_assert!(init.pre_subs.is_empty());
-            harness::apply_dispatch_outcome(sched, head_deferred::initial_expr(expr), idx)
+            debug_assert!(pre_subs.is_empty());
+            head_deferred::initial_expr(expr)
         }
         DispatchShape::TypeHeadDeferred => {
-            debug_assert!(init.pre_subs.is_empty());
-            harness::apply_dispatch_outcome(sched, head_deferred::initial_type(expr), idx)
+            debug_assert!(pre_subs.is_empty());
+            head_deferred::initial_type(expr)
         }
         // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
         // a non-callable head is a runtime error, not a fatal `execute()` abort.
         DispatchShape::NonCallableHead => {
-            NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(),
                 reason: format!(
                     "head is not callable: `{}`",
@@ -441,30 +442,22 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
             })))
         }
         DispatchShape::OperatorChain => {
-            debug_assert!(init.pre_subs.is_empty());
-            // Decide against a read-only view (immutable scheduler borrow), then reborrow
-            // `&mut` through the harness to apply — the borrow contract the effect split rests
-            // on. The `read_view` borrow ends at the `run` call (NLL), freeing `ctx` for apply.
-            let outcome = operator_chain::run(&DispatchCx::new(sched), &expr);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
+            debug_assert!(pre_subs.is_empty());
+            operator_chain::run(view, &expr)
         }
-        DispatchShape::Keyworded => {
-            let outcome = KeywordedState::initial(&DispatchCx::new(sched), expr, init.pre_subs, idx);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
-        }
+        DispatchShape::Keyworded => keyworded::initial(view, expr, pre_subs, idx),
         DispatchShape::SigiledTypeExpr => {
-            debug_assert!(init.pre_subs.is_empty());
-            harness::apply_dispatch_outcome(sched, single_poll::sigiled_type_expr(expr), idx)
+            debug_assert!(pre_subs.is_empty());
+            single_poll::sigiled_type_expr(expr)
         }
         DispatchShape::RecordType => {
-            debug_assert!(init.pre_subs.is_empty());
-            let outcome = single_poll::record_type(&DispatchCx::new(sched), expr);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
+            debug_assert!(pre_subs.is_empty());
+            single_poll::record_type(view, expr)
         }
         DispatchShape::LiteralPassThrough => {
-            debug_assert!(init.pre_subs.is_empty());
-            let outcome = single_poll::literal_pass_through(&DispatchCx::new(sched), expr);
-            harness::apply_dispatch_outcome(sched, outcome, idx)
+            debug_assert!(pre_subs.is_empty());
+            single_poll::literal_pass_through(view, expr)
         }
     }
 }
+

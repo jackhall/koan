@@ -1,6 +1,6 @@
 //! `free` / node-reclamation invariants.
 
-use super::super::super::nodes::{NodeOutput, NodeWork};
+use super::super::super::nodes::NodeOutput;
 use super::super::dep_graph::DepEdge;
 use super::super::Scheduler;
 use crate::builtins::default_scope;
@@ -15,7 +15,7 @@ fn free_reclaims_owned_subtree() {
     let root = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     let value: &KObject = arena.alloc_object(KObject::Number(42.0));
-    let mk_dispatch = || NodeWork::dispatch(KExpression::new(Vec::new()));
+    let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
     let s0 = sched.add(mk_dispatch(), root);
     let s1 = sched.add(mk_dispatch(), root);
     let s2 = sched.add(mk_dispatch(), root);
@@ -75,7 +75,7 @@ fn free_skips_live_slot_and_is_idempotent() {
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    let mk_dispatch = || NodeWork::dispatch(KExpression::new(Vec::new()));
+    let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
     let s = sched.add(mk_dispatch(), root);
     // Live slot: free must be a no-op.
     sched.free(s.index());
@@ -103,7 +103,7 @@ fn free_does_not_recurse_through_notify_edges() {
     let root = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     let value: &KObject = arena.alloc_object(KObject::Number(7.0));
-    let mk_dispatch = || NodeWork::dispatch(KExpression::new(Vec::new()));
+    let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
     let s_owner = sched.add(mk_dispatch(), root);
     let s_owned = sched.add(mk_dispatch(), root);
     let s_sibling = sched.add(mk_dispatch(), root);

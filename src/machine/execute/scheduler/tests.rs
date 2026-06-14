@@ -16,7 +16,6 @@ mod execute;
 mod index_gated;
 mod lexical_provenance;
 mod nested_binder_submission;
-mod recent_wakes;
 mod reclaim;
 mod unified_walk;
 

@@ -11,12 +11,11 @@
 use crate::builtins::default_scope;
 use crate::builtins::test_support::parse_one;
 use crate::machine::core::kfunction::action::{arg_object, Action, BodyCtx};
-use crate::machine::core::source::Spanned;
 use crate::machine::execute::dispatch::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
 };
 use crate::machine::execute::Scheduler;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
@@ -531,20 +530,23 @@ fn fast_lane_list_of_closures_escapes_outer_call_with_rc_attached() {
     }
 }
 
-/// `f {x = 7}` submitted as a forward reference: `f` is installed as a
-/// `Placeholder` on `scope` before the slot is dispatched. The fast lane's
-/// `FunctionValueCall` handler hits the `Placeholder` arm on head-resolution
-/// (before the args-shape check), installs a combined park, and never enters
-/// `resolve_dispatch`.
+/// `f {x = 7}` submitted as a forward reference: `f` is installed as a `Placeholder`
+/// on `scope` before the slot is dispatched. The fast lane's `FunctionValueCall`
+/// handler hits the `Placeholder` arm on head-resolution (before the args-shape
+/// check), routing without entering `resolve_dispatch`. The producer here finalizes
+/// with an error, so the head arm propagates it to the call slot — the reachable
+/// ready-producer case. (A ready *ok* producer can't occur: a binder's successful
+/// finalize binds the name, which then resolves to a `Value`, not a `Placeholder`.)
 #[test]
-fn function_value_call_forward_ref_parks() {
+fn function_value_call_forward_ref_routes_via_placeholder() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
 
-    // Bind `producer_target` to a value so the producer's own dispatch fast-lanes
-    // via the BareIdentifier `Resolution::Value` hit — otherwise the unbound
-    // fall-through would advance the counter and defeat the routing assertion.
+    // The producer is a `FunctionValueCall` on a non-function value: the fast lane
+    // errors with `TypeMismatch` (a `Number` head isn't callable) without entering
+    // `resolve_dispatch`, so the producer finalizes `Err` and the routing counter stays
+    // clean. `f` is then a backward-visible placeholder pointing at it.
     let producer_target = scope.arena.alloc_object(KObject::Number(42.0));
     scope
         .bind_value(
@@ -553,26 +555,24 @@ fn function_value_call_forward_ref_parks() {
             BindingIndex::BUILTIN,
         )
         .expect("bind_value should succeed");
-    let producer = sched.add_dispatch(
-        KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
-            "producer_target".into(),
-        ))]),
-        scope,
-    );
+    let producer = sched.add_dispatch(parse_one("producer_target {y = 1}"), scope);
     scope
         .install_placeholder("f".to_string(), producer, BindingIndex::BUILTIN)
         .expect("install_placeholder should succeed");
 
-    let f_call = parse_one("f {x = 7}");
-    let _f_call_id = sched.add_dispatch(f_call, scope);
+    let f_call_id = sched.add_dispatch(parse_one("f {x = 7}"), scope);
 
     reset_resolve_dispatch_entry_count();
     let _ = sched.execute();
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
-        "FunctionValueCall forward-ref park must not enter resolve_dispatch; \
-         the head-Placeholder arm fires before any args-shape inspection",
+        "FunctionValueCall forward-ref must route through the head-Placeholder arm \
+         before any args-shape inspection — never entering resolve_dispatch",
+    );
+    assert!(
+        sched.read_result(f_call_id).is_err(),
+        "the head-Placeholder arm must propagate the ready producer's error to the call slot",
     );
 }
 
@@ -688,9 +688,9 @@ fn keyworded_unchanged_with_keyword_in_body() {
 
 /// A Keyworded dispatch whose initial resolve picks an overload but whose
 /// value-cell parts need sub-Dispatch evaluation (the Resolved-with-eager-subs
-/// arm) must terminate correctly under the stateful driver. Pins that
-/// `KeywordedState::WaitingEagerSubs` resumes, re-resolves, and binds inline
-/// through `exec::invoke`.
+/// arm) must terminate correctly under the stateful driver. Pins that the
+/// eager-subs `Combine` finish re-resolves and binds inline through
+/// `exec::invoke`.
 ///
 /// Program: `LET y = (FIRST [1 2 3])`. LET picks at initial resolve; the RHS
 /// is an eager sub-Dispatch. After the sub resolves to `1`, the resume handler
@@ -744,81 +744,6 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
         Some(other) => panic!("expected KString(\"numbers\"), got {}", other.summarize()),
         None => panic!("LET out = ... must bind `out` in scope"),
     }
-}
-
-/// For each Keyworded track variant: the drain-end cycle-detection guard in
-/// [`Scheduler::execute`] must read the parked slot's carrier expression from
-/// `KeywordedState`, not from the placeholder `NodeWork::Dispatch.expr` that
-/// `install_eager_subs_track` / `install_bare_name_park` / `install_overload_park`
-/// drop to `KExpression::new(Vec::new())`. With only the empty `NodeWork`
-/// expression available the deadlock sample would render as `""`;
-/// `DispatchState::parked_carrier_expr` must surface the state-carried form.
-#[test]
-fn keyworded_parked_carrier_expr_reads_state() {
-    use crate::machine::execute::dispatch::keyworded::{
-        BareNameParkTrack, KeywordedState, OverloadParkTrack,
-    };
-    use crate::machine::execute::dispatch::{DispatchState, Initialized};
-
-    fn carrier_expr<'run>() -> KExpression<'run> {
-        // `(LIFT_BARE arg)` — a recognizable sample distinct from any other
-        // test's expressions, so a regression that drops the carrier shows up
-        // as a `""` summary, not a coincidentally-matching sibling expression.
-        KExpression::new(vec![
-            Spanned::bare(ExpressionPart::Keyword("LIFT_BARE".into())),
-            Spanned::bare(ExpressionPart::Identifier("arg".into())),
-        ])
-    }
-    let expected = carrier_expr().summarize();
-
-    let with_bare_name = DispatchState::Keyworded(Box::new(KeywordedState::with_bare_name_park(
-        Initialized {
-            pre_subs: Vec::new(),
-        },
-        BareNameParkTrack::new(carrier_expr()),
-    )));
-    assert_eq!(
-        with_bare_name
-            .parked_carrier_expr()
-            .map(Parseable::summarize),
-        Some(expected.clone()),
-        "bare-name-park track must surface `working_expr` as the parked sample",
-    );
-
-    let with_overload = DispatchState::Keyworded(Box::new(KeywordedState::with_overload_park(
-        Initialized {
-            pre_subs: Vec::new(),
-        },
-        OverloadParkTrack::new(carrier_expr()),
-    )));
-    assert_eq!(
-        with_overload
-            .parked_carrier_expr()
-            .map(Parseable::summarize),
-        Some(expected),
-        "overload-park track must surface its original `expr` as the parked sample",
-    );
-
-    // Non-Keyworded variants — and the one-shot Keyworded path that
-    // terminalizes without installing a track — never park, so the
-    // accessor surfaces `None` and the drain-end guard falls back to
-    // the slot's `NodeWork::Dispatch.expr` field.
-    let untracked = DispatchState::Keyworded(Box::new(KeywordedState {
-        init: Initialized {
-            pre_subs: Vec::new(),
-        },
-        track: None,
-    }));
-    assert!(
-        untracked.parked_carrier_expr().is_none(),
-        "Keyworded with no installed track must surface None (fall back to NodeWork expr)",
-    );
-    assert!(
-        DispatchState::initialized(Vec::new())
-            .parked_carrier_expr()
-            .is_none(),
-        "Initialized must surface None (fall back to NodeWork expr)",
-    );
 }
 
 // =====================================================================

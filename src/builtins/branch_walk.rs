@@ -44,8 +44,8 @@ pub(crate) fn resolve_arm_contract<'a>(
 
 /// Build the matched-arm tail shared by the `Action`-harness `MATCH` and `TRY` bodies: a fresh
 /// per-call frame (`root`-rooted, chained onto `outer_frame`) with `it` bound at idx 0,
-/// tail-replacing into the arm body's last statement (the harness dispatches the leading
-/// statements as siblings) carrying `contract`.
+/// tail-replacing into the arm body's last statement (the harness parks on the leading statements
+/// as owned deps, running them before the tail continues) carrying `contract`.
 pub(crate) fn arm_tail<'a>(
     root: &Scope<'a>,
     outer_frame: Option<Rc<crate::machine::CallArena>>,

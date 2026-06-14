@@ -8,7 +8,7 @@ use crate::builtins::default_scope;
 use crate::builtins::test_support::parse_one;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
-use crate::machine::{RuntimeArena, SchedulerHandle};
+use crate::machine::RuntimeArena;
 
 use super::super::Scheduler;
 use super::let_expr;
@@ -149,7 +149,7 @@ fn add_with_chain_without_chain_panics() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     sched.add_with_chain(
-        super::super::super::nodes::NodeWork::dispatch(KExpression::new(vec![Spanned::bare(
+        crate::machine::execute::dispatch::decide(KExpression::new(vec![Spanned::bare(
             ExpressionPart::Literal(KLiteral::Number(1.0)),
         )])),
         scope,

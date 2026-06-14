@@ -245,11 +245,13 @@ Per-call elaboration runs in the body executor
 `Deferred(_)` outcome as a `Suspend { join, resume }`: `join` names the body
 statements (plus, for the `Expression` carrier, the return-type expression as an
 extra dep), and `resume` checks the body's terminal value once the deps resolve.
-The dispatch-side [`invoke`](../../src/machine/execute/dispatch/exec.rs) lowers
-that `Suspend` onto the scheduler — spawning the join deps under the per-call
-frame via `SchedulerHandle::with_active_frame` (see
+The dispatch-side [`invoke`](../../src/machine/execute/dispatch/exec.rs) is a
+pure decide that lowers that `Suspend` into an `Outcome::ParkThenContinue` over
+a single [`DispatchDep::BodyBlock`](../../src/machine/execute/outcome.rs) — the
+body statements plus the return-type expression as deps in the harness-acquired
+per-call frame (see
 [per-call-arena-protocol.md § Active-frame propagation](../per-call-arena-protocol.md#active-frame-propagation))
-and an `add_combine_in_frame` whose finish runs `resume`. The `resume` closure
+— whose combine finish runs `resume`. The `resume` closure
 runs `per_call_ret.matches_value(body_value)` and surfaces mismatches with
 `(per-call return type)` wording — a passing value is returned as-is (no
 return-type stamp). The

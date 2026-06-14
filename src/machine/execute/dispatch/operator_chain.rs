@@ -20,20 +20,20 @@ use crate::machine::model::Parseable;
 use crate::machine::{KError, KErrorKind};
 
 use super::super::nodes::NodeOutput;
-use super::ctx::DispatchCx;
-use super::outcome::DispatchOutcome;
+use super::ctx::SchedulerView;
+use super::Outcome;
 
 /// Resolve the chain's operator group via the cached probe and route to the fold
 /// seam. The probe is `Some` for every `OperatorChain` (the classifier guarantees it),
 /// so a `None` probe is a classification bug.
 ///
 /// This handler issues no scheduler write — every path is a terminal — so it decides
-/// against a read-only [`DispatchCx`] and returns a [`DispatchOutcome::Terminal`]; the
-/// router applies it through [`super::harness::apply_dispatch_outcome`].
+/// against a read-only [`SchedulerView`] and returns a [`Outcome::Done`]; the
+/// router applies it through [`Scheduler::apply_outcome`](super::super::scheduler::Scheduler).
 pub(in crate::machine::execute) fn run<'run>(
-    ctx: &DispatchCx<'run, '_>,
+    ctx: &SchedulerView<'run, '_>,
     expr: &KExpression<'run>,
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     let probe = expr
         .operator_probe()
         .expect("OperatorChain shape guarantees a cached operator probe");
@@ -42,27 +42,23 @@ pub(in crate::machine::execute) fn run<'run>(
         .current_scope()
         .resolve_operator_group_with_chain(probe, chain)
     {
-        None => {
-            DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
-                expr: expr.summarize(),
-                reason: undeclared_operator_reason(probe),
-            })))
-        }
+        None => Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+            expr: expr.summarize(),
+            reason: undeclared_operator_reason(probe),
+        }))),
         Some(group) => {
             // A hit on a key whose probe operators aren't all members would be a
             // registry-build bug (the powerset keys only name members), but guard it:
             // a mismatch is a cross-group mix surfacing as a clean non-match.
             let operators = chain_operators(expr);
             if !group.covers(&operators) {
-                return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
-                    KErrorKind::DispatchFailed {
-                        expr: expr.summarize(),
-                        reason: cross_group_reason(probe),
-                    },
-                )));
+                return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+                    expr: expr.summarize(),
+                    reason: cross_group_reason(probe),
+                })));
             }
             // Fold seam: the precedence climb + binary sub-dispatch is the follow-on.
-            DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(),
                 reason: "operator-chain folding not yet implemented".to_string(),
             })))

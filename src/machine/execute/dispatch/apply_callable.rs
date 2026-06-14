@@ -10,7 +10,8 @@
 //! A [`ResolvedCallable`] has exactly two execution arms:
 //!
 //! - `Constructor(&KType)` — build a value from a type schema (struct / tagged /
-//!   newtype / `TypeConstructor` identity). Reuses `CtorState`/`CtorTrack`.
+//!   newtype / `TypeConstructor` identity). Reuses the `constructors` module
+//!   (`CtorKind` + `launch`).
 //! - `Function(&KFunction)` — call a `KFunction` by name. A functor is a
 //!   `KFunction` whose result is a module, so functor application *is* this arm;
 //!   the functor/function distinction survives only at classification (for
@@ -26,8 +27,8 @@ use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::{KError, KErrorKind};
 
 use super::super::nodes::NodeOutput;
-use super::ctx::DispatchCx;
-use super::outcome::DispatchOutcome;
+use super::ctx::SchedulerView;
+use super::Outcome;
 use super::{
     body_shape_err, constructors, extract_call_body, stage_all_eager_parts, CallBody, NAMED_ONLY,
     POSITIONAL_ONLY,
@@ -47,10 +48,10 @@ pub(in crate::machine::execute) enum ResolvedCallable<'run> {
 /// call body; `extract_call_body` admits one `{name = value}` record literal
 /// (`Named`) or one `(value)` paren group (`Positional`).
 pub(in crate::machine::execute) fn apply_callable<'run>(
-    ctx: &DispatchCx<'run, '_>,
+    ctx: &SchedulerView<'run, '_>,
     callable: ResolvedCallable<'run>,
     expr: &KExpression<'run>,
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     match callable {
         // A constructor branches on the projected schema before deciding what body shape it
         // admits; the newtype arm in particular takes the trailing parts directly (so
@@ -60,7 +61,7 @@ pub(in crate::machine::execute) fn apply_callable<'run>(
         ResolvedCallable::Function(f) => {
             let body = match extract_call_body(expr) {
                 Ok(b) => b,
-                Err(e) => return DispatchOutcome::Terminal(NodeOutput::Err(e)),
+                Err(e) => return Outcome::Done(NodeOutput::Err(e)),
             };
             apply_function(ctx, f, expr, body)
         }
@@ -75,12 +76,12 @@ pub(in crate::machine::execute) fn apply_callable<'run>(
 /// The schema is projected off the member (sibling `SetLocal`s resolved to external
 /// `SetRef`s); `(set, index)` is stamped onto a tagged value.
 fn apply_constructor<'run>(
-    ctx: &DispatchCx<'run, '_>,
+    ctx: &SchedulerView<'run, '_>,
     identity: &'run KType<'run>,
     expr: &KExpression<'run>,
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     let KType::SetRef { set, index } = identity else {
-        return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+        return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
             expected: "constructible Type".to_string(),
             got: identity.name(),
@@ -110,20 +111,20 @@ fn apply_constructor<'run>(
             {
                 let tag = t.render();
                 if !schema.contains_key(&tag) {
-                    return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
-                        KErrorKind::ShapeError(format!(
+                    return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::ShapeError(
+                        format!(
                             "`{tag}` is not a variant of `{}` (variants: {})",
                             set.member(*index).name,
                             sorted_variant_names(&schema),
-                        )),
-                    )));
+                        ),
+                    ))));
                 }
                 let variant = KType::Variant {
                     set: Rc::clone(set),
                     index: *index,
                     tag,
                 };
-                return DispatchOutcome::Terminal(NodeOutput::ktype(
+                return Outcome::Done(NodeOutput::ktype(
                     ctx.current_scope().arena.alloc_ktype(variant),
                 ));
             }
@@ -137,7 +138,7 @@ fn apply_constructor<'run>(
                     parts,
                 ),
                 Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
-                Err(e) => DispatchOutcome::Terminal(NodeOutput::Err(e)),
+                Err(e) => Outcome::Done(NodeOutput::Err(e)),
             }
         }
         ProjectedSchema::TypeConstructor { schema, .. } => match extract_call_body(expr) {
@@ -148,7 +149,7 @@ fn apply_constructor<'run>(
                 parts,
             ),
             Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
-            Err(e) => DispatchOutcome::Terminal(NodeOutput::Err(e)),
+            Err(e) => Outcome::Done(NodeOutput::Err(e)),
         },
     }
 }
@@ -165,29 +166,29 @@ fn sorted_variant_names(schema: &std::collections::HashMap<String, KType<'_>>) -
 /// expression and eager-resolve the value slots before binding; a positional body
 /// is a loud `DispatchFailed` (functions and functors take `{name = value}` only).
 fn apply_function<'run>(
-    ctx: &DispatchCx<'run, '_>,
+    ctx: &SchedulerView<'run, '_>,
     f: &'run KFunction<'run>,
     expr: &KExpression<'run>,
     body: CallBody<'run>,
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     match body {
         CallBody::Named(fields) => match f.reconstruct_positional(fields) {
             Ok(rebuilt) => install_eager_subs_track(ctx, rebuilt, f),
-            Err(e) => DispatchOutcome::Terminal(NodeOutput::Err(e)),
+            Err(e) => Outcome::Done(NodeOutput::Err(e)),
         },
         CallBody::Positional(_) => body_shape_err(expr, NAMED_ONLY),
     }
 }
 
 /// Stage every eager part of the reconstructed call as a sub-Dispatch, splice already-terminal
-/// subs inline, and park the slot on the in-flight ones as a `DispatchCombine` whose finish binds
+/// subs inline, and park the slot on the in-flight ones as a `Combine` whose finish binds
 /// `picked`. Shared by the `FunctionValueCall` lane and every head-deferred / type-call function
 /// arm.
 pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
-    ctx: &DispatchCx<'run, '_>,
+    ctx: &SchedulerView<'run, '_>,
     expr: KExpression<'run>,
     picked: &'run KFunction<'run>,
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     // `picked` is already committed (the head uniquely resolved to it), so bare-name
     // value slots resolve by sub-Dispatch rather than the keyword path's pre-pick
     // `bare_outcomes` lookup — their resolved carrier then reaches `accepts_part` at bind.

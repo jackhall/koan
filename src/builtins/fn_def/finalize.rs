@@ -17,7 +17,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{Elaborator, ReturnType};
 use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionSignature, KObject, SignatureElement};
-use crate::machine::{BindingIndex, Body, BodyResult, KError, KErrorKind, NodeId, Scope};
+use crate::machine::{BindingIndex, Body, KError, KErrorKind, NodeId, Scope};
 
 use super::return_type::{
     make_capture, resolve_capture_at_finish, ReturnTypeCapture, ReturnTypeState,
@@ -201,14 +201,14 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     body_expr: KExpression<'a>,
     kind: FnKind,
     bind_index: BindingIndex,
-) -> BodyResult<'a> {
+) -> Result<Carried<'a>, KError> {
     let is_functor = matches!(kind, FnKind::Functor);
     // FUNCTOR-only post-resolution return-type validation: fires here when the
     // return slot resolved at Combine-finish time rather than synchronously.
     if is_functor {
         if let ReturnType::Resolved(kt) = &return_type {
             if !kt.is_admissible_functor_return() {
-                return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                return Err(KError::new(KErrorKind::ShapeError(format!(
                     "FUNCTOR return-type slot must denote a module, signature, or functor; \
                      got `{}`",
                     kt.name(),
@@ -250,19 +250,17 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         let name = match name {
             Some(n) => n,
             None => {
-                return BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                return Err(KError::new(KErrorKind::ShapeError(
                     "FN signature must contain at least one Keyword (a fixed token to dispatch on)"
                         .to_string(),
                 )));
             }
         };
-        if let Err(e) = scope.register_function(name, f, obj, bind_index) {
-            return BodyResult::Err(e);
-        }
+        scope.register_function(name, f, obj, bind_index)?;
     }
     // Return the function reference so `LET f = (FN ...)` captures a callable
     // handle for the identifier-bound dispatch fallback.
-    BodyResult::value(obj)
+    Ok(Carried::Object(obj))
 }
 
 /// Schedule a `Combine` over `park_producers` plus any newly scheduled
@@ -272,8 +270,8 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 /// Build the Combine as an `Action` — park producers become `Dep::Existing`, the
 /// optional return-type sub and the param-type subs become `Dep::Dispatch { OwnScope }`
 /// (in that order, so the `[park ++ rt? ++ subs]` result layout the `splice_layout` /
-/// `ReturnTypeExpr { results_pos }` indices assume holds), and the finish routes the
-/// still-`BodyResult`-returning [`finalize_fn_with_kind`] through `body_result_to_action`.
+/// `ReturnTypeExpr { results_pos }` indices assume holds), and the finish wraps the
+/// [`finalize_fn_with_kind`] result in `Action::Done`.
 ///
 /// Splice protocol: each entry in `inputs.sub_dispatches` becomes a `Dep::Dispatch`;
 /// the finish closure splices each result into `signature_expr.parts[slot_idx]` as
@@ -285,9 +283,7 @@ pub(crate) fn defer_via_combine<'a>(
     kind: FnKind,
     bind_index: BindingIndex,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{
-        body_result_to_action, Action, Cont, Dep, DepPlacement,
-    };
+    use crate::machine::core::kfunction::action::{Action, Cont, Dep, DepPlacement};
     let CombineInputs {
         capture,
         park_producers,
@@ -347,7 +343,7 @@ pub(crate) fn defer_via_combine<'a>(
                 }
             }
         };
-        body_result_to_action(finalize_fn_with_kind(
+        Action::Done(finalize_fn_with_kind(
             fctx.scope,
             elements,
             return_type,

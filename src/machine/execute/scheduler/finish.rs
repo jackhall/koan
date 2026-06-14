@@ -1,8 +1,9 @@
-use crate::machine::model::{Carried, KObject};
-use crate::machine::{BodyResult, CatchFinish, CombineFinish, KError, NodeId, TraceFrame};
+use crate::machine::model::Carried;
+use crate::machine::{KError, NodeId};
 
-use super::super::dispatch::propagate_dep_error;
-use super::super::nodes::{DispatchCombineFinish, LiftState, NodeOutput, NodeStep, NodeWork};
+use super::super::dispatch::SchedulerView;
+use super::super::nodes::NodeStep;
+use super::super::NodeCont;
 use super::Scheduler;
 
 impl<'run> Scheduler<'run> {
@@ -16,116 +17,25 @@ impl<'run> Scheduler<'run> {
         }
     }
 
-    /// Only the `deps[park_count..]` owned-sub suffix is eagerly freed on the
-    /// success path; the `[..park_count]` park-producer prefix is kept alive
-    /// (sibling producers the Combine merely read at finish-time). The error
-    /// path leaves edges in `dep_edges[idx]` for chain-free at slot drop.
-    pub(super) fn run_combine(
+    /// The unified node handler: collect the resolved dep terminals (as owned `Result`s — an
+    /// errored dep is handed through, the continuation decides), run `cont` against a read-only
+    /// [`SchedulerView`], reclaim the owned-dep suffix, then apply. The continuation issues no
+    /// graph write, so the reclaim lands after it and before the apply that installs the
+    /// continuation's edges. Carried values survive the reclaim (they live in arenas, not slots).
+    pub(super) fn run_wait(
         &mut self,
         deps: Vec<NodeId>,
         park_count: usize,
-        finish: CombineFinish<'run>,
+        cont: NodeCont<'run>,
         idx: usize,
     ) -> NodeStep<'run> {
-        // The finish closure carries its own framing (e.g. "<list>", "<dict>");
-        // this generic frame is used only for dep-error propagation.
-        let make_frame = || TraceFrame::bare("<combine>", "combine");
-        for dep in &deps {
-            if let Err(e) = self.read_result(*dep) {
-                return NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(make_frame()))));
-            }
-        }
-        // Pre-collect carriers so `finish` (which takes `&mut self`) doesn't reborrow for
-        // reads. A type-resolving dep arrives as `Carried::Type`; the finish closure
-        // narrows each arm it expects.
-        let values: Vec<Carried<'run>> = deps.iter().map(|d| self.read(*d)).collect();
+        let results: Vec<Result<Carried<'run>, KError>> = deps
+            .iter()
+            .map(|d| self.read_result(*d).map_err(|e| e.clone()))
+            .collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
-        let body = finish(self, &values);
+        let outcome = cont(&SchedulerView::new(self), &results, idx);
         self.reclaim_deps(idx, owned_indices);
-        self.dispatch_body_result(body, idx)
-    }
-
-    /// Dispatch-side dual of [`Self::run_combine`]. Same dep short-circuit and owned-dep
-    /// reclaim, but the `finish` returns a [`NodeStep`] directly (it may re-park), so there is
-    /// no `BodyResult` lowering. Deps are reclaimed *before* the finish runs — a dispatch finish
-    /// installs its own park/replace edges on `idx`, which a post-finish `clear_dep_edges` would
-    /// wrongly wipe. Dep-error propagation is frameless; the resumed dispatch attaches its own
-    /// frame.
-    pub(super) fn run_dispatch_combine(
-        &mut self,
-        deps: Vec<NodeId>,
-        park_count: usize,
-        finish: DispatchCombineFinish<'run>,
-        dep_error_frame: Option<TraceFrame>,
-        idx: usize,
-    ) -> NodeStep<'run> {
-        for dep in &deps {
-            if let Err(e) = self.read_result(*dep) {
-                return NodeStep::Done(NodeOutput::Err(propagate_dep_error(
-                    e,
-                    dep_error_frame.clone(),
-                )));
-            }
-        }
-        let values: Vec<Carried<'run>> = deps.iter().map(|d| self.read(*d)).collect();
-        let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
-        self.reclaim_deps(idx, owned_indices);
-        super::super::dispatch::run_dispatch_combine_finish(self, finish, &values, idx)
-    }
-
-    /// Map a finished `BodyResult` to its `NodeStep`, shared by Combine and Catch:
-    /// a value/error completes the node, a `Tail` replaces it with a fresh dispatch,
-    /// and a `DeferTo` parks on the named lift. Callers free their deps first.
-    fn dispatch_body_result(&mut self, body: BodyResult<'run>, idx: usize) -> NodeStep<'run> {
-        match body {
-            BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
-            BodyResult::Tail {
-                expr,
-                frame,
-                function,
-                block_entry,
-                body_index,
-            } => NodeStep::Replace {
-                work: NodeWork::dispatch(expr),
-                frame,
-                function,
-                block_entry,
-                body_index,
-            },
-            BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
-            BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
-        }
-    }
-
-    /// Unlike Combine, an errored `from` does not short-circuit; the finish
-    /// closure decides whether to recover or re-raise. `from` is freed on both paths.
-    pub(super) fn run_catch(
-        &mut self,
-        from: NodeId,
-        finish: CatchFinish<'run>,
-        idx: usize,
-    ) -> NodeStep<'run> {
-        let result: Result<&'run KObject<'run>, KError> = match self.read_result(from) {
-            Ok(v) => Ok(v.object()),
-            // Frameless: the recovery-site dispatch attaches its own frame; adding
-            // one here would double-frame.
-            Err(e) => Err(propagate_dep_error(e, None)),
-        };
-        let body = finish(self, result);
-        self.reclaim_deps(idx, vec![from.index()]);
-        self.dispatch_body_result(body, idx)
-    }
-
-    /// Consume the stamped Lift state. By pop time the notify-walk has
-    /// transitioned `Pending → Ready`; the `Pending` arm is a wake-misfire
-    /// panic. See [design/execution-model.md § Lift: push/notify single-producer
-    /// model](../../../../design/execution-model.md#lift-pushnotify-single-producer-model).
-    pub(super) fn run_lift(state: LiftState<'run>) -> NodeOutput<'run> {
-        match state {
-            LiftState::Ready(output) => output,
-            LiftState::Pending(_) => {
-                panic!("scheduler invariant: notify-walk must stamp Lift to Ready before enqueue",)
-            }
-        }
+        self.apply_outcome(outcome, idx)
     }
 }

@@ -2,7 +2,7 @@
 //! and the `FunctionValueCall` fast lane (fn_value) route a resolved verb-carrier here. Args
 //! resolve through per-value eager sub-Dispatches; when all are bound, `finish` validates
 //! types and emits the `KObject::Wrapped` / `KObject::Tagged` directly — no bucket lookup, no
-//! `BodyResult::Tail` re-dispatch. Reusing the eager-subs `CtorState` machinery (rather than a
+//! re-dispatch. Reusing the eager-subs `Combine` machinery (rather than a
 //! standalone `Combine`) is load-bearing: it stages an already-ready value in place and parks
 //! a deferred one on the construction node itself, so a newtype built from a still-pending
 //! reference (`(Boxed (p))` where `p` is a sibling construction) finalizes correctly.
@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
@@ -17,9 +18,10 @@ use crate::machine::model::values::NonWrappedRef;
 use crate::machine::model::KObject;
 use crate::machine::{KError, KErrorKind, Scope};
 
-use super::super::nodes::{DispatchCombineFinish, NodeOutput};
-use super::outcome::{DispatchDep, DispatchOutcome};
+use super::super::nodes::NodeOutput;
+use super::super::CombineFinish;
 use super::single_poll::CtorKind;
+use super::{park_combine, DispatchDep, Outcome};
 
 pub(in crate::machine::execute) mod tagged_union;
 
@@ -31,7 +33,7 @@ pub(in crate::machine::execute) mod tagged_union;
 pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
     identity: &'run KType<'run>,
     mut value_parts: Vec<Spanned<ExpressionPart<'run>>>,
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     if let [Spanned {
         value: ExpressionPart::Expression(inner),
         ..
@@ -40,7 +42,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
         value_parts = inner.parts.clone();
     }
     if value_parts.is_empty() {
-        return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::ArityMismatch {
+        return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::ArityMismatch {
             expected: 1,
             got: 0,
         })));
@@ -63,7 +65,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
 pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'run>(
     identity: &'run KType<'run>,
     record_fields: Vec<(String, ExpressionPart<'run>)>,
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     let field_names: Vec<String> = record_fields.iter().map(|(n, _)| n.clone()).collect();
     let value_parts: Vec<ExpressionPart<'run>> =
         record_fields.into_iter().map(|(_, p)| p).collect();
@@ -112,10 +114,10 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
     index: usize,
     schema: Rc<HashMap<String, KType<'run>>>,
     args_parts: Vec<Spanned<ExpressionPart<'run>>>,
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     let (tag, value_part) = match tagged_union::prepare_args(args_parts) {
         Ok(v) => v,
-        Err(e) => return DispatchOutcome::Terminal(NodeOutput::Err(e)),
+        Err(e) => return Outcome::Done(NodeOutput::Err(e)),
     };
     launch(
         vec![value_part],
@@ -131,30 +133,25 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
 /// Decide a constructor park: every value part is a fresh sub-Dispatch dep (a single-part
 /// `Expression` wrapping routes through normal classification), and a freshly-minted sub is never
 /// terminal in the same step (submission is enqueue-then-drain), so there is no inline-ready case —
-/// the slot always parks as a [`DispatchOutcome::Combine`]. The finish reads the resolved deps in
+/// the slot always parks as a [`Outcome::ParkThenContinue`]. The finish reads the resolved deps in
 /// declaration order and materializes the value via [`finish`]; dep errors propagate frameless.
-fn launch<'run>(
-    value_parts: Vec<ExpressionPart<'run>>,
-    kind: CtorKind<'run>,
-) -> DispatchOutcome<'run> {
+fn launch<'run>(value_parts: Vec<ExpressionPart<'run>>, kind: CtorKind<'run>) -> Outcome<'run> {
     debug_assert!(
         !value_parts.is_empty(),
         "launch requires at least one value part (arity-zero is rejected upstream)"
     );
     let deps: Vec<DispatchDep<'run>> = value_parts
         .into_iter()
-        .map(|part| DispatchDep::Dispatch(KExpression::new(vec![Spanned::bare(part)])))
+        .map(|part| DispatchDep::Dispatch {
+            expr: KExpression::new(vec![Spanned::bare(part)]),
+            placement: DepPlacement::OwnScope,
+        })
         .collect();
-    let combine_finish: DispatchCombineFinish<'run> = Box::new(move |ctx, results, _idx| {
+    let combine_finish: CombineFinish<'run> = Box::new(move |ctx, results| {
         let values: Vec<&'run KObject<'run>> = results.iter().map(|c| c.object()).collect();
         finish(ctx.current_scope(), &kind, &values)
     });
-    DispatchOutcome::Combine {
-        deps,
-        dep_error_frame: None,
-        finish: combine_finish,
-        free: Vec::new(),
-    }
+    park_combine(deps, None, combine_finish, Vec::new())
 }
 
 /// All value subs have completed. Read each, materialize the kind-keyed
@@ -163,7 +160,7 @@ pub(in crate::machine::execute::dispatch) fn finish<'run>(
     scope: &Scope<'run>,
     kind: &CtorKind<'run>,
     values: &[&'run KObject<'run>],
-) -> DispatchOutcome<'run> {
+) -> Outcome<'run> {
     let result = match kind {
         CtorKind::Newtype { identity } => {
             debug_assert_eq!(values.len(), 1);
@@ -192,7 +189,7 @@ pub(in crate::machine::execute::dispatch) fn finish<'run>(
         }
     };
     match result {
-        Ok(obj) => DispatchOutcome::Terminal(NodeOutput::value(scope.arena.alloc_object(obj))),
-        Err(e) => DispatchOutcome::Terminal(NodeOutput::Err(e)),
+        Ok(obj) => Outcome::Done(NodeOutput::value(scope.arena.alloc_object(obj))),
+        Err(e) => Outcome::Done(NodeOutput::Err(e)),
     }
 }

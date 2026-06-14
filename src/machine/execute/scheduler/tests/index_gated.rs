@@ -11,7 +11,6 @@ use std::rc::Rc;
 use crate::builtins::default_scope;
 use crate::machine::execute::Scheduler;
 use crate::machine::model::{KObject, KType, Parseable};
-use crate::machine::SchedulerHandle;
 use crate::machine::{KError, KErrorKind, RuntimeArena, Scope};
 use crate::parse::parse;
 

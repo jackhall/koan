@@ -141,7 +141,7 @@ record values is width/depth — see [ktype.md § Variance](ktype.md#variance).
 `(x y) FROM r` projects a record value to the named fields
 ([record_projection.rs](../../src/builtins/record_projection.rs)). Unlike the
 type-returning `_OF` dispatcher ops, `FROM` is a plain value builtin: it returns a
-`BodyResult::Value`, `Rc`-sharing the backing record whole and narrowing the carried
+`Done` value, `Rc`-sharing the backing record whole and narrowing the carried
 field-type record to the named fields — it derives its result type from the literal
 field list off the value's own carrier, never routing as a scheduled `TypeExprRef`.
 The field list arrives unevaluated through a `KExpression` slot (bare names only), so

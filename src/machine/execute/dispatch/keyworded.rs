@@ -1,9 +1,6 @@
 //! Keyworded dispatch shape: the catch-all for any expression with a
 //! keyword present, or a head that isn't a fast-lane shape.
 
-use std::marker::PhantomData;
-
-use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Parseable;
 use crate::machine::{
@@ -11,350 +8,244 @@ use crate::machine::{
 };
 
 use super::super::nodes::NodeOutput;
-use super::ctx::DispatchCx;
-use super::outcome::DispatchOutcome;
-use super::{
-    bare_name_of, propagate_dep_error, DispatchState, Initialized, PartWalkResult, PendingSub,
-};
+use super::ctx::SchedulerView;
+use super::{bare_name_of, park_resume, propagate_dep_error, Outcome, PartWalkResult, PendingSub};
 
-pub(in crate::machine::execute) struct KeywordedState<'run> {
-    pub(in crate::machine::execute) init: Initialized,
-    /// `None` on initial entry; `Some` once the slot has parked.
-    pub(in crate::machine::execute) track: Option<ParkTrack<'run>>,
-}
-
-/// Park reason for a `Keyworded` slot. Variants are mutually exclusive by construction: a
-/// single resolve either parks on producers (`Overload`) or runs the part walk which discovers
-/// bare-name producers (`BareName`). Eager subs do not park here — they resolve through their
-/// own [`NodeWork::DispatchCombine`](super::super::nodes::NodeWork), so a re-Dispatch never
-/// re-enters the Keyworded resume for them.
-pub(in crate::machine::execute) enum ParkTrack<'run> {
-    Overload(OverloadParkTrack<'run>),
-    BareName(BareNameParkTrack<'run>),
-}
-
-impl<'run> ParkTrack<'run> {
-    /// Working expression carried by the track, for drain-end
-    /// cycle-detection sample rendering.
-    pub(in crate::machine::execute) fn carrier_expr(&self) -> &KExpression<'run> {
-        match self {
-            ParkTrack::Overload(t) => &t.expr,
-            ParkTrack::BareName(t) => &t.working_expr,
+/// Entry from the dispatch router. Resolved-no-parks-no-subs terminates inline; all other
+/// outcomes install a park (an overload / bare-name producer wait, or eager subs) and re-enter
+/// through a [`park_resume`] closure that re-runs this function on wake.
+pub(super) fn initial<'run>(
+    ctx: &SchedulerView<'run, '_>,
+    expr: KExpression<'run>,
+    pre_subs: Vec<(usize, NodeId)>,
+    idx: usize,
+) -> Outcome<'run> {
+    let bare_outcomes = ctx.build_bare_outcomes(&expr.parts);
+    // A bare-name arg whose producer already errored can never resolve.
+    for outcome in bare_outcomes.iter().flatten() {
+        if let NameOutcome::ProducerErrored(e) = outcome {
+            let frame = TraceFrame::from_expr("<wrap-resolve>", &expr);
+            return Outcome::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))));
         }
     }
-}
-
-/// Track for bare-name forward-reference parks. `working_expr` is
-/// partly spliced — Resolved wrap slots already substituted for
-/// `Future(obj)`; Parked wrap and ref-name slots keep their original
-/// bare-name token — so resume re-runs `initial` against it.
-pub(in crate::machine::execute) struct BareNameParkTrack<'run> {
-    pub(in crate::machine::execute) working_expr: KExpression<'run>,
-    _ph: PhantomData<&'run KFunction<'run>>,
-}
-
-impl<'run> BareNameParkTrack<'run> {
-    pub(in crate::machine::execute) fn new(working_expr: KExpression<'run>) -> Self {
-        Self {
-            working_expr,
-            _ph: PhantomData,
-        }
-    }
-}
-
-/// Track for forward-reference overload-producer parks. Carries the
-/// *original* `expr` — no splice has happened yet — so resume hands it
-/// straight back to `initial`.
-pub(in crate::machine::execute) struct OverloadParkTrack<'run> {
-    pub(in crate::machine::execute) expr: KExpression<'run>,
-    _ph: PhantomData<&'run KFunction<'run>>,
-}
-
-impl<'run> OverloadParkTrack<'run> {
-    pub(in crate::machine::execute) fn new(expr: KExpression<'run>) -> Self {
-        Self {
-            expr,
-            _ph: PhantomData,
-        }
-    }
-}
-
-impl<'run> KeywordedState<'run> {
-    pub(in crate::machine::execute) fn with_bare_name_park(
-        init: Initialized,
-        track: BareNameParkTrack<'run>,
-    ) -> Self {
-        Self {
-            init,
-            track: Some(ParkTrack::BareName(track)),
-        }
-    }
-
-    pub(in crate::machine::execute) fn with_overload_park(
-        init: Initialized,
-        track: OverloadParkTrack<'run>,
-    ) -> Self {
-        Self {
-            init,
-            track: Some(ParkTrack::Overload(track)),
-        }
-    }
-
-    /// Entry from the dispatch router. Resolved-no-parks-no-subs
-    /// terminates inline; all other outcomes install a `ParkTrack` and
-    /// re-enter through [`Self::resume`].
-    pub(super) fn initial(
-        ctx: &DispatchCx<'run, '_>,
-        expr: KExpression<'run>,
-        pre_subs: Vec<(usize, NodeId)>,
-        idx: usize,
-    ) -> DispatchOutcome<'run> {
-        let bare_outcomes = ctx.build_bare_outcomes(&expr.parts);
-        // A bare-name arg whose producer already errored can never resolve.
-        for outcome in bare_outcomes.iter().flatten() {
-            if let NameOutcome::ProducerErrored(e) = outcome {
-                let frame = TraceFrame::from_expr("<wrap-resolve>", &expr);
-                return DispatchOutcome::Terminal(NodeOutput::Err(propagate_dep_error(
-                    e,
-                    Some(frame),
-                )));
-            }
-        }
-        let chain = ctx.chain_deref();
-        let outcome = ctx
-            .current_scope()
-            .resolve_dispatch(&expr, chain, &bare_outcomes);
-        let resolved = match outcome {
-            ResolveOutcome::Resolved(r) => r,
-            // Dispatch failures are slot-terminal (TRY-catchable), uniform with the
-            // bare-identifier and head-deferred lanes — not a fatal `?` abort. `interpret`
-            // reads each top-level slot result and re-raises, so the CLI surfacing is unchanged.
-            ResolveOutcome::Ambiguous(n) => {
-                return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
-                    KErrorKind::AmbiguousDispatch {
-                        expr: expr.summarize(),
-                        candidates: n,
-                    },
-                )));
-            }
-            ResolveOutcome::Unmatched => {
-                return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
-                    KErrorKind::DispatchFailed {
-                        expr: expr.summarize(),
-                        reason: "no matching function".to_string(),
-                    },
-                )));
-            }
-            ResolveOutcome::UnboundName(name) => {
-                return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
-                    KErrorKind::UnboundName(name),
-                )));
-            }
-            ResolveOutcome::Deferred => {
-                debug_assert!(
-                    pre_subs.is_empty(),
-                    "Deferred resolve_dispatch implies no binder pick at submit time; \
-                     `pre_subs` must be empty here",
-                );
-                return Self::install_eager_only(ctx, expr);
-            }
-            ResolveOutcome::ParkOnProducers(producers) => {
-                return Self::install_overload_park(ctx, producers, expr, pre_subs, idx);
-            }
-        };
-        let lex_index = ctx
-            .active_chain()
-            .expect("dispatching slot must have an active chain")
-            .index;
-        let bind_index = BindingIndex::value(lex_index);
-        if let Some(name) = resolved.placeholder_name.as_ref() {
-            if let Err(e) =
-                ctx.current_scope()
-                    .install_placeholder(name.clone(), NodeId(idx), bind_index)
-            {
-                return DispatchOutcome::Terminal(NodeOutput::Err(e));
-            }
-        }
-        if let Some(bucket) = resolved.pending_overload_bucket.as_ref() {
-            if let Err(e) = ctx.current_scope().install_pending_overload(
-                bucket.clone(),
-                NodeId(idx),
-                bind_index,
-            ) {
-                return DispatchOutcome::Terminal(NodeOutput::Err(e));
-            }
-        }
-        let walk = match part_walk(
-            ctx,
-            expr.parts,
-            &pre_subs,
-            &bare_outcomes,
-            &resolved.slots,
-            idx,
-        ) {
-            Ok(w) => w,
-            Err(e) => return DispatchOutcome::Terminal(NodeOutput::Err(e)),
-        };
-        let PartWalkResult {
-            new_parts,
-            producers_to_wait,
-            staged_subs,
-        } = walk;
-        let new_expr = KExpression::new(new_parts);
-        if !producers_to_wait.is_empty() {
-            // Park-precedence guard: drop staged_subs on the floor;
-            // re-Dispatch on wake re-runs the walk and re-stages them.
-            let _ = staged_subs;
-            return Self::install_bare_name_park(producers_to_wait, new_expr, pre_subs);
-        }
-        if staged_subs.is_empty() {
-            // The synchronous (no-eager-subs) call — the common path for builtins and simple calls.
-            return DispatchOutcome::Invoke {
-                picked: resolved.function,
-                working_expr: new_expr,
-                free: Vec::new(),
-            };
-        }
-        let _ = resolved; // discard the speculative pick.
-        Self::install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs)
-    }
-
-    /// Resume entry, dispatched on the installed `ParkTrack` variant.
-    pub(super) fn resume(self, ctx: &DispatchCx<'run, '_>, idx: usize) -> DispatchOutcome<'run> {
-        let KeywordedState { init, track } = self;
-        let track = track.expect("Keyworded resume is only entered after a track is installed");
-        let expr = match track {
-            ParkTrack::Overload(OverloadParkTrack { expr, .. }) => expr,
-            ParkTrack::BareName(BareNameParkTrack { working_expr, .. }) => working_expr,
-        };
-        Self::initial(ctx, expr, init.pre_subs, idx)
-    }
-
-    /// Re-resolve dispatch against the (now fully spliced) `working_expr`
-    /// after eager subs complete.
-    pub(super) fn finish(
-        ctx: &DispatchCx<'run, '_>,
-        working_expr: KExpression<'run>,
-        idx: usize,
-    ) -> DispatchOutcome<'run> {
-        match ctx
-            .current_scope()
-            .resolve_dispatch(&working_expr, ctx.chain_deref(), &[])
-        {
-            // The post-eager-subs re-dispatch lands resolved calls here — name the resolved call
-            // for the harness to run.
-            ResolveOutcome::Resolved(r) => DispatchOutcome::Invoke {
-                picked: r.function,
-                working_expr,
-                free: Vec::new(),
-            },
-            // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
-            // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
-            ResolveOutcome::Ambiguous(n) => DispatchOutcome::Terminal(NodeOutput::Err(
-                KError::new(KErrorKind::AmbiguousDispatch {
-                    expr: working_expr.summarize(),
-                    candidates: n,
-                }),
-            )),
-            ResolveOutcome::Deferred | ResolveOutcome::Unmatched => {
-                DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
-                    expr: working_expr.summarize(),
-                    reason: "no matching function".to_string(),
-                })))
-            }
-            ResolveOutcome::ParkOnProducers(producers) => {
-                Self::install_overload_park(ctx, producers, working_expr, Vec::new(), idx)
-            }
-            ResolveOutcome::UnboundName(name) => {
-                DispatchOutcome::Terminal(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))))
-            }
-        }
-    }
-
-    /// Realize an overload-park Track, filtering `producers` for cycles
-    /// and already-errored terminals. Visibility is widened for
-    /// `single_poll::type_call`, which reuses this path for
-    /// forward-reference type-binder parks.
-    pub(in crate::machine::execute::dispatch) fn install_overload_park(
-        ctx: &DispatchCx<'run, '_>,
-        producers: Vec<NodeId>,
-        expr: KExpression<'run>,
-        pre_subs: Vec<(usize, NodeId)>,
-        idx: usize,
-    ) -> DispatchOutcome<'run> {
-        let mut to_wait: Vec<NodeId> = Vec::new();
-        for p in producers {
-            if ctx.is_result_ready(p) {
-                if let Err(e) = ctx.read_result(p) {
-                    let frame = TraceFrame::from_expr("<dispatch-park>", &expr);
-                    return DispatchOutcome::Terminal(NodeOutput::Err(propagate_dep_error(
-                        e,
-                        Some(frame),
-                    )));
-                }
-            } else if !ctx.would_create_cycle(p, NodeId(idx)) && !to_wait.contains(&p) {
-                to_wait.push(p);
-            }
-        }
-        if to_wait.is_empty() {
-            return DispatchOutcome::Terminal(NodeOutput::Err(KError::new(
-                KErrorKind::DispatchFailed {
+    let chain = ctx.chain_deref();
+    let outcome = ctx
+        .current_scope()
+        .resolve_dispatch(&expr, chain, &bare_outcomes);
+    let resolved = match outcome {
+        ResolveOutcome::Resolved(r) => r,
+        // Dispatch failures are slot-terminal (TRY-catchable), uniform with the
+        // bare-identifier and head-deferred lanes — not a fatal `?` abort. `interpret`
+        // reads each top-level slot result and re-raises, so the CLI surfacing is unchanged.
+        ResolveOutcome::Ambiguous(n) => {
+            return Outcome::Done(NodeOutput::Err(KError::new(
+                KErrorKind::AmbiguousDispatch {
                     expr: expr.summarize(),
-                    reason: "no matching function".to_string(),
+                    candidates: n,
                 },
             )));
         }
-        let track = OverloadParkTrack::new(expr);
-        let init = Initialized { pre_subs };
-        DispatchOutcome::ParkSelf {
-            producers: to_wait,
-            state: DispatchState::Keyworded(Box::new(Self::with_overload_park(init, track))),
+        ResolveOutcome::Unmatched => {
+            return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+                expr: expr.summarize(),
+                reason: "no matching function".to_string(),
+            })));
+        }
+        ResolveOutcome::UnboundName(name) => {
+            return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))));
+        }
+        ResolveOutcome::Deferred => {
+            debug_assert!(
+                pre_subs.is_empty(),
+                "Deferred resolve_dispatch implies no binder pick at submit time; \
+                 `pre_subs` must be empty here",
+            );
+            return install_eager_only(ctx, expr);
+        }
+        ResolveOutcome::ParkOnProducers(producers) => {
+            return install_overload_park(ctx, producers, expr, pre_subs, idx);
+        }
+    };
+    let lex_index = ctx
+        .active_chain()
+        .expect("dispatching slot must have an active chain")
+        .index;
+    let bind_index = BindingIndex::value(lex_index);
+    if let Some(name) = resolved.placeholder_name.as_ref() {
+        if let Err(e) =
+            ctx.current_scope()
+                .install_placeholder(name.clone(), NodeId(idx), bind_index)
+        {
+            return Outcome::Done(NodeOutput::Err(e));
         }
     }
-
-    /// `ResolveOutcome::Deferred` arm: stage every eager part and park
-    /// on them, with no speculative function pick captured.
-    fn install_eager_only(
-        ctx: &DispatchCx<'run, '_>,
-        expr: KExpression<'run>,
-    ) -> DispatchOutcome<'run> {
-        // Deferred arm: no committed pick yet (resume re-resolves on finish), so no
-        // bare-name slots to pre-resolve here.
-        let (new_parts, staged_subs) = super::stage_all_eager_parts(expr.parts, &[]);
-        debug_assert!(
-            !staged_subs.is_empty(),
-            "install_eager_only invoked from Deferred arm; \
-             resolve_dispatch contract requires at least one eager part",
-        );
-        let new_expr = KExpression::new(new_parts);
-        Self::install_eager_subs_track(ctx, new_expr, staged_subs, Vec::new())
-    }
-
-    fn install_bare_name_park(
-        producers: Vec<NodeId>,
-        working_expr: KExpression<'run>,
-        pre_subs: Vec<(usize, NodeId)>,
-    ) -> DispatchOutcome<'run> {
-        let track = BareNameParkTrack::new(working_expr);
-        let init = Initialized { pre_subs };
-        DispatchOutcome::ParkSelf {
-            producers,
-            state: DispatchState::Keyworded(Box::new(Self::with_bare_name_park(init, track))),
+    if let Some(bucket) = resolved.pending_overload_bucket.as_ref() {
+        if let Err(e) =
+            ctx.current_scope()
+                .install_pending_overload(bucket.clone(), NodeId(idx), bind_index)
+        {
+            return Outcome::Done(NodeOutput::Err(e));
         }
     }
-
-    fn install_eager_subs_track(
-        ctx: &DispatchCx<'run, '_>,
-        working_expr: KExpression<'run>,
-        staged_subs: Vec<(usize, PendingSub<'run>)>,
-        pre_subs: Vec<(usize, NodeId)>,
-    ) -> DispatchOutcome<'run> {
-        // The combine carrier owns its deps directly; the Keyworded eager-subs resume state is
-        // never re-entered (a re-Dispatch never lands here — the combine finish runs instead),
-        // so `pre_subs` is unused on this path.
-        let _ = pre_subs;
-        ctx.install_eager_subs(working_expr, staged_subs, None)
+    let walk = match part_walk(
+        ctx,
+        expr.parts,
+        &pre_subs,
+        &bare_outcomes,
+        &resolved.slots,
+        idx,
+    ) {
+        Ok(w) => w,
+        Err(e) => return Outcome::Done(NodeOutput::Err(e)),
+    };
+    let PartWalkResult {
+        new_parts,
+        producers_to_wait,
+        staged_subs,
+    } = walk;
+    let new_expr = KExpression::new(new_parts);
+    if !producers_to_wait.is_empty() {
+        // Park-precedence guard: drop staged_subs on the floor;
+        // re-Dispatch on wake re-runs the walk and re-stages them.
+        let _ = staged_subs;
+        return install_bare_name_park(producers_to_wait, new_expr, pre_subs);
     }
+    if staged_subs.is_empty() {
+        // The synchronous (no-eager-subs) call — the common path for builtins and simple calls.
+        return Outcome::Invoke {
+            picked: resolved.function,
+            working_expr: new_expr,
+            free: Vec::new(),
+        };
+    }
+    let _ = resolved; // discard the speculative pick.
+    install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs)
+}
+
+/// Re-resolve dispatch against the (now fully spliced) `working_expr`
+/// after eager subs complete.
+pub(super) fn finish<'run>(
+    ctx: &SchedulerView<'run, '_>,
+    working_expr: KExpression<'run>,
+    idx: usize,
+) -> Outcome<'run> {
+    match ctx
+        .current_scope()
+        .resolve_dispatch(&working_expr, ctx.chain_deref(), &[])
+    {
+        // The post-eager-subs re-dispatch lands resolved calls here — name the resolved call
+        // for the harness to run.
+        ResolveOutcome::Resolved(r) => Outcome::Invoke {
+            picked: r.function,
+            working_expr,
+            free: Vec::new(),
+        },
+        // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
+        // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
+        ResolveOutcome::Ambiguous(n) => Outcome::Done(NodeOutput::Err(KError::new(
+            KErrorKind::AmbiguousDispatch {
+                expr: working_expr.summarize(),
+                candidates: n,
+            },
+        ))),
+        ResolveOutcome::Deferred | ResolveOutcome::Unmatched => {
+            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+                expr: working_expr.summarize(),
+                reason: "no matching function".to_string(),
+            })))
+        }
+        ResolveOutcome::ParkOnProducers(producers) => {
+            install_overload_park(ctx, producers, working_expr, Vec::new(), idx)
+        }
+        ResolveOutcome::UnboundName(name) => {
+            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))))
+        }
+    }
+}
+
+/// Park on forward-reference overload producers, filtering `producers` for cycles and
+/// already-errored terminals; on wake `resume` re-runs [`initial`] against the original `expr`.
+/// Visibility is widened for `single_poll::type_call`, which reuses this path for
+/// forward-reference type-binder parks.
+pub(in crate::machine::execute::dispatch) fn install_overload_park<'run>(
+    ctx: &SchedulerView<'run, '_>,
+    producers: Vec<NodeId>,
+    expr: KExpression<'run>,
+    pre_subs: Vec<(usize, NodeId)>,
+    idx: usize,
+) -> Outcome<'run> {
+    let mut to_wait: Vec<NodeId> = Vec::new();
+    for p in producers {
+        if ctx.is_result_ready(p) {
+            if let Err(e) = ctx.read_result(p) {
+                let frame = TraceFrame::from_expr("<dispatch-park>", &expr);
+                return Outcome::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))));
+            }
+        } else if !ctx.would_create_cycle(p, NodeId(idx)) && !to_wait.contains(&p) {
+            to_wait.push(p);
+        }
+    }
+    if to_wait.is_empty() {
+        return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+            expr: expr.summarize(),
+            reason: "no matching function".to_string(),
+        })));
+    }
+    // Summarize the *original* `expr` for the deadlock report — no splice has happened yet — then
+    // hand `expr` itself to the resume closure.
+    let carrier = expr.summarize();
+    park_resume(
+        to_wait,
+        Some(carrier),
+        Box::new(move |ctx, idx| initial(ctx, expr, pre_subs, idx)),
+    )
+}
+
+/// `ResolveOutcome::Deferred` arm: stage every eager part and park
+/// on them, with no speculative function pick captured.
+fn install_eager_only<'run>(
+    ctx: &SchedulerView<'run, '_>,
+    expr: KExpression<'run>,
+) -> Outcome<'run> {
+    // Deferred arm: no committed pick yet (resume re-resolves on finish), so no
+    // bare-name slots to pre-resolve here.
+    let (new_parts, staged_subs) = super::stage_all_eager_parts(expr.parts, &[]);
+    debug_assert!(
+        !staged_subs.is_empty(),
+        "install_eager_only invoked from Deferred arm; \
+         resolve_dispatch contract requires at least one eager part",
+    );
+    let new_expr = KExpression::new(new_parts);
+    install_eager_subs_track(ctx, new_expr, staged_subs, Vec::new())
+}
+
+/// Park on bare-name forward-reference producers. `working_expr` is partly spliced — Resolved wrap
+/// slots already substituted for `Future(obj)`; Parked wrap and ref-name slots keep their original
+/// bare-name token — so on wake `resume` re-runs [`initial`] against it.
+fn install_bare_name_park<'run>(
+    producers: Vec<NodeId>,
+    working_expr: KExpression<'run>,
+    pre_subs: Vec<(usize, NodeId)>,
+) -> Outcome<'run> {
+    let carrier = working_expr.summarize();
+    park_resume(
+        producers,
+        Some(carrier),
+        Box::new(move |ctx, idx| initial(ctx, working_expr, pre_subs, idx)),
+    )
+}
+
+fn install_eager_subs_track<'run>(
+    ctx: &SchedulerView<'run, '_>,
+    working_expr: KExpression<'run>,
+    staged_subs: Vec<(usize, PendingSub<'run>)>,
+    pre_subs: Vec<(usize, NodeId)>,
+) -> Outcome<'run> {
+    // The combine carrier owns its deps directly; the Keyworded eager-subs resume state is
+    // never re-entered (a re-Dispatch never lands here — the combine finish runs instead),
+    // so `pre_subs` is unused on this path.
+    let _ = pre_subs;
+    ctx.install_eager_subs(working_expr, staged_subs, None)
 }
 
 /// Fused splice / park / eager-sub walk over `parts`. Pure: no
@@ -363,7 +254,7 @@ impl<'run> KeywordedState<'run> {
 /// subs. `Err(KError)` surfaces a *slot-terminal* error (cycle /
 /// unbound wrap), not a scheduler-level error.
 fn part_walk<'run>(
-    ctx: &DispatchCx<'run, '_>,
+    ctx: &SchedulerView<'run, '_>,
     parts: Vec<
         crate::machine::core::source::Spanned<crate::machine::model::ast::ExpressionPart<'run>>,
     >,

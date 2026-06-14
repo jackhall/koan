@@ -79,7 +79,7 @@ The user-fn body executor (`run_user_fn`, lowered onto the scheduler by
 `dispatch::exec::invoke`) allocates a per-call [`CallArena`](../src/machine/core/arena.rs),
 binds each parameter into a fresh child `Scope` whose `outer` is the function's
 captured definition scope, and returns the body unmodified as
-`BodyResult::Tail` for the scheduler to dispatch in the same slot.
+`Action::Tail` (lowered to `Outcome::Continue`) for the scheduler to dispatch in the same slot.
 Two consequences:
 
 - User-fns inherit TCO automatically — every call rewrites the slot in place.

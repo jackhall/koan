@@ -12,7 +12,7 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{KObject, KType};
-use koan::machine::{RuntimeArena, Scheduler, SchedulerHandle, Scope};
+use koan::machine::{RuntimeArena, Scheduler, Scope};
 use koan::parse::parse;
 
 /// Scaffolding: spin up a fresh arena + default scope, run `source` end-to-end through

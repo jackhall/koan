@@ -18,11 +18,10 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::body::ErasedContract;
 use crate::machine::core::{CallArena, LexicalFrame};
 use crate::machine::model::Carried;
-use crate::machine::model::Parseable;
 use crate::machine::KError;
 use crate::machine::NodeId;
 
-use super::super::nodes::{CallFrame, LiftState, Node, NodeOutput, NodeScope, NodeWork};
+use super::super::nodes::{CallFrame, Node, NodeOutput, NodeScope, NodeWork};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -68,9 +67,34 @@ enum SlotState<'run> {
     /// `reinstall*` / `finalize` / `free_one` exits this state.
     Running,
     Done(NodeOutput<'run>),
+    /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
+    /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
+    /// slot's consumers were moved onto `producer`'s notify list at splice time, so `producer`'s
+    /// fire wakes them directly. See [`Outcome::Forward`](super::super::outcome::Outcome).
+    Aliased(NodeId),
     /// Distinct from `Running` so the cascade-free walk's idempotency
     /// guard can be precise about "already freed".
     Free,
+}
+
+/// The drain-end deadlock-sample contribution of one parked/pending slot's work.
+/// `unresolved` shows the first `Preferred` (a real source expression) across all stuck slots,
+/// falling back to the first `Fallback` (a generic work-shape tag) only when no slot carries an
+/// expression — so a stuck `(foo bar)` always out-renders a bare `<combine>`.
+enum DeadlockSample {
+    Preferred(String),
+    Fallback(&'static str),
+}
+
+/// Map a stuck slot's `work` to its deadlock-sample contribution. A `Some`-carrier `Wait` (a
+/// dispatch decide) carries a renderable expression summary (`Preferred`); a carrier-less wait
+/// (combine / catch) carries only a generic tag (`Fallback`).
+fn work_deadlock_sample<'run>(work: &NodeWork<'run>) -> DeadlockSample {
+    let NodeWork { carrier, .. } = work;
+    match carrier {
+        Some(carrier) => DeadlockSample::Preferred(carrier.clone()),
+        None => DeadlockSample::Fallback("<wait>"),
+    }
 }
 
 pub(in crate::machine::execute::scheduler) struct NodeStore<'run> {
@@ -79,11 +103,6 @@ pub(in crate::machine::execute::scheduler) struct NodeStore<'run> {
     /// extending `slots`, giving constant scheduler memory across
     /// tail-recursive bodies.
     free_list: Vec<NodeId>,
-    /// Per-consumer side-channel: producers that have fired since this
-    /// slot's last poll. Populated only for `NodeWork::Dispatch`
-    /// consumers; drained on entry to `run_dispatch`. Indexed in
-    /// lockstep with `slots`.
-    recent_wakes: SlotVec<Vec<NodeId>>,
 }
 
 impl<'run> NodeStore<'run> {
@@ -91,7 +110,6 @@ impl<'run> NodeStore<'run> {
         Self {
             slots: SlotVec::new(),
             free_list: Vec::new(),
-            recent_wakes: SlotVec::new(),
         }
     }
 
@@ -107,9 +125,6 @@ impl<'run> NodeStore<'run> {
             None => {
                 let id = NodeId(self.slots.len());
                 self.slots.push(SlotState::PreRun(node));
-                // Grow the wake side-channel in lockstep with `slots` so
-                // every live `NodeId` indexes a valid inner Vec.
-                self.recent_wakes.push(Vec::new());
                 id
             }
         }
@@ -166,16 +181,26 @@ impl<'run> NodeStore<'run> {
     /// `dep_edges[id]` free-time clears in `DepGraph`.
     pub(super) fn free_one(&mut self, id: NodeId) {
         self.slots[id] = SlotState::Free;
-        self.recent_wakes[id].clear();
         self.free_list.push(id);
     }
 
+    /// The alias target of a spliced-out bare-name forward, or `None`. The single follow step the
+    /// `Scheduler`-level [`resolve_alias`](super::Scheduler::resolve_alias) walks; resolution lives
+    /// there (with `DepGraph`), not in the store. See [`scheduler::splice`](super::splice).
+    pub(super) fn alias_target(&self, id: NodeId) -> Option<NodeId> {
+        match self.slots.get(id) {
+            Some(SlotState::Aliased(to)) => Some(*to),
+            _ => None,
+        }
+    }
+
+    /// Raw readiness — callers pass an already alias-resolved id.
     pub(super) fn is_result_ready(&self, id: NodeId) -> bool {
         matches!(self.slots.get(id), Some(SlotState::Done(_)))
     }
 
-    /// Only safe on IDs whose slot has been finalized; internal slots may
-    /// have been eagerly freed by their parent.
+    /// Only safe on IDs whose slot has been finalized; internal slots may have been eagerly freed by
+    /// their parent. Raw — callers pass an already alias-resolved id.
     pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
         match &self.slots[id] {
             &SlotState::Done(NodeOutput::Value(c)) => Ok(c),
@@ -202,25 +227,10 @@ impl<'run> NodeStore<'run> {
         for slot in self.slots.iter() {
             if let SlotState::PreRun(node) = slot {
                 count += 1;
-                match &node.work {
-                    NodeWork::Dispatch { expr, state } if expr_sample.is_none() => {
-                        // Parked `Keyworded` slots null out `expr` once a
-                        // Track installs; the working expression lives on
-                        // the state.
-                        let carrier = state.parked_carrier_expr().unwrap_or(expr);
-                        expr_sample = Some(carrier.summarize());
-                    }
-                    NodeWork::Combine { .. } if fallback_sample.is_none() => {
-                        fallback_sample = Some("<combine>".to_string());
-                    }
-                    NodeWork::DispatchCombine { .. } if fallback_sample.is_none() => {
-                        fallback_sample = Some("<dispatch-combine>".to_string());
-                    }
-                    NodeWork::Catch { .. } if fallback_sample.is_none() => {
-                        fallback_sample = Some("<catch>".to_string());
-                    }
-                    NodeWork::Lift(_) if fallback_sample.is_none() => {
-                        fallback_sample = Some("<lift>".to_string());
+                match work_deadlock_sample(&node.work) {
+                    DeadlockSample::Preferred(s) if expr_sample.is_none() => expr_sample = Some(s),
+                    DeadlockSample::Fallback(s) if fallback_sample.is_none() => {
+                        fallback_sample = Some(s.to_string());
                     }
                     _ => {}
                 }
@@ -251,54 +261,12 @@ impl<'run> NodeStore<'run> {
         !matches!(self.slots[id], SlotState::Done(_))
     }
 
-    /// Notify-walk transition: if `consumer` is `Lift(Pending(producer))`,
-    /// stamp it to `Lift(Ready(_))` by cloning the producer's terminal.
-    /// `Err` goes through `clone_for_propagation`. No-op otherwise.
-    pub(super) fn stamp_lift_ready(&mut self, consumer: NodeId, producer: NodeId) {
-        let is_lift_pending = matches!(
-            &self.slots[consumer],
-            SlotState::PreRun(node)
-                if matches!(&node.work, NodeWork::Lift(LiftState::Pending(from)) if *from == producer),
-        );
-        if !is_lift_pending {
-            return;
-        }
-        let stamped = match &self.slots[producer] {
-            &SlotState::Done(NodeOutput::Value(v)) => NodeOutput::Value(v),
-            SlotState::Done(NodeOutput::Err(e)) => NodeOutput::Err(e.clone_for_propagation()),
-            _ => panic!("producer just finalized"),
-        };
-        if let SlotState::PreRun(node) = &mut self.slots[consumer] {
-            if let NodeWork::Lift(state) = &mut node.work {
-                *state = LiftState::Ready(stamped);
-            }
-        }
-    }
-
-    /// Record that `producer` just terminalized into the consumer slot's
-    /// `recent_wakes`. No-op unless `consumer` is `PreRun` with
-    /// `NodeWork::Dispatch` — `Combine` / `Catch` / `Lift` run a fixed
-    /// closure on counter-zero and don't need per-edge wake attribution.
-    pub(super) fn push_recent_wake(&mut self, consumer: NodeId, producer: NodeId) {
-        let is_dispatch_prerun = matches!(
-            &self.slots[consumer],
-            SlotState::PreRun(node) if matches!(&node.work, NodeWork::Dispatch { .. }),
-        );
-        if !is_dispatch_prerun {
-            return;
-        }
-        self.recent_wakes[consumer].push(producer);
-    }
-
-    /// Drain the producers that fired since the slot's last poll. Called by
-    /// `run_dispatch` on entry via `Scheduler::take_recent_wakes`; the
-    /// side-channel stays empty for non-`Dispatch` work by construction in
-    /// `push_recent_wake`.
-    pub(in crate::machine::execute::scheduler) fn take_recent_wakes(
-        &mut self,
-        consumer: NodeId,
-    ) -> Vec<NodeId> {
-        std::mem::take(&mut self.recent_wakes[consumer])
+    /// Splice a bare-name forward out: the running slot becomes an alias of `producer` (a
+    /// downstream real producer). `read_result` / `is_result_ready` follow the alias; the slot's
+    /// consumers were already moved onto `producer`'s notify list, so this just records the
+    /// redirect. See [`Outcome::Forward`](super::super::outcome::Outcome).
+    pub(super) fn alias(&mut self, id: NodeId, producer: NodeId) {
+        self.slots[id] = SlotState::Aliased(producer);
     }
 
     // --- Test-only helpers for synthetic-state setup. ---
@@ -340,5 +308,40 @@ impl<'run> NodeStore<'run> {
             Some(SlotState::PreRun(node)) => Some(node.chain.clone()),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_wait<'r>(carrier: Option<String>) -> NodeWork<'r> {
+        NodeWork {
+            deps: Vec::new(),
+            park_count: 0,
+            cont: Box::new(|_view, _results, _idx| unreachable!("sample test never runs")),
+            carrier,
+        }
+    }
+
+    #[test]
+    fn some_carrier_wait_prefers_the_carrier() {
+        let work = sample_wait(Some("PARKED-EXPR".to_string()));
+        assert!(
+            matches!(work_deadlock_sample(&work), DeadlockSample::Preferred(s) if s.contains("PARKED")),
+            "a Some-carrier Wait (a dispatch decide) must surface its carrier",
+        );
+    }
+
+    #[test]
+    fn carrier_less_wait_falls_back_to_a_tag() {
+        let work = sample_wait(None);
+        assert!(
+            matches!(
+                work_deadlock_sample(&work),
+                DeadlockSample::Fallback("<wait>")
+            ),
+            "a carrier-less Wait must surface a generic tag, not an empty sample",
+        );
     }
 }

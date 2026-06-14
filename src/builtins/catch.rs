@@ -16,7 +16,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // CATCH yields `Result {Ok :Any, Error :KError}` — `Any` covers only the unpredictable
     // `Ok` payload, the `Error` arm is the `KError` carrier. `result::register` runs first, so
     // the `Result` `SetRef` resolves here. This is a documentary contract: the catch finish
-    // produces a `BodyResult::Value` (never a `ReturnContract`), so the declared return is not
+    // produces an `Outcome::Done(Value)` (never a `ReturnContract`), so the declared return is not
     // validated against the runtime value, and the throwaway `kerror_ktype()` identity is fine.
     let result_ctor = match scope.resolve_type("Result") {
         Some(kt @ KType::SetRef { .. }) => kt.clone(),

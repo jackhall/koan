@@ -466,7 +466,7 @@ boundary.
 
 This makes element-only-differing overloads (`:(LIST OF Number)` vs `:(LIST OF Str)`)
 dispatchable across the forms a container argument takes. Admission is
-strict-only, driven by a per-`run_dispatch` `bare_outcomes` cache —
+strict-only, driven by a per-dispatch-poll `bare_outcomes` cache —
 [`signature_admits_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
 reads each bare-name slot's cached
 [`NameOutcome`](../../src/machine/execute/dispatch/resolve_dispatch.rs) once and
@@ -625,9 +625,9 @@ dict (see [type-language-via-dispatch.md § Record-type sigil](type-language-via
   time. A nested `MATCH` / `TRY` arm whose body tail-calls a function is checked
   against the callee's contract, not the arm's `-> :T`.
 - **Value-returning builtins are not runtime-checked.** They return through
-  `BodyResult::Value` with no slot frame, so the runtime check has nowhere to
+  a `Done` value with no slot frame, so the runtime check has nowhere to
   attach; their declared return types are honest but unenforced. `MATCH` / `TRY`
-  are the exception — they return through `BodyResult::Tail` carrying a
+  are the exception — they return through an `Action::Tail` carrying a
   `ReturnContract::Arm`, so their `-> :T` is enforced.
 The two-phase execution work in [open-work.md](open-work.md) closes both
 uniformly.

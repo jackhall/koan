@@ -66,7 +66,7 @@ What's shipped that the open items below build on:
   slot's own `Node.frame` cart — no fabricated run-length `&'a` persists across a TCO reset.
   The frame re-anchor then landed in full: the free `&'run` scope fabrication at the read
   boundary is deleted, a within-step frame lifetime `'s` (`'a: 's`) threads
-  `run_dispatch`/`BuiltinFn`/`SchedulerHandle`, and a slot's scope is now read on demand via
+  `run_dispatch`/`SchedulerView`/`BuiltinFn`, and a slot's scope is now read on demand via
   [`Scheduler::current_scope`](../src/machine/execute/scheduler.rs) through the witness-bounded
   [`CallArena::scope_bounded`](../src/machine/core/arena.rs) brand (the post-step loop reads it
   through a `PostStep` token off the slot's returned frame). The sole surviving free re-exposure
@@ -147,16 +147,37 @@ What's shipped that the open items below build on:
   documentary `:(Result Any KError)` rather than a nominal-family wildcard. See
   [design/typing/ktype.md](../design/typing/ktype.md) and
   [design/typing/user-types.md](../design/typing/user-types.md).
-- *Dispatcher pulled out of the scheduler via a write-effect contract.* The dispatch tree now
+- *Dispatcher pulled out of the scheduler via a write-effect contract.* The dispatch tree
   mirrors the builtin `Action` / `run_action` split: a shape handler *decides* against a
-  read-only [`DispatchCx`](../src/machine/execute/dispatch/ctx.rs) and *returns* its scheduler
-  mutations as a [`DispatchOutcome`](../src/machine/execute/dispatch/outcome.rs) effect that a
-  [harness](../src/machine/execute/dispatch/harness.rs) interprets — so `Scheduler` is the **sole**
-  `SchedulerHandle` impl and no dispatch handler holds `&mut Scheduler`. Eager-subs is modelled
-  as the dispatcher's own `DispatchCombine`: deps declared, the `Future`-cell splice lives in the
-  finish, and the scheduler stays splice-unaware. A builtin invoked mid-dispatch routes through
-  the shared action harness, reading the dispatcher's ambient frame/chain off the raw scheduler.
+  read-only view and *returns* its scheduler mutations as an
+  [`Outcome`](../src/machine/execute/outcome.rs) effect that a
+  [harness](../src/machine/execute/dispatch/harness.rs) interprets — so no dispatch handler
+  holds `&mut Scheduler`. Eager-subs is modelled as the dispatcher's own `Combine` (the same
+  N→1 shape the action harness installs): deps declared, the `Future`-cell splice lives in the
+  finish, and the scheduler stays splice-unaware. A builtin invoked mid-dispatch routes through the shared action harness,
+  reading the dispatcher's ambient frame/chain off the view.
   See [design/execution-model.md § The dispatcher / scheduler boundary](../design/execution-model.md#the-dispatcher--scheduler-boundary).
+- *Unified scheduler interface.* Every scheduler-facing step — a dispatch decide, a finish, a
+  builtin body, an invoke — decides against one read-only
+  [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) and returns one
+  [`Outcome`](../src/machine/execute/outcome.rs) (`Done` / `Continue` / `ParkThenContinue`, plus
+  the `Invoke` frame-acquisition trigger), with [`Scheduler::apply_outcome`](../src/machine/execute/scheduler.rs)
+  the sole graph writer. The `SchedulerHandle` trait, `BodyResult`, `DispatchOutcome`, and the
+  per-shape `DispatchState` envelope are gone — the scheduler's write methods are inherent and
+  private to the execute tree. A multi-statement FN body's leading statements are now owned deps
+  the activation parks on, so they sequence and cascade-free before the tail reuses the frame —
+  tail recursion with side-effecting statements runs in constant frame space. See
+  [design/execution-model.md § The dispatcher / scheduler boundary](../design/execution-model.md#the-dispatcher--scheduler-boundary).
+- *`NodeWork` carries no AST.* The scheduler's slot-work enum collapsed to its essence: the
+  `Combine` / `DispatchCombine` pair merged to one `Combine` (one finish type, the `<combine>`
+  dep-error label now harness policy), and `Dispatch` / `DispatchResume` merged to one
+  [`NodeWork::Decide`](../src/machine/execute/nodes.rs) — a captured `SchedulerView -> Outcome`
+  closure (birth and resume run through one `run_decide` arm) plus a pre-rendered deadlock-summary
+  string. Binder-install and the recursive eager-sub pre-submission moved out of `Scheduler::submit_node`
+  into a dispatch-layer [`submit_dispatch`](../src/machine/execute/dispatch/submit.rs) chokepoint,
+  so the scheduler never introspects a `KExpression` — `submit_node` is a generic slot allocator
+  and no `NodeWork` variant names an AST. See
+  [design/execution-model.md § Dispatch birth and resume](../design/execution-model.md#dispatch-birth-and-resume).
 
 ## Next items
 
@@ -174,7 +195,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
-- [Unify the scheduler interface around a three-way node outcome](refactor/unify-scheduler-interface.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
@@ -263,7 +283,3 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
-- [Unify the scheduler interface around a three-way node outcome](refactor/unify-scheduler-interface.md)
-  — collapse `SchedulerHandle`, `DispatchCx`, and the raw harness writes onto one read-only view
-  in / three-way `Done` · `Continue` · `ParkThenContinue` outcome out, harness the sole graph
-  writer; folds in the fire-and-forget-leading-statement TCO fix.

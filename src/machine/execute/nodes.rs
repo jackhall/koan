@@ -2,13 +2,10 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::ScopeId;
-use crate::machine::model::ast::KExpression;
 use crate::machine::model::{Carried, KObject, KType};
-use crate::machine::{
-    CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, Scope, TraceFrame,
-};
+use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope};
 
-use super::dispatch::{DispatchCx, DispatchOutcome, DispatchState};
+use super::NodeCont;
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
 /// no further write to that slot occurs until it is freed and reused.
@@ -56,98 +53,32 @@ pub(super) enum NodeStep<'run> {
         function: Option<ReturnContract<'run>>,
         block_entry: Option<ScopeId>,
         /// Body-scope chain index for FN-body / MATCH-arm / TRY-arm tail-replace
-        /// (mirrors [`crate::machine::core::kfunction::body::BodyResult::Tail::body_index`]).
+        /// (mirrors [`Outcome::Continue::body_index`]).
         /// Positions the freshly-pushed block frame at index `N` for multi-statement
         /// tail-into-last; `0` is the single-statement case.
         body_index: usize,
     },
+    /// The slot is spliced out as an alias of `producer` (a bare-name forward whose producer was not
+    /// yet ready). The slot's consumers have already been moved onto `producer`'s notify list; this
+    /// just marks the slot so `read_result` follows through to `producer`. See [`Outcome::Forward`].
+    Alias(NodeId),
 }
 
-/// Host-side closure for a [`NodeWork::DispatchCombine`] slot — the dispatch-side dual of
-/// [`CombineFinish`]. Receives the dep terminals in submission order and a read-only dispatch
-/// view, and returns a [`DispatchOutcome`]: unlike a builtin Combine (whose `BodyResult` finish
-/// cannot re-park), a dispatch finish may resolve, tail-redispatch, or **park again** (e.g. an
-/// overload park on a freshly resolved producer), which the richer outcome expresses. The harness
-/// applies the returned outcome, so the finish — like every decide — issues no graph write itself.
-pub(super) type DispatchCombineFinish<'run> = Box<
-    dyn for<'a> FnOnce(&DispatchCx<'run, 'a>, &[Carried<'run>], usize) -> DispatchOutcome<'run>
-        + 'run,
->;
-
-/// What a scheduler node will run. `Lift` exists because the push/notify model
-/// assumes a single producer slot per result — see [design/execution-model.md §
-/// Lift: push/notify single-producer model](../../../design/execution-model.md#lift-pushnotify-single-producer-model).
-/// `Combine` is the dual of `Bind`: a host-side N→1 combinator that waits on a
-/// fixed set of dep slots and runs a host closure over their resolved values.
-pub(super) enum NodeWork<'run> {
-    /// Resolve and schedule a single expression. `state` carries the
-    /// dispatch slot's per-variant cached state, with `Initialized` as the
-    /// universal birth state and one variant per `DispatchShape` for the
-    /// stateful driver to transition into on first classification.
-    /// `state.init.pre_subs` carries any recursively pre-submitted sub-
-    /// Dispatches keyed by their slot index in `expr.parts`, populated at
-    /// submit time for binder-shaped expressions so a nested binder's
-    /// placeholders install at the outermost submission point; empty
-    /// otherwise. Phase 4 of `run_dispatch` reuses these instead of
-    /// allocating fresh sub-Dispatches for the named slots.
-    Dispatch {
-        expr: KExpression<'run>,
-        state: DispatchState<'run>,
-    },
-    /// `deps` layout is `[park_producers..., owned_subs...]`. `park_count` is the
-    /// size of the park-producer prefix — those slots are sibling producers this
-    /// Combine merely reads at finish-time and does NOT own. Only the
-    /// `deps[park_count..]` suffix gets installed as `DepEdge::Owned` and
-    /// cascade-freed at success; the prefix installs as `Notify` (park) edges.
-    Combine {
-        deps: Vec<NodeId>,
-        park_count: usize,
-        finish: CombineFinish<'run>,
-    },
-    /// Catching dual of a single-dep `Combine`: waits on `from` and hands its terminal
-    /// (Value or Err) to `finish`. `Combine` short-circuits on dep-error before its
-    /// finish runs; `Catch`'s finish always runs so the closure can decide to recover.
-    Catch {
-        from: NodeId,
-        finish: CatchFinish<'run>,
-    },
-    /// Dispatch-side dual of `Combine`: identical dep-resolution and edge layout
-    /// (`[park_producers..., owned_subs...]`, `park_count` the prefix), but the `finish`
-    /// returns a [`NodeStep`] so a dispatch continuation can re-park. Drives the eager-subs /
-    /// head-deferred / constructor park-sites: the scheduler resolves the deps and hands the
-    /// values to a dispatch finish that splices / classifies / invokes, learning nothing about
-    /// the dispatch internals (the splice into a `KExpression` lives entirely in the finish).
-    ///
-    /// `dep_error_frame` is attached to a dep-error short-circuit (before the finish runs) so a
-    /// site that wants to surface the consuming call in the trace (e.g. eager-subs' `<bind>`
-    /// frame keyed off the call expression) can; `None` propagates frameless.
-    DispatchCombine {
-        deps: Vec<NodeId>,
-        park_count: usize,
-        finish: DispatchCombineFinish<'run>,
-        dep_error_frame: Option<TraceFrame>,
-    },
-    Lift(LiftState<'run>),
-}
-
-impl<'run> NodeWork<'run> {
-    /// `Dispatch` in the `Initialized` birth state with empty `pre_subs`.
-    /// Sites that need to carry pre-submitted sub-Dispatches across a
-    /// re-Dispatch go through [`DispatchState::initialized`] directly.
-    pub(super) fn dispatch(expr: KExpression<'run>) -> Self {
-        NodeWork::Dispatch {
-            expr,
-            state: DispatchState::initialized(Vec::new()),
-        }
-    }
-}
-
-/// `Pending(from)` parks on `from`'s terminal; `Ready(output)` holds the stamped
-/// producer terminal. The `Pending → Ready` transition is the sole responsibility
-/// of `Scheduler::finalize`; a queued Lift in `Pending` indicates a wake misfire.
-pub(super) enum LiftState<'run> {
-    Pending(NodeId),
-    Ready(NodeOutput<'run>),
+/// What a scheduler node will run: wait on `deps`, then run `cont` over their resolved terminals
+/// (passed as `Result`s — the continuation, not the handler, decides short-circuit vs recover).
+/// `deps` layout is `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix
+/// (`Notify` edges, kept alive), the suffix installs `Owned` (cascade-freed at success). A dispatch
+/// decide (birth or resume) waits on no owned deps and ignores the results; a combine reads its dep
+/// values; a catch reads its single dep's `Result`. `carrier` is the deadlock-report sample (a
+/// decide's expression summary, else `None`). The per-family behavior lives in `cont`, built by the
+/// [`short_circuit`](super::outcome::short_circuit) / [`catch_cont`](super::outcome::catch_cont) /
+/// [`ignore_results`](super::outcome::ignore_results) combinators, so the node itself never
+/// branches and names no AST.
+pub(super) struct NodeWork<'run> {
+    pub(in crate::machine::execute) deps: Vec<NodeId>,
+    pub(in crate::machine::execute) park_count: usize,
+    pub(in crate::machine::execute) cont: NodeCont<'run>,
+    pub(in crate::machine::execute) carrier: Option<String>,
 }
 
 /// Slot-stored scope handle. `Anchored` holds a run-lifetime borrow directly — a genuinely
@@ -214,58 +145,14 @@ pub(super) struct Node<'run> {
     pub(super) chain: Rc<LexicalFrame>,
 }
 
-/// Owned `NodeId`s a node must read before running, or `None` if it has no
-/// owned read-deps. `Dispatch` spawns rather than reads, so returns `None`. For
-/// `Combine`, only the `deps[park_count..]` suffix is owned; the park-producer
-/// prefix is installed separately as `Notify` edges by `Scheduler::add`.
-pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Option<Vec<NodeId>> {
-    match work {
-        // `pre_subs` ride along structurally on the slot's `DispatchState`; they are
-        // not read-deps of the Dispatch itself.
-        NodeWork::Dispatch { .. } => None,
-        NodeWork::Combine {
-            deps, park_count, ..
-        } => Some(deps[*park_count..].to_vec()),
-        NodeWork::DispatchCombine {
-            deps, park_count, ..
-        } => Some(deps[*park_count..].to_vec()),
-        NodeWork::Catch { from, .. } => Some(vec![*from]),
-        NodeWork::Lift(LiftState::Pending(from)) => Some(vec![*from]),
-        NodeWork::Lift(LiftState::Ready(_)) => None,
-    }
+/// Owned `NodeId`s a node must read before running: the `deps[park_count..]` suffix. The
+/// park-producer prefix is installed separately as `Notify` edges.
+pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Vec<NodeId> {
+    work.deps[work.park_count..].to_vec()
 }
 
-/// Park-producer prefix for a `Combine` (sibling slots whose values it splices
-/// but does not own). Empty for every other work shape. The caller installs
-/// each entry as a `Notify` edge separately from the Owned-edge install path.
+/// Park-producer prefix (sibling slots whose values the node reads but does not own). The caller
+/// installs each as a `Notify` edge separately from the Owned path.
 pub(super) fn work_park_producers<'run, 'b>(work: &'b NodeWork<'run>) -> &'b [NodeId] {
-    match work {
-        NodeWork::Combine {
-            deps, park_count, ..
-        } => &deps[..*park_count],
-        NodeWork::DispatchCombine {
-            deps, park_count, ..
-        } => &deps[..*park_count],
-        _ => &[],
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::machine::core::{KError, KErrorKind};
-
-    #[test]
-    fn work_deps_lift_pending_returns_from_node() {
-        let work = NodeWork::Lift(LiftState::Pending(NodeId(7)));
-        assert_eq!(work_deps(&work), Some(vec![NodeId(7)]));
-    }
-
-    #[test]
-    fn work_deps_lift_ready_returns_none() {
-        let work = NodeWork::Lift(LiftState::Ready(NodeOutput::Err(KError::new(
-            KErrorKind::User("stamped".to_string()),
-        ))));
-        assert!(work_deps(&work).is_none());
-    }
+    &work.deps[..work.park_count]
 }

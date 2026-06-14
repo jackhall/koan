@@ -6,7 +6,7 @@ use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 
 use super::super::lift::{lift_kobject, lift_ktype};
-use super::super::nodes::{CallFrame, LiftState, Node, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{CallFrame, Node, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 use crate::machine::model::Carried;
 
@@ -34,24 +34,13 @@ impl<'run> Scheduler<'run> {
             // contract chain — a deferred-return FN dispatched here skips resolving its own return
             // type (keep-first discards it anyway).
             self.active_in_contract_chain = prev_contract.is_some();
-            let step = match work {
-                NodeWork::Dispatch { expr, state } => {
-                    crate::machine::execute::dispatch::run_dispatch(self, expr, state, idx)
-                }
-                NodeWork::Combine {
-                    deps,
-                    park_count,
-                    finish,
-                } => self.run_combine(deps, park_count, finish, idx),
-                NodeWork::DispatchCombine {
-                    deps,
-                    park_count,
-                    finish,
-                    dep_error_frame,
-                } => self.run_dispatch_combine(deps, park_count, finish, dep_error_frame, idx),
-                NodeWork::Catch { from, finish } => self.run_catch(from, finish, idx),
-                NodeWork::Lift(state) => NodeStep::Done(Self::run_lift(state)),
-            };
+            let NodeWork {
+                deps,
+                park_count,
+                cont,
+                ..
+            } = work;
+            let step = self.run_wait(deps, park_count, cont, idx);
             // The post-step token owns the slot's frame at step end and is the *only* source of
             // the step scope (via `post.step_scope()`), so the wrong-frame read that ambient
             // `active_frame` allowed is unspellable here.
@@ -148,6 +137,13 @@ impl<'run> Scheduler<'run> {
                         self.queues.push_after_replace(idx);
                     }
                 }
+                NodeStep::Alias(producer) => {
+                    // The slot spliced itself out as a bare-name forward: move its consumers onto
+                    // `producer` and alias it for reads. The slot is not re-queued; `producer`'s
+                    // fire wakes the moved consumers, and late parkers resolve the alias when they
+                    // wire in. See `scheduler::splice`.
+                    self.splice_forward(id, producer);
+                }
             }
         }
         // Any slot still `PreRun` after drain is parked on a dependency that can
@@ -166,7 +162,7 @@ impl<'run> Scheduler<'run> {
     /// freed slots are scrubbed from every producer's `notify_list` before the
     /// producer drains.
     ///
-    /// Stamps must all land before any queue push: a later stamp re-reading the
+    /// Wakes must all land before any queue push: a later wake re-reading the
     /// slot must observe the prior transition.
     pub(in crate::machine::execute::scheduler) fn finalize(
         &mut self,
@@ -178,9 +174,7 @@ impl<'run> Scheduler<'run> {
         let drained = self.deps.drain_notify(idx);
         let mut woken: Vec<usize> = Vec::new();
         for (consumer, hit_zero) in drained {
-            self.store.push_recent_wake(NodeId(consumer), id);
             if hit_zero {
-                self.store.stamp_lift_ready(NodeId(consumer), id);
                 woken.push(consumer);
             }
         }
@@ -208,28 +202,6 @@ impl<'run> Scheduler<'run> {
                 stack.push(child);
             }
             self.store.free_one(id);
-        }
-    }
-
-    /// CallFrame / function are left as `None` and `block_entry: None` so the slot's
-    /// existing per-call frame, function label, and chain stay attached when the
-    /// Lift writes its terminal.
-    ///
-    /// After a replay-park, `dep_edges[idx]` can take the mixed shape
-    /// `[Notify(producer), …, Owned(bind_id)]`; `free` handles that correctly via
-    /// its Owned-only recursion.
-    pub(in crate::machine::execute) fn defer_to_lift(
-        &mut self,
-        idx: usize,
-        bind_id: NodeId,
-    ) -> NodeStep<'run> {
-        self.deps.add_owned_edge(bind_id, NodeId(idx));
-        NodeStep::Replace {
-            work: NodeWork::Lift(LiftState::Pending(bind_id)),
-            frame: None,
-            function: None,
-            block_entry: None,
-            body_index: 0,
         }
     }
 }

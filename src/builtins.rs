@@ -1,5 +1,5 @@
-use crate::machine::core::kfunction::{BinderNameFn, Body, BodyResult, KFunction};
-use crate::machine::core::{BindingIndex, KError, Scope};
+use crate::machine::core::kfunction::{BinderNameFn, Body, KFunction};
+use crate::machine::core::{BindingIndex, Scope};
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
@@ -33,10 +33,6 @@ mod val_decl;
 
 #[cfg(test)]
 pub(crate) mod test_support;
-
-pub(crate) fn err<'a>(e: KError) -> BodyResult<'a> {
-    BodyResult::Err(e)
-}
 
 /// Signature-element constructor for a keyword slot.
 pub(crate) fn kw<'a>(s: &str) -> SignatureElement<'a> {

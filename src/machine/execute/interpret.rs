@@ -1,6 +1,6 @@
 use super::scheduler::Scheduler;
 use crate::builtins::default_scope;
-use crate::machine::{KError, RuntimeArena, SchedulerHandle};
+use crate::machine::{KError, RuntimeArena};
 use crate::parse::{parse, parse_with_path};
 
 /// Parse Koan source and run it on a fresh `RuntimeArena`; all values allocated by the

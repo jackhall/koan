@@ -12,9 +12,13 @@ mod harness;
 mod interpret;
 mod lift;
 mod nodes;
+mod outcome;
 mod scheduler;
 
 pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path};
+pub(in crate::machine::execute) use outcome::{
+    catch_cont, ignore_results, short_circuit, CatchFinish, CombineFinish, NodeCont,
+};
 pub use scheduler::Scheduler;
 
 pub(crate) use dispatch::{defer_field_list_action, resolve_type_leaf_carrier, TypeLeafCarrier};

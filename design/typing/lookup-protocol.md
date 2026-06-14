@@ -129,7 +129,7 @@ check fires:
   slot type during dispatch admission. The strict-only admission
   rules table lives at
   [elaboration.md § Strict admission rules](elaboration.md#strict-admission-rules);
-  the cache it consumes is built once per `run_dispatch` and shared
+  the cache it consumes is built once per dispatch poll and shared
   between the strict admit pass and the post-pick splice walk.
 - [`KType::is_more_specific_than`](../../src/machine/model/types/ktype_predicates.rs)
   — specificity ranking. Ranks two slot types when multiple overloads
@@ -147,7 +147,7 @@ check fires:
 
 The dispatch-admission glue is
 [`signature_admits_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs),
-which walks slot/part pairs and consults the per-`run_dispatch`
+which walks slot/part pairs and consults the per-dispatch-poll
 `bare_outcomes` cache — the strict-admission rules table at
 [elaboration.md § Strict admission rules](elaboration.md#strict-admission-rules)
 spells out which `NameOutcome` arms admit via `accepts_part`, which

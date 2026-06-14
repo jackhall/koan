@@ -1,6 +1,7 @@
 //! combine, defer_to, and tail-call slot reuse.
 
-use super::super::super::nodes::{NodeOutput, NodeWork};
+use super::super::super::nodes::NodeOutput;
+use super::super::super::outcome::Outcome;
 use super::super::Scheduler;
 use crate::builtins::default_scope;
 use crate::machine::model::ast::KExpression;
@@ -13,8 +14,8 @@ use super::let_expr;
 #[test]
 fn combine_waits_on_deps_then_runs_finish() {
     // Pins that Combine waits on every dep before invoking finish and that
-    // finish-returned BodyResult::Value lands in the slot's result.
-    use crate::machine::{BodyResult, CombineFinish};
+    // finish-returned Outcome::Done(Value) lands in the slot's result.
+    use crate::machine::execute::CombineFinish;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
@@ -24,24 +25,24 @@ fn combine_waits_on_deps_then_runs_finish() {
         let a = match results[0] {
             Carried::Object(KObject::Number(n)) => *n,
             _ => {
-                return BodyResult::Err(crate::machine::KError::new(
+                return Outcome::Done(NodeOutput::Err(crate::machine::KError::new(
                     crate::machine::KErrorKind::ShapeError("a not number".into()),
-                ))
+                )))
             }
         };
         let b = match results[1] {
             Carried::Object(KObject::Number(n)) => *n,
             _ => {
-                return BodyResult::Err(crate::machine::KError::new(
+                return Outcome::Done(NodeOutput::Err(crate::machine::KError::new(
                     crate::machine::KErrorKind::ShapeError("b not number".into()),
-                ))
+                )))
             }
         };
         let allocated = _sched
             .current_scope()
             .arena
             .alloc_object(KObject::KString(format!("{a}+{b}")));
-        BodyResult::value(allocated)
+        Outcome::Done(NodeOutput::Value(Carried::Object(allocated)))
     });
     let combine_id = sched.add_combine(vec![dep_a, dep_b], vec![], scope, finish);
     sched.execute().unwrap();
@@ -52,7 +53,8 @@ fn combine_waits_on_deps_then_runs_finish() {
 fn combine_short_circuits_on_dep_error() {
     // Pins that finish does not run when any dep errored, and that the
     // propagated error carries a "<combine>" frame.
-    use crate::machine::{BodyResult, CombineFinish, KError, KErrorKind};
+    use crate::machine::execute::CombineFinish;
+    use crate::machine::{KError, KErrorKind};
     use std::cell::Cell;
     use std::rc::Rc;
     let arena = RuntimeArena::new();
@@ -61,7 +63,7 @@ fn combine_short_circuits_on_dep_error() {
 
     // Allocate two placeholder Dispatch slots, drain the queue so execute()
     // doesn't revisit them, then overwrite their results directly.
-    let mk_dispatch = || NodeWork::dispatch(KExpression::new(Vec::new()));
+    let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
     let dep_ok = sched.add(mk_dispatch(), scope);
     let dep_err = sched.add(mk_dispatch(), scope);
     sched.store.clear_node(dep_ok);
@@ -81,7 +83,7 @@ fn combine_short_circuits_on_dep_error() {
     let invoked_clone = Rc::clone(&invoked);
     let finish: CombineFinish = Box::new(move |_sched, _results| {
         invoked_clone.set(true);
-        BodyResult::value(value)
+        Outcome::Done(NodeOutput::Value(Carried::Object(value)))
     });
     let combine_id = sched.add_combine(vec![dep_ok, dep_err], vec![], scope, finish);
     sched.execute().unwrap();
@@ -100,8 +102,8 @@ fn combine_short_circuits_on_dep_error() {
 
 #[test]
 fn defer_to_lifts_slot_terminal_off_combine_id() {
-    // Pins the binder-body wrap-up shape MODULE / SIG use: a body returning
-    // `BodyResult::DeferTo(combine_id)` leaves its slot with the Combine's terminal.
+    // Pins the binder-body wrap-up shape MODULE / SIG use: an `Action::Combine` body parks the
+    // slot as a Combine and leaves it with the Combine's terminal.
     use crate::builtins::{default_scope, register_builtin};
     use crate::machine::core::kfunction::action::{Action, BodyCtx, Cont};
     use crate::machine::model::ast::ExpressionPart;
@@ -150,7 +152,7 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
 
 #[test]
 fn tail_call_reuses_node_slot_in_place() {
-    // Pins that `BodyResult::Tail` rewrites the caller's slot in place rather
+    // Pins that an `Outcome::Continue` tail rewrites the caller's slot in place rather
     // than spawning a fresh one (verified via sched.len() == 1 below).
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));

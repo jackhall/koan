@@ -10,10 +10,11 @@ destructures, and [`TRY-WITH`](#try-with) / [`CATCH`](#catch) for recovering
 from interpreter faults. Remaining surface work — stdlib `Result` helpers and
 REPL continue-on-error — is tracked under [Open work](#open-work).
 
-## `BodyResult::Err` and `KError`
+## `Done(Err)` and `KError`
 
-A builtin body returns one of `Value`, `Tail`, or `Err(KError)` (see
-[execution-model.md](execution-model.md)).
+A builtin body's result lowers to an `Outcome`: a final value or an error
+both ride `Done`, a tail rides `Continue` (see
+[execution-model.md](execution-model.md)). A failure is `Done(Err(KError))`.
 
 [`KError`](../src/machine/core/kerror.rs) is a struct:
 

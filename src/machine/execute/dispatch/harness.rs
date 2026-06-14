@@ -1,38 +1,19 @@
 //! The dispatch write-harness — the peer of
 //! [`run_action`](super::super::harness::run_action) for the dispatcher.
 //!
-//! [`apply_dispatch_outcome`] is the one place that turns a decided [`DispatchOutcome`]
-//! into the scheduler graph writes it implies and the terminal [`NodeStep`]. A shape
-//! handler decides against a read-only [`DispatchCx`](super::ctx::DispatchCx) and returns an
-//! outcome; this applies it. The harness holds the sole `&mut Scheduler` on the dispatch side.
+//! [`Scheduler::apply_outcome`] is the one place that turns a decided [`Outcome`] into the
+//! scheduler graph writes it implies and the terminal [`NodeStep`]. A shape handler decides
+//! against a read-only [`SchedulerView`](super::ctx::SchedulerView) and returns an outcome; this
+//! applies it. The harness holds the sole `&mut Scheduler` on the dispatch side.
 
-use crate::machine::core::kfunction::{BodyResult, SchedulerHandle};
-use crate::machine::model::ast::KExpression;
-use crate::machine::model::Carried;
-use crate::machine::NodeId;
+use crate::machine::core::kfunction::action::{Dep, DepPlacement, FramePlacement};
+use crate::machine::{NodeId, TraceFrame};
 
-use super::super::nodes::{DispatchCombineFinish, LiftState, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
+use super::super::{catch_cont, ignore_results, short_circuit};
 use super::super::scheduler::Scheduler;
-use super::ctx::DispatchCx;
-use super::outcome::{DispatchDep, DispatchOutcome};
-use super::DispatchState;
-
-// The park edges a `ParkSelf` adds are `Notify` (sibling producers the slot waits on), never
-// owned — `add_park_edge` is the right primitive.
-
-/// Run a [`NodeWork::DispatchCombine`] finish at wake: build the read-only view, decide, and
-/// apply the returned outcome — the bridge `run_dispatch_combine` (the scheduler wake side) calls
-/// so the `read_view` → decide → apply dance stays inside the dispatch harness. The finish sees a
-/// `&DispatchCx`, so it — like every decide — issues no graph write itself.
-pub(in crate::machine::execute) fn run_dispatch_combine_finish<'run>(
-    sched: &mut Scheduler<'run>,
-    finish: DispatchCombineFinish<'run>,
-    values: &[Carried<'run>],
-    idx: usize,
-) -> NodeStep<'run> {
-    let outcome = finish(&DispatchCx::new(sched), values, idx);
-    apply_dispatch_outcome(sched, outcome, idx)
-}
+use super::ctx::SchedulerView;
+use super::{Continuation, DispatchDep, Outcome};
 
 /// Reclaim the producers a decide phase consumed inline (a ready `Reuse` spliced into a
 /// `working_expr`). Deferred off the decide phase so the handler stays read-only; the harness
@@ -43,145 +24,210 @@ fn drain_free(sched: &mut Scheduler<'_>, free: Vec<usize>) {
     }
 }
 
-/// Interpret a handler's [`DispatchOutcome`] into the scheduler effect it names and return the
-/// slot's [`NodeStep`]. This is the dispatch-side write owner: it holds the `&mut Scheduler`, so a
-/// decide handler never does. Grows one arm per outcome variant.
-pub(in crate::machine::execute) fn apply_dispatch_outcome<'run>(
-    sched: &mut Scheduler<'run>,
-    outcome: DispatchOutcome<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
-    match outcome {
-        DispatchOutcome::Terminal(output) => NodeStep::Done(output),
-        DispatchOutcome::Combine {
-            deps,
-            dep_error_frame,
-            finish,
-            free,
-        } => {
-            // Reclaim the Reuse producers the decide phase consumed inline before declaring deps.
-            drain_free(sched, free);
-            // Submit each fresh dep (an `Existing` is already in the graph), install it as an
-            // owned edge so it cascade-frees on resolve, and park the slot on the lot as a
-            // `DispatchCombine`. Submission order is preserved, so `finish` reads `results[k]`
-            // for the k-th declared dep.
-            let dep_ids: Vec<NodeId> = deps
-                .into_iter()
-                .map(|dep| {
-                    let id = match dep {
-                        DispatchDep::Dispatch(expr) => sched.add_dispatch_here(expr),
-                        DispatchDep::ListLit(items) => sched.schedule_list_literal(items),
-                        DispatchDep::DictLit(pairs) => sched.schedule_dict_literal(pairs),
-                        DispatchDep::RecordLit(fields) => sched.schedule_record_literal(fields),
-                        DispatchDep::Existing(id) => id,
-                    };
-                    sched.add_owned_edge(id, NodeId(idx));
-                    id
-                })
-                .collect();
-            NodeStep::Replace {
-                work: NodeWork::DispatchCombine {
-                    deps: dep_ids,
-                    park_count: 0,
-                    finish,
-                    dep_error_frame,
-                },
-                frame: None,
-                function: None,
-                block_entry: None,
-                body_index: 0,
-            }
-        }
-        DispatchOutcome::ParkSelf { producers, state } => {
-            for producer in producers {
-                sched.add_park_edge(producer, NodeId(idx));
-            }
-            replace_with_parked_dispatch(state)
-        }
-        DispatchOutcome::Invoke {
-            picked,
-            working_expr,
-            free,
-        } => {
-            // The dispatch→execution hand-off: run the resolved call against the raw
-            // `&mut Scheduler` and lower its body onto the slot.
-            drain_free(sched, free);
-            let body = super::exec::invoke(sched, picked, working_expr);
-            lower_body_result(sched, body, idx)
-        }
-        DispatchOutcome::Redispatch { working_expr, free } => {
-            drain_free(sched, free);
-            let outcome =
-                super::keyworded::KeywordedState::finish(&DispatchCx::new(sched), working_expr, idx);
-            apply_dispatch_outcome(sched, outcome, idx)
-        }
-        DispatchOutcome::ParkLift { producer } => {
-            // Notify edge, not Owned: the producer is a sibling slot we only wait on. The slot
-            // then becomes a pending `Lift`, which adopts the producer's resolved value directly.
-            sched.add_park_edge(producer, NodeId(idx));
-            NodeStep::Replace {
-                work: NodeWork::Lift(LiftState::Pending(producer)),
-                frame: None,
-                function: None,
-                block_entry: None,
-                body_index: 0,
-            }
-        }
-        DispatchOutcome::BecomeDispatch(inner) => NodeStep::Replace {
-            work: NodeWork::dispatch(inner),
-            frame: None,
-            function: None,
-            block_entry: None,
-            body_index: 0,
-        },
-        DispatchOutcome::ElaborateRecordType { fields, chain } => {
-            // Execution layer: the field-list elaborator holds `&mut Scheduler` and may defer
-            // through a Combine; lower its body onto the slot like any resolved call.
-            let body = super::field_list::elaborate_record_value(sched, fields, chain);
-            lower_body_result(sched, body, idx)
+impl<'run> Scheduler<'run> {
+    /// Realize a [`Catch`](Continuation::Catch)'s single watched [`Dep`] to a producer `NodeId`.
+    /// Unlike a Combine body, an `InScope` watched expr enters a fresh **single-statement** block
+    /// (TRY's `child_under` body scope) so an inner `LET` stays local; `Existing` is already a
+    /// producer the builtin found in scope.
+    fn realize_catch_dep(&mut self, dep: Dep<'run>) -> NodeId {
+        match dep {
+            Dep::Existing(id) => id,
+            Dep::Dispatch { expr, placement } => match placement {
+                DepPlacement::OwnScope => self.dispatch_here(expr),
+                DepPlacement::ActiveFrame => self.add_dispatch_in_frame(expr),
+                DepPlacement::InScope(scope) => self
+                    .enter_block(scope.id, vec![expr], scope)
+                    .into_iter()
+                    .next()
+                    .expect("enter_block of one statement yields one node"),
+            },
         }
     }
-}
 
-/// Lower a resolved body's [`BodyResult`] onto the slot's [`NodeStep`] — shared by the `Invoke`
-/// and `ElaborateRecordType` arms (a value/error completes the slot, a `Tail` re-dispatches, a
-/// `DeferTo` parks on the named lift).
-fn lower_body_result<'run>(
-    sched: &mut Scheduler<'run>,
-    body: BodyResult<'run>,
-    idx: usize,
-) -> NodeStep<'run> {
-    match body {
-        BodyResult::Value(c) => NodeStep::Done(NodeOutput::Value(c)),
-        BodyResult::Tail {
-            expr,
-            frame,
-            function,
-            block_entry,
-            body_index,
-        } => NodeStep::Replace {
-            work: NodeWork::dispatch(expr),
-            frame,
-            function,
-            block_entry,
-            body_index,
-        },
-        BodyResult::DeferTo(id) => sched.defer_to_lift(idx, id),
-        BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
-    }
-}
-
-/// Replace a slot with a parked `Dispatch` carrying `state`: drop the entry expression to an empty
-/// placeholder (the state carries the evolving `working_expr` from here on).
-fn replace_with_parked_dispatch<'run>(state: DispatchState<'run>) -> NodeStep<'run> {
-    NodeStep::Replace {
-        work: NodeWork::Dispatch {
-            expr: KExpression::new(Vec::new()),
-            state,
-        },
-        frame: None,
-        function: None,
-        block_entry: None,
-        body_index: 0,
+    /// Interpret an [`Outcome`] into the scheduler effect it names and return the slot's
+    /// [`NodeStep`]. This is the sole graph writer the dispatch side reaches — a decide handler
+    /// never holds `&mut Scheduler`.
+    pub(in crate::machine::execute) fn apply_outcome(
+        &mut self,
+        outcome: Outcome<'run>,
+        idx: usize,
+    ) -> NodeStep<'run> {
+        match outcome {
+            Outcome::Done(output) => NodeStep::Done(output),
+            Outcome::Continue {
+                work,
+                frame,
+                contract,
+                block_entry,
+                body_index,
+            } => {
+                // Resolve the frame placement to the cart the Replace installs: reuse the slot's
+                // ping-pong reserve, take a builtin-minted cart, or keep the current cart. The
+                // body's leading statements are never dispatched here — a producer with leading
+                // statements parks on them as owned `BodyBlock` deps and emits this `Continue` only
+                // from the resolving finish (see `dispatch/exec.rs` and `execute/harness.rs`).
+                let frame = match frame {
+                    FramePlacement::ReuseReserve { outer } => Some(self.acquire_tail_frame(outer)),
+                    FramePlacement::FreshChild { frame } => Some(frame),
+                    FramePlacement::Inherit => None,
+                };
+                NodeStep::Replace {
+                    work,
+                    frame,
+                    function: contract,
+                    block_entry,
+                    body_index,
+                }
+            }
+            Outcome::ParkThenContinue {
+                deps,
+                park_count,
+                cont,
+                dep_error_frame,
+                free,
+            } => {
+                // Reclaim the Reuse producers the decide phase consumed inline before declaring
+                // deps.
+                drain_free(self, free);
+                // Submit each fresh dep (an `Existing` is already in the graph). Submission order
+                // is preserved, so a finish reads `results[k]` for the k-th declared dep — except
+                // an `InScope`-placed `Dispatch`, whose multi-statement body fans out to one
+                // producer per statement (the only one-dep-to-many case, so this is a loop not a
+                // `map`).
+                let mut dep_ids: Vec<NodeId> = Vec::with_capacity(deps.len());
+                for dep in deps {
+                    match dep {
+                        DispatchDep::Dispatch { expr, placement } => match placement {
+                            DepPlacement::OwnScope => dep_ids.push(self.dispatch_here(expr)),
+                            DepPlacement::ActiveFrame => {
+                                dep_ids.push(self.add_dispatch_in_frame(expr))
+                            }
+                            DepPlacement::InScope(scope) => {
+                                dep_ids.extend(self.enter_body_block(scope, expr))
+                            }
+                        },
+                        DispatchDep::ListLit(items) => {
+                            dep_ids.push(self.schedule_list_literal(items))
+                        }
+                        DispatchDep::DictLit(pairs) => {
+                            dep_ids.push(self.schedule_dict_literal(pairs))
+                        }
+                        DispatchDep::RecordLit(fields) => {
+                            dep_ids.push(self.schedule_record_literal(fields))
+                        }
+                        DispatchDep::BodyBlock { frame, statements } => {
+                            dep_ids.extend(self.dispatch_body_statements(&frame, statements))
+                        }
+                        DispatchDep::Existing(id) => dep_ids.push(id),
+                    }
+                }
+                // Edge install: the `[..park_count]` prefix is notify-parked (sibling producers
+                // the slot waits on but doesn't own); the `[park_count..]` suffix is owned
+                // (cascade-freed on resolve). Each continuation sets `park_count` to match: a
+                // dispatch `Finish` owns all its deps (`park_count: 0`); an action `Combine` parks
+                // its `Existing` prefix and owns its `Dispatch` suffix; `Replay` parks every
+                // producer (`park_count: len`); a bare-name `Forward` parks its one producer
+                // (`park_count: 1`) while a deferred-combine `Forward` owns it (`park_count: 0`).
+                // (`Catch` declares no deps here — it realizes and owns its single watched dep in
+                // the `cont` match below.)
+                for (i, id) in dep_ids.iter().enumerate() {
+                    if i < park_count {
+                        self.add_park_edge(*id, NodeId(idx));
+                    } else {
+                        self.add_owned_edge(*id, NodeId(idx));
+                    }
+                }
+                let work = match cont {
+                    // A dispatch finish carries its own dep-error frame (the consuming call's, or
+                    // `None` frameless); an action/literal combine is labelled `<combine>` — the
+                    // one place that policy lives. Both install the same `Wait` over the realized
+                    // deps (edges already installed by the loop above), the short-circuit baked into
+                    // the continuation by `short_circuit`.
+                    Continuation::Finish(finish) => NodeWork {
+                        deps: dep_ids,
+                        park_count,
+                        cont: short_circuit(dep_error_frame, finish),
+                        carrier: None,
+                    },
+                    Continuation::Combine(finish) => NodeWork {
+                        deps: dep_ids,
+                        park_count,
+                        cont: short_circuit(Some(TraceFrame::bare("<combine>", "combine")), finish),
+                        carrier: None,
+                    },
+                    // The action-harness catch carries its single watched dep unrealized (its
+                    // placement differs from a Combine body's fan-out); realize and own it here.
+                    // `catch_cont` runs the finish without short-circuiting on a dep error.
+                    Continuation::Catch { watched, finish } => {
+                        let from = self.realize_catch_dep(watched);
+                        self.add_owned_edge(from, NodeId(idx));
+                        NodeWork {
+                            deps: vec![from],
+                            park_count: 0,
+                            cont: catch_cont(finish),
+                            carrier: None,
+                        }
+                    }
+                    // The resume closure carries the evolving `working_expr` from here on; the
+                    // `carrier` it travels with is only the deadlock-summary sample. A decide takes
+                    // no dep values, so `ignore_results` drops the (park-only) results slice.
+                    Continuation::Resume { carrier, resume } => NodeWork {
+                        deps: dep_ids,
+                        park_count,
+                        cont: ignore_results(resume),
+                        carrier,
+                    },
+                };
+                NodeStep::Replace {
+                    work,
+                    frame: None,
+                    function: None,
+                    block_entry: None,
+                    body_index: 0,
+                }
+            }
+            Outcome::Forward(producer) => {
+                // The slot's result *is* `producer`'s. If `producer` is ready, finalize the slot
+                // with its terminal directly. Otherwise splice the slot out: move its consumers onto
+                // `producer`'s notify list and alias the slot to `producer` — `producer` becomes the
+                // sole producer of this result, with no forwarding node and no extra wake hop.
+                if self.is_result_ready(producer) {
+                    match self.read_result(producer) {
+                        Ok(c) => NodeStep::Done(NodeOutput::Value(c)),
+                        Err(e) => NodeStep::Done(NodeOutput::Err(e.clone_for_propagation())),
+                    }
+                } else {
+                    // Not ready: `NodeStep::Alias` drives `splice_forward` (move consumers onto the
+                    // producer + alias the slot) in the execute loop.
+                    NodeStep::Alias(producer)
+                }
+            }
+            Outcome::Invoke {
+                picked,
+                working_expr,
+                free,
+            } => {
+                // The dispatch→execution hand-off. A user fn runs in a freshly acquired per-call
+                // frame (the harness's irreducible write — TCO reuse mutates the reserve); a
+                // builtin runs in the current frame. `invoke` is a pure decide that reads that
+                // frame, so the harness acquires it here and applies the outcome `invoke` returns.
+                drain_free(self, free);
+                let frame = match &picked.body {
+                    crate::machine::core::kfunction::Body::Builtin(_) => None,
+                    _ => Some(self.acquire_tail_frame(picked.captured_scope())),
+                };
+                let oc =
+                    super::exec::invoke(&SchedulerView::new(self), frame, picked, working_expr);
+                self.apply_outcome(oc, idx)
+            }
+            Outcome::Redispatch { working_expr, free } => {
+                // Re-resolve dispatch against the now fully-spliced `working_expr` immediately
+                // (the post-eager-subs continuation with no speculatively pre-picked function).
+                drain_free(self, free);
+                let outcome =
+                    super::keyworded::finish(&SchedulerView::new(self), working_expr, idx);
+                self.apply_outcome(outcome, idx)
+            }
+        }
     }
 }

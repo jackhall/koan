@@ -1,13 +1,13 @@
 //! The scheduler-aware `Action` currency. The peer of
 //! [`super::exec::ExecOutcome`]: where `ExecOutcome` is what `run_user_fn` returns (scheduler-
 //! *unaware*), `Action` is what a builtin returns and what the harness interprets (scheduler-*aware*).
-//! These are the **types only** — they reference core/model types, never `SchedulerHandle`. The
+//! These are the **types only** — they reference core/model types, never the scheduler. The
 //! interpreter that drives the scheduler from an `Action` lives one layer up in
 //! `machine::execute::harness::run_action` (the peer of `dispatch/exec.rs::invoke`).
 
 use std::rc::Rc;
 
-use super::body::{BodyResult, ReturnContract};
+use super::body::ReturnContract;
 use crate::machine::core::{CallArena, LexicalFrame, Scope, ScopeId};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::KType;
@@ -125,19 +125,6 @@ fn bare_type_name<'a>(t: &KType<'a>, name: &str, surface: &str) -> Result<String
     }
 }
 
-/// Convert a [`BodyResult`] into an [`Action`] for the deferral helpers that reuse the
-/// existing `BodyResult`-returning `finalize_*` functions inside an `Action` finish. Those
-/// finalizers only ever produce `Value` / `Err`; a `Tail` / `DeferTo` would be a logic error.
-pub(crate) fn body_result_to_action<'a>(result: BodyResult<'a>) -> Action<'a> {
-    match result {
-        BodyResult::Value(carried) => Action::Done(Ok(carried)),
-        BodyResult::Err(error) => Action::Done(Err(error)),
-        BodyResult::Tail { .. } | BodyResult::DeferTo(_) => {
-            unreachable!("a field-list / fn-def finalize only yields Value or Err")
-        }
-    }
-}
-
 /// Extract a cloned `KExpression` from arg `slot`, or the canonical parenthesized-slot
 /// `ShapeError` (`"<builtin> <slot> slot must be a parenthesized expression"`), owning that error
 /// text so every `KExpression`-slot builtin reports it identically.
@@ -193,7 +180,7 @@ pub struct FinishCtx<'a, 'c> {
 }
 
 /// A `Combine` finish: re-entered at wake with the resolved dep values, yielding another `Action` the
-/// harness recurses into. No `&mut SchedulerHandle` — exec's continuation pattern.
+/// harness recurses into. Reads only a `FinishCtx`, never the scheduler — exec's continuation pattern.
 pub type Cont<'a> = Box<dyn FnOnce(&FinishCtx<'a, '_>, &[Carried<'a>]) -> Action<'a> + 'a>;
 
 /// A `Catch` finish: re-entered with the watched slot's `Result`, yielding a `Action`.
@@ -204,11 +191,13 @@ pub type CatchCont<'a> =
 pub enum Action<'a> {
     /// Produce a value / error for this slot (after any direct scope mutation the builtin did).
     Done(Result<Carried<'a>, KError>),
-    /// Tail-replace into `tail` (after the `leading` body statements, dispatched as siblings),
-    /// carrying `contract`, in a cart per `frame_placement`. `block_entry` is the body/arm scope id
-    /// when the tail enters a fresh lexical block (MATCH / TRY arms, FN-body tails) — `None` for a
-    /// frameless / current-block continuation (EVAL). The harness derives the body-statement chains
-    /// and the tail's `body_index` from `block_entry` + `leading`.
+    /// Tail-replace into `tail`, carrying `contract`, in a cart per `frame_placement`. When
+    /// `leading` (the body's non-tail statements) is non-empty the slot first parks on them as
+    /// owned deps and tail-replaces only once they resolve — so they run, and cascade-free, before
+    /// the tail continues (a leading-carrying arm always mints a `FreshChild` frame). `block_entry`
+    /// is the body/arm scope id when the tail enters a fresh lexical block (MATCH / TRY arms,
+    /// FN-body tails) — `None` for a frameless / current-block continuation (EVAL). The harness
+    /// derives the body-statement chains and the tail's `body_index` from `block_entry` + `leading`.
     Tail {
         leading: Vec<KExpression<'a>>,
         tail: KExpression<'a>,

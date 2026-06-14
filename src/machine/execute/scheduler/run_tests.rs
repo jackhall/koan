@@ -1,10 +1,9 @@
 //! End-to-end coverage for the bare-name short-circuit, auto-wrap pass, and
-//! replay-park routing in `run_dispatch` (see
+//! replay-park routing in `classify_dispatch` (see
 //! [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders)).
 use super::Scheduler;
 use crate::builtins::default_scope;
 use crate::machine::model::{KObject, KType};
-use crate::machine::SchedulerHandle;
 use crate::machine::{KErrorKind, RuntimeArena};
 use crate::parse::parse;
 
@@ -168,8 +167,9 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 22.0));
 }
 
-/// Miri audit-slate: Lift-park lifetime contract — see [design/execution-model.md
-/// § Miri Lift-park lifetime contract](../../../../design/execution-model.md#miri-lift-park-lifetime-contract).
+/// Miri audit-slate: bare-name forward-splice lifetime contract — see
+/// [design/execution-model.md § Miri forward-splice and replay-park lifetime
+/// contract](../../../../design/execution-model.md#miri-forward-splice-and-replay-park-lifetime-contract).
 #[test]
 fn lift_park_minimal_program_for_miri() {
     let arena = RuntimeArena::new();

@@ -174,8 +174,8 @@ A builtin can opt out of eager evaluation for specific slot positions: it
 declares the slot as lazy at registration, the scheduler hands it the
 unevaluated `KExpression` instead of a value, and the builtin emits a fresh
 `Dispatch` for the chosen branch only. Two mechanisms exist:
-[`SchedulerHandle::add_dispatch`](../src/machine/core/scope.rs) submits a child
-node directly, while [`BodyResult::Tail`](../src/machine/core/kfunction.rs) — used
+[`Scheduler::add_dispatch`](../src/machine/execute/scheduler.rs) submits a child
+node directly, while [`Action::Tail`](../src/machine/core/kfunction/action.rs) — used
 by `MATCH` — tail-returns the chosen branch so the scheduler dispatches it in
 place.
 
@@ -203,7 +203,7 @@ mechanism. Two consequences:
   shapes overlap.
 
 See [functional-programming.md](functional-programming.md) for how the body
-binds parameters into a per-call scope and what `BodyResult::Tail` does at
+binds parameters into a per-call scope and what `Action::Tail` does at
 the slot.
 
 ## Quote and eval sigils
