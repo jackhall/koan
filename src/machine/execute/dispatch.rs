@@ -257,16 +257,10 @@ pub(in crate::machine::execute) fn park_resume<'run>(
     }
 }
 
-/// Park a bare-identifier slot on the single `producer` that binds its name, then *become* that
-/// producer's resolved value (the push/notify single-producer `Lift` forward).
+/// A bare-identifier slot whose name binds to `producer`: the slot's result *is* `producer`'s
+/// result, so the harness splices the slot out (no forwarding node) — see [`Outcome::Forward`].
 pub(in crate::machine::execute) fn park_lift<'run>(producer: NodeId) -> Outcome<'run> {
-    Outcome::ParkThenContinue {
-        deps: vec![DispatchDep::Existing(producer)],
-        park_count: 1,
-        cont: Continuation::Forward(producer),
-        dep_error_frame: None,
-        free: Vec::new(),
-    }
+    Outcome::Forward(producer)
 }
 
 /// Replace the slot with a fresh frameless `Dispatch` of `inner` — the decide reduced its

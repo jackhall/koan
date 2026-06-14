@@ -11,12 +11,11 @@
 use crate::builtins::default_scope;
 use crate::builtins::test_support::parse_one;
 use crate::machine::core::kfunction::action::{arg_object, Action, BodyCtx};
-use crate::machine::core::source::Spanned;
 use crate::machine::execute::dispatch::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
 };
 use crate::machine::execute::Scheduler;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
@@ -531,20 +530,23 @@ fn fast_lane_list_of_closures_escapes_outer_call_with_rc_attached() {
     }
 }
 
-/// `f {x = 7}` submitted as a forward reference: `f` is installed as a
-/// `Placeholder` on `scope` before the slot is dispatched. The fast lane's
-/// `FunctionValueCall` handler hits the `Placeholder` arm on head-resolution
-/// (before the args-shape check), installs a combined park, and never enters
-/// `resolve_dispatch`.
+/// `f {x = 7}` submitted as a forward reference: `f` is installed as a `Placeholder`
+/// on `scope` before the slot is dispatched. The fast lane's `FunctionValueCall`
+/// handler hits the `Placeholder` arm on head-resolution (before the args-shape
+/// check), routing without entering `resolve_dispatch`. The producer here finalizes
+/// with an error, so the head arm propagates it to the call slot — the reachable
+/// ready-producer case. (A ready *ok* producer can't occur: a binder's successful
+/// finalize binds the name, which then resolves to a `Value`, not a `Placeholder`.)
 #[test]
-fn function_value_call_forward_ref_parks() {
+fn function_value_call_forward_ref_routes_via_placeholder() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
 
-    // Bind `producer_target` to a value so the producer's own dispatch fast-lanes
-    // via the BareIdentifier `Resolution::Value` hit — otherwise the unbound
-    // fall-through would advance the counter and defeat the routing assertion.
+    // The producer is a `FunctionValueCall` on a non-function value: the fast lane
+    // errors with `TypeMismatch` (a `Number` head isn't callable) without entering
+    // `resolve_dispatch`, so the producer finalizes `Err` and the routing counter stays
+    // clean. `f` is then a backward-visible placeholder pointing at it.
     let producer_target = scope.arena.alloc_object(KObject::Number(42.0));
     scope
         .bind_value(
@@ -553,26 +555,24 @@ fn function_value_call_forward_ref_parks() {
             BindingIndex::BUILTIN,
         )
         .expect("bind_value should succeed");
-    let producer = sched.add_dispatch(
-        KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
-            "producer_target".into(),
-        ))]),
-        scope,
-    );
+    let producer = sched.add_dispatch(parse_one("producer_target {y = 1}"), scope);
     scope
         .install_placeholder("f".to_string(), producer, BindingIndex::BUILTIN)
         .expect("install_placeholder should succeed");
 
-    let f_call = parse_one("f {x = 7}");
-    let _f_call_id = sched.add_dispatch(f_call, scope);
+    let f_call_id = sched.add_dispatch(parse_one("f {x = 7}"), scope);
 
     reset_resolve_dispatch_entry_count();
     let _ = sched.execute();
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
-        "FunctionValueCall forward-ref park must not enter resolve_dispatch; \
-         the head-Placeholder arm fires before any args-shape inspection",
+        "FunctionValueCall forward-ref must route through the head-Placeholder arm \
+         before any args-shape inspection — never entering resolve_dispatch",
+    );
+    assert!(
+        sched.read_result(f_call_id).is_err(),
+        "the head-Placeholder arm must propagate the ready producer's error to the call slot",
     );
 }
 

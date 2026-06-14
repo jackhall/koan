@@ -87,6 +87,13 @@ pub(in crate::machine::execute) enum Outcome<'run> {
         working_expr: KExpression<'run>,
         free: Vec<usize>,
     },
+    /// The slot's result *is* `producer`'s result (a bare name resolving to a binding). Rather than
+    /// installing a forwarding node, the harness splices the slot out: if `producer` is ready the
+    /// slot finalizes with its terminal directly; otherwise the slot's consumers are moved onto
+    /// `producer`'s notify list and the slot becomes an alias that reads through to `producer`. So
+    /// the single-producer invariant holds with `producer` as the sole producer — no duplicate
+    /// forwarding slot.
+    Forward(NodeId),
 }
 
 /// What a [`Outcome::ParkThenContinue`] runs once its deps resolve. The shapes are the closed set
@@ -108,7 +115,9 @@ pub(in crate::machine::execute) enum Outcome<'run> {
 ///   pre-rendered summary the drain-end deadlock report surfaces (`None` when the park carries no
 ///   renderable form). On apply the slot becomes a resume
 ///   [`NodeWork::Wait`](super::nodes::NodeWork::Wait).
-/// - `Forward` makes the slot *be* a single producer's value (the bare-name `Lift` forward).
+///
+/// (A bare-name forward is not a continuation — it splices the slot out via
+/// [`Outcome::Forward`], never parking on a dep.)
 pub(in crate::machine::execute) enum Continuation<'run> {
     Finish(CombineFinish<'run>),
     Combine(CombineFinish<'run>),
@@ -120,7 +129,6 @@ pub(in crate::machine::execute) enum Continuation<'run> {
         carrier: Option<String>,
         resume: ResumeFn<'run>,
     },
-    Forward(NodeId),
 }
 
 /// A dependency a [`Outcome::ParkThenContinue`] declares. `Dispatch`/`*Lit` are fresh sub-slots

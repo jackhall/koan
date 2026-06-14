@@ -34,15 +34,13 @@ impl<'run> Scheduler<'run> {
             // contract chain — a deferred-return FN dispatched here skips resolving its own return
             // type (keep-first discards it anyway).
             self.active_in_contract_chain = prev_contract.is_some();
-            let step = match work {
-                NodeWork::Wait {
-                    deps,
-                    park_count,
-                    cont,
-                    ..
-                } => self.run_wait(deps, park_count, cont, idx),
-                NodeWork::Lift(state) => NodeStep::Done(Self::run_lift(state)),
-            };
+            let NodeWork::Wait {
+                deps,
+                park_count,
+                cont,
+                ..
+            } = work;
+            let step = self.run_wait(deps, park_count, cont, idx);
             // The post-step token owns the slot's frame at step end and is the *only* source of
             // the step scope (via `post.step_scope()`), so the wrong-frame read that ambient
             // `active_frame` allowed is unspellable here.
@@ -139,6 +137,13 @@ impl<'run> Scheduler<'run> {
                         self.queues.push_after_replace(idx);
                     }
                 }
+                NodeStep::Alias(producer) => {
+                    // The slot spliced itself out as a bare-name forward: move its consumers onto
+                    // `producer` and alias it for reads. The slot is not re-queued; `producer`'s
+                    // fire wakes the moved consumers, and late parkers resolve the alias when they
+                    // wire in. See `scheduler::splice`.
+                    self.splice_forward(id, producer);
+                }
             }
         }
         // Any slot still `PreRun` after drain is parked on a dependency that can
@@ -157,7 +162,7 @@ impl<'run> Scheduler<'run> {
     /// freed slots are scrubbed from every producer's `notify_list` before the
     /// producer drains.
     ///
-    /// Stamps must all land before any queue push: a later stamp re-reading the
+    /// Wakes must all land before any queue push: a later wake re-reading the
     /// slot must observe the prior transition.
     pub(in crate::machine::execute::scheduler) fn finalize(
         &mut self,
@@ -170,7 +175,6 @@ impl<'run> Scheduler<'run> {
         let mut woken: Vec<usize> = Vec::new();
         for (consumer, hit_zero) in drained {
             if hit_zero {
-                self.store.stamp_lift_ready(NodeId(consumer), id);
                 woken.push(consumer);
             }
         }

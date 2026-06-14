@@ -21,7 +21,7 @@ use crate::machine::model::Carried;
 use crate::machine::KError;
 use crate::machine::NodeId;
 
-use super::super::nodes::{CallFrame, LiftState, Node, NodeOutput, NodeScope, NodeWork};
+use super::super::nodes::{CallFrame, Node, NodeOutput, NodeScope, NodeWork};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -67,6 +67,11 @@ enum SlotState<'run> {
     /// `reinstall*` / `finalize` / `free_one` exits this state.
     Running,
     Done(NodeOutput<'run>),
+    /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
+    /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
+    /// slot's consumers were moved onto `producer`'s notify list at splice time, so `producer`'s
+    /// fire wakes them directly. See [`Outcome::Forward`](super::super::outcome::Outcome).
+    Aliased(NodeId),
     /// Distinct from `Running` so the cascade-free walk's idempotency
     /// guard can be precise about "already freed".
     Free,
@@ -83,15 +88,12 @@ enum DeadlockSample {
 
 /// Map a stuck slot's `work` to its deadlock-sample contribution. A `Some`-carrier `Wait` (a
 /// dispatch decide) carries a renderable expression summary (`Preferred`); a carrier-less wait
-/// (combine / catch) and a `Lift` carry only a generic tag (`Fallback`).
+/// (combine / catch) carries only a generic tag (`Fallback`).
 fn work_deadlock_sample<'run>(work: &NodeWork<'run>) -> DeadlockSample {
-    match work {
-        NodeWork::Wait {
-            carrier: Some(carrier),
-            ..
-        } => DeadlockSample::Preferred(carrier.clone()),
-        NodeWork::Wait { carrier: None, .. } => DeadlockSample::Fallback("<wait>"),
-        NodeWork::Lift(_) => DeadlockSample::Fallback("<lift>"),
+    let NodeWork::Wait { carrier, .. } = work;
+    match carrier {
+        Some(carrier) => DeadlockSample::Preferred(carrier.clone()),
+        None => DeadlockSample::Fallback("<wait>"),
     }
 }
 
@@ -182,12 +184,23 @@ impl<'run> NodeStore<'run> {
         self.free_list.push(id);
     }
 
+    /// The alias target of a spliced-out bare-name forward, or `None`. The single follow step the
+    /// `Scheduler`-level [`resolve_alias`](super::Scheduler::resolve_alias) walks; resolution lives
+    /// there (with `DepGraph`), not in the store. See [`scheduler::splice`](super::splice).
+    pub(super) fn alias_target(&self, id: NodeId) -> Option<NodeId> {
+        match self.slots.get(id) {
+            Some(SlotState::Aliased(to)) => Some(*to),
+            _ => None,
+        }
+    }
+
+    /// Raw readiness — callers pass an already alias-resolved id.
     pub(super) fn is_result_ready(&self, id: NodeId) -> bool {
         matches!(self.slots.get(id), Some(SlotState::Done(_)))
     }
 
-    /// Only safe on IDs whose slot has been finalized; internal slots may
-    /// have been eagerly freed by their parent.
+    /// Only safe on IDs whose slot has been finalized; internal slots may have been eagerly freed by
+    /// their parent. Raw — callers pass an already alias-resolved id.
     pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
         match &self.slots[id] {
             &SlotState::Done(NodeOutput::Value(c)) => Ok(c),
@@ -248,30 +261,13 @@ impl<'run> NodeStore<'run> {
         !matches!(self.slots[id], SlotState::Done(_))
     }
 
-    /// Notify-walk transition: if `consumer` is `Lift(Pending(producer))`,
-    /// stamp it to `Lift(Ready(_))` by cloning the producer's terminal.
-    /// `Err` goes through `clone_for_propagation`. No-op otherwise.
-    pub(super) fn stamp_lift_ready(&mut self, consumer: NodeId, producer: NodeId) {
-        let is_lift_pending = matches!(
-            &self.slots[consumer],
-            SlotState::PreRun(node)
-                if matches!(&node.work, NodeWork::Lift(LiftState::Pending(from)) if *from == producer),
-        );
-        if !is_lift_pending {
-            return;
-        }
-        let stamped = match &self.slots[producer] {
-            &SlotState::Done(NodeOutput::Value(v)) => NodeOutput::Value(v),
-            SlotState::Done(NodeOutput::Err(e)) => NodeOutput::Err(e.clone_for_propagation()),
-            _ => panic!("producer just finalized"),
-        };
-        if let SlotState::PreRun(node) = &mut self.slots[consumer] {
-            if let NodeWork::Lift(state) = &mut node.work {
-                *state = LiftState::Ready(stamped);
-            }
-        }
+    /// Splice a bare-name forward out: the running slot becomes an alias of `producer` (a
+    /// downstream real producer). `read_result` / `is_result_ready` follow the alias; the slot's
+    /// consumers were already moved onto `producer`'s notify list, so this just records the
+    /// redirect. See [`Outcome::Forward`](super::super::outcome::Outcome).
+    pub(super) fn alias(&mut self, id: NodeId, producer: NodeId) {
+        self.slots[id] = SlotState::Aliased(producer);
     }
-
 
     // --- Test-only helpers for synthetic-state setup. ---
 
@@ -347,14 +343,5 @@ mod tests {
             ),
             "a carrier-less Wait must surface a generic tag, not an empty sample",
         );
-    }
-
-    #[test]
-    fn lift_falls_back_to_a_tag() {
-        let work = NodeWork::Lift(LiftState::Pending(NodeId(0)));
-        assert!(matches!(
-            work_deadlock_sample(&work),
-            DeadlockSample::Fallback("<lift>")
-        ));
     }
 }

@@ -28,10 +28,7 @@ impl DepEdge {
 /// Owned-edge sidecar built from `work_deps`. Park edges are installed
 /// separately via `add_park_edge`.
 pub(super) fn work_owned_edges<'run>(work: &NodeWork<'run>) -> Vec<DepEdge> {
-    match work_deps(work) {
-        Some(ids) => ids.into_iter().map(DepEdge::Owned).collect(),
-        None => Vec::new(),
-    }
+    work_deps(work).into_iter().map(DepEdge::Owned).collect()
 }
 
 /// The three coordinated per-slot fields. Mutations go through the row, so
@@ -176,6 +173,15 @@ impl DepGraph {
     /// is already drained by the time the caller hits this.
     pub(in crate::machine::execute::scheduler) fn clear_dep_edges(&mut self, idx: usize) {
         self.rows[idx].edges.clear();
+    }
+
+    /// Move `from`'s notify list onto `into`'s — the bare-name-forward splice. `from`'s consumers
+    /// keep their pending counts and `from`-labelled edges; `into`'s fire now drains them (and their
+    /// reads of `from` follow the alias to `into`). Their pending counts are unchanged: each still
+    /// waits on one dep, now serviced by `into`'s single fire.
+    pub(in crate::machine::execute::scheduler) fn splice_notify(&mut self, from: usize, into: usize) {
+        let moved = std::mem::take(&mut self.rows[from].notify);
+        self.rows[into].notify.extend(moved);
     }
 
     pub(super) fn pending_count(&self, idx: usize) -> usize {

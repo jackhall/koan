@@ -25,7 +25,27 @@ pub(super) fn initial<'run>(
     let chain = ctx.chain_deref();
     match ctx.current_scope().resolve_with_chain(&head, chain) {
         Resolution::Value(obj) => dispatch_callable_value(ctx, expr, obj),
-        Resolution::Placeholder(producer) => install_head_park(producer, expr),
+        // A still-finalizing head placeholder parks and re-runs on resume. A placeholder whose
+        // producer has *already* finalized splits two ways:
+        // - `Err`: the binder errored before binding the head, so the name never became a value —
+        //   propagate the producer's error.
+        // - `Ok`: unreachable. A binder's successful finalize always registers its name (the
+        //   `Value` then shadows the placeholder), so a ready-Ok producer resolves to `Value`,
+        //   never `Placeholder`. Reaching here means that invariant broke.
+        Resolution::Placeholder(producer) => {
+            if ctx.is_result_ready(producer) {
+                match ctx.read_result(producer) {
+                    Err(e) => Outcome::Done(NodeOutput::Err(e.clone_for_propagation())),
+                    Ok(_) => unreachable!(
+                        "head placeholder `{head}` producer finalized Ok without registering the \
+                         name — a binder's successful finalize always binds its name, so a \
+                         ready-Ok producer must resolve to a Value, not a Placeholder",
+                    ),
+                }
+            } else {
+                install_head_park(producer, expr)
+            }
+        }
         Resolution::UnboundName => {
             Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(head))))
         }

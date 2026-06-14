@@ -58,6 +58,10 @@ pub(super) enum NodeStep<'run> {
         /// tail-into-last; `0` is the single-statement case.
         body_index: usize,
     },
+    /// The slot is spliced out as an alias of `producer` (a bare-name forward whose producer was not
+    /// yet ready). The slot's consumers have already been moved onto `producer`'s notify list; this
+    /// just marks the slot so `read_result` follows through to `producer`. See [`Outcome::Forward`].
+    Alias(NodeId),
 }
 
 /// What a scheduler node will run. `Lift` exists because the push/notify model
@@ -82,15 +86,6 @@ pub(super) enum NodeWork<'run> {
         cont: NodeCont<'run>,
         carrier: Option<String>,
     },
-    Lift(LiftState<'run>),
-}
-
-/// `Pending(from)` parks on `from`'s terminal; `Ready(output)` holds the stamped
-/// producer terminal. The `Pending → Ready` transition is the sole responsibility
-/// of `Scheduler::finalize`; a queued Lift in `Pending` indicates a wake misfire.
-pub(super) enum LiftState<'run> {
-    Pending(NodeId),
-    Ready(NodeOutput<'run>),
 }
 
 /// Slot-stored scope handle. `Anchored` holds a run-lifetime borrow directly — a genuinely
@@ -157,46 +152,20 @@ pub(super) struct Node<'run> {
     pub(super) chain: Rc<LexicalFrame>,
 }
 
-/// Owned `NodeId`s a node must read before running, or `None` if it has no owned read-deps. For a
-/// `Wait`, only the `deps[park_count..]` suffix is owned; the park-producer prefix is installed
-/// separately as `Notify` edges. A `Lift` owns its single producer.
-pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Option<Vec<NodeId>> {
-    match work {
-        NodeWork::Wait {
-            deps, park_count, ..
-        } => Some(deps[*park_count..].to_vec()),
-        NodeWork::Lift(LiftState::Pending(from)) => Some(vec![*from]),
-        NodeWork::Lift(LiftState::Ready(_)) => None,
-    }
+/// Owned `NodeId`s a node must read before running: the `deps[park_count..]` suffix. The
+/// park-producer prefix is installed separately as `Notify` edges.
+pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Vec<NodeId> {
+    let NodeWork::Wait {
+        deps, park_count, ..
+    } = work;
+    deps[*park_count..].to_vec()
 }
 
-/// Park-producer prefix for a `Wait` (sibling slots whose values it reads but does not own). Empty
-/// for a `Lift`. The caller installs each entry as a `Notify` edge separately from the Owned path.
+/// Park-producer prefix (sibling slots whose values the node reads but does not own). The caller
+/// installs each as a `Notify` edge separately from the Owned path.
 pub(super) fn work_park_producers<'run, 'b>(work: &'b NodeWork<'run>) -> &'b [NodeId] {
-    match work {
-        NodeWork::Wait {
-            deps, park_count, ..
-        } => &deps[..*park_count],
-        _ => &[],
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::machine::core::{KError, KErrorKind};
-
-    #[test]
-    fn work_deps_lift_pending_returns_from_node() {
-        let work = NodeWork::Lift(LiftState::Pending(NodeId(7)));
-        assert_eq!(work_deps(&work), Some(vec![NodeId(7)]));
-    }
-
-    #[test]
-    fn work_deps_lift_ready_returns_none() {
-        let work = NodeWork::Lift(LiftState::Ready(NodeOutput::Err(KError::new(
-            KErrorKind::User("stamped".to_string()),
-        ))));
-        assert!(work_deps(&work).is_none());
-    }
+    let NodeWork::Wait {
+        deps, park_count, ..
+    } = work;
+    &deps[..*park_count]
 }

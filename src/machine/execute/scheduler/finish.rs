@@ -2,7 +2,7 @@ use crate::machine::model::Carried;
 use crate::machine::{KError, NodeId};
 
 use super::super::dispatch::SchedulerView;
-use super::super::nodes::{LiftState, NodeOutput, NodeStep};
+use super::super::nodes::NodeStep;
 use super::super::NodeCont;
 use super::Scheduler;
 
@@ -37,18 +37,5 @@ impl<'run> Scheduler<'run> {
         let outcome = cont(&SchedulerView::new(self), &results, idx);
         self.reclaim_deps(idx, owned_indices);
         self.apply_outcome(outcome, idx)
-    }
-
-    /// Consume the stamped Lift state. By pop time the notify-walk has
-    /// transitioned `Pending → Ready`; the `Pending` arm is a wake-misfire
-    /// panic. See [design/execution-model.md § Lift: push/notify single-producer
-    /// model](../../../../design/execution-model.md#lift-pushnotify-single-producer-model).
-    pub(super) fn run_lift(state: LiftState<'run>) -> NodeOutput<'run> {
-        match state {
-            LiftState::Ready(output) => output,
-            LiftState::Pending(_) => {
-                panic!("scheduler invariant: notify-walk must stamp Lift to Ready before enqueue",)
-            }
-        }
     }
 }

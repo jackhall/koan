@@ -9,7 +9,7 @@
 use crate::machine::core::kfunction::action::{Dep, DepPlacement, FramePlacement};
 use crate::machine::{NodeId, TraceFrame};
 
-use super::super::nodes::{LiftState, NodeStep, NodeWork};
+use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::super::{catch_cont, ignore_results, short_circuit};
 use super::super::scheduler::Scheduler;
 use super::ctx::SchedulerView;
@@ -177,7 +177,6 @@ impl<'run> Scheduler<'run> {
                         cont: ignore_results(resume),
                         carrier,
                     },
-                    Continuation::Forward(producer) => NodeWork::Lift(LiftState::Pending(producer)),
                 };
                 NodeStep::Replace {
                     work,
@@ -185,6 +184,22 @@ impl<'run> Scheduler<'run> {
                     function: None,
                     block_entry: None,
                     body_index: 0,
+                }
+            }
+            Outcome::Forward(producer) => {
+                // The slot's result *is* `producer`'s. If `producer` is ready, finalize the slot
+                // with its terminal directly. Otherwise splice the slot out: move its consumers onto
+                // `producer`'s notify list and alias the slot to `producer` — `producer` becomes the
+                // sole producer of this result, with no forwarding node and no extra wake hop.
+                if self.is_result_ready(producer) {
+                    match self.read_result(producer) {
+                        Ok(c) => NodeStep::Done(NodeOutput::Value(c)),
+                        Err(e) => NodeStep::Done(NodeOutput::Err(e.clone_for_propagation())),
+                    }
+                } else {
+                    // Not ready: `NodeStep::Alias` drives `splice_forward` (move consumers onto the
+                    // producer + alias the slot) in the execute loop.
+                    NodeStep::Alias(producer)
                 }
             }
             Outcome::Invoke {

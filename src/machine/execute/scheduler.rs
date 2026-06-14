@@ -17,6 +17,7 @@ mod literal;
 mod node_store;
 #[cfg(test)]
 mod run_tests;
+mod splice;
 mod submit;
 #[cfg(test)]
 mod tests;
@@ -206,20 +207,21 @@ impl<'run> Scheduler<'run> {
         self.store.is_empty()
     }
 
-    /// An errored sub counts as ready — parents short-circuit on it.
+    /// An errored sub counts as ready — parents short-circuit on it. Follows a bare-name-forward
+    /// alias to the real producer (see [`splice`](self::splice)).
     pub(in crate::machine::execute) fn is_result_ready(&self, id: NodeId) -> bool {
-        self.store.is_result_ready(id)
+        self.store.is_result_ready(self.resolve_alias(id))
     }
 
     /// Only safe on IDs returned by `add_dispatch`; internal slots may have been eagerly
-    /// freed by their parent.
+    /// freed by their parent. Follows a bare-name-forward alias to the real producer.
     pub fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
-        self.store.read_result(id)
+        self.store.read_result(self.resolve_alias(id))
     }
 
-    /// Panics on `Err`.
+    /// Panics on `Err`. Follows a bare-name-forward alias to the real producer.
     pub fn read(&self, id: NodeId) -> Carried<'run> {
-        self.store.read(id)
+        self.store.read(self.resolve_alias(id))
     }
 
     // ----- Narrow dispatcher-facing surface (pub(in execute)) -----
@@ -229,26 +231,8 @@ impl<'run> Scheduler<'run> {
     // so the storage layout (`deps` / `store` / `queues` / `active_*` fields)
     // stays scheduler-internal.
 
-    /// Atomic +1 on the consumer's pending count, edges list, and the
-    /// producer's notify list (`DepGraph::add_park_edge`).
-    pub(in crate::machine::execute) fn add_park_edge(
-        &mut self,
-        producer: NodeId,
-        consumer: NodeId,
-    ) {
-        self.deps.add_park_edge(producer, consumer);
-    }
-
-    /// Atomic +1 on the consumer's pending count, edges list, and the
-    /// producer's notify list, recording the edge as `Owned` so reclaim
-    /// recurses through it (`DepGraph::add_owned_edge`).
-    pub(in crate::machine::execute) fn add_owned_edge(
-        &mut self,
-        producer: NodeId,
-        consumer: NodeId,
-    ) {
-        self.deps.add_owned_edge(producer, consumer);
-    }
+    // `add_owned_edge` / `add_park_edge` (the alias-resolving edge installs) and the splice itself
+    // live in [`splice`](self::splice), the one home for the bare-name-forward graph logic.
 
     /// True iff `producer` is forward-reachable from `consumer`
     /// (`DepGraph::would_create_cycle`).
