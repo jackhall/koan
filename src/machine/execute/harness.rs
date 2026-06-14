@@ -1,7 +1,12 @@
-//! The shared action harness. [`run_action`] turns an [`Action`] into the scheduler's [`Outcome`]
-//! currency — a pure decide that reads a [`SchedulerView`] and issues no graph write. Both
-//! `KFunction::invoke` (lowering an `ExecOutcome → Action`) and every `Action`-authored builtin
-//! route through it. The peer of `dispatch/exec.rs::invoke`. The `Action` *types* live in
+//! The write harness. [`KoanHarness`] owns the [`Scheduler`] by composition and is the sole holder
+//! of `&mut Scheduler` across the execute tree — the AST-aware submission wrappers, the execute
+//! loop, and [`KoanHarness::apply_outcome`] (the one graph writer) hang off it. Its read surface
+//! forwards to the owned scheduler.
+//!
+//! [`run_action`] is the shared *action* harness: a pure `Action -> Outcome` decide that reads a
+//! [`SchedulerView`] and issues no graph write. Both `KFunction::invoke` (lowering an
+//! `ExecOutcome → Action`) and every `Action`-authored builtin route through it. The peer of
+//! `dispatch/exec.rs::invoke`. The `Action` *types* live in
 //! [`crate::machine::core::kfunction::action`].
 
 use std::rc::Rc;

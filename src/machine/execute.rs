@@ -7,7 +7,7 @@
 //! [design/memory-model.md](../../design/memory-model.md).
 
 mod dispatch;
-// The shared action harness for KFunction::invoke + builtins. See harness.rs.
+// The write harness (KoanHarness, sole &mut Scheduler) + the shared action harness. See harness.rs.
 mod harness;
 mod interpret;
 mod lift;
