@@ -10,7 +10,7 @@ use crate::machine::core::kfunction::action::{
     Action, Dep, DepPlacement, FinishCtx, FramePlacement,
 };
 use crate::machine::core::kfunction::body::split_body_statements;
-use crate::machine::{CallArena, NodeId};
+use crate::machine::{CallArena, KError, NodeId};
 
 use super::dispatch::DepRequest;
 use super::nodes::{NodeOutput, NodeStep, NodeWork};
@@ -45,19 +45,55 @@ impl Default for KoanHarness<'_> {
     }
 }
 
-// Temporary Phase-1 scaffold: while methods migrate off `Scheduler` onto `KoanHarness`, every
-// untouched `harness.method()` call resolves through this deref. Removed once all the AST-aware /
-// write methods are native to `KoanHarness` and explicit forwarders cover the read surface.
-impl<'run> std::ops::Deref for KoanHarness<'run> {
-    type Target = Scheduler<'run>;
-    fn deref(&self) -> &Scheduler<'run> {
-        &self.sched
+/// Read forwarders to the owned [`Scheduler`]. The harness exposes the scheduler's read surface
+/// (terminal reads / slot count) so callers drive the whole run through the harness without ever
+/// borrowing the scheduler — the write methods are the inherent `&mut self` ones above.
+impl<'run> KoanHarness<'run> {
+    /// Read a slot's terminal. See [`Scheduler::read_result`].
+    pub fn read_result(&self, id: NodeId) -> Result<crate::machine::model::Carried<'run>, &KError> {
+        self.sched.read_result(id)
+    }
+
+    /// Read a slot's value terminal, panicking on `Err`. See [`Scheduler::read`].
+    pub fn read(&self, id: NodeId) -> crate::machine::model::Carried<'run> {
+        self.sched.read(id)
+    }
+
+    pub fn len(&self) -> usize {
+        self.sched.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.sched.is_empty()
     }
 }
 
-impl<'run> std::ops::DerefMut for KoanHarness<'run> {
-    fn deref_mut(&mut self) -> &mut Scheduler<'run> {
+/// Test-only forwarders: an immutable `&Scheduler` view (`resolve_name_part` fixtures) plus the
+/// AST-free poke surface (`free`, the reserve-reuse counter, a slot's stored chain). No `&mut
+/// Scheduler` escapes — the accessor hands out `&Scheduler`, keeping the harness the sole writer.
+#[cfg(test)]
+impl<'run> KoanHarness<'run> {
+    pub(in crate::machine::execute) fn scheduler(&self) -> &Scheduler<'run> {
+        &self.sched
+    }
+
+    /// Mutable scheduler access for the white-box scheduler tests that poke `store` / `deps` /
+    /// `queues` directly. Test-only — production drives every write through the harness's own
+    /// `&mut self` methods, so this is the one sanctioned `&mut Scheduler` outside them.
+    pub(in crate::machine::execute) fn scheduler_mut(&mut self) -> &mut Scheduler<'run> {
         &mut self.sched
+    }
+
+    pub(in crate::machine::execute) fn free(&mut self, idx: usize) {
+        self.sched.free(idx)
+    }
+
+    pub fn chain_of(&self, id: NodeId) -> Option<Rc<crate::machine::LexicalFrame>> {
+        self.sched.chain_of(id)
+    }
+
+    pub fn tail_reuse_count(&self) -> usize {
+        self.sched.tail_reuse_count()
     }
 }
 

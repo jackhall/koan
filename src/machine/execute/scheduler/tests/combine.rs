@@ -66,13 +66,14 @@ fn combine_short_circuits_on_dep_error() {
     let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
     let dep_ok = sched.add(mk_dispatch(), scope);
     let dep_err = sched.add(mk_dispatch(), scope);
-    sched.store.clear_node(dep_ok);
-    sched.store.clear_node(dep_err);
-    let _ = sched.queues.pop_next();
-    let _ = sched.queues.pop_next();
+    let store = sched.scheduler_mut();
+    store.store.clear_node(dep_ok);
+    store.store.clear_node(dep_err);
+    let _ = store.queues.pop_next();
+    let _ = store.queues.pop_next();
     let value = arena.alloc_object(KObject::Number(99.0));
-    sched.store.set_result(dep_ok, NodeOutput::value(value));
-    sched.store.set_result(
+    store.store.set_result(dep_ok, NodeOutput::value(value));
+    store.store.set_result(
         dep_err,
         NodeOutput::Err(KError::new(KErrorKind::ShapeError(
             "dep_err synthetic".into(),

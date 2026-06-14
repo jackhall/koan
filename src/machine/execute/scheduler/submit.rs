@@ -229,3 +229,37 @@ impl<'run> KoanHarness<'run> {
             .submit_here(NodeWork::combine(deps, park_count, finish))
     }
 }
+
+/// Test-fixture forwarders for the AST-free submission prims that stay on [`Scheduler`]
+/// (`add` / `add_with_chain` / `add_combine`), so scheduler tests build raw `NodeWork` slots
+/// through the harness without naming the scheduler.
+#[cfg(test)]
+impl<'run> KoanHarness<'run> {
+    pub(in crate::machine::execute) fn add(
+        &mut self,
+        work: NodeWork<'run>,
+        scope: &'run Scope<'run>,
+    ) -> NodeId {
+        self.sched.add(work, scope)
+    }
+
+    pub(in crate::machine::execute) fn add_with_chain(
+        &mut self,
+        work: NodeWork<'run>,
+        scope: &'run Scope<'run>,
+        explicit_chain: Option<Rc<LexicalFrame>>,
+    ) -> NodeId {
+        self.sched.add_with_chain(work, scope, explicit_chain)
+    }
+
+    pub(in crate::machine::execute) fn add_combine(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        scope: &'run Scope<'run>,
+        finish: CombineFinish<'run>,
+    ) -> NodeId {
+        self.sched
+            .add_combine(owned_subs, park_producers, scope, finish)
+    }
+}
