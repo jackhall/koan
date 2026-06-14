@@ -198,7 +198,7 @@ state in a
 sub-struct that owns `nodes: Vec<Option<Node<'a>>>`, `results:
 Vec<Option<NodeOutput<'a>>>`, `free_list: Vec<usize>`, and
 `recent_wakes: Vec<Vec<NodeId>>` (the per-consumer wake-attribution
-side-channel scoped to `NodeWork::Dispatch` consumers) behind the slot
+side-channel scoped to `NodeWork::Decide` consumers) behind the slot
 lifecycle `alloc_slot → take_for_run → reinstall* → finalize → free_one`. The
 slot-indexed vectors share an index space; `alloc_slot` is the only path that
 picks an index, `finalize` is the only path that lands a terminal `NodeOutput`,

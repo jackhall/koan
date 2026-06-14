@@ -13,7 +13,7 @@ fn recent_wakes_empty_for_non_dispatch_consumer() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     let producer = sched.add(
-        NodeWork::dispatch(KExpression::new(vec![Spanned::bare(
+        crate::machine::execute::dispatch::decide(KExpression::new(vec![Spanned::bare(
             ExpressionPart::Identifier("_p".into()),
         )])),
         scope,
@@ -30,13 +30,13 @@ fn recent_wakes_records_producer_for_dispatch_consumer() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     let producer = sched.add(
-        NodeWork::dispatch(KExpression::new(vec![Spanned::bare(
+        crate::machine::execute::dispatch::decide(KExpression::new(vec![Spanned::bare(
             ExpressionPart::Identifier("_p".into()),
         )])),
         scope,
     );
     let consumer = sched.add(
-        NodeWork::dispatch(KExpression::new(vec![Spanned::bare(
+        crate::machine::execute::dispatch::decide(KExpression::new(vec![Spanned::bare(
             ExpressionPart::Identifier("_c".into()),
         )])),
         scope,
@@ -55,7 +55,7 @@ fn recent_wakes_drain_default_empty() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     let id: NodeId = sched.add(
-        NodeWork::dispatch(KExpression::new(vec![Spanned::bare(
+        crate::machine::execute::dispatch::decide(KExpression::new(vec![Spanned::bare(
             ExpressionPart::Identifier("_".into()),
         )])),
         scope,

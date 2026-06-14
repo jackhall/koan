@@ -15,7 +15,7 @@ use crate::machine::model::types::UntypedKey;
 use crate::machine::model::{KType, SignatureElement};
 use crate::machine::{BindingIndex, FunctionLookup, KFunction, LexicalFrame, NodeId, Scope};
 
-use super::super::nodes::{NodeScope, NodeWork};
+use super::super::nodes::NodeScope;
 use super::super::scheduler::Scheduler;
 
 /// Submission-time binder-install info — see the module docs for the per-bucket eager-slot mask
@@ -134,7 +134,7 @@ pub(in crate::machine::execute) fn submit_dispatch<'run, 'step>(
         None => Vec::new(),
     };
     let id = sched.submit_node(
-        NodeWork::dispatch_with_presubs(expr, pre_subs),
+        super::decide_with_presubs(expr, pre_subs),
         node_scope,
         Some(chain.clone()),
     );

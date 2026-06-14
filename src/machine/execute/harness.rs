@@ -6,7 +6,7 @@
 
 use crate::machine::core::kfunction::action::{Action, Dep, FinishCtx, FramePlacement};
 
-use super::nodes::{NodeOutput, NodeWork};
+use super::nodes::NodeOutput;
 use super::outcome::{Continuation, DispatchDep, Outcome};
 use super::{CatchFinish, CombineFinish};
 
@@ -38,7 +38,7 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
             if leading.is_empty() {
                 // No leading statements: tail-replace directly into the arm body.
                 return Outcome::Continue {
-                    work: NodeWork::dispatch(tail),
+                    work: super::dispatch::decide(tail),
                     frame: frame_placement,
                     contract,
                     block_entry,
@@ -58,7 +58,7 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
             };
             let body_frame = frame.clone();
             let finish: CombineFinish<'run> = Box::new(move |_view, _results| Outcome::Continue {
-                work: NodeWork::dispatch(tail),
+                work: super::dispatch::decide(tail),
                 frame: FramePlacement::FreshChild { frame: body_frame },
                 contract,
                 block_entry,

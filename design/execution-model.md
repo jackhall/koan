@@ -82,8 +82,7 @@ them. The three pieces:
   [`Scheduler::apply_outcome`](../src/machine/execute/scheduler.rs)
   interprets a returned outcome into graph writes and the slot's
   `NodeStep`. It holds the **only** `&mut Scheduler`, so no decide handler
-  does — decide and apply never overlap. The router (`run_dispatch` /
-  `run_dispatch_resume`) builds a `SchedulerView` per decide, runs the
+  does — decide and apply never overlap. The router (`run_decide`) builds a `SchedulerView` per decide, runs the
   handler, and hands the outcome to `apply_outcome`; the recent-wakes
   side-channel drain stays in the router, the legitimate `&mut` boundary.
 
@@ -135,7 +134,7 @@ rather than restated at each call site. Consumers arrive on the run-set
 only when actually ready; there is no poll-and-requeue.
 
 A second fan-out runs alongside the counter-decrement. Each drained
-consumer whose work is `NodeWork::Dispatch` or `NodeWork::DispatchResume`
+consumer whose work is `NodeWork::Decide`
 gets the producer's `NodeId` appended to its
 `recent_wakes: Vec<NodeId>` side-channel before the counter is
 inspected. `Bind` / `Combine` / `Catch` / `Lift` consumers skip the
@@ -185,8 +184,8 @@ index space with `NodeStore::nodes` and uphold three invariants:
 Inv-B is what makes the eager `dep_edges[idx].clear()` in
 `Scheduler::reclaim_deps` sound at `Combine` / `Catch` success: those
 slots at reclaim time hold only `Owned` edges (their `deps` / `from`,
-all spawned by the slot). `Notify` edges land only on `Dispatch` slots
-via the bare-name short-circuit / replay-park in `run_dispatch`, never
+all spawned by the slot). `Notify` edges land only on `Decide` slots
+via the bare-name short-circuit / replay-park in `classify_dispatch`, never
 on `Combine` / `Catch`, so clearing the list cannot drop a wake intent.
 
 ## Lift: push/notify single-producer model
@@ -211,7 +210,7 @@ pending-deps accounting, not in any read-side caller.
 ## Working-copy splice
 
 The scheduler dispatches each expression by mutating an **owned working
-copy** of it. `run_dispatch` extracts every nested sub-expression out of
+copy** of it. The keyworded dispatcher extracts every nested sub-expression out of
 the parent's `parts` (replacing each with a placeholder `Identifier`) and
 declares them as the deps of a
 [`ParkThenContinue`](#the-dispatcher--scheduler-boundary) whose continuation
@@ -307,7 +306,7 @@ Vec<Option<Node<'a>>>` (active node payloads), `results:
 Vec<Option<NodeOutput<'a>>>` (terminal results), `free_list: Vec<usize>`
 (recyclable indices), and `recent_wakes: Vec<Vec<NodeId>>` (per-consumer
 side-channel of producers that have fired since the slot's last poll,
-populated only for `NodeWork::Dispatch` consumers) — and the slot
+populated only for `NodeWork::Decide` consumers) — and the slot
 lifecycle that moves each index through them: `alloc_slot → take_for_run
 → reinstall* → finalize → free_one`. Each transition is a single atomic
 mutator body, so the recycle-vs-extend choice, the take/reinstall
@@ -526,9 +525,9 @@ not here. Each recursive `submit_dispatch` runs its own
 outermost step as its parent's; recursion terminates at non-binder leaves and at
 lazy slots, bounded by AST depth.
 
-The collected `(slot_idx, sub_node_id)` pairs ride through into the
-parent's `NodeWork::Dispatch { expr, pre_subs }`
-([`nodes.rs`](../src/machine/execute/nodes.rs)). When the parent runs,
+The collected `(slot_idx, sub_node_id)` pairs are captured (with `expr`) in the
+parent's birth `NodeWork::Decide` closure
+([`decide_with_presubs`](../src/machine/execute/dispatch.rs)). When the parent runs,
 the fused splice / park / eager-sub walk in
 [`dispatch.rs`](../src/machine/execute/dispatch.rs) consults
 `pre_subs` before the `Expression` / `ListLiteral` / `DictLiteral` arms:
@@ -552,7 +551,7 @@ branch) gets [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs)
 scope visible. This is what lets a REPL query read through to every
 prior bind without sharing an index space with them.
 
-The execute side — [`run_dispatch`](../src/machine/execute/dispatch.rs) —
+The execute side — [`classify_dispatch`](../src/machine/execute/dispatch.rs) —
 opens with a pre-walk shape classifier. `classify_dispatch_shape` sweeps the
 expression's parts for any `Keyword` first and, if none, branches on the head
 token's shape, producing a `DispatchShape` variant. The no-keyword fast-lane
@@ -687,8 +686,8 @@ The rails the dispatch driver feeds:
     schema rides the identity. Opaque / Module / unbound heads surface a
     `TypeMismatch`. A head token bound to a still-finalizing producer (a
     forward functor `LET`) parks on it and re-runs `type_call` on resume.
-  - `SigiledTypeExpr` (single-part `:(...)` wrapper) — the `run_dispatch`
-    arm tail-replaces the slot with a `Dispatch`
+  - `SigiledTypeExpr` (single-part `:(...)` wrapper) — the `classify_dispatch`
+    arm tail-replaces the slot with a fresh `Decide`
     of the wrapped `KExpression`, so the inner expression runs through the
     same classifier and produces the same carrier shape any other dispatch
     site does. See
@@ -794,7 +793,7 @@ The rails the dispatch driver feeds:
 
   Wrap and ref-name arms read the same `bare_outcomes[i]` cache the
   resolver consumed in Step 3 — so each bare name is resolved once per
-  `run_dispatch` invocation, shared across admission and the walk.
+  dispatch poll, shared across admission and the walk.
   Per-arm behavior:
 
   - **Wrap slot.** `Resolved(obj)` rewrites the slot to
@@ -816,7 +815,7 @@ The rails the dispatch driver feeds:
     classification.
   - **Eager-sub slot.** `Expression` parts sub-Dispatch; `SigiledTypeExpr`
     and `RecordType` parts wrap into a single-part `KExpression` and
-    sub-Dispatch (the sub-Dispatch enters `run_dispatch`'s matching shape arm —
+    sub-Dispatch (the sub-Dispatch enters `classify_dispatch`'s matching shape arm —
     `SigiledTypeExpr` tail-replaces with the inner dispatch, `RecordType` folds
     to `KType::Record`); `ListLiteral` and `DictLiteral`
     route through `schedule_list_literal` / `schedule_dict_literal` for the
@@ -830,7 +829,7 @@ The rails the dispatch driver feeds:
   returns a `ParkThenContinue` whose continuation is a `Continuation::Resume`
   (carrying a `ResumeFn` closure over the partly-spliced `working_expr`) — the
   harness installs the park edges as `Notify` (via `add_park_edge`) and
-  transitions the slot to `NodeWork::DispatchResume`, so the captured
+  installs a resume `NodeWork::Decide`, so the captured
   `working_expr` becomes the source of truth on wake — **without** submitting
   any staged subs. Eager submission would leak the sub-nodes on the re-resume
   wake path, where the closure would re-stage them. Multi-name forward
@@ -936,15 +935,22 @@ diagnostic points at code the reader can act on.
 
 ### Dispatch birth and resume
 
-A dispatch slot has exactly two work shapes — there is no per-shape state
-envelope. **Birth** is [`NodeWork::Dispatch { expr, pre_subs }`](../src/machine/execute/nodes.rs):
-[`run_dispatch`](../src/machine/execute/dispatch.rs) classifies `expr` via
-`classify_dispatch_shape` on first poll and decides against a
+A dispatch slot has exactly one work shape:
+[`NodeWork::Decide { run, carrier }`](../src/machine/execute/nodes.rs) — a captured
+`SchedulerView -> Outcome` closure plus its deadlock-summary string. Birth and
+resume are the same shape, run through the same handler
+([`run_decide`](../src/machine/execute/dispatch.rs)); the scheduler never switches
+on dispatch-internal state and `NodeWork` names no `KExpression`.
+
+**Birth** closures are built by the dispatch layer
+([`decide`](../src/machine/execute/dispatch.rs) / `submit_dispatch`) capturing the
+slot's `expr` (+ `pre_subs`). On first poll the closure runs `classify_dispatch`,
+which classifies `expr` via `classify_dispatch_shape` and decides against a
 `SchedulerView`, returning an `Outcome`. `pre_subs` carries any recursively
-pre-submitted sub-Dispatches keyed by their slot index in `expr.parts`,
-populated at submit time for binder-shaped expressions so a nested binder's
-placeholders install at the outermost submission point; `run_dispatch` reuses
-these instead of allocating fresh sub-Dispatches.
+pre-submitted sub-Dispatches keyed by their slot index in `expr.parts`, populated
+at submit time for binder-shaped expressions so a nested binder's placeholders
+install at the outermost submission point; `classify_dispatch` reuses these instead
+of allocating fresh sub-Dispatches.
 
 When a decide must wait — a keyworded resolve that found bare-name or
 overload producers, a `FunctionValueCall` head still resolving to a
@@ -952,15 +958,13 @@ overload producers, a `FunctionValueCall` head still resolving to a
 `ParkThenContinue` whose continuation is a `Continuation::Resume` carrying an
 opaque [`ResumeFn`](../src/machine/execute/dispatch.rs) closure
 (`SchedulerView -> Outcome`, built by `park_resume`). The harness parks the
-slot's edges and transitions it to **resume**,
-[`NodeWork::DispatchResume { carrier, resume }`](../src/machine/execute/nodes.rs).
-On wake, [`run_dispatch_resume`](../src/machine/execute/dispatch.rs) clears
-the slot's stale dep edges, runs the captured closure against a fresh
-`SchedulerView`, and applies its `Outcome` — **one uniform arm** for every
-shape, so the scheduler never switches on dispatch-internal state. Clearing
-on resume is uniform and safe: a dispatch park installs only `Notify` edges
-(sibling forward references, never children), which drop at free, so a resume
-re-deriving its producers from the rebuilt scope cannot drop a live wake.
+slot's edges and installs a fresh **resume** `Decide` carrying that closure. On
+wake, `run_decide` clears the slot's stale dep edges, runs the captured closure
+against a fresh `SchedulerView`, and applies its `Outcome` — **one uniform arm**
+for every shape. Clearing on resume is uniform and safe: a dispatch park installs
+only `Notify` edges (sibling forward references, never children), which drop at
+free, so a resume re-deriving its producers from the rebuilt scope cannot drop a
+live wake. (Clearing on a fresh birth is a no-op — it owns no dep edges yet.)
 
 Each family's closure captures exactly what its decide needs and re-runs it
 against the now-populated scope:
@@ -996,9 +1000,9 @@ take the `Combine` route rather than a resume. So a slot's resume
 carries exactly one park reason.
 
 The drain-end cycle-detection guard (`NodeStore::unresolved`) summarizes
-parked slots from the `DispatchResume.carrier` — the parked expression the
-decide captured (`None` falls back to a generic `<dispatch-resume>` tag) —
-selected by a testable `work_deadlock_sample` helper in `node_store`.
+parked slots from the `Decide.carrier` — the decide expression's pre-rendered
+summary (`None` falls back to a generic `<decide>` tag) — selected by a testable
+`work_deadlock_sample` helper in `node_store`.
 
 ## `KObject` and the model/core boundary
 

@@ -81,7 +81,7 @@ Errors are first-class via [`KError`](src/machine/core/kerror.rs) — a `Done(Er
 
 ### execute — run the DAG
 
-[`Scheduler`](src/machine/execute/scheduler.rs) holds a slot table of in-flight work plus a push/notify dependency graph. Callers submit a top-level block via `enter_block` (and nested parts via `add_dispatch`); each slot's `run_dispatch` spawns sub-Dispatches for the expression's nested parts and parks the parent as a `Bind` until its deps terminalize. When a producer writes its terminal, a single `finalize` step drains the producer's notify-list and wakes any consumer whose `pending_deps` counter hits zero — no polling, no result-table sweep. Tail returns (an `Action::Tail` lowered to `Outcome::Continue`) rewrite the slot's own work in place rather than allocating a new slot. See [design/execution-model.md](design/execution-model.md).
+[`Scheduler`](src/machine/execute/scheduler.rs) holds a slot table of in-flight work plus a push/notify dependency graph. Callers submit a top-level block via `enter_block` (and nested parts via `add_dispatch`); each slot's decide spawns sub-Dispatches for the expression's nested parts and parks the parent as a `Bind` until its deps terminalize. When a producer writes its terminal, a single `finalize` step drains the producer's notify-list and wakes any consumer whose `pending_deps` counter hits zero — no polling, no result-table sweep. Tail returns (an `Action::Tail` lowered to `Outcome::Continue`) rewrite the slot's own work in place rather than allocating a new slot. See [design/execution-model.md](design/execution-model.md).
 
 [`interpret`](src/machine/execute/interpret.rs) is the glue: parse the source, hand the top-level block to `enter_block` against a root `default_scope`, drain the scheduler, then `read_result` each top-level node. `PRINT` output flows through the scope's pluggable writer (default stdout; tests swap in a shared `Vec<u8>` buffer to read it back), and every value the program allocated dies with the per-run `RuntimeArena` when `interpret` returns.
 
@@ -219,7 +219,7 @@ src/
         ├── nodes.rs       node types (NodeWork / NodeOutput / NodeStep / Node) + work_deps
         ├── outcome.rs     Outcome — the unified scheduler-step currency (Done / Continue / ParkThenContinue / Invoke / Redispatch) + Continuation / DispatchDep
         ├── harness.rs     run_action — lowers a builtin Action to an Outcome (pure)
-        ├── dispatch.rs    run_dispatch / run_dispatch_resume routers + classify_dispatch_shape; submit/ (binder-aware submit_dispatch chokepoint), harness/ (apply_outcome caller), ctx/ (SchedulerView read view), exec/ (dispatch-side invoke), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/, operator_chain/, field_list/, constructors/, resolve_dispatch/, resolve_type_expr/ submodules
+        ├── dispatch.rs    classify_dispatch + run_decide (one decide handler) + classify_dispatch_shape; submit/ (binder-aware submit_dispatch chokepoint), harness/ (apply_outcome caller), ctx/ (SchedulerView read view), exec/ (dispatch-side invoke), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/, operator_chain/, field_list/, constructors/, resolve_dispatch/, resolve_type_expr/ submodules
         ├── lift.rs        lift_kobject — rebuild values across per-call arena boundaries
         └── interpret.rs   parse → enter_block → execute
 ```

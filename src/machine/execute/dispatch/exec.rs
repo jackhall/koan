@@ -10,7 +10,7 @@
 
 use std::rc::Rc;
 
-use super::super::nodes::{NodeOutput, NodeWork};
+use super::super::nodes::NodeOutput;
 use super::super::outcome::{Continuation, DispatchDep, Outcome};
 use super::super::CombineFinish;
 use super::SchedulerView;
@@ -110,7 +110,7 @@ pub(super) fn invoke<'run>(
             if leading.is_empty() {
                 // No leading statements: tail-replace directly into the body terminal.
                 return Outcome::Continue {
-                    work: NodeWork::dispatch(tail_expr),
+                    work: super::decide(tail_expr),
                     frame: FramePlacement::FreshChild { frame },
                     contract: Some(contract),
                     block_entry: Some(block_entry),
@@ -126,7 +126,7 @@ pub(super) fn invoke<'run>(
                 leading.into_iter().map(|e| (*e).clone()).collect();
             let body_frame = frame.clone();
             let finish: CombineFinish<'run> = Box::new(move |_view, _results| Outcome::Continue {
-                work: NodeWork::dispatch(tail_expr),
+                work: super::decide(tail_expr),
                 frame: FramePlacement::FreshChild { frame: body_frame },
                 contract: Some(contract),
                 block_entry: Some(block_entry),
@@ -181,7 +181,7 @@ pub(super) fn invoke<'run>(
                 };
                 let block_entry = body_frame.scope().id;
                 Outcome::Continue {
-                    work: NodeWork::dispatch(tail_expr),
+                    work: super::decide(tail_expr),
                     frame: FramePlacement::FreshChild { frame: body_frame },
                     contract: Some(contract),
                     block_entry: Some(block_entry),

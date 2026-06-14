@@ -162,9 +162,10 @@ impl<'run> Scheduler<'run> {
                     }
                     // The resume closure carries the evolving `working_expr` from here on; the
                     // `carrier` it travels with is only the deadlock-summary sample.
-                    Continuation::Resume { carrier, resume } => {
-                        NodeWork::DispatchResume { carrier, resume }
-                    }
+                    Continuation::Resume { carrier, resume } => NodeWork::Decide {
+                        run: resume,
+                        carrier,
+                    },
                     Continuation::Forward(producer) => NodeWork::Lift(LiftState::Pending(producer)),
                 };
                 NodeStep::Replace {

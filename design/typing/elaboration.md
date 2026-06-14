@@ -297,7 +297,7 @@ surface-name carrier variant inside `KType` itself.
 
 [`signature_admits_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
 admits a candidate signature against an expression by walking slot/part
-pairs and consulting the per-`run_dispatch` `bare_outcomes` cache. The
+pairs and consulting the per-dispatch-poll `bare_outcomes` cache. The
 admission rule per cache entry on a bare-name part:
 
 | Cache entry              | Admission rule                                                                   |

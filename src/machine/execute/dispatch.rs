@@ -275,7 +275,7 @@ pub(in crate::machine::execute) fn become_dispatch<'run>(
     inner: KExpression<'run>,
 ) -> Outcome<'run> {
     Outcome::Continue {
-        work: NodeWork::dispatch(inner),
+        work: decide(inner),
         frame: FramePlacement::Inherit,
         contract: None,
         block_entry: None,
@@ -355,27 +355,45 @@ pub(super) fn stage_all_eager_parts<'run>(
 
 // ---------- Resume closure ----------
 
-/// A parked slot's resume: the `SchedulerView -> Outcome` decide a dispatch slot re-runs on wake.
-/// It captures whatever its decide needs (the carried `expr` + `pre_subs`, or a bare leaf), so the
-/// router can wake any family uniformly without naming its internals — boxed like
-/// [`CombineFinish`](super::outcome::CombineFinish) so [`NodeWork::DispatchResume`]
-/// stays slim.
+/// A dispatch slot's decide — the `SchedulerView -> Outcome` closure a [`NodeWork::Decide`] runs.
+/// A birth decide classifies the carried `expr` (+ `pre_subs`) and routes; a park's resume re-runs
+/// the decide its park captured (a bare leaf, an evolving `working_expr`). Boxing keeps the router
+/// blind to which family it is — every `Decide` wakes through [`run_decide`] uniformly.
 pub(in crate::machine::execute) type ResumeFn<'run> =
     Box<dyn for<'a> FnOnce(&SchedulerView<'run, 'a>, usize) -> Outcome<'run> + 'run>;
 
 // ---------- Cross-shape driver ----------
 
-/// Stateful dispatch driver. Classifies a freshly-born slot's shape and routes to the matching
-/// per-shape entry. Fast-lane variants terminalize (or single-producer-park) in one poll; a shape
-/// that parks re-enters through [`run_dispatch_resume`] with the closure it captured, never back
-/// through here.
-pub(in crate::machine::execute) fn run_dispatch<'run>(
-    sched: &mut Scheduler<'run>,
+/// Build a birth [`NodeWork::Decide`] for `expr` with empty `pre_subs` — the dispatch-layer
+/// constructor every tail-replace / re-dispatch site uses instead of a raw work literal. The
+/// captured closure classifies `expr` on first poll; `carrier` is its deadlock-summary.
+pub(in crate::machine::execute) fn decide<'run>(expr: KExpression<'run>) -> NodeWork<'run> {
+    decide_with_presubs(expr, Vec::new())
+}
+
+/// Birth [`NodeWork::Decide`] carrying the dispatch layer's pre-submitted nested sub-Dispatches
+/// (computed by [`submit_dispatch`]).
+pub(in crate::machine::execute) fn decide_with_presubs<'run>(
+    expr: KExpression<'run>,
+    pre_subs: Vec<(usize, NodeId)>,
+) -> NodeWork<'run> {
+    let carrier = expr.summarize();
+    NodeWork::Decide {
+        run: Box::new(move |view, idx| classify_dispatch(view, expr, pre_subs, idx)),
+        carrier: Some(carrier),
+    }
+}
+
+/// Classify a freshly-born dispatch expression's shape and route to the matching per-shape decide,
+/// returning the [`Outcome`] for the harness to apply. Fast-lane shapes terminalize or
+/// single-producer-park in one poll; a shape that parks returns a `ParkThenContinue` whose resume
+/// closure re-enters [`run_decide`], never back through here.
+fn classify_dispatch<'run>(
+    view: &SchedulerView<'run, '_>,
     expr: KExpression<'run>,
     pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
-) -> NodeStep<'run> {
-    let _wakes = sched.take_recent_wakes(NodeId(idx));
+) -> Outcome<'run> {
     match expr.shape() {
         DispatchShape::BareTypeLeaf => {
             debug_assert!(pre_subs.is_empty());
@@ -383,8 +401,7 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
                 ExpressionPart::Type(t) => t.clone(),
                 _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
             };
-            let outcome = single_poll::bare_type_leaf(&SchedulerView::new(sched), &t);
-            sched.apply_outcome(outcome, idx)
+            single_poll::bare_type_leaf(view, &t)
         }
         DispatchShape::BareIdentifier => {
             debug_assert!(pre_subs.is_empty());
@@ -392,31 +409,28 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
                 ExpressionPart::Identifier(n) => n.clone(),
                 _ => unreachable!("BareIdentifier shape implies single Identifier part"),
             };
-            let outcome = single_poll::bare_identifier(&SchedulerView::new(sched), name);
-            sched.apply_outcome(outcome, idx)
+            single_poll::bare_identifier(view, name)
         }
         DispatchShape::FunctionValueCall => {
             debug_assert!(pre_subs.is_empty());
-            let outcome = fn_value::initial(&SchedulerView::new(sched), expr);
-            sched.apply_outcome(outcome, idx)
+            fn_value::initial(view, expr)
         }
         DispatchShape::TypeCall => {
             debug_assert!(pre_subs.is_empty());
-            let outcome = single_poll::type_call(&SchedulerView::new(sched), expr);
-            sched.apply_outcome(outcome, idx)
+            single_poll::type_call(view, expr)
         }
         DispatchShape::HeadDeferred => {
             debug_assert!(pre_subs.is_empty());
-            sched.apply_outcome(head_deferred::initial_expr(expr), idx)
+            head_deferred::initial_expr(expr)
         }
         DispatchShape::TypeHeadDeferred => {
             debug_assert!(pre_subs.is_empty());
-            sched.apply_outcome(head_deferred::initial_type(expr), idx)
+            head_deferred::initial_type(expr)
         }
         // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
         // a non-callable head is a runtime error, not a fatal `execute()` abort.
         DispatchShape::NonCallableHead => {
-            NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(),
                 reason: format!(
                     "head is not callable: `{}`",
@@ -429,44 +443,35 @@ pub(in crate::machine::execute) fn run_dispatch<'run>(
         }
         DispatchShape::OperatorChain => {
             debug_assert!(pre_subs.is_empty());
-            // Decide against a read-only view (immutable scheduler borrow), then reborrow
-            // `&mut` through the harness to apply — the borrow contract the effect split rests
-            // on. The `read_view` borrow ends at the `run` call (NLL), freeing `ctx` for apply.
-            let outcome = operator_chain::run(&SchedulerView::new(sched), &expr);
-            sched.apply_outcome(outcome, idx)
+            operator_chain::run(view, &expr)
         }
-        DispatchShape::Keyworded => {
-            let outcome = keyworded::initial(&SchedulerView::new(sched), expr, pre_subs, idx);
-            sched.apply_outcome(outcome, idx)
-        }
+        DispatchShape::Keyworded => keyworded::initial(view, expr, pre_subs, idx),
         DispatchShape::SigiledTypeExpr => {
             debug_assert!(pre_subs.is_empty());
-            sched.apply_outcome(single_poll::sigiled_type_expr(expr), idx)
+            single_poll::sigiled_type_expr(expr)
         }
         DispatchShape::RecordType => {
             debug_assert!(pre_subs.is_empty());
-            let outcome = single_poll::record_type(&SchedulerView::new(sched), expr);
-            sched.apply_outcome(outcome, idx)
+            single_poll::record_type(view, expr)
         }
         DispatchShape::LiteralPassThrough => {
             debug_assert!(pre_subs.is_empty());
-            let outcome = single_poll::literal_pass_through(&SchedulerView::new(sched), expr);
-            sched.apply_outcome(outcome, idx)
+            single_poll::literal_pass_through(view, expr)
         }
     }
 }
 
-/// Wake a parked dispatch slot. The router clears the resuming slot's stale dep edges, runs its
-/// captured `resume` decide against a read-only view, and applies the returned outcome — the
-/// resume itself issues no graph write, so every shape wakes through this one arm regardless of
-/// what its decide reads.
-pub(in crate::machine::execute) fn run_dispatch_resume<'run>(
+/// Run a [`NodeWork::Decide`] slot: drain stale wakes, clear the slot's stale dep edges (a no-op on
+/// a fresh birth, which owns none), run the captured decide against a read-only view, and apply the
+/// returned [`Outcome`]. Birth and resume wake through this one arm, so the scheduler never learns
+/// which dispatch family the slot is.
+pub(in crate::machine::execute) fn run_decide<'run>(
     sched: &mut Scheduler<'run>,
-    resume: ResumeFn<'run>,
+    run: ResumeFn<'run>,
     idx: usize,
 ) -> NodeStep<'run> {
     let _wakes = sched.take_recent_wakes(NodeId(idx));
     sched.clear_dep_edges(idx);
-    let outcome = resume(&SchedulerView::new(sched), idx);
+    let outcome = run(&SchedulerView::new(sched), idx);
     sched.apply_outcome(outcome, idx)
 }

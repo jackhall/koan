@@ -1,6 +1,6 @@
 //! combine, defer_to, and tail-call slot reuse.
 
-use super::super::super::nodes::{NodeOutput, NodeWork};
+use super::super::super::nodes::NodeOutput;
 use super::super::super::outcome::Outcome;
 use super::super::Scheduler;
 use crate::builtins::default_scope;
@@ -63,7 +63,7 @@ fn combine_short_circuits_on_dep_error() {
 
     // Allocate two placeholder Dispatch slots, drain the queue so execute()
     // doesn't revisit them, then overwrite their results directly.
-    let mk_dispatch = || NodeWork::dispatch(KExpression::new(Vec::new()));
+    let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
     let dep_ok = sched.add(mk_dispatch(), scope);
     let dep_err = sched.add(mk_dispatch(), scope);
     sched.store.clear_node(dep_ok);

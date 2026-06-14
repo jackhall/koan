@@ -106,8 +106,8 @@ pub(in crate::machine::execute) enum Outcome<'run> {
 /// - `Resume` re-runs the parked dispatch decide (the `ParkSelf` shape) through the opaque
 ///   [`ResumeFn`] closure the parking decide captured; `carrier` is the parked expression's
 ///   pre-rendered summary the drain-end deadlock report surfaces (`None` when the park carries no
-///   renderable form). On apply the slot becomes a
-///   [`NodeWork::DispatchResume`](super::nodes::NodeWork::DispatchResume).
+///   renderable form). On apply the slot becomes a resume
+///   [`NodeWork::Decide`](super::nodes::NodeWork::Decide).
 /// - `Forward` makes the slot *be* a single producer's value (the bare-name `Lift` forward).
 pub(in crate::machine::execute) enum Continuation<'run> {
     Finish(CombineFinish<'run>),

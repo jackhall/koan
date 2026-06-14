@@ -149,7 +149,7 @@ fn add_with_chain_without_chain_panics() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     sched.add_with_chain(
-        super::super::super::nodes::NodeWork::dispatch(KExpression::new(vec![Spanned::bare(
+        crate::machine::execute::dispatch::decide(KExpression::new(vec![Spanned::bare(
             ExpressionPart::Literal(KLiteral::Number(1.0)),
         )])),
         scope,

@@ -332,7 +332,7 @@ The post-step loop in `Scheduler::execute` reads the just-finished step's scope 
 `PostStep` token returned by `exit_slot_step`, derived from the slot's *returned* frame
 (`prev_frame`) rather than the ambient `active_frame` — an in-step invoke can swap the ambient
 frame, so the returned value is the authoritative source. A within-step frame lifetime `'s`
-(`'a: 's`) threads `run_dispatch` → `SchedulerView` → `BuiltinFn` → the scheduler's write
+(`'a: 's`) threads `classify_dispatch` → `SchedulerView` → `BuiltinFn` → the scheduler's write
 primitives, lifting to the run `'a` only at the `lift_kobject` Done boundary.
 
 ## Seed-side re-anchor

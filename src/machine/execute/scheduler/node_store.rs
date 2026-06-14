@@ -18,7 +18,6 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::body::ErasedContract;
 use crate::machine::core::{CallArena, LexicalFrame};
 use crate::machine::model::Carried;
-use crate::machine::model::Parseable;
 use crate::machine::KError;
 use crate::machine::NodeId;
 
@@ -82,19 +81,16 @@ enum DeadlockSample {
     Fallback(&'static str),
 }
 
-/// Map a stuck slot's `work` to its deadlock-sample contribution. A pending `Dispatch` and a
-/// `Some`-carrier `DispatchResume` carry a renderable expression summary (`Preferred`); a
-/// carrier-less resume and the fixed-dep combinators carry only a generic tag (`Fallback`).
+/// Map a stuck slot's `work` to its deadlock-sample contribution. A `Some`-carrier `Decide` (birth
+/// or resume) carries a renderable expression summary (`Preferred`); a carrier-less decide and the
+/// fixed-dep combinators carry only a generic tag (`Fallback`).
 fn work_deadlock_sample<'run>(work: &NodeWork<'run>) -> DeadlockSample {
     match work {
-        NodeWork::Dispatch { expr, .. } => DeadlockSample::Preferred(expr.summarize()),
-        NodeWork::DispatchResume {
+        NodeWork::Decide {
             carrier: Some(carrier),
             ..
         } => DeadlockSample::Preferred(carrier.clone()),
-        NodeWork::DispatchResume { carrier: None, .. } => {
-            DeadlockSample::Fallback("<dispatch-resume>")
-        }
+        NodeWork::Decide { carrier: None, .. } => DeadlockSample::Fallback("<decide>"),
         NodeWork::Combine { .. } => DeadlockSample::Fallback("<combine>"),
         NodeWork::Catch { .. } => DeadlockSample::Fallback("<catch>"),
         NodeWork::Lift(_) => DeadlockSample::Fallback("<lift>"),
@@ -108,9 +104,8 @@ pub(in crate::machine::execute::scheduler) struct NodeStore<'run> {
     /// tail-recursive bodies.
     free_list: Vec<NodeId>,
     /// Per-consumer side-channel: producers that have fired since this
-    /// slot's last poll. Populated only for `NodeWork::Dispatch` /
-    /// `NodeWork::DispatchResume` consumers; drained on entry to the
-    /// dispatch driver. Indexed in lockstep with `slots`.
+    /// slot's last poll. Populated only for `NodeWork::Decide` consumers;
+    /// drained on entry to the dispatch driver. Indexed in lockstep with `slots`.
     recent_wakes: SlotVec<Vec<NodeId>>,
 }
 
@@ -289,18 +284,14 @@ impl<'run> NodeStore<'run> {
     }
 
     /// Record that `producer` just terminalized into the consumer slot's
-    /// `recent_wakes`. No-op unless `consumer` is `PreRun` with `NodeWork::Dispatch`
-    /// or `NodeWork::DispatchResume` (the parked-and-replaying shape) — `Combine` /
-    /// `Catch` / `Lift` run a fixed closure on counter-zero and don't need per-edge
-    /// wake attribution.
+    /// `recent_wakes`. No-op unless `consumer` is `PreRun` with a `NodeWork::Decide`
+    /// (the birth / parked-and-replaying shape) — `Combine` / `Catch` / `Lift` run a
+    /// fixed closure on counter-zero and don't need per-edge wake attribution.
     pub(super) fn push_recent_wake(&mut self, consumer: NodeId, producer: NodeId) {
         let is_dispatch_prerun = matches!(
             &self.slots[consumer],
             SlotState::PreRun(node)
-                if matches!(
-                    &node.work,
-                    NodeWork::Dispatch { .. } | NodeWork::DispatchResume { .. }
-                ),
+                if matches!(&node.work, NodeWork::Decide { .. }),
         );
         if !is_dispatch_prerun {
             return;
@@ -364,49 +355,31 @@ impl<'run> NodeStore<'run> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::core::source::Spanned;
-    use crate::machine::model::ast::{ExpressionPart, KExpression};
-
-    fn keyworded(name: &str) -> KExpression<'static> {
-        KExpression::new(vec![Spanned::bare(ExpressionPart::Keyword(name.into()))])
-    }
 
     #[test]
-    fn pending_dispatch_prefers_its_expression() {
-        let work = NodeWork::Dispatch {
-            expr: keyworded("HEAD"),
-            pre_subs: Vec::new(),
-        };
-        assert!(
-            matches!(work_deadlock_sample(&work), DeadlockSample::Preferred(s) if s.contains("HEAD")),
-            "a pending Dispatch must surface its own expression",
-        );
-    }
-
-    #[test]
-    fn some_carrier_resume_prefers_the_carrier() {
-        let work = NodeWork::DispatchResume {
-            carrier: Some(keyworded("PARKED").summarize()),
-            resume: Box::new(|_view, _idx| unreachable!("sample test never resumes")),
+    fn some_carrier_decide_prefers_the_carrier() {
+        let work = NodeWork::Decide {
+            carrier: Some("PARKED-EXPR".to_string()),
+            run: Box::new(|_view, _idx| unreachable!("sample test never resumes")),
         };
         assert!(
             matches!(work_deadlock_sample(&work), DeadlockSample::Preferred(s) if s.contains("PARKED")),
-            "a Some-carrier resume must surface its carrier",
+            "a Some-carrier Decide (birth or resume) must surface its carrier",
         );
     }
 
     #[test]
-    fn carrier_less_resume_falls_back_to_a_tag() {
-        let work = NodeWork::DispatchResume {
+    fn carrier_less_decide_falls_back_to_a_tag() {
+        let work = NodeWork::Decide {
             carrier: None,
-            resume: Box::new(|_view, _idx| unreachable!("sample test never resumes")),
+            run: Box::new(|_view, _idx| unreachable!("sample test never resumes")),
         };
         assert!(
             matches!(
                 work_deadlock_sample(&work),
-                DeadlockSample::Fallback("<dispatch-resume>")
+                DeadlockSample::Fallback("<decide>")
             ),
-            "a carrier-less resume must surface a generic tag, not an empty sample",
+            "a carrier-less Decide must surface a generic tag, not an empty sample",
         );
     }
 

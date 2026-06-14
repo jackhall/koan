@@ -466,7 +466,7 @@ boundary.
 
 This makes element-only-differing overloads (`:(LIST OF Number)` vs `:(LIST OF Str)`)
 dispatchable across the forms a container argument takes. Admission is
-strict-only, driven by a per-`run_dispatch` `bare_outcomes` cache —
+strict-only, driven by a per-dispatch-poll `bare_outcomes` cache —
 [`signature_admits_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
 reads each bare-name slot's cached
 [`NameOutcome`](../../src/machine/execute/dispatch/resolve_dispatch.rs) once and
