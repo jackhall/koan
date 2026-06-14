@@ -191,9 +191,9 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'run>(
             reason: "no matching function".to_string(),
         })));
     }
-    // Carry the *original* `expr` — no splice has happened yet — so resume hands it straight back
-    // to `initial`.
-    let carrier = expr.clone();
+    // Summarize the *original* `expr` for the deadlock report — no splice has happened yet — then
+    // hand `expr` itself to the resume closure.
+    let carrier = expr.summarize();
     park_resume(
         to_wait,
         Some(carrier),
@@ -227,7 +227,7 @@ fn install_bare_name_park<'run>(
     working_expr: KExpression<'run>,
     pre_subs: Vec<(usize, NodeId)>,
 ) -> Outcome<'run> {
-    let carrier = working_expr.clone();
+    let carrier = working_expr.summarize();
     park_resume(
         producers,
         Some(carrier),

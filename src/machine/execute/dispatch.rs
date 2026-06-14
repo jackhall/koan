@@ -238,11 +238,12 @@ pub(in crate::machine::execute) fn park_combine<'run>(
 
 /// Park the slot on `producers` (notify edges) and re-run its `resume` decide on wake — the
 /// closure-carrying `ParkSelf` shape every park-and-replay family uses. `carrier` is the parked
-/// expression the deadlock summary renders (`None` when the park carries no renderable form). The
-/// producers are the to-wait set the decide already filtered.
+/// expression's pre-rendered summary the deadlock report surfaces (`None` when the park carries no
+/// renderable form); rendering it here keeps the AST out of the scheduler. The producers are the
+/// to-wait set the decide already filtered.
 pub(in crate::machine::execute) fn park_resume<'run>(
     producers: Vec<NodeId>,
-    carrier: Option<KExpression<'run>>,
+    carrier: Option<String>,
     resume: ResumeFn<'run>,
 ) -> Outcome<'run> {
     Outcome::ParkThenContinue {

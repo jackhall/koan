@@ -83,15 +83,15 @@ enum DeadlockSample {
 }
 
 /// Map a stuck slot's `work` to its deadlock-sample contribution. A pending `Dispatch` and a
-/// `Some`-carrier `DispatchResume` carry a renderable expression (`Preferred`); a carrier-less
-/// resume and the fixed-dep combinators carry only a generic tag (`Fallback`).
+/// `Some`-carrier `DispatchResume` carry a renderable expression summary (`Preferred`); a
+/// carrier-less resume and the fixed-dep combinators carry only a generic tag (`Fallback`).
 fn work_deadlock_sample<'run>(work: &NodeWork<'run>) -> DeadlockSample {
     match work {
         NodeWork::Dispatch { expr, .. } => DeadlockSample::Preferred(expr.summarize()),
         NodeWork::DispatchResume {
             carrier: Some(carrier),
             ..
-        } => DeadlockSample::Preferred(carrier.summarize()),
+        } => DeadlockSample::Preferred(carrier.clone()),
         NodeWork::DispatchResume { carrier: None, .. } => {
             DeadlockSample::Fallback("<dispatch-resume>")
         }
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn some_carrier_resume_prefers_the_carrier() {
         let work = NodeWork::DispatchResume {
-            carrier: Some(keyworded("PARKED")),
+            carrier: Some(keyworded("PARKED").summarize()),
             resume: Box::new(|_view, _idx| unreachable!("sample test never resumes")),
         };
         assert!(

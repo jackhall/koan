@@ -81,11 +81,12 @@ pub(super) enum NodeWork<'run> {
     /// A parked dispatch slot woken to re-run its decide. `resume` is the opaque
     /// `SchedulerView -> Outcome` closure the parking decide captured (its family's internals
     /// stay hidden from the router); [`run_dispatch_resume`](super::dispatch::run_dispatch_resume)
-    /// clears the slot's stale dep edges and runs it. `carrier` is the parked expression surfaced
-    /// for the drain-end deadlock summary, or `None` for a park that carries no renderable
-    /// expression (it falls back to a generic tag).
+    /// clears the slot's stale dep edges and runs it. `carrier` is the parked expression's
+    /// pre-rendered summary, surfaced for the drain-end deadlock report, or `None` for a park that
+    /// carries no renderable form (it falls back to a generic tag). The summary is rendered in the
+    /// dispatch layer at park time so the scheduler holds no AST.
     DispatchResume {
-        carrier: Option<KExpression<'run>>,
+        carrier: Option<String>,
         resume: ResumeFn<'run>,
     },
     /// An N→1 combinator: wait on a fixed set of dep slots, then run `finish` over their resolved

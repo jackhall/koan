@@ -60,7 +60,7 @@ fn dispatch_callable_value<'run>(
 /// resume. The carrier surfaces the original (unspliced) call expression for the drain-end
 /// deadlock summary.
 fn install_head_park<'run>(producer: NodeId, expr: KExpression<'run>) -> Outcome<'run> {
-    let carrier = expr.clone();
+    let carrier = expr.summarize();
     park_resume(
         vec![producer],
         Some(carrier),

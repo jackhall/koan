@@ -12,7 +12,7 @@ use std::rc::Rc;
 use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
-use crate::machine::model::{KType, RecursiveSet};
+use crate::machine::model::{KType, Parseable, RecursiveSet};
 use crate::machine::{KError, KErrorKind, Resolution};
 
 use super::super::nodes::NodeOutput;
@@ -210,7 +210,7 @@ pub(super) fn type_call<'run>(
         if !ctx.is_result_ready(producer) {
             // The original call expression is the deadlock-summary sample; the resume re-runs
             // the whole fast lane against it once the head binding finalizes.
-            let carrier = expr.clone();
+            let carrier = expr.summarize();
             return park_resume(
                 vec![producer],
                 Some(carrier),
