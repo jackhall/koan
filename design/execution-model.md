@@ -886,7 +886,7 @@ The rails the dispatch driver feeds:
   none was pre-picked.
 
   Dict and list literals (`classify_aggregate_part` in
-  [`scheduler/literal.rs`](../src/machine/execute/scheduler/literal.rs))
+  [`dispatch/literal.rs`](../src/machine/execute/dispatch/literal.rs))
   ride the same name-resolve rail when their `wrap_identifiers` plan-input
   is set: bare-name entries call `resolve_name_part` directly and
   materialize as `Slot::Static` (resolved) or `Slot::Park(i)` (parked

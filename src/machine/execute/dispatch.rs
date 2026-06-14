@@ -39,6 +39,7 @@ pub(in crate::machine::execute) mod fn_value;
 mod harness;
 pub(in crate::machine::execute) mod head_deferred;
 pub(in crate::machine::execute) mod keyworded;
+mod literal;
 pub(in crate::machine::execute) mod operator_chain;
 pub(in crate::machine) mod resolve_dispatch;
 pub(in crate::machine) mod resolve_type_expr;

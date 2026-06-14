@@ -5,11 +5,11 @@ use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
 use crate::machine::{KError, KErrorKind, NameOutcome, NodeId, TraceFrame};
 
-use super::super::dispatch::resolve_name_part;
 use super::super::nodes::NodeOutput;
 use super::super::outcome::Outcome;
+use super::super::scheduler::Scheduler;
 use super::super::CombineFinish;
-use super::Scheduler;
+use super::resolve_name_part;
 
 /// One element of a list literal or one side of a dict-literal pair. Indices are into the
 /// Combine's results: `Park(i)` reads position `i` of the park-producer prefix; `Owned(j)`

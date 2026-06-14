@@ -180,6 +180,15 @@ What's shipped that the open items below build on:
   so the scheduler never introspects a `KExpression` — `submit_node` is a generic slot allocator
   and no `NodeWork` variant names an AST. See
   [design/execution-model.md § Dispatch birth and resume](../design/execution-model.md#dispatch-birth-and-resume).
+- *Literal lowering hoisted to the dispatcher.* The aggregate-literal lowering
+  (`schedule_list_literal` / `schedule_dict_literal` / `schedule_record_literal`, the `Slot`
+  layout enum, `classify_aggregate_part`, `resolve_aggregate_bare_name`) moved from
+  `scheduler/literal.rs` to [`dispatch/literal.rs`](../src/machine/execute/dispatch/literal.rs),
+  next to the harness that drives it. It was the one file in the scheduler subtree that
+  name-resolved and built values from an `ExpressionPart`, so the "scheduler names no AST"
+  invariant now holds structurally across `scheduler/**`. The methods stay inherent on
+  `Scheduler`, reached through its public surface (`combine_here` / `dispatch_here` /
+  `current_scope`). See [design/execution-model.md](../design/execution-model.md#the-dispatcher--scheduler-boundary).
 
 ## Next items
 

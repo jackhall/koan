@@ -13,7 +13,6 @@ use work_queues::WorkQueues;
 mod dep_graph;
 mod execute;
 mod finish;
-mod literal;
 mod node_store;
 #[cfg(test)]
 mod run_tests;
