@@ -90,7 +90,7 @@ enum DeadlockSample {
 /// dispatch decide) carries a renderable expression summary (`Preferred`); a carrier-less wait
 /// (combine / catch) carries only a generic tag (`Fallback`).
 fn work_deadlock_sample<'run>(work: &NodeWork<'run>) -> DeadlockSample {
-    let NodeWork::Wait { carrier, .. } = work;
+    let NodeWork { carrier, .. } = work;
     match carrier {
         Some(carrier) => DeadlockSample::Preferred(carrier.clone()),
         None => DeadlockSample::Fallback("<wait>"),
@@ -316,7 +316,7 @@ mod tests {
     use super::*;
 
     fn sample_wait<'r>(carrier: Option<String>) -> NodeWork<'r> {
-        NodeWork::Wait {
+        NodeWork {
             deps: Vec::new(),
             park_count: 0,
             cont: Box::new(|_view, _results, _idx| unreachable!("sample test never runs")),

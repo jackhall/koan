@@ -34,7 +34,7 @@ impl<'run> Scheduler<'run> {
             // contract chain — a deferred-return FN dispatched here skips resolving its own return
             // type (keep-first discards it anyway).
             self.active_in_contract_chain = prev_contract.is_some();
-            let NodeWork::Wait {
+            let NodeWork {
                 deps,
                 park_count,
                 cont,

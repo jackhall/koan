@@ -1,7 +1,7 @@
 //! Head-deferred dispatch shapes — `HeadDeferred` and `TypeHeadDeferred`.
 //!
 //! Both evaluate the head (`parts[0]`) first as a sub-dispatch, parking the slot
-//! on it as a single-dep [`NodeWork::Wait`](super::super::nodes::NodeWork::Wait);
+//! on it as a single-dep [`NodeWork`](super::super::nodes::NodeWork);
 //! once it resolves, the finish applies the value to `parts[1..]` via the shared
 //! apply-a-callable tail. The `type_only` flag selects the admitted arm set:
 //!

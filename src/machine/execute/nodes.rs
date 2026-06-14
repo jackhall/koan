@@ -64,28 +64,21 @@ pub(super) enum NodeStep<'run> {
     Alias(NodeId),
 }
 
-/// What a scheduler node will run. `Lift` exists because the push/notify model
-/// assumes a single producer slot per result — see [design/execution-model.md §
-/// Lift: push/notify single-producer model](../../../design/execution-model.md#lift-pushnotify-single-producer-model).
-/// `Combine` is the dual of `Bind`: a host-side N→1 combinator that waits on a
-/// fixed set of dep slots and runs a host closure over their resolved values.
-pub(super) enum NodeWork<'run> {
-    /// The unified node: wait on `deps`, then run `cont` over their resolved terminals (passed as
-    /// `Result`s — the continuation, not the handler, decides short-circuit vs recover). `deps`
-    /// layout is `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix
-    /// (`Notify` edges, kept alive), the suffix installs `Owned` (cascade-freed at success). A
-    /// dispatch decide (birth or resume) waits on no owned deps and ignores the results; a combine
-    /// reads its dep values; a catch reads its single dep's `Result`. `carrier` is the
-    /// deadlock-report sample (a decide's expression summary, else `None`). The per-family behavior
-    /// lives in `cont`, built by the [`short_circuit`](super::outcome::short_circuit) /
-    /// [`catch_cont`](super::outcome::catch_cont) / [`ignore_results`](super::outcome::ignore_results)
-    /// combinators, so the node itself never branches and names no AST.
-    Wait {
-        deps: Vec<NodeId>,
-        park_count: usize,
-        cont: NodeCont<'run>,
-        carrier: Option<String>,
-    },
+/// What a scheduler node will run: wait on `deps`, then run `cont` over their resolved terminals
+/// (passed as `Result`s — the continuation, not the handler, decides short-circuit vs recover).
+/// `deps` layout is `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix
+/// (`Notify` edges, kept alive), the suffix installs `Owned` (cascade-freed at success). A dispatch
+/// decide (birth or resume) waits on no owned deps and ignores the results; a combine reads its dep
+/// values; a catch reads its single dep's `Result`. `carrier` is the deadlock-report sample (a
+/// decide's expression summary, else `None`). The per-family behavior lives in `cont`, built by the
+/// [`short_circuit`](super::outcome::short_circuit) / [`catch_cont`](super::outcome::catch_cont) /
+/// [`ignore_results`](super::outcome::ignore_results) combinators, so the node itself never
+/// branches and names no AST.
+pub(super) struct NodeWork<'run> {
+    pub(in crate::machine::execute) deps: Vec<NodeId>,
+    pub(in crate::machine::execute) park_count: usize,
+    pub(in crate::machine::execute) cont: NodeCont<'run>,
+    pub(in crate::machine::execute) carrier: Option<String>,
 }
 
 /// Slot-stored scope handle. `Anchored` holds a run-lifetime borrow directly — a genuinely
@@ -155,17 +148,11 @@ pub(super) struct Node<'run> {
 /// Owned `NodeId`s a node must read before running: the `deps[park_count..]` suffix. The
 /// park-producer prefix is installed separately as `Notify` edges.
 pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Vec<NodeId> {
-    let NodeWork::Wait {
-        deps, park_count, ..
-    } = work;
-    deps[*park_count..].to_vec()
+    work.deps[work.park_count..].to_vec()
 }
 
 /// Park-producer prefix (sibling slots whose values the node reads but does not own). The caller
 /// installs each as a `Notify` edge separately from the Owned path.
 pub(super) fn work_park_producers<'run, 'b>(work: &'b NodeWork<'run>) -> &'b [NodeId] {
-    let NodeWork::Wait {
-        deps, park_count, ..
-    } = work;
-    &deps[..*park_count]
+    &work.deps[..work.park_count]
 }

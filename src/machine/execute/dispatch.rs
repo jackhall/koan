@@ -220,7 +220,7 @@ pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>)
 
 // ---------- Outcome constructors (the dispatch-currency → Outcome mapping) ----------
 
-/// Park the slot on `deps` as a [`NodeWork::Wait`](super::nodes::NodeWork::Wait) whose
+/// Park the slot on `deps` as a [`NodeWork`](super::nodes::NodeWork) whose
 /// `finish` runs over their resolved values (the dispatch combine — short-circuits on dep error).
 /// Every dep is owned (`park_count: 0`); `free` reclaims `Reuse` producers consumed inline.
 pub(in crate::machine::execute) fn park_combine<'run>(
@@ -349,7 +349,7 @@ pub(super) fn stage_all_eager_parts<'run>(
 
 // ---------- Resume closure ----------
 
-/// A dispatch slot's decide — the `SchedulerView -> Outcome` closure a dispatch [`NodeWork::Wait`](super::nodes::NodeWork::Wait) runs.
+/// A dispatch slot's decide — the `SchedulerView -> Outcome` closure a dispatch [`NodeWork`](super::nodes::NodeWork) runs.
 /// A birth decide classifies the carried `expr` (+ `pre_subs`) and routes; a park's resume re-runs
 /// the decide its park captured (a bare leaf, an evolving `working_expr`). Boxing keeps the router
 /// blind to which family it is — every `Wait` wakes through `run_wait` uniformly.
@@ -358,14 +358,14 @@ pub(in crate::machine::execute) type ResumeFn<'run> =
 
 // ---------- Cross-shape driver ----------
 
-/// Build a birth dispatch [`NodeWork::Wait`](super::nodes::NodeWork::Wait) for `expr` with empty `pre_subs` — the dispatch-layer
+/// Build a birth dispatch [`NodeWork`](super::nodes::NodeWork) for `expr` with empty `pre_subs` — the dispatch-layer
 /// constructor every tail-replace / re-dispatch site uses instead of a raw work literal. The
 /// captured closure classifies `expr` on first poll; `carrier` is its deadlock-summary.
 pub(in crate::machine::execute) fn decide<'run>(expr: KExpression<'run>) -> NodeWork<'run> {
     decide_with_presubs(expr, Vec::new())
 }
 
-/// Birth dispatch [`NodeWork::Wait`](super::nodes::NodeWork::Wait) carrying the dispatch layer's pre-submitted nested sub-Dispatches
+/// Birth dispatch [`NodeWork`](super::nodes::NodeWork) carrying the dispatch layer's pre-submitted nested sub-Dispatches
 /// (computed by [`submit_dispatch`]).
 pub(in crate::machine::execute) fn decide_with_presubs<'run>(
     expr: KExpression<'run>,
@@ -374,7 +374,7 @@ pub(in crate::machine::execute) fn decide_with_presubs<'run>(
     let carrier = expr.summarize();
     // A birth decide waits on no deps and ignores the (empty) results slice; it runs on first poll,
     // classifies, and routes. `ignore_results` adapts the decide closure to the unified `NodeCont`.
-    NodeWork::Wait {
+    NodeWork {
         deps: Vec::new(),
         park_count: 0,
         cont: ignore_results(Box::new(move |view, idx| {

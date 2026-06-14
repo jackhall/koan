@@ -39,7 +39,7 @@ impl<'run> Scheduler<'run> {
         let mut deps = park_producers;
         deps.extend(owned_subs);
         self.add(
-            NodeWork::Wait {
+            NodeWork {
                 deps,
                 park_count,
                 cont: short_circuit(Some(TraceFrame::bare("<combine>", "combine")), finish),
@@ -169,7 +169,7 @@ impl<'run> Scheduler<'run> {
         let park_count = park_producers.len();
         let mut deps = park_producers;
         deps.extend(owned_subs);
-        self.submit_here(NodeWork::Wait {
+        self.submit_here(NodeWork {
             deps,
             park_count,
             cont: short_circuit(Some(TraceFrame::bare("<combine>", "combine")), finish),

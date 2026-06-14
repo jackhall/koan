@@ -98,7 +98,7 @@ pub(in crate::machine::execute) enum Outcome<'run> {
 
 /// What a [`Outcome::ParkThenContinue`] runs once its deps resolve. The shapes are the closed set
 /// of "what happens on wake":
-/// `Finish` and `Combine` both install a [`NodeWork::Wait`](super::nodes::NodeWork::Wait) (combine cont) —
+/// `Finish` and `Combine` both install a [`NodeWork`](super::nodes::NodeWork) (combine cont) —
 /// they differ only in the dep-error frame the harness attaches:
 /// - `Finish` is a dispatch decide's re-park/splice; its finish consumes the resolved dep values
 ///   and returns another [`Outcome`] (it may itself re-park), carrying its own `dep_error_frame`
@@ -107,14 +107,14 @@ pub(in crate::machine::execute) enum Outcome<'run> {
 ///   `Action::Combine`) and the literal builders; the harness labels its dep errors `<combine>`.
 ///   Its finish runs against a read-only [`SchedulerView`].
 /// - `Catch` is the action-harness catch ([`run_action`](super::harness::run_action)'s
-///   `Action::Catch`): the slot becomes a [`NodeWork::Wait`](super::nodes::NodeWork::Wait) watching the realized `watched` dep;
+///   `Action::Catch`): the slot becomes a [`NodeWork`](super::nodes::NodeWork) watching the realized `watched` dep;
 ///   the harness owns that producer. `watched`'s placement is realized at apply time (an `InScope`
 ///   watched enters a fresh single-statement block, unlike a Combine body's fan-out).
 /// - `Resume` re-runs the parked dispatch decide (the `ParkSelf` shape) through the opaque
 ///   [`ResumeFn`] closure the parking decide captured; `carrier` is the parked expression's
 ///   pre-rendered summary the drain-end deadlock report surfaces (`None` when the park carries no
 ///   renderable form). On apply the slot becomes a resume
-///   [`NodeWork::Wait`](super::nodes::NodeWork::Wait).
+///   [`NodeWork`](super::nodes::NodeWork).
 ///
 /// (A bare-name forward is not a continuation — it splices the slot out via
 /// [`Outcome::Forward`], never parking on a dep.)
@@ -156,7 +156,7 @@ pub(in crate::machine::execute) enum DispatchDep<'run> {
     Existing(NodeId),
 }
 
-/// Host-side value-only closure for a combine [`NodeWork::Wait`](super::nodes::NodeWork::Wait). Receives the dep terminals in submission
+/// Host-side value-only closure for a combine [`NodeWork`](super::nodes::NodeWork). Receives the dep terminals in submission
 /// order as [`Carried`] (an object or a type flowing in the type channel); static elements are
 /// captured in the closure. A value-consuming finish calls `.object()` on each; a type-resolving
 /// dep (a VAL type, an FN return type, a field type) arrives as [`Carried::Type`]. The finish
@@ -165,7 +165,7 @@ pub(in crate::machine::execute) enum DispatchDep<'run> {
 pub(in crate::machine::execute) type CombineFinish<'a> =
     Box<dyn for<'s> FnOnce(&SchedulerView<'a, 's>, &[Carried<'a>]) -> Outcome<'a> + 'a>;
 
-/// Host-side closure for a catch [`NodeWork::Wait`](super::nodes::NodeWork::Wait). Receives the watched slot's terminal as a
+/// Host-side closure for a catch [`NodeWork`](super::nodes::NodeWork). Receives the watched slot's terminal as a
 /// `Result` so the closure can branch on either outcome, plus a read-only [`SchedulerView`].
 pub(in crate::machine::execute) type CatchFinish<'a> = Box<
     dyn for<'s> FnOnce(&SchedulerView<'a, 's>, Result<&'a KObject<'a>, KError>) -> Outcome<'a> + 'a,

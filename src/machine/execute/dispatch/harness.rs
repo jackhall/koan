@@ -143,13 +143,13 @@ impl<'run> Scheduler<'run> {
                     // one place that policy lives. Both install the same `Wait` over the realized
                     // deps (edges already installed by the loop above), the short-circuit baked into
                     // the continuation by `short_circuit`.
-                    Continuation::Finish(finish) => NodeWork::Wait {
+                    Continuation::Finish(finish) => NodeWork {
                         deps: dep_ids,
                         park_count,
                         cont: short_circuit(dep_error_frame, finish),
                         carrier: None,
                     },
-                    Continuation::Combine(finish) => NodeWork::Wait {
+                    Continuation::Combine(finish) => NodeWork {
                         deps: dep_ids,
                         park_count,
                         cont: short_circuit(Some(TraceFrame::bare("<combine>", "combine")), finish),
@@ -161,7 +161,7 @@ impl<'run> Scheduler<'run> {
                     Continuation::Catch { watched, finish } => {
                         let from = self.realize_catch_dep(watched);
                         self.add_owned_edge(from, NodeId(idx));
-                        NodeWork::Wait {
+                        NodeWork {
                             deps: vec![from],
                             park_count: 0,
                             cont: catch_cont(finish),
@@ -171,7 +171,7 @@ impl<'run> Scheduler<'run> {
                     // The resume closure carries the evolving `working_expr` from here on; the
                     // `carrier` it travels with is only the deadlock-summary sample. A decide takes
                     // no dep values, so `ignore_results` drops the (park-only) results slice.
-                    Continuation::Resume { carrier, resume } => NodeWork::Wait {
+                    Continuation::Resume { carrier, resume } => NodeWork {
                         deps: dep_ids,
                         park_count,
                         cont: ignore_results(resume),
