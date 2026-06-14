@@ -125,13 +125,13 @@ impl<'run> Scheduler<'run> {
                             }
                         },
                         DepRequest::ListLit(items) => {
-                            dep_ids.push(self.schedule_list_literal(items))
+                            dep_ids.push(super::literal::schedule_list_literal(self, items))
                         }
                         DepRequest::DictLit(pairs) => {
-                            dep_ids.push(self.schedule_dict_literal(pairs))
+                            dep_ids.push(super::literal::schedule_dict_literal(self, pairs))
                         }
                         DepRequest::RecordLit(fields) => {
-                            dep_ids.push(self.schedule_record_literal(fields))
+                            dep_ids.push(super::literal::schedule_record_literal(self, fields))
                         }
                         DepRequest::BodyBlock { frame, statements } => {
                             dep_ids.extend(self.dispatch_body_statements(&frame, statements))
