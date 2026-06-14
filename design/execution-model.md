@@ -215,10 +215,10 @@ copy** of it. `run_dispatch` extracts every nested sub-expression out of
 the parent's `parts` (replacing each with a placeholder `Identifier`) and
 declares them as the deps of a
 [`ParkThenContinue`](#the-dispatcher--scheduler-boundary) whose continuation
-is a `Continuation::Finish` — its own dual of a builtin `Combine`. The
+is a `Continuation::Finish` — the dispatch flavor of a builtin `Combine`. The
 harness submits each dep as a sub-Dispatch and parks the parent on a
-[`NodeWork::DispatchCombine`](../src/machine/execute/nodes.rs) carrying that
-*splice finish* (a [`DispatchCombineFinish`](../src/machine/execute/nodes.rs)
+[`NodeWork::Combine`](../src/machine/execute/nodes.rs) carrying that
+*splice finish* (a [`CombineFinish`](../src/machine/execute/outcome.rs)
 closure). When the deps terminalize, that finish runs and writes each
 resolved value back into the working copy:
 `working_expr.parts[part_idx] = ExpressionPart::Future(value)`. The splice
@@ -277,16 +277,16 @@ memory** constant too.
 sub-expressions — the predicate of an `IF`/`MATCH` guard, the argument
 expressions of a recursive call, list/dict literal elements. Each spawns
 a sub-`Dispatch`; the consumer is either the parent `Dispatch` slot
-itself (parked as a `DispatchCombine`) or, for
-list/dict aggregates and combinator builtins like `TRY`, a `Combine` /
+itself (parked as a dispatch `Combine`) or, for
+list/dict aggregates and combinator builtins like `TRY`, an action `Combine` /
 `Catch` slot. Without reclamation those slots accumulate per body
 iteration, so realistic recursive code is O(n) scheduler memory even
 when its data footprint is O(1).
 
-Reclamation runs at the start of a `DispatchCombine` finish
-(`run_dispatch_combine` reclaims deps before the finish, since a dispatch
-finish writes its own edges), and at the end of `run_combine` and
-`run_catch`. Once the consumer has read its dep results and either spliced
+Reclamation runs in `run_combine` and `run_catch` after the finish closure
+returns its `Outcome`, before the harness applies it — so a dispatch splice
+finish's freed indices are on the free-list before the harness dispatches the
+spliced body. Once the consumer has read its dep results and either spliced
 them into `working_expr.parts` as `Future(value)` (the eager-subs splice
 finish) or handed them to its finish closure (Combine / Catch), the dep
 slots are unreachable: a sub-Dispatch is
@@ -601,7 +601,7 @@ the per-slot index buckets `r.slots` carries (`wrap_indices`,
 `AmbiguousDispatch` error; `Unmatched` surfaces as `DispatchFailed`;
 `Deferred` (the candidate may match after sub-evaluation yields a typed
 `Future(_)`) routes to `KeywordedState::install_eager_only`, which declares every
-eager-shaped part as a `DispatchCombine` dep and parks this slot on them;
+eager-shaped part as a `Combine` dep and parks this slot on them;
 the splice finish re-resolves dispatch against the spliced expression at
 dep completion;
 `ParkOnProducers(_)` and `UnboundName(_)` are decided inside the scope walk
@@ -847,7 +847,7 @@ The rails the dispatch driver feeds:
   leaves no eager parts, and binds in one step — no Combine detour). Otherwise
   the decide returns a `ParkThenContinue` with a `Continuation::Finish`
   declaring the fresh subs as deps with a splice finish; the harness parks the
-  slot as a `DispatchCombine` carrying the finish. At dep completion the finish
+  slot as a `Combine` carrying the finish. At dep completion the finish
   re-resolves
   the spliced `working_expr` and routes it — `Invoke` on the
   speculatively-picked function, or `Redispatch` through
@@ -971,7 +971,7 @@ against the now-populated scope:
   re-runs the resolve against the now-populated `pending_overloads` bucket.
   **Eager subs never park here**: a `Deferred`/eager-subs resolve returns a
   `ParkThenContinue` with a `Continuation::Finish` and parks as a
-  `DispatchCombine` whose finish re-resolves the spliced expression — so a
+  `Combine` whose finish re-resolves the spliced expression — so a
   keyworded resume never re-enters for them. Re-resolve in the finish is
   authoritative: an element-typed `Future(_)` that narrows a typed-slot
   admission rules a speculative initial pick out, and the call surfaces
@@ -981,7 +981,7 @@ against the now-populated scope:
   carries the original call expression and re-runs the fast lane once
   `scope.resolve_with_chain` lands in the `Resolution::Value` arm. Its eager
   subs route through `apply_callable::install_eager_subs_track`, which returns
-  a `DispatchCombine` carrying the picked `KFunction` from the head directly;
+  a `Combine` carrying the picked `KFunction` from the head directly;
   `FunctionValueCall` is non-overload-set, so a typed `Future(_)` an eager sub
   reveals can't narrow the pick and the finish binds `picked` without
   re-resolving.
@@ -990,7 +990,7 @@ against the now-populated scope:
 one park installer: the overload park installs from a resolve failure *before*
 the part walk runs; the bare-name park installs *before* any eager sub could
 stage, because the part walk's park-precedence guard runs first; eager subs
-take the `DispatchCombine` route rather than a resume. So a slot's resume
+take the `Combine` route rather than a resume. So a slot's resume
 carries exactly one park reason.
 
 The drain-end cycle-detection guard (`NodeStore::unresolved`) summarizes
@@ -1076,13 +1076,13 @@ recursive tree-walker can't get cheaply.
 - **Per dep-result splice.** O(1) write into `expr.parts`.
 - **Per terminal.** Single `notify_list` drain. The cost scales with
   the producer's dependent count, which is typically 1 (the consumer
-  parked on it through a `DispatchCombine` or a `Combine`) but unbounded
+  parked on it through a `Combine` or a `Catch`) but unbounded
   in principle (forward-reference parks).
 
 ### What amortizes
 
 - **Slot recycling.** `Scheduler::reclaim_deps` frees sub-slots eagerly
-  during a `DispatchCombine` finish / `run_combine` / `run_catch`, and `add()`
+  during `run_combine` / `run_catch`, and `add()`
   pulls
   from the free-list before extending the underlying vectors. A
   steady-state recursive body reuses the same slot indices across

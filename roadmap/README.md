@@ -152,9 +152,9 @@ What's shipped that the open items below build on:
   read-only view and *returns* its scheduler mutations as an
   [`Outcome`](../src/machine/execute/outcome.rs) effect that a
   [harness](../src/machine/execute/dispatch/harness.rs) interprets — so no dispatch handler
-  holds `&mut Scheduler`. Eager-subs is modelled as the dispatcher's own `DispatchCombine`:
-  deps declared, the `Future`-cell splice lives in the finish, and the scheduler stays
-  splice-unaware. A builtin invoked mid-dispatch routes through the shared action harness,
+  holds `&mut Scheduler`. Eager-subs is modelled as the dispatcher's own `Combine` (the same
+  N→1 shape the action harness installs): deps declared, the `Future`-cell splice lives in the
+  finish, and the scheduler stays splice-unaware. A builtin invoked mid-dispatch routes through the shared action harness,
   reading the dispatcher's ambient frame/chain off the view.
   See [design/execution-model.md § The dispatcher / scheduler boundary](../design/execution-model.md#the-dispatcher--scheduler-boundary).
 - *Unified scheduler interface.* Every scheduler-facing step — a dispatch decide, a finish, a
