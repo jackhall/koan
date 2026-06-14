@@ -6,8 +6,7 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope, TraceFrame};
 
-use super::dispatch::{ResumeFn, SchedulerView};
-use super::outcome::Outcome;
+use super::dispatch::ResumeFn;
 use super::{CatchFinish, CombineFinish};
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
@@ -63,17 +62,6 @@ pub(super) enum NodeStep<'run> {
     },
 }
 
-/// Host-side closure for a [`NodeWork::DispatchCombine`] slot — the dispatch-side dual of
-/// [`CombineFinish`]. Receives the dep terminals in submission order, a read-only
-/// [`SchedulerView`], and the slot's own index (for an overload re-park keyed on it), and returns
-/// an [`Outcome`] — resolve, tail-redispatch, or **park again** (e.g. an overload park on a freshly
-/// resolved producer). The dispatcher genuinely reads evolving graph state, hence the extra `idx`
-/// and the dispatch-only park-sites; an action [`CombineFinish`] needs neither. The harness applies
-/// the returned outcome, so the finish — like every decide — issues no graph write.
-pub(super) type DispatchCombineFinish<'run> = Box<
-    dyn for<'a> FnOnce(&SchedulerView<'run, 'a>, &[Carried<'run>], usize) -> Outcome<'run> + 'run,
->;
-
 /// What a scheduler node will run. `Lift` exists because the push/notify model
 /// assumes a single producer slot per result — see [design/execution-model.md §
 /// Lift: push/notify single-producer model](../../../design/execution-model.md#lift-pushnotify-single-producer-model).
@@ -118,8 +106,10 @@ pub(super) enum NodeWork<'run> {
         finish: CatchFinish<'run>,
     },
     /// Dispatch-side dual of `Combine`: identical dep-resolution and edge layout
-    /// (`[park_producers..., owned_subs...]`, `park_count` the prefix), but the `finish`
-    /// returns a [`NodeStep`] so a dispatch continuation can re-park. Drives the eager-subs /
+    /// (`[park_producers..., owned_subs...]`, `park_count` the prefix), and its finish returns the
+    /// same [`Outcome`](super::outcome::Outcome) currency — which may itself re-park (a fresh
+    /// `Outcome::ParkThenContinue`,
+    /// e.g. an overload park on a just-resolved producer). Drives the eager-subs /
     /// head-deferred / constructor park-sites: the scheduler resolves the deps and hands the
     /// values to a dispatch finish that splices / classifies / invokes, learning nothing about
     /// the dispatch internals (the splice into a `KExpression` lives entirely in the finish).
@@ -130,7 +120,7 @@ pub(super) enum NodeWork<'run> {
     DispatchCombine {
         deps: Vec<NodeId>,
         park_count: usize,
-        finish: DispatchCombineFinish<'run>,
+        finish: CombineFinish<'run>,
         dep_error_frame: Option<TraceFrame>,
     },
     Lift(LiftState<'run>),

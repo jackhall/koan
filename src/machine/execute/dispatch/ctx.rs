@@ -125,7 +125,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
         staged_subs: Vec<(usize, PendingSub<'run>)>,
         picked: Option<&'run KFunction<'run>>,
     ) -> Outcome<'run> {
-        use super::super::nodes::DispatchCombineFinish;
+        use super::super::CombineFinish;
         let mut deps: Vec<DispatchDep<'run>> = Vec::with_capacity(staged_subs.len());
         let mut part_indices: Vec<usize> = Vec::with_capacity(staged_subs.len());
         // Reuse producers consumed inline (spliced into `working_expr`); the harness reclaims
@@ -172,7 +172,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
             "<bind>",
             &working_expr,
         ));
-        let finish: DispatchCombineFinish<'run> = Box::new(move |_ctx, results, _idx| {
+        let finish: CombineFinish<'run> = Box::new(move |_ctx, results| {
             // The short-circuit already guaranteed every dep resolved; splice each into the
             // slot it was staged from, then route the continuation. No inline frees remain at
             // wake — those were drained when the Combine was installed.

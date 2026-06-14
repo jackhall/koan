@@ -18,7 +18,8 @@ use crate::machine::model::values::NonWrappedRef;
 use crate::machine::model::KObject;
 use crate::machine::{KError, KErrorKind, Scope};
 
-use super::super::nodes::{DispatchCombineFinish, NodeOutput};
+use super::super::nodes::NodeOutput;
+use super::super::CombineFinish;
 use super::single_poll::CtorKind;
 use super::{park_combine, DispatchDep, Outcome};
 
@@ -146,7 +147,7 @@ fn launch<'run>(value_parts: Vec<ExpressionPart<'run>>, kind: CtorKind<'run>) ->
             placement: DepPlacement::OwnScope,
         })
         .collect();
-    let combine_finish: DispatchCombineFinish<'run> = Box::new(move |ctx, results, _idx| {
+    let combine_finish: CombineFinish<'run> = Box::new(move |ctx, results| {
         let values: Vec<&'run KObject<'run>> = results.iter().map(|c| c.object()).collect();
         finish(ctx.current_scope(), &kind, &values)
     });

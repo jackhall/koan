@@ -15,7 +15,8 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{KType, RecursiveSet};
 use crate::machine::{KError, KErrorKind, Resolution};
 
-use super::super::nodes::{DispatchCombineFinish, NodeOutput};
+use super::super::nodes::NodeOutput;
+use super::super::CombineFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
 use super::{become_dispatch, park_combine, park_lift, park_resume, DispatchDep, Outcome};
@@ -162,8 +163,8 @@ pub(super) fn literal_pass_through<'run>(
 /// lifts the producer's resolved value straight through. The harness submits the literal and owns
 /// it; a dep error short-circuits frameless before the finish runs.
 fn park_on_literal<'run>(dep: DispatchDep<'run>) -> Outcome<'run> {
-    let finish: DispatchCombineFinish<'run> =
-        Box::new(|_ctx, results, _idx| Outcome::Done(NodeOutput::Value(results[0])));
+    let finish: CombineFinish<'run> =
+        Box::new(|_ctx, results| Outcome::Done(NodeOutput::Value(results[0])));
     park_combine(vec![dep], None, finish, Vec::new())
 }
 

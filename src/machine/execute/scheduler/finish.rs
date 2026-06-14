@@ -2,7 +2,7 @@ use crate::machine::model::{Carried, KObject};
 use crate::machine::{KError, NodeId, TraceFrame};
 
 use super::super::dispatch::{propagate_dep_error, SchedulerView};
-use super::super::nodes::{DispatchCombineFinish, LiftState, NodeOutput, NodeStep};
+use super::super::nodes::{LiftState, NodeOutput, NodeStep};
 use super::super::{CatchFinish, CombineFinish};
 use super::Scheduler;
 
@@ -55,7 +55,7 @@ impl<'run> Scheduler<'run> {
         &mut self,
         deps: Vec<NodeId>,
         park_count: usize,
-        finish: DispatchCombineFinish<'run>,
+        finish: CombineFinish<'run>,
         dep_error_frame: Option<TraceFrame>,
         idx: usize,
     ) -> NodeStep<'run> {
@@ -69,7 +69,7 @@ impl<'run> Scheduler<'run> {
         }
         let values: Vec<Carried<'run>> = deps.iter().map(|d| self.read(*d)).collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
-        let outcome = finish(&SchedulerView::new(self), &values, idx);
+        let outcome = finish(&SchedulerView::new(self), &values);
         self.reclaim_deps(idx, owned_indices);
         self.apply_outcome(outcome, idx)
     }

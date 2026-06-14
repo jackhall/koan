@@ -31,7 +31,7 @@ use crate::machine::model::values::{Carried, KObject};
 use crate::machine::{KError, NodeId, TraceFrame};
 
 use super::dispatch::{ResumeFn, SchedulerView};
-use super::nodes::{DispatchCombineFinish, NodeOutput, NodeWork};
+use super::nodes::{NodeOutput, NodeWork};
 
 /// What a node's step wants the harness to do — the single currency every producer and finish
 /// returns. See the module docs for the taxonomy.
@@ -106,7 +106,7 @@ pub(in crate::machine::execute) enum Outcome<'run> {
 ///   apply the slot becomes a [`NodeWork::DispatchResume`](super::nodes::NodeWork::DispatchResume).
 /// - `Forward` makes the slot *be* a single producer's value (the bare-name `Lift` forward).
 pub(in crate::machine::execute) enum Continuation<'run> {
-    Finish(DispatchCombineFinish<'run>),
+    Finish(CombineFinish<'run>),
     Combine(CombineFinish<'run>),
     Catch {
         watched: Dep<'run>,

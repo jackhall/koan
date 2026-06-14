@@ -25,7 +25,8 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
 
-use super::nodes::{DispatchCombineFinish, NodeOutput, NodeStep, NodeWork};
+use super::nodes::{NodeOutput, NodeStep, NodeWork};
+use super::CombineFinish;
 use super::scheduler::Scheduler;
 use crate::machine::core::kfunction::action::FramePlacement;
 
@@ -223,7 +224,7 @@ pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>)
 pub(in crate::machine::execute) fn park_combine<'run>(
     deps: Vec<DispatchDep<'run>>,
     dep_error_frame: Option<TraceFrame>,
-    finish: DispatchCombineFinish<'run>,
+    finish: CombineFinish<'run>,
     free: Vec<usize>,
 ) -> Outcome<'run> {
     Outcome::ParkThenContinue {
@@ -354,7 +355,7 @@ pub(super) fn stage_all_eager_parts<'run>(
 /// A parked slot's resume: the `SchedulerView -> Outcome` decide a dispatch slot re-runs on wake.
 /// It captures whatever its decide needs (the carried `expr` + `pre_subs`, or a bare leaf), so the
 /// router can wake any family uniformly without naming its internals — boxed like
-/// [`DispatchCombineFinish`](super::nodes::DispatchCombineFinish) so [`NodeWork::DispatchResume`]
+/// [`CombineFinish`](super::outcome::CombineFinish) so [`NodeWork::DispatchResume`]
 /// stays slim.
 pub(in crate::machine::execute) type ResumeFn<'run> =
     Box<dyn for<'a> FnOnce(&SchedulerView<'run, 'a>, usize) -> Outcome<'run> + 'run>;
