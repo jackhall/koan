@@ -215,11 +215,11 @@ src/
     │       └── scheduler_handle.rs  NodeId — stable DAG node handle
     ├── execute.rs
     └── execute/
-        ├── scheduler.rs   Scheduler struct, execute loop, apply_outcome (sole graph writer) + inherent write primitives; dep_graph/, node_store/, submit/, work_queues/, finish/, execute/, literal/ submodules, tests under it
-        ├── nodes.rs       node types (NodeWork / NodeOutput / NodeStep / Node) + work_deps
-        ├── outcome.rs     Outcome — the unified scheduler-step currency (Done / Continue / ParkThenContinue / Invoke / Redispatch) + Continuation / DispatchDep
+        ├── scheduler.rs   Scheduler struct, execute loop, apply_outcome (sole graph writer) + inherent write primitives; dep_graph/, node_store/, submit/, work_queues/, finish/ (run_wait — one node handler), execute/, splice/ (bare-name forward alias), literal/ submodules, tests under it
+        ├── nodes.rs       node types (NodeWork struct / NodeOutput / NodeStep / Node) + work_deps
+        ├── outcome.rs     Outcome — the unified scheduler-step currency (Done / Continue / ParkThenContinue / Invoke / Redispatch / Forward) + Continuation / DispatchDep + cont combinators (short_circuit / catch_cont / ignore_results)
         ├── harness.rs     run_action — lowers a builtin Action to an Outcome (pure)
-        ├── dispatch.rs    classify_dispatch + run_decide (one decide handler) + classify_dispatch_shape; submit/ (binder-aware submit_dispatch chokepoint), harness/ (apply_outcome caller), ctx/ (SchedulerView read view), exec/ (dispatch-side invoke), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/, operator_chain/, field_list/, constructors/, resolve_dispatch/, resolve_type_expr/ submodules
+        ├── dispatch.rs    classify_dispatch (the decide) + decide/decide_with_presubs + classify_dispatch_shape; submit/ (binder-aware submit_dispatch chokepoint), harness/ (apply_outcome caller), ctx/ (SchedulerView read view), exec/ (dispatch-side invoke), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/, operator_chain/, field_list/, constructors/, resolve_dispatch/, resolve_type_expr/ submodules
         ├── lift.rs        lift_kobject — rebuild values across per-call arena boundaries
         └── interpret.rs   parse → enter_block → execute
 ```

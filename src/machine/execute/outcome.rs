@@ -60,7 +60,7 @@ pub(in crate::machine::execute) enum Outcome<'run> {
     /// Park the slot on `deps` and run `cont` when they resolve. `deps` layout is
     /// `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix length
     /// (`Notify` edges, kept alive), the suffix installs as `Owned` (cascade-freed). For a
-    /// [`Continuation::Resume`] / [`Continuation::Forward`] every dep parks (notify-only).
+    /// [`Continuation::Resume`] every dep parks (notify-only).
     /// `dep_error_frame` is attached to a dep-error short-circuit (Combine-style) before the
     /// finish runs; `free` reclaims producers the decide phase consumed inline.
     ParkThenContinue {
