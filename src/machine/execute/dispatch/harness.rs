@@ -7,27 +7,12 @@
 //! applies it. The harness holds the sole `&mut Scheduler` on the dispatch side.
 
 use crate::machine::core::kfunction::action::{Dep, DepPlacement, FramePlacement};
-use crate::machine::model::Carried;
 use crate::machine::NodeId;
 
-use super::super::nodes::{DispatchCombineFinish, LiftState, NodeStep, NodeWork};
+use super::super::nodes::{LiftState, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
 use super::ctx::SchedulerView;
 use super::{Continuation, DispatchDep, Outcome};
-
-/// Run a [`NodeWork::DispatchCombine`] finish at wake: build the read-only view, decide, and
-/// apply the returned outcome — the bridge `run_dispatch_combine` (the scheduler wake side) calls
-/// so the `read_view` → decide → apply dance stays inside the dispatch harness. The finish sees a
-/// `&SchedulerView`, so it — like every decide — issues no graph write itself.
-pub(in crate::machine::execute) fn run_dispatch_combine_finish<'run>(
-    sched: &mut Scheduler<'run>,
-    finish: DispatchCombineFinish<'run>,
-    values: &[Carried<'run>],
-    idx: usize,
-) -> NodeStep<'run> {
-    let outcome = finish(&SchedulerView::new(sched), values, idx);
-    sched.apply_outcome(outcome, idx)
-}
 
 /// Reclaim the producers a decide phase consumed inline (a ready `Reuse` spliced into a
 /// `working_expr`). Deferred off the decide phase so the handler stays read-only; the harness

@@ -49,7 +49,6 @@ mod tests;
 pub(in crate::machine::execute) use super::outcome::{Continuation, DispatchDep, Outcome};
 pub(in crate::machine::execute) use ctx::SchedulerView;
 pub(crate) use field_list::defer_field_list_action;
-pub(in crate::machine::execute) use harness::run_dispatch_combine_finish;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};

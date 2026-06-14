@@ -46,13 +46,11 @@ impl<'run> Scheduler<'run> {
         self.apply_outcome(outcome, idx)
     }
 
-    /// Dispatch-side dual of [`Self::run_combine`]. Same dep short-circuit and owned-dep
-    /// reclaim; both finishes return an [`Outcome`] the harness applies, but the dispatch finish
-    /// runs through [`super::super::dispatch::run_dispatch_combine_finish`] (which builds the
-    /// read-only view), and its deps are reclaimed *before* the finish runs — a dispatch finish
-    /// installs its own park/replace edges on `idx`, which a post-finish `clear_dep_edges` would
-    /// wrongly wipe. Dep-error propagation is frameless; the resumed dispatch attaches its own
-    /// frame.
+    /// Dispatch-side dual of [`Self::run_combine`], with the same shape: short-circuit on a dep
+    /// error (frameless or via the carried `dep_error_frame`), collect the resolved values, run the
+    /// finish to an [`Outcome`], reclaim the owned deps, then apply. The finish sees a read-only
+    /// [`SchedulerView`] and issues no graph write, so the reclaim lands after it and before the
+    /// apply that installs the continuation's edges.
     pub(super) fn run_dispatch_combine(
         &mut self,
         deps: Vec<NodeId>,
@@ -71,8 +69,9 @@ impl<'run> Scheduler<'run> {
         }
         let values: Vec<Carried<'run>> = deps.iter().map(|d| self.read(*d)).collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
+        let outcome = finish(&SchedulerView::new(self), &values, idx);
         self.reclaim_deps(idx, owned_indices);
-        super::super::dispatch::run_dispatch_combine_finish(self, finish, &values, idx)
+        self.apply_outcome(outcome, idx)
     }
 
     /// Unlike Combine, an errored `from` does not short-circuit; the finish
