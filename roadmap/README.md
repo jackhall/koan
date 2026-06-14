@@ -182,6 +182,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
+- [Dispatch submission owns binder-install; merge the dispatch node variants](refactor/dispatch-owns-submission.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
@@ -263,6 +264,10 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
+- [Dispatch submission owns binder-install; merge the dispatch node variants](refactor/dispatch-owns-submission.md) —
+  hoist binder-install + recursive pre-submission out of `Scheduler::submit_node` into a
+  dispatch-layer chokepoint so no `NodeWork` variant holds a `KExpression`, then collapse
+  `Dispatch` / `DispatchResume` into one closure-carrying `Decide`.
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md) —
   collapse `ElabResult` / `ResolveTypeExprOutcome` / `TypeLeafCarrier` into one generic
   `ResolveOutcome<T>` with a `map_done` lift.
