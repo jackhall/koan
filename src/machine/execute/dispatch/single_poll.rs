@@ -19,7 +19,7 @@ use super::super::nodes::NodeOutput;
 use super::super::CombineFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
-use super::{become_dispatch, park_combine, park_lift, park_resume, DispatchDep, Outcome};
+use super::{become_dispatch, park_combine, park_lift, park_resume, DepRequest, Outcome};
 
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
 /// slot is resolved. `(set, index)` is the sealed-member identity stamped onto the produced
@@ -152,9 +152,9 @@ pub(super) fn literal_pass_through<'run>(
         }
         ExpressionPart::Future(c) => Outcome::Done(NodeOutput::Value(c)),
         ExpressionPart::Expression(boxed) => become_dispatch(*boxed),
-        ExpressionPart::ListLiteral(items) => park_on_literal(DispatchDep::ListLit(items)),
-        ExpressionPart::DictLiteral(pairs) => park_on_literal(DispatchDep::DictLit(pairs)),
-        ExpressionPart::RecordLiteral(fields) => park_on_literal(DispatchDep::RecordLit(fields)),
+        ExpressionPart::ListLiteral(items) => park_on_literal(DepRequest::ListLit(items)),
+        ExpressionPart::DictLiteral(pairs) => park_on_literal(DepRequest::DictLit(pairs)),
+        ExpressionPart::RecordLiteral(fields) => park_on_literal(DepRequest::RecordLit(fields)),
         _ => unreachable!("LiteralPassThrough classifier only routes Literal/Future/Expression/ListLiteral/DictLiteral/RecordLiteral"),
     }
 }
@@ -162,7 +162,7 @@ pub(super) fn literal_pass_through<'run>(
 /// Park the slot on a single literal-producer dep as a [`Outcome::ParkThenContinue`] whose finish
 /// lifts the producer's resolved value straight through. The harness submits the literal and owns
 /// it; a dep error short-circuits frameless before the finish runs.
-fn park_on_literal<'run>(dep: DispatchDep<'run>) -> Outcome<'run> {
+fn park_on_literal<'run>(dep: DepRequest<'run>) -> Outcome<'run> {
     let finish: CombineFinish<'run> =
         Box::new(|_ctx, results| Outcome::Done(NodeOutput::Value(results[0])));
     park_combine(vec![dep], None, finish, Vec::new())

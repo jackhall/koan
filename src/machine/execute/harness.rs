@@ -6,8 +6,9 @@
 
 use crate::machine::core::kfunction::action::{Action, Dep, FinishCtx, FramePlacement};
 
+use super::dispatch::DepRequest;
 use super::nodes::NodeOutput;
-use super::outcome::{Continuation, DispatchDep, Outcome};
+use super::outcome::{Continuation, Outcome};
 use super::{CatchFinish, CombineFinish};
 
 /// Lower an [`Action`] into the scheduler's [`Outcome`] currency — a pure `Action -> Outcome`
@@ -67,7 +68,7 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
                 free: Vec::new(),
             });
             Outcome::ParkThenContinue {
-                deps: vec![DispatchDep::BodyBlock {
+                deps: vec![DepRequest::BodyBlock {
                     frame,
                     statements: leading,
                 }],
@@ -83,13 +84,13 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
             // deps are owned sub-slots (an `InScope` body fans out one per statement at apply
             // time). The harness orders the realized deps `[park..., owned...]`; `park_count` is
             // the park prefix length. The wrapped finish recurses `run_action` on the `Cont`.
-            let mut park: Vec<DispatchDep<'run>> = Vec::new();
-            let mut owned: Vec<DispatchDep<'run>> = Vec::new();
+            let mut park: Vec<DepRequest<'run>> = Vec::new();
+            let mut owned: Vec<DepRequest<'run>> = Vec::new();
             for dep in deps {
                 match dep {
-                    Dep::Existing(id) => park.push(DispatchDep::Existing(id)),
+                    Dep::Existing(id) => park.push(DepRequest::Existing(id)),
                     Dep::Dispatch { expr, placement } => {
-                        owned.push(DispatchDep::Dispatch { expr, placement })
+                        owned.push(DepRequest::Dispatch { expr, placement })
                     }
                 }
             }

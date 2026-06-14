@@ -189,6 +189,14 @@ What's shipped that the open items below build on:
   invariant now holds structurally across `scheduler/**`. The methods stay inherent on
   `Scheduler`, reached through its public surface (`combine_here` / `dispatch_here` /
   `current_scope`). See [design/execution-model.md](../design/execution-model.md#the-dispatcher--scheduler-boundary).
+- *Dep-request enum made AST-free at the source.* The six-arm dep enum a
+  `ParkThenContinue` declares (`Dispatch` / `ListLit` / `DictLit` / `RecordLit` / `BodyBlock` /
+  `Existing`) is renamed `DispatchDep`→[`DepRequest`](../src/machine/execute/dispatch.rs) and
+  moved out of `outcome.rs` to the dispatch side, beside `PendingSub` — the layer that
+  legitimately names AST. The data arms are unchanged (each still carries its `KExpression` /
+  `ExpressionPart`), and the harness `match` still does every `&mut Scheduler` write. The win:
+  `outcome.rs` imports no `crate::machine::model::ast` and carries `DepRequest` as an opaque
+  type, so the decide phase stays read-only and the scheduler-step currency names no AST.
 
 ## Next items
 

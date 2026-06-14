@@ -13,7 +13,7 @@ use crate::machine::{NodeId, TraceFrame};
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
 use super::super::{catch_cont, ignore_results, short_circuit};
-use super::{Continuation, DispatchDep, Outcome};
+use super::{Continuation, DepRequest, Outcome};
 
 /// Reclaim the producers a decide phase consumed inline (a ready `Reuse` spliced into a
 /// `working_expr`). Deferred off the decide phase so the handler stays read-only; the harness
@@ -105,13 +105,12 @@ impl<'run> Scheduler<'run> {
                 drain_free(self, free);
                 // Submit each fresh dep (an `Existing` is already in the graph). Submission order
                 // is preserved, so a finish reads `results[k]` for the k-th declared dep — except
-                // an `InScope`-placed `Dispatch`, whose multi-statement body fans out to one
-                // producer per statement (the only one-dep-to-many case, so this is a loop not a
-                // `map`).
+                // an `InScope`-placed `Dispatch` and a `BodyBlock`, whose multi-statement body each
+                // fan out to one producer per statement (so those arms `extend`, the rest `push`).
                 let mut dep_ids: Vec<NodeId> = Vec::with_capacity(deps.len());
                 for dep in deps {
                     match dep {
-                        DispatchDep::Dispatch { expr, placement } => match placement {
+                        DepRequest::Dispatch { expr, placement } => match placement {
                             DepPlacement::OwnScope => dep_ids.push(self.dispatch_here(expr)),
                             DepPlacement::ActiveFrame => {
                                 dep_ids.push(self.add_dispatch_in_frame(expr))
@@ -121,19 +120,19 @@ impl<'run> Scheduler<'run> {
                                 dep_ids.extend(self.enter_block(scope.id, statements, scope))
                             }
                         },
-                        DispatchDep::ListLit(items) => {
+                        DepRequest::ListLit(items) => {
                             dep_ids.push(self.schedule_list_literal(items))
                         }
-                        DispatchDep::DictLit(pairs) => {
+                        DepRequest::DictLit(pairs) => {
                             dep_ids.push(self.schedule_dict_literal(pairs))
                         }
-                        DispatchDep::RecordLit(fields) => {
+                        DepRequest::RecordLit(fields) => {
                             dep_ids.push(self.schedule_record_literal(fields))
                         }
-                        DispatchDep::BodyBlock { frame, statements } => {
+                        DepRequest::BodyBlock { frame, statements } => {
                             dep_ids.extend(self.dispatch_body_statements(&frame, statements))
                         }
-                        DispatchDep::Existing(id) => dep_ids.push(id),
+                        DepRequest::Existing(id) => dep_ids.push(id),
                     }
                 }
                 // Edge install: the `[..park_count]` prefix is notify-parked (sibling producers

@@ -20,7 +20,10 @@
 //! [`Outcome`] the [`harness`] applies — the router and harness hold the only
 //! `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field names).
 
+use std::rc::Rc;
+
 use crate::machine::core::source::Spanned;
+use crate::machine::core::CallArena;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
@@ -28,7 +31,7 @@ use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
 use super::nodes::{NodeOutput, NodeWork};
 use super::scheduler::Scheduler;
 use super::{ignore_results, CombineFinish};
-use crate::machine::core::kfunction::action::FramePlacement;
+use crate::machine::core::kfunction::action::{DepPlacement, FramePlacement};
 
 pub(in crate::machine::execute) mod apply_callable;
 mod constructors;
@@ -49,7 +52,7 @@ mod submit;
 #[cfg(test)]
 mod tests;
 
-pub(in crate::machine::execute) use super::outcome::{Continuation, DispatchDep, Outcome};
+pub(in crate::machine::execute) use super::outcome::{Continuation, Outcome};
 pub(in crate::machine::execute) use ctx::SchedulerView;
 pub(crate) use field_list::defer_field_list_action;
 #[cfg(test)]
@@ -148,6 +151,36 @@ pub(in crate::machine::execute) enum PendingSub<'run> {
     RecordLit(Vec<(String, ExpressionPart<'run>)>),
 }
 
+/// A dependency a [`Outcome::ParkThenContinue`] declares — the data the read-only decide phase hands
+/// the harness (`apply_outcome`, the sole `&mut Scheduler`), which runs the matching write. The
+/// decide phase issues no graph write itself. `Dispatch` / `*Lit` / `BodyBlock` are fresh producers the harness submits
+/// (and owns); `Existing` is a pre-existing producer the decide phase found that the slot merely
+/// parks on. Deps resolve in declaration order, so a finish reads `results[k]` for the k-th dep —
+/// except an `InScope`-placed `Dispatch` and a `BodyBlock`, whose multi-statement body each fan out
+/// to one resolved producer per statement (the harness `extend`s them in order).
+///
+/// This enum names AST (`KExpression` / `ExpressionPart`) and so lives on the dispatch side, beside
+/// [`PendingSub`]; [`Outcome`] carries it as an opaque type, keeping `outcome.rs` AST-free.
+pub(in crate::machine::execute) enum DepRequest<'run> {
+    Dispatch {
+        expr: KExpression<'run>,
+        placement: DepPlacement<'run>,
+    },
+    ListLit(Vec<ExpressionPart<'run>>),
+    DictLit(Vec<(ExpressionPart<'run>, ExpressionPart<'run>)>),
+    RecordLit(Vec<(String, ExpressionPart<'run>)>),
+    /// A deferred-return FN's first-call body: dispatch `statements` (its non-tail body + the
+    /// return-type expression, in that order) as body-chain siblings in the freshly acquired
+    /// per-call `frame`, fanning out to one owned producer per statement. The combine reads the
+    /// last (the resolved return type) to build the `PerCall` contract; the earlier statements'
+    /// scope binds feed the tail body. The only dep that carries its own frame.
+    BodyBlock {
+        frame: Rc<CallArena>,
+        statements: Vec<KExpression<'run>>,
+    },
+    Existing(NodeId),
+}
+
 /// Result of a successful keyworded part walk.
 pub(in crate::machine::execute) struct PartWalkResult<'run> {
     pub new_parts: Vec<Spanned<ExpressionPart<'run>>>,
@@ -225,7 +258,7 @@ pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>)
 /// `finish` runs over their resolved values (the dispatch combine — short-circuits on dep error).
 /// Every dep is owned (`park_count: 0`); `free` reclaims `Reuse` producers consumed inline.
 pub(in crate::machine::execute) fn park_combine<'run>(
-    deps: Vec<DispatchDep<'run>>,
+    deps: Vec<DepRequest<'run>>,
     dep_error_frame: Option<TraceFrame>,
     finish: CombineFinish<'run>,
     free: Vec<usize>,
@@ -251,7 +284,7 @@ pub(in crate::machine::execute) fn park_resume<'run>(
 ) -> Outcome<'run> {
     Outcome::ParkThenContinue {
         park_count: producers.len(),
-        deps: producers.into_iter().map(DispatchDep::Existing).collect(),
+        deps: producers.into_iter().map(DepRequest::Existing).collect(),
         cont: Continuation::Resume { carrier, resume },
         dep_error_frame: None,
         free: Vec::new(),

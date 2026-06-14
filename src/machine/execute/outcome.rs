@@ -17,16 +17,13 @@
 //!   another outcome.
 //! - [`Outcome::Forward`] — splice the slot out as an alias of an existing producer.
 
-use std::rc::Rc;
-
-use crate::machine::core::kfunction::action::{Dep, DepPlacement, FramePlacement};
+use crate::machine::core::kfunction::action::{Dep, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::{CallArena, ScopeId};
-use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::core::ScopeId;
 use crate::machine::model::values::{Carried, KObject};
 use crate::machine::{KError, NodeId, TraceFrame};
 
-use super::dispatch::{propagate_dep_error, ResumeFn, SchedulerView};
+use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
 use super::nodes::{NodeOutput, NodeWork};
 
 /// What a node's step wants the harness to do — the single currency every producer and finish
@@ -43,7 +40,7 @@ pub(in crate::machine::execute) enum Outcome<'run> {
     /// harness resolves the placement to a cart); `contract` / `block_entry` / `body_index` carry
     /// the tail-call chain payload, all keep-first. A body's non-tail (leading) statements are NOT
     /// carried here: a producer with leading statements parks on them as owned deps (a
-    /// [`DispatchDep::BodyBlock`]) and emits this `Continue` only from the resolving finish, so the
+    /// [`DepRequest::BodyBlock`]) and emits this `Continue` only from the resolving finish, so the
     /// leading siblings cascade-free before the tail-replace — restoring frame uniqueness for TCO
     /// reuse. `body_index` already accounts for their count. `free` reclaims producers the decide
     /// phase consumed inline (a ready eager-subs `Reuse` spliced into the `work`'s expression),
@@ -63,7 +60,7 @@ pub(in crate::machine::execute) enum Outcome<'run> {
     /// `dep_error_frame` is attached to a dep-error short-circuit (Combine-style) before the
     /// finish runs; `free` reclaims producers the decide phase consumed inline.
     ParkThenContinue {
-        deps: Vec<DispatchDep<'run>>,
+        deps: Vec<DepRequest<'run>>,
         park_count: usize,
         cont: Continuation<'run>,
         dep_error_frame: Option<TraceFrame>,
@@ -111,31 +108,6 @@ pub(in crate::machine::execute) enum Continuation<'run> {
         carrier: Option<String>,
         resume: ResumeFn<'run>,
     },
-}
-
-/// A dependency a [`Outcome::ParkThenContinue`] declares. `Dispatch`/`*Lit` are fresh sub-slots
-/// the harness submits (and owns); `Existing` is a pre-existing producer the decide phase found
-/// that the slot merely parks on. Deps resolve in declaration order, so a finish reads
-/// `results[k]` for the k-th dep — except an `InScope`-placed `Dispatch`, whose multi-statement
-/// body fans out to one resolved producer per statement (the harness `extend`s them in order).
-pub(in crate::machine::execute) enum DispatchDep<'run> {
-    Dispatch {
-        expr: KExpression<'run>,
-        placement: DepPlacement<'run>,
-    },
-    ListLit(Vec<ExpressionPart<'run>>),
-    DictLit(Vec<(ExpressionPart<'run>, ExpressionPart<'run>)>),
-    RecordLit(Vec<(String, ExpressionPart<'run>)>),
-    /// A deferred-return FN's first-call body: dispatch `statements` (its non-tail body + the
-    /// return-type expression, in that order) as body-chain siblings in the freshly acquired
-    /// per-call `frame`, fanning out to one owned producer per statement. The combine reads the
-    /// last (the resolved return type) to build the `PerCall` contract; the earlier statements'
-    /// scope binds feed the tail body. The only dep that carries its own frame.
-    BodyBlock {
-        frame: Rc<CallArena>,
-        statements: Vec<KExpression<'run>>,
-    },
-    Existing(NodeId),
 }
 
 /// Host-side value-only closure for a combine [`NodeWork`](super::nodes::NodeWork). Receives the dep terminals in submission

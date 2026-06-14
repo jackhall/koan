@@ -21,7 +21,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::super::nodes::NodeOutput;
 use super::super::CombineFinish;
 use super::single_poll::CtorKind;
-use super::{park_combine, DispatchDep, Outcome};
+use super::{park_combine, DepRequest, Outcome};
 
 pub(in crate::machine::execute) mod tagged_union;
 
@@ -140,9 +140,9 @@ fn launch<'run>(value_parts: Vec<ExpressionPart<'run>>, kind: CtorKind<'run>) ->
         !value_parts.is_empty(),
         "launch requires at least one value part (arity-zero is rejected upstream)"
     );
-    let deps: Vec<DispatchDep<'run>> = value_parts
+    let deps: Vec<DepRequest<'run>> = value_parts
         .into_iter()
-        .map(|part| DispatchDep::Dispatch {
+        .map(|part| DepRequest::Dispatch {
             expr: KExpression::new(vec![Spanned::bare(part)]),
             placement: DepPlacement::OwnScope,
         })

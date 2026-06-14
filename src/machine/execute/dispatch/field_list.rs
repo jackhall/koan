@@ -21,8 +21,9 @@ use crate::machine::model::{KType, Record};
 use crate::machine::{KError, KErrorKind, NodeId, Scope, TraceFrame};
 
 use super::super::nodes::NodeOutput;
-use super::super::outcome::{Continuation, DispatchDep, Outcome};
+use super::super::outcome::{Continuation, Outcome};
 use super::super::CombineFinish;
+use super::DepRequest;
 use super::SchedulerView;
 
 /// Folds the elaborated `(name, KType)` pairs into the caller's carrier on the Combine's
@@ -96,11 +97,11 @@ pub(crate) fn defer_field_list_via_combine<'run>(
     });
     // Deps `[park_producers (Existing) ..., sigil subs (Dispatch/OwnScope) ...]`; the harness owns
     // the `Dispatch` suffix and parks the `Existing` prefix, feeding results in that order.
-    let mut deps: Vec<DispatchDep<'run>> = park_producers
+    let mut deps: Vec<DepRequest<'run>> = park_producers
         .into_iter()
-        .map(DispatchDep::Existing)
+        .map(DepRequest::Existing)
         .collect();
-    deps.extend(sub_dispatches.into_iter().map(|sub| DispatchDep::Dispatch {
+    deps.extend(sub_dispatches.into_iter().map(|sub| DepRequest::Dispatch {
         expr: sub,
         placement: DepPlacement::OwnScope,
     }));

@@ -23,7 +23,7 @@ use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 
 use super::super::scheduler::Scheduler;
-use super::{bind_frame_err, park_combine, resolve_name_part, DispatchDep, Outcome, PendingSub};
+use super::{bind_frame_err, park_combine, resolve_name_part, DepRequest, Outcome, PendingSub};
 
 /// Read-only dispatch view — the decide-phase context. It holds only `&Scheduler`, never `&mut`.
 /// A shape handler decides against this and *returns* a
@@ -126,7 +126,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
         picked: Option<&'run KFunction<'run>>,
     ) -> Outcome<'run> {
         use super::super::CombineFinish;
-        let mut deps: Vec<DispatchDep<'run>> = Vec::with_capacity(staged_subs.len());
+        let mut deps: Vec<DepRequest<'run>> = Vec::with_capacity(staged_subs.len());
         let mut part_indices: Vec<usize> = Vec::with_capacity(staged_subs.len());
         // Reuse producers consumed inline (spliced into `working_expr`); the harness reclaims
         // them so the decide phase issues no `free` write.
@@ -149,15 +149,15 @@ impl<'run, 's> SchedulerView<'run, 's> {
                             }
                         }
                     }
-                    DispatchDep::Existing(id)
+                    DepRequest::Existing(id)
                 }
-                PendingSub::Dispatch(sub_expr) => DispatchDep::Dispatch {
+                PendingSub::Dispatch(sub_expr) => DepRequest::Dispatch {
                     expr: sub_expr,
                     placement: DepPlacement::OwnScope,
                 },
-                PendingSub::ListLit(items) => DispatchDep::ListLit(items),
-                PendingSub::DictLit(pairs) => DispatchDep::DictLit(pairs),
-                PendingSub::RecordLit(fields) => DispatchDep::RecordLit(fields),
+                PendingSub::ListLit(items) => DepRequest::ListLit(items),
+                PendingSub::DictLit(pairs) => DepRequest::DictLit(pairs),
+                PendingSub::RecordLit(fields) => DepRequest::RecordLit(fields),
             };
             deps.push(dep);
             part_indices.push(i);

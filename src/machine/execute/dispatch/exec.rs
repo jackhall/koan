@@ -4,13 +4,14 @@
 //! to an [`Outcome`] the harness applies. `invoke` is a **pure decide**: it reads a `SchedulerView`
 //! and the per-call `frame` the harness already acquired (frame acquisition is the harness's write),
 //! and returns the deferred body dispatch declaratively (a `Continue` for the tail, a
-//! `ParkThenContinue` over a [`DispatchDep::BodyBlock`] for a first-call deferred return). Kept out
+//! `ParkThenContinue` over a [`DepRequest::BodyBlock`] for a first-call deferred return). Kept out
 //! of `ctx.rs` (the dispatcher facade) so the dispatcher core stays thin; pure body semantics live
 //! one layer down in [`crate::machine::core::kfunction::exec`].
 
 use super::super::nodes::{NodeOutput, NodeWork};
-use super::super::outcome::{Continuation, DispatchDep, Outcome};
+use super::super::outcome::{Continuation, Outcome};
 use super::super::{ignore_results, CombineFinish};
+use super::DepRequest;
 use super::SchedulerView;
 use crate::machine::core::kfunction::action::FramePlacement;
 use crate::machine::core::kfunction::bind_by_name::CallArgs;
@@ -179,7 +180,7 @@ pub(super) fn invoke<'run>(
                 free: Vec::new(),
             });
             Outcome::ParkThenContinue {
-                deps: vec![DispatchDep::BodyBlock { frame, statements }],
+                deps: vec![DepRequest::BodyBlock { frame, statements }],
                 park_count: 0,
                 cont: Continuation::Combine(finish),
                 dep_error_frame: None,
@@ -237,7 +238,7 @@ pub(super) fn invoke<'run>(
                 }
             });
             Outcome::ParkThenContinue {
-                deps: vec![DispatchDep::BodyBlock { frame, statements }],
+                deps: vec![DepRequest::BodyBlock { frame, statements }],
                 park_count: 0,
                 cont: Continuation::Combine(finish),
                 dep_error_frame: None,

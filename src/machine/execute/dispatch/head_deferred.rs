@@ -32,7 +32,7 @@ use crate::machine::{KError, KErrorKind};
 use super::super::nodes::NodeOutput;
 use super::super::CombineFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
-use super::{park_combine, DispatchDep, Outcome};
+use super::{park_combine, DepRequest, Outcome};
 
 /// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly, then
 /// applied to `parts[1..]` once it resolves.
@@ -78,7 +78,7 @@ fn park_on_head<'run>(
     // The head sub is the only dep; a dep error propagates frameless (the resumed dispatch
     // attaches its own frame), matching the resume behaviour.
     park_combine(
-        vec![DispatchDep::Dispatch {
+        vec![DepRequest::Dispatch {
             expr: head,
             placement: DepPlacement::OwnScope,
         }],

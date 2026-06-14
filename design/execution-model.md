@@ -281,7 +281,7 @@ builtins (`match_case`, and `run_user_fn` for user-fns) are tail by
 construction. A chain of tail calls (`A → B → PRINT`, or unbounded
 `LOOP → LOOP`) reuses one slot end-to-end. Verified by two slot-count
 assertions in the test suite. When a body has leading (non-tail) statements,
-they become owned deps the slot parks on (one `DispatchDep::BodyBlock`) and
+they become owned deps the slot parks on (one body-block `DepRequest::BodyBlock`) and
 the `Continue` tail fires only from the resolving finish — so the leading
 siblings run, and cascade-free, before the tail-replace, restoring frame
 uniqueness so [`try_reset_for_tail`](per-call-arena-protocol.md#tco-frame-reuse)
