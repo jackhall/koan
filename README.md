@@ -219,7 +219,7 @@ src/
         ├── nodes.rs       node types (NodeWork / NodeOutput / NodeStep / Node) + work_deps
         ├── outcome.rs     Outcome — the unified scheduler-step currency (Done / Continue / ParkThenContinue / Invoke / Redispatch) + Continuation / DispatchDep
         ├── harness.rs     run_action — lowers a builtin Action to an Outcome (pure)
-        ├── dispatch.rs    run_dispatch / run_dispatch_resume routers + classify_dispatch_shape; harness/ (apply_outcome caller), ctx/ (SchedulerView read view), exec/ (dispatch-side invoke), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/, operator_chain/, field_list/, constructors/, resolve_dispatch/, resolve_type_expr/ submodules
+        ├── dispatch.rs    run_dispatch / run_dispatch_resume routers + classify_dispatch_shape; submit/ (binder-aware submit_dispatch chokepoint), harness/ (apply_outcome caller), ctx/ (SchedulerView read view), exec/ (dispatch-side invoke), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/, operator_chain/, field_list/, constructors/, resolve_dispatch/, resolve_type_expr/ submodules
         ├── lift.rs        lift_kobject — rebuild values across per-call arena boundaries
         └── interpret.rs   parse → enter_block → execute
 ```

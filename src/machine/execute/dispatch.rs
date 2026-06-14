@@ -43,6 +43,7 @@ pub(in crate::machine::execute) mod operator_chain;
 pub(in crate::machine) mod resolve_dispatch;
 pub(in crate::machine) mod resolve_type_expr;
 pub(in crate::machine::execute) mod single_poll;
+mod submit;
 
 #[cfg(test)]
 mod tests;
@@ -50,6 +51,7 @@ mod tests;
 pub(in crate::machine::execute) use super::outcome::{Continuation, DispatchDep, Outcome};
 pub(in crate::machine::execute) use ctx::SchedulerView;
 pub(crate) use field_list::defer_field_list_action;
+pub(in crate::machine::execute) use submit::submit_dispatch;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};

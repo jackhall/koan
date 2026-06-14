@@ -129,6 +129,16 @@ impl<'run> NodeWork<'run> {
             pre_subs: Vec::new(),
         }
     }
+
+    /// `Dispatch` birth state carrying the dispatch layer's pre-submitted nested sub-Dispatches.
+    /// Built only by `dispatch::submit_dispatch`, which owns the binder-shape introspection that
+    /// computes `pre_subs`.
+    pub(in crate::machine::execute) fn dispatch_with_presubs(
+        expr: KExpression<'run>,
+        pre_subs: Vec<(usize, NodeId)>,
+    ) -> Self {
+        NodeWork::Dispatch { expr, pre_subs }
+    }
 }
 
 /// `Pending(from)` parks on `from`'s terminal; `Ready(output)` holds the stamped

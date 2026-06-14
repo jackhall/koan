@@ -5,7 +5,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope};
 
-use super::nodes::{NodeScope, NodeWork};
+use super::nodes::NodeScope;
 use dep_graph::DepGraph;
 use node_store::NodeStore;
 use work_queues::WorkQueues;
@@ -408,7 +408,9 @@ impl<'run> Scheduler<'run> {
         scope: &'run Scope<'run>,
         chain: Rc<LexicalFrame>,
     ) -> NodeId {
-        Scheduler::add_with_chain(self, NodeWork::dispatch(expr), scope, Some(chain))
+        self.ensure_run_frame(scope);
+        let node_scope = self.resolve_node_scope(scope);
+        crate::machine::execute::dispatch::submit_dispatch(self, expr, scope, node_scope, Some(chain))
     }
 
     /// Dispatch `expr` as a sub-slot of the currently-active per-call frame, storing the slot's
@@ -425,10 +427,11 @@ impl<'run> Scheduler<'run> {
             .expect("in-frame dispatch requires an active frame");
         // `scope_for_bind` is `Rc`-bounded — not a free `'run`-fabrication. The
         // slot stores `Yoked` and re-projects the scope from the frame cart at the read
-        // boundary, so this short borrow only needs to outlive the `submit_node` call.
+        // boundary, so this short borrow only needs to outlive the `submit_dispatch` call.
         let scope = frame.scope_for_bind();
-        self.submit_node(
-            NodeWork::dispatch(expr),
+        crate::machine::execute::dispatch::submit_dispatch(
+            self,
+            expr,
             scope,
             NodeScope::Yoked,
             Some(chain),
@@ -447,8 +450,9 @@ impl<'run> Scheduler<'run> {
             .expect("in-frame dispatch requires an active frame");
         let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
         let scope = frame.scope_for_bind();
-        self.submit_node(
-            NodeWork::dispatch(expr),
+        crate::machine::execute::dispatch::submit_dispatch(
+            self,
+            expr,
             scope,
             NodeScope::Yoked,
             explicit_chain,

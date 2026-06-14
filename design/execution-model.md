@@ -496,33 +496,35 @@ tests pin the contract under Miri tree borrows.
 
 ### Submission-time binder install and recursive sub-Dispatch
 
-[`Scheduler::add_with_chain`](../src/machine/execute/scheduler/submit.rs)
-inspects every incoming `NodeWork::Dispatch` against the dispatching
-scope's ancestor chain via `extract_binder_install`: it finds the first
-overload in the matching `functions[expr.untyped_key()]` bucket whose
-`binder_name` OR `binder_bucket` extractor returns `Some(_)` for the
-expression. The picked overload's install channel is reified as
-`BinderKey::Name(name)` (for `LET` / `STRUCT` / `UNION` / `SIG` /
-`MODULE`) or `BinderKey::Bucket(key)` (for `FN` / `FUNCTOR`); the
-install site stamps the corresponding `placeholders[name]` or
-`pending_overloads[bucket]` entry on the dispatching scope before the
-slot is ever popped from the work queues. A later sibling that
-dispatches before the binder's slot pops finds the entry and parks
-rather than surfacing `UnboundName` / `DispatchFailed`.
+The dispatch-layer submission chokepoint
+[`dispatch::submit_dispatch`](../src/machine/execute/dispatch/submit.rs)
+inspects every dispatch submission against the dispatching scope's ancestor
+chain via `extract_binder_install`: it finds the first overload in the
+matching `functions[expr.untyped_key()]` bucket whose `binder_name` OR
+`binder_bucket` extractor returns `Some(_)` for the expression. The picked
+overload's install channel is reified as `BinderKey::Name(name)` (for `LET` /
+`STRUCT` / `UNION` / `SIG` / `MODULE`) or `BinderKey::Bucket(key)` (for `FN` /
+`FUNCTOR`); the install site stamps the corresponding `placeholders[name]` or
+`pending_overloads[bucket]` entry on the dispatching scope before the slot is
+ever popped from the work queues. A later sibling that dispatches before the
+binder's slot pops finds the entry and parks rather than surfacing
+`UnboundName` / `DispatchFailed`. The binder logic lives in the dispatch layer,
+not the scheduler: the scheduler exposes only a generic slot allocator
+(`Scheduler::submit_node`) and the `Scope::install_*` primitives, so no
+`NodeWork` variant or scheduler code names a `KExpression`.
 
-For binder-shaped Dispatch nodes, the submission walk also recurses into
-the expression's eager Expression-shaped argument slots and submits each
-as a sub-Dispatch *at the same outermost submission point*. The walk
-computes an `eager_slot_mask` over the bucket — a slot is eager only if
-*every* binder overload in the bucket marks it non-`KType::KExpression`;
-any overload tagging a slot lazy keeps that slot out of the recursive
-walk because the eventual dispatch may resolve to that overload. Lazy
-slots — FN body, FN signature/return-type-`KExpression` overload, FUNCTOR
-body, MODULE body — dispatch in the callee's scope at body-invoke time,
-not here. Each recursive `add_with_chain` runs its own
-`extract_binder_install`, so a nested binder's placeholder installs at
-the same outermost step as its parent's; recursion terminates at
-non-binder leaves and at lazy slots, bounded by AST depth.
+For binder-shaped expressions, `submit_dispatch` also recurses into the eager
+Expression-shaped argument slots and submits each as a sub-dispatch *at the same
+outermost submission point*. The walk computes an `eager_slot_mask` over the
+bucket — a slot is eager only if *every* binder overload in the bucket marks it
+non-`KType::KExpression`; any overload tagging a slot lazy keeps that slot out
+of the recursive walk because the eventual dispatch may resolve to that
+overload. Lazy slots — FN body, FN signature/return-type-`KExpression` overload,
+FUNCTOR body, MODULE body — dispatch in the callee's scope at body-invoke time,
+not here. Each recursive `submit_dispatch` runs its own
+`extract_binder_install`, so a nested binder's placeholder installs at the same
+outermost step as its parent's; recursion terminates at non-binder leaves and at
+lazy slots, bounded by AST depth.
 
 The collected `(slot_idx, sub_node_id)` pairs ride through into the
 parent's `NodeWork::Dispatch { expr, pre_subs }`
@@ -1175,13 +1177,12 @@ statements as dispatch nodes:
   shape is special because the call site's chain is not the body's
   lexical chain).
 
-The "every dispatched node has a chain" invariant is a debug
-assertion in the strict
-[`Scheduler::add_with_chain`](../src/machine/execute/scheduler/submit.rs)
-path; the public `add` path auto-roots a chain when no ambient one is
-present via [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs)
-(so REPL-style submissions outside `enter_block` see every prior bind
-in the target scope).
+The "every dispatched node has a chain" invariant is an `expect` in
+[`Scheduler::submit_node`](../src/machine/execute/scheduler/submit.rs); the
+public `add_dispatch` entry auto-roots a chain when no ambient one is present
+via [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs) (so
+REPL-style submissions outside `enter_block` see every prior bind in the target
+scope).
 
 ### Multi-statement FN body split
 
