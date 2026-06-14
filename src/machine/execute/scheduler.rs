@@ -379,7 +379,13 @@ impl<'run> Scheduler<'run> {
     ) -> NodeId {
         self.ensure_run_frame(scope);
         let node_scope = self.resolve_node_scope(scope);
-        crate::machine::execute::dispatch::submit_dispatch(self, expr, scope, node_scope, Some(chain))
+        crate::machine::execute::dispatch::submit_dispatch(
+            self,
+            expr,
+            scope,
+            node_scope,
+            Some(chain),
+        )
     }
 
     /// Dispatch `expr` as a sub-slot of the currently-active per-call frame, storing the slot's

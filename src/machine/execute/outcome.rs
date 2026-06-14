@@ -7,24 +7,20 @@
 //! [`NodeStep`](super::nodes::NodeStep). The scheduler never learns *what* a step ran (dispatch /
 //! invoke / builtin) nor *whether* it ran before — only a read view in and an outcome out.
 //!
-//! The taxonomy is three-way:
+//! The taxonomy is AST-free — no variant names a `KFunction` or a `KExpression`:
 //! - [`Outcome::Done`] — the node dies, producing a value to lift or an error.
 //! - [`Outcome::Continue`] — the node lives; replace its work and run again immediately (no park).
+//!   A resolved call folds into this: the producer installs the per-call cart (its frame placement)
+//!   and the work re-decides via the folded `invoke` / re-resolve closure on the next pop — so the
+//!   dispatch→execution hand-off is a dep-free `Continue`, not a distinct trigger.
 //! - [`Outcome::ParkThenContinue`] — park on deps; on resolve run a [`Continuation`] that yields
 //!   another outcome.
-//!
-//! [`Outcome::Invoke`] is the dispatch→execution trigger: a decide picks a function but can't
-//! acquire the per-call frame (a write), so it names the call and the harness acquires the frame
-//! before running the pure `invoke` decide. [`Outcome::Redispatch`] is the one remaining
-//! **transitional** variant — an immediate dispatch-specific re-decide via
-//! [`keyworded::finish`](super::dispatch::keyworded::finish), shed when the
-//! eager-subs re-resolve folds in.
+//! - [`Outcome::Forward`] — splice the slot out as an alias of an existing producer.
 
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::{Dep, DepPlacement, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, ScopeId};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::{Carried, KObject};
@@ -49,13 +45,16 @@ pub(in crate::machine::execute) enum Outcome<'run> {
     /// carried here: a producer with leading statements parks on them as owned deps (a
     /// [`DispatchDep::BodyBlock`]) and emits this `Continue` only from the resolving finish, so the
     /// leading siblings cascade-free before the tail-replace — restoring frame uniqueness for TCO
-    /// reuse. `body_index` already accounts for their count.
+    /// reuse. `body_index` already accounts for their count. `free` reclaims producers the decide
+    /// phase consumed inline (a ready eager-subs `Reuse` spliced into the `work`'s expression),
+    /// drained by the harness before the placement resolves and the re-decide runs.
     Continue {
         work: NodeWork<'run>,
         frame: FramePlacement<'run>,
         contract: Option<ReturnContract<'run>>,
         block_entry: Option<ScopeId>,
         body_index: usize,
+        free: Vec<usize>,
     },
     /// Park the slot on `deps` and run `cont` when they resolve. `deps` layout is
     /// `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix length
@@ -68,23 +67,6 @@ pub(in crate::machine::execute) enum Outcome<'run> {
         park_count: usize,
         cont: Continuation<'run>,
         dep_error_frame: Option<TraceFrame>,
-        free: Vec<usize>,
-    },
-    /// Run a resolved call. The dispatch→execution trigger: a decide that picks a function can't
-    /// acquire the per-call frame (a write), so it names the call here and the harness acquires the
-    /// frame (for a user fn) before calling the pure `invoke` decide. `free` reclaims eager-subs
-    /// `Reuse` producers consumed inline. Not transitional — frame acquisition is an irreducible
-    /// harness write, and this is its trigger.
-    Invoke {
-        picked: &'run KFunction<'run>,
-        working_expr: KExpression<'run>,
-        free: Vec<usize>,
-    },
-    /// Transitional: re-resolve dispatch against a fully-spliced `working_expr` immediately
-    /// (the post-eager-subs continuation with no speculatively pre-picked function). `free`
-    /// reclaims `Reuse` producers consumed inline.
-    Redispatch {
-        working_expr: KExpression<'run>,
         free: Vec<usize>,
     },
     /// The slot's result *is* `producer`'s result (a bare name resolving to a binding). Rather than

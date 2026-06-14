@@ -1,13 +1,15 @@
 //! Keyworded dispatch shape: the catch-all for any expression with a
 //! keyword present, or a head that isn't a fast-lane shape.
 
+use crate::machine::core::kfunction::action::FramePlacement;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Parseable;
 use crate::machine::{
     BindingIndex, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, TraceFrame,
 };
 
-use super::super::nodes::NodeOutput;
+use super::super::ignore_results;
+use super::super::nodes::{NodeOutput, NodeWork};
 use super::ctx::SchedulerView;
 use super::{bare_name_of, park_resume, propagate_dep_error, Outcome, PartWalkResult, PendingSub};
 
@@ -112,11 +114,7 @@ pub(super) fn initial<'run>(
     }
     if staged_subs.is_empty() {
         // The synchronous (no-eager-subs) call — the common path for builtins and simple calls.
-        return Outcome::Invoke {
-            picked: resolved.function,
-            working_expr: new_expr,
-            free: Vec::new(),
-        };
+        return super::exec::invoke_continue(resolved.function, new_expr, Vec::new());
     }
     let _ = resolved; // discard the speculative pick.
     install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs)
@@ -133,13 +131,11 @@ pub(super) fn finish<'run>(
         .current_scope()
         .resolve_dispatch(&working_expr, ctx.chain_deref(), &[])
     {
-        // The post-eager-subs re-dispatch lands resolved calls here — name the resolved call
-        // for the harness to run.
-        ResolveOutcome::Resolved(r) => Outcome::Invoke {
-            picked: r.function,
-            working_expr,
-            free: Vec::new(),
-        },
+        // The post-eager-subs re-dispatch lands resolved calls here — fold the resolved call into
+        // the `Continue` that installs its frame and runs `invoke`.
+        ResolveOutcome::Resolved(r) => {
+            super::exec::invoke_continue(r.function, working_expr, Vec::new())
+        }
         // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
         // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
         ResolveOutcome::Ambiguous(n) => Outcome::Done(NodeOutput::Err(KError::new(
@@ -160,6 +156,31 @@ pub(super) fn finish<'run>(
         ResolveOutcome::UnboundName(name) => {
             Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))))
         }
+    }
+}
+
+/// Fold the post-eager-subs re-resolve into a [`Outcome::Continue`]: a dep-free decide that re-runs
+/// [`finish`] against the fully-spliced `working_expr` on the next pop, with no committed function
+/// pick. `Inherit` — a re-resolve runs in the slot's current frame; `free` reclaims the `Reuse`
+/// producers the decide phase consumed inline.
+pub(super) fn redispatch_continue<'run>(
+    working_expr: KExpression<'run>,
+    free: Vec<usize>,
+) -> Outcome<'run> {
+    let carrier = working_expr.summarize();
+    let work = NodeWork {
+        deps: Vec::new(),
+        park_count: 0,
+        cont: ignore_results(Box::new(move |ctx, idx| finish(ctx, working_expr, idx))),
+        carrier: Some(carrier),
+    };
+    Outcome::Continue {
+        work,
+        frame: FramePlacement::Inherit,
+        contract: None,
+        block_entry: None,
+        body_index: 0,
+        free,
     }
 }
 

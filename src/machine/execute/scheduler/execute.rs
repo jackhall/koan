@@ -84,11 +84,16 @@ impl<'run> Scheduler<'run> {
                     // `new_function` (still live) for the chain-shape decision before erasure.
                     let next_contract: Option<ErasedContract> =
                         prev_contract.or_else(|| new_function.map(ErasedContract::erase));
+                    // The frame the body runs in: a freshly installed cart, else the slot's current
+                    // one (a `FramePlacement::Inherit` FN-body re-enters the cart a prior `Continue`
+                    // already installed — the folded `invoke`).
+                    let body_frame: &crate::machine::core::CallArena =
+                        new_frame.as_deref().unwrap_or(&prev_frame);
                     let new_chain = compute_replace_chain(
                         prev_chain_carrier,
                         block_entry,
                         new_function,
-                        new_frame.as_deref(),
+                        body_frame,
                         body_index,
                     );
                     match new_frame {
@@ -312,23 +317,29 @@ fn check_declared_return<'run>(
 ///
 /// - `None` — TCO in the same lexical block; chain unchanged.
 /// - `Some(scope_id)` + non-`Function` contract — block-entry arm (MATCH, TRY); prepend.
-/// - `Some(_)` + `Function(fn)` — FN body invoke. Chain is assembled from the FN's
-///   lexical `outer` walk so depth tracks lexical nesting, not call depth
-///   (tail-recursive loops produce equal-depth chains each iteration).
+/// - `Some(_)` + `Function`/`PerCall` contract — FN body invoke (a deferred FN body for
+///   `PerCall`). Chain is assembled from the FN's lexical `outer` walk so depth tracks lexical
+///   nesting, not call depth (tail-recursive loops produce equal-depth chains each iteration).
+///
+/// `body_frame` is the cart the body runs in — the freshly installed frame for a
+/// `FreshChild`/`ReuseReserve` tail, or the slot's already-installed current cart for an `Inherit`
+/// FN-body re-entry (the folded `invoke`). The body-chain decision keys off the **contract kind**,
+/// not whether a new frame was minted, so an `Inherit` FN body assembles against the current cart
+/// exactly as a `FreshChild` one assembles against the minted cart.
 fn compute_replace_chain<'run>(
     prev_chain: Rc<LexicalFrame>,
     block_entry: Option<ScopeId>,
     new_function: Option<ReturnContract<'run>>,
-    new_frame: Option<&crate::machine::core::CallArena>,
+    body_frame: &crate::machine::core::CallArena,
     body_index: usize,
 ) -> Rc<LexicalFrame> {
     let Some(scope_id) = block_entry else {
         return prev_chain;
     };
-    match (new_function, new_frame) {
+    match new_function {
         // `Function` and `PerCall` (a deferred FN body) both assemble the FN-body chain.
-        (Some(ReturnContract::Function(_) | ReturnContract::PerCall { .. }), Some(frame)) => {
-            assemble_body_chain(frame.scope(), prev_chain, body_index)
+        Some(ReturnContract::Function(_) | ReturnContract::PerCall { .. }) => {
+            assemble_body_chain(body_frame.scope(), prev_chain, body_index)
         }
         _ => LexicalFrame::push(Some(prev_chain), scope_id, body_index),
     }

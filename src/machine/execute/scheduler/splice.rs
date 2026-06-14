@@ -29,7 +29,10 @@ impl<'run> Scheduler<'run> {
         while let Some(to) = self.store.alias_target(id) {
             id = to;
             guard += 1;
-            assert!(guard <= self.len(), "alias cycle while resolving forward at {id:?}");
+            assert!(
+                guard <= self.len(),
+                "alias cycle while resolving forward at {id:?}"
+            );
         }
         id
     }
@@ -51,7 +54,11 @@ impl<'run> Scheduler<'run> {
     /// Install an `Owned` read-edge from `producer` to `consumer`, following any alias on
     /// `producer`. An already-finalized resolved producer adds no edge — the consumer reads its
     /// value directly, so it never parks on a slot that will not fire.
-    pub(in crate::machine::execute) fn add_owned_edge(&mut self, producer: NodeId, consumer: NodeId) {
+    pub(in crate::machine::execute) fn add_owned_edge(
+        &mut self,
+        producer: NodeId,
+        consumer: NodeId,
+    ) {
         let producer = self.resolve_alias(producer);
         if !self.store.is_result_ready(producer) {
             self.deps.add_owned_edge(producer, consumer);
@@ -60,7 +67,11 @@ impl<'run> Scheduler<'run> {
 
     /// Park (`Notify`) sibling of [`Self::add_owned_edge`]: the consumer reads `producer` but does
     /// not own it. Same alias-resolve and already-finalized short-circuit.
-    pub(in crate::machine::execute) fn add_park_edge(&mut self, producer: NodeId, consumer: NodeId) {
+    pub(in crate::machine::execute) fn add_park_edge(
+        &mut self,
+        producer: NodeId,
+        consumer: NodeId,
+    ) {
         let producer = self.resolve_alias(producer);
         if !self.store.is_result_ready(producer) {
             self.deps.add_park_edge(producer, consumer);

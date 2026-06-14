@@ -179,7 +179,11 @@ impl DepGraph {
     /// keep their pending counts and `from`-labelled edges; `into`'s fire now drains them (and their
     /// reads of `from` follow the alias to `into`). Their pending counts are unchanged: each still
     /// waits on one dep, now serviced by `into`'s single fire.
-    pub(in crate::machine::execute::scheduler) fn splice_notify(&mut self, from: usize, into: usize) {
+    pub(in crate::machine::execute::scheduler) fn splice_notify(
+        &mut self,
+        from: usize,
+        into: usize,
+    ) {
         let moved = std::mem::take(&mut self.rows[from].notify);
         self.rows[into].notify.extend(moved);
     }

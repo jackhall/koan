@@ -10,9 +10,8 @@ use crate::machine::core::kfunction::action::{Dep, DepPlacement, FramePlacement}
 use crate::machine::{NodeId, TraceFrame};
 
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
-use super::super::{catch_cont, ignore_results, short_circuit};
 use super::super::scheduler::Scheduler;
-use super::ctx::SchedulerView;
+use super::super::{catch_cont, ignore_results, short_circuit};
 use super::{Continuation, DispatchDep, Outcome};
 
 /// Reclaim the producers a decide phase consumed inline (a ready `Reuse` spliced into a
@@ -44,6 +43,22 @@ impl<'run> Scheduler<'run> {
         }
     }
 
+    /// Resolve a [`FramePlacement`] to the cart a [`Continue`](Outcome::Continue) installs: reuse
+    /// the slot's ping-pong reserve (the TCO tail-call cart), take a builtin-minted fresh cart, or
+    /// keep the current cart (`None`). The one place the placement → cart mapping lives — shared by
+    /// the `Continue` body re-run and the folded invoke / re-resolve paths (which reach it through
+    /// their own `Continue`).
+    fn resolve_frame_placement(
+        &mut self,
+        placement: FramePlacement<'run>,
+    ) -> Option<std::rc::Rc<crate::machine::core::CallArena>> {
+        match placement {
+            FramePlacement::ReuseReserve { outer } => Some(self.acquire_tail_frame(outer)),
+            FramePlacement::FreshChild { frame } => Some(frame),
+            FramePlacement::Inherit => None,
+        }
+    }
+
     /// Interpret an [`Outcome`] into the scheduler effect it names and return the slot's
     /// [`NodeStep`]. This is the sole graph writer the dispatch side reaches — a decide handler
     /// never holds `&mut Scheduler`.
@@ -60,17 +75,15 @@ impl<'run> Scheduler<'run> {
                 contract,
                 block_entry,
                 body_index,
+                free,
             } => {
-                // Resolve the frame placement to the cart the Replace installs: reuse the slot's
-                // ping-pong reserve, take a builtin-minted cart, or keep the current cart. The
-                // body's leading statements are never dispatched here — a producer with leading
+                // Reclaim the Reuse producers the decide phase consumed inline before installing the
+                // replacement (mirrors the `ParkThenContinue` arm).
+                drain_free(self, free);
+                // The body's leading statements are never dispatched here — a producer with leading
                 // statements parks on them as owned `BodyBlock` deps and emits this `Continue` only
                 // from the resolving finish (see `dispatch/exec.rs` and `execute/harness.rs`).
-                let frame = match frame {
-                    FramePlacement::ReuseReserve { outer } => Some(self.acquire_tail_frame(outer)),
-                    FramePlacement::FreshChild { frame } => Some(frame),
-                    FramePlacement::Inherit => None,
-                };
+                let frame = self.resolve_frame_placement(frame);
                 NodeStep::Replace {
                     work,
                     frame,
@@ -201,32 +214,6 @@ impl<'run> Scheduler<'run> {
                     // producer + alias the slot) in the execute loop.
                     NodeStep::Alias(producer)
                 }
-            }
-            Outcome::Invoke {
-                picked,
-                working_expr,
-                free,
-            } => {
-                // The dispatch→execution hand-off. A user fn runs in a freshly acquired per-call
-                // frame (the harness's irreducible write — TCO reuse mutates the reserve); a
-                // builtin runs in the current frame. `invoke` is a pure decide that reads that
-                // frame, so the harness acquires it here and applies the outcome `invoke` returns.
-                drain_free(self, free);
-                let frame = match &picked.body {
-                    crate::machine::core::kfunction::Body::Builtin(_) => None,
-                    _ => Some(self.acquire_tail_frame(picked.captured_scope())),
-                };
-                let oc =
-                    super::exec::invoke(&SchedulerView::new(self), frame, picked, working_expr);
-                self.apply_outcome(oc, idx)
-            }
-            Outcome::Redispatch { working_expr, free } => {
-                // Re-resolve dispatch against the now fully-spliced `working_expr` immediately
-                // (the post-eager-subs continuation with no speculatively pre-picked function).
-                drain_free(self, free);
-                let outcome =
-                    super::keyworded::finish(&SchedulerView::new(self), working_expr, idx);
-                self.apply_outcome(outcome, idx)
             }
         }
     }

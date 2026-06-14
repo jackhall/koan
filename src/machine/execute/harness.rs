@@ -43,6 +43,7 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
                     contract,
                     block_entry,
                     body_index,
+                    free: Vec::new(),
                 };
             }
             // Leading statements become owned siblings in the arm's frame (one `BodyBlock` dep);
@@ -63,6 +64,7 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
                 contract,
                 block_entry,
                 body_index,
+                free: Vec::new(),
             });
             Outcome::ParkThenContinue {
                 deps: vec![DispatchDep::BodyBlock {
