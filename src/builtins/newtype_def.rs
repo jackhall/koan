@@ -311,7 +311,7 @@ mod tests {
     use std::rc::Rc;
 
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::machine::execute::Scheduler;
+    use crate::machine::execute::KoanHarness;
     use crate::machine::model::types::{KKind, NominalSchema, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
     use crate::machine::{KErrorKind, RuntimeArena, Scope};
@@ -612,7 +612,7 @@ mod tests {
             KObject::KString(s) => assert_eq!(s, "num"),
             other => panic!("expected \"num\", got {:?}", other.ktype()),
         }
-        let mut sched1 = Scheduler::new();
+        let mut sched1 = KoanHarness::new();
         let root = sched1.add_dispatch(parse_one("TAKES_NUM (Distance (3.0))"), scope);
         sched1
             .execute()
@@ -625,7 +625,7 @@ mod tests {
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed on Number-slot Distance, got {err}",
         );
-        let mut sched2 = Scheduler::new();
+        let mut sched2 = KoanHarness::new();
         let root2 = sched2.add_dispatch(parse_one("TAKES_DIST (3.0)"), scope);
         sched2
             .execute()

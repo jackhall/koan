@@ -81,7 +81,7 @@ pub fn body<'a>(
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
-    use crate::machine::execute::Scheduler;
+    use crate::machine::execute::KoanHarness;
     use crate::machine::model::KType;
     use crate::machine::RuntimeArena;
 
@@ -171,7 +171,7 @@ mod tests {
             scope,
             "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
         );
-        let mut sched = Scheduler::new();
+        let mut sched = KoanHarness::new();
         let id = sched.add_dispatch(parse_one("OrderedSig WITH {Bogus = Number}"), scope);
         sched
             .execute()
@@ -193,7 +193,7 @@ mod tests {
             scope,
             "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
         );
-        let mut sched = Scheduler::new();
+        let mut sched = KoanHarness::new();
         let id = sched.add_dispatch(parse_one("OrderedSig WITH {type = Number}"), scope);
         sched
             .execute()

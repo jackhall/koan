@@ -9,7 +9,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::builtins::default_scope;
-use crate::machine::execute::Scheduler;
+use crate::machine::execute::KoanHarness;
 use crate::machine::model::{KObject, KType, Parseable};
 use crate::machine::{KError, KErrorKind, RuntimeArena, Scope};
 use crate::parse::parse;
@@ -38,7 +38,7 @@ impl Write for SharedBuf {
 fn run_scope<'run>(arena: &'run RuntimeArena, source: &str) -> &'run Scope<'run> {
     let scope = default_scope(arena, Box::new(Sink));
     let exprs = parse(source).expect("parse should succeed");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     sched.enter_block(scope.id, exprs, scope);
     let _ = sched.execute();
     scope
@@ -48,7 +48,7 @@ fn run_collect_err(source: &str) -> Option<KError> {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(Sink));
     let exprs = parse(source).expect("parse should succeed");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let ids: Vec<_> = sched.enter_block(scope.id, exprs, scope);
     if let Err(e) = sched.execute() {
         return Some(e);
@@ -147,7 +147,7 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
          LET out = (PING 42 (Tick (More null)))",
     )
     .expect("parse should succeed");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     for e in exprs {
         sched.add_dispatch(e, scope);
     }

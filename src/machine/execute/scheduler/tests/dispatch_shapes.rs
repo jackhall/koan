@@ -14,7 +14,7 @@ use crate::machine::core::kfunction::action::{arg_object, Action, BodyCtx};
 use crate::machine::execute::dispatch::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
 };
-use crate::machine::execute::Scheduler;
+use crate::machine::execute::KoanHarness;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
@@ -34,7 +34,7 @@ fn dispatch_one_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>)
 }
 
 fn sched_read_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> Carried<'run> {
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().expect("scheduler should succeed");
     sched.read(id)
@@ -166,7 +166,7 @@ fn function_value_call_named_args_missing_short_circuits() {
     );
     let expr = parse_one("f {a = 1}");
     reset_resolve_dispatch_entry_count();
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let id = sched.add_dispatch(expr, scope);
     sched
         .execute()
@@ -541,7 +541,7 @@ fn fast_lane_list_of_closures_escapes_outer_call_with_rc_attached() {
 fn function_value_call_forward_ref_routes_via_placeholder() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
 
     // The producer is a `FunctionValueCall` on a non-function value: the fast lane
     // errors with `TypeMismatch` (a `Number` head isn't callable) without entering
@@ -665,7 +665,7 @@ fn keyworded_unchanged_with_keyword_in_body() {
 
     let expr_a = parse_one("(List MAYBE Number)");
     reset_resolve_dispatch_entry_count();
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     sched.add_dispatch(expr_a, scope);
     let _ = sched.execute();
     assert!(
@@ -676,7 +676,7 @@ fn keyworded_unchanged_with_keyword_in_body() {
 
     let expr_b = parse_one("(f IF x)");
     reset_resolve_dispatch_entry_count();
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     sched.add_dispatch(expr_b, scope);
     let _ = sched.execute();
     assert!(
@@ -700,7 +700,7 @@ fn stateful_keyworded_eager_subs_resumes_through_state() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     crate::builtins::test_support::run(scope, "FN (FIRST xs :(LIST OF Number)) -> Number = (1)");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let exprs = crate::parse::parse("LET y = (FIRST [1 2 3])").expect("parse succeeds");
     for e in exprs {
         sched.add_dispatch(e, scope);
@@ -731,7 +731,7 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
         scope,
         "FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")",
     );
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let exprs = crate::parse::parse("LET out = (DESCRIBE [1 2 3])").expect("parse succeeds");
     for e in exprs {
         sched.add_dispatch(e, scope);
@@ -786,7 +786,7 @@ fn classifier_single_operator_stays_keyworded() {
 fn operator_chain_undeclared_errors_cleanly() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let id = sched.add_dispatch(parse_one("a + b + c"), scope);
     sched.execute().expect("scheduler drains without deadlock");
     let msg = match sched.read_result(id) {
@@ -827,7 +827,7 @@ fn operator_chain_registered_reaches_fold_seam() {
         .register_operator_group("+".to_string(), group, BindingIndex::BUILTIN)
         .expect("register operator group");
 
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let id = sched.add_dispatch(parse_one("a + b + c"), scope);
     sched.execute().expect("scheduler drains without deadlock");
     let msg = match sched.read_result(id) {
@@ -1029,7 +1029,7 @@ fn non_callable_list_head_errors() {
     use crate::machine::KErrorKind;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let root = sched.add_dispatch(parse_one("[1 2 3] x"), scope);
     sched
         .execute()

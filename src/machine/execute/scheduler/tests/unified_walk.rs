@@ -9,7 +9,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::builtins::default_scope;
-use crate::machine::execute::Scheduler;
+use crate::machine::execute::KoanHarness;
 use crate::machine::{KErrorKind, RuntimeArena};
 use crate::parse::parse;
 
@@ -44,7 +44,7 @@ fn self_referential_let_surfaces_unbound_name() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(Sink));
     let exprs = parse("LET Ty = Ty").expect("parse should succeed");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let ids = sched.enter_block(scope.id, exprs, scope);
     sched
         .execute()
@@ -75,7 +75,7 @@ fn forward_reference_parks_then_resolves_on_wake() {
          PRINT Fwd",
     )
     .expect("parse should succeed");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     sched.enter_block(scope.id, exprs, scope);
     sched
         .execute()

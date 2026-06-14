@@ -2,7 +2,7 @@
 
 use super::super::super::nodes::NodeOutput;
 use super::super::dep_graph::DepEdge;
-use super::super::Scheduler;
+use crate::machine::execute::KoanHarness;
 use crate::builtins::default_scope;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::KObject;
@@ -13,7 +13,7 @@ fn free_reclaims_owned_subtree() {
     // s0 ─Owned→ s1 ─Owned→ s2 ─Owned→ s3; free(s1) reclaims s1..s3, leaves s0.
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let value: &KObject = arena.alloc_object(KObject::Number(42.0));
     let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
     let s0 = sched.add(mk_dispatch(), root);
@@ -74,7 +74,7 @@ fn free_reclaims_owned_subtree() {
 fn free_skips_live_slot_and_is_idempotent() {
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
     let s = sched.add(mk_dispatch(), root);
     // Live slot: free must be a no-op.
@@ -101,7 +101,7 @@ fn free_does_not_recurse_through_notify_edges() {
     // free(owner) must reclaim only Owned descendants, not parked-on siblings.
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let value: &KObject = arena.alloc_object(KObject::Number(7.0));
     let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
     let s_owner = sched.add(mk_dispatch(), root);
@@ -152,7 +152,7 @@ fn freed_slot_does_not_appear_in_other_notify_lists() {
     // producer drains, leaving a stale edge to misfire onto a reused slot.
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
 
     let exprs = crate::parse::parse(
         "LET x = 1\n\

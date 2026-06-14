@@ -3,7 +3,7 @@
 use crate::builtins::test_support::{
     fn_is_registered, lookup_fn, parse_one, run, run_one, run_root_silent,
 };
-use crate::machine::execute::Scheduler;
+use crate::machine::execute::KoanHarness;
 use crate::machine::model::{Argument, KObject, KType, SignatureElement};
 use crate::machine::{KErrorKind, RuntimeArena};
 
@@ -42,7 +42,7 @@ fn fn_typed_param_rejects_mismatched_call() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let root = sched.add_dispatch(parse_one("DOUBLE \"hi\""), scope);
     sched
         .execute()
@@ -74,7 +74,7 @@ fn fn_overloads_dispatch_by_param_type() {
 fn fn_param_without_annotation_is_rejected() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let id = sched.add_dispatch(parse_one("FN (DOUBLE x) -> Number = (x)"), scope);
     sched
         .execute()
@@ -97,7 +97,7 @@ fn fn_param_without_annotation_is_rejected() {
 fn fn_param_with_unknown_type_name_is_rejected() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let id = sched.add_dispatch(parse_one("FN (DOUBLE x :Bogus) -> Number = (x)"), scope);
     sched
         .execute()

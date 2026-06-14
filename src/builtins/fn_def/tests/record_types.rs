@@ -4,7 +4,7 @@
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::machine::core::KErrorKind;
-use crate::machine::execute::Scheduler;
+use crate::machine::execute::KoanHarness;
 use crate::machine::model::types::KType;
 use crate::machine::model::Record;
 use crate::machine::RuntimeArena;
@@ -93,7 +93,7 @@ fn record_field_type_mismatch_is_dispatch_failure() {
     let scope = run_root_silent(&arena);
     run(scope, "LET r = {x = \"s\"}");
     run(scope, "FN (USE r :{x :Number}) -> Str = (\"ok\")");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let root = sched.add_dispatch(parse_one("USE r"), scope);
     sched
         .execute()
@@ -116,7 +116,7 @@ fn record_missing_field_is_dispatch_failure() {
     let scope = run_root_silent(&arena);
     run(scope, "LET r = {x = 1}");
     run(scope, "FN (NEED r :{x :Number, q :Bool}) -> Str = (\"ok\")");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let root = sched.add_dispatch(parse_one("NEED r"), scope);
     sched
         .execute()
@@ -141,7 +141,7 @@ fn record_incomparable_overloads_are_ambiguous() {
     let scope = run_root_silent(&arena);
     run(scope, "FN (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")");
     run(scope, "FN (PICK r :{x :Number, z :Str}) -> Str = (\"xz\")");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let root = sched.add_dispatch(parse_one("PICK {x = 1, y = \"a\", z = \"b\"}"), scope);
     sched
         .execute()

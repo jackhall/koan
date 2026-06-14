@@ -7,7 +7,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::execute::Scheduler;
+use crate::machine::execute::KoanHarness;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
@@ -60,7 +60,7 @@ pub(crate) fn parse_one<'a>(src: &str) -> KExpression<'a> {
 /// from prior `run(...)` calls read through. Semantic errors surface via `read_result`,
 /// not `execute` — use [`run_one_err`] when the test expects a `KError`.
 pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().expect("scheduler should succeed");
     sched.read(id).object()
@@ -69,7 +69,7 @@ pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KO
 /// Like [`run_one`] but for a type-producing expression: narrows the result's carrier to
 /// its [`Carried::Type`] arm. Panics if the expression produced a runtime value instead.
 pub(crate) fn run_one_type<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KType<'a> {
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().expect("scheduler should succeed");
     match sched.read(id) {
@@ -80,7 +80,7 @@ pub(crate) fn run_one_type<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &
 
 /// Like [`run_one`] but returns the `KError` produced by the dispatched node.
 pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KError {
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let id = sched.add_dispatch(expr, scope);
     sched
         .execute()
@@ -96,7 +96,7 @@ pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KE
 /// *ordering* (e.g. forward-ref-fails behavior) call `enter_block` directly instead.
 pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
     let exprs = parse(source).expect("parse should succeed");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     for expr in exprs {
         sched.add_dispatch(expr, scope);
     }

@@ -1,4 +1,4 @@
-use super::scheduler::Scheduler;
+use super::KoanHarness;
 use crate::builtins::default_scope;
 use crate::machine::{KError, RuntimeArena};
 use crate::parse::{parse, parse_with_path};
@@ -28,7 +28,7 @@ pub fn interpret_with_writer_path(
     };
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, out);
-    let mut scheduler = Scheduler::new();
+    let mut scheduler = KoanHarness::new();
     // Route top-level statements through `enter_block` so each gets a root
     // `LexicalFrame { scope_id: root.id, index: i, parent: None }`. Every other
     // dispatched node inherits from there (cactus chain).

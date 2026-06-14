@@ -2,7 +2,7 @@
 
 use super::super::super::nodes::NodeOutput;
 use super::super::super::outcome::Outcome;
-use super::super::Scheduler;
+use crate::machine::execute::KoanHarness;
 use crate::builtins::default_scope;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::ReturnType;
@@ -18,7 +18,7 @@ fn combine_waits_on_deps_then_runs_finish() {
     use crate::machine::execute::CombineFinish;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let dep_a = sched.add_dispatch(let_expr("ca", 7.0), scope);
     let dep_b = sched.add_dispatch(let_expr("cb", 11.0), scope);
     let finish: CombineFinish = Box::new(|_sched, results| {
@@ -59,7 +59,7 @@ fn combine_short_circuits_on_dep_error() {
     use std::rc::Rc;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
 
     // Allocate two placeholder Dispatch slots, drain the queue so execute()
     // doesn't revisit them, then overwrite their results directly.
@@ -136,7 +136,7 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
         body,
     );
 
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let id = sched.add_dispatch(
         KExpression::new(vec![crate::machine::core::source::Spanned::bare(
             ExpressionPart::Keyword("DEFERTEST".into()),
@@ -156,7 +156,7 @@ fn tail_call_reuses_node_slot_in_place() {
     // than spawning a fresh one (verified via sched.len() == 1 below).
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let exprs = crate::parse::parse("MATCH true -> :Str WITH (true -> (\"hi\") false -> (\"no\"))")
         .expect("parse should succeed");
     assert_eq!(exprs.len(), 1);

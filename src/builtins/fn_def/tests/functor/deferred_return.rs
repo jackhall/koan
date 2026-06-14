@@ -187,7 +187,7 @@ fn functor_deferred_return_coarsens_list_carrier() {
 /// TCO-flat. (The pre-`PerCall` Combine lowering held a frame per call and would not collapse.)
 #[test]
 fn deferred_return_tail_call_stays_tco_flat() {
-    use crate::machine::execute::Scheduler;
+    use crate::machine::execute::KoanHarness;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -201,7 +201,7 @@ fn deferred_return_tail_call_stays_tco_flat() {
         "FN (BB Er :Seq) -> Er = (Er)\n\
          FN (AA Er :Seq) -> Er = (BB Er)",
     );
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let id = sched.add_dispatch(parse_one("AA View"), scope);
     sched
         .execute()
@@ -226,7 +226,7 @@ fn deferred_return_tail_call_stays_tco_flat() {
 /// Combine deps, making each onward call a dep — O(n).)
 #[test]
 fn deferred_expression_return_tail_chain_reuses_frames() {
-    use crate::machine::execute::Scheduler;
+    use crate::machine::execute::KoanHarness;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -242,7 +242,7 @@ fn deferred_expression_return_tail_chain_reuses_frames() {
          FN (BB Er :Seq) -> Er.Carrier = (CC Er)\n\
          FN (AA Er :Seq) -> Er.Carrier = (BB Er)",
     );
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let id = sched.add_dispatch(parse_one("AA View"), scope);
     sched
         .execute()
@@ -266,7 +266,7 @@ fn deferred_expression_return_tail_chain_reuses_frames() {
 /// per-call check, not the static lift-time one.
 #[test]
 fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
-    use crate::machine::execute::Scheduler;
+    use crate::machine::execute::KoanHarness;
     use crate::machine::KErrorKind;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
@@ -277,7 +277,7 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
          LET IntOrdView = (IntOrd :| OrderedSig)",
     );
     run(scope, "FN (BAD Er :OrderedSig) -> Er.Type = (1)");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let id = sched.add_dispatch(parse_one("BAD IntOrdView"), scope);
     sched
         .execute()

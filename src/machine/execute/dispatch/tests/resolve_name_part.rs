@@ -1,7 +1,7 @@
 use crate::builtins::default_scope;
 use crate::machine::core::source::Spanned;
 use crate::machine::execute::dispatch::resolve_name_part;
-use crate::machine::execute::Scheduler;
+use crate::machine::execute::KoanHarness;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::NameOutcome;
@@ -16,7 +16,7 @@ fn resolve_name_part_identifier_resolved() {
         .bind_value("x".to_string(), bound, BindingIndex::BUILTIN)
         .unwrap();
     let part = ExpressionPart::Identifier("x".to_string());
-    let sched = Scheduler::new();
+    let sched = KoanHarness::new();
     match resolve_name_part(scope, &part, &sched, None) {
         NameOutcome::Resolved(Carried::Object(KObject::Number(n))) => assert_eq!(*n, 7.0),
         _ => panic!("expected NameOutcome::Resolved(Number)"),
@@ -28,7 +28,7 @@ fn resolve_name_part_type_resolved() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let part = ExpressionPart::Type(TypeName::leaf("Number".to_string()));
-    let sched = Scheduler::new();
+    let sched = KoanHarness::new();
     match resolve_name_part(scope, &part, &sched, None) {
         NameOutcome::Resolved(Carried::Type(KType::Number)) => {}
         other => {
@@ -48,7 +48,7 @@ fn resolve_name_part_type_resolved() {
 fn resolve_name_part_parked() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let producer = sched.add_dispatch(
         KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("_".into()))]),
         scope,
@@ -68,7 +68,7 @@ fn resolve_name_part_unbound() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let part = ExpressionPart::Identifier("missing".to_string());
-    let sched = Scheduler::new();
+    let sched = KoanHarness::new();
     match resolve_name_part(scope, &part, &sched, None) {
         NameOutcome::Unbound(name) => assert_eq!(name, "missing"),
         _ => panic!("expected NameOutcome::Unbound"),
@@ -80,7 +80,7 @@ fn resolve_name_part_unbound() {
 fn resolve_name_part_self_park_is_cycle() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanHarness::new();
     let slot = sched.add_dispatch(
         KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
             "self_ref".into(),

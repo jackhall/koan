@@ -9,7 +9,51 @@ use crate::machine::core::kfunction::action::{Action, Dep, FinishCtx, FramePlace
 use super::dispatch::DepRequest;
 use super::nodes::NodeOutput;
 use super::outcome::{Continuation, Outcome};
+use super::scheduler::Scheduler;
 use super::{CatchFinish, CombineFinish};
+
+/// The write harness: the sole holder of `&mut Scheduler` across the execute tree. It owns the
+/// [`Scheduler`] by composition (a `sched` field, not a `&mut` borrow) and carries every AST-aware
+/// and graph-mutating step — the execute loop, [`Self::apply_outcome`], the dispatch-submission
+/// wrappers, `submit_dispatch`, and the literal lowering. A dispatch *decide* runs against a
+/// read-only [`SchedulerView`](super::dispatch::SchedulerView) over `&self.sched` and returns an
+/// [`Outcome`]; only the harness reborrows the scheduler mutably to apply it. So "everything outside
+/// the harness is read-only" is structurally enforced, not a naming convention.
+///
+/// See design/execution-model.md § the dispatcher / scheduler boundary.
+pub struct KoanHarness<'run> {
+    pub(in crate::machine::execute) sched: Scheduler<'run>,
+}
+
+impl<'run> KoanHarness<'run> {
+    pub fn new() -> Self {
+        Self {
+            sched: Scheduler::new(),
+        }
+    }
+}
+
+impl Default for KoanHarness<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// Temporary Phase-1 scaffold: while methods migrate off `Scheduler` onto `KoanHarness`, every
+// untouched `harness.method()` call resolves through this deref. Removed once all the AST-aware /
+// write methods are native to `KoanHarness` and explicit forwarders cover the read surface.
+impl<'run> std::ops::Deref for KoanHarness<'run> {
+    type Target = Scheduler<'run>;
+    fn deref(&self) -> &Scheduler<'run> {
+        &self.sched
+    }
+}
+
+impl<'run> std::ops::DerefMut for KoanHarness<'run> {
+    fn deref_mut(&mut self) -> &mut Scheduler<'run> {
+        &mut self.sched
+    }
+}
 
 /// Lower an [`Action`] into the scheduler's [`Outcome`] currency — a pure `Action -> Outcome`
 /// transform that reads nothing: a `Combine`/`Catch` declares its deps (and a wrapped finish that
