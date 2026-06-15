@@ -35,7 +35,7 @@ fn dispatch_one_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>)
 
 fn sched_read_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> Carried<'run> {
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(expr, scope);
+    let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().expect("scheduler should succeed");
     sched.read(id)
 }
@@ -167,7 +167,7 @@ fn function_value_call_named_args_missing_short_circuits() {
     let expr = parse_one("f {a = 1}");
     reset_resolve_dispatch_entry_count();
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(expr, scope);
+    let id = sched.dispatch_in_scope(expr, scope);
     sched
         .execute()
         .expect("scheduler should not surface errors directly");
@@ -555,12 +555,12 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
             BindingIndex::BUILTIN,
         )
         .expect("bind_value should succeed");
-    let producer = sched.add_dispatch(parse_one("producer_target {y = 1}"), scope);
+    let producer = sched.dispatch_in_scope(parse_one("producer_target {y = 1}"), scope);
     scope
         .install_placeholder("f".to_string(), producer, BindingIndex::BUILTIN)
         .expect("install_placeholder should succeed");
 
-    let f_call_id = sched.add_dispatch(parse_one("f {x = 7}"), scope);
+    let f_call_id = sched.dispatch_in_scope(parse_one("f {x = 7}"), scope);
 
     reset_resolve_dispatch_entry_count();
     let _ = sched.execute();
@@ -666,7 +666,7 @@ fn keyworded_unchanged_with_keyword_in_body() {
     let expr_a = parse_one("(List MAYBE Number)");
     reset_resolve_dispatch_entry_count();
     let mut sched = KoanRuntime::new();
-    sched.add_dispatch(expr_a, scope);
+    sched.dispatch_in_scope(expr_a, scope);
     let _ = sched.execute();
     assert!(
         resolve_dispatch_entry_count() >= 1,
@@ -677,7 +677,7 @@ fn keyworded_unchanged_with_keyword_in_body() {
     let expr_b = parse_one("(f IF x)");
     reset_resolve_dispatch_entry_count();
     let mut sched = KoanRuntime::new();
-    sched.add_dispatch(expr_b, scope);
+    sched.dispatch_in_scope(expr_b, scope);
     let _ = sched.execute();
     assert!(
         resolve_dispatch_entry_count() >= 1,
@@ -703,7 +703,7 @@ fn stateful_keyworded_eager_subs_resumes_through_state() {
     let mut sched = KoanRuntime::new();
     let exprs = crate::parse::parse("LET y = (FIRST [1 2 3])").expect("parse succeeds");
     for e in exprs {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched
         .execute()
@@ -734,7 +734,7 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
     let mut sched = KoanRuntime::new();
     let exprs = crate::parse::parse("LET out = (DESCRIBE [1 2 3])").expect("parse succeeds");
     for e in exprs {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched
         .execute()
@@ -787,7 +787,7 @@ fn operator_chain_undeclared_errors_cleanly() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("a + b + c"), scope);
+    let id = sched.dispatch_in_scope(parse_one("a + b + c"), scope);
     sched.execute().expect("scheduler drains without deadlock");
     let msg = match sched.read_result(id) {
         Err(e) => e.to_string(),
@@ -828,7 +828,7 @@ fn operator_chain_registered_reaches_fold_seam() {
         .expect("register operator group");
 
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("a + b + c"), scope);
+    let id = sched.dispatch_in_scope(parse_one("a + b + c"), scope);
     sched.execute().expect("scheduler drains without deadlock");
     let msg = match sched.read_result(id) {
         Err(e) => e.to_string(),
@@ -1030,7 +1030,7 @@ fn non_callable_list_head_errors() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let mut sched = KoanRuntime::new();
-    let root = sched.add_dispatch(parse_one("[1 2 3] x"), scope);
+    let root = sched.dispatch_in_scope(parse_one("[1 2 3] x"), scope);
     sched
         .execute()
         .expect("a non-callable head is slot-terminal, not a fatal execute error");

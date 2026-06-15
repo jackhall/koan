@@ -56,7 +56,7 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
     let mut sched = KoanRuntime::new();
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(sched.add_dispatch(expr, scope));
+        ids.push(sched.dispatch_in_scope(expr, scope));
     }
     sched.execute().expect("scheduler should succeed");
     for (i, id) in ids.iter().enumerate() {

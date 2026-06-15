@@ -37,14 +37,14 @@ fn run<'run>(scope: &'run Scope<'run>, source: &str) {
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = KoanRuntime::new();
     for expr in exprs {
-        sched.add_dispatch(expr, scope);
+        sched.dispatch_in_scope(expr, scope);
     }
     sched.execute().expect("scheduler should succeed");
 }
 
 fn run_one<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> &'run KObject<'run> {
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(expr, scope);
+    let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().expect("scheduler should succeed");
     sched.read(id).object()
 }
@@ -54,7 +54,7 @@ fn run_one_err<'run>(
     expr: KExpression<'run>,
 ) -> crate::machine::core::KError {
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(expr, scope);
+    let id = sched.dispatch_in_scope(expr, scope);
     sched
         .execute()
         .expect("scheduler should not surface errors directly");

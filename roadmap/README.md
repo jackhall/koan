@@ -201,8 +201,8 @@ What's shipped that the open items below build on:
   [`KoanRuntime<'run>`](../src/machine/execute/runtime.rs) owns the `Scheduler` by composition
   (a `sched` field) and is the **sole** holder of `&mut Scheduler` across the execute tree. The
   execute loop, `apply_outcome` (the one graph writer), `submit_dispatch`, the aggregate-literal
-  lowering, and the AST-aware submission wrappers (`enter_block`, `dispatch_here`,
-  `add_dispatch_in_frame`, `dispatch_body_statements`, `combine_here`) are all `&mut self`
+  lowering, and the AST-aware submission wrappers (`enter_block`, `dispatch_in_own_scope`,
+  `dispatch_in_active_frame`, `dispatch_body`, `combine_here`) are all `&mut self`
   methods on it. `Scheduler` keeps the AST-free read views and low-level write primitives, so a
   dispatch decide sees only a read-only `SchedulerView` / `&Scheduler` — "everything outside the
   harness is read-only" is now structurally enforced by the type, not a naming convention. The

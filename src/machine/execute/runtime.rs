@@ -12,8 +12,8 @@
 //! The [`interpret`] submodule holds the program entry points ([`interpret`], [`interpret_with_writer`],
 //! [`interpret_with_writer_path`]); they parse, stand up the arena/root scope, and drive the run via
 //! [`KoanRuntime::run_program`]. The [`submit`] submodule holds the AST-aware dispatch-submission
-//! wrappers ([`KoanRuntime::enter_block`], [`KoanRuntime::add_dispatch`], `dispatch_here`,
-//! `dispatch_body_statements`, `combine_here`) — the only callers that turn a `KExpression` into
+//! wrappers ([`KoanRuntime::enter_block`], [`KoanRuntime::dispatch_in_scope`], `dispatch_in_own_scope`,
+//! `dispatch_body`, `combine_here`) — the only callers that turn a `KExpression` into
 //! scheduler work.
 
 use std::rc::Rc;
@@ -257,13 +257,13 @@ impl<'run> KoanRuntime<'run> {
     /// re-dispatches against the executing slot's own scope; `ActiveFrame` inherits the ambient
     /// per-call frame; `InScope` enters a fresh **single-statement** block (so an inner `LET` stays
     /// local). A multi-statement body splits separately — see the `InScope` arm of [`Self::apply_outcome`]
-    /// and [`Self::dispatch_body_statements`].
+    /// and [`Self::dispatch_body`].
     fn realize_dispatch(&mut self, expr: KExpression<'run>, placement: DepPlacement<'run>) -> NodeId {
         match placement {
-            DepPlacement::OwnScope => self.dispatch_here(expr),
+            DepPlacement::OwnScope => self.dispatch_in_own_scope(expr),
             DepPlacement::ActiveFrame => {
                 let chain = self.sched.ambient_or_detached_chain();
-                self.add_dispatch_in_frame(expr, chain)
+                self.dispatch_in_active_frame(expr, chain)
             }
             DepPlacement::InScope(scope) => self
                 .enter_block(scope.id, vec![expr], scope)
@@ -373,7 +373,7 @@ impl<'run> KoanRuntime<'run> {
                             dep_ids.push(self.schedule_record_literal(fields))
                         }
                         DepRequest::BodyBlock { frame, statements } => {
-                            dep_ids.extend(self.dispatch_body_statements(&frame, statements))
+                            dep_ids.extend(self.dispatch_body(&frame, statements))
                         }
                         DepRequest::Existing(id) => dep_ids.push(id),
                     }

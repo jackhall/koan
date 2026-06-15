@@ -169,13 +169,13 @@ impl<'run> KoanRuntime<'run> {
             ExpressionPart::RecordLiteral(inner) => {
                 Slot::owned(deps, self.schedule_record_literal(inner))
             }
-            ExpressionPart::Expression(boxed) => Slot::owned(deps, self.dispatch_here(*boxed)),
+            ExpressionPart::Expression(boxed) => Slot::owned(deps, self.dispatch_in_own_scope(*boxed)),
             ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
                 // A `:(...)` / `:{…}` type value is a type-context sub-Dispatch to a
                 // `KTypeValue`, like the keyworded eager-subs path — it cannot `resolve()`.
                 let wrapped =
                     crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part)]);
-                Slot::owned(deps, self.dispatch_here(wrapped))
+                Slot::owned(deps, self.dispatch_in_own_scope(wrapped))
             }
             ref p @ ExpressionPart::Identifier(_) if wrap_identifiers => {
                 self.resolve_aggregate_bare_name(p, deps, park_producers)
@@ -209,7 +209,7 @@ impl<'run> KoanRuntime<'run> {
             NameOutcome::Unbound(_) | NameOutcome::ProducerErrored(_) | NameOutcome::Cycle(_) => {
                 let expr =
                     crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part.clone())]);
-                Slot::owned(deps, self.dispatch_here(expr))
+                Slot::owned(deps, self.dispatch_in_own_scope(expr))
             }
         }
     }

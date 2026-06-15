@@ -61,7 +61,7 @@ pub(crate) fn parse_one<'a>(src: &str) -> KExpression<'a> {
 /// not `execute` — use [`run_one_err`] when the test expects a `KError`.
 pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(expr, scope);
+    let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().expect("scheduler should succeed");
     sched.read(id).object()
 }
@@ -70,7 +70,7 @@ pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KO
 /// its [`Carried::Type`] arm. Panics if the expression produced a runtime value instead.
 pub(crate) fn run_one_type<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KType<'a> {
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(expr, scope);
+    let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().expect("scheduler should succeed");
     match sched.read(id) {
         Carried::Type(kt) => kt,
@@ -81,7 +81,7 @@ pub(crate) fn run_one_type<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &
 /// Like [`run_one`] but returns the `KError` produced by the dispatched node.
 pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KError {
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(expr, scope);
+    let id = sched.dispatch_in_scope(expr, scope);
     sched
         .execute()
         .expect("scheduler should not surface errors directly");
@@ -98,7 +98,7 @@ pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = KoanRuntime::new();
     for expr in exprs {
-        sched.add_dispatch(expr, scope);
+        sched.dispatch_in_scope(expr, scope);
     }
     sched.execute().expect("scheduler should succeed");
 }

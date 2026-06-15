@@ -16,7 +16,7 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
     );
 
     let mut sched = KoanRuntime::new();
-    sched.add_dispatch(parse_one("AA"), scope);
+    sched.dispatch_in_scope(parse_one("AA"), scope);
     sched.execute().expect("AA should run");
 
     assert_eq!(captured.borrow().as_slice(), b"ok\n");
@@ -42,7 +42,7 @@ fn chained_tail_calls_reuse_frames() {
     );
 
     let mut sched = KoanRuntime::new();
-    sched.add_dispatch(parse_one("AA"), scope);
+    sched.dispatch_in_scope(parse_one("AA"), scope);
     sched.execute().expect("AA should run");
 
     assert_eq!(captured.borrow().as_slice(), b"ok\n");
@@ -78,7 +78,7 @@ fn leading_statements_run_before_tail_across_chain() {
     );
 
     let mut sched = KoanRuntime::new();
-    sched.add_dispatch(parse_one("AA"), scope);
+    sched.dispatch_in_scope(parse_one("AA"), scope);
     sched.execute().expect("AA should run");
 
     assert_eq!(
@@ -109,7 +109,7 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
     );
 
     let mut sched = KoanRuntime::new();
-    sched.add_dispatch(parse_one("AA"), scope);
+    sched.dispatch_in_scope(parse_one("AA"), scope);
     sched.execute().expect("AA should run");
 
     assert_eq!(
@@ -146,7 +146,7 @@ fn match_driven_tail_recursion_completes() {
     );
 
     let mut sched = KoanRuntime::new();
-    sched.add_dispatch(parse_one("HOP (Bit (One null))"), scope);
+    sched.dispatch_in_scope(parse_one("HOP (Bit (One null))"), scope);
     sched.execute().expect("HOP should run");
 
     assert_eq!(captured.borrow().as_slice(), b"done\n");
@@ -172,7 +172,7 @@ fn match_arm_leading_statement_runs_before_tail_recursion() {
     );
 
     let mut sched = KoanRuntime::new();
-    sched.add_dispatch(parse_one("HOP (Bit (One null))"), scope);
+    sched.dispatch_in_scope(parse_one("HOP (Bit (One null))"), scope);
     sched.execute().expect("HOP should run");
 
     assert_eq!(
@@ -197,7 +197,7 @@ fn tail_call_enforces_first_callers_return_contract() {
          FN (FF) -> Number = (GG)",
     );
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("FF"), scope);
+    let id = sched.dispatch_in_scope(parse_one("FF"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -278,7 +278,7 @@ fn body_subexpression_slots_recycle_across_calls() {
     let mut sched = KoanRuntime::new();
 
     // Warmup: populates the free-list with the body's transient pool.
-    sched.add_dispatch(parse_one("LOOK (Bit (One null))"), scope);
+    sched.dispatch_in_scope(parse_one("LOOK (Bit (One null))"), scope);
     sched.execute().expect("LOOK should run");
     let after_warmup = sched.len();
 
@@ -289,7 +289,7 @@ fn body_subexpression_slots_recycle_across_calls() {
         } else {
             "LOOK (Bit (Zero null))"
         };
-        sched.add_dispatch(parse_one(src), scope);
+        sched.dispatch_in_scope(parse_one(src), scope);
         sched.execute().expect("LOOK should run");
     }
     let after_batch = sched.len();

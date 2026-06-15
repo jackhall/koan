@@ -325,7 +325,7 @@ free, `'a: 'p`). Because the borrow cannot outlive the frame `Rc` it reads from,
 the frame is a compile error rather than a fabrication; `Scope<'a>` invariance rides structurally
 on the returned `Scope<'a>`, so the brand needs no separate struct. Bodies / finishes / the
 dispatch engine no longer thread a `scope` parameter — they call `current_scope()`; the genuine
-run-scope methods (`add_dispatch` / `add_combine` / `add_catch` / `enter_block` /
+run-scope methods (`dispatch_in_scope` / `add_combine` / `add_catch` / `enter_block` /
 `submit_node`) keep their `&'a Scope` argument.
 
 The post-step loop in `Scheduler::execute` reads the just-finished step's scope through a
@@ -346,7 +346,7 @@ and the frame `Rc` the caller holds heap-pins it) and its child scope re-handed 
 witness-bounded `scope_bounded` brand — so the scope half is *not* fabricated free, only the
 arena half is. This is the sole surviving free re-exposure in the protocol.
 Arm and body statements then dispatch through the framed scheduler write primitives
-(`add_dispatch_with_chain_in_frame`, `add_dispatch_in_frame`, `add_combine_in_frame`), which
+(`add_dispatch_with_chain_in_frame`, `dispatch_in_active_frame`, `add_combine_in_frame`), which
 derive the scope from the active frame and store `Yoked`, so the seed itself persists no
 fabricated `&'a`.
 

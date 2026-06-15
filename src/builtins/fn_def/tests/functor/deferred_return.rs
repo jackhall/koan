@@ -202,7 +202,7 @@ fn deferred_return_tail_call_stays_tco_flat() {
          FN (AA Er :Seq) -> Er = (BB Er)",
     );
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("AA View"), scope);
+    let id = sched.dispatch_in_scope(parse_one("AA View"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -243,7 +243,7 @@ fn deferred_expression_return_tail_chain_reuses_frames() {
          FN (AA Er :Seq) -> Er.Carrier = (BB Er)",
     );
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("AA View"), scope);
+    let id = sched.dispatch_in_scope(parse_one("AA View"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -278,7 +278,7 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     );
     run(scope, "FN (BAD Er :OrderedSig) -> Er.Type = (1)");
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("BAD IntOrdView"), scope);
+    let id = sched.dispatch_in_scope(parse_one("BAD IntOrdView"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");

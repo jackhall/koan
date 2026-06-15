@@ -104,8 +104,8 @@ them. The three pieces:
   decide (against a read-only view) and apply (against `&mut self`) never
   overlap, and that separation is structurally enforced by the type rather than
   a naming convention. The execute loop, the AST-aware submission wrappers
-  (`enter_block`, `dispatch_here`, `add_dispatch_in_frame`,
-  `dispatch_body_statements`, `combine_here`), `submit_dispatch`, and the
+  (`enter_block`, `dispatch_in_own_scope`, `dispatch_in_active_frame`,
+  `dispatch_body`, `combine_here`), `submit_dispatch`, and the
   aggregate-literal lowering are all `&mut self` methods on `KoanRuntime`. The
   unified node handler
   ([`run_wait`](../src/machine/execute/scheduler/finish.rs)) collects the slot's
@@ -175,7 +175,7 @@ The run-set has two priority bands managed by
 [`WorkQueues`](../src/machine/execute/scheduler/work_queues.rs). Internal
 work — notify-walk wake-ups, Replace-arm re-enqueues, and ready-on-arrival
 nodes registered in `add()` — routes through `WorkQueues::push_internal` /
-`push_internal_front` / `push_woken`. Top-level `add_dispatch` calls route
+`push_internal_front` / `push_woken`. Top-level `dispatch_in_scope` calls route
 through `WorkQueues::push_top_level` so independent top-level expressions
 execute in submission order. The execute loop drains via `WorkQueues::pop_next`,
 which yields internal slots ahead of top-level slots; the routing rule (which
@@ -273,7 +273,7 @@ which aliases one slot to another. They share the word but not the mechanism.)
 Source-of-truth ASTs are never mutated. The working copy is cloned from
 its source at slot-submission time — the user-fn body executor clones each
 body statement onto its slot, `match_case::body` and `try_with` clone their picked arm, top-level
-expressions move into the slot at `add_dispatch`. The splice mutates the
+expressions move into the slot at `dispatch_in_scope`. The splice mutates the
 slot-owned copy and nothing else; the next call to the same FN clones the
 body fresh.
 
@@ -381,7 +381,7 @@ A known limitation: each top-level dispatch retains a small constant of
 persistent slots — the entry slot returned to the user, and, for a bare-name
 binding (`LET y = z`), the spliced-out alias slot plus its producer. An aliased
 slot is never freed (it has no parent to reclaim it), and a top-level producer
-has no parent either. So each `add_dispatch` costs a small constant rather than
+has no parent either. So each `dispatch_in_scope` costs a small constant rather than
 one slot — linear in call count, not multiplicative in body size; closing it
 would need a post-execute compaction pass.
 
@@ -1237,7 +1237,7 @@ statements as dispatch nodes:
 
 The "every dispatched node has a chain" invariant is an `expect` in
 [`Scheduler::submit_node`](../src/machine/execute/scheduler/submit.rs); the
-public `add_dispatch` entry auto-roots a chain when no ambient one is present
+public `dispatch_in_scope` entry auto-roots a chain when no ambient one is present
 via [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs) (so
 REPL-style submissions outside `enter_block` see every prior bind in the target
 scope).

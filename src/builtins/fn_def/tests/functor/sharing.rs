@@ -186,7 +186,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
          (MODULE Generated = ((LET Elt = Str) (LET insert = 0)))",
     );
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("MAKEBAD IntOrdView"), scope);
+    let id = sched.dispatch_in_scope(parse_one("MAKEBAD IntOrdView"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");

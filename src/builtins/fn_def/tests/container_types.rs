@@ -39,7 +39,7 @@ fn fn_return_heterogeneous_list_rejected_by_precise_declared() {
     let scope = run_root_silent(&arena);
     run(scope, "FN (BAD) -> :(LIST OF Number) = ([2 \"hello\"])");
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("BAD"), scope);
+    let id = sched.dispatch_in_scope(parse_one("BAD"), scope);
     sched.execute().expect("scheduler runs to completion");
     assert!(sched.read_result(id).is_err());
 }
@@ -81,7 +81,7 @@ fn fn_returning_typed_list_rejects_wrong_element_type() {
     let scope = run_root_silent(&arena);
     run(scope, "FN (BAD) -> :(LIST OF Number) = ([1 \"x\"])");
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("BAD"), scope);
+    let id = sched.dispatch_in_scope(parse_one("BAD"), scope);
     sched.execute().expect("scheduler runs to completion");
     let res = sched.read_result(id);
     assert!(
@@ -122,7 +122,7 @@ fn fn_with_typed_function_param_rejects_name_mismatch() {
         "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")",
     );
     let mut sched = KoanRuntime::new();
-    let root = sched.add_dispatch(
+    let root = sched.dispatch_in_scope(
         parse_one("USE (FN (SHOW n :Number) -> Str = (\"hi\"))"),
         scope,
     );
@@ -186,7 +186,7 @@ fn fn_with_typed_function_param_rejects_width_extra() {
         "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")",
     );
     let mut sched = KoanRuntime::new();
-    let root = sched.add_dispatch(
+    let root = sched.dispatch_in_scope(
         parse_one("USE (FN (SHOW x :Number, y :Str) -> Str = (\"hi\"))"),
         scope,
     );
@@ -236,7 +236,7 @@ fn fn_typed_function_param_incomparable_is_ambiguous() {
     );
     run(scope, "FN (USE f :(FN (x :Str) -> Str)) -> Str = (\"str\")");
     let mut sched = KoanRuntime::new();
-    let root = sched.add_dispatch(parse_one("USE (FN (GET x :Any) -> Str = (\"v\"))"), scope);
+    let root = sched.dispatch_in_scope(parse_one("USE (FN (GET x :Any) -> Str = (\"v\"))"), scope);
     sched
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -348,7 +348,7 @@ fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
         "FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")",
     );
     let mut sched = KoanRuntime::new();
-    let root = sched.add_dispatch(parse_one("DESCRIBE nope"), scope);
+    let root = sched.dispatch_in_scope(parse_one("DESCRIBE nope"), scope);
     sched
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -378,7 +378,7 @@ fn dispatch_heterogeneous_literal_matches_no_concrete_element_overload() {
         "FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")",
     );
     let mut sched = KoanRuntime::new();
-    let root = sched.add_dispatch(parse_one("DESCRIBE [1 \"a\"]"), scope);
+    let root = sched.dispatch_in_scope(parse_one("DESCRIBE [1 \"a\"]"), scope);
     sched
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -444,7 +444,7 @@ fn fn_typed_list_param_wrong_element_type_finds_no_match() {
     let scope = run_root_silent(&arena);
     run(scope, "FN (HEAD xs :(LIST OF Number)) -> Number = (1)");
     let mut sched = KoanRuntime::new();
-    let root = sched.add_dispatch(parse_one("HEAD [\"a\"]"), scope);
+    let root = sched.dispatch_in_scope(parse_one("HEAD [\"a\"]"), scope);
     sched
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");

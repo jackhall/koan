@@ -96,7 +96,7 @@ fn let_then_fn_in_same_batch_works() {
     )
     .unwrap();
     for e in exprs {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched.execute().unwrap();
     assert!(

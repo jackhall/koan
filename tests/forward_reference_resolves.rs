@@ -351,7 +351,7 @@ fn producer_error_propagates_to_parked_consumer() {
     let mut sched = KoanRuntime::new();
     let ids: Vec<_> = exprs
         .into_iter()
-        .map(|e| sched.add_dispatch(e, scope))
+        .map(|e| sched.dispatch_in_scope(e, scope))
         .collect();
     sched
         .execute()

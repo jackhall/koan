@@ -210,7 +210,7 @@ impl<'run> Scheduler<'run> {
         self.store.is_result_ready(self.resolve_alias(id))
     }
 
-    /// Only safe on IDs returned by `add_dispatch`; internal slots may have been eagerly
+    /// Only safe on IDs returned by `dispatch_in_scope`; internal slots may have been eagerly
     /// freed by their parent. Follows a bare-name-forward alias to the real producer.
     pub fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
         self.store.read_result(self.resolve_alias(id))
@@ -285,7 +285,7 @@ impl<'run> Scheduler<'run> {
     }
 
     /// The executing slot's raw [`NodeScope`] handle (`Anchored`/`Yoked`), before materialization.
-    /// [`KoanRuntime::dispatch_here`](super::runtime::KoanRuntime::dispatch_here) matches the arm to
+    /// [`KoanRuntime::dispatch_in_own_scope`](super::runtime::KoanRuntime::dispatch_in_own_scope) matches the arm to
     /// pick its re-dispatch path; [`Self::current_scope`] is the materialized form.
     pub(in crate::machine::execute) fn current_node_scope(&self) -> Option<NodeScope<'run>> {
         self.active_node_scope
@@ -301,7 +301,7 @@ impl<'run> Default for Scheduler<'run> {
 /// The scheduler's frame/chain reads and the per-call-frame allocator that
 /// [`KoanRuntime`](super::runtime::KoanRuntime) — the sole `&mut Scheduler` — calls while realizing
 /// a decided [`Outcome`](super::outcome::Outcome). AST-free state operations: the AST-aware
-/// submission wrappers (`enter_block`, `dispatch_here`, …) live on `KoanRuntime`.
+/// submission wrappers (`enter_block`, `dispatch_in_own_scope`, …) live on `KoanRuntime`.
 impl<'run> Scheduler<'run> {
     /// Active slot's `Rc<CallArena>`. See
     /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
@@ -310,7 +310,7 @@ impl<'run> Scheduler<'run> {
     }
 
     /// Install `frame` as the ambient cart and return the previous one — the transient save/restore
-    /// [`dispatch_body_statements`](super::runtime::KoanRuntime::dispatch_body_statements) wraps each
+    /// [`dispatch_body`](super::runtime::KoanRuntime::dispatch_body) wraps each
     /// body sub-slot in, so the sub-slot inherits the body frame rather than the caller's.
     pub(in crate::machine::execute) fn swap_active_frame(
         &mut self,

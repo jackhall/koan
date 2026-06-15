@@ -87,7 +87,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
     ]);
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(expr, inner);
+    let id = sched.dispatch_in_scope(expr, inner);
     sched.execute().unwrap();
     let result = sched.read(id).object();
     assert!(
@@ -122,7 +122,7 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
         "foo".into(),
     ))]);
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(expr, scope);
+    let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().unwrap();
     let err = match sched.read_result(id) {
         Err(e) => e.clone(),
@@ -162,7 +162,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
     ]);
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(expr, scope);
+    let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().unwrap();
     let result = sched.read(id).object();
     assert!(matches!(result, KObject::KString(s) if s == "lowercase"));

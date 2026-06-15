@@ -163,7 +163,7 @@ fn using_on_non_module_fails_dispatch() {
     let scope = run_root_silent(&arena);
     run(scope, "LET n = 5");
     let mut sched = KoanRuntime::new();
-    let root = sched.add_dispatch(parse_one("USING n SCOPE (1)"), scope);
+    let root = sched.dispatch_in_scope(parse_one("USING n SCOPE (1)"), scope);
     sched
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");

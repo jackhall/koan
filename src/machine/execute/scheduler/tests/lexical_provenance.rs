@@ -126,7 +126,7 @@ fn fn_body_call_with_spacers_produces_value() {
 
 #[test]
 fn cons_head_subdispatch_inherits_parent_chain() {
-    // CONS-head `add_dispatch` inherits the active chain of the slot running
+    // CONS-head `dispatch_in_scope` inherits the active chain of the slot running
     // CONS; pinned indirectly via a multi-statement FN body folded into CONS.
     let arena = RuntimeArena::new();
     let scope = crate::builtins::test_support::run_root_silent(&arena);
@@ -140,7 +140,7 @@ fn cons_head_subdispatch_inherits_parent_chain() {
 }
 
 /// Debug-assert tripwire: strict `add_with_chain(_, _, None)` with no ambient
-/// chain must panic. Public `add` / `add_dispatch` auto-route to a root frame,
+/// chain must panic. Public `add` / `dispatch_in_scope` auto-route to a root frame,
 /// so reaching the strict path requires the super-visible helper directly.
 #[test]
 #[should_panic(expected = "every dispatched node has a chain")]

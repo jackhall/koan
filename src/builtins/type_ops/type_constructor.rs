@@ -121,7 +121,7 @@ mod tests {
             BindingIndex::BUILTIN,
         );
         let mut sched = KoanRuntime::new();
-        let id = sched.add_dispatch(
+        let id = sched.dispatch_in_scope(
             parse_one("LET pure = (FN (PURE a :Number) -> :(Number AS Wrap) = (1))"),
             scope,
         );
@@ -158,7 +158,7 @@ mod tests {
         let mut sched = KoanRuntime::new();
         let mut ids = Vec::new();
         for expr in exprs {
-            ids.push(sched.add_dispatch(expr, scope));
+            ids.push(sched.dispatch_in_scope(expr, scope));
         }
         match sched.execute() {
             Ok(()) => {}

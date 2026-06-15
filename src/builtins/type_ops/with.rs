@@ -172,7 +172,7 @@ mod tests {
             "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
         );
         let mut sched = KoanRuntime::new();
-        let id = sched.add_dispatch(parse_one("OrderedSig WITH {Bogus = Number}"), scope);
+        let id = sched.dispatch_in_scope(parse_one("OrderedSig WITH {Bogus = Number}"), scope);
         sched
             .execute()
             .expect("execute does not surface per-slot errors");
@@ -194,7 +194,7 @@ mod tests {
             "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
         );
         let mut sched = KoanRuntime::new();
-        let id = sched.add_dispatch(parse_one("OrderedSig WITH {type = Number}"), scope);
+        let id = sched.dispatch_in_scope(parse_one("OrderedSig WITH {type = Number}"), scope);
         sched
             .execute()
             .expect("execute does not surface per-slot errors");

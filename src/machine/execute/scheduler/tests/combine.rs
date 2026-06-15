@@ -18,8 +18,8 @@ fn combine_waits_on_deps_then_runs_finish() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
-    let dep_a = sched.add_dispatch(let_expr("ca", 7.0), scope);
-    let dep_b = sched.add_dispatch(let_expr("cb", 11.0), scope);
+    let dep_a = sched.dispatch_in_scope(let_expr("ca", 7.0), scope);
+    let dep_b = sched.dispatch_in_scope(let_expr("cb", 11.0), scope);
     let finish: CombineFinish = Box::new(|_sched, results| {
         let a = match results[0] {
             Carried::Object(KObject::Number(n)) => *n,
@@ -137,7 +137,7 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
     );
 
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(
+    let id = sched.dispatch_in_scope(
         KExpression::new(vec![crate::machine::core::source::Spanned::bare(
             ExpressionPart::Keyword("DEFERTEST".into()),
         )]),
@@ -160,7 +160,7 @@ fn tail_call_reuses_node_slot_in_place() {
     let exprs = crate::parse::parse("MATCH true -> :Str WITH (true -> (\"hi\") false -> (\"no\"))")
         .expect("parse should succeed");
     assert_eq!(exprs.len(), 1);
-    let id = sched.add_dispatch(exprs.into_iter().next().unwrap(), root);
+    let id = sched.dispatch_in_scope(exprs.into_iter().next().unwrap(), root);
 
     sched.execute().unwrap();
 

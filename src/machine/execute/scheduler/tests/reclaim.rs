@@ -176,7 +176,7 @@ fn freed_slot_does_not_appear_in_other_notify_lists() {
     )
     .expect("parse should succeed");
     for e in exprs {
-        sched.add_dispatch(e, root);
+        sched.dispatch_in_scope(e, root);
     }
     sched.execute().expect("program should run");
 

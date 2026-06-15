@@ -38,7 +38,7 @@ fn run<'a>(arena: &'a RuntimeArena, src: &str) -> &'a Scope<'a> {
     let exprs = parse(src).expect("parse should succeed");
     let mut sched = KoanRuntime::new();
     for e in exprs {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched.execute().expect("scheduler should run to completion");
     scope
@@ -51,7 +51,7 @@ fn run_expect_err(arena: &RuntimeArena, src: &str) -> String {
     let mut sched = KoanRuntime::new();
     let ids: Vec<_> = exprs
         .into_iter()
-        .map(|e| sched.add_dispatch(e, scope))
+        .map(|e| sched.dispatch_in_scope(e, scope))
         .collect();
     sched
         .execute()

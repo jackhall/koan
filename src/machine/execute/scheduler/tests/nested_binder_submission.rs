@@ -32,7 +32,7 @@ fn nested_binder_installs_inner_placeholder_at_outer_submission() {
     assert_eq!(exprs.len(), 1, "test fixture: single top-level expression");
     let expr = exprs.remove(0);
     let mut sched = KoanRuntime::new();
-    let _id = sched.add_dispatch(expr, scope);
+    let _id = sched.dispatch_in_scope(expr, scope);
     // Read both maps before any `execute()` — installs must land at submission time.
     let placeholders = scope.bindings().placeholders();
     assert!(

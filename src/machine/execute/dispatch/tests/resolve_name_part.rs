@@ -49,7 +49,7 @@ fn resolve_name_part_parked() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
-    let producer = sched.add_dispatch(
+    let producer = sched.dispatch_in_scope(
         KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("_".into()))]),
         scope,
     );
@@ -81,7 +81,7 @@ fn resolve_name_part_self_park_is_cycle() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
-    let slot = sched.add_dispatch(
+    let slot = sched.dispatch_in_scope(
         KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
             "self_ref".into(),
         ))]),

@@ -43,7 +43,7 @@ fn fn_typed_param_rejects_mismatched_call() {
     let scope = run_root_silent(&arena);
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
     let mut sched = KoanRuntime::new();
-    let root = sched.add_dispatch(parse_one("DOUBLE \"hi\""), scope);
+    let root = sched.dispatch_in_scope(parse_one("DOUBLE \"hi\""), scope);
     sched
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -75,7 +75,7 @@ fn fn_param_without_annotation_is_rejected() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("FN (DOUBLE x) -> Number = (x)"), scope);
+    let id = sched.dispatch_in_scope(parse_one("FN (DOUBLE x) -> Number = (x)"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -98,7 +98,7 @@ fn fn_param_with_unknown_type_name_is_rejected() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("FN (DOUBLE x :Bogus) -> Number = (x)"), scope);
+    let id = sched.dispatch_in_scope(parse_one("FN (DOUBLE x :Bogus) -> Number = (x)"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");

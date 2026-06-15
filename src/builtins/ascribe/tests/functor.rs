@@ -133,7 +133,7 @@ fn functor_rejects_unascribed_module_argument() {
     // partition).
     run(scope, "LET Unascribed = IntOrd");
     let mut sched = KoanRuntime::new();
-    let root = sched.add_dispatch(parse_one("MAKESET Unascribed"), scope);
+    let root = sched.dispatch_in_scope(parse_one("MAKESET Unascribed"), scope);
     sched
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -299,7 +299,7 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     let mut sched = KoanRuntime::new();
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(sched.add_dispatch(expr, scope));
+        ids.push(sched.dispatch_in_scope(expr, scope));
     }
     sched.execute().expect("scheduler should succeed");
     for (i, id) in ids.iter().enumerate() {

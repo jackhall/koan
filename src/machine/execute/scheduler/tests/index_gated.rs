@@ -149,7 +149,7 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
     .expect("parse should succeed");
     let mut sched = KoanRuntime::new();
     for e in exprs {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched
         .execute()

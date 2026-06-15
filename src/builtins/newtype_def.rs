@@ -613,7 +613,7 @@ mod tests {
             other => panic!("expected \"num\", got {:?}", other.ktype()),
         }
         let mut sched1 = KoanRuntime::new();
-        let root = sched1.add_dispatch(parse_one("TAKES_NUM (Distance (3.0))"), scope);
+        let root = sched1.dispatch_in_scope(parse_one("TAKES_NUM (Distance (3.0))"), scope);
         sched1
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -626,7 +626,7 @@ mod tests {
             "expected DispatchFailed on Number-slot Distance, got {err}",
         );
         let mut sched2 = KoanRuntime::new();
-        let root2 = sched2.add_dispatch(parse_one("TAKES_DIST (3.0)"), scope);
+        let root2 = sched2.dispatch_in_scope(parse_one("TAKES_DIST (3.0)"), scope);
         sched2
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");

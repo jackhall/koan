@@ -28,7 +28,7 @@ fn fn_without_return_type_annotation_does_not_register() {
     let exprs = parse("FN (DOUBLE x :Number) = (PRINT \"x\")").expect("parse should succeed");
     let mut sched = KoanRuntime::new();
     for expr in exprs {
-        sched.add_dispatch(expr, scope);
+        sched.dispatch_in_scope(expr, scope);
     }
     let _ = sched.execute();
     assert!(
@@ -42,7 +42,7 @@ fn fn_with_unknown_return_type_name_errors() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("FN (DOUBLE x :Number) -> Bogus = (x)"), scope);
+    let id = sched.dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Bogus = (x)"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -62,7 +62,7 @@ fn user_fn_return_type_mismatch_surfaces_as_kerror() {
     let scope = run_root_silent(&arena);
     run(scope, "FN (LIE) -> Number = (\"oops\")");
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("LIE"), scope);
+    let id = sched.dispatch_in_scope(parse_one("LIE"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -117,7 +117,7 @@ fn fn_return_type_surface_name_preserved_in_error() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("FN (DOIT) -> SomeWeirdName = (1)"), scope);
+    let id = sched.dispatch_in_scope(parse_one("FN (DOIT) -> SomeWeirdName = (1)"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");

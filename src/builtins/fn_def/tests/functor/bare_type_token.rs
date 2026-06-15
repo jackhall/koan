@@ -16,7 +16,7 @@ use crate::machine::{KError, KErrorKind, RuntimeArena, Scope};
 /// first path.
 fn run_expecting_dispatch_error<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KError {
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(expr, scope);
+    let id = sched.dispatch_in_scope(expr, scope);
     match sched.execute() {
         Err(e) => e,
         Ok(()) => match sched.read_result(id) {
@@ -160,7 +160,7 @@ fn functor_deferred_return_builtin_keyed_mismatch_surfaces_per_call_diagnostic()
     let scope = run_root_silent(&arena);
     run(scope, "FUNCTOR (BUILD Elt :Type) -> :Elt = (42)");
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("BUILD Str"), scope);
+    let id = sched.dispatch_in_scope(parse_one("BUILD Str"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");

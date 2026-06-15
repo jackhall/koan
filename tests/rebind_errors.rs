@@ -35,7 +35,7 @@ fn run_collecting_errors<'a>(
     let mut sched = KoanRuntime::new();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(sched.add_dispatch(e, scope));
+        ids.push(sched.dispatch_in_scope(e, scope));
     }
     let _ = sched.execute();
     // Keep the raw carrier (don't narrow to the object arm) — a top-level `MODULE` /

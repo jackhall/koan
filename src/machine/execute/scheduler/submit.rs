@@ -112,7 +112,7 @@ impl<'run> Scheduler<'run> {
     }
 
     /// Node-creation core, shared by the run-lifetime [`Self::add_with_chain`] and the framed
-    /// [`KoanRuntime::add_dispatch_in_frame`](super::super::runtime::KoanRuntime::add_dispatch_in_frame).
+    /// [`KoanRuntime::dispatch_in_active_frame`](super::super::runtime::KoanRuntime::dispatch_in_active_frame).
     /// `scope` is read only transiently
     /// (binder-install, placeholder install, `pre_subs` recursion) and never retained — the
     /// node keeps a `NodeScope<'run>` handle, not this borrow — so it is clamped to a `'step`

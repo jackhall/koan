@@ -117,7 +117,7 @@ fn fn_def_parens_param_type_non_type_value_errors() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("FN (USE xs (1)) -> Null = (xs)"), scope);
+    let id = sched.dispatch_in_scope(parse_one("FN (USE xs (1)) -> Null = (xs)"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -140,7 +140,7 @@ fn fn_def_sigil_return_type_non_type_value_errors() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let mut sched = KoanRuntime::new();
-    let id = sched.add_dispatch(parse_one("FN (NOP) -> :(1) = (1)"), scope);
+    let id = sched.dispatch_in_scope(parse_one("FN (NOP) -> :(1) = (1)"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
