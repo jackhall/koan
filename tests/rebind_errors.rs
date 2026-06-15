@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{Carried, KObject, KType};
-use koan::machine::{KError, KErrorKind, RuntimeArena, Scheduler, Scope};
+use koan::machine::{KError, KErrorKind, KoanRuntime, RuntimeArena, Scope};
 use koan::parse::parse;
 
 struct SharedBuf(Rc<RefCell<Vec<u8>>>);
@@ -32,10 +32,10 @@ fn run_collecting_errors<'a>(
     source: &str,
 ) -> Vec<Result<Carried<'a>, KError>> {
     let exprs = parse(source).expect("parse should succeed");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(sched.add_dispatch(e, scope));
+        ids.push(sched.dispatch_in_scope(e, scope));
     }
     let _ = sched.execute();
     // Keep the raw carrier (don't narrow to the object arm) — a top-level `MODULE` /

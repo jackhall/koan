@@ -18,7 +18,7 @@ use signature::ParamListOutcome;
 pub(crate) use signature::binder_bucket;
 
 /// Build a map of `param_name → declared-KType` for the FUNCTOR deferred-arm head
-/// inspector. Skips slots that don't elaborate eagerly; the Combine path's
+/// inspector. Skips slots that don't elaborate eagerly; the dep-finish path's
 /// resolved validator catches the slack.
 fn collect_param_types<'a>(
     signature: &KExpression<'a>,
@@ -54,7 +54,7 @@ fn collect_param_types<'a>(
 /// Shared FN / FUNCTOR elaboration: extract the `signature` / return / `body`
 /// slots from `BodyCtx::args`, collect param names, classify the return type,
 /// parse the param list, and route to [`finalize_fn_with_kind`] (synchronous, via
-/// `Action::Done`) or [`finalize::defer_via_combine`] (Combine).
+/// `Action::Done`) or [`finalize::defer`] (dep-finish).
 /// `kind` is the sole behavioral fork — `FnKind::Functor` builds the param-type
 /// map and acts on the return-admissibility verdict; FN passes `None` and
 /// [`classify_return_type`] returns `Admissible`, so the `Rejected` check is a
@@ -65,7 +65,7 @@ pub(crate) fn build_fn_like<'a>(
     kind: FnKind,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, Action};
-    use finalize::defer_via_combine;
+    use finalize::defer;
     use return_type::extract_return_type_raw;
 
     let signature_expr = crate::try_action!(require_kexpression(ctx.args, builtin, "signature"));
@@ -113,9 +113,7 @@ pub(crate) fn build_fn_like<'a>(
             kind,
             bind_index,
         )),
-        FnPlan::Combine(inputs) => {
-            defer_via_combine(signature_expr, inputs, body_expr, kind, bind_index)
-        }
+        FnPlan::Deferred(inputs) => defer(signature_expr, inputs, body_expr, kind, bind_index),
     }
 }
 
@@ -145,7 +143,7 @@ pub fn body_record_schema<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_type, require_kexpression, Action};
-    use finalize::defer_via_combine;
+    use finalize::defer;
     use return_type::extract_return_type_raw;
 
     let schema = match arg_type(ctx.args, "signature") {
@@ -191,9 +189,9 @@ pub fn body_record_schema<'a>(
             FnKind::Anonymous,
             bind_index,
         )),
-        FnPlan::Combine(mut inputs) => {
+        FnPlan::Deferred(mut inputs) => {
             inputs.prebuilt_elements = Some(elements);
-            defer_via_combine(
+            defer(
                 crate::machine::model::ast::KExpression::new(Vec::new()),
                 inputs,
                 body_expr,
@@ -211,7 +209,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     //
     // Two keyworded overloads cover the return-type carrier — `TypeExprRef` for a bare
     // `Type(_)` (`-> Number`) and `SigiledTypeExpr` for a `:(…)` / dotted form
-    // (`-> Er.Type`, `-> :(Set WITH {…})`). `Future(KTypeValue(_))` post-Combine wakes
+    // (`-> Er.Type`, `-> :(Set WITH {…})`). `Future(KTypeValue(_))` post-dep-finish wakes
     // admit only against `TypeExprRef`. A third overload (below) carries the
     // anonymous `:{…}` record-schema signature.
     //

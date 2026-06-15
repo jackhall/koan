@@ -8,7 +8,7 @@
 use std::io::Write;
 
 use crate::builtins::default_scope;
-use crate::machine::execute::Scheduler;
+use crate::machine::execute::KoanRuntime;
 use crate::machine::model::types::UntypedElement;
 use crate::machine::RuntimeArena;
 use crate::parse::parse;
@@ -31,8 +31,8 @@ fn nested_binder_installs_inner_placeholder_at_outer_submission() {
         parse("LET f = (FN (HELPER x :Number) -> Number = (x))").expect("parse should succeed");
     assert_eq!(exprs.len(), 1, "test fixture: single top-level expression");
     let expr = exprs.remove(0);
-    let mut sched = Scheduler::new();
-    let _id = sched.add_dispatch(expr, scope);
+    let mut sched = KoanRuntime::new();
+    let _id = sched.dispatch_in_scope(expr, scope);
     // Read both maps before any `execute()` — installs must land at submission time.
     let placeholders = scope.bindings().placeholders();
     assert!(

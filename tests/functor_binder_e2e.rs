@@ -23,7 +23,7 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{KObject, KType, SignatureElement};
-use koan::machine::{KFunction, RuntimeArena, Scheduler, Scope};
+use koan::machine::{KFunction, KoanRuntime, RuntimeArena, Scope};
 use koan::parse::parse;
 
 /// Shared `Write` adapter — every test here drops PRINT output (the smoke
@@ -44,9 +44,9 @@ fn run<'a>(arena: &'a RuntimeArena, src: &str) -> &'a Scope<'a> {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = default_scope(arena, Box::new(SharedBuf(captured)));
     let exprs = parse(src).expect("parse should succeed");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     for e in exprs {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched.execute().expect("scheduler should run to completion");
     scope
@@ -195,7 +195,7 @@ fn let_bound_functor_applied_via_sigil_yields_module() {
 /// Run `src` through the real interpreter entry point (which reads each top-level
 /// node's result, so a LET-RHS bind error surfaces), expecting an error.
 ///
-/// The `run` helper above uses `add_dispatch` + `execute()` to inspect scope
+/// The `run` helper above uses `dispatch_in_scope` + `execute()` to inspect scope
 /// bindings; that path stores a node's error without returning it from `execute()`,
 /// so it can't witness a bind-time `TypeMismatch`. `interpret_with_writer` mirrors
 /// the CLI: `enter_block` the top level, then propagate the first node error.

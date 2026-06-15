@@ -1,13 +1,13 @@
 //! Post-classification side of FN-def: turn the (return-type, parameter-list)
-//! pair into either a synchronous `finalize_fn_with_kind` call or a Combine-deferred
-//! schedule, and own the Combine finish closure.
+//! pair into either a synchronous `finalize_fn_with_kind` call or a deferred
+//! schedule, and own the dep-finish closure.
 //!
 //! [`classify`] collapses the 8-combinatoric `(ReturnTypeState × ParamListResult)`
 //! decision tree to an [`FnPlan`] with two terminal shapes, so the caller in
 //! `super::fn_def` reduces to a two-arm match.
 //!
 //! The FUNCTOR and anonymous-FN binders ride the same path, selected by the
-//! [`FnKind`] threaded through `finalize_fn_with_kind` / `defer_via_combine`:
+//! [`FnKind`] threaded through `finalize_fn_with_kind` / `defer`:
 //! `Functor` flips the `KFunction::is_functor` carrier bit and gates the
 //! FUNCTOR-only return-type admissibility check; `Anonymous` (the `FN :{…}`
 //! record-schema binder) skips registration. No closure plumbing.
@@ -55,14 +55,14 @@ pub(crate) enum FnPlan<'a> {
         elements: Vec<SignatureElement<'a>>,
         return_type: ReturnType<'a>,
     },
-    Combine(CombineInputs<'a>),
+    Deferred(DeferredInputs<'a>),
 }
 
-/// Inputs to [`defer_via_combine`]: carrier that survives the Combine boundary
+/// Inputs to [`defer`]: carrier that survives the dep-finish boundary
 /// plus the two parking lists.
-pub(crate) struct CombineInputs<'a> {
+pub(crate) struct DeferredInputs<'a> {
     pub capture: ReturnTypeCapture<'a>,
-    /// Existing sibling slots this Combine reads at finish-time but does NOT
+    /// Existing sibling slots this dep-finish reads at finish-time but does NOT
     /// own. Installed as `Notify` (park) edges; must not cascade-free.
     pub park_producers: Vec<NodeId>,
     /// `Some` only when the return-type slot is an `Expression(_)` carrier that
@@ -80,7 +80,7 @@ pub(crate) struct CombineInputs<'a> {
     pub prebuilt_elements: Option<Vec<SignatureElement<'a>>>,
 }
 
-/// Decide between the synchronous build path and the Combine-deferred path.
+/// Decide between the synchronous build path and the deferred path.
 ///
 /// Arms differ only in how they shape the [`ReturnTypeCapture`] and merge the
 /// two parking lists. All eight `(ReturnTypeState × ParamListResult)` combos
@@ -97,7 +97,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
         },
         (ReturnTypeState::ExprToSubDispatch(e), ParamListResult::Done(_)) => {
             // Park empty, only the return-type sub: results[0] is its value.
-            FnPlan::Combine(CombineInputs {
+            FnPlan::Deferred(DeferredInputs {
                 capture: ReturnTypeCapture::ReturnTypeExpr { results_pos: 0 },
                 park_producers: Vec::new(),
                 return_type_sub: Some(e),
@@ -111,7 +111,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
                 park_producers,
                 sub_dispatches,
             },
-        ) => FnPlan::Combine(CombineInputs {
+        ) => FnPlan::Deferred(DeferredInputs {
             capture: ReturnTypeCapture::Resolved(kt),
             park_producers,
             return_type_sub: None,
@@ -124,7 +124,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
                 park_producers,
                 sub_dispatches,
             },
-        ) => FnPlan::Combine(CombineInputs {
+        ) => FnPlan::Deferred(DeferredInputs {
             // Return type is per-call-deferred: carry the carrier verbatim
             // through to `finalize_fn_with_kind` once params land.
             capture: ReturnTypeCapture::Deferred(d),
@@ -143,7 +143,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
             // `[park ++ return_type_sub ++ sub_dispatches...]` puts the
             // return-type result at `results[park_producers.len()]`.
             let results_pos = park_producers.len();
-            FnPlan::Combine(CombineInputs {
+            FnPlan::Deferred(DeferredInputs {
                 capture: ReturnTypeCapture::ReturnTypeExpr { results_pos },
                 park_producers,
                 return_type_sub: Some(e),
@@ -154,7 +154,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
         (ReturnTypeState::Pending { te, producers }, ParamListResult::Done(_)) => {
             // Synchronously elaborated `elements` are discarded; the wake
             // re-elaborates the param list against the spliced signature.
-            FnPlan::Combine(CombineInputs {
+            FnPlan::Deferred(DeferredInputs {
                 capture: make_capture(te),
                 park_producers: producers,
                 return_type_sub: None,
@@ -173,7 +173,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
             },
         ) => {
             park_producers.extend(rt_producers);
-            FnPlan::Combine(CombineInputs {
+            FnPlan::Deferred(DeferredInputs {
                 capture: make_capture(te),
                 park_producers,
                 return_type_sub: None,
@@ -204,7 +204,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 ) -> Result<Carried<'a>, KError> {
     let is_functor = matches!(kind, FnKind::Functor);
     // FUNCTOR-only post-resolution return-type validation: fires here when the
-    // return slot resolved at Combine-finish time rather than synchronously.
+    // return slot resolved at dep-finish time rather than synchronously.
     if is_functor {
         if let ReturnType::Resolved(kt) = &return_type {
             if !kt.is_admissible_functor_return() {
@@ -263,11 +263,11 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     Ok(Carried::Object(obj))
 }
 
-/// Schedule a `Combine` over `park_producers` plus any newly scheduled
+/// Schedule a `AwaitDeps` over `park_producers` plus any newly scheduled
 /// sub-Dispatches for parens-wrapped parameter types, then re-run the signature
 /// elaboration in the finish closure.
 ///
-/// Build the Combine as an `Action` — park producers become `Dep::Existing`, the
+/// Build the dep-finish as an `Action` — park producers become `Dep::Existing`, the
 /// optional return-type sub and the param-type subs become `Dep::Dispatch { OwnScope }`
 /// (in that order, so the `[park ++ rt? ++ subs]` result layout the `splice_layout` /
 /// `ReturnTypeExpr { results_pos }` indices assume holds), and the finish wraps the
@@ -276,15 +276,15 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 /// Splice protocol: each entry in `inputs.sub_dispatches` becomes a `Dep::Dispatch`;
 /// the finish closure splices each result into `signature_expr.parts[slot_idx]` as
 /// `Future(obj)` before re-running `parse_fn_param_list` against the now-final scope.
-pub(crate) fn defer_via_combine<'a>(
+pub(crate) fn defer<'a>(
     signature_expr: KExpression<'a>,
-    inputs: CombineInputs<'a>,
+    inputs: DeferredInputs<'a>,
     body_expr: KExpression<'a>,
     kind: FnKind,
     bind_index: BindingIndex,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{Action, Cont, Dep, DepPlacement};
-    let CombineInputs {
+    use crate::machine::core::kfunction::action::{Action, AwaitContinue, Dep, DepPlacement};
+    let DeferredInputs {
         capture,
         park_producers,
         return_type_sub,
@@ -310,7 +310,7 @@ pub(crate) fn defer_via_combine<'a>(
         splice_layout.push((slot_idx, park_count + owned_count));
         owned_count += 1;
     }
-    let finish: Cont<'a> = Box::new(move |fctx, results| {
+    let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         let mut spliced_parts = signature_expr.parts.clone();
         for &(slot_idx, results_pos) in &splice_layout {
             let carrier = results[results_pos];
@@ -337,7 +337,8 @@ pub(crate) fn defer_via_combine<'a>(
                     }
                     ParamListOutcome::Pending { .. } => {
                         return Action::Done(Err(KError::new(KErrorKind::ShapeError(
-                            "FN signature elaboration still pending after Combine wake".to_string(),
+                            "FN signature elaboration still pending after dep-finish wake"
+                                .to_string(),
                         ))))
                     }
                 }
@@ -352,5 +353,5 @@ pub(crate) fn defer_via_combine<'a>(
             bind_index,
         ))
     });
-    crate::machine::core::kfunction::action::Action::Combine { deps, finish }
+    crate::machine::core::kfunction::action::Action::AwaitDeps { deps, finish }
 }

@@ -88,7 +88,7 @@ Type and module system ([typing/](typing/README.md)):
   checking, cross-implicit equivalence checking, and the
   resolution-and-coherence design dials.
 - [typing/scheduler.md](typing/scheduler.md) — type inference and
-  implicit search as ordinary `Dispatch` / `Bind` scheduler work
+  implicit search as ordinary `Dispatch` / dep-finish scheduler work
   rather than a parallel node-kind track.
 - [typing/type-language-via-dispatch.md](typing/type-language-via-dispatch.md)
   — the `:(...)` sigil as a parse-context marker; parameterized type

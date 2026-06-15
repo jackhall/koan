@@ -53,7 +53,7 @@ fn finalize_newtype<'a>(
         .try_register_type(&name, kt_ref, bind_index)
     {
         Ok(ApplyOutcome::Applied) => Ok(Carried::Type(scope.arena.alloc_ktype(kt_ref.clone()))),
-        // Finalize sites run post-Combine outside the re-entrant hot path, so borrow
+        // Finalize sites run post-dep-finish outside the re-entrant hot path, so borrow
         // contention here is a programming error. Surface as a structured error rather
         // than panicking — a future re-entrant caller still gets a recoverable diag.
         Ok(ApplyOutcome::Conflict) => Err(KError::new(KErrorKind::ShapeError(format!(
@@ -67,7 +67,7 @@ fn finalize_newtype<'a>(
 /// `NominalSchema::Newtype(KType::Record(sealed))`. Transient `RecursiveRef(name)` field leaves
 /// seal to `SetLocal(index)` against the member's set — the block's shared set when present (a
 /// `RECURSIVE TYPES` member), else a fresh singleton (standalone self-recursion). Shared by the
-/// synchronous and Combine-finish paths.
+/// synchronous and dep-finish paths.
 fn finalize_record_newtype<'a>(
     scope: &Scope<'a>,
     name: String,
@@ -111,13 +111,13 @@ fn finalize_record_newtype<'a>(
 }
 
 /// A resolved repr finalizes synchronously; a bare-leaf name resolves against the scope chain,
-/// parks on an in-flight producer (a `Dep::Existing` Combine), or errors; a raw sigil repr
+/// parks on an in-flight producer (a `Dep::Existing` dep-finish), or errors; a raw sigil repr
 /// sub-dispatches via [`defer_resolved_sigil`].
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        arg_object, arg_type, require_bare_type_name, Action, Cont, Dep,
+        arg_object, arg_type, require_bare_type_name, Action, AwaitContinue, Dep,
     };
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "NEWTYPE"));
@@ -134,13 +134,13 @@ pub fn body<'a>(
                     return Action::Done(finalize_newtype(ctx.scope, name, kt.clone(), bind_index));
                 }
                 // The repr names a type still finalizing in this scheduler: park on its producer
-                // and re-resolve at Combine-finish. A name with no in-flight producer is a genuine
+                // and re-resolve at dep-finish. A name with no in-flight producer is a genuine
                 // forward/unknown reference.
                 if let Resolution::Placeholder(producer) =
                     ctx.scope.resolve_with_chain(te.as_str(), chain.as_deref())
                 {
                     let chain_for_finish = chain.clone();
-                    let finish: Cont<'a> = Box::new(move |fctx, _results| {
+                    let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
                         match fctx
                             .scope
                             .resolve_type_with_chain(te.as_str(), chain_for_finish.as_deref())
@@ -156,7 +156,7 @@ pub fn body<'a>(
                             )))),
                         }
                     });
-                    return Action::Combine {
+                    return Action::AwaitDeps {
                         deps: vec![Dep::Existing(producer)],
                         finish,
                     };
@@ -178,17 +178,17 @@ pub fn body<'a>(
 }
 
 /// A non-record sigil repr (`NEWTYPE Stream = :(LIST OF Number)`): re-wrap the captured sigil,
-/// sub-dispatch it, and seal a plain Newtype over the resolved `KType` at Combine-finish.
+/// sub-dispatch it, and seal a plain Newtype over the resolved `KType` at dep-finish.
 fn defer_resolved_sigil<'a>(
     name: String,
     inner: KExpression<'a>,
     bind_index: BindingIndex,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{Action, Cont, Dep, DepPlacement};
+    use crate::machine::core::kfunction::action::{Action, AwaitContinue, Dep, DepPlacement};
     let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
         Box::new(inner),
     ))]);
-    let finish: Cont<'a> = Box::new(move |fctx, results| match results[0] {
+    let finish: AwaitContinue<'a> = Box::new(move |fctx, results| match results[0] {
         Carried::Type(kt) => {
             Action::Done(finalize_newtype(fctx.scope, name, kt.clone(), bind_index))
         }
@@ -197,7 +197,7 @@ fn defer_resolved_sigil<'a>(
             other.ktype().name(),
         ))))),
     });
-    Action::Combine {
+    Action::AwaitDeps {
         deps: vec![Dep::Dispatch {
             expr: wrapped,
             placement: DepPlacement::OwnScope,
@@ -311,7 +311,7 @@ mod tests {
     use std::rc::Rc;
 
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::machine::execute::Scheduler;
+    use crate::machine::execute::KoanRuntime;
     use crate::machine::model::types::{KKind, NominalSchema, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
     use crate::machine::{KErrorKind, RuntimeArena, Scope};
@@ -588,7 +588,7 @@ mod tests {
 
     /// `Distance` and `Number` are observably distinct at dispatch.
     ///
-    /// Rejection lands as `DispatchFailed` out of `Scheduler::execute` (the per-slot
+    /// Rejection lands as `DispatchFailed` out of `KoanRuntime::execute` (the per-slot
     /// type check filters the only candidate, scope chain runs out without a match)
     /// — drive the scheduler directly rather than `run_one_err`, which expects a
     /// per-slot Err result.
@@ -612,8 +612,8 @@ mod tests {
             KObject::KString(s) => assert_eq!(s, "num"),
             other => panic!("expected \"num\", got {:?}", other.ktype()),
         }
-        let mut sched1 = Scheduler::new();
-        let root = sched1.add_dispatch(parse_one("TAKES_NUM (Distance (3.0))"), scope);
+        let mut sched1 = KoanRuntime::new();
+        let root = sched1.dispatch_in_scope(parse_one("TAKES_NUM (Distance (3.0))"), scope);
         sched1
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -625,8 +625,8 @@ mod tests {
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed on Number-slot Distance, got {err}",
         );
-        let mut sched2 = Scheduler::new();
-        let root2 = sched2.add_dispatch(parse_one("TAKES_DIST (3.0)"), scope);
+        let mut sched2 = KoanRuntime::new();
+        let root2 = sched2.dispatch_in_scope(parse_one("TAKES_DIST (3.0)"), scope);
         sched2
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -640,7 +640,7 @@ mod tests {
         );
     }
 
-    /// `Distance(x)` resolves the inner identifier inside the Combine's dispatched
+    /// `Distance(x)` resolves the inner identifier inside the dep-finish's dispatched
     /// dep before the finish closure runs — pins the non-trivial-dispatch path.
     #[test]
     fn construct_with_identifier_value() {

@@ -169,12 +169,12 @@ mod tests {
     /// [scheduler.md § In-walk dispatch precedence](../../design/typing/scheduler.md#in-walk-dispatch-precedence)).
     #[test]
     fn anonymous_union_fails_dispatch() {
-        use crate::machine::execute::Scheduler;
+        use crate::machine::execute::KoanRuntime;
 
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let mut sched = Scheduler::new();
-        let root = sched.add_dispatch(parse_one("UNION (Ok :Number Err :Str)"), scope);
+        let mut sched = KoanRuntime::new();
+        let root = sched.dispatch_in_scope(parse_one("UNION (Ok :Number Err :Str)"), scope);
         sched
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");

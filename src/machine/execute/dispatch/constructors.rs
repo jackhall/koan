@@ -2,8 +2,8 @@
 //! and the `FunctionValueCall` fast lane (fn_value) route a resolved verb-carrier here. Args
 //! resolve through per-value eager sub-Dispatches; when all are bound, `finish` validates
 //! types and emits the `KObject::Wrapped` / `KObject::Tagged` directly — no bucket lookup, no
-//! re-dispatch. Reusing the eager-subs `Combine` machinery (rather than a
-//! standalone `Combine`) is load-bearing: it stages an already-ready value in place and parks
+//! re-dispatch. Reusing the eager-subs `AwaitDeps` machinery (rather than a
+//! standalone `AwaitDeps`) is load-bearing: it stages an already-ready value in place and parks
 //! a deferred one on the construction node itself, so a newtype built from a still-pending
 //! reference (`(Boxed (p))` where `p` is a sibling construction) finalizes correctly.
 
@@ -15,13 +15,12 @@ use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::NonWrappedRef;
-use crate::machine::model::KObject;
+use crate::machine::model::{Carried, KObject};
 use crate::machine::{KError, KErrorKind, Scope};
 
-use super::super::nodes::NodeOutput;
-use super::super::CombineFinish;
+use super::super::DepFinish;
 use super::single_poll::CtorKind;
-use super::{park_combine, DispatchDep, Outcome};
+use super::{park_on_deps, DepRequest, Outcome};
 
 pub(in crate::machine::execute) mod tagged_union;
 
@@ -42,7 +41,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
         value_parts = inner.parts.clone();
     }
     if value_parts.is_empty() {
-        return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::ArityMismatch {
+        return Outcome::Done(Err(KError::new(KErrorKind::ArityMismatch {
             expected: 1,
             got: 0,
         })));
@@ -117,7 +116,7 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
 ) -> Outcome<'run> {
     let (tag, value_part) = match tagged_union::prepare_args(args_parts) {
         Ok(v) => v,
-        Err(e) => return Outcome::Done(NodeOutput::Err(e)),
+        Err(e) => return Outcome::Done(Err(e)),
     };
     launch(
         vec![value_part],
@@ -140,18 +139,18 @@ fn launch<'run>(value_parts: Vec<ExpressionPart<'run>>, kind: CtorKind<'run>) ->
         !value_parts.is_empty(),
         "launch requires at least one value part (arity-zero is rejected upstream)"
     );
-    let deps: Vec<DispatchDep<'run>> = value_parts
+    let deps: Vec<DepRequest<'run>> = value_parts
         .into_iter()
-        .map(|part| DispatchDep::Dispatch {
+        .map(|part| DepRequest::Dispatch {
             expr: KExpression::new(vec![Spanned::bare(part)]),
             placement: DepPlacement::OwnScope,
         })
         .collect();
-    let combine_finish: CombineFinish<'run> = Box::new(move |ctx, results| {
+    let combine_finish: DepFinish<'run> = Box::new(move |ctx, results| {
         let values: Vec<&'run KObject<'run>> = results.iter().map(|c| c.object()).collect();
         finish(ctx.current_scope(), &kind, &values)
     });
-    park_combine(deps, None, combine_finish, Vec::new())
+    park_on_deps(deps, None, combine_finish, Vec::new())
 }
 
 /// All value subs have completed. Read each, materialize the kind-keyed
@@ -189,7 +188,7 @@ pub(in crate::machine::execute::dispatch) fn finish<'run>(
         }
     };
     match result {
-        Ok(obj) => Outcome::Done(NodeOutput::value(scope.arena.alloc_object(obj))),
-        Err(e) => Outcome::Done(NodeOutput::Err(e)),
+        Ok(obj) => Outcome::Done(Ok(Carried::Object(scope.arena.alloc_object(obj)))),
+        Err(e) => Outcome::Done(Err(e)),
     }
 }

@@ -183,11 +183,11 @@ fn functor_deferred_return_coarsens_list_carrier() {
 /// TCO across deferred returns: a deferred-return FN whose body tail-calls another deferred-return
 /// FN collapses to a **single scheduler slot**, exactly like a resolved-return tail chain. The
 /// per-call return type rides a `ReturnContract::PerCall` on the tail-replace, so the body is a
-/// proper tail call — no per-call Combine frame is held, so a recursive deferred body stays
-/// TCO-flat. (The pre-`PerCall` Combine lowering held a frame per call and would not collapse.)
+/// proper tail call — no per-call dep-finish frame is held, so a recursive deferred body stays
+/// TCO-flat. (The pre-`PerCall` dep-finish lowering held a frame per call and would not collapse.)
 #[test]
 fn deferred_return_tail_call_stays_tco_flat() {
-    use crate::machine::execute::Scheduler;
+    use crate::machine::execute::KoanRuntime;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -201,8 +201,8 @@ fn deferred_return_tail_call_stays_tco_flat() {
         "FN (BB Er :Seq) -> Er = (Er)\n\
          FN (AA Er :Seq) -> Er = (BB Er)",
     );
-    let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("AA View"), scope);
+    let mut sched = KoanRuntime::new();
+    let id = sched.dispatch_in_scope(parse_one("AA View"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -222,11 +222,11 @@ fn deferred_return_tail_call_stays_tco_flat() {
 /// A chain of deferred-`Expression` functors (`-> Er.Carrier`) stays TCO-flat. The first call
 /// resolves `Er.Carrier` once and tail-replaces into the body; each subsequent tail call skips
 /// resolution (keep-first discards its contract) and tail-replaces, so the chain reuses frames
-/// instead of accumulating a Combine per call. (The pre-`DeferredExprTail` lowering ran the body as
-/// Combine deps, making each onward call a dep — O(n).)
+/// instead of accumulating a dep-finish per call. (The pre-`DeferredExprTail` lowering ran the body as
+/// dep-finish dependencies, making each onward call a dep — O(n).)
 #[test]
 fn deferred_expression_return_tail_chain_reuses_frames() {
-    use crate::machine::execute::Scheduler;
+    use crate::machine::execute::KoanRuntime;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -242,8 +242,8 @@ fn deferred_expression_return_tail_chain_reuses_frames() {
          FN (BB Er :Seq) -> Er.Carrier = (CC Er)\n\
          FN (AA Er :Seq) -> Er.Carrier = (BB Er)",
     );
-    let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("AA View"), scope);
+    let mut sched = KoanRuntime::new();
+    let id = sched.dispatch_in_scope(parse_one("AA View"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -252,7 +252,7 @@ fn deferred_expression_return_tail_chain_reuses_frames() {
         "AA should succeed: {:?}",
         sched.read_result(id).err(),
     );
-    // Subsequent calls tail-replace and reuse per-call frames rather than each spawning a Combine.
+    // Subsequent calls tail-replace and reuse per-call frames rather than each spawning a dep-finish.
     assert!(
         sched.tail_reuse_count() >= 1,
         "deferred-Expression tail chain must reuse a frame (tail-replace), got {}",
@@ -260,13 +260,13 @@ fn deferred_expression_return_tail_chain_reuses_frames() {
     );
 }
 
-/// Wrong-typed body for a per-call return type — Combine-finish runs the
+/// Wrong-typed body for a per-call return type — dep-finish runs the
 /// slot check against the per-call elaboration and rejects with a diagnostic
 /// mentioning "per-call return type", pinning that the rejection path is the
 /// per-call check, not the static lift-time one.
 #[test]
 fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
-    use crate::machine::execute::Scheduler;
+    use crate::machine::execute::KoanRuntime;
     use crate::machine::KErrorKind;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
@@ -277,8 +277,8 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
          LET IntOrdView = (IntOrd :| OrderedSig)",
     );
     run(scope, "FN (BAD Er :OrderedSig) -> Er.Type = (1)");
-    let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("BAD IntOrdView"), scope);
+    let mut sched = KoanRuntime::new();
+    let id = sched.dispatch_in_scope(parse_one("BAD IntOrdView"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");

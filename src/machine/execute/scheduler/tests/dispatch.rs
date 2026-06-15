@@ -2,12 +2,12 @@
 //! returns a distinct labeled marker so a test can identify which overload won.
 //! Counterpart `resolve_dispatch`-only assertions live in `machine::core::tests::dispatch`.
 
-use super::super::Scheduler;
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::core::source::Spanned;
 use crate::machine::core::BindingIndex;
+use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
@@ -86,8 +86,8 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         Spanned::bare(ExpressionPart::Keyword("MARK".into())),
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
     ]);
-    let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(expr, inner);
+    let mut sched = KoanRuntime::new();
+    let id = sched.dispatch_in_scope(expr, inner);
     sched.execute().unwrap();
     let result = sched.read(id).object();
     assert!(
@@ -121,8 +121,8 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "foo".into(),
     ))]);
-    let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(expr, scope);
+    let mut sched = KoanRuntime::new();
+    let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().unwrap();
     let err = match sched.read_result(id) {
         Err(e) => e.clone(),
@@ -161,8 +161,8 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
         Spanned::bare(ExpressionPart::Keyword("FOO".into())),
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
     ]);
-    let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(expr, scope);
+    let mut sched = KoanRuntime::new();
+    let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().unwrap();
     let result = sched.read(id).object();
     assert!(matches!(result, KObject::KString(s) if s == "lowercase"));

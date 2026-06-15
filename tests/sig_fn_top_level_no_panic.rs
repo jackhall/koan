@@ -1,7 +1,7 @@
 //! Integration test for the scheduler-reclaim-vs-interpret-readback fix: a
 //! top-level `SIG` followed by an `FN` whose signature references the SIG (both
 //! as parameter type and return type) used to panic at the interpret seam's
-//! per-top-level `read_result`, because the FN-def's Combine was installing the
+//! per-top-level `read_result`, because the FN-def's dep-finish was installing the
 //! SIG's top-level slot as an `Owned` dep and cascade-freeing it on success.
 //!
 //! Runs the smoke through `interpret_with_writer` (the same path the CLI uses)

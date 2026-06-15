@@ -5,7 +5,7 @@
 //! The `{Slot = Type}` record literal eager-evaluates to a `KObject::Record` whose field
 //! values are resolved `KTypeValue`s — a dotted `Er.Type` value sub-dispatches in value
 //! context for free — so the body reads `(name, KTypeValue)` entries directly: no lazy
-//! binding slot, no `Combine`.
+//! binding slot, no `AwaitDeps`.
 
 use std::collections::HashSet;
 
@@ -81,7 +81,7 @@ pub fn body<'a>(
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
-    use crate::machine::execute::Scheduler;
+    use crate::machine::execute::KoanRuntime;
     use crate::machine::model::KType;
     use crate::machine::RuntimeArena;
 
@@ -171,8 +171,8 @@ mod tests {
             scope,
             "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
         );
-        let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(parse_one("OrderedSig WITH {Bogus = Number}"), scope);
+        let mut sched = KoanRuntime::new();
+        let id = sched.dispatch_in_scope(parse_one("OrderedSig WITH {Bogus = Number}"), scope);
         sched
             .execute()
             .expect("execute does not surface per-slot errors");
@@ -193,8 +193,8 @@ mod tests {
             scope,
             "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
         );
-        let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(parse_one("OrderedSig WITH {type = Number}"), scope);
+        let mut sched = KoanRuntime::new();
+        let id = sched.dispatch_in_scope(parse_one("OrderedSig WITH {type = Number}"), scope);
         sched
             .execute()
             .expect("execute does not surface per-slot errors");

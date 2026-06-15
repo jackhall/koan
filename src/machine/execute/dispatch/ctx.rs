@@ -4,9 +4,10 @@
 //! (never `&mut`) for its reads — the static-over-the-step ones (`current_scope`, `chain_deref`,
 //! …) and the live reads of *pre-existing* producers (`is_result_ready`, `would_create_cycle`,
 //! `read_result`) — and the decide *returns* a
-//! [`Outcome`](super::Outcome) the [`harness`](super::harness) applies.
-//! The harness holds the only `&mut Scheduler` on the dispatch side, so no decide handler touches
-//! it — the scheduler's write primitives are inherent methods the harness alone calls.
+//! [`Outcome`](super::Outcome) the [`harness`](super::runtime) applies.
+//! [`KoanRuntime`](super::runtime::KoanRuntime) owns the scheduler and is the sole holder of `&mut
+//! Scheduler` across the execute tree, so no decide handler touches it — the scheduler's write
+//! primitives are inherent methods the harness alone calls.
 //!
 //! The dispatcher genuinely reads evolving graph state, so full scheduler-unawareness (the builtin
 //! model) is not a goal — only the *writes* defer to the harness. Dispatch *shape* modules
@@ -23,7 +24,7 @@ use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 
 use super::super::scheduler::Scheduler;
-use super::{bind_frame_err, park_combine, resolve_name_part, DispatchDep, Outcome, PendingSub};
+use super::{bind_frame_err, park_on_deps, resolve_name_part, DepRequest, Outcome, PendingSub};
 
 /// Read-only dispatch view — the decide-phase context. It holds only `&Scheduler`, never `&mut`.
 /// A shape handler decides against this and *returns* a
@@ -113,10 +114,10 @@ impl<'run, 's> SchedulerView<'run, 's> {
     /// Stage each `PendingSub` and decide the eager-subs outcome. A `Reuse` of an already-resolved
     /// producer splices inline (a read of a static-over-this-step slot) and rides on the outcome's
     /// `free`; a freshly minted sub is never terminal in the same step, so it becomes an owned
-    /// `Combine` dep. The finish splices the resolved values into `working_expr` and routes on
-    /// `picked` — `Some(f)` calls `f` ([`Outcome::Invoke`]), `None` re-resolves
-    /// ([`Outcome::Redispatch`] → [`keyworded::finish`](super::keyworded::finish)). When every sub spliced
-    /// inline, that routing happens now; otherwise the slot parks as a `Combine` and the routing
+    /// `AwaitDeps` dep. The finish splices the resolved values into `working_expr` and routes on
+    /// `picked` — `Some(f)` folds the committed call into a frame-installing `Continue`, `None`
+    /// re-resolves via [`keyworded::finish`](super::keyworded::finish). When every sub spliced
+    /// inline, that routing happens now; otherwise the slot parks as a `AwaitDeps` and the routing
     /// runs in the finish. The `<bind>` dep-error frame rides on `dep_error_frame`. Read-only —
     /// every write the outcome implies is the harness's.
     pub(super) fn install_eager_subs(
@@ -125,8 +126,8 @@ impl<'run, 's> SchedulerView<'run, 's> {
         staged_subs: Vec<(usize, PendingSub<'run>)>,
         picked: Option<&'run KFunction<'run>>,
     ) -> Outcome<'run> {
-        use super::super::CombineFinish;
-        let mut deps: Vec<DispatchDep<'run>> = Vec::with_capacity(staged_subs.len());
+        use super::super::DepFinish;
+        let mut deps: Vec<DepRequest<'run>> = Vec::with_capacity(staged_subs.len());
         let mut part_indices: Vec<usize> = Vec::with_capacity(staged_subs.len());
         // Reuse producers consumed inline (spliced into `working_expr`); the harness reclaims
         // them so the decide phase issues no `free` write.
@@ -149,22 +150,22 @@ impl<'run, 's> SchedulerView<'run, 's> {
                             }
                         }
                     }
-                    DispatchDep::Existing(id)
+                    DepRequest::Existing(id)
                 }
-                PendingSub::Dispatch(sub_expr) => DispatchDep::Dispatch {
+                PendingSub::Dispatch(sub_expr) => DepRequest::Dispatch {
                     expr: sub_expr,
                     placement: DepPlacement::OwnScope,
                 },
-                PendingSub::ListLit(items) => DispatchDep::ListLit(items),
-                PendingSub::DictLit(pairs) => DispatchDep::DictLit(pairs),
-                PendingSub::RecordLit(fields) => DispatchDep::RecordLit(fields),
+                PendingSub::ListLit(items) => DepRequest::ListLit(items),
+                PendingSub::DictLit(pairs) => DepRequest::DictLit(pairs),
+                PendingSub::RecordLit(fields) => DepRequest::RecordLit(fields),
             };
             deps.push(dep);
             part_indices.push(i);
         }
         if deps.is_empty() {
             // Every sub was an already-resolved `Reuse` spliced inline — `working_expr` is fully
-            // resolved, so route to the finish now instead of parking on a Combine; the inline
+            // resolved, so route to the finish now instead of parking on a dep-finish; the inline
             // frees ride on the resulting Invoke/Redispatch outcome.
             return finish_eager_subs(working_expr, picked, free);
         }
@@ -172,35 +173,33 @@ impl<'run, 's> SchedulerView<'run, 's> {
             "<bind>",
             &working_expr,
         ));
-        let finish: CombineFinish<'run> = Box::new(move |_ctx, results| {
+        let finish: DepFinish<'run> = Box::new(move |_ctx, results| {
             // The short-circuit already guaranteed every dep resolved; splice each into the
             // slot it was staged from, then route the continuation. No inline frees remain at
-            // wake — those were drained when the Combine was installed.
+            // wake — those were drained when the dep-finish was installed.
             for (slot, value) in part_indices.iter().zip(results) {
                 working_expr.parts[*slot].value = ExpressionPart::Future(*value);
             }
             finish_eager_subs(working_expr, picked, Vec::new())
         });
-        park_combine(deps, dep_error_frame, finish, free)
+        park_on_deps(deps, dep_error_frame, finish, free)
     }
 }
 
 /// Route a fully-spliced eager-subs `working_expr` to its continuation — the shared tail of
-/// the `Combine` finish and its all-inline fast path. `Some(f)` names the committed
-/// call as an [`Outcome::Invoke`]; `None` defers to a [`Outcome::Redispatch`]
-/// (the harness re-resolves via [`keyworded::finish`](super::keyworded::finish), where an element-typed `Future(_)`
-/// revealed by a sub surfaces as a slot-terminal `DispatchFailed`). Pure data — no `&mut`.
+/// the `AwaitDeps` finish and its all-inline fast path. `Some(f)` folds the committed call into a
+/// frame-installing [`Outcome::Continue`] (via [`invoke_continue`](super::exec::invoke_continue));
+/// `None` defers to a re-resolve `Continue` (via
+/// [`redispatch_continue`](super::keyworded::redispatch_continue), which re-runs
+/// [`keyworded::finish`](super::keyworded::finish), where an element-typed `Future(_)` revealed by a
+/// sub surfaces as a slot-terminal `DispatchFailed`). Pure data — no `&mut`.
 fn finish_eager_subs<'run>(
     working_expr: KExpression<'run>,
     picked: Option<&'run KFunction<'run>>,
     free: Vec<usize>,
 ) -> Outcome<'run> {
     match picked {
-        Some(f) => Outcome::Invoke {
-            picked: f,
-            working_expr,
-            free,
-        },
-        None => Outcome::Redispatch { working_expr, free },
+        Some(f) => super::exec::invoke_continue(f, working_expr, free),
+        None => super::keyworded::redispatch_continue(working_expr, free),
     }
 }

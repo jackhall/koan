@@ -182,7 +182,7 @@ Several "must hold" rules are encoded in types rather than checked at runtime:
 - `Scope::arena: &'a RuntimeArena` is non-optional; `test_sink()` takes a
   caller-supplied arena.
 - `KFunction::captured_scope() -> &'a Scope<'a>` is non-optional.
-- The running scope passes through `Scheduler::add_dispatch(expr, scope)`
+- The running scope passes through `KoanRuntime::dispatch_in_scope(expr, scope)`
   directly, so dispatch sites carry their scope explicitly.
 - [`RuntimeArena::alloc_function`](../src/machine/core/arena.rs) `debug_assert`s
   arena-identity between the function and its captured scope, catching a
@@ -195,17 +195,14 @@ The push/notify scheduler ([execution-model.md § Push/notify dependency
 edges](execution-model.md#pushnotify-dependency-edges)) keeps its slot-table
 state in a
 [`NodeStore`](../src/machine/execute/scheduler/node_store.rs)
-sub-struct that owns `nodes: Vec<Option<Node<'a>>>`, `results:
-Vec<Option<NodeOutput<'a>>>`, `free_list: Vec<usize>`, and
-`recent_wakes: Vec<Vec<NodeId>>` (the per-consumer wake-attribution
-side-channel scoped to `NodeWork::Decide` consumers) behind the slot
-lifecycle `alloc_slot → take_for_run → reinstall* → finalize → free_one`. The
-slot-indexed vectors share an index space; `alloc_slot` is the only path that
-picks an index, `finalize` is the only path that lands a terminal `NodeOutput`,
-and `free_one` is the only path that clears `results[idx]`, clears
-`recent_wakes[idx]` (retaining the inner Vec's capacity for the next owner —
-the side-channel's amortized-allocation pattern), and pushes onto
-`free_list`. Dependency bookkeeping lives alongside it in a
+sub-struct that owns `slots: SlotVec<SlotState<'run>>` (each slot a `PreRun(Node)`
+/ `Running` / `Done(Result<Carried, KError>)` / `Aliased(NodeId)` / `Free`) and
+`free_list: Vec<NodeId>`, behind the slot lifecycle
+`alloc_slot → take_for_run → reinstall* → finalize → free_one`. `alloc_slot` is
+the only path that picks an index (pulling from `free_list` before extending
+`slots`), `finalize` is the only path that lands a terminal `Done`, and
+`free_one` is the only path that returns a slot to `Free` and pushes its index
+onto `free_list`. Dependency bookkeeping lives alongside it in a
 [`DepGraph`](../src/machine/execute/scheduler/dep_graph.rs) sub-struct
 that bundles three `Vec`-shaped fields: `notify_list: Vec<Vec<NodeId>>`
 (each producer's dependent list), `pending_deps: Vec<usize>` (each consumer's
@@ -220,8 +217,8 @@ invariant (every forward edge in `notify_list[p]` matched by a backward
 surface rather than by convention.
 
 Transient-node reclamation runs through `Scheduler::reclaim_deps` from the
-dep-consuming steps `run_combine` and `run_catch`, in both cases *after* the
-finish closure returns its `Outcome` but *before* the harness applies it. So
+unified node handler `KoanRuntime::run_wait`, *after* the finish closure returns
+its `Outcome` but *before* the harness applies it. So
 when a dispatch splice finish has rewritten `working_expr.parts` to
 `ExpressionPart::Future`, the freed indices are back on the free-list before
 the harness dispatches the bound expression — its `add()` can recycle them
@@ -245,3 +242,16 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   under `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB and zero process-exit
   leaks, signing off the memory model as it stands today. The canonical
   slate list lives in [observe/miri_slate.md](../observe/miri_slate.md).
+
+## Open work
+
+- **Scheduler lifts node outputs**
+  ([roadmap/scheduler-lifts-node-outputs.md](../roadmap/refactor/scheduler-lifts-node-outputs.md)).
+  Lift currently re-homes a value typed `'run` into the consumer's arena. Binding a node's output
+  to its own per-call frame lifetime makes the lift a genuine per-node→consumer promotion and the
+  scheduler's own step, with the `KObject`-aware relocation behind a workload hook.
+- **Workload-independent DAG runtime**
+  ([roadmap/workload-independent-dag-runtime.md](../roadmap/refactor/workload-independent-dag-runtime.md)).
+  Move `CallArena` into the scheduler as the per-node memory manager and store node scopes as
+  erased `ScopePtr` payload re-anchored at read, rather than a live `&'run` borrow, so the run
+  lifetime is confined to `KoanRuntime`.

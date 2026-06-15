@@ -13,8 +13,8 @@
 //!
 //! Both divergences key on `FnKind::Functor`: `build_fn_like` passes
 //! `Some(&param_type_map)` to the shared `classify_return_type`, which emits a
-//! `Rejected`/`Admissible`/`DeferredToCombine` verdict alongside classification so
-//! the carrier is walked once; the deferred arm rides Combine-finish gated by the
+//! `Rejected`/`Admissible`/`Deferred` verdict alongside classification so
+//! the carrier is walked once; the deferred arm rides dep-finish gated by the
 //! same kind, with no separate predicate closure threaded through the schedule.
 //!
 //! This module owns only the two surface-form overload registrations.

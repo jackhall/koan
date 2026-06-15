@@ -1,8 +1,8 @@
 //! End-to-end coverage for the bare-name short-circuit, auto-wrap pass, and
 //! replay-park routing in `classify_dispatch` (see
 //! [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders)).
-use super::Scheduler;
 use crate::builtins::default_scope;
+use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, RuntimeArena};
 use crate::parse::parse;
@@ -21,12 +21,12 @@ fn parse_all<'run>(src: &str) -> Vec<crate::machine::model::ast::KExpression<'ru
 fn single_identifier_short_circuit_returns_value_when_bound() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     for e in parse_all("LET x = 42") {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched.execute().unwrap();
-    let id = sched.add_dispatch(parse_one("(x)"), scope);
+    let id = sched.dispatch_in_scope(parse_one("(x)"), scope);
     sched.execute().unwrap();
     assert!(matches!(sched.read(id).object(), KObject::Number(n) if *n == 42.0));
 }
@@ -37,7 +37,7 @@ fn single_identifier_short_circuit_returns_value_when_bound() {
 fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let ids = sched.enter_block(scope.id, parse_all("LET y = (x)\nLET x = 1"), scope);
     sched.execute().unwrap();
     let err = sched
@@ -55,8 +55,8 @@ fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
 fn single_identifier_short_circuit_falls_through_when_unbound() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("(missing)"), scope);
+    let mut sched = KoanRuntime::new();
+    let id = sched.dispatch_in_scope(parse_one("(missing)"), scope);
     sched.execute().unwrap();
     let err = match sched.read_result(id) {
         Err(e) => e.clone(),
@@ -72,9 +72,9 @@ fn single_identifier_short_circuit_falls_through_when_unbound() {
 fn bare_identifier_in_value_slot_auto_wraps_and_resolves() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     for e in parse_all("LET z = 7\nLET y = z") {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched.execute().unwrap();
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 7.0));
@@ -86,7 +86,7 @@ fn bare_identifier_in_value_slot_auto_wraps_and_resolves() {
 fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let ids = sched.enter_block(scope.id, parse_all("LET y = z\nLET z = 9"), scope);
     sched.execute().unwrap();
     let err = sched
@@ -106,14 +106,14 @@ fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
 fn multiple_value_slot_placeholders_park_on_distinct_producers() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     for e in parse_all(
         "FN (ADD a :Number BY b :Number) -> Number = (a)\n\
          LET aa = 3\n\
          LET bb = 4\n\
          LET out = (ADD aa BY bb)",
     ) {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched.execute().unwrap();
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 3.0));
@@ -125,7 +125,7 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
 fn forward_keyword_function_reference_is_unbound() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let ids = sched.enter_block(
         scope.id,
         parse_all(
@@ -154,14 +154,14 @@ fn forward_keyword_function_reference_is_unbound() {
 fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     for e in parse_all(
         "FN (ADD a :Number BY b :Number) -> Number = (b)\n\
          LET aa = 11\n\
          LET bb = 22\n\
          LET out = (ADD aa BY bb)",
     ) {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched.execute().unwrap();
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 22.0));
@@ -174,9 +174,9 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
 fn lift_park_minimal_program_for_miri() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     for e in parse_all("LET z = 11\nLET y = z") {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched.execute().unwrap();
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 11.0));
@@ -188,13 +188,13 @@ fn lift_park_minimal_program_for_miri() {
 fn replay_park_minimal_program_for_miri() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     for e in parse_all(
         "FN (DOUBLE x :Number) -> Number = (x)\n\
          LET aa = 7\n\
          LET out = (DOUBLE aa)",
     ) {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched.execute().unwrap();
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0));
@@ -207,13 +207,13 @@ fn replay_park_minimal_program_for_miri() {
 fn replay_park_propagates_producer_error() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let ids: Vec<_> = parse_all(
         "LET y = (x)\n\
          LET x = (UNDEFINED_FN)",
     )
     .into_iter()
-    .map(|e| sched.add_dispatch(e, scope))
+    .map(|e| sched.dispatch_in_scope(e, scope))
     .collect();
     sched
         .execute()
@@ -239,13 +239,13 @@ fn replay_park_propagates_producer_error() {
 fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     for e in parse_all(
         "LET AResult = (IntOrd :| OrderedSig)\n\
          MODULE IntOrd = (LET compare = 0)\n\
          SIG OrderedSig = (VAL compare :Number)",
     ) {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched.execute().unwrap();
     assert!(
@@ -270,8 +270,8 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
 fn let_type_to_value_name_rejected() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("LET ty = Number"), scope);
+    let mut sched = KoanRuntime::new();
+    let id = sched.dispatch_in_scope(parse_one("LET ty = Number"), scope);
     sched.execute().unwrap();
     match sched.read_result(id) {
         Err(e) => assert!(
@@ -283,9 +283,9 @@ fn let_type_to_value_name_rejected() {
     }
 
     // The Type-classified alias is the legal form: it lands type-side.
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     for e in parse_all("LET Ty = Number") {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched.execute().unwrap();
     assert_eq!(scope.resolve_type("Ty"), Some(&KType::Number));

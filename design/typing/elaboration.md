@@ -61,7 +61,7 @@ the child scope's `data` (so chained `Outer.Inner.X` reads the inner
 *module value* and the chain stays drillable), then the child scope's
 type-side `bindings.types` via `Scope::resolve_type` — surfacing the type in the value
 channel's `Type` arm so type-position consumers (e.g. a LET-RHS routing
-through Combine) see a first-class `KType` value. The resolved type is
+through dep-finish) see a first-class `KType` value. The resolved type is
 the leaf's existing per-declaration `KType::SetRef { set, index }`; no new
 variant, no path field.
 
@@ -131,7 +131,7 @@ cross-link this section rather than restating its slice.
   error, and a builtin name falls back to `KType::from_name`. Parameterized shapes
   (`:(LIST OF X)`, `:(MAP K -> V)`) sub-Dispatch through the standalone dispatcher
   rather than recursing here, so the only recursion is the sibling-result reduce.
-  FN-signature, STRUCT/UNION field-type, and FUNCTOR per-call return-type Combines
+  FN-signature, STRUCT/UNION field-type, and FUNCTOR per-call return-type dep-finishes
   reduce to this leaf walk; see
   [execution-model.md § Dispatch-time name placeholders](../execution-model.md#dispatch-time-name-placeholders)
   for the parking integration.
@@ -344,7 +344,7 @@ it hot. The scope-bound resolution memo is therefore the only cache:
 
 Consumers that need the scope-resolved identity —
 [`val_decl::body`](../../src/builtins/val_decl.rs)'s structural
-carrier path and its post-Combine finish, and
+carrier path and its post-dep-finish, and
 [`fn_def::body`](../../src/builtins/fn_def.rs)'s return-type
 elaboration — go through `Scope::resolve_type_expr`. NEWTYPE's bare-leaf
 user-bound repr path keeps the simpler `Scope::resolve_type` lookup (it's

@@ -53,7 +53,7 @@ pub fn body<'a>(
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
-    use crate::machine::execute::Scheduler;
+    use crate::machine::execute::KoanRuntime;
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
     use crate::machine::{BindingIndex, RuntimeArena, ScopeId};
@@ -120,8 +120,8 @@ mod tests {
             wrap_type_constructor(ScopeId::from_raw(0, 0xC0DE)),
             BindingIndex::BUILTIN,
         );
-        let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(
+        let mut sched = KoanRuntime::new();
+        let id = sched.dispatch_in_scope(
             parse_one("LET pure = (FN (PURE a :Number) -> :(Number AS Wrap) = (1))"),
             scope,
         );
@@ -155,10 +155,10 @@ mod tests {
         let src = "SIG Monad = ((LET Wrap = (TEMPLATE Type)) \
              (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))";
         let exprs = parse(src).expect("parse should succeed");
-        let mut sched = Scheduler::new();
+        let mut sched = KoanRuntime::new();
         let mut ids = Vec::new();
         for expr in exprs {
-            ids.push(sched.add_dispatch(expr, scope));
+            ids.push(sched.dispatch_in_scope(expr, scope));
         }
         match sched.execute() {
             Ok(()) => {}

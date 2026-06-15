@@ -1,5 +1,5 @@
 use crate::builtins::default_scope;
-use crate::machine::execute::Scheduler;
+use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType};
 
 #[test]
@@ -16,15 +16,15 @@ fn binder_name_extracts_let_name() {
 #[test]
 fn binder_name_install_then_body_finalize_clears_placeholder() {
     use crate::builtins::default_scope;
-    use crate::machine::execute::Scheduler;
+    use crate::machine::execute::KoanRuntime;
     use crate::machine::RuntimeArena;
     use crate::parse::parse;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let exprs = parse("LET hello = 1").unwrap();
     for e in exprs {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched.execute().unwrap();
     assert!(scope.bindings().placeholders().get("hello").is_none());
@@ -37,13 +37,13 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
 #[test]
 fn let_t_cycle_errors() {
     use crate::builtins::default_scope;
-    use crate::machine::execute::Scheduler;
+    use crate::machine::execute::KoanRuntime;
     use crate::machine::KErrorKind;
     use crate::machine::RuntimeArena;
     use crate::parse::parse;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let exprs = parse("LET Ty = Ty").unwrap();
     let ids = sched.enter_block(scope.id, exprs, scope);
     sched
@@ -74,9 +74,9 @@ fn let_type_class_with_non_type_value_errors() {
     for (src, expected) in [("LET Foo = 1", "Number"), ("LET Foo = \"hello\"", "Str")] {
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let mut sched = Scheduler::new();
+        let mut sched = KoanRuntime::new();
         let exprs = parse(src).unwrap();
-        let id = sched.add_dispatch(exprs.into_iter().next().unwrap(), scope);
+        let id = sched.dispatch_in_scope(exprs.into_iter().next().unwrap(), scope);
         sched
             .execute()
             .expect("execute does not surface per-slot errors");
@@ -100,11 +100,11 @@ fn let_type_class_with_type_value_still_binds() {
     use crate::parse::parse;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let exprs = parse("LET Foo = Number").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(sched.add_dispatch(e, scope));
+        ids.push(sched.dispatch_in_scope(e, scope));
     }
     sched
         .execute()
@@ -125,11 +125,11 @@ fn let_identifier_lhs_with_non_type_still_binds() {
     use crate::parse::parse;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let exprs = parse("LET foo = 1").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(sched.add_dispatch(e, scope));
+        ids.push(sched.dispatch_in_scope(e, scope));
     }
     sched
         .execute()
@@ -154,11 +154,11 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     use crate::parse::parse;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let exprs = parse("LET :(LIST OF Number) = 1").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(sched.add_dispatch(e, scope));
+        ids.push(sched.dispatch_in_scope(e, scope));
     }
     sched
         .execute()

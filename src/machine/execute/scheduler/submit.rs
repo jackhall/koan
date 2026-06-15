@@ -1,70 +1,57 @@
 use std::rc::Rc;
 
-use crate::machine::model::ast::KExpression;
-use crate::machine::{LexicalFrame, NodeId, Scope, TraceFrame};
+use crate::machine::{LexicalFrame, NodeId, Scope};
 
 use super::super::nodes::{work_park_producers, CallFrame, Node, NodeScope, NodeWork};
-use super::super::{short_circuit, CombineFinish};
+#[cfg(test)]
+use super::super::runtime::KoanRuntime;
+#[cfg(test)]
+use super::super::DepFinish;
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
 impl<'run> Scheduler<'run> {
-    /// Submit an unresolved expression for the scheduler to dispatch + execute
-    /// against `scope`. The only public way to add work.
-    pub fn add_dispatch(&mut self, expr: KExpression<'run>, scope: &'run Scope<'run>) -> NodeId {
-        let explicit_chain = if self.active_chain.is_some() {
-            None
-        } else {
-            Some(LexicalFrame::detached())
-        };
-        self.ensure_run_frame(scope);
-        let node_scope = self.resolve_node_scope(scope);
-        crate::machine::execute::dispatch::submit_dispatch(self, expr, scope, node_scope, explicit_chain)
+    /// The explicit chain a submission passes when there is no ambient `active_chain`: a detached
+    /// chain so the visibility predicate treats every scope as "complete" (test fixtures /
+    /// top-level), else `None` to inherit the ambient one.
+    pub(in crate::machine::execute) fn ambient_or_detached_chain(
+        &self,
+    ) -> Option<Rc<LexicalFrame>> {
+        self.active_chain.is_none().then(LexicalFrame::detached)
     }
 
-    /// Schedule a `Combine` slot against an explicit `scope`. `owned_subs` are sub-Dispatches
-    /// this Combine allocated (cascade-freed on success); `park_producers` are existing sibling
+    /// Schedule a dep-finish slot against an explicit `scope`. `owned_subs` are sub-Dispatches
+    /// this dep-finish allocated (cascade-freed on success); `park_producers` are existing sibling
     /// slots it splices but does not own (kept alive past success via `Notify` edges). The finish
     /// closure sees results as `[park_producers..., owned_subs...]`. Test fixture entry point; the
-    /// run path uses [`Scheduler::combine_here`].
+    /// run path uses [`KoanRuntime::submit_dep_finish_in_own_scope`](super::super::runtime::KoanRuntime::submit_dep_finish_in_own_scope).
     #[cfg(test)]
-    pub(in crate::machine::execute) fn add_combine(
+    pub(in crate::machine::execute) fn add_dep_finish(
         &mut self,
         owned_subs: Vec<NodeId>,
         park_producers: Vec<NodeId>,
         scope: &'run Scope<'run>,
-        finish: CombineFinish<'run>,
+        finish: DepFinish<'run>,
     ) -> NodeId {
         let park_count = park_producers.len();
         let mut deps = park_producers;
         deps.extend(owned_subs);
-        self.add(
-            NodeWork {
-                deps,
-                park_count,
-                cont: short_circuit(Some(TraceFrame::bare("<combine>", "combine")), finish),
-                carrier: None,
-            },
-            scope,
-        )
+        self.add(NodeWork::awaiting(deps, park_count, finish), scope)
     }
 
     /// Generic ambient-chain submission for any `NodeWork` — a test fixture entry point. When
     /// there is no ambient chain (test fixtures) it synthesizes a detached chain so the visibility
     /// predicate treats every scope as "complete". The run path submits a `Dispatch` through
-    /// [`dispatch::submit_dispatch`](crate::machine::execute::dispatch) (binder-aware) and a
-    /// `Combine`/`Catch` through [`Self::combine_here`] / the harness.
+    /// [`KoanRuntime::submit_dispatch`](super::super::runtime::KoanRuntime::submit_dispatch)
+    /// (binder-aware) and a dep-finish / catch through `KoanRuntime::submit_dep_finish_in_own_scope` / the harness.
     #[cfg(test)]
     pub(in crate::machine::execute::scheduler) fn add(
         &mut self,
         work: NodeWork<'run>,
         scope: &'run Scope<'run>,
     ) -> NodeId {
-        if self.active_chain.is_some() {
-            self.add_with_chain(work, scope, None)
-        } else {
-            self.add_with_chain(work, scope, Some(LexicalFrame::detached()))
-        }
+        let explicit_chain = self.ambient_or_detached_chain();
+        self.add_with_chain(work, scope, explicit_chain)
     }
 
     /// Run-lifetime submission funnel. `explicit_chain` is `Some` for
@@ -73,7 +60,7 @@ impl<'run> Scheduler<'run> {
     /// `self.active_chain`). Decides the slot's [`NodeScope`] handle — `Yoked` when this
     /// runs inside the per-call frame whose own child is `scope` (re-projected from the
     /// cart), else `Root` — then hands off to [`Self::submit_node`]. Test fixture entry; the run
-    /// path routes a `Dispatch` through `dispatch::submit_dispatch`.
+    /// path routes a `Dispatch` through `KoanRuntime::submit_dispatch`.
     #[cfg(test)]
     pub(super) fn add_with_chain(
         &mut self,
@@ -89,7 +76,7 @@ impl<'run> Scheduler<'run> {
     /// Establish the run frame on the first run-lifetime submission (top-level run scope), so every
     /// top-level slot carries a frame cart and `active_frame` is never `None` during a top-level
     /// step. Adopts the passed scope without minting a child. Idempotent.
-    pub(super) fn ensure_run_frame(&mut self, scope: &'run Scope<'run>) {
+    pub(in crate::machine::execute) fn ensure_run_frame(&mut self, scope: &'run Scope<'run>) {
         if self.run_frame.is_none() {
             self.run_frame = Some(crate::machine::CallArena::adopting(scope));
         }
@@ -98,7 +85,10 @@ impl<'run> Scheduler<'run> {
     /// Decide a run-scope submission's [`NodeScope`] handle: `Yoked` when this runs inside the
     /// per-call frame whose own child is `scope` (re-projected from the cart at the read boundary —
     /// no fabricated `&'run` persisted), else `Anchored` at `'run`.
-    pub(super) fn resolve_node_scope(&self, scope: &'run Scope<'run>) -> NodeScope<'run> {
+    pub(in crate::machine::execute) fn resolve_node_scope(
+        &self,
+        scope: &'run Scope<'run>,
+    ) -> NodeScope<'run> {
         match &self.active_frame {
             Some(f)
                 if std::ptr::eq(
@@ -116,69 +106,20 @@ impl<'run> Scheduler<'run> {
     /// `Anchored(&'run)` re-uses the genuine run-lived borrow the slot already holds; `Yoked`
     /// re-projects from the active frame cart at the read boundary. Backs the `*_here` methods —
     /// the honest re-dispatch-against-my-own-scope path.
-    pub(super) fn submit_here(&mut self, work: NodeWork<'run>) -> NodeId {
+    pub(in crate::machine::execute) fn submit_in_own_scope(
+        &mut self,
+        work: NodeWork<'run>,
+    ) -> NodeId {
         let node_scope = self
             .active_node_scope
             .expect("a slot step installs active_node_scope before the body submits");
-        let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
+        let explicit_chain = self.ambient_or_detached_chain();
         self.submit_node(work, node_scope, explicit_chain)
     }
 
-    /// Dispatch `expr` against the executing slot's own scope handle — the honest
-    /// re-dispatch-against-my-own-scope path (the `OwnScope` dep placement). Routes through
-    /// `dispatch::submit_dispatch` so a binder spliced here still installs its placeholder; the
-    /// concrete scope is materialized from the handle (`Anchored`'s borrow / a `Yoked` frame's
-    /// `scope_for_bind`).
-    pub(in crate::machine::execute) fn dispatch_here(&mut self, expr: KExpression<'run>) -> NodeId {
-        let node_scope = self
-            .active_node_scope
-            .expect("a slot step installs active_node_scope before the body submits");
-        let explicit_chain = self.active_chain.is_none().then(LexicalFrame::detached);
-        match node_scope {
-            NodeScope::Anchored(scope) => crate::machine::execute::dispatch::submit_dispatch(
-                self,
-                expr,
-                scope,
-                node_scope,
-                explicit_chain,
-            ),
-            NodeScope::Yoked => {
-                let frame = self
-                    .active_frame
-                    .clone()
-                    .expect("a Yoked slot step has an active frame");
-                let scope = frame.scope_for_bind();
-                crate::machine::execute::dispatch::submit_dispatch(
-                    self,
-                    expr,
-                    scope,
-                    NodeScope::Yoked,
-                    explicit_chain,
-                )
-            }
-        }
-    }
-
-    /// Schedule a `Combine` against the executing slot's own scope handle.
-    pub(in crate::machine::execute) fn combine_here(
-        &mut self,
-        owned_subs: Vec<NodeId>,
-        park_producers: Vec<NodeId>,
-        finish: CombineFinish<'run>,
-    ) -> NodeId {
-        let park_count = park_producers.len();
-        let mut deps = park_producers;
-        deps.extend(owned_subs);
-        self.submit_here(NodeWork {
-            deps,
-            park_count,
-            cont: short_circuit(Some(TraceFrame::bare("<combine>", "combine")), finish),
-            carrier: None,
-        })
-    }
-
     /// Node-creation core, shared by the run-lifetime [`Self::add_with_chain`] and the framed
-    /// [`Self::add_dispatch_with_chain_in_frame`]. `scope` is read only transiently
+    /// [`KoanRuntime::dispatch_in_active_frame`](super::super::runtime::KoanRuntime::dispatch_in_active_frame).
+    /// `scope` is read only transiently
     /// (binder-install, placeholder install, `pre_subs` recursion) and never retained — the
     /// node keeps a `NodeScope<'run>` handle, not this borrow — so it is clamped to a `'step`
     /// read: a run scope and a `scope_for_bind` re-projection both shorten into it.
@@ -241,5 +182,39 @@ impl<'run> Scheduler<'run> {
             }
         }
         id
+    }
+}
+
+/// Test-fixture forwarders for the AST-free submission prims that stay on [`Scheduler`]
+/// (`add` / `add_with_chain` / `add_dep_finish`), so scheduler tests build raw `NodeWork` slots
+/// through the harness without naming the scheduler.
+#[cfg(test)]
+impl<'run> KoanRuntime<'run> {
+    pub(in crate::machine::execute) fn add(
+        &mut self,
+        work: NodeWork<'run>,
+        scope: &'run Scope<'run>,
+    ) -> NodeId {
+        self.sched.add(work, scope)
+    }
+
+    pub(in crate::machine::execute) fn add_with_chain(
+        &mut self,
+        work: NodeWork<'run>,
+        scope: &'run Scope<'run>,
+        explicit_chain: Option<Rc<LexicalFrame>>,
+    ) -> NodeId {
+        self.sched.add_with_chain(work, scope, explicit_chain)
+    }
+
+    pub(in crate::machine::execute) fn add_dep_finish(
+        &mut self,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
+        scope: &'run Scope<'run>,
+        finish: DepFinish<'run>,
+    ) -> NodeId {
+        self.sched
+            .add_dep_finish(owned_subs, park_producers, scope, finish)
     }
 }

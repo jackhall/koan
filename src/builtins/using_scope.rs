@@ -34,7 +34,7 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        arg_held, require_kexpression, Action, Cont, Dep, DepPlacement,
+        arg_held, require_kexpression, Action, AwaitContinue, Dep, DepPlacement,
     };
     use crate::machine::model::values::Held;
 
@@ -75,13 +75,13 @@ pub fn body<'a>(
         .scope
         .arena
         .alloc_scope(Scope::child_transparent(ctx.scope, module_bindings));
-    let finish: Cont<'a> = Box::new(move |_fctx, results| {
+    let finish: AwaitContinue<'a> = Box::new(move |_fctx, results| {
         // The body block's final statement value is the USING result.
         Action::Done(Ok(*results
             .last()
             .expect("USING body yields at least one value")))
     });
-    Action::Combine {
+    Action::AwaitDeps {
         deps: vec![Dep::Dispatch {
             expr: body_expr,
             placement: DepPlacement::InScope(child),

@@ -3,7 +3,7 @@
 //! [design/typing/modules.md](../../design/typing/modules.md).
 //!
 //! Construction mirrors [`module_def`](super::module_def): body statements dispatch
-//! against a fresh child scope on the outer scheduler; a `Combine` over those slots
+//! against a fresh child scope on the outer scheduler; a `AwaitDeps` over those slots
 //! captures the populated scope into a [`Signature`] value, allocates it in the
 //! parent's arena, and binds it under the signature's name. Body declarations are
 //! `LET name = (FN <signature> -> <return> = ...)` for operations and
@@ -18,13 +18,13 @@ use crate::machine::{Scope, TraceFrame};
 use super::{arg, kw, sig};
 
 /// `Action`-harness twin of the legacy body: mints the declaration scope, dispatches the SIG body
-/// block against it (an `InScope` Combine dep), and the finish captures that scope into a
+/// block against it (an `InScope` dep-finish dependency), and the finish captures that scope into a
 /// [`Signature`] and installs the `KType::Signature` identity into the parent scope.
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        require_bare_type_name, require_kexpression, Action, Cont, Dep, DepPlacement,
+        require_bare_type_name, require_kexpression, Action, AwaitContinue, Dep, DepPlacement,
     };
     use crate::machine::model::Carried;
 
@@ -38,7 +38,7 @@ pub fn body<'a>(
 
     let bind_index = ctx.bind_index();
     let name_for_finish = name;
-    let finish: Cont<'a> = Box::new(move |fctx, _results| {
+    let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
         let sig: &'a Signature<'a> = fctx
             .scope
             .arena
@@ -60,7 +60,7 @@ pub fn body<'a>(
             )))),
         }
     });
-    Action::Combine {
+    Action::AwaitDeps {
         deps: vec![Dep::Dispatch {
             expr: body_expr,
             placement: DepPlacement::InScope(decl_scope),

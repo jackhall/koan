@@ -241,7 +241,7 @@ The builtin ([`recursive_types.rs`](../../src/builtins/recursive_types.rs)):
   finalize fills the shared set rather than minting a singleton. Inside the
   block every member name is threaded, so a cross-reference lowers to a transient
   `RecursiveRef` and seals to a `SetLocal` index into the shared set;
-- on the block's Combine finish, guarantees resolution — every member must have
+- on the block's dep-finish, guarantees resolution — every member must have
   sealed, or a forward reference named a name outside the group, raised as a
   localized shape error at the block boundary. The sealed members mirror into the
   enclosing scope as external `SetRef` handles (`A`, `B` bind as ordinary type
@@ -293,8 +293,8 @@ Construction (`Distance(3.0)`, `Bar(Foo(3.0))`) flows through
 [`type_call`](../../src/machine/execute/dispatch/single_poll.rs)'s `Newtype` arm —
 which branches on the resolved member's `kind` — into
 [`newtype_def::newtype_construct`](../../src/builtins/newtype_def.rs), which
-schedules the value sub-expression via `add_dispatch` and waits on it via a
-`Combine` whose finish closure type-checks against `repr` and produces a
+schedules the value sub-expression via `dispatch_in_scope` and waits on it via a
+dep-finish whose finish closure type-checks against `repr` and produces a
 [`KObject::Wrapped { inner: NonWrappedRef<'a>, type_id: &'a KType }`](../../src/machine/model/values/kobject.rs)
 carrier.
 

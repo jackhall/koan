@@ -146,7 +146,7 @@ parser collects the inner tokens into a regular `KExpression` and wraps it as
 etc.) are the dispatcher's responsibility: the
 sigil's only job is to flag "this slot evaluates to a type, not a value". The
 framing logic lives in [frame.rs](../src/parse/frame.rs)
-(`Frame::TypeExpr`); the dispatcher's `fast_lane_sigiled_type_expr` handler
+(`Frame::TypeExpr`); the dispatcher's `sigiled_type_expr` handler
 tail-replaces the slot with a `Dispatch` of the wrapped expression. See
 [typing/type-language-via-dispatch.md](typing/type-language-via-dispatch.md)
 for the full sigil-and-dispatch contract.
@@ -174,7 +174,7 @@ A builtin can opt out of eager evaluation for specific slot positions: it
 declares the slot as lazy at registration, the scheduler hands it the
 unevaluated `KExpression` instead of a value, and the builtin emits a fresh
 `Dispatch` for the chosen branch only. Two mechanisms exist:
-[`Scheduler::add_dispatch`](../src/machine/execute/scheduler.rs) submits a child
+[`KoanRuntime::dispatch_in_scope`](../src/machine/execute/runtime/submit.rs) submits a child
 node directly, while [`Action::Tail`](../src/machine/core/kfunction/action.rs) — used
 by `MATCH` — tail-returns the chosen branch so the scheduler dispatches it in
 place.

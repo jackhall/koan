@@ -75,15 +75,15 @@ The output is one [`KExpression`](src/machine/model/ast.rs) per top-level line: 
 
 A [`Scope`](src/machine/core/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. [`resolve_dispatch`](src/machine/execute/dispatch/resolve_dispatch.rs) walks the scope chain in a single pass and returns a [`ResolveOutcome`](src/machine/execute/dispatch/resolve_dispatch.rs) — `Resolved` (a unique pick, classified per slot), `Ambiguous(n)` (strict-mode tie), `Deferred` (no match yet but nested subs may unblock one), or `Unmatched` (a real dispatch failure). [`ExpressionSignature`](src/machine/model/types/signature.rs)s mix fixed `Token`s and typed `Argument` slots; on `Resolved` the resolved function binds its arguments, ready to run but not yet executed.
 
-Runtime values are [`KObject`](src/machine/model/values/kobject.rs) (scalars, collections, expressions, futures, function references); cross-cutting traits (`Parseable`, `Executable`, `Serializable`, `Monadic`, …) live in [ktraits.rs](src/machine/model/types/ktraits.rs). Builtins are registered in [builtins.rs](src/builtins.rs) and produce the default root scope.
+Runtime values are [`KObject`](src/machine/model/values/kobject.rs) (scalars, collections, expressions, futures, function references); cross-cutting traits (`Parseable`, `Serializable`) live in [ktraits.rs](src/machine/model/types/ktraits.rs). Builtins are registered in [builtins.rs](src/builtins.rs) and produce the default root scope.
 
 Errors are first-class via [`KError`](src/machine/core/kerror.rs) — a `Done(Err(KError))` outcome propagates structured failures (type mismatches, unbound names, dispatch failures, shape errors) along the scheduler's dependency edges, accumulating call-stack frames as it walks. `TRY (<expr>) WITH (<branches>)` catches in-language; uncaught errors short-circuit to the top level and the CLI formats them with frames. See [design/error-handling.md](design/error-handling.md) for the per-arm `it` shape and the privilege boundary that keeps builtin and user errors disjoint.
 
 ### execute — run the DAG
 
-[`Scheduler`](src/machine/execute/scheduler.rs) holds a slot table of in-flight work plus a push/notify dependency graph. Callers submit a top-level block via `enter_block` (and nested parts via `add_dispatch`); each slot's decide spawns sub-Dispatches for the expression's nested parts and parks the parent as a `Bind` until its deps terminalize. When a producer writes its terminal, a single `finalize` step drains the producer's notify-list and wakes any consumer whose `pending_deps` counter hits zero — no polling, no result-table sweep. Tail returns (an `Action::Tail` lowered to `Outcome::Continue`) rewrite the slot's own work in place rather than allocating a new slot. See [design/execution-model.md](design/execution-model.md).
+[`Scheduler`](src/machine/execute/scheduler.rs) holds a slot table of in-flight work plus a push/notify dependency graph; [`KoanRuntime`](src/machine/execute/runtime.rs) owns it and is the sole holder of `&mut Scheduler`. Callers submit a top-level block via the harness's `enter_block` (and nested parts via `dispatch_in_scope`); each slot's decide spawns sub-Dispatches for the expression's nested parts and parks the parent as a dep-finish until its deps terminalize. When a producer writes its terminal, a single `finalize` step drains the producer's notify-list and wakes any consumer whose `pending_deps` counter hits zero — no polling, no result-table sweep. Tail returns (an `Action::Tail` lowered to `Outcome::Continue`) rewrite the slot's own work in place rather than allocating a new slot. See [design/execution-model.md](design/execution-model.md).
 
-[`interpret`](src/machine/execute/interpret.rs) is the glue: parse the source, hand the top-level block to `enter_block` against a root `default_scope`, drain the scheduler, then `read_result` each top-level node. `PRINT` output flows through the scope's pluggable writer (default stdout; tests swap in a shared `Vec<u8>` buffer to read it back), and every value the program allocated dies with the per-run `RuntimeArena` when `interpret` returns.
+[`interpret`](src/machine/execute/runtime/interpret.rs) is the glue: parse the source, hand the top-level block to `enter_block` against a root `default_scope`, drain the scheduler, then `read_result` each top-level node. `PRINT` output flows through the scope's pluggable writer (default stdout; tests swap in a shared `Vec<u8>` buffer to read it back), and every value the program allocated dies with the per-run `RuntimeArena` when `interpret` returns.
 
 ## Source layout
 
@@ -184,7 +184,7 @@ src/
     │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking and per-scope resolution memo
     │   │   ├── recursive_set.rs   RecursiveSet — Rc-owned unit of nominal identity, allocation, and lift
     │   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
-    │   │   ├── ktraits.rs         Parseable / Executable / Iterable / Serializable / Monadic
+    │   │   ├── ktraits.rs         Parseable / Serializable
     │   │   └── typed_field_list.rs  shared parser for `(name :Type ...)` schemas
     │   ├── values.rs
     │   └── values/
@@ -215,13 +215,12 @@ src/
     │       └── scheduler_handle.rs  NodeId — stable DAG node handle
     ├── execute.rs
     └── execute/
-        ├── scheduler.rs   Scheduler struct, execute loop, apply_outcome (sole graph writer) + inherent write primitives; dep_graph/, node_store/, submit/, work_queues/, finish/ (run_wait — one node handler), execute/, splice/ (bare-name forward alias), literal/ submodules, tests under it
-        ├── nodes.rs       node types (NodeWork struct / NodeOutput / NodeStep / Node) + work_deps
-        ├── outcome.rs     Outcome — the unified scheduler-step currency (Done / Continue / ParkThenContinue / Invoke / Redispatch / Forward) + Continuation / DispatchDep + cont combinators (short_circuit / catch_cont / ignore_results)
-        ├── harness.rs     run_action — lowers a builtin Action to an Outcome (pure)
-        ├── dispatch.rs    classify_dispatch (the decide) + decide/decide_with_presubs + classify_dispatch_shape; submit/ (binder-aware submit_dispatch chokepoint), harness/ (apply_outcome caller), ctx/ (SchedulerView read view), exec/ (dispatch-side invoke), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/, operator_chain/, field_list/, constructors/, resolve_dispatch/, resolve_type_expr/ submodules
-        ├── lift.rs        lift_kobject — rebuild values across per-call arena boundaries
-        └── interpret.rs   parse → enter_block → execute
+        ├── scheduler.rs   Scheduler struct — read views + inherent write primitives (the AST-free store the harness drives); dep_graph/, node_store/, submit/, work_queues/, finish/ (run_wait — one node handler), execute/ (the pop loop), splice/ (bare-name forward alias) submodules, tests under it
+        ├── nodes.rs       node types (NodeWork struct / NodeStep / Node) + work_deps
+        ├── outcome.rs     Outcome — the unified scheduler-step currency (Done / Continue / ParkThenContinue / Invoke / Redispatch / Forward) + Continuation + cont combinators (short_circuit / catch_cont / ignore_results); AST-free (carries DepRequest as an opaque type)
+        ├── runtime.rs     KoanRuntime — owns the Scheduler, the sole &mut holder: the execute loop, apply_outcome (sole graph writer), submit_dispatch, literal lowering; plus run_action (lowers a builtin Action to an Outcome, pure); interpret/ (program entry points + run_program) and submit/ (the AST-aware submission wrappers — enter_block / dispatch_in_scope / dispatch_in_own_scope / dispatch_body / submit_dep_finish_in_own_scope) submodules
+        ├── dispatch.rs    classify_dispatch (the decide) + decide/decide_with_presubs + classify_dispatch_shape; submit/ (binder-aware submit_dispatch chokepoint), literal/ (aggregate-literal lowering), ctx/ (SchedulerView read view), exec/ (dispatch-side invoke), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/, operator_chain/, field_list/, constructors/, resolve_dispatch/, resolve_type_expr/ submodules
+        └── lift.rs        lift_kobject — rebuild values across per-call arena boundaries
 ```
 
 ## Design and roadmap

@@ -11,7 +11,7 @@ use crate::machine::model::types::{
 use crate::machine::model::values::{KObject, NonWrappedRef};
 use crate::machine::RuntimeArena;
 
-/// Structured runtime error propagated as a value via `NodeOutput::Err`. `frames` accumulate
+/// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.
 #[derive(Clone)]
 pub struct KError {

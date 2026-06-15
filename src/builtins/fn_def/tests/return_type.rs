@@ -3,7 +3,7 @@
 use crate::builtins::test_support::{
     fn_is_registered, lookup_fn, parse_one, run, run_one, run_root_silent,
 };
-use crate::machine::execute::Scheduler;
+use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType, ReturnType};
 use crate::machine::{KErrorKind, RuntimeArena};
 use crate::parse::parse;
@@ -26,9 +26,9 @@ fn fn_without_return_type_annotation_does_not_register() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let exprs = parse("FN (DOUBLE x :Number) = (PRINT \"x\")").expect("parse should succeed");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     for expr in exprs {
-        sched.add_dispatch(expr, scope);
+        sched.dispatch_in_scope(expr, scope);
     }
     let _ = sched.execute();
     assert!(
@@ -41,8 +41,8 @@ fn fn_without_return_type_annotation_does_not_register() {
 fn fn_with_unknown_return_type_name_errors() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("FN (DOUBLE x :Number) -> Bogus = (x)"), scope);
+    let mut sched = KoanRuntime::new();
+    let id = sched.dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Bogus = (x)"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -61,8 +61,8 @@ fn user_fn_return_type_mismatch_surfaces_as_kerror() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "FN (LIE) -> Number = (\"oops\")");
-    let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("LIE"), scope);
+    let mut sched = KoanRuntime::new();
+    let id = sched.dispatch_in_scope(parse_one("LIE"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -97,7 +97,7 @@ fn fn_with_user_bound_return_type_works() {
     assert_eq!(bytes, b"7\n");
 }
 
-/// Forward reference: FN's body parks on `MyT`'s submit-time placeholder via Combine
+/// Forward reference: FN's body parks on `MyT`'s submit-time placeholder via dep-finish
 /// and re-elaborates against the final scope when the LET wakes.
 #[test]
 fn fn_with_forward_user_bound_return_type_works() {
@@ -116,8 +116,8 @@ fn fn_with_forward_user_bound_return_type_works() {
 fn fn_return_type_surface_name_preserved_in_error() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("FN (DOIT) -> SomeWeirdName = (1)"), scope);
+    let mut sched = KoanRuntime::new();
+    let id = sched.dispatch_in_scope(parse_one("FN (DOIT) -> SomeWeirdName = (1)"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");

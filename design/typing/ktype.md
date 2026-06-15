@@ -167,7 +167,7 @@ Shape decisions (keyworded `:(LIST OF Number)`, user-functor
 parser's only job is to flag "this slot evaluates to a type". `<` and `>` flow through unencumbered as keyword
 tokens, leaving the arithmetic comparison operators available. The framing
 logic lives in [frame.rs](../../src/parse/frame.rs) (`Frame::TypeExpr`);
-the dispatcher's `fast_lane_sigiled_type_expr` handler
+the dispatcher's `sigiled_type_expr` handler
 ([dispatch.rs](../../src/machine/execute/dispatch.rs))
 tail-replaces the slot with a `Dispatch` of the wrapped expression. See
 [type-language-via-dispatch.md](type-language-via-dispatch.md) for the full
@@ -344,9 +344,10 @@ annotation. The three boundaries are:
   **resolved** return type the lift-time Done boundary in
   [`scheduler/execute.rs`](../../src/machine/execute/scheduler/execute.rs) then
   stamps the carrier to the declared type (`check_declared_return` →
-  `KObject::stamp_type`). The **deferred**-return path checks only:
-  [`check_deferred_return`](../../src/machine/core/kfunction/exec.rs) runs
-  `matches_value` and passes a satisfying value through un-stamped (a passing value
+  `KObject::stamp_type`). The **deferred**-return (`PerCall`) path checks only: the same
+  [`check_declared_return`](../../src/machine/execute/scheduler/execute.rs) runs
+  the match predicate but returns no stamp, so a satisfying value passes through
+  un-stamped (a passing value
   already satisfies the declared type, at worst as a subtype).
 - **FN argument** — each parameterized-carrier argument slot (`List` / `Dict` /
   `ConstructorApply`) is checked with `matches_value` in

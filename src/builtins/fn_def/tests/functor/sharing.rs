@@ -170,7 +170,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
 /// The pin comparison itself is covered by `sharing_constraint_rejects_mismatched_module_type`.
 #[test]
 fn functor_return_with_mismatched_sharing_constraint_errors() {
-    use crate::machine::execute::Scheduler;
+    use crate::machine::execute::KoanRuntime;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -185,8 +185,8 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
         "FN (MAKEBAD p :OrderedSig) -> :(SetSig WITH {Elt = Number}) = \
          (MODULE Generated = ((LET Elt = Str) (LET insert = 0)))",
     );
-    let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("MAKEBAD IntOrdView"), scope);
+    let mut sched = KoanRuntime::new();
+    let id = sched.dispatch_in_scope(parse_one("MAKEBAD IntOrdView"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");

@@ -71,7 +71,7 @@ fn variant_typed_overloads_dispatch_by_variant() {
 /// has no overload admitting a `None`, so the call fails dispatch.
 #[test]
 fn variant_typed_slot_rejects_other_variant() {
-    use crate::machine::execute::interpret::interpret_with_writer;
+    use crate::machine::execute::interpret_with_writer;
     use crate::machine::KErrorKind;
     let result = interpret_with_writer(
         "UNION Maybe = (Some :Number None :Null)\n\
@@ -123,7 +123,7 @@ fn variant_type_value_renders_union_qualified() {
 /// surface, listing the real variants.
 #[test]
 fn unknown_variant_reference_errors() {
-    use crate::machine::execute::interpret::interpret_with_writer;
+    use crate::machine::execute::interpret_with_writer;
     use crate::machine::KErrorKind;
     let result = interpret_with_writer(
         "UNION Maybe = (Some :Number None :Null)\n\

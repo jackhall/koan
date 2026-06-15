@@ -16,6 +16,6 @@ pub use core::{
     Resolution, RuntimeArena, Scope, ScopeId, ScopeKind, TraceFrame,
 };
 pub use execute::{
-    interpret, interpret_with_writer, interpret_with_writer_path, NameOutcome, ResolveOutcome,
-    ResolveTypeExprOutcome, Resolved, Scheduler,
+    interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime, NameOutcome,
+    ResolveOutcome, ResolveTypeExprOutcome, Resolved, Scheduler,
 };

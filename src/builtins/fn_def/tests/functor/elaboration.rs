@@ -85,18 +85,18 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
 #[test]
 fn let_then_fn_in_same_batch_works() {
     use crate::builtins::default_scope;
-    use crate::machine::execute::Scheduler;
+    use crate::machine::execute::KoanRuntime;
     use crate::parse::parse;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let exprs = parse(
         "LET MyList = :(LIST OF Number)\n\
          FN (USE xs :MyList) -> Number = (1)",
     )
     .unwrap();
     for e in exprs {
-        sched.add_dispatch(e, scope);
+        sched.dispatch_in_scope(e, scope);
     }
     sched.execute().unwrap();
     assert!(

@@ -29,10 +29,9 @@ use crate::machine::model::types::KType;
 use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{KError, KErrorKind};
 
-use super::super::nodes::NodeOutput;
-use super::super::CombineFinish;
+use super::super::DepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
-use super::{park_combine, DispatchDep, Outcome};
+use super::{park_on_deps, DepRequest, Outcome};
 
 /// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly, then
 /// applied to `parts[1..]` once it resolves.
@@ -68,17 +67,17 @@ fn park_on_head<'run>(
     head: KExpression<'run>,
     type_only: bool,
 ) -> Outcome<'run> {
-    let finish: CombineFinish<'run> = Box::new(move |ctx, results| {
+    let finish: DepFinish<'run> = Box::new(move |ctx, results| {
         let callable = match classify_head(results[0], type_only) {
             Ok(c) => c,
-            Err(e) => return Outcome::Done(NodeOutput::Err(e)),
+            Err(e) => return Outcome::Done(Err(e)),
         };
         apply_callable(ctx, callable, &expr)
     });
     // The head sub is the only dep; a dep error propagates frameless (the resumed dispatch
     // attaches its own frame), matching the resume behaviour.
-    park_combine(
-        vec![DispatchDep::Dispatch {
+    park_on_deps(
+        vec![DepRequest::Dispatch {
             expr: head,
             placement: DepPlacement::OwnScope,
         }],

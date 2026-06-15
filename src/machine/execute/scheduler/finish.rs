@@ -3,6 +3,7 @@ use crate::machine::{KError, NodeId};
 
 use super::super::dispatch::SchedulerView;
 use super::super::nodes::NodeStep;
+use super::super::runtime::KoanRuntime;
 use super::super::NodeCont;
 use super::Scheduler;
 
@@ -10,19 +11,25 @@ impl<'run> Scheduler<'run> {
     /// Success-path eager free; the error path leaves deps for chain-free
     /// at slot drop. Inv-B is what makes `dep_edges[idx].clear()` sound
     /// here — see [design/execution-model.md § Dependency graph invariants](../../../../design/execution-model.md#dependency-graph-invariants).
-    fn reclaim_deps(&mut self, idx: usize, dep_indices: Vec<usize>) {
+    pub(in crate::machine::execute::scheduler) fn reclaim_deps(
+        &mut self,
+        idx: usize,
+        dep_indices: Vec<usize>,
+    ) {
         self.deps.clear_dep_edges(idx);
         for d in dep_indices {
             self.free(d);
         }
     }
+}
 
+impl<'run> KoanRuntime<'run> {
     /// The unified node handler: collect the resolved dep terminals (as owned `Result`s — an
     /// errored dep is handed through, the continuation decides), run `cont` against a read-only
     /// [`SchedulerView`], reclaim the owned-dep suffix, then apply. The continuation issues no
     /// graph write, so the reclaim lands after it and before the apply that installs the
     /// continuation's edges. Carried values survive the reclaim (they live in arenas, not slots).
-    pub(super) fn run_wait(
+    pub(in crate::machine::execute::scheduler) fn run_wait(
         &mut self,
         deps: Vec<NodeId>,
         park_count: usize,
@@ -31,11 +38,11 @@ impl<'run> Scheduler<'run> {
     ) -> NodeStep<'run> {
         let results: Vec<Result<Carried<'run>, KError>> = deps
             .iter()
-            .map(|d| self.read_result(*d).map_err(|e| e.clone()))
+            .map(|d| self.sched.read_result(*d).map_err(|e| e.clone()))
             .collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
-        let outcome = cont(&SchedulerView::new(self), &results, idx);
-        self.reclaim_deps(idx, owned_indices);
+        let outcome = cont(&SchedulerView::new(&self.sched), &results, idx);
+        self.sched.reclaim_deps(idx, owned_indices);
         self.apply_outcome(outcome, idx)
     }
 }

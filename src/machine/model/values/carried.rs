@@ -12,7 +12,7 @@ use crate::machine::model::types::{KType, Parseable};
 use super::KObject;
 
 /// Two-arm value currency. `Copy` like the `&'a` references it wraps, so it threads through
-/// `NodeOutput::Value`, the `Outcome::Done` value, and the lift path without clones.
+/// the `Ok` arm of a node result, the `Outcome::Done` value, and the lift path without clones.
 #[derive(Clone, Copy)]
 pub enum Carried<'a> {
     Object(&'a KObject<'a>),
@@ -124,7 +124,7 @@ pub enum Held<'a> {
 
 impl<'a> Held<'a> {
     /// Owned-ify a borrowed channel [`Carried`] into a cell: deep-clone the object arm,
-    /// clone the type arm. Used by the literal-aggregate `Combine` finish.
+    /// clone the type arm. Used by the literal-aggregate `AwaitDeps` finish.
     pub fn from_carried(c: Carried<'a>) -> Held<'a> {
         match c {
             Carried::Object(o) => Held::Object(o.deep_clone()),

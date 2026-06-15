@@ -10,8 +10,8 @@ use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::RuntimeArena;
 
-use super::super::Scheduler;
 use super::let_expr;
+use crate::machine::execute::KoanRuntime;
 
 fn lit<'run>(name: &str) -> KExpression<'run> {
     KExpression::new(vec![Spanned::bare(ExpressionPart::Keyword(name.into()))])
@@ -21,7 +21,7 @@ fn lit<'run>(name: &str) -> KExpression<'run> {
 fn top_level_statements_get_root_frames_with_consecutive_indices() {
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let ids = sched.enter_block(
         root.id,
         vec![let_expr("a", 1.0), let_expr("b", 2.0), let_expr("c", 3.0)],
@@ -45,7 +45,7 @@ fn top_level_statements_get_root_frames_with_consecutive_indices() {
 fn sibling_statements_in_inner_block_share_parent_rc() {
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let ids = sched.enter_block(root.id, vec![lit("ANY1"), lit("ANY2")], root);
     let chain_a = sched.chain_of(ids[0]).unwrap();
     let chain_b = sched.chain_of(ids[1]).unwrap();
@@ -67,7 +67,7 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
     use crate::machine::model::values::Module;
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let module_expr = parse_one("MODULE Foo = (LET x = 1)");
     let ids = sched.enter_block(root.id, vec![module_expr], root);
     let top_id = ids[0];
@@ -126,7 +126,7 @@ fn fn_body_call_with_spacers_produces_value() {
 
 #[test]
 fn cons_head_subdispatch_inherits_parent_chain() {
-    // CONS-head `add_dispatch` inherits the active chain of the slot running
+    // CONS-head `dispatch_in_scope` inherits the active chain of the slot running
     // CONS; pinned indirectly via a multi-statement FN body folded into CONS.
     let arena = RuntimeArena::new();
     let scope = crate::builtins::test_support::run_root_silent(&arena);
@@ -140,14 +140,14 @@ fn cons_head_subdispatch_inherits_parent_chain() {
 }
 
 /// Debug-assert tripwire: strict `add_with_chain(_, _, None)` with no ambient
-/// chain must panic. Public `add` / `add_dispatch` auto-route to a root frame,
+/// chain must panic. Public `add` / `dispatch_in_scope` auto-route to a root frame,
 /// so reaching the strict path requires the super-visible helper directly.
 #[test]
 #[should_panic(expected = "every dispatched node has a chain")]
 fn add_with_chain_without_chain_panics() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     sched.add_with_chain(
         crate::machine::execute::dispatch::decide(KExpression::new(vec![Spanned::bare(
             ExpressionPart::Literal(KLiteral::Number(1.0)),

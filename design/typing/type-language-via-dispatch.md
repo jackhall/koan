@@ -164,7 +164,7 @@ part holding the named arguments.
 `classify_dispatch_shape`
 ([dispatch.rs](../../src/machine/execute/dispatch.rs))
 carries a `SigiledTypeExpr` variant whose handler
-(`fast_lane_sigiled_type_expr`) tail-replaces the slot with a
+(`sigiled_type_expr`) tail-replaces the slot with a
 `Dispatch` of the wrapped `KExpression`. The inner dispatch sees the
 same classifier — there is no separate type-context table — so the
 inner expression's parts decide its shape:
@@ -196,7 +196,7 @@ The classifier also carries a `RecordType` variant for a single-part `:{…}`,
 separate from the `SigiledTypeExpr` lane. Its handler (`record_type` in
 [single_poll.rs](../../src/machine/execute/dispatch/single_poll.rs)) does not
 tail-replace with a sub-Dispatch — it folds the field list straight to
-`KType::Record`, deferring through a Combine only when a field type forward-references
+`KType::Record`, deferring through a dep-finish only when a field type forward-references
 or sub-dispatches. A `:{…}` head in a multi-part expression classifies as
 `NonCallableHead` (a record type is a value, not a callable).
 

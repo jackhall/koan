@@ -2,7 +2,7 @@
 //! per-call generativity.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
-use crate::machine::execute::Scheduler;
+use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, RuntimeArena};
 use crate::parse::parse;
@@ -132,8 +132,8 @@ fn functor_rejects_unascribed_module_argument() {
     // to ride Type-classified names (design/typing/elaboration.md § Binding-map
     // partition).
     run(scope, "LET Unascribed = IntOrd");
-    let mut sched = Scheduler::new();
-    let root = sched.add_dispatch(parse_one("MAKESET Unascribed"), scope);
+    let mut sched = KoanRuntime::new();
+    let root = sched.dispatch_in_scope(parse_one("MAKESET Unascribed"), scope);
     sched
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -296,10 +296,10 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
                LET First = (IntList :| MonadSig)\n\
                LET Second = (IntList :| MonadSig)";
     let exprs = parse(src).expect("parse should succeed");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(sched.add_dispatch(expr, scope));
+        ids.push(sched.dispatch_in_scope(expr, scope));
     }
     sched.execute().expect("scheduler should succeed");
     for (i, id) in ids.iter().enumerate() {

@@ -17,18 +17,22 @@
 //!
 //! State and transitions live with their shape; this file keeps the cross-shape glue. Every
 //! per-shape handler *decides* against a read-only [`SchedulerView`] and returns a
-//! [`Outcome`] the [`harness`] applies — the router and harness hold the only
-//! `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field names).
+//! [`Outcome`] that [`KoanRuntime`](super::runtime::KoanRuntime) applies — the harness holds the
+//! only `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field
+//! names).
+
+use std::rc::Rc;
 
 use crate::machine::core::source::Spanned;
+use crate::machine::core::CallArena;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
 
-use super::nodes::{NodeOutput, NodeWork};
+use super::nodes::NodeWork;
 use super::scheduler::Scheduler;
-use super::{ignore_results, CombineFinish};
-use crate::machine::core::kfunction::action::FramePlacement;
+use super::{ignore_results, DepFinish};
+use crate::machine::core::kfunction::action::{DepPlacement, FramePlacement};
 
 pub(in crate::machine::execute) mod apply_callable;
 mod constructors;
@@ -36,9 +40,9 @@ mod ctx;
 mod exec;
 pub(in crate::machine) mod field_list;
 pub(in crate::machine::execute) mod fn_value;
-mod harness;
 pub(in crate::machine::execute) mod head_deferred;
 pub(in crate::machine::execute) mod keyworded;
+mod literal;
 pub(in crate::machine::execute) mod operator_chain;
 pub(in crate::machine) mod resolve_dispatch;
 pub(in crate::machine) mod resolve_type_expr;
@@ -48,10 +52,9 @@ mod submit;
 #[cfg(test)]
 mod tests;
 
-pub(in crate::machine::execute) use super::outcome::{Continuation, DispatchDep, Outcome};
+pub(in crate::machine::execute) use super::outcome::{Continuation, Outcome};
 pub(in crate::machine::execute) use ctx::SchedulerView;
 pub(crate) use field_list::defer_field_list_action;
-pub(in crate::machine::execute) use submit::submit_dispatch;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
@@ -147,6 +150,37 @@ pub(in crate::machine::execute) enum PendingSub<'run> {
     RecordLit(Vec<(String, ExpressionPart<'run>)>),
 }
 
+/// A dependency a [`Outcome::ParkThenContinue`] declares — the data the read-only decide phase hands
+/// the harness (`KoanRuntime::apply_outcome`; the harness is the sole `&mut Scheduler` holder),
+/// which runs the matching write. The
+/// decide phase issues no graph write itself. `Dispatch` / `*Lit` / `BodyBlock` are fresh producers the harness submits
+/// (and owns); `Existing` is a pre-existing producer the decide phase found that the slot merely
+/// parks on. Deps resolve in declaration order, so a finish reads `results[k]` for the k-th dep —
+/// except an `InScope`-placed `Dispatch` and a `BodyBlock`, whose multi-statement body each fan out
+/// to one resolved producer per statement (the harness `extend`s them in order).
+///
+/// This enum names AST (`KExpression` / `ExpressionPart`) and so lives on the dispatch side, beside
+/// [`PendingSub`]; [`Outcome`] carries it as an opaque type, keeping `outcome.rs` AST-free.
+pub(in crate::machine::execute) enum DepRequest<'run> {
+    Dispatch {
+        expr: KExpression<'run>,
+        placement: DepPlacement<'run>,
+    },
+    ListLit(Vec<ExpressionPart<'run>>),
+    DictLit(Vec<(ExpressionPart<'run>, ExpressionPart<'run>)>),
+    RecordLit(Vec<(String, ExpressionPart<'run>)>),
+    /// A deferred-return FN's first-call body: dispatch `statements` (its non-tail body + the
+    /// return-type expression, in that order) as body-chain siblings in the freshly acquired
+    /// per-call `frame`, fanning out to one owned producer per statement. The combine reads the
+    /// last (the resolved return type) to build the `PerCall` contract; the earlier statements'
+    /// scope binds feed the tail body. The only dep that carries its own frame.
+    BodyBlock {
+        frame: Rc<CallArena>,
+        statements: Vec<KExpression<'run>>,
+    },
+    Existing(NodeId),
+}
+
 /// Result of a successful keyworded part walk.
 pub(in crate::machine::execute) struct PartWalkResult<'run> {
     pub new_parts: Vec<Spanned<ExpressionPart<'run>>>,
@@ -195,7 +229,7 @@ pub(super) const POSITIONAL_ONLY: &str =
 
 /// Loud non-match for a call body whose surface shape the resolved carrier doesn't admit.
 pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> Outcome<'run> {
-    Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+    Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
         expr: expr.summarize(),
         reason: reason.to_string(),
     })))
@@ -215,7 +249,7 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<TraceFrame>) -> KErr
 /// off `working_expr`.
 pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>) -> Outcome<'run> {
     let frame = TraceFrame::from_expr("<bind>", working_expr);
-    Outcome::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
+    Outcome::Done(Err(propagate_dep_error(e, Some(frame))))
 }
 
 // ---------- Outcome constructors (the dispatch-currency → Outcome mapping) ----------
@@ -223,10 +257,10 @@ pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>)
 /// Park the slot on `deps` as a [`NodeWork`](super::nodes::NodeWork) whose
 /// `finish` runs over their resolved values (the dispatch combine — short-circuits on dep error).
 /// Every dep is owned (`park_count: 0`); `free` reclaims `Reuse` producers consumed inline.
-pub(in crate::machine::execute) fn park_combine<'run>(
-    deps: Vec<DispatchDep<'run>>,
+pub(in crate::machine::execute) fn park_on_deps<'run>(
+    deps: Vec<DepRequest<'run>>,
     dep_error_frame: Option<TraceFrame>,
-    finish: CombineFinish<'run>,
+    finish: DepFinish<'run>,
     free: Vec<usize>,
 ) -> Outcome<'run> {
     Outcome::ParkThenContinue {
@@ -250,7 +284,7 @@ pub(in crate::machine::execute) fn park_resume<'run>(
 ) -> Outcome<'run> {
     Outcome::ParkThenContinue {
         park_count: producers.len(),
-        deps: producers.into_iter().map(DispatchDep::Existing).collect(),
+        deps: producers.into_iter().map(DepRequest::Existing).collect(),
         cont: Continuation::Resume { carrier, resume },
         dep_error_frame: None,
         free: Vec::new(),
@@ -274,6 +308,7 @@ pub(in crate::machine::execute) fn become_dispatch<'run>(
         contract: None,
         block_entry: None,
         body_index: 0,
+        free: Vec::new(),
     }
 }
 
@@ -430,7 +465,7 @@ fn classify_dispatch<'run>(
         // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
         // a non-callable head is a runtime error, not a fatal `execute()` abort.
         DispatchShape::NonCallableHead => {
-            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+            Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(),
                 reason: format!(
                     "head is not callable: `{}`",
@@ -460,4 +495,3 @@ fn classify_dispatch<'run>(
         }
     }
 }
-

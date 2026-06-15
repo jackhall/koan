@@ -3,7 +3,7 @@
 //! *unaware*), `Action` is what a builtin returns and what the harness interprets (scheduler-*aware*).
 //! These are the **types only** — they reference core/model types, never the scheduler. The
 //! interpreter that drives the scheduler from an `Action` lives one layer up in
-//! `machine::execute::harness::run_action` (the peer of `dispatch/exec.rs::invoke`).
+//! `machine::execute::runtime::run_action` (the peer of `dispatch/exec.rs::invoke`).
 
 use std::rc::Rc;
 
@@ -179,9 +179,9 @@ pub struct FinishCtx<'a, 'c> {
     pub scope: &'c Scope<'a>,
 }
 
-/// A `Combine` finish: re-entered at wake with the resolved dep values, yielding another `Action` the
+/// A `AwaitDeps` finish: re-entered at wake with the resolved dep values, yielding another `Action` the
 /// harness recurses into. Reads only a `FinishCtx`, never the scheduler — exec's continuation pattern.
-pub type Cont<'a> = Box<dyn FnOnce(&FinishCtx<'a, '_>, &[Carried<'a>]) -> Action<'a> + 'a>;
+pub type AwaitContinue<'a> = Box<dyn FnOnce(&FinishCtx<'a, '_>, &[Carried<'a>]) -> Action<'a> + 'a>;
 
 /// A `Catch` finish: re-entered with the watched slot's `Result`, yielding a `Action`.
 pub type CatchCont<'a> =
@@ -206,9 +206,9 @@ pub enum Action<'a> {
         block_entry: Option<ScopeId>,
     },
     /// Dispatch `deps`, then `finish` over their resolved values yields the next `Action`.
-    Combine {
+    AwaitDeps {
         deps: Vec<Dep<'a>>,
-        finish: Cont<'a>,
+        finish: AwaitContinue<'a>,
     },
     /// Watch `watched`, recover via `finish`.
     Catch {
@@ -217,7 +217,7 @@ pub enum Action<'a> {
     },
 }
 
-/// A Combine/Tail dependency. `Dispatch` → an owned sub-slot the harness dispatches; `Existing` → a
+/// A dep-finish/Tail dependency. `Dispatch` → an owned sub-slot the harness dispatches; `Existing` → a
 /// producer NodeId the builtin already found in scope (a forward-ref / pending type) kept alive as
 /// a park-producer.
 pub enum Dep<'a> {
@@ -232,12 +232,12 @@ pub enum Dep<'a> {
 pub enum DepPlacement<'a> {
     /// The slot's own `NodeScope` (`add_dispatch_here`) — binders' type sub-dispatches.
     OwnScope,
-    /// The active frame's child (`add_dispatch_in_frame`) — FN-body leading statements.
+    /// The active frame's child (`dispatch_in_active_frame`) — FN-body leading statements.
     ActiveFrame,
     /// A builtin-minted child scope (module/sig/recursive/using body), carried by reference. In a
-    /// `Combine` a multi-statement body fans out one sub-dispatch per top-level statement
-    /// (`enter_body_block`); in a `Catch` a single watched expr enters a fresh lexical block
-    /// (`enter_block`).
+    /// `AwaitDeps` a multi-statement body fans out one sub-dispatch per top-level statement
+    /// (`split_body_statements` + `enter_block`); in a `Catch` a single watched expr enters a
+    /// fresh lexical block (`enter_block`).
     InScope(&'a Scope<'a>),
 }
 

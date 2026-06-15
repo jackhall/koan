@@ -181,7 +181,7 @@ impl<'a> ReturnType<'a> {
     }
 
     /// Lift-time return-type check. `Deferred` returns `true` — the real slot check
-    /// runs in the per-call elaboration's Combine finish, where the resolved `KType`
+    /// runs in the per-call elaboration's dep-finish, where the resolved `KType`
     /// is available.
     pub fn matches_value(&self, obj: &crate::machine::model::values::KObject<'a>) -> bool {
         match self {

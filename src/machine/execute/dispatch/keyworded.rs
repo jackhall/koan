@@ -1,13 +1,15 @@
 //! Keyworded dispatch shape: the catch-all for any expression with a
 //! keyword present, or a head that isn't a fast-lane shape.
 
+use crate::machine::core::kfunction::action::FramePlacement;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Parseable;
 use crate::machine::{
     BindingIndex, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, TraceFrame,
 };
 
-use super::super::nodes::NodeOutput;
+use super::super::ignore_results;
+use super::super::nodes::NodeWork;
 use super::ctx::SchedulerView;
 use super::{bare_name_of, park_resume, propagate_dep_error, Outcome, PartWalkResult, PendingSub};
 
@@ -25,7 +27,7 @@ pub(super) fn initial<'run>(
     for outcome in bare_outcomes.iter().flatten() {
         if let NameOutcome::ProducerErrored(e) = outcome {
             let frame = TraceFrame::from_expr("<wrap-resolve>", &expr);
-            return Outcome::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))));
+            return Outcome::Done(Err(propagate_dep_error(e, Some(frame))));
         }
     }
     let chain = ctx.chain_deref();
@@ -38,21 +40,19 @@ pub(super) fn initial<'run>(
         // bare-identifier and head-deferred lanes — not a fatal `?` abort. `interpret`
         // reads each top-level slot result and re-raises, so the CLI surfacing is unchanged.
         ResolveOutcome::Ambiguous(n) => {
-            return Outcome::Done(NodeOutput::Err(KError::new(
-                KErrorKind::AmbiguousDispatch {
-                    expr: expr.summarize(),
-                    candidates: n,
-                },
-            )));
+            return Outcome::Done(Err(KError::new(KErrorKind::AmbiguousDispatch {
+                expr: expr.summarize(),
+                candidates: n,
+            })));
         }
         ResolveOutcome::Unmatched => {
-            return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+            return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(),
                 reason: "no matching function".to_string(),
             })));
         }
         ResolveOutcome::UnboundName(name) => {
-            return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))));
+            return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))));
         }
         ResolveOutcome::Deferred => {
             debug_assert!(
@@ -76,7 +76,7 @@ pub(super) fn initial<'run>(
             ctx.current_scope()
                 .install_placeholder(name.clone(), NodeId(idx), bind_index)
         {
-            return Outcome::Done(NodeOutput::Err(e));
+            return Outcome::Done(Err(e));
         }
     }
     if let Some(bucket) = resolved.pending_overload_bucket.as_ref() {
@@ -84,7 +84,7 @@ pub(super) fn initial<'run>(
             ctx.current_scope()
                 .install_pending_overload(bucket.clone(), NodeId(idx), bind_index)
         {
-            return Outcome::Done(NodeOutput::Err(e));
+            return Outcome::Done(Err(e));
         }
     }
     let walk = match part_walk(
@@ -96,7 +96,7 @@ pub(super) fn initial<'run>(
         idx,
     ) {
         Ok(w) => w,
-        Err(e) => return Outcome::Done(NodeOutput::Err(e)),
+        Err(e) => return Outcome::Done(Err(e)),
     };
     let PartWalkResult {
         new_parts,
@@ -112,11 +112,7 @@ pub(super) fn initial<'run>(
     }
     if staged_subs.is_empty() {
         // The synchronous (no-eager-subs) call — the common path for builtins and simple calls.
-        return Outcome::Invoke {
-            picked: resolved.function,
-            working_expr: new_expr,
-            free: Vec::new(),
-        };
+        return super::exec::invoke_continue(resolved.function, new_expr, Vec::new());
     }
     let _ = resolved; // discard the speculative pick.
     install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs)
@@ -133,23 +129,21 @@ pub(super) fn finish<'run>(
         .current_scope()
         .resolve_dispatch(&working_expr, ctx.chain_deref(), &[])
     {
-        // The post-eager-subs re-dispatch lands resolved calls here — name the resolved call
-        // for the harness to run.
-        ResolveOutcome::Resolved(r) => Outcome::Invoke {
-            picked: r.function,
-            working_expr,
-            free: Vec::new(),
-        },
+        // The post-eager-subs re-dispatch lands resolved calls here — fold the resolved call into
+        // the `Continue` that installs its frame and runs `invoke`.
+        ResolveOutcome::Resolved(r) => {
+            super::exec::invoke_continue(r.function, working_expr, Vec::new())
+        }
         // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
         // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
-        ResolveOutcome::Ambiguous(n) => Outcome::Done(NodeOutput::Err(KError::new(
-            KErrorKind::AmbiguousDispatch {
+        ResolveOutcome::Ambiguous(n) => {
+            Outcome::Done(Err(KError::new(KErrorKind::AmbiguousDispatch {
                 expr: working_expr.summarize(),
                 candidates: n,
-            },
-        ))),
+            })))
+        }
         ResolveOutcome::Deferred | ResolveOutcome::Unmatched => {
-            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+            Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                 expr: working_expr.summarize(),
                 reason: "no matching function".to_string(),
             })))
@@ -158,8 +152,33 @@ pub(super) fn finish<'run>(
             install_overload_park(ctx, producers, working_expr, Vec::new(), idx)
         }
         ResolveOutcome::UnboundName(name) => {
-            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))))
+            Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))))
         }
+    }
+}
+
+/// Fold the post-eager-subs re-resolve into a [`Outcome::Continue`]: a dep-free decide that re-runs
+/// [`finish`] against the fully-spliced `working_expr` on the next pop, with no committed function
+/// pick. `Inherit` — a re-resolve runs in the slot's current frame; `free` reclaims the `Reuse`
+/// producers the decide phase consumed inline.
+pub(super) fn redispatch_continue<'run>(
+    working_expr: KExpression<'run>,
+    free: Vec<usize>,
+) -> Outcome<'run> {
+    let carrier = working_expr.summarize();
+    let work = NodeWork {
+        deps: Vec::new(),
+        park_count: 0,
+        cont: ignore_results(Box::new(move |ctx, idx| finish(ctx, working_expr, idx))),
+        carrier: Some(carrier),
+    };
+    Outcome::Continue {
+        work,
+        frame: FramePlacement::Inherit,
+        contract: None,
+        block_entry: None,
+        body_index: 0,
+        free,
     }
 }
 
@@ -179,14 +198,14 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'run>(
         if ctx.is_result_ready(p) {
             if let Err(e) = ctx.read_result(p) {
                 let frame = TraceFrame::from_expr("<dispatch-park>", &expr);
-                return Outcome::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))));
+                return Outcome::Done(Err(propagate_dep_error(e, Some(frame))));
             }
         } else if !ctx.would_create_cycle(p, NodeId(idx)) && !to_wait.contains(&p) {
             to_wait.push(p);
         }
     }
     if to_wait.is_empty() {
-        return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+        return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
             expr: expr.summarize(),
             reason: "no matching function".to_string(),
         })));

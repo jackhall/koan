@@ -211,12 +211,12 @@ mod tests {
     #[test]
     fn from_non_record_operand_is_dispatch_non_match() {
         use crate::machine::core::KErrorKind;
-        use crate::machine::execute::Scheduler;
+        use crate::machine::execute::KoanRuntime;
 
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let mut sched = Scheduler::new();
-        let root = sched.add_dispatch(parse_one("(x y) FROM 5"), scope);
+        let mut sched = KoanRuntime::new();
+        let root = sched.dispatch_in_scope(parse_one("(x y) FROM 5"), scope);
         sched
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn from_breaks_ambiguous_record_dispatch_tie() {
         use crate::machine::core::KErrorKind;
-        use crate::machine::execute::Scheduler;
+        use crate::machine::execute::KoanRuntime;
 
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
@@ -248,8 +248,8 @@ mod tests {
         );
 
         // Bare call ties: the full `{x, y, z}` carrier fills both incomparable arms.
-        let mut sched = Scheduler::new();
-        let root = sched.add_dispatch(parse_one("PICK r"), scope);
+        let mut sched = KoanRuntime::new();
+        let root = sched.dispatch_in_scope(parse_one("PICK r"), scope);
         sched
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");

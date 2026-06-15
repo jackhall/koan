@@ -9,7 +9,6 @@ use crate::machine::model::KObject;
 use crate::machine::model::Parseable;
 use crate::machine::{KError, KErrorKind, NodeId, Resolution};
 
-use super::super::nodes::NodeOutput;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
 use super::{park_resume, Outcome};
@@ -35,7 +34,7 @@ pub(super) fn initial<'run>(
         Resolution::Placeholder(producer) => {
             if ctx.is_result_ready(producer) {
                 match ctx.read_result(producer) {
-                    Err(e) => Outcome::Done(NodeOutput::Err(e.clone_for_propagation())),
+                    Err(e) => Outcome::Done(Err(e.clone_for_propagation())),
                     Ok(_) => unreachable!(
                         "head placeholder `{head}` producer finalized Ok without registering the \
                          name — a binder's successful finalize always binds its name, so a \
@@ -46,9 +45,7 @@ pub(super) fn initial<'run>(
                 install_head_park(producer, expr)
             }
         }
-        Resolution::UnboundName => {
-            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(head))))
-        }
+        Resolution::UnboundName => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head)))),
     }
 }
 
@@ -66,7 +63,7 @@ fn dispatch_callable_value<'run>(
     let callable = match head_obj {
         KObject::KFunction(f, _) => ResolvedCallable::Function(f),
         other => {
-            return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+            return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "KFunction or Type".to_string(),
                 got: other.summarize(),

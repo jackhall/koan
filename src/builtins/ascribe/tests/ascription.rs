@@ -1,7 +1,7 @@
 //! Primitive ascription behaviors: transparent passthrough, missing-member errors, opaque type-minting.
 
 use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
-use crate::machine::execute::Scheduler;
+use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, RuntimeArena};
 use crate::parse::parse;
@@ -53,10 +53,10 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
          LET FirstAbstract = (IntOrd :| OrderedSig)\n\
          LET SecondAbstract = (IntOrd :| OrderedSig)";
     let exprs = parse(src).expect("parse should succeed");
-    let mut sched = Scheduler::new();
+    let mut sched = KoanRuntime::new();
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(sched.add_dispatch(expr, scope));
+        ids.push(sched.dispatch_in_scope(expr, scope));
     }
     sched.execute().expect("scheduler should succeed");
     for (i, id) in ids.iter().enumerate() {

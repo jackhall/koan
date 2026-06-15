@@ -1,6 +1,6 @@
 //! [`NodeId`] — the stable handle to a node in the scheduler's DAG, used crate-wide. The
 //! scheduler's write primitives are inherent methods on `machine::execute::Scheduler`; the
-//! `Combine`/`Catch` finish aliases live in `machine::execute::outcome` (they return the
+//! `AwaitDeps`/`Catch` finish aliases live in `machine::execute::outcome` (they return the
 //! execute-private `Outcome`).
 
 /// Stable handle to a node in the scheduler's DAG.

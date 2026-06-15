@@ -46,8 +46,8 @@ What's shipped that the open items below build on:
 - *Duplication consolidation.* Six pre-located copy-paste clusters each collapsed to a
   single owner: per-builtin typed-binder `binder_name` (one shared
   [`type_part_binder_name`](../src/builtins.rs)), the FN and FUNCTOR bodies (one shared
-  [`build_fn_like`](../src/builtins/fn_def.rs) keyed on `FnKind`), the `finish.rs`
-  `run_combine`/`run_catch` arms (one `dispatch_body_result`), the `dict_literal`
+  [`build_fn_like`](../src/builtins/fn_def.rs) keyed on `FnKind`), the `finish.rs` dep-finish/catch handler arms (one shared
+  [`run_wait`](../src/machine/execute/scheduler/finish.rs)), the `dict_literal`
   `accept_colon`/`accept_equals` pair (one `accept_separator`), the slot-extract error
   envelope (one [`require_kexpression`](../src/machine/core/kfunction/action.rs)
   owning the parenthesized-slot error text), and the scheduler `Object`/`Type` finalize
@@ -151,33 +151,61 @@ What's shipped that the open items below build on:
   mirrors the builtin `Action` / `run_action` split: a shape handler *decides* against a
   read-only view and *returns* its scheduler mutations as an
   [`Outcome`](../src/machine/execute/outcome.rs) effect that a
-  [harness](../src/machine/execute/dispatch/harness.rs) interprets — so no dispatch handler
-  holds `&mut Scheduler`. Eager-subs is modelled as the dispatcher's own `Combine` (the same
+  [harness](../src/machine/execute/runtime.rs) interprets — so no dispatch handler
+  holds `&mut Scheduler`. Eager-subs is modelled as the dispatcher's own dep-finish (the same
   N→1 shape the action harness installs): deps declared, the `Future`-cell splice lives in the
   finish, and the scheduler stays splice-unaware. A builtin invoked mid-dispatch routes through the shared action harness,
   reading the dispatcher's ambient frame/chain off the view.
   See [design/execution-model.md § The dispatcher / scheduler boundary](../design/execution-model.md#the-dispatcher--scheduler-boundary).
 - *Unified scheduler interface.* Every scheduler-facing step — a dispatch decide, a finish, a
   builtin body, an invoke — decides against one read-only
-  [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) and returns one
-  [`Outcome`](../src/machine/execute/outcome.rs) (`Done` / `Continue` / `ParkThenContinue`, plus
-  the `Invoke` frame-acquisition trigger), with [`Scheduler::apply_outcome`](../src/machine/execute/scheduler.rs)
+  [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) and returns one AST-free
+  [`Outcome`](../src/machine/execute/outcome.rs) (`Done` / `Continue` / `ParkThenContinue` /
+  `Forward` — no variant names a `KFunction` or `KExpression`; the dispatch→execution hand-off
+  folds into a dep-free `Continue` whose frame placement installs the per-call cart), with
+  [`apply_outcome`](../src/machine/execute/runtime.rs)
   the sole graph writer. The `SchedulerHandle` trait, `BodyResult`, `DispatchOutcome`, and the
   per-shape `DispatchState` envelope are gone — the scheduler's write methods are inherent and
   private to the execute tree. A multi-statement FN body's leading statements are now owned deps
   the activation parks on, so they sequence and cascade-free before the tail reuses the frame —
   tail recursion with side-effecting statements runs in constant frame space. See
   [design/execution-model.md § The dispatcher / scheduler boundary](../design/execution-model.md#the-dispatcher--scheduler-boundary).
-- *`NodeWork` carries no AST.* The scheduler's slot-work enum collapsed to its essence: the
-  `Combine` / `DispatchCombine` pair merged to one `Combine` (one finish type, the `<combine>`
-  dep-error label now harness policy), and `Dispatch` / `DispatchResume` merged to one
-  [`NodeWork::Decide`](../src/machine/execute/nodes.rs) — a captured `SchedulerView -> Outcome`
-  closure (birth and resume run through one `run_decide` arm) plus a pre-rendered deadlock-summary
-  string. Binder-install and the recursive eager-sub pre-submission moved out of `Scheduler::submit_node`
+- *`NodeWork` carries no AST.* The scheduler's slot-work collapsed to a single
+  [`NodeWork`](../src/machine/execute/nodes.rs) struct — one captured `SchedulerView -> Outcome`
+  `cont` (the combine/catch/decide behavior built in by combinators; the `<deps>` dep-error label
+  is harness policy) plus a pre-rendered deadlock-summary string. Binder-install and the recursive eager-sub pre-submission moved out of `Scheduler::submit_node`
   into a dispatch-layer [`submit_dispatch`](../src/machine/execute/dispatch/submit.rs) chokepoint,
   so the scheduler never introspects a `KExpression` — `submit_node` is a generic slot allocator
   and no `NodeWork` variant names an AST. See
   [design/execution-model.md § Dispatch birth and resume](../design/execution-model.md#dispatch-birth-and-resume).
+- *Literal lowering hoisted to the dispatcher.* The aggregate-literal lowering
+  (`schedule_list_literal` / `schedule_dict_literal` / `schedule_record_literal`, the `Slot`
+  layout enum, `classify_aggregate_part`, `resolve_aggregate_bare_name`) moved from
+  `scheduler/literal.rs` to [`dispatch/literal.rs`](../src/machine/execute/dispatch/literal.rs),
+  next to the harness that drives it. It was the one file in the scheduler subtree that
+  name-resolved and built values from an `ExpressionPart`, so the "scheduler names no AST"
+  invariant now holds structurally across `scheduler/**`. The methods are `&mut self` on
+  `KoanRuntime` (below), reached through the scheduler's public surface (`submit_in_own_scope` /
+  `current_scope`). See [design/execution-model.md](../design/execution-model.md#the-dispatcher--scheduler-boundary).
+- *Dep-request enum made AST-free at the source.* The six-arm dep enum a
+  `ParkThenContinue` declares (`Dispatch` / `ListLit` / `DictLit` / `RecordLit` / `BodyBlock` /
+  `Existing`) is renamed `DispatchDep`→[`DepRequest`](../src/machine/execute/dispatch.rs) and
+  moved out of `outcome.rs` to the dispatch side, beside `PendingSub` — the layer that
+  legitimately names AST. The data arms are unchanged (each still carries its `KExpression` /
+  `ExpressionPart`), and the harness `match` still does every `&mut Scheduler` write. The win:
+  `outcome.rs` imports no `crate::machine::model::ast` and carries `DepRequest` as an opaque
+  type, so the decide phase stays read-only and the scheduler-step currency names no AST.
+- *`KoanRuntime` owns the scheduler.* A
+  [`KoanRuntime<'run>`](../src/machine/execute/runtime.rs) owns the `Scheduler` by composition
+  (a `sched` field) and is the **sole** holder of `&mut Scheduler` across the execute tree. The
+  execute loop, `apply_outcome` (the one graph writer), `submit_dispatch`, the aggregate-literal
+  lowering, and the AST-aware submission wrappers (`enter_block`, `dispatch_in_own_scope`,
+  `dispatch_in_active_frame`, `dispatch_body`, `submit_dep_finish_in_own_scope`) are all `&mut self`
+  methods on it. `Scheduler` keeps the AST-free read views and low-level write primitives, so a
+  dispatch decide sees only a read-only `SchedulerView` / `&Scheduler` — "everything outside the
+  harness is read-only" is now structurally enforced by the type, not a naming convention. The
+  `apply_outcome` cluster migrated up to `execute/runtime.rs` (the old `dispatch/harness.rs` is
+  gone), unifying "the harness" at the `execute/` level above both `dispatch/` and `scheduler/`.
 
 ## Next items
 
@@ -193,6 +221,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
+- [Scheduler lifts node outputs](refactor/scheduler-lifts-node-outputs.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
@@ -283,3 +312,10 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
+- [Scheduler lifts node outputs](refactor/scheduler-lifts-node-outputs.md) — bind a node
+  continuation's output to its own frame lifetime and make lift the scheduler's step, so the
+  uniform-`'run` output type stops smearing the run lifetime across the scheduler.
+- [Workload-independent DAG runtime](refactor/workload-independent-dag-runtime.md) — erase
+  per-node continuations and evict `scope` / `chain` into opaque workload payload (moving
+  `CallArena` in), confining `'run` to `KoanRuntime` and leaving a generic per-node-memory
+  DAG runtime.

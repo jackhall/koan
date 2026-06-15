@@ -115,7 +115,7 @@ fn wrap_slot_parens_expression_still_sub_dispatches() {
 /// dict planner's `classify_aggregate_part` (with `wrap_identifiers = true`)
 /// eager-resolves the bare name via `resolve_aggregate_bare_name`, hits a still-pending
 /// placeholder, and records the producer in `park_producers`. On the LET binder's
-/// terminalize, the Combine wakes and reads the value through the park-prefix
+/// terminalize, the dep-finish wakes and reads the value through the park-prefix
 /// `Slot::Park(i)` lookup. Pins the wake-graph path that integration coverage
 /// previously routed only through the dispatcher's wrap-slot path, not the literal
 /// planner. (List literals use `wrap_identifiers = false` — bare identifiers there
@@ -146,7 +146,7 @@ fn dict_literal_backward_identifier_value_resolves_through_real_wake() {
 /// slot's parens-Expression hits the `eager_indices` filter. The fused walk in
 /// `run_dispatch` reads `resolved.slots.eager_indices` to gate the eager-sub
 /// schedule: the m-slot sub-Dispatches, the SCOPE-body slot rides through
-/// unscheduled, and the post-bind Combine re-dispatches with the resolved
+/// unscheduled, and the post-bind dep-finish re-dispatches with the resolved
 /// `Future(KModule)` spliced into the m-slot.
 #[test]
 fn using_lazy_arm_with_filter_routes_module_expr_through_filter() {

@@ -11,7 +11,7 @@ use crate::machine::model::types::{ExpressionSignature, Parseable, Record, Signa
 use crate::machine::model::values::{ArgValue, NamedPairs};
 
 /// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
-/// `machine::execute::harness::run_action`.
+/// `machine::execute::runtime::run_action`.
 pub mod action;
 pub mod bind_by_name;
 pub mod body;

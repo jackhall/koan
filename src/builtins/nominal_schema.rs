@@ -1,7 +1,7 @@
 //! Shared `Action`-harness elaboration for a nominal type declarator's field-list schema —
 //! the path UNION and NEWTYPE's record repr both walk: mark the binder in-flight, elaborate the
 //! `(tag/field :Type, …)` list threading the binder name, then either fold the sealed pairs into
-//! the carrier synchronously or defer one Combine over the parked producers + sigil sub-Dispatches.
+//! the carrier synchronously or defer one dep-finish over the parked producers + sigil sub-Dispatches.
 //!
 //! The two callers differ only in the parameters threaded through here (kind, diagnostic context,
 //! field-name policy, error frame) and the `finalize` that folds the sealed `(name, KType)` pairs
@@ -18,7 +18,7 @@ use crate::machine::model::KType;
 use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
 
 /// Fold the sealed `(name, KType)` pairs into the declarator's carrier; shared by the synchronous
-/// and Combine-finish paths. A plain `fn` pointer (not a closure) so it rides both the eager arm
+/// and dep-finish paths. A plain `fn` pointer (not a closure) so it rides both the eager arm
 /// and the deferred finish without `Clone`.
 pub(crate) type SchemaFinalize<'a> =
     fn(&Scope<'a>, String, Vec<(String, KType<'a>)>, BindingIndex) -> Result<Carried<'a>, KError>;
@@ -41,7 +41,7 @@ pub(crate) fn nominal_schema_action<'a>(
     let chain = ctx.chain.clone();
     // Mark this binder in-flight so a consumer referencing it (an earlier sibling still finalizing)
     // can park on our producer node. The guard's Drop removes the entry; the Pending path moves it
-    // into the Combine-finish closure.
+    // into the dep-finish closure.
     let pending_guard = ctx.scope.bindings().insert_pending_type(
         name.clone(),
         PendingTypeEntry {
