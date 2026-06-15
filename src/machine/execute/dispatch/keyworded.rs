@@ -9,7 +9,7 @@ use crate::machine::{
 };
 
 use super::super::ignore_results;
-use super::super::nodes::{NodeOutput, NodeWork};
+use super::super::nodes::NodeWork;
 use super::ctx::SchedulerView;
 use super::{bare_name_of, park_resume, propagate_dep_error, Outcome, PartWalkResult, PendingSub};
 
@@ -27,7 +27,7 @@ pub(super) fn initial<'run>(
     for outcome in bare_outcomes.iter().flatten() {
         if let NameOutcome::ProducerErrored(e) = outcome {
             let frame = TraceFrame::from_expr("<wrap-resolve>", &expr);
-            return Outcome::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))));
+            return Outcome::Done(Err(propagate_dep_error(e, Some(frame))));
         }
     }
     let chain = ctx.chain_deref();
@@ -40,21 +40,19 @@ pub(super) fn initial<'run>(
         // bare-identifier and head-deferred lanes — not a fatal `?` abort. `interpret`
         // reads each top-level slot result and re-raises, so the CLI surfacing is unchanged.
         ResolveOutcome::Ambiguous(n) => {
-            return Outcome::Done(NodeOutput::Err(KError::new(
-                KErrorKind::AmbiguousDispatch {
-                    expr: expr.summarize(),
-                    candidates: n,
-                },
-            )));
+            return Outcome::Done(Err(KError::new(KErrorKind::AmbiguousDispatch {
+                expr: expr.summarize(),
+                candidates: n,
+            })));
         }
         ResolveOutcome::Unmatched => {
-            return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+            return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(),
                 reason: "no matching function".to_string(),
             })));
         }
         ResolveOutcome::UnboundName(name) => {
-            return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))));
+            return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))));
         }
         ResolveOutcome::Deferred => {
             debug_assert!(
@@ -78,7 +76,7 @@ pub(super) fn initial<'run>(
             ctx.current_scope()
                 .install_placeholder(name.clone(), NodeId(idx), bind_index)
         {
-            return Outcome::Done(NodeOutput::Err(e));
+            return Outcome::Done(Err(e));
         }
     }
     if let Some(bucket) = resolved.pending_overload_bucket.as_ref() {
@@ -86,7 +84,7 @@ pub(super) fn initial<'run>(
             ctx.current_scope()
                 .install_pending_overload(bucket.clone(), NodeId(idx), bind_index)
         {
-            return Outcome::Done(NodeOutput::Err(e));
+            return Outcome::Done(Err(e));
         }
     }
     let walk = match part_walk(
@@ -98,7 +96,7 @@ pub(super) fn initial<'run>(
         idx,
     ) {
         Ok(w) => w,
-        Err(e) => return Outcome::Done(NodeOutput::Err(e)),
+        Err(e) => return Outcome::Done(Err(e)),
     };
     let PartWalkResult {
         new_parts,
@@ -138,14 +136,14 @@ pub(super) fn finish<'run>(
         }
         // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
         // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
-        ResolveOutcome::Ambiguous(n) => Outcome::Done(NodeOutput::Err(KError::new(
-            KErrorKind::AmbiguousDispatch {
+        ResolveOutcome::Ambiguous(n) => {
+            Outcome::Done(Err(KError::new(KErrorKind::AmbiguousDispatch {
                 expr: working_expr.summarize(),
                 candidates: n,
-            },
-        ))),
+            })))
+        }
         ResolveOutcome::Deferred | ResolveOutcome::Unmatched => {
-            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+            Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                 expr: working_expr.summarize(),
                 reason: "no matching function".to_string(),
             })))
@@ -154,7 +152,7 @@ pub(super) fn finish<'run>(
             install_overload_park(ctx, producers, working_expr, Vec::new(), idx)
         }
         ResolveOutcome::UnboundName(name) => {
-            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))))
+            Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))))
         }
     }
 }
@@ -200,14 +198,14 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'run>(
         if ctx.is_result_ready(p) {
             if let Err(e) = ctx.read_result(p) {
                 let frame = TraceFrame::from_expr("<dispatch-park>", &expr);
-                return Outcome::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))));
+                return Outcome::Done(Err(propagate_dep_error(e, Some(frame))));
             }
         } else if !ctx.would_create_cycle(p, NodeId(idx)) && !to_wait.contains(&p) {
             to_wait.push(p);
         }
     }
     if to_wait.is_empty() {
-        return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+        return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
             expr: expr.summarize(),
             reason: "no matching function".to_string(),
         })));

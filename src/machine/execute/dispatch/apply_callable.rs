@@ -26,13 +26,13 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::{KError, KErrorKind};
 
-use super::super::nodes::NodeOutput;
 use super::ctx::SchedulerView;
 use super::Outcome;
 use super::{
     body_shape_err, constructors, extract_call_body, stage_all_eager_parts, CallBody, NAMED_ONLY,
     POSITIONAL_ONLY,
 };
+use crate::machine::model::Carried;
 
 /// A head resolved to something callable. The lane decides which arm; the tail
 /// branches on the body surface and launches.
@@ -61,7 +61,7 @@ pub(in crate::machine::execute) fn apply_callable<'run>(
         ResolvedCallable::Function(f) => {
             let body = match extract_call_body(expr) {
                 Ok(b) => b,
-                Err(e) => return Outcome::Done(NodeOutput::Err(e)),
+                Err(e) => return Outcome::Done(Err(e)),
             };
             apply_function(ctx, f, expr, body)
         }
@@ -81,7 +81,7 @@ fn apply_constructor<'run>(
     expr: &KExpression<'run>,
 ) -> Outcome<'run> {
     let KType::SetRef { set, index } = identity else {
-        return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+        return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
             expected: "constructible Type".to_string(),
             got: identity.name(),
@@ -111,22 +111,20 @@ fn apply_constructor<'run>(
             {
                 let tag = t.render();
                 if !schema.contains_key(&tag) {
-                    return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::ShapeError(
-                        format!(
-                            "`{tag}` is not a variant of `{}` (variants: {})",
-                            set.member(*index).name,
-                            sorted_variant_names(&schema),
-                        ),
-                    ))));
+                    return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                        "`{tag}` is not a variant of `{}` (variants: {})",
+                        set.member(*index).name,
+                        sorted_variant_names(&schema),
+                    )))));
                 }
                 let variant = KType::Variant {
                     set: Rc::clone(set),
                     index: *index,
                     tag,
                 };
-                return Outcome::Done(NodeOutput::ktype(
+                return Outcome::Done(Ok(Carried::Type(
                     ctx.current_scope().arena.alloc_ktype(variant),
-                ));
+                )));
             }
             // Positional construction: `Outcome (Error "x")` (paren-group body). Tagged
             // unions and higher-kinded `TypeConstructor`s both construct positionally.
@@ -138,7 +136,7 @@ fn apply_constructor<'run>(
                     parts,
                 ),
                 Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
-                Err(e) => Outcome::Done(NodeOutput::Err(e)),
+                Err(e) => Outcome::Done(Err(e)),
             }
         }
         ProjectedSchema::TypeConstructor { schema, .. } => match extract_call_body(expr) {
@@ -149,7 +147,7 @@ fn apply_constructor<'run>(
                 parts,
             ),
             Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
-            Err(e) => Outcome::Done(NodeOutput::Err(e)),
+            Err(e) => Outcome::Done(Err(e)),
         },
     }
 }
@@ -174,7 +172,7 @@ fn apply_function<'run>(
     match body {
         CallBody::Named(fields) => match f.reconstruct_positional(fields) {
             Ok(rebuilt) => install_eager_subs_track(ctx, rebuilt, f),
-            Err(e) => Outcome::Done(NodeOutput::Err(e)),
+            Err(e) => Outcome::Done(Err(e)),
         },
         CallBody::Positional(_) => body_shape_err(expr, NAMED_ONLY),
     }

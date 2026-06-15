@@ -29,7 +29,6 @@ use crate::machine::model::types::KType;
 use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{KError, KErrorKind};
 
-use super::super::nodes::NodeOutput;
 use super::super::CombineFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::{park_combine, DepRequest, Outcome};
@@ -71,7 +70,7 @@ fn park_on_head<'run>(
     let finish: CombineFinish<'run> = Box::new(move |ctx, results| {
         let callable = match classify_head(results[0], type_only) {
             Ok(c) => c,
-            Err(e) => return Outcome::Done(NodeOutput::Err(e)),
+            Err(e) => return Outcome::Done(Err(e)),
         };
         apply_callable(ctx, callable, &expr)
     });

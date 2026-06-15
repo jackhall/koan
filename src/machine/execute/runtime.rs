@@ -22,7 +22,7 @@ use crate::machine::core::kfunction::body::split_body_statements;
 use crate::machine::{CallArena, KError, NodeId};
 
 use super::dispatch::DepRequest;
-use super::nodes::{NodeOutput, NodeStep, NodeWork};
+use super::nodes::{NodeStep, NodeWork};
 use super::outcome::{Continuation, Outcome};
 use super::scheduler::Scheduler;
 use super::{catch_cont, ignore_results, short_circuit, CatchFinish, CombineFinish};
@@ -118,8 +118,8 @@ impl<'run> KoanRuntime<'run> {
 pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Outcome<'run> {
     match action {
         // Terminal: the value the builtin already computed (scope was mutated in place first).
-        Action::Done(Ok(c)) => Outcome::Done(NodeOutput::Value(c)),
-        Action::Done(Err(e)) => Outcome::Done(NodeOutput::Err(e)),
+        Action::Done(Ok(c)) => Outcome::Done(Ok(c)),
+        Action::Done(Err(e)) => Outcome::Done(Err(e)),
 
         Action::Tail {
             leading,
@@ -429,8 +429,8 @@ impl<'run> KoanRuntime<'run> {
                 // sole producer of this result, with no forwarding node and no extra wake hop.
                 if self.sched.is_result_ready(producer) {
                     match self.sched.read_result(producer) {
-                        Ok(c) => NodeStep::Done(NodeOutput::Value(c)),
-                        Err(e) => NodeStep::Done(NodeOutput::Err(e.clone_for_propagation())),
+                        Ok(c) => NodeStep::Done(Ok(c)),
+                        Err(e) => NodeStep::Done(Err(e.clone_for_propagation())),
                     }
                 } else {
                     // Not ready: `NodeStep::Alias` drives `splice_forward` (move consumers onto the

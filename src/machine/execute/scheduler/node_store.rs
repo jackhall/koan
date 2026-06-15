@@ -21,7 +21,7 @@ use crate::machine::model::Carried;
 use crate::machine::KError;
 use crate::machine::NodeId;
 
-use super::super::nodes::{CallFrame, Node, NodeOutput, NodeScope, NodeWork};
+use super::super::nodes::{CallFrame, Node, NodeScope, NodeWork};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -66,7 +66,7 @@ enum SlotState<'run> {
     /// Node payload has been moved out by `take_for_run`. A matching
     /// `reinstall*` / `finalize` / `free_one` exits this state.
     Running,
-    Done(NodeOutput<'run>),
+    Done(Result<Carried<'run>, KError>),
     /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
     /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
     /// slot's consumers were moved onto `producer`'s notify list at splice time, so `producer`'s
@@ -172,7 +172,7 @@ impl<'run> NodeStore<'run> {
 
     /// Callers must pair this with the dep-graph notify-walk so consumers
     /// wake atomically with the write.
-    pub(super) fn finalize(&mut self, id: NodeId, output: NodeOutput<'run>) {
+    pub(super) fn finalize(&mut self, id: NodeId, output: Result<Carried<'run>, KError>) {
         self.slots[id] = SlotState::Done(output);
     }
 
@@ -203,8 +203,8 @@ impl<'run> NodeStore<'run> {
     /// their parent. Raw — callers pass an already alias-resolved id.
     pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
         match &self.slots[id] {
-            &SlotState::Done(NodeOutput::Value(c)) => Ok(c),
-            SlotState::Done(NodeOutput::Err(e)) => Err(e),
+            &SlotState::Done(Ok(c)) => Ok(c),
+            SlotState::Done(Err(e)) => Err(e),
             _ => panic!("result must be ready by the time it's read"),
         }
     }
@@ -277,7 +277,7 @@ impl<'run> NodeStore<'run> {
     }
 
     #[cfg(test)]
-    pub(super) fn set_result(&mut self, id: NodeId, output: NodeOutput<'run>) {
+    pub(super) fn set_result(&mut self, id: NodeId, output: Result<Carried<'run>, KError>) {
         self.slots[id] = SlotState::Done(output);
     }
 

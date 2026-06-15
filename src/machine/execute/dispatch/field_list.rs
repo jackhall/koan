@@ -20,7 +20,6 @@ use crate::machine::model::values::Carried;
 use crate::machine::model::{KType, Record};
 use crate::machine::{KError, KErrorKind, NodeId, Scope, TraceFrame};
 
-use super::super::nodes::NodeOutput;
 use super::super::outcome::{Continuation, Outcome};
 use super::super::CombineFinish;
 use super::DepRequest;
@@ -81,18 +80,18 @@ pub(crate) fn defer_field_list_via_combine<'run>(
             FieldListOutcome::Done(fields) => finalize(view.current_scope(), fields),
             FieldListOutcome::Err(msg) => {
                 let error = KError::new(KErrorKind::ShapeError(msg));
-                Outcome::Done(NodeOutput::Err(match error_frame {
+                Outcome::Done(Err(match error_frame {
                     Some(frame) => error.with_frame(frame),
                     None => error,
                 }))
             }
             // Every producer waited on is terminal by Combine invariant, so a second
             // park is a scheduling inconsistency rather than a recoverable forward ref.
-            FieldListOutcome::Pending { .. } => Outcome::Done(NodeOutput::Err(KError::new(
-                KErrorKind::ShapeError(format!(
+            FieldListOutcome::Pending { .. } => {
+                Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "{context}: forward type reference still unresolved after Combine wake"
-                )),
-            ))),
+                )))))
+            }
         }
     });
     // Deps `[park_producers (Existing) ..., sigil subs (Dispatch/OwnScope) ...]`; the harness owns
@@ -186,7 +185,7 @@ pub(crate) fn elaborate_record_value<'run, 's>(
     fn fold<'run>(scope: &Scope<'run>, pairs: Vec<(String, KType<'run>)>) -> Outcome<'run> {
         let record = Record::from_pairs(pairs);
         let kt = scope.arena.alloc_ktype(KType::Record(Box::new(record)));
-        Outcome::Done(NodeOutput::Value(Carried::Type(kt)))
+        Outcome::Done(Ok(Carried::Type(kt)))
     }
     let mut elaborator = Elaborator::new(view.current_scope()).with_chain(chain.clone());
     match parse_typed_field_list_via_elaborator(
@@ -197,9 +196,7 @@ pub(crate) fn elaborate_record_value<'run, 's>(
         None,
     ) {
         FieldListOutcome::Done(pairs) => fold(view.current_scope(), pairs),
-        FieldListOutcome::Err(msg) => {
-            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::ShapeError(msg))))
-        }
+        FieldListOutcome::Err(msg) => Outcome::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,

@@ -5,7 +5,6 @@ use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
 use crate::machine::{KError, KErrorKind, NameOutcome, NodeId, TraceFrame};
 
-use super::super::nodes::NodeOutput;
 use super::super::outcome::Outcome;
 use super::super::runtime::KoanRuntime;
 use super::super::CombineFinish;
@@ -57,7 +56,7 @@ impl<'run> KoanRuntime<'run> {
                 .current_scope()
                 .arena
                 .alloc_object(KObject::list_of_held(items));
-            Outcome::Done(NodeOutput::Value(Carried::Object(allocated)))
+            Outcome::Done(Ok(Carried::Object(allocated)))
         });
         self.combine_here(deps, park_producers, finish)
     }
@@ -89,19 +88,17 @@ impl<'run> KoanRuntime<'run> {
                 let key_obj = match key_held.as_object() {
                     Some(obj) => obj,
                     None => {
-                        return Outcome::Done(NodeOutput::Err(
-                            KError::new(KErrorKind::ShapeError(
-                                "dict key must be a value, not a type".to_string(),
-                            ))
-                            .with_frame(frame_label()),
+                        return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(
+                            "dict key must be a value, not a type".to_string(),
                         ))
+                        .with_frame(frame_label())))
                     }
                 };
                 let kkey = match KKey::try_from_kobject(key_obj) {
                     Ok(k) => k,
                     Err(msg) => {
-                        return Outcome::Done(NodeOutput::Err(
-                            KError::new(KErrorKind::ShapeError(msg)).with_frame(frame_label()),
+                        return Outcome::Done(Err(
+                            KError::new(KErrorKind::ShapeError(msg)).with_frame(frame_label())
                         ))
                     }
                 };
@@ -111,7 +108,7 @@ impl<'run> KoanRuntime<'run> {
                 .current_scope()
                 .arena
                 .alloc_object(KObject::dict_of_held(map));
-            Outcome::Done(NodeOutput::Value(Carried::Object(allocated)))
+            Outcome::Done(Ok(Carried::Object(allocated)))
         });
         self.combine_here(deps, park_producers, finish)
     }
@@ -144,7 +141,7 @@ impl<'run> KoanRuntime<'run> {
                 .current_scope()
                 .arena
                 .alloc_object(KObject::record_of_held(record));
-            Outcome::Done(NodeOutput::Value(Carried::Object(allocated)))
+            Outcome::Done(Ok(Carried::Object(allocated)))
         });
         self.combine_here(deps, park_producers, finish)
     }

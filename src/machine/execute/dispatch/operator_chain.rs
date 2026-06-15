@@ -19,7 +19,6 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Parseable;
 use crate::machine::{KError, KErrorKind};
 
-use super::super::nodes::NodeOutput;
 use super::ctx::SchedulerView;
 use super::Outcome;
 
@@ -42,7 +41,7 @@ pub(in crate::machine::execute) fn run<'run>(
         .current_scope()
         .resolve_operator_group_with_chain(probe, chain)
     {
-        None => Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+        None => Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
             expr: expr.summarize(),
             reason: undeclared_operator_reason(probe),
         }))),
@@ -52,13 +51,13 @@ pub(in crate::machine::execute) fn run<'run>(
             // a mismatch is a cross-group mix surfacing as a clean non-match.
             let operators = chain_operators(expr);
             if !group.covers(&operators) {
-                return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+                return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                     expr: expr.summarize(),
                     reason: cross_group_reason(probe),
                 })));
             }
             // Fold seam: the precedence climb + binary sub-dispatch is the follow-on.
-            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+            Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(),
                 reason: "operator-chain folding not yet implemented".to_string(),
             })))

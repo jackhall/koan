@@ -12,10 +12,9 @@ use std::rc::Rc;
 use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
-use crate::machine::model::{KType, Parseable, RecursiveSet};
+use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
 use crate::machine::{KError, KErrorKind, Resolution};
 
-use super::super::nodes::NodeOutput;
 use super::super::CombineFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
@@ -53,20 +52,16 @@ pub(super) fn bare_identifier<'run>(ctx: &SchedulerView<'run, '_>, name: String)
         .current_scope()
         .resolve_with_chain(&name, ctx.chain_deref())
     {
-        Resolution::Value(obj) => Outcome::Done(NodeOutput::value(obj)),
+        Resolution::Value(obj) => Outcome::Done(Ok(Carried::Object(obj))),
         Resolution::Placeholder(producer) => park_lift(producer),
-        Resolution::UnboundName => {
-            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))))
-        }
+        Resolution::UnboundName => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name)))),
     }
 }
 
 pub(super) fn bare_type_leaf<'run>(ctx: &SchedulerView<'run, '_>, t: &TypeName) -> Outcome<'run> {
     match resolve_type_leaf_carrier(ctx.current_scope(), t, ctx.active_chain()) {
-        TypeLeafCarrier::Resolved(kt) => Outcome::Done(NodeOutput::ktype(kt)),
-        TypeLeafCarrier::Unbound(n) => {
-            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))))
-        }
+        TypeLeafCarrier::Resolved(kt) => Outcome::Done(Ok(Carried::Type(kt))),
+        TypeLeafCarrier::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS
         // through the bridge, so a bare leaf parks on exactly one producer; park on it and
         // re-resolve once it seals. A producer already terminal-with-error short-circuits.
@@ -74,14 +69,12 @@ pub(super) fn bare_type_leaf<'run>(ctx: &SchedulerView<'run, '_>, t: &TypeName) 
             let producer = match producers.first() {
                 Some(p) => *p,
                 None => {
-                    return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(
-                        t.render(),
-                    ))));
+                    return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(t.render()))));
                 }
             };
             if ctx.is_result_ready(producer) {
                 if let Err(e) = ctx.read_result(producer) {
-                    return Outcome::Done(NodeOutput::Err(e.clone_for_propagation()));
+                    return Outcome::Done(Err(e.clone_for_propagation()));
                 }
                 // Ready-and-bound: the referent finalized between resolve and this check, so
                 // re-resolve directly — the memoized bridge now admits.
@@ -148,9 +141,9 @@ pub(super) fn literal_pass_through<'run>(
     match only.value {
         ExpressionPart::Literal(_) => {
             let allocated = ctx.current_scope().arena.alloc_object(only.value.resolve());
-            Outcome::Done(NodeOutput::value(allocated))
+            Outcome::Done(Ok(Carried::Object(allocated)))
         }
-        ExpressionPart::Future(c) => Outcome::Done(NodeOutput::Value(c)),
+        ExpressionPart::Future(c) => Outcome::Done(Ok(c)),
         ExpressionPart::Expression(boxed) => become_dispatch(*boxed),
         ExpressionPart::ListLiteral(items) => park_on_literal(DepRequest::ListLit(items)),
         ExpressionPart::DictLiteral(pairs) => park_on_literal(DepRequest::DictLit(pairs)),
@@ -163,8 +156,7 @@ pub(super) fn literal_pass_through<'run>(
 /// lifts the producer's resolved value straight through. The harness submits the literal and owns
 /// it; a dep error short-circuits frameless before the finish runs.
 fn park_on_literal<'run>(dep: DepRequest<'run>) -> Outcome<'run> {
-    let finish: CombineFinish<'run> =
-        Box::new(|_ctx, results| Outcome::Done(NodeOutput::Value(results[0])));
+    let finish: CombineFinish<'run> = Box::new(|_ctx, results| Outcome::Done(Ok(results[0])));
     park_combine(vec![dep], None, finish, Vec::new())
 }
 
@@ -228,9 +220,7 @@ pub(super) fn type_call<'run>(
     {
         Some(kt) => kt,
         None => {
-            return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(
-                head_t.render(),
-            ))));
+            return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head_t.render()))));
         }
     };
     match identity {
@@ -240,7 +230,7 @@ pub(super) fn type_call<'run>(
         }
         // A bare `:(FUNCTOR …)` type annotation has no callable to invoke.
         KType::KFunctor { body: None, .. } => {
-            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+            Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "constructible Type or bound functor".to_string(),
                 got: identity.name(),

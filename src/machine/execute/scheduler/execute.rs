@@ -6,7 +6,7 @@ use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 
 use super::super::lift::{lift_kobject, lift_ktype};
-use super::super::nodes::{CallFrame, Node, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{CallFrame, Node, NodeStep, NodeWork};
 use super::super::runtime::KoanRuntime;
 use super::Scheduler;
 use crate::machine::model::Carried;
@@ -67,7 +67,7 @@ impl<'run> KoanRuntime<'run> {
                         _ => None,
                     };
                     let result = compute_done_output(output, frame, dest_arena, prev_function);
-                    if matches!(result, NodeOutput::Err(_)) {
+                    if result.is_err() {
                         post.step_scope().clear_placeholders_for_producer(id);
                     }
                     self.sched.finalize(idx, result);
@@ -177,7 +177,7 @@ impl<'run> Scheduler<'run> {
     pub(in crate::machine::execute::scheduler) fn finalize(
         &mut self,
         idx: usize,
-        output: NodeOutput<'run>,
+        output: Result<Carried<'run>, KError>,
     ) {
         let id = NodeId(idx);
         self.store.finalize(id, output);
@@ -223,13 +223,13 @@ impl<'run> Scheduler<'run> {
 /// and finalizes. Pure: the scope-derived inputs were captured by the caller while the step's
 /// scope was still ambient, so this holds no scope borrow.
 fn compute_done_output<'run>(
-    output: NodeOutput<'run>,
+    output: Result<Carried<'run>, KError>,
     frame: Option<&Rc<crate::machine::core::CallArena>>,
     dest_arena: Option<&'run crate::machine::core::RuntimeArena>,
     prev_function: Option<ReturnContract<'run>>,
-) -> NodeOutput<'run> {
+) -> Result<Carried<'run>, KError> {
     match (output, frame) {
-        (NodeOutput::Value(Carried::Object(v)), Some(frame)) => {
+        (Ok(Carried::Object(v)), Some(frame)) => {
             let dest = dest_arena.expect("per-call scope must have an outer (its captured scope)");
             let mut lifted_obj = lift_kobject(v, frame);
             match check_declared_return(
@@ -241,26 +241,20 @@ fn compute_done_output<'run>(
                 // (may coarsen, e.g. `List<Number>` through `:(LIST OF Any)` -> `List<Any>`).
                 Ok(Some(declared)) => lifted_obj = lifted_obj.stamp_type(declared),
                 Ok(None) => {}
-                Err(err) => return NodeOutput::Err(err),
+                Err(err) => return Err(err),
             }
-            NodeOutput::Value(Carried::Object(dest.alloc_object(lifted_obj)))
+            Ok(Carried::Object(dest.alloc_object(lifted_obj)))
         }
         // A type flowing the type channel re-anchors any `Module` frame and re-allocs into the
         // destination arena, after the shared declared-return check via `matches_type`. The type
         // channel ignores the returned declared type — unlike the `Object` arm, it does not re-tag.
-        (NodeOutput::Value(Carried::Type(t)), Some(frame)) => {
+        (Ok(Carried::Type(t)), Some(frame)) => {
             let dest = dest_arena.expect("per-call scope must have an outer (its captured scope)");
             let lifted_t = lift_ktype(t, frame);
-            if let Err(err) = check_declared_return(
-                prev_function,
-                |d| d.matches_type(&lifted_t),
-                || lifted_t.name(),
-            ) {
-                return NodeOutput::Err(err);
-            }
-            NodeOutput::Value(Carried::Type(dest.alloc_ktype(lifted_t)))
+            check_declared_return(prev_function, |d| d.matches_type(&lifted_t), || lifted_t.name())?;
+            Ok(Carried::Type(dest.alloc_ktype(lifted_t)))
         }
-        (NodeOutput::Err(e), Some(_frame)) => {
+        (Err(e), Some(_frame)) => {
             let with_frame = match prev_function {
                 Some(contract) => {
                     let label = match contract {
@@ -272,7 +266,7 @@ fn compute_done_output<'run>(
                 }
                 None => e,
             };
-            NodeOutput::Err(with_frame)
+            Err(with_frame)
         }
         (other, None) => other,
     }

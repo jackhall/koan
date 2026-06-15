@@ -1,6 +1,5 @@
 //! combine, defer_to, and tail-call slot reuse.
 
-use super::super::super::nodes::NodeOutput;
 use super::super::super::outcome::Outcome;
 use crate::builtins::default_scope;
 use crate::machine::execute::KoanRuntime;
@@ -25,7 +24,7 @@ fn combine_waits_on_deps_then_runs_finish() {
         let a = match results[0] {
             Carried::Object(KObject::Number(n)) => *n,
             _ => {
-                return Outcome::Done(NodeOutput::Err(crate::machine::KError::new(
+                return Outcome::Done(Err(crate::machine::KError::new(
                     crate::machine::KErrorKind::ShapeError("a not number".into()),
                 )))
             }
@@ -33,7 +32,7 @@ fn combine_waits_on_deps_then_runs_finish() {
         let b = match results[1] {
             Carried::Object(KObject::Number(n)) => *n,
             _ => {
-                return Outcome::Done(NodeOutput::Err(crate::machine::KError::new(
+                return Outcome::Done(Err(crate::machine::KError::new(
                     crate::machine::KErrorKind::ShapeError("b not number".into()),
                 )))
             }
@@ -42,7 +41,7 @@ fn combine_waits_on_deps_then_runs_finish() {
             .current_scope()
             .arena
             .alloc_object(KObject::KString(format!("{a}+{b}")));
-        Outcome::Done(NodeOutput::Value(Carried::Object(allocated)))
+        Outcome::Done(Ok(Carried::Object(allocated)))
     });
     let combine_id = sched.add_combine(vec![dep_a, dep_b], vec![], scope, finish);
     sched.execute().unwrap();
@@ -72,10 +71,10 @@ fn combine_short_circuits_on_dep_error() {
     let _ = store.queues.pop_next();
     let _ = store.queues.pop_next();
     let value = arena.alloc_object(KObject::Number(99.0));
-    store.store.set_result(dep_ok, NodeOutput::value(value));
+    store.store.set_result(dep_ok, Ok(Carried::Object(value)));
     store.store.set_result(
         dep_err,
-        NodeOutput::Err(KError::new(KErrorKind::ShapeError(
+        Err(KError::new(KErrorKind::ShapeError(
             "dep_err synthetic".into(),
         ))),
     );
@@ -84,7 +83,7 @@ fn combine_short_circuits_on_dep_error() {
     let invoked_clone = Rc::clone(&invoked);
     let finish: CombineFinish = Box::new(move |_sched, _results| {
         invoked_clone.set(true);
-        Outcome::Done(NodeOutput::Value(Carried::Object(value)))
+        Outcome::Done(Ok(Carried::Object(value)))
     });
     let combine_id = sched.add_combine(vec![dep_ok, dep_err], vec![], scope, finish);
     sched.execute().unwrap();

@@ -24,7 +24,7 @@ use crate::machine::model::values::{Carried, KObject};
 use crate::machine::{KError, NodeId, TraceFrame};
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
-use super::nodes::{NodeOutput, NodeWork};
+use super::nodes::NodeWork;
 
 /// What a node's step wants the harness to do — the single currency every producer and finish
 /// returns. See the module docs for the taxonomy.
@@ -34,7 +34,7 @@ use super::nodes::{NodeOutput, NodeWork};
 #[allow(clippy::large_enum_variant)]
 pub(in crate::machine::execute) enum Outcome<'run> {
     /// The node dies with a value (to lift out of the dying frame) or an error.
-    Done(NodeOutput<'run>),
+    Done(Result<Carried<'run>, KError>),
     /// The node lives: install `work` and run again immediately (no park). `frame` rotates the
     /// per-call cart (`Inherit` keeps it; `ReuseReserve`/`FreshChild` install a new one — the
     /// harness resolves the placement to a cart); `contract` / `block_entry` / `body_index` carry
@@ -149,10 +149,7 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
             match r {
                 Ok(c) => values.push(*c),
                 Err(e) => {
-                    return Outcome::Done(NodeOutput::Err(propagate_dep_error(
-                        e,
-                        dep_error_frame.clone(),
-                    )))
+                    return Outcome::Done(Err(propagate_dep_error(e, dep_error_frame.clone())))
                 }
             }
         }

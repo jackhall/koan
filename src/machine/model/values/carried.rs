@@ -12,7 +12,7 @@ use crate::machine::model::types::{KType, Parseable};
 use super::KObject;
 
 /// Two-arm value currency. `Copy` like the `&'a` references it wraps, so it threads through
-/// `NodeOutput::Value`, the `Outcome::Done` value, and the lift path without clones.
+/// the `Ok` arm of a node result, the `Outcome::Done` value, and the lift path without clones.
 #[derive(Clone, Copy)]
 pub enum Carried<'a> {
     Object(&'a KObject<'a>),

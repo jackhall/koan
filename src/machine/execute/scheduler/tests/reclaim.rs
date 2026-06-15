@@ -1,11 +1,10 @@
 //! `free` / node-reclamation invariants.
 
-use super::super::super::nodes::NodeOutput;
 use super::super::dep_graph::DepEdge;
 use crate::builtins::default_scope;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::KObject;
+use crate::machine::model::{Carried, KObject};
 use crate::machine::RuntimeArena;
 
 #[test]
@@ -24,9 +23,9 @@ fn free_reclaims_owned_subtree() {
     for id in [s0, s1, s2, s3] {
         store.store.clear_node(id);
     }
-    store.store.set_result(s1, NodeOutput::value(value));
-    store.store.set_result(s2, NodeOutput::value(value));
-    store.store.set_result(s3, NodeOutput::value(value));
+    store.store.set_result(s1, Ok(Carried::Object(value)));
+    store.store.set_result(s2, Ok(Carried::Object(value)));
+    store.store.set_result(s3, Ok(Carried::Object(value)));
     store
         .deps
         .set_dep_edges(s0.index(), vec![DepEdge::Owned(s1)]);
@@ -97,7 +96,7 @@ fn free_skips_live_slot_and_is_idempotent() {
     sched
         .scheduler_mut()
         .store
-        .set_result(s, NodeOutput::value(value));
+        .set_result(s, Ok(Carried::Object(value)));
     sched.free(s.index());
     assert_eq!(sched.scheduler().store.free_list_snapshot(), vec![s]);
     sched.free(s.index());
@@ -124,9 +123,11 @@ fn free_does_not_recurse_through_notify_edges() {
     for id in [s_owner, s_owned, s_sibling] {
         store.store.clear_node(id);
     }
-    store.store.set_result(s_owner, NodeOutput::value(value));
-    store.store.set_result(s_owned, NodeOutput::value(value));
-    store.store.set_result(s_sibling, NodeOutput::value(value));
+    store.store.set_result(s_owner, Ok(Carried::Object(value)));
+    store.store.set_result(s_owned, Ok(Carried::Object(value)));
+    store
+        .store
+        .set_result(s_sibling, Ok(Carried::Object(value)));
     // Sibling self-loop is synthetic: a real scheduler never installs one, but it
     // gives the bug-shape something to walk into so we can assert the walk stopped.
     store.deps.set_dep_edges(

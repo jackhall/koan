@@ -345,7 +345,7 @@ Slot-table state lives in a
 sub-struct on `Scheduler` that owns a single `slots` vector of `SlotState`
 enums plus a `free_list: Vec<NodeId>` of recyclable indices. One enum encodes
 the per-slot lifecycle — `PreRun(Node)` (an un-run node payload), `Running`
-(payload moved out for its step), `Done(NodeOutput)` (terminal result),
+(payload moved out for its step), `Done(Result)` (terminal result),
 `Aliased(NodeId)` (a bare-name forward spliced out to its producer), and `Free`
 (reclaimed) — and each index moves through `alloc_slot → take_for_run →
 reinstall* → finalize → free_one`. Each transition is a single atomic mutator
@@ -757,7 +757,7 @@ The rails the dispatch driver feeds:
     `Keyworded`. Reconstruction errors from
     `KFunction::reconstruct_positional` (missing / unknown /
     duplicate-named args, malformed pair shapes) surface as
-    `NodeOutput::Err` with the same structured wording the keyworded
+    the `Err` arm of a node result with the same structured wording the keyworded
     path produces.
   - `HeadDeferred` (`(pick) {x = 1}`) and `TypeHeadDeferred`
     (`:(MyFunctor {base = IntOrd})`) — [`HeadDeferredState`](../src/machine/execute/dispatch/head_deferred.rs)

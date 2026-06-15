@@ -29,7 +29,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
 
-use super::nodes::{NodeOutput, NodeWork};
+use super::nodes::NodeWork;
 use super::scheduler::Scheduler;
 use super::{ignore_results, CombineFinish};
 use crate::machine::core::kfunction::action::{DepPlacement, FramePlacement};
@@ -229,7 +229,7 @@ pub(super) const POSITIONAL_ONLY: &str =
 
 /// Loud non-match for a call body whose surface shape the resolved carrier doesn't admit.
 pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> Outcome<'run> {
-    Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+    Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
         expr: expr.summarize(),
         reason: reason.to_string(),
     })))
@@ -249,7 +249,7 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<TraceFrame>) -> KErr
 /// off `working_expr`.
 pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>) -> Outcome<'run> {
     let frame = TraceFrame::from_expr("<bind>", working_expr);
-    Outcome::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
+    Outcome::Done(Err(propagate_dep_error(e, Some(frame))))
 }
 
 // ---------- Outcome constructors (the dispatch-currency → Outcome mapping) ----------
@@ -465,7 +465,7 @@ fn classify_dispatch<'run>(
         // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
         // a non-callable head is a runtime error, not a fatal `execute()` abort.
         DispatchShape::NonCallableHead => {
-            Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+            Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(),
                 reason: format!(
                     "head is not callable: `{}`",

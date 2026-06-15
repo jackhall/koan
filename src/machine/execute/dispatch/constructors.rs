@@ -15,10 +15,9 @@ use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::NonWrappedRef;
-use crate::machine::model::KObject;
+use crate::machine::model::{Carried, KObject};
 use crate::machine::{KError, KErrorKind, Scope};
 
-use super::super::nodes::NodeOutput;
 use super::super::CombineFinish;
 use super::single_poll::CtorKind;
 use super::{park_combine, DepRequest, Outcome};
@@ -42,7 +41,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
         value_parts = inner.parts.clone();
     }
     if value_parts.is_empty() {
-        return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::ArityMismatch {
+        return Outcome::Done(Err(KError::new(KErrorKind::ArityMismatch {
             expected: 1,
             got: 0,
         })));
@@ -117,7 +116,7 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
 ) -> Outcome<'run> {
     let (tag, value_part) = match tagged_union::prepare_args(args_parts) {
         Ok(v) => v,
-        Err(e) => return Outcome::Done(NodeOutput::Err(e)),
+        Err(e) => return Outcome::Done(Err(e)),
     };
     launch(
         vec![value_part],
@@ -189,7 +188,7 @@ pub(in crate::machine::execute::dispatch) fn finish<'run>(
         }
     };
     match result {
-        Ok(obj) => Outcome::Done(NodeOutput::value(scope.arena.alloc_object(obj))),
-        Err(e) => Outcome::Done(NodeOutput::Err(e)),
+        Ok(obj) => Outcome::Done(Ok(Carried::Object(scope.arena.alloc_object(obj)))),
+        Err(e) => Outcome::Done(Err(e)),
     }
 }

@@ -196,12 +196,12 @@ edges](execution-model.md#pushnotify-dependency-edges)) keeps its slot-table
 state in a
 [`NodeStore`](../src/machine/execute/scheduler/node_store.rs)
 sub-struct that owns `nodes: Vec<Option<Node<'a>>>`, `results:
-Vec<Option<NodeOutput<'a>>>`, `free_list: Vec<usize>`, and
+Vec<Option<Result<Carried<'a>, KError>>>`, `free_list: Vec<usize>`, and
 `recent_wakes: Vec<Vec<NodeId>>` (the per-consumer wake-attribution
 side-channel scoped to `NodeWork::Decide` consumers) behind the slot
 lifecycle `alloc_slot → take_for_run → reinstall* → finalize → free_one`. The
 slot-indexed vectors share an index space; `alloc_slot` is the only path that
-picks an index, `finalize` is the only path that lands a terminal `NodeOutput`,
+picks an index, `finalize` is the only path that lands a terminal result,
 and `free_one` is the only path that clears `results[idx]`, clears
 `recent_wakes[idx]` (retaining the inner Vec's capacity for the next owner —
 the side-channel's amortized-allocation pattern), and pushes onto

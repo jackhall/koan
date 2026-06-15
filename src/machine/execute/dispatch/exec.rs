@@ -8,7 +8,7 @@
 //! of `ctx.rs` (the dispatcher facade) so the dispatcher core stays thin; pure body semantics live
 //! one layer down in [`crate::machine::core::kfunction::exec`].
 
-use super::super::nodes::{NodeOutput, NodeWork};
+use super::super::nodes::NodeWork;
 use super::super::outcome::{Continuation, Outcome};
 use super::super::{ignore_results, CombineFinish};
 use super::DepRequest;
@@ -85,7 +85,7 @@ pub(super) fn invoke<'run>(
         let f = *f;
         let args = match picked.bind(working_expr) {
             Ok(future) => future.args,
-            Err(e) => return Outcome::Done(NodeOutput::Err(e)),
+            Err(e) => return Outcome::Done(Err(e)),
         };
         return run_action_builtin(view, f, args);
     }
@@ -94,7 +94,7 @@ pub(super) fn invoke<'run>(
     // `bind_by_name`: a uniquely-picked call is admitted shape-only by dispatch, so a non-satisfying
     // typed argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here.
     if let Err(e) = picked.validate_call_args(&working_expr) {
-        return Outcome::Done(NodeOutput::Err(e));
+        return Outcome::Done(Err(e));
     }
 
     let args = match extract_carried_args(view, &working_expr) {
@@ -102,7 +102,7 @@ pub(super) fn invoke<'run>(
         // Unreachable by construction (the bind sites resolve value parts to `Future`/literal
         // first); surface a diagnostic rather than silently mis-bind if that ever breaks.
         None => {
-            return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::User(
+            return Outcome::Done(Err(KError::new(KErrorKind::User(
                 "exec: a call argument was not a resolved value at the bind site".to_string(),
             ))))
         }
@@ -110,7 +110,7 @@ pub(super) fn invoke<'run>(
 
     let bound = match picked.bind_by_name(CallArgs::Positional(args)) {
         Ok(record) => record,
-        Err(e) => return Outcome::Done(NodeOutput::Err(e)),
+        Err(e) => return Outcome::Done(Err(e)),
     };
 
     let outer = picked.captured_scope();
@@ -213,12 +213,10 @@ pub(super) fn invoke<'run>(
                 let kt = match results[results.len() - 1] {
                     Carried::Type(t) => t,
                     Carried::Object(other) => {
-                        return Outcome::Done(NodeOutput::Err(KError::new(KErrorKind::ShapeError(
-                            format!(
-                                "FN deferred return-type expression produced a non-type {} value",
-                                other.ktype().name(),
-                            ),
-                        ))))
+                        return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                            "FN deferred return-type expression produced a non-type {} value",
+                            other.ktype().name(),
+                        )))))
                     }
                 };
                 // The per-call type rides the captured-scope (frame-outer) arena, a strict ancestor
@@ -245,7 +243,7 @@ pub(super) fn invoke<'run>(
                 free: Vec::new(),
             }
         }
-        ExecOutcome::Errored(e) => Outcome::Done(NodeOutput::Err(e)),
+        ExecOutcome::Errored(e) => Outcome::Done(Err(e)),
     }
 }
 

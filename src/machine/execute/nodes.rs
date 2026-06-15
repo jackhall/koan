@@ -2,31 +2,10 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::ScopeId;
-use crate::machine::model::{Carried, KObject, KType};
+use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope, TraceFrame};
 
 use super::{short_circuit, CombineFinish, NodeCont};
-
-/// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
-/// no further write to that slot occurs until it is freed and reused.
-pub(super) enum NodeOutput<'run> {
-    /// A produced value in the two-arm currency (a runtime [`KObject`] or a raw type).
-    /// Use [`NodeOutput::value`] to wrap an object.
-    Value(Carried<'run>),
-    Err(KError),
-}
-
-impl<'run> NodeOutput<'run> {
-    /// Wrap a runtime object as the `Object` arm.
-    pub(super) fn value(o: &'run KObject<'run>) -> Self {
-        NodeOutput::Value(Carried::Object(o))
-    }
-
-    /// Wrap a type as the `Type` arm. Pair with `arena.alloc_ktype`.
-    pub(super) fn ktype(t: &'run KType<'run>) -> Self {
-        NodeOutput::Value(Carried::Type(t))
-    }
-}
 
 /// Outcome of a node's run. `Replace` is the tail-call path: rewrite the slot's work and
 /// re-enqueue the same index so it runs again with no fresh slot allocated, giving constant
@@ -46,7 +25,7 @@ impl<'run> NodeOutput<'run> {
 // path to balance the variants is the wrong trade — the imbalance is inherent.
 #[allow(clippy::large_enum_variant)]
 pub(super) enum NodeStep<'run> {
-    Done(NodeOutput<'run>),
+    Done(Result<Carried<'run>, KError>),
     Replace {
         work: NodeWork<'run>,
         frame: Option<Rc<CallArena>>,
