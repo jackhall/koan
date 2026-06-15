@@ -21,7 +21,7 @@ The scheduler models dispatch itself as a node. There is one node shape — a
 and then runs a [`NodeCont`](../src/machine/execute/outcome.rs) closure over
 their resolved terminals. A top-level expression enters as a *dispatch decide*: a
 `NodeWork` whose `cont` classifies the expression on first poll
-([`schedule_expr`](../src/machine/execute/interpret.rs) collapses to "add one
+([`schedule_expr`](../src/machine/execute/runtime/interpret.rs) collapses to "add one
 dispatch decide per top-level expression"; the rest is dynamic). At run time a
 decide walks its expression's parts, spawns sub-dispatch nodes for nested
 sub-expressions, and a builtin body can declare further dispatch nodes as deps of
@@ -1211,7 +1211,7 @@ statement `i` onto the current ambient chain and submits the
 statements as dispatch nodes:
 
 - Top-level statements
-  ([`interpret`](../src/machine/execute/interpret.rs)) enter through
+  ([`interpret`](../src/machine/execute/runtime/interpret.rs)) enter through
   `enter_block(root.id, exprs, root)` against an empty parent chain.
 - `MODULE` and `SIG` bodies enter through the dispatch harness's `InScope`
   fan-out

@@ -55,7 +55,7 @@ converts to `Err(KError)` with `KErrorKind::AmbiguousDispatch` /
 `DispatchFailed`, and `KFunction::bind` returns `Result<KFuture, KError>` on
 arity mismatch.
 [`Scheduler::execute`](../src/machine/execute/scheduler.rs) and
-[`interpret`](../src/machine/execute/interpret.rs) return `Result<(), KError>` to
+[`interpret`](../src/machine/execute/runtime/interpret.rs) return `Result<(), KError>` to
 complete the surfacing.
 
 ## `try_args!` macro

@@ -8,6 +8,10 @@
 //! `ExecOutcome → Action`) and every `Action`-authored builtin route through it. The peer of
 //! `dispatch/exec.rs::invoke`. The `Action` *types* live in
 //! [`crate::machine::core::kfunction::action`].
+//!
+//! The [`interpret`] submodule holds the program entry points ([`interpret`], [`interpret_with_writer`],
+//! [`interpret_with_writer_path`]); they parse, stand up the arena/root scope, and drive the run via
+//! [`KoanRuntime::run_program`].
 
 use std::rc::Rc;
 
@@ -22,6 +26,10 @@ use super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::outcome::{Continuation, Outcome};
 use super::scheduler::Scheduler;
 use super::{catch_cont, ignore_results, short_circuit, CatchFinish, CombineFinish};
+
+mod interpret;
+
+pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path};
 
 /// The write harness: the sole holder of `&mut Scheduler` across the execute tree. It owns the
 /// [`Scheduler`] by composition (a `sched` field, not a `&mut` borrow) and carries every AST-aware
