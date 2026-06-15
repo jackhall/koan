@@ -85,7 +85,7 @@ site needs.
   node kind, no parallel substitution table. Inference produces type
   refinements that search consumes; search produces module choices that
   refine types other inference tasks are waiting on. Both ride the
-  existing `Dispatch` / `Bind` machinery stage 2 lands.
+  existing `Dispatch` / dep-finish machinery stage 2 lands.
 - *Higher-order restriction — decided.* Implicit modules cannot themselves
   take implicit parameters; documented and enforced in this stage. This is
   the architectural simplification that keeps resolution decidable and

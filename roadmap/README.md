@@ -46,8 +46,8 @@ What's shipped that the open items below build on:
 - *Duplication consolidation.* Six pre-located copy-paste clusters each collapsed to a
   single owner: per-builtin typed-binder `binder_name` (one shared
   [`type_part_binder_name`](../src/builtins.rs)), the FN and FUNCTOR bodies (one shared
-  [`build_fn_like`](../src/builtins/fn_def.rs) keyed on `FnKind`), the `finish.rs`
-  `run_combine`/`run_catch` arms (one `dispatch_body_result`), the `dict_literal`
+  [`build_fn_like`](../src/builtins/fn_def.rs) keyed on `FnKind`), the `finish.rs` dep-finish/catch handler arms (one shared
+  [`run_wait`](../src/machine/execute/scheduler/finish.rs)), the `dict_literal`
   `accept_colon`/`accept_equals` pair (one `accept_separator`), the slot-extract error
   envelope (one [`require_kexpression`](../src/machine/core/kfunction/action.rs)
   owning the parenthesized-slot error text), and the scheduler `Object`/`Type` finalize
@@ -152,7 +152,7 @@ What's shipped that the open items below build on:
   read-only view and *returns* its scheduler mutations as an
   [`Outcome`](../src/machine/execute/outcome.rs) effect that a
   [harness](../src/machine/execute/runtime.rs) interprets — so no dispatch handler
-  holds `&mut Scheduler`. Eager-subs is modelled as the dispatcher's own `Combine` (the same
+  holds `&mut Scheduler`. Eager-subs is modelled as the dispatcher's own dep-finish (the same
   N→1 shape the action harness installs): deps declared, the `Future`-cell splice lives in the
   finish, and the scheduler stays splice-unaware. A builtin invoked mid-dispatch routes through the shared action harness,
   reading the dispatcher's ambient frame/chain off the view.
@@ -170,12 +170,10 @@ What's shipped that the open items below build on:
   the activation parks on, so they sequence and cascade-free before the tail reuses the frame —
   tail recursion with side-effecting statements runs in constant frame space. See
   [design/execution-model.md § The dispatcher / scheduler boundary](../design/execution-model.md#the-dispatcher--scheduler-boundary).
-- *`NodeWork` carries no AST.* The scheduler's slot-work enum collapsed to its essence: the
-  `Combine` / `DispatchCombine` pair merged to one finish type (the `<deps>`
-  dep-error label now harness policy), and `Dispatch` / `DispatchResume` merged to one
-  [`NodeWork::Decide`](../src/machine/execute/nodes.rs) — a captured `SchedulerView -> Outcome`
-  closure (birth and resume run through one `run_decide` arm) plus a pre-rendered deadlock-summary
-  string. Binder-install and the recursive eager-sub pre-submission moved out of `Scheduler::submit_node`
+- *`NodeWork` carries no AST.* The scheduler's slot-work collapsed to a single
+  [`NodeWork`](../src/machine/execute/nodes.rs) struct — one captured `SchedulerView -> Outcome`
+  `cont` (the combine/catch/decide behavior built in by combinators; the `<deps>` dep-error label
+  is harness policy) plus a pre-rendered deadlock-summary string. Binder-install and the recursive eager-sub pre-submission moved out of `Scheduler::submit_node`
   into a dispatch-layer [`submit_dispatch`](../src/machine/execute/dispatch/submit.rs) chokepoint,
   so the scheduler never introspects a `KExpression` — `submit_node` is a generic slot allocator
   and no `NodeWork` variant names an AST. See

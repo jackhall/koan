@@ -49,6 +49,6 @@ Future work on the type and module system. Each entry points at a
   — closes the TCO and builtin runtime-check gaps uniformly, and is the
   language's performance ceiling. The build-time scheduling
   ([scheduler.md](scheduler.md)) — type-returning builtins dispatched and
-  bound through the same `Dispatch`/`Bind` machinery values use, with
+  bound through the same `Dispatch`/dep-finish machinery values use, with
   implicit search layered as a `SEARCH_IMPLICIT` builtin — is the substrate
   the pegged-frontier build phase builds on.

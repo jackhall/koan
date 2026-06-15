@@ -9,7 +9,7 @@ See [execution-model.md § Pegged and free execution](../execution-model.md#pegg
 build-time and run-time are the same engine, differing only in which nodes
 are pegged.
 
-**Inference and search reduce to the existing `Dispatch` and `Bind`
+**Inference and search reduce to the existing `Dispatch` and dep-finish
 machinery.** Type expressions are evaluated by the same engine values
 are. There is no `Infer` node kind; there is no `ImplicitSearch` node
 kind; there is no `KType::TypeVar`.
@@ -31,7 +31,7 @@ The mechanism:
   type definitions short-circuit self-references through the elaborator's
   threaded-set recognition rather than parking on their own placeholder
   ([elaboration.md](elaboration.md)).
-- **Refinement rides on `Bind`.** A `Bind` waiting for its sub-Dispatches
+- **Refinement rides on dep-finish.** A dep-finish waiting for its sub-Dispatches
   to complete is the existing wake-up mechanism; a type expression that
   tightens later (e.g. as functor application reaches the body) wakes
   its dependents through the same path.
@@ -44,7 +44,7 @@ The mechanism:
 Rejected: a parallel `Infer` / `ImplicitSearch` node-kind track, with
 its own substitution table and `KType::TypeVar`. It would duplicate
 scheduling, dependency tracking, cycle detection, and error
-propagation that `Dispatch` and `Bind` already provide, and it would
+propagation that `Dispatch` and dep-finish already provide, and it would
 fork the module language away from the value language at exactly the
 point — inference — where the metacircular reuse is most valuable.
 

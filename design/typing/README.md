@@ -58,7 +58,7 @@ Module-system mechanics:
   parametric vs operation-bearing split, type-argument-from-carried-type
   versus module-argument-from-search, and dependent parameters.
 - [scheduler.md](scheduler.md) — type inference and implicit search as
-  ordinary `Dispatch` / `Bind` scheduler work, with no parallel
+  ordinary `Dispatch` / dep-finish scheduler work, with no parallel
   `Infer` / `ImplicitSearch` node-kind track.
 - [type-language-via-dispatch.md](type-language-via-dispatch.md) — the
   sigil `:(...)` as a parse-context marker; parameterized type

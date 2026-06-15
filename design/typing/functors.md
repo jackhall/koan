@@ -214,7 +214,7 @@ resolves to — so `(MAKETREE Number)` against
 with no call-site wrapping. The per-call type-side bind treats the
 builtin-keyed and nominal-keyed paths identically: a body-position `Elt`
 resolves to `KType::Number` through `Scope::resolve_type`, and a deferred
-return like `-> :Elt` re-elaborates through the same Combine-finish slot
+return like `-> :Elt` re-elaborates through the same dep-finish slot
 check the nominal-keyed path uses. The wall on `KType::Module { .. }` /
 `KType::Signature { .. }` carriers stays in place — those route through
 `OfKind(Module)` / `OfKind(Signature)` / `Signature { .. }` slots, keeping the
@@ -251,19 +251,19 @@ a single body-block [`DepRequest::BodyBlock`](../../src/machine/execute/dispatch
 body statements plus the return-type expression as deps in the harness-acquired
 per-call frame (see
 [per-call-arena-protocol.md § Active-frame propagation](../per-call-arena-protocol.md#active-frame-propagation))
-— whose combine finish runs `resume`. The `resume` closure
+— whose dep-finish runs `resume`. The `resume` closure
 runs `per_call_ret.matches_value(body_value)` and surfaces mismatches with
 `(per-call return type)` wording — a passing value is returned as-is (no
 return-type stamp). The
 `TypeExpr` carrier elaborates inline against the per-call scope where
 the per-call type-side bind has installed the parameter-name
-identities; both carriers feed the same Combine. The inline elaboration
+identities; both carriers feed the same dep-finish. The inline elaboration
 is the standard
 [elaboration.md § Layers](elaboration.md#layers) § Layer 3 walk against
 the per-call scope. The lift-time return-type check in
 [`scheduler/execute.rs`](../../src/machine/execute/scheduler/execute.rs)
 gates on `ReturnType::is_resolved()` so the static-typing pathway stays
-untouched and the deferred slot check runs only inside the Combine
+untouched and the deferred slot check runs only inside the dep-finish
 finish where the per-call elaboration is in hand. The structural
 `KType::KFunctor { ret }` synthesis at
 [`function_value_ktype`](../../src/machine/model/values/kobject.rs) preserves the

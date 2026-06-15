@@ -97,7 +97,7 @@ the composite holds the `Rc<CallArena>`, and the `Rc` holds the arena.
 Neither side can drop. The case shows up when a body returns a
 List / Dict / Tagged / Struct holding a closure — the lift-on-return
 machinery attaches the per-call frame's `Rc` to the closure, then a
-re-allocation of the composite (via `value_pass`, `Combine`, etc.)
+re-allocation of the composite (via `value_pass`, a dep-finish, etc.)
 lands the composite back in the per-call arena.
 
 `RuntimeArena` carries an `escape: Option<*const RuntimeArena>` set by
@@ -136,19 +136,21 @@ state live on `Scheduler`:
   [`Scheduler::current_frame`](../src/machine/execute/scheduler.rs);
   written only by `enter_slot_step` / `exit_slot_step` (the RAII
   bracket around every iteration of `Scheduler::execute`) and the
-  `with_active_frame` body bracket. An invoke never takes it (tail
+  `swap_active_frame` save/restore. An invoke never takes it (tail
   reuse draws from the reserve, below), so within a step it is always
   `Some` — `Node::frame` and `PostStep::prev_frame` are non-optional.
 - **`active_reserve: Option<Rc<CallArena>>`** — the slot's reserve
   frame, drained from `Node`'s `Frame::reserve` through
   `enter_slot_step` and consumed by `acquire_tail_frame` (see
   [§ Ping-pong reserve frame](#ping-pong-reserve-frame)).
-- **`Scheduler::with_active_frame(frame, f)`** — temporarily
-  installs `frame` as `active_frame` for the duration of a closure
-  call. Used by `dispatch::exec::invoke` to spawn a deferred return-type
-  sub-Dispatch under the per-call frame so the sub-Dispatch's scope
-  resolves against the per-call type-side bind (see
-  [typing/functors.md § Deferred return-type elaboration](typing/functors.md#deferred-return-type-elaboration)).
+- **`Scheduler::swap_active_frame(frame) -> Option<Rc<CallArena>>`** —
+  installs `frame` as `active_frame` and returns the previous one, for a
+  transient save/restore. Used by
+  [`KoanRuntime::dispatch_body`](../src/machine/execute/runtime/submit.rs) to
+  dispatch a body's non-tail statements under the body frame so each sub-slot
+  inherits it as its cart (see
+  [typing/functors.md § Deferred return-type elaboration](typing/functors.md#deferred-return-type-elaboration)
+  for the per-call type-side bind that motivates it).
 
 `Scheduler::execute` *moves* `node.frame` into `self.active_frame`
 (no clone) for the duration of each step. That single-ownership
@@ -157,9 +159,8 @@ when the just-finished active frame rotates into the slot's reserve and
 a later step tries to reuse it, `try_reset_for_tail`'s `Rc::get_mut`
 succeeds only at `strong_count == 1` — a clone visible to `strong_count`
 (an escaped closure, a sub-Dispatch that cloned `active_frame`) is a
-real escape and refuses the reset. Sub-Dispatch / sub-Bind / sub-Combine
-slots spawned via `add()` inherit `active_frame` so they see the right
-ancestor for their own chaining decisions.
+real escape and refuses the reset. Sub-dispatch and dep-finish slots inherit
+`active_frame` so they see the right ancestor for their own chaining decisions.
 
 ## Outer-frame chain for builtin-built frames
 
@@ -325,8 +326,8 @@ free, `'a: 'p`). Because the borrow cannot outlive the frame `Rc` it reads from,
 the frame is a compile error rather than a fabrication; `Scope<'a>` invariance rides structurally
 on the returned `Scope<'a>`, so the brand needs no separate struct. Bodies / finishes / the
 dispatch engine no longer thread a `scope` parameter — they call `current_scope()`; the genuine
-run-scope methods (`dispatch_in_scope` / `add_combine` / `add_catch` / `enter_block` /
-`submit_node`) keep their `&'a Scope` argument.
+run-scope methods (`dispatch_in_scope` / `dispatch_in_scope_with_chain` /
+`enter_block`) keep their `&'a Scope` argument.
 
 The post-step loop in `Scheduler::execute` reads the just-finished step's scope through a
 `PostStep` token returned by `exit_slot_step`, derived from the slot's *returned* frame
@@ -346,7 +347,7 @@ and the frame `Rc` the caller holds heap-pins it) and its child scope re-handed 
 witness-bounded `scope_bounded` brand — so the scope half is *not* fabricated free, only the
 arena half is. This is the sole surviving free re-exposure in the protocol.
 Arm and body statements then dispatch through the framed scheduler write primitives
-(`add_dispatch_with_chain_in_frame`, `dispatch_in_active_frame`, `add_combine_in_frame`), which
+(`dispatch_in_active_frame`, `dispatch_body`), which
 derive the scope from the active frame and store `Yoked`, so the seed itself persists no
 fabricated `&'a`.
 
@@ -362,7 +363,7 @@ mechanics:
 - [execution-model.md](execution-model.md) — the dispatch / TCO
   pipeline whose `Tail` rewrite drives `try_reset_for_tail`.
 - [typing/functors.md](typing/functors.md) — the per-call type-side
-  bind and the `with_active_frame` deferred return-type Combine.
+  bind and the deferred return-type dep-finish.
 - [typing/modules.md](typing/modules.md) — `USING … SCOPE` allocating
   in the call-site arena so a forwarded bind or window-surfaced
   member outlives the block.

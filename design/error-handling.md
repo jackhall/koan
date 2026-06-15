@@ -42,9 +42,9 @@ with these `KErrorKind` variants:
 ## Propagation
 
 The scheduler walks errors along the dependency edges: a slot's terminal
-`Err` write triggers the notify-walk, which wakes each waiting `Bind` /
-`Combine` / `Lift` consumer; those short-circuit, append a `Frame`, and
-write the error into their own slot. Errors flow to the top level; the CLI
+`Err` write triggers the notify-walk, which wakes each waiting consumer; a dep-finish
+short-circuits, appends a `Frame`, and writes the error into its own slot (a
+catch instead recovers or re-raises). Errors flow to the top level; the CLI
 formats them to stderr with the frame chain via `KError`'s `Display` impl.
 
 Dispatch failures (no match, ambiguous overload, arity mismatch in bind) flow
@@ -74,10 +74,10 @@ function in the trace, because the slot's `function` field is replaced at TCO
 time (see [execution-model.md](execution-model.md) and
 [per-call-arena-protocol.md § TCO frame reuse](per-call-arena-protocol.md#tco-frame-reuse)).
 Non-tail-call positions — e.g., a sub-`Dispatch` inside a parens-wrapped
-sub-expression — preserve the outer frame: the slot rewrites to a `Lift`
-shim that retains the call frame and `function` label until the spawned
-`Bind` notifies, so an error landing on the Lift carries the outer
-function's frame. This matches how other languages with TCO behave.
+sub-expression — preserve the outer frame: the consuming slot parks on the
+sub-`Dispatch` as a dependency, and the dep-finish short-circuit retains the call
+frame and `function` label, so an error landing on the dependency carries the
+outer function's frame. This matches how other languages with TCO behave.
 
 ## User-side surface
 
@@ -194,12 +194,12 @@ inside the body is not visible to code following the `TRY`.
 
 The branch walker is shared with `MATCH`
 ([`branch_walk::find_branch_body`](../src/builtins/branch_walk.rs));
-TRY opts into `_` wildcard support, MATCH does not. The catching wiring
-is a new scheduler primitive `NodeWork::Catch` (see
-[execution-model.md](execution-model.md)): `add_catch` waits on a watched
-slot and hands its `Result<&KObject, KError>` to a host closure that
-decides whether to recover or re-raise. Unlike `Combine`, an errored dep
-does not short-circuit — TRY's finish always runs.
+TRY opts into `_` wildcard support, MATCH does not. The catching wiring is the
+action-harness catch (`Action::Catch`, lowered to a `Continuation::Catch`; see
+[execution-model.md](execution-model.md)): it waits on a watched slot and hands
+its `Result<&KObject, KError>` to a host closure that decides whether to recover
+or re-raise. Unlike a dep-finish, an errored dep does not short-circuit — TRY's
+finish always runs (`catch_cont`).
 
 ### Exposed variants
 
@@ -243,7 +243,7 @@ the caller binds with `LET`, passes as an argument, or returns:
   MATCH-ing `e` after destructuring the `Result`.
 
 The [`CATCH`](../src/builtins/catch.rs) builtin reuses the same scheduler
-primitive as `TRY-WITH` (`add_catch` / `CatchFinish`): it schedules `<expr>` as a
+mechanism as `TRY-WITH` (`Action::Catch` / `CatchFinish`): it schedules `<expr>` as a
 catching sub-dispatch and registers a finish closure that wraps the outcome in
 a `Result` value. The prelude `Result` identity's `scope_id` is read from
 `bindings.types` (via `scope.resolve_type("Result")`) at body time, not from the

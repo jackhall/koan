@@ -70,12 +70,9 @@ direct accessors of ambient state. The runtime drains effects through a
 single channel: a default handler performs them; a test handler captures
 them; a replay handler feeds recorded results.
 
-The Rust-side
-[`Monadic`](../src/machine/model/types/ktraits.rs) trait, currently scaffolding
-for `Option`, becomes the bridge between the in-language `Monad`
-signature and the runtime's effect drainage. It implements the carrier
-shape the runtime uses for `Effectful<T>` — a value paired with pending
-effects.
+A Rust-side `Monadic` trait will bridge the in-language `Monad` signature and the
+runtime's effect drainage, implementing the carrier shape the runtime uses for
+`Effectful<T>` — a value paired with pending effects.
 
 ## Pure / effectful boundary
 

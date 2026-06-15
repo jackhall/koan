@@ -27,14 +27,14 @@ decide walks its expression's parts, spawns sub-dispatch nodes for nested
 sub-expressions, and a builtin body can declare further dispatch nodes as deps of
 the `Outcome` it returns.
 
-Per-family behavior — combine vs. catch vs. decide — is not a node variant; it is
+Per-family behavior — dep-finish vs. catch vs. decide — is not a node variant; it is
 which combinator built the `cont` closure ([`short_circuit`](../src/machine/execute/outcome.rs)
 / [`catch_cont`](../src/machine/execute/outcome.rs) /
 [`ignore_results`](../src/machine/execute/outcome.rs) in
 [`outcome.rs`](../src/machine/execute/outcome.rs)). The node itself never branches
 and names no AST.
 
-- A **combine** `cont` (built by `short_circuit`) waits on a fixed set of dep
+- A **dep-finish** `cont` (built by `short_circuit`) waits on a fixed set of dep
   slots, short-circuits on the first errored dep, and otherwise runs an arbitrary
   host closure ([`DepFinish`](../src/machine/execute/outcome.rs)) over their
   resolved values. List- and dict-literal planners use it; the construction logic
@@ -42,7 +42,7 @@ and names no AST.
   in the closure's capture.
 - A **catch** `cont` (built by `catch_cont`) waits on one slot and hands its
   terminal to a [`CatchFinish`](../src/machine/execute/outcome.rs) closure as a
-  `Result<&KObject, KError>`. Unlike a combine, an errored dep does not
+  `Result<&KObject, KError>`. Unlike a dep-finish, an errored dep does not
   short-circuit — the closure always runs and decides whether to recover or
   re-raise. The `TRY-WITH` builtin
   ([`try_with`](../src/builtins/try_with.rs); see
@@ -140,7 +140,7 @@ A builtin or user-fn body, like every other step, returns an
 When a body cannot produce its result inline — its expression has nested
 sub-expressions whose own evaluation hasn't run yet — the slot parks: its work is
 rewritten to a `NodeWork` that waits on the spawned sub-dispatch deps and runs a
-combine `cont` that assembles the result on wake. The slot keeps its index, so
+dep-finish `cont` that assembles the result on wake. The slot keeps its index, so
 consumers downstream see the eventual terminal under the original slot index as
 if the body had produced it directly.
 
@@ -211,7 +211,7 @@ Inv-B is what makes the eager `clear_dep_edges(idx)` in
 `Scheduler::reclaim_deps` sound at the `[park_count..]` owned-suffix reclaim: the
 suffix a node owns holds only `Owned` edges (the sub-Dispatches the slot spawned).
 `Notify` edges land only in the `[..park_count]` prefix — a dispatch decide's
-park-on-producer and a combine's `Existing` sibling parks — which `run_wait`
+park-on-producer and a dep-finish's `Existing` sibling parks — which `run_wait`
 excludes from the reclaim by reading `deps[park_count..]` for the owned indices,
 so clearing the owned tree cannot drop a wake intent on a sibling producer.
 
@@ -254,15 +254,15 @@ copy** of it. The keyworded dispatcher extracts every nested sub-expression out 
 the parent's `parts` (replacing each with a placeholder `Identifier`) and
 declares them as the deps of a
 [`ParkThenContinue`](#the-dispatcher--scheduler-boundary) whose continuation
-is a `Continuation::Finish` — the dispatch flavor of a combine. The harness
+is a `Continuation::Finish` — the dispatch flavor of a dep-finish. The harness
 submits each dep as a sub-Dispatch and parks the parent on a
-[`NodeWork`](../src/machine/execute/nodes.rs) whose `cont` is a combine wrapping
+[`NodeWork`](../src/machine/execute/nodes.rs) whose `cont` is a dep-finish wrapping
 that *splice finish* (a [`DepFinish`](../src/machine/execute/outcome.rs)
 closure). When the deps terminalize, that finish runs and writes each
 resolved value back into the working copy:
 `working_expr.parts[part_idx] = ExpressionPart::Future(value)`. The splice
 lives **entirely inside the finish** — the scheduler resolves deps and hands
-values back exactly as it does for any combine, learning nothing about `Future`
+values back exactly as it does for any dep-finish, learning nothing about `Future`
 cells. The assembled `Future`-laden expression then goes through
 `resolve_dispatch` as if it had been written with literals.
 
@@ -328,7 +328,7 @@ the `cont` closure returns its `Outcome`, before the harness applies it — so a
 dispatch splice finish's freed indices are on the free-list before the harness
 dispatches the spliced body. Once the consumer has read its dep results and either
 spliced them into `working_expr.parts` as `Future(value)` (the eager-subs splice
-finish) or handed them to its combine / catch finish, the owned dep
+finish) or handed them to its dep-finish / catch finish, the owned dep
 slots are unreachable: a sub-Dispatch is
 owned by exactly one consumer, recorded in the consumer's `dep_edges`
 entry as a `DepEdge::Owned(NodeId)`. Free walks recursively, recycling
@@ -644,7 +644,7 @@ the per-slot index buckets `r.slots` carries (`wrap_indices`,
 `AmbiguousDispatch` error; `Unmatched` surfaces as `DispatchFailed`;
 `Deferred` (the candidate may match after sub-evaluation yields a typed
 `Future(_)`) routes to `KeywordedState::install_eager_only`, which declares every
-eager-shaped part as a `Combine` dep and parks this slot on them;
+eager-shaped part as a dep-finish dependency and parks this slot on them;
 the splice finish re-resolves dispatch against the spliced expression at
 dep completion;
 `ParkOnProducers(_)` and `UnboundName(_)` are decided inside the scope walk
@@ -737,7 +737,7 @@ The rails the dispatch driver feeds:
   - `RecordType` (single-part `:{…}` record type) — `record_type` folds the
     field list straight to `KType::Record` through the shared field-list
     elaborator (no tail-replace, no internal type-constructor builtin),
-    deferring through a combine `cont` only when a field type forward-references
+    deferring through a dep-finish `cont` only when a field type forward-references
     or sub-dispatches. See
     [type-language-via-dispatch.md § Record-type sigil](typing/type-language-via-dispatch.md#record-type-sigil).
   - `FunctionValueCall` (`f {x = 7}`) — [`FnValueState`](../src/machine/execute/dispatch/fn_value.rs)
@@ -843,7 +843,7 @@ The rails the dispatch driver feeds:
     and either surfaces `SchedulerDeadlock { sample: "cycle in type alias
     `<name>`" }` on a self-park or pushes `p` onto the shared
     `producers_to_wait` list. `Unbound(name)` surfaces a slot-terminal
-    `UnboundName` (the parent binder's Combine reads it through
+    `UnboundName` (the parent binder's dep-finish reads it through
     `read_result(dep)` and short-circuits with the right framing — an
     `Err` from `execute` would break that catch).
     `Cycle` / `ProducerErrored` are unreachable here: the cache is built
@@ -860,7 +860,7 @@ The rails the dispatch driver feeds:
     `SigiledTypeExpr` tail-replaces with the inner dispatch, `RecordType` folds
     to `KType::Record`); `ListLiteral` and `DictLiteral`
     route through `schedule_list_literal` / `schedule_dict_literal` for the
-    aggregate Combine; any other shape rides through unchanged. Lazy
+    aggregate dep-finish; any other shape rides through unchanged. Lazy
     `Expression` parts in `KExpression` slots are filtered out by
     `eager_indices` and the receiving builtin dispatches them itself.
 
@@ -888,10 +888,10 @@ The rails the dispatch driver feeds:
   placement installs the per-call cart and whose `work` re-decides via
   `dispatch::exec::invoke` on the next pop
   (a wrap-slot-only call like `MAKESET IntOrd` resolves bare names in Step 4,
-  leaves no eager parts, and binds in one step — no Combine detour). Otherwise
+  leaves no eager parts, and binds in one step — no dep-finish detour). Otherwise
   the decide returns a `ParkThenContinue` with a `Continuation::Finish`
   declaring the fresh subs as deps with a splice finish; the harness parks the
-  slot as a `Combine` carrying the finish. At dep completion the finish
+  slot as a dep-finish carrying the finish. At dep completion the finish
   re-resolves the spliced `working_expr` and folds it into a `Continue` — via
   `invoke_continue` on the speculatively-picked function, or via
   `redispatch_continue` (re-running
@@ -903,7 +903,7 @@ The rails the dispatch driver feeds:
   ride the same name-resolve rail when their `wrap_identifiers` plan-input
   is set: bare-name entries call `resolve_name_part` directly and
   materialize as `Slot::Static` (resolved) or `Slot::Park(i)` (parked
-  producer), with the combine driving a single wake across all parked
+  producer), with the dep-finish driving a single wake across all parked
   siblings.
 
 `Resolved.slots`'s three index vectors (`wrap_indices` / `ref_name_indices` /
@@ -951,17 +951,17 @@ elaboration plugs into the same mechanism: when
 [`elaborate_type_expr`](../src/machine/model/types/resolver.rs) hits a
 bare type-name leaf whose binder is in `Scope::placeholders` but not yet
 finalized, it returns `ElabResult::Park(producers)` and FN-def's body
-schedules a combine over those producers that re-runs the signature
+schedules a dep-finish over those producers that re-runs the signature
 elaboration against the now-final scope at finish time. (See
 [typing/elaboration.md § Layers](typing/elaboration.md#layers) § Layer 3
 for the elaborator's role in the pipeline.) A parens-wrapped
-parameter type (`xs :(LIST OF Number)`) rides the same combine:
+parameter type (`xs :(LIST OF Number)`) rides the same dep-finish:
 `parse_fn_param_list` records the `(slot_idx, sub_expr)` pair, FN-def
-schedules each sub-expression as its own sub-Dispatch, and the combine's
+schedules each sub-expression as its own sub-Dispatch, and the dep-finish's
 finish closure splices each result into
 `signature_expr.parts[slot_idx]` as `Future(Carried::Type(_))` before
 re-running the parameter-list walk against the spliced signature. STRUCT
-and UNION share the same elaborator-and-combine shape for their
+and UNION share the same elaborator-and-dep-finish shape for their
 field-type lists. The fused walk's per-park cycle check
 ([`DepGraph::would_create_cycle`](../src/machine/execute/scheduler/dep_graph.rs),
 covered above) handles the simple trivially-cyclic cases proactively; the
@@ -975,7 +975,7 @@ node parked on a dependency that can no longer fire — and returns
 `KErrorKind::SchedulerDeadlock { pending, sample }` rather than letting
 the top-level result read panic on an unresolved slot. `sample` is the carrier
 summary of the first parked node that has one (a dispatch decide carries its
-expression's pre-rendered summary; a carrier-less combine/catch wait falls back
+expression's pre-rendered summary; a carrier-less dep-finish/catch wait falls back
 to a generic tag), so the diagnostic points at code the reader can act on.
 
 ### Dispatch birth and resume
@@ -1024,7 +1024,7 @@ against the now-populated scope:
   re-runs the resolve against the now-populated `pending_overloads` bucket.
   **Eager subs never park here**: a `Deferred`/eager-subs resolve returns a
   `ParkThenContinue` with a `Continuation::Finish` and parks on a node with a
-  combine `cont` whose finish re-resolves the spliced expression — so a
+  dep-finish `cont` whose finish re-resolves the spliced expression — so a
   keyworded resume never re-enters for them. Re-resolve in the finish is
   authoritative: an element-typed `Future(_)` that narrows a typed-slot
   admission rules a speculative initial pick out, and the call surfaces
@@ -1043,12 +1043,12 @@ against the now-populated scope:
 one park installer: the overload park installs from a resolve failure *before*
 the part walk runs; the bare-name park installs *before* any eager sub could
 stage, because the part walk's park-precedence guard runs first; eager subs
-take the combine-finish route rather than a resume. So a slot's resume
+take the dep-finish route rather than a resume. So a slot's resume
 carries exactly one park reason.
 
 The drain-end cycle-detection guard (`NodeStore::unresolved`) summarizes parked
 slots from each `NodeWork`'s `carrier` — a dispatch decide carries its
-expression's pre-rendered summary; a carrier-less combine/catch wait falls back to
+expression's pre-rendered summary; a carrier-less dep-finish/catch wait falls back to
 a generic `<wait>` tag — selected by a testable `work_deadlock_sample` helper in
 `node_store`.
 
@@ -1130,7 +1130,7 @@ recursive tree-walker can't get cheaply.
 - **Per dep-result splice.** O(1) write into `expr.parts`.
 - **Per terminal.** Single `notify_list` drain. The cost scales with
   the producer's dependent count, which is typically 1 (the consumer
-  parked on it through a combine or catch `cont`) but unbounded
+  parked on it through a dep-finish or catch `cont`) but unbounded
   in principle (forward-reference parks, where the splice moves many
   consumers onto one producer).
 
@@ -1335,8 +1335,8 @@ for test fixtures and builtin-registration paths.
 - **Inference and search as scheduler work**
   ([typing/scheduler.md](typing/scheduler.md)).
   Type inference and modular-implicit resolution reduce to the existing
-  dispatch-decide and combine machinery — type-returning builtins on the value
-  path, a combine `cont` as the refinement-and-wake-up mechanism, and stage 5
+  dispatch-decide and dep-finish machinery — type-returning builtins on the value
+  path, a dep-finish `cont` as the refinement-and-wake-up mechanism, and stage 5
   implicit search as a single `SEARCH_IMPLICIT` builtin rather than a new
   node kind. Higher-kinded slots and sharing constraints layer on top of
   the scheduler-driven elaborator (see

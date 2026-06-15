@@ -146,7 +146,7 @@ parser collects the inner tokens into a regular `KExpression` and wraps it as
 etc.) are the dispatcher's responsibility: the
 sigil's only job is to flag "this slot evaluates to a type, not a value". The
 framing logic lives in [frame.rs](../src/parse/frame.rs)
-(`Frame::TypeExpr`); the dispatcher's `fast_lane_sigiled_type_expr` handler
+(`Frame::TypeExpr`); the dispatcher's `sigiled_type_expr` handler
 tail-replaces the slot with a `Dispatch` of the wrapped expression. See
 [typing/type-language-via-dispatch.md](typing/type-language-via-dispatch.md)
 for the full sigil-and-dispatch contract.
