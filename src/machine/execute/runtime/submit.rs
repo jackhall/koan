@@ -32,7 +32,7 @@ impl<'run> KoanRuntime<'run> {
             .enumerate()
             .map(|(i, expr)| {
                 let chain = LexicalFrame::push(parent.clone(), scope_id, i + 1);
-                self.add_dispatch_with_chain(expr, scope, chain)
+                self.submit_against_scope(expr, scope, Some(chain))
             })
             .collect()
     }
@@ -45,20 +45,10 @@ impl<'run> KoanRuntime<'run> {
         self.submit_against_scope(expr, scope, chain)
     }
 
-    /// [`Self::add_dispatch`] with `chain` attached explicitly rather than read from `active_chain`
-    /// — the `enter_block` path, which positions each statement at its own block index.
-    pub(in crate::machine::execute) fn add_dispatch_with_chain(
-        &mut self,
-        expr: KExpression<'run>,
-        scope: &'run Scope<'run>,
-        chain: Rc<LexicalFrame>,
-    ) -> NodeId {
-        self.submit_against_scope(expr, scope, Some(chain))
-    }
-
-    /// Shared core of [`Self::add_dispatch`] / [`Self::add_dispatch_with_chain`]: establish the run
-    /// frame, decide the slot's [`NodeScope`] handle against `scope`, then submit. `chain` is the
-    /// caller's resolved lexical chain (ambient for `add_dispatch`, explicit for `enter_block`).
+    /// Submit `expr` against a run-lived `scope`: establish the run frame, decide the slot's
+    /// [`NodeScope`] handle against `scope`, then submit. `chain` is the caller's resolved lexical
+    /// chain — ambient for [`Self::add_dispatch`], or the per-statement block chain for
+    /// [`Self::enter_block`].
     fn submit_against_scope(
         &mut self,
         expr: KExpression<'run>,
