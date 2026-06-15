@@ -404,4 +404,16 @@ mechanics:
 
 ## Open work
 
-- (none)
+- **Scheduler lifts node outputs**
+  ([roadmap/scheduler-lifts-node-outputs.md](../roadmap/refactor/scheduler-lifts-node-outputs.md)).
+  Bind a node continuation's output to its own per-call frame lifetime and make the
+  Done-boundary lift the scheduler's own step (policy in the scheduler, KObject-aware
+  relocation behind a workload hook), so the value is promoted per-node→consumer rather
+  than re-homed within a uniform `'run`.
+- **Workload-independent DAG runtime**
+  ([roadmap/workload-independent-dag-runtime.md](../roadmap/refactor/workload-independent-dag-runtime.md)).
+  Make the scheduler generic over two lifetime-erased workload types — a node-stored payload
+  and an inter-node value — re-anchored to the node frame lifetime at run / read (generalizing
+  the `ErasedContract` reattach). Evict `scope` / `chain` into the node payload and move
+  `CallArena` into the scheduler, leaving the active-frame plumbing here as a generic per-node
+  memory manager with `'run` confined to `KoanRuntime`.

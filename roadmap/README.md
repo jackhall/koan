@@ -221,6 +221,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
+- [Scheduler lifts node outputs](refactor/scheduler-lifts-node-outputs.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
@@ -311,3 +312,10 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
+- [Scheduler lifts node outputs](refactor/scheduler-lifts-node-outputs.md) — bind a node
+  continuation's output to its own frame lifetime and make lift the scheduler's step, so the
+  uniform-`'run` output type stops smearing the run lifetime across the scheduler.
+- [Workload-independent DAG runtime](refactor/workload-independent-dag-runtime.md) — erase
+  per-node continuations and evict `scope` / `chain` into opaque workload payload (moving
+  `CallArena` in), confining `'run` to `KoanRuntime` and leaving a generic per-node-memory
+  DAG runtime.

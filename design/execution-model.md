@@ -1347,3 +1347,12 @@ for test fixtures and builtin-registration paths.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
+- **Workload-independent DAG runtime**
+  ([roadmap/workload-independent-dag-runtime.md](../roadmap/refactor/workload-independent-dag-runtime.md),
+  building on [roadmap/scheduler-lifts-node-outputs.md](../roadmap/refactor/scheduler-lifts-node-outputs.md)).
+  The scheduler still stores Koan-semantic state (a node's `scope` / `chain`) and
+  `'run`-capturing continuations, so `'run` threads through every `scheduler/` file. Shrinking the
+  continuation output to a per-node lifetime (lift becomes the scheduler's step) and then making the
+  scheduler generic over two lifetime-erased workload types — a node-stored payload and an
+  inter-node value, re-anchored to the node frame lifetime at run / read — evicts those concerns,
+  leaving a generic per-node-memory DAG runtime with `'run` confined to `KoanRuntime`.
