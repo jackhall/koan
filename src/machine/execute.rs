@@ -16,7 +16,7 @@ mod runtime;
 mod scheduler;
 
 pub(in crate::machine::execute) use outcome::{
-    catch_cont, ignore_results, short_circuit, CatchFinish, CombineFinish, NodeCont,
+    catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, NodeCont,
 };
 pub use runtime::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};
 pub use scheduler::Scheduler;

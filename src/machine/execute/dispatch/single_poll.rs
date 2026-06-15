@@ -15,10 +15,10 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
 use crate::machine::{KError, KErrorKind, Resolution};
 
-use super::super::CombineFinish;
+use super::super::DepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
-use super::{become_dispatch, park_combine, park_lift, park_resume, DepRequest, Outcome};
+use super::{become_dispatch, park_on_deps, park_lift, park_resume, DepRequest, Outcome};
 
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
 /// slot is resolved. `(set, index)` is the sealed-member identity stamped onto the produced
@@ -156,8 +156,8 @@ pub(super) fn literal_pass_through<'run>(
 /// lifts the producer's resolved value straight through. The harness submits the literal and owns
 /// it; a dep error short-circuits frameless before the finish runs.
 fn park_on_literal<'run>(dep: DepRequest<'run>) -> Outcome<'run> {
-    let finish: CombineFinish<'run> = Box::new(|_ctx, results| Outcome::Done(Ok(results[0])));
-    park_combine(vec![dep], None, finish, Vec::new())
+    let finish: DepFinish<'run> = Box::new(|_ctx, results| Outcome::Done(Ok(results[0])));
+    park_on_deps(vec![dep], None, finish, Vec::new())
 }
 
 /// Synchronous resolve-then-branch for a bare-`Type`-head call. One resolution,

@@ -20,8 +20,8 @@ use crate::machine::model::values::Carried;
 use crate::machine::model::{KType, Record};
 use crate::machine::{KError, KErrorKind, NodeId, Scope, TraceFrame};
 
-use super::super::outcome::{Continuation, Outcome};
-use super::super::CombineFinish;
+use super::super::outcome::{dep_error_frame, Continuation, Outcome};
+use super::super::DepFinish;
 use super::DepRequest;
 use super::SchedulerView;
 
@@ -61,7 +61,7 @@ pub(crate) fn defer_field_list_via_combine<'run>(
     finalize: FieldListFinalize<'run>,
 ) -> Outcome<'run> {
     let park_count = park_producers.len();
-    let finish: CombineFinish<'run> = Box::new(move |view, results| {
+    let finish: DepFinish<'run> = Box::new(move |view, results| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
         // `results` = `[park results.. , owned-sub results..]`; the re-walk consumes only
@@ -107,8 +107,8 @@ pub(crate) fn defer_field_list_via_combine<'run>(
     Outcome::ParkThenContinue {
         deps,
         park_count,
-        cont: Continuation::Combine(finish),
-        dep_error_frame: None,
+        cont: Continuation::Finish(finish),
+        dep_error_frame: Some(dep_error_frame()),
         free: Vec::new(),
     }
 }

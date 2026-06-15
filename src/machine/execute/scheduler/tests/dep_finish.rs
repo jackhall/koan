@@ -11,16 +11,16 @@ use crate::machine::RuntimeArena;
 use super::let_expr;
 
 #[test]
-fn combine_waits_on_deps_then_runs_finish() {
+fn dep_finish_waits_on_deps_then_runs_finish() {
     // Pins that Combine waits on every dep before invoking finish and that
     // finish-returned Outcome::Done(Value) lands in the slot's result.
-    use crate::machine::execute::CombineFinish;
+    use crate::machine::execute::DepFinish;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let dep_a = sched.dispatch_in_scope(let_expr("ca", 7.0), scope);
     let dep_b = sched.dispatch_in_scope(let_expr("cb", 11.0), scope);
-    let finish: CombineFinish = Box::new(|_sched, results| {
+    let finish: DepFinish = Box::new(|_sched, results| {
         let a = match results[0] {
             Carried::Object(KObject::Number(n)) => *n,
             _ => {
@@ -43,16 +43,16 @@ fn combine_waits_on_deps_then_runs_finish() {
             .alloc_object(KObject::KString(format!("{a}+{b}")));
         Outcome::Done(Ok(Carried::Object(allocated)))
     });
-    let combine_id = sched.add_combine(vec![dep_a, dep_b], vec![], scope, finish);
+    let dep_finish_id = sched.add_dep_finish(vec![dep_a, dep_b], vec![], scope, finish);
     sched.execute().unwrap();
-    assert!(matches!(sched.read(combine_id).object(), KObject::KString(s) if s == "7+11"));
+    assert!(matches!(sched.read(dep_finish_id).object(), KObject::KString(s) if s == "7+11"));
 }
 
 #[test]
-fn combine_short_circuits_on_dep_error() {
+fn dep_finish_short_circuits_on_dep_error() {
     // Pins that finish does not run when any dep errored, and that the
-    // propagated error carries a "<combine>" frame.
-    use crate::machine::execute::CombineFinish;
+    // propagated error carries a "<deps>" frame.
+    use crate::machine::execute::DepFinish;
     use crate::machine::{KError, KErrorKind};
     use std::cell::Cell;
     use std::rc::Rc;
@@ -81,27 +81,27 @@ fn combine_short_circuits_on_dep_error() {
 
     let invoked: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let invoked_clone = Rc::clone(&invoked);
-    let finish: CombineFinish = Box::new(move |_sched, _results| {
+    let finish: DepFinish = Box::new(move |_sched, _results| {
         invoked_clone.set(true);
         Outcome::Done(Ok(Carried::Object(value)))
     });
-    let combine_id = sched.add_combine(vec![dep_ok, dep_err], vec![], scope, finish);
+    let dep_finish_id = sched.add_dep_finish(vec![dep_ok, dep_err], vec![], scope, finish);
     sched.execute().unwrap();
 
     assert!(!invoked.get(), "finish must not run when a dep errored");
-    let result = sched.read_result(combine_id);
+    let result = sched.read_result(dep_finish_id);
     let err = match result {
         Err(e) => e.clone(),
         Ok(_) => panic!("combine should have errored"),
     };
     assert!(
-        err.frames.iter().any(|f| f.function == "<combine>"),
-        "propagated error should carry a <combine> frame, got {err}",
+        err.frames.iter().any(|f| f.function == "<deps>"),
+        "propagated error should carry a <deps> frame, got {err}",
     );
 }
 
 #[test]
-fn defer_to_lifts_slot_terminal_off_combine_id() {
+fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
     // Pins the binder-body wrap-up shape MODULE / SIG use: an `Action::Combine` body parks the
     // slot as a Combine and leaves it with the Combine's terminal.
     use crate::builtins::{default_scope, register_builtin};

@@ -13,7 +13,7 @@
 //! [`interpret_with_writer_path`]); they parse, stand up the arena/root scope, and drive the run via
 //! [`KoanRuntime::run_program`]. The [`submit`] submodule holds the AST-aware dispatch-submission
 //! wrappers ([`KoanRuntime::enter_block`], [`KoanRuntime::dispatch_in_scope`], `dispatch_in_own_scope`,
-//! `dispatch_body`, `combine_here`) — the only callers that turn a `KExpression` into
+//! `dispatch_body`, `submit_dep_finish_in_own_scope`) — the only callers that turn a `KExpression` into
 //! scheduler work.
 
 use std::rc::Rc;
@@ -27,9 +27,9 @@ use crate::machine::{CallArena, KError, NodeId};
 
 use super::dispatch::DepRequest;
 use super::nodes::{NodeStep, NodeWork};
-use super::outcome::{Continuation, Outcome};
+use super::outcome::{dep_error_frame, Continuation, Outcome};
 use super::scheduler::Scheduler;
-use super::{catch_cont, ignore_results, short_circuit, CatchFinish, CombineFinish};
+use super::{catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish};
 
 mod interpret;
 mod submit;
@@ -163,7 +163,7 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
                 ),
             };
             let body_frame = frame.clone();
-            let finish: CombineFinish<'run> = Box::new(move |_view, _results| Outcome::Continue {
+            let finish: DepFinish<'run> = Box::new(move |_view, _results| Outcome::Continue {
                 work: super::dispatch::decide(tail),
                 frame: FramePlacement::FreshChild { frame: body_frame },
                 contract,
@@ -177,8 +177,8 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
                     statements: leading,
                 }],
                 park_count: 0,
-                cont: Continuation::Combine(finish),
-                dep_error_frame: None,
+                cont: Continuation::Finish(finish),
+                dep_error_frame: Some(dep_error_frame()),
                 free: Vec::new(),
             }
         }
@@ -200,7 +200,7 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
             }
             let park_count = park.len();
             park.extend(owned);
-            let wrapped: CombineFinish<'run> = Box::new(move |view, results| {
+            let wrapped: DepFinish<'run> = Box::new(move |view, results| {
                 let fctx = FinishCtx {
                     scope: view.current_scope(),
                 };
@@ -209,15 +209,15 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
             Outcome::ParkThenContinue {
                 deps: park,
                 park_count,
-                cont: Continuation::Combine(wrapped),
-                dep_error_frame: None,
+                cont: Continuation::Finish(wrapped),
+                dep_error_frame: Some(dep_error_frame()),
                 free: Vec::new(),
             }
         }
 
         Action::Catch { watched, finish } => {
             // `watched` is realized (and owned) at apply time — an `InScope` watched enters a
-            // fresh single-statement block, distinct from a Combine body's fan-out.
+            // fresh single-statement block, distinct from a dep-finish body's fan-out.
             let wrapped: CatchFinish<'run> = Box::new(move |view, result| {
                 let fctx = FinishCtx {
                     scope: view.current_scope(),
@@ -396,19 +396,18 @@ impl<'run> KoanRuntime<'run> {
                 }
                 let work = match cont {
                     // A dispatch finish carries its own dep-error frame (the consuming call's, or
-                    // `None` frameless); an action/literal combine is labelled `<combine>` by
-                    // [`NodeWork::combine`], where that policy lives. Both install the same `Wait`
-                    // over the realized deps (edges already installed by the loop above), the
-                    // short-circuit baked into the continuation by `short_circuit`.
+                    // `None` frameless); an action/literal dep-finish carries the `dep_error_frame()`
+                    // label. Both install the same `Wait` over the realized deps (edges already
+                    // installed by the loop above), the short-circuit baked into the continuation by
+                    // `short_circuit`.
                     Continuation::Finish(finish) => NodeWork {
                         deps: dep_ids,
                         park_count,
                         cont: short_circuit(dep_error_frame, finish),
                         carrier: None,
                     },
-                    Continuation::Combine(finish) => NodeWork::combine(dep_ids, park_count, finish),
                     // The action-harness catch carries its single watched dep unrealized (its
-                    // placement differs from a Combine body's fan-out); realize and own it here.
+                    // placement differs from a dep-finish body's fan-out); realize and own it here.
                     // `catch_cont` runs the finish without short-circuiting on a dep error.
                     Continuation::Catch { watched, finish } => {
                         let from = self.realize_catch_dep(watched);

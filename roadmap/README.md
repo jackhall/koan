@@ -171,7 +171,7 @@ What's shipped that the open items below build on:
   tail recursion with side-effecting statements runs in constant frame space. See
   [design/execution-model.md § The dispatcher / scheduler boundary](../design/execution-model.md#the-dispatcher--scheduler-boundary).
 - *`NodeWork` carries no AST.* The scheduler's slot-work enum collapsed to its essence: the
-  `Combine` / `DispatchCombine` pair merged to one `Combine` (one finish type, the `<combine>`
+  `Combine` / `DispatchCombine` pair merged to one finish type (the `<deps>`
   dep-error label now harness policy), and `Dispatch` / `DispatchResume` merged to one
   [`NodeWork::Decide`](../src/machine/execute/nodes.rs) — a captured `SchedulerView -> Outcome`
   closure (birth and resume run through one `run_decide` arm) plus a pre-rendered deadlock-summary
@@ -187,7 +187,7 @@ What's shipped that the open items below build on:
   next to the harness that drives it. It was the one file in the scheduler subtree that
   name-resolved and built values from an `ExpressionPart`, so the "scheduler names no AST"
   invariant now holds structurally across `scheduler/**`. The methods are `&mut self` on
-  `KoanRuntime` (below), reached through the scheduler's public surface (`submit_here` /
+  `KoanRuntime` (below), reached through the scheduler's public surface (`submit_in_own_scope` /
   `current_scope`). See [design/execution-model.md](../design/execution-model.md#the-dispatcher--scheduler-boundary).
 - *Dep-request enum made AST-free at the source.* The six-arm dep enum a
   `ParkThenContinue` declares (`Dispatch` / `ListLit` / `DictLit` / `RecordLit` / `BodyBlock` /
@@ -202,7 +202,7 @@ What's shipped that the open items below build on:
   (a `sched` field) and is the **sole** holder of `&mut Scheduler` across the execute tree. The
   execute loop, `apply_outcome` (the one graph writer), `submit_dispatch`, the aggregate-literal
   lowering, and the AST-aware submission wrappers (`enter_block`, `dispatch_in_own_scope`,
-  `dispatch_in_active_frame`, `dispatch_body`, `combine_here`) are all `&mut self`
+  `dispatch_in_active_frame`, `dispatch_body`, `submit_dep_finish_in_own_scope`) are all `&mut self`
   methods on it. `Scheduler` keeps the AST-free read views and low-level write primitives, so a
   dispatch decide sees only a read-only `SchedulerView` / `&Scheduler` — "everything outside the
   harness is read-only" is now structurally enforced by the type, not a naming convention. The

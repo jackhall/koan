@@ -1,7 +1,7 @@
 //! The AST-aware dispatch-submission wrappers. Each resolves `(scope, node_scope, chain)` from
 //! scheduler state and forwards to [`KoanRuntime::submit_dispatch`] — so these are the only callers
 //! that turn a `KExpression` into scheduler work. The harness owns the sole `&mut Scheduler`; the
-//! AST-free submission prims they reach (`ensure_run_frame`, `resolve_node_scope`, `submit_here`,
+//! AST-free submission prims they reach (`ensure_run_frame`, `resolve_node_scope`, `submit_in_own_scope`,
 //! `submit_node`) stay on [`Scheduler`](super::super::scheduler::Scheduler).
 
 use std::rc::Rc;
@@ -11,7 +11,7 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::{CallArena, LexicalFrame, NodeId, Scope};
 
 use super::super::nodes::{NodeScope, NodeWork};
-use super::super::CombineFinish;
+use super::super::DepFinish;
 use super::KoanRuntime;
 
 impl<'run> KoanRuntime<'run> {
@@ -139,16 +139,16 @@ impl<'run> KoanRuntime<'run> {
     /// Schedule a `Combine` against the executing slot's own scope handle. `owned_subs` are
     /// cascade-freed on success; `park_producers` are existing siblings the combine reads but does
     /// not own. The finish sees results as `[park_producers..., owned_subs...]`.
-    pub(in crate::machine::execute) fn combine_here(
+    pub(in crate::machine::execute) fn submit_dep_finish_in_own_scope(
         &mut self,
         owned_subs: Vec<NodeId>,
         park_producers: Vec<NodeId>,
-        finish: CombineFinish<'run>,
+        finish: DepFinish<'run>,
     ) -> NodeId {
         let park_count = park_producers.len();
         let mut deps = park_producers;
         deps.extend(owned_subs);
         self.sched
-            .submit_here(NodeWork::combine(deps, park_count, finish))
+            .submit_in_own_scope(NodeWork::awaiting(deps, park_count, finish))
     }
 }

@@ -31,7 +31,7 @@ use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
 
 use super::nodes::NodeWork;
 use super::scheduler::Scheduler;
-use super::{ignore_results, CombineFinish};
+use super::{ignore_results, DepFinish};
 use crate::machine::core::kfunction::action::{DepPlacement, FramePlacement};
 
 pub(in crate::machine::execute) mod apply_callable;
@@ -257,10 +257,10 @@ pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>)
 /// Park the slot on `deps` as a [`NodeWork`](super::nodes::NodeWork) whose
 /// `finish` runs over their resolved values (the dispatch combine — short-circuits on dep error).
 /// Every dep is owned (`park_count: 0`); `free` reclaims `Reuse` producers consumed inline.
-pub(in crate::machine::execute) fn park_combine<'run>(
+pub(in crate::machine::execute) fn park_on_deps<'run>(
     deps: Vec<DepRequest<'run>>,
     dep_error_frame: Option<TraceFrame>,
-    finish: CombineFinish<'run>,
+    finish: DepFinish<'run>,
     free: Vec<usize>,
 ) -> Outcome<'run> {
     Outcome::ParkThenContinue {

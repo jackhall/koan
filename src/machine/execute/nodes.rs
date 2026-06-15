@@ -3,9 +3,10 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::ScopeId;
 use crate::machine::model::Carried;
-use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope, TraceFrame};
+use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope};
 
-use super::{short_circuit, CombineFinish, NodeCont};
+use super::outcome::dep_error_frame;
+use super::{short_circuit, DepFinish, NodeCont};
 
 /// Outcome of a node's run. `Replace` is the tail-call path: rewrite the slot's work and
 /// re-enqueue the same index so it runs again with no fresh slot allocated, giving constant
@@ -61,19 +62,19 @@ pub(super) struct NodeWork<'run> {
 }
 
 impl<'run> NodeWork<'run> {
-    /// The combine work shared by the action/literal harness, `combine_here`, and the test
-    /// fixture: wait on `deps` (a `park_count`-long park prefix, owned suffix), short-circuit on
-    /// the first errored dep under the `<combine>` label, else hand the resolved values to
-    /// `finish`. The one place the combine label / short-circuit policy lives.
-    pub(in crate::machine::execute) fn combine(
+    /// A dep-finish node built for direct submission (not via `apply_outcome`): the path shared by
+    /// `submit_dep_finish_in_own_scope` and the test fixture. Waits on `deps` (a `park_count`-long
+    /// park prefix, owned suffix), short-circuits on the first errored dep under the
+    /// [`dep_error_frame`] label, else hands the resolved values to `finish`.
+    pub(in crate::machine::execute) fn awaiting(
         deps: Vec<NodeId>,
         park_count: usize,
-        finish: CombineFinish<'run>,
+        finish: DepFinish<'run>,
     ) -> Self {
         NodeWork {
             deps,
             park_count,
-            cont: short_circuit(Some(TraceFrame::bare("<combine>", "combine")), finish),
+            cont: short_circuit(Some(dep_error_frame()), finish),
             carrier: None,
         }
     }

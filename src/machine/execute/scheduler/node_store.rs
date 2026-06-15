@@ -80,7 +80,7 @@ enum SlotState<'run> {
 /// The drain-end deadlock-sample contribution of one parked/pending slot's work.
 /// `unresolved` shows the first `Preferred` (a real source expression) across all stuck slots,
 /// falling back to the first `Fallback` (a generic work-shape tag) only when no slot carries an
-/// expression — so a stuck `(foo bar)` always out-renders a bare `<combine>`.
+/// expression — so a stuck `(foo bar)` always out-renders a bare `<deps>`.
 enum DeadlockSample {
     Preferred(String),
     Fallback(&'static str),

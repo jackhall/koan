@@ -18,9 +18,9 @@ use crate::machine::model::values::NonWrappedRef;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::{KError, KErrorKind, Scope};
 
-use super::super::CombineFinish;
+use super::super::DepFinish;
 use super::single_poll::CtorKind;
-use super::{park_combine, DepRequest, Outcome};
+use super::{park_on_deps, DepRequest, Outcome};
 
 pub(in crate::machine::execute) mod tagged_union;
 
@@ -146,11 +146,11 @@ fn launch<'run>(value_parts: Vec<ExpressionPart<'run>>, kind: CtorKind<'run>) ->
             placement: DepPlacement::OwnScope,
         })
         .collect();
-    let combine_finish: CombineFinish<'run> = Box::new(move |ctx, results| {
+    let combine_finish: DepFinish<'run> = Box::new(move |ctx, results| {
         let values: Vec<&'run KObject<'run>> = results.iter().map(|c| c.object()).collect();
         finish(ctx.current_scope(), &kind, &values)
     });
-    park_combine(deps, None, combine_finish, Vec::new())
+    park_on_deps(deps, None, combine_finish, Vec::new())
 }
 
 /// All value subs have completed. Read each, materialize the kind-keyed

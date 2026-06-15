@@ -1,6 +1,6 @@
 //! Scheduler tests, split by surface:
 //!
-//! - [`execute`], [`reclaim`], [`combine`], [`dispatch`],
+//! - [`execute`], [`reclaim`], [`dep_finish`], [`dispatch`],
 //!   [`lexical_provenance`], [`index_gated`], [`unified_walk`].
 //! - [`dispatch_shapes`] — no-keyword shapes bypass
 //!   `resolve_dispatch`; keyword-bearing shapes enter it.
@@ -9,7 +9,7 @@
 //!   placeholders before any sibling can dispatch, closing the
 //!   `LET f = (FN NAME [x] x)` race independent of FIFO ordering.
 
-mod combine;
+mod dep_finish;
 mod dispatch;
 mod dispatch_shapes;
 mod execute;

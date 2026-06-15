@@ -57,7 +57,7 @@ pub(in crate::machine::execute) enum Outcome<'run> {
     /// `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix length
     /// (`Notify` edges, kept alive), the suffix installs as `Owned` (cascade-freed). For a
     /// [`Continuation::Resume`] every dep parks (notify-only).
-    /// `dep_error_frame` is attached to a dep-error short-circuit (Combine-style) before the
+    /// `dep_error_frame` is attached to a dep-error short-circuit (dep-finish-style) before the
     /// finish runs; `free` reclaims producers the decide phase consumed inline.
     ParkThenContinue {
         deps: Vec<DepRequest<'run>>,
@@ -77,18 +77,17 @@ pub(in crate::machine::execute) enum Outcome<'run> {
 
 /// What a [`Outcome::ParkThenContinue`] runs once its deps resolve. The shapes are the closed set
 /// of "what happens on wake":
-/// `Finish` and `Combine` both install a [`NodeWork`](super::nodes::NodeWork) (combine cont) —
-/// they differ only in the dep-error frame the harness attaches:
-/// - `Finish` is a dispatch decide's re-park/splice; its finish consumes the resolved dep values
-///   and returns another [`Outcome`] (it may itself re-park), carrying its own `dep_error_frame`
-///   (the consuming call's, or `None` frameless).
-/// - `Combine` is the action-harness combine ([`run_action`](super::runtime::run_action)'s
-///   `Action::Combine`) and the literal builders; the harness labels its dep errors `<combine>`.
-///   Its finish runs against a read-only [`SchedulerView`].
+/// - `Finish` installs a [`NodeWork`](super::nodes::NodeWork) that short-circuits on the first
+///   errored dep (under the [`Outcome::ParkThenContinue::dep_error_frame`]) and otherwise hands the
+///   resolved dep values to a [`DepFinish`]. This is both a dispatch decide's re-park/splice (it
+///   carries the consuming call's frame, or `None` frameless) and the action-harness / literal
+///   dep-finishes ([`run_action`](super::runtime::run_action)'s `Action::Combine`, the literal
+///   builders — labelled [`dep_error_frame`]). Its finish consumes the dep values, runs against a
+///   read-only [`SchedulerView`], and returns another [`Outcome`] (it may itself re-park).
 /// - `Catch` is the action-harness catch ([`run_action`](super::runtime::run_action)'s
 ///   `Action::Catch`): the slot becomes a [`NodeWork`](super::nodes::NodeWork) watching the realized `watched` dep;
 ///   the harness owns that producer. `watched`'s placement is realized at apply time (an `InScope`
-///   watched enters a fresh single-statement block, unlike a Combine body's fan-out).
+///   watched enters a fresh single-statement block, unlike a dep-finish body's fan-out).
 /// - `Resume` re-runs the parked dispatch decide (the `ParkSelf` shape) through the opaque
 ///   [`ResumeFn`] closure the parking decide captured; `carrier` is the parked expression's
 ///   pre-rendered summary the drain-end deadlock report surfaces (`None` when the park carries no
@@ -98,8 +97,7 @@ pub(in crate::machine::execute) enum Outcome<'run> {
 /// (A bare-name forward is not a continuation — it splices the slot out via
 /// [`Outcome::Forward`], never parking on a dep.)
 pub(in crate::machine::execute) enum Continuation<'run> {
-    Finish(CombineFinish<'run>),
-    Combine(CombineFinish<'run>),
+    Finish(DepFinish<'run>),
     Catch {
         watched: Dep<'run>,
         finish: CatchFinish<'run>,
@@ -110,14 +108,23 @@ pub(in crate::machine::execute) enum Continuation<'run> {
     },
 }
 
-/// Host-side value-only closure for a combine [`NodeWork`](super::nodes::NodeWork). Receives the dep terminals in submission
+/// Host-side value-only closure run by a dep-finish [`NodeWork`](super::nodes::NodeWork) once its
+/// deps resolve without error. Receives the dep terminals in submission
 /// order as [`Carried`] (an object or a type flowing in the type channel); static elements are
 /// captured in the closure. A value-consuming finish calls `.object()` on each; a type-resolving
 /// dep (a VAL type, an FN return type, a field type) arrives as [`Carried::Type`]. The finish
 /// decides against a read-only [`SchedulerView`] and returns an [`Outcome`] the harness applies —
 /// it issues no graph write of its own.
-pub(in crate::machine::execute) type CombineFinish<'a> =
+pub(in crate::machine::execute) type DepFinish<'a> =
     Box<dyn for<'s> FnOnce(&SchedulerView<'a, 's>, &[Carried<'a>]) -> Outcome<'a> + 'a>;
+
+/// The error-frame label a dep-finish attaches when a dependency errors — an action-harness combine
+/// (a fanned-out FN arg / arm body) or a literal builder (a list element / dict value). A dispatch
+/// finish carries the consuming call's own frame instead, so this is the fallback label for the
+/// frameless dep-finish paths.
+pub(in crate::machine::execute) fn dep_error_frame() -> TraceFrame {
+    TraceFrame::bare("<deps>", "deps")
+}
 
 /// Host-side closure for a catch [`NodeWork`](super::nodes::NodeWork). Receives the watched slot's terminal as a
 /// `Result` so the closure can branch on either outcome, plus a read-only [`SchedulerView`].
@@ -136,12 +143,12 @@ pub(in crate::machine::execute) type NodeCont<'a> = Box<
         + 'a,
 >;
 
-/// Combine continuation: short-circuit on the first errored dep (labelled with `dep_error_frame`),
-/// else hand the resolved [`Carried`] values to a value-only [`CombineFinish`]. The short-circuit
+/// Dep-finish continuation: short-circuit on the first errored dep (labelled with `dep_error_frame`),
+/// else hand the resolved [`Carried`] values to a value-only [`DepFinish`]. The short-circuit
 /// the handler used to do is now this combinator's job, so the node stays uniform.
 pub(in crate::machine::execute) fn short_circuit<'a>(
     dep_error_frame: Option<TraceFrame>,
-    finish: CombineFinish<'a>,
+    finish: DepFinish<'a>,
 ) -> NodeCont<'a> {
     Box::new(move |view, results, _idx| {
         let mut values: Vec<Carried<'a>> = Vec::with_capacity(results.len());

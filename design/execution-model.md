@@ -36,7 +36,7 @@ and names no AST.
 
 - A **combine** `cont` (built by `short_circuit`) waits on a fixed set of dep
   slots, short-circuits on the first errored dep, and otherwise runs an arbitrary
-  host closure ([`CombineFinish`](../src/machine/execute/outcome.rs)) over their
+  host closure ([`DepFinish`](../src/machine/execute/outcome.rs)) over their
   resolved values. List- and dict-literal planners use it; the construction logic
   — including already-resolved literal scalars that don't need a dep slot — lives
   in the closure's capture.
@@ -105,7 +105,7 @@ them. The three pieces:
   overlap, and that separation is structurally enforced by the type rather than
   a naming convention. The execute loop, the AST-aware submission wrappers
   (`enter_block`, `dispatch_in_own_scope`, `dispatch_in_active_frame`,
-  `dispatch_body`, `combine_here`), `submit_dispatch`, and the
+  `dispatch_body`, `submit_dep_finish_in_own_scope`), `submit_dispatch`, and the
   aggregate-literal lowering are all `&mut self` methods on `KoanRuntime`. The
   unified node handler
   ([`run_wait`](../src/machine/execute/scheduler/finish.rs)) collects the slot's
@@ -257,7 +257,7 @@ declares them as the deps of a
 is a `Continuation::Finish` — the dispatch flavor of a combine. The harness
 submits each dep as a sub-Dispatch and parks the parent on a
 [`NodeWork`](../src/machine/execute/nodes.rs) whose `cont` is a combine wrapping
-that *splice finish* (a [`CombineFinish`](../src/machine/execute/outcome.rs)
+that *splice finish* (a [`DepFinish`](../src/machine/execute/outcome.rs)
 closure). When the deps terminalize, that finish runs and writes each
 resolved value back into the working copy:
 `working_expr.parts[part_idx] = ExpressionPart::Future(value)`. The splice

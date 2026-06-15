@@ -6,7 +6,7 @@ use super::super::nodes::{work_park_producers, CallFrame, Node, NodeScope, NodeW
 #[cfg(test)]
 use super::super::runtime::KoanRuntime;
 #[cfg(test)]
-use super::super::CombineFinish;
+use super::super::DepFinish;
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
@@ -20,30 +20,30 @@ impl<'run> Scheduler<'run> {
         self.active_chain.is_none().then(LexicalFrame::detached)
     }
 
-    /// Schedule a `Combine` slot against an explicit `scope`. `owned_subs` are sub-Dispatches
-    /// this Combine allocated (cascade-freed on success); `park_producers` are existing sibling
+    /// Schedule a dep-finish slot against an explicit `scope`. `owned_subs` are sub-Dispatches
+    /// this dep-finish allocated (cascade-freed on success); `park_producers` are existing sibling
     /// slots it splices but does not own (kept alive past success via `Notify` edges). The finish
     /// closure sees results as `[park_producers..., owned_subs...]`. Test fixture entry point; the
-    /// run path uses [`KoanRuntime::combine_here`](super::super::runtime::KoanRuntime::combine_here).
+    /// run path uses [`KoanRuntime::submit_dep_finish_in_own_scope`](super::super::runtime::KoanRuntime::submit_dep_finish_in_own_scope).
     #[cfg(test)]
-    pub(in crate::machine::execute) fn add_combine(
+    pub(in crate::machine::execute) fn add_dep_finish(
         &mut self,
         owned_subs: Vec<NodeId>,
         park_producers: Vec<NodeId>,
         scope: &'run Scope<'run>,
-        finish: CombineFinish<'run>,
+        finish: DepFinish<'run>,
     ) -> NodeId {
         let park_count = park_producers.len();
         let mut deps = park_producers;
         deps.extend(owned_subs);
-        self.add(NodeWork::combine(deps, park_count, finish), scope)
+        self.add(NodeWork::awaiting(deps, park_count, finish), scope)
     }
 
     /// Generic ambient-chain submission for any `NodeWork` — a test fixture entry point. When
     /// there is no ambient chain (test fixtures) it synthesizes a detached chain so the visibility
     /// predicate treats every scope as "complete". The run path submits a `Dispatch` through
     /// [`KoanRuntime::submit_dispatch`](super::super::runtime::KoanRuntime::submit_dispatch)
-    /// (binder-aware) and a `Combine`/`Catch` through `KoanRuntime::combine_here` / the harness.
+    /// (binder-aware) and a dep-finish / catch through `KoanRuntime::submit_dep_finish_in_own_scope` / the harness.
     #[cfg(test)]
     pub(in crate::machine::execute::scheduler) fn add(
         &mut self,
@@ -103,7 +103,7 @@ impl<'run> Scheduler<'run> {
     /// `Anchored(&'run)` re-uses the genuine run-lived borrow the slot already holds; `Yoked`
     /// re-projects from the active frame cart at the read boundary. Backs the `*_here` methods —
     /// the honest re-dispatch-against-my-own-scope path.
-    pub(in crate::machine::execute) fn submit_here(&mut self, work: NodeWork<'run>) -> NodeId {
+    pub(in crate::machine::execute) fn submit_in_own_scope(&mut self, work: NodeWork<'run>) -> NodeId {
         let node_scope = self
             .active_node_scope
             .expect("a slot step installs active_node_scope before the body submits");
@@ -180,7 +180,7 @@ impl<'run> Scheduler<'run> {
 }
 
 /// Test-fixture forwarders for the AST-free submission prims that stay on [`Scheduler`]
-/// (`add` / `add_with_chain` / `add_combine`), so scheduler tests build raw `NodeWork` slots
+/// (`add` / `add_with_chain` / `add_dep_finish`), so scheduler tests build raw `NodeWork` slots
 /// through the harness without naming the scheduler.
 #[cfg(test)]
 impl<'run> KoanRuntime<'run> {
@@ -201,14 +201,14 @@ impl<'run> KoanRuntime<'run> {
         self.sched.add_with_chain(work, scope, explicit_chain)
     }
 
-    pub(in crate::machine::execute) fn add_combine(
+    pub(in crate::machine::execute) fn add_dep_finish(
         &mut self,
         owned_subs: Vec<NodeId>,
         park_producers: Vec<NodeId>,
         scope: &'run Scope<'run>,
-        finish: CombineFinish<'run>,
+        finish: DepFinish<'run>,
     ) -> NodeId {
         self.sched
-            .add_combine(owned_subs, park_producers, scope, finish)
+            .add_dep_finish(owned_subs, park_producers, scope, finish)
     }
 }

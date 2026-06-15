@@ -7,12 +7,12 @@ use crate::machine::{KError, KErrorKind, NameOutcome, NodeId, TraceFrame};
 
 use super::super::outcome::Outcome;
 use super::super::runtime::KoanRuntime;
-use super::super::CombineFinish;
+use super::super::DepFinish;
 use super::ctx::SchedulerView;
 use super::resolve_name_part;
 
 /// One element of a list literal or one side of a dict-literal pair. Indices are into the
-/// Combine's results: `Park(i)` reads position `i` of the park-producer prefix; `Owned(j)`
+/// the dep-finish's results: `Park(i)` reads position `i` of the park-producer prefix; `Owned(j)`
 /// reads position `park_count + j` of the owned-sub suffix.
 enum Slot<'run> {
     Static(Held<'run>),
@@ -48,7 +48,7 @@ fn done_object<'run>(view: &SchedulerView<'run, '_>, obj: KObject<'run>) -> Outc
 }
 
 impl<'run> KoanRuntime<'run> {
-    /// Schedule a list-literal materialization as a Combine over its element producers.
+    /// Schedule a list-literal materialization as a dep-finish over its element producers.
     pub(in crate::machine::execute) fn schedule_list_literal(
         &mut self,
         items: Vec<ExpressionPart<'run>>,
@@ -62,17 +62,17 @@ impl<'run> KoanRuntime<'run> {
             layout.push(slot);
         }
         let park_count = park_producers.len();
-        let finish: CombineFinish<'run> = Box::new(move |_sched, results| {
+        let finish: DepFinish<'run> = Box::new(move |_sched, results| {
             let items: Vec<Held<'run>> = layout
                 .into_iter()
                 .map(|slot| slot.materialize(results, park_count))
                 .collect();
             done_object(_sched, KObject::list_of_held(items))
         });
-        self.combine_here(deps, park_producers, finish)
+        self.submit_dep_finish_in_own_scope(deps, park_producers, finish)
     }
 
-    /// Schedule a dict-literal materialization as a Combine over its key/value producers.
+    /// Schedule a dict-literal materialization as a dep-finish over its key/value producers.
     /// Bare identifiers on either side are name-resolved (Python-like: keys are
     /// expressions, not symbols). Non-scalar keys produce `KErrorKind::ShapeError` at
     /// finish-time via the `KKey` conversion.
@@ -90,7 +90,7 @@ impl<'run> KoanRuntime<'run> {
         }
         let frame_label = || TraceFrame::bare("<dict>", "dict literal");
         let park_count = park_producers.len();
-        let finish: CombineFinish<'run> = Box::new(move |_sched, results| {
+        let finish: DepFinish<'run> = Box::new(move |_sched, results| {
             let mut map: HashMap<Box<dyn Serializable<'run> + 'run>, Held<'run>> = HashMap::new();
             for (k_slot, v_slot) in layout {
                 let key_held = k_slot.materialize(results, park_count);
@@ -117,7 +117,7 @@ impl<'run> KoanRuntime<'run> {
             }
             done_object(_sched, KObject::dict_of_held(map))
         });
-        self.combine_here(deps, park_producers, finish)
+        self.submit_dep_finish_in_own_scope(deps, park_producers, finish)
     }
 
     /// Schedule a record-literal materialization (`{x = 1, y = "a"}`). Field *names* are literal
@@ -138,7 +138,7 @@ impl<'run> KoanRuntime<'run> {
             layout.push(val_slot);
         }
         let park_count = park_producers.len();
-        let finish: CombineFinish<'run> = Box::new(move |_sched, results| {
+        let finish: DepFinish<'run> = Box::new(move |_sched, results| {
             let record: Record<Held<'run>> = names
                 .into_iter()
                 .zip(layout)
@@ -146,12 +146,12 @@ impl<'run> KoanRuntime<'run> {
                 .collect();
             done_object(_sched, KObject::record_of_held(record))
         });
-        self.combine_here(deps, park_producers, finish)
+        self.submit_dep_finish_in_own_scope(deps, park_producers, finish)
     }
 
     /// Plan one slot of a list / dict literal. The cycle check in the bare-name path is
-    /// suppressed (`consumer = None` to `resolve_name_part`) because the Combine slot
-    /// does not yet exist; cycles are caught post-submission against the Combine ID.
+    /// suppressed (`consumer = None` to `resolve_name_part`) because the dep-finish slot
+    /// does not yet exist; cycles are caught post-submission against the dep-finish ID.
     fn classify_aggregate_part(
         &mut self,
         part: ExpressionPart<'run>,
@@ -189,7 +189,7 @@ impl<'run> KoanRuntime<'run> {
 
     /// Shared eager-resolve for the Identifier and leaf-Type branches. Unbound /
     /// ProducerErrored / Cycle outcomes fall back to a sub-Dispatch so the
-    /// `BareIdentifier` fast lane's error path (and the Combine's dep-error
+    /// `BareIdentifier` fast lane's error path (and the dep-finish's dep-error
     /// short-circuit) handles them uniformly.
     fn resolve_aggregate_bare_name(
         &mut self,

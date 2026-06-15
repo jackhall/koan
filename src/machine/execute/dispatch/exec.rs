@@ -9,8 +9,8 @@
 //! one layer down in [`crate::machine::core::kfunction::exec`].
 
 use super::super::nodes::NodeWork;
-use super::super::outcome::{Continuation, Outcome};
-use super::super::{ignore_results, CombineFinish};
+use super::super::outcome::{dep_error_frame, Continuation, Outcome};
+use super::super::{ignore_results, DepFinish};
 use super::DepRequest;
 use super::SchedulerView;
 use crate::machine::core::kfunction::action::FramePlacement;
@@ -171,7 +171,7 @@ pub(super) fn invoke<'run>(
             // `Continue`, re-entering the already-installed cart with `Inherit`.
             let statements: Vec<KExpression<'run>> =
                 leading.into_iter().map(|e| (*e).clone()).collect();
-            let finish: CombineFinish<'run> = Box::new(move |_view, _results| Outcome::Continue {
+            let finish: DepFinish<'run> = Box::new(move |_view, _results| Outcome::Continue {
                 work: super::decide(tail_expr),
                 frame: FramePlacement::Inherit,
                 contract: Some(contract),
@@ -182,8 +182,8 @@ pub(super) fn invoke<'run>(
             Outcome::ParkThenContinue {
                 deps: vec![DepRequest::BodyBlock { frame, statements }],
                 park_count: 0,
-                cont: Continuation::Combine(finish),
-                dep_error_frame: None,
+                cont: Continuation::Finish(finish),
+                dep_error_frame: Some(dep_error_frame()),
                 free: Vec::new(),
             }
         }
@@ -207,7 +207,7 @@ pub(super) fn invoke<'run>(
             // Capture the body scope id before `frame` moves into the `BodyBlock` dep; the finish
             // re-enters that already-installed cart with `Inherit`.
             let block_entry = frame.scope().id;
-            let finish: CombineFinish<'run> = Box::new(move |_view, results| {
+            let finish: DepFinish<'run> = Box::new(move |_view, results| {
                 // The return-type expression is the last body statement, so its resolved value is
                 // the last result.
                 let kt = match results[results.len() - 1] {
@@ -238,8 +238,8 @@ pub(super) fn invoke<'run>(
             Outcome::ParkThenContinue {
                 deps: vec![DepRequest::BodyBlock { frame, statements }],
                 park_count: 0,
-                cont: Continuation::Combine(finish),
-                dep_error_frame: None,
+                cont: Continuation::Finish(finish),
+                dep_error_frame: Some(dep_error_frame()),
                 free: Vec::new(),
             }
         }

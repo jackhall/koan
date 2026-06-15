@@ -24,7 +24,7 @@ use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 
 use super::super::scheduler::Scheduler;
-use super::{bind_frame_err, park_combine, resolve_name_part, DepRequest, Outcome, PendingSub};
+use super::{bind_frame_err, park_on_deps, resolve_name_part, DepRequest, Outcome, PendingSub};
 
 /// Read-only dispatch view — the decide-phase context. It holds only `&Scheduler`, never `&mut`.
 /// A shape handler decides against this and *returns* a
@@ -126,7 +126,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
         staged_subs: Vec<(usize, PendingSub<'run>)>,
         picked: Option<&'run KFunction<'run>>,
     ) -> Outcome<'run> {
-        use super::super::CombineFinish;
+        use super::super::DepFinish;
         let mut deps: Vec<DepRequest<'run>> = Vec::with_capacity(staged_subs.len());
         let mut part_indices: Vec<usize> = Vec::with_capacity(staged_subs.len());
         // Reuse producers consumed inline (spliced into `working_expr`); the harness reclaims
@@ -173,7 +173,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
             "<bind>",
             &working_expr,
         ));
-        let finish: CombineFinish<'run> = Box::new(move |_ctx, results| {
+        let finish: DepFinish<'run> = Box::new(move |_ctx, results| {
             // The short-circuit already guaranteed every dep resolved; splice each into the
             // slot it was staged from, then route the continuation. No inline frees remain at
             // wake — those were drained when the Combine was installed.
@@ -182,7 +182,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
             }
             finish_eager_subs(working_expr, picked, Vec::new())
         });
-        park_combine(deps, dep_error_frame, finish, free)
+        park_on_deps(deps, dep_error_frame, finish, free)
     }
 }
 
