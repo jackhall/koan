@@ -1,6 +1,6 @@
-//! The write harness. [`KoanHarness`] owns the [`Scheduler`] by composition and is the sole holder
+//! The write harness. [`KoanRuntime`] owns the [`Scheduler`] by composition and is the sole holder
 //! of `&mut Scheduler` across the execute tree — the AST-aware submission wrappers, the execute
-//! loop, and [`KoanHarness::apply_outcome`] (the one graph writer) hang off it. Its read surface
+//! loop, and [`KoanRuntime::apply_outcome`] (the one graph writer) hang off it. Its read surface
 //! forwards to the owned scheduler.
 //!
 //! [`run_action`] is the shared *action* harness: a pure `Action -> Outcome` decide that reads a
@@ -32,11 +32,11 @@ use super::{catch_cont, ignore_results, short_circuit, CatchFinish, CombineFinis
 /// the harness is read-only" is structurally enforced, not a naming convention.
 ///
 /// See design/execution-model.md § the dispatcher / scheduler boundary.
-pub struct KoanHarness<'run> {
+pub struct KoanRuntime<'run> {
     pub(in crate::machine::execute) sched: Scheduler<'run>,
 }
 
-impl<'run> KoanHarness<'run> {
+impl<'run> KoanRuntime<'run> {
     pub fn new() -> Self {
         Self {
             sched: Scheduler::new(),
@@ -44,7 +44,7 @@ impl<'run> KoanHarness<'run> {
     }
 }
 
-impl Default for KoanHarness<'_> {
+impl Default for KoanRuntime<'_> {
     fn default() -> Self {
         Self::new()
     }
@@ -53,7 +53,7 @@ impl Default for KoanHarness<'_> {
 /// Read forwarders to the owned [`Scheduler`]. The harness exposes the scheduler's read surface
 /// (terminal reads / slot count) so callers drive the whole run through the harness without ever
 /// borrowing the scheduler — the write methods are the inherent `&mut self` ones above.
-impl<'run> KoanHarness<'run> {
+impl<'run> KoanRuntime<'run> {
     /// Read a slot's terminal. See [`Scheduler::read_result`].
     pub fn read_result(&self, id: NodeId) -> Result<crate::machine::model::Carried<'run>, &KError> {
         self.sched.read_result(id)
@@ -77,7 +77,7 @@ impl<'run> KoanHarness<'run> {
 /// AST-free poke surface (`free`, the reserve-reuse counter, a slot's stored chain). No `&mut
 /// Scheduler` escapes — the accessor hands out `&Scheduler`, keeping the harness the sole writer.
 #[cfg(test)]
-impl<'run> KoanHarness<'run> {
+impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn scheduler(&self) -> &Scheduler<'run> {
         &self.sched
     }
@@ -228,9 +228,9 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
 /// The write-harness apply path — the one place that turns a decided [`Outcome`] into the scheduler
 /// graph writes it implies and the terminal [`NodeStep`]. A shape handler decides against a
 /// read-only [`SchedulerView`](super::dispatch::SchedulerView) and returns an outcome; this applies
-/// it. `KoanHarness` holds the sole `&mut Scheduler`, so this is the only path that mutates the
+/// it. `KoanRuntime` holds the sole `&mut Scheduler`, so this is the only path that mutates the
 /// graph in response to a dispatch decide.
-impl<'run> KoanHarness<'run> {
+impl<'run> KoanRuntime<'run> {
     /// Reclaim the producers a decide phase consumed inline (a ready `Reuse` spliced into a
     /// `working_expr`). Deferred off the decide phase so the handler stays read-only; the harness
     /// is the sole writer, so the free lands here.

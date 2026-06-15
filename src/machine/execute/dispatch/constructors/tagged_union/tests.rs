@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::builtins::default_scope;
 use crate::machine::core::{KErrorKind, RuntimeArena, Scope};
-use crate::machine::execute::KoanHarness;
+use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::values::KObject;
 use crate::parse::parse;
@@ -35,7 +35,7 @@ fn parse_one<'run>(src: &str) -> KExpression<'run> {
 
 fn run<'run>(scope: &'run Scope<'run>, source: &str) {
     let exprs = parse(source).expect("parse should succeed");
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     for expr in exprs {
         sched.add_dispatch(expr, scope);
     }
@@ -43,7 +43,7 @@ fn run<'run>(scope: &'run Scope<'run>, source: &str) {
 }
 
 fn run_one<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> &'run KObject<'run> {
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().expect("scheduler should succeed");
     sched.read(id).object()
@@ -53,7 +53,7 @@ fn run_one_err<'run>(
     scope: &'run Scope<'run>,
     expr: KExpression<'run>,
 ) -> crate::machine::core::KError {
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     let id = sched.add_dispatch(expr, scope);
     sched
         .execute()

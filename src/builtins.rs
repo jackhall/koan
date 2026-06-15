@@ -72,7 +72,7 @@ pub(crate) fn type_part_binder_name(
 
 /// Full-form builtin registration with both binder hooks and the `is_functor` flag. The `body` is
 /// an [`ActionFn`](crate::machine::core::kfunction::ActionFn) (`fn(&BodyCtx) -> Action`) installed
-/// as [`Body::Builtin`] — the builtin runs through `machine::execute::harness::run_action`.
+/// as [`Body::Builtin`] — the builtin runs through `machine::execute::runtime::run_action`.
 /// `binder_bucket` lets FN / FUNCTOR key pending-overload entries by inner-call bucket.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn register_builtin_full<'a>(

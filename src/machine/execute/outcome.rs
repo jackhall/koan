@@ -2,7 +2,7 @@
 //!
 //! Every node step — a fresh dispatch decide, a finish, a builtin body, an invoke — decides
 //! against a read-only [`SchedulerView`](super::dispatch::SchedulerView) and **returns** an
-//! [`Outcome`]; [`KoanHarness::apply_outcome`](super::harness::KoanHarness) is the sole place that
+//! [`Outcome`]; [`KoanRuntime::apply_outcome`](super::runtime::KoanRuntime) is the sole place that
 //! turns an outcome into the scheduler-graph writes it implies and the terminal
 //! [`NodeStep`](super::nodes::NodeStep). The scheduler never learns *what* a step ran (dispatch /
 //! invoke / builtin) nor *whether* it ran before — only a read view in and an outcome out.
@@ -82,10 +82,10 @@ pub(in crate::machine::execute) enum Outcome<'run> {
 /// - `Finish` is a dispatch decide's re-park/splice; its finish consumes the resolved dep values
 ///   and returns another [`Outcome`] (it may itself re-park), carrying its own `dep_error_frame`
 ///   (the consuming call's, or `None` frameless).
-/// - `Combine` is the action-harness combine ([`run_action`](super::harness::run_action)'s
+/// - `Combine` is the action-harness combine ([`run_action`](super::runtime::run_action)'s
 ///   `Action::Combine`) and the literal builders; the harness labels its dep errors `<combine>`.
 ///   Its finish runs against a read-only [`SchedulerView`].
-/// - `Catch` is the action-harness catch ([`run_action`](super::harness::run_action)'s
+/// - `Catch` is the action-harness catch ([`run_action`](super::runtime::run_action)'s
 ///   `Action::Catch`): the slot becomes a [`NodeWork`](super::nodes::NodeWork) watching the realized `watched` dep;
 ///   the harness owns that producer. `watched`'s placement is realized at apply time (an `InScope`
 ///   watched enters a fresh single-statement block, unlike a Combine body's fan-out).

@@ -281,7 +281,7 @@ fn run_action_builtin<'run>(
         f(&body_ctx)
     };
     // `run_action` is a pure `Action -> Outcome` lowering; the harness applies the result.
-    super::super::harness::run_action(action)
+    super::super::runtime::run_action(action)
 }
 
 /// Extract the call's resolved value arguments from `working_expr`'s parts, in order. Returns

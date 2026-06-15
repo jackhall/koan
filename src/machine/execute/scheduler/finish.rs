@@ -2,8 +2,8 @@ use crate::machine::model::Carried;
 use crate::machine::{KError, NodeId};
 
 use super::super::dispatch::SchedulerView;
-use super::super::harness::KoanHarness;
 use super::super::nodes::NodeStep;
+use super::super::runtime::KoanRuntime;
 use super::super::NodeCont;
 use super::Scheduler;
 
@@ -23,7 +23,7 @@ impl<'run> Scheduler<'run> {
     }
 }
 
-impl<'run> KoanHarness<'run> {
+impl<'run> KoanRuntime<'run> {
     /// The unified node handler: collect the resolved dep terminals (as owned `Result`s — an
     /// errored dep is handed through, the continuation decides), run `cont` against a read-only
     /// [`SchedulerView`], reclaim the owned-dep suffix, then apply. The continuation issues no

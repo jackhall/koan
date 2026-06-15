@@ -151,7 +151,7 @@ What's shipped that the open items below build on:
   mirrors the builtin `Action` / `run_action` split: a shape handler *decides* against a
   read-only view and *returns* its scheduler mutations as an
   [`Outcome`](../src/machine/execute/outcome.rs) effect that a
-  [harness](../src/machine/execute/harness.rs) interprets — so no dispatch handler
+  [harness](../src/machine/execute/runtime.rs) interprets — so no dispatch handler
   holds `&mut Scheduler`. Eager-subs is modelled as the dispatcher's own `Combine` (the same
   N→1 shape the action harness installs): deps declared, the `Future`-cell splice lives in the
   finish, and the scheduler stays splice-unaware. A builtin invoked mid-dispatch routes through the shared action harness,
@@ -163,7 +163,7 @@ What's shipped that the open items below build on:
   [`Outcome`](../src/machine/execute/outcome.rs) (`Done` / `Continue` / `ParkThenContinue` /
   `Forward` — no variant names a `KFunction` or `KExpression`; the dispatch→execution hand-off
   folds into a dep-free `Continue` whose frame placement installs the per-call cart), with
-  [`apply_outcome`](../src/machine/execute/harness.rs)
+  [`apply_outcome`](../src/machine/execute/runtime.rs)
   the sole graph writer. The `SchedulerHandle` trait, `BodyResult`, `DispatchOutcome`, and the
   per-shape `DispatchState` envelope are gone — the scheduler's write methods are inherent and
   private to the execute tree. A multi-statement FN body's leading statements are now owned deps
@@ -187,7 +187,7 @@ What's shipped that the open items below build on:
   next to the harness that drives it. It was the one file in the scheduler subtree that
   name-resolved and built values from an `ExpressionPart`, so the "scheduler names no AST"
   invariant now holds structurally across `scheduler/**`. The methods are `&mut self` on
-  `KoanHarness` (below), reached through the scheduler's public surface (`submit_here` /
+  `KoanRuntime` (below), reached through the scheduler's public surface (`submit_here` /
   `current_scope`). See [design/execution-model.md](../design/execution-model.md#the-dispatcher--scheduler-boundary).
 - *Dep-request enum made AST-free at the source.* The six-arm dep enum a
   `ParkThenContinue` declares (`Dispatch` / `ListLit` / `DictLit` / `RecordLit` / `BodyBlock` /
@@ -197,8 +197,8 @@ What's shipped that the open items below build on:
   `ExpressionPart`), and the harness `match` still does every `&mut Scheduler` write. The win:
   `outcome.rs` imports no `crate::machine::model::ast` and carries `DepRequest` as an opaque
   type, so the decide phase stays read-only and the scheduler-step currency names no AST.
-- *`KoanHarness` owns the scheduler.* A
-  [`KoanHarness<'run>`](../src/machine/execute/harness.rs) owns the `Scheduler` by composition
+- *`KoanRuntime` owns the scheduler.* A
+  [`KoanRuntime<'run>`](../src/machine/execute/runtime.rs) owns the `Scheduler` by composition
   (a `sched` field) and is the **sole** holder of `&mut Scheduler` across the execute tree. The
   execute loop, `apply_outcome` (the one graph writer), `submit_dispatch`, the aggregate-literal
   lowering, and the AST-aware submission wrappers (`enter_block`, `dispatch_here`,
@@ -206,7 +206,7 @@ What's shipped that the open items below build on:
   methods on it. `Scheduler` keeps the AST-free read views and low-level write primitives, so a
   dispatch decide sees only a read-only `SchedulerView` / `&Scheduler` — "everything outside the
   harness is read-only" is now structurally enforced by the type, not a naming convention. The
-  `apply_outcome` cluster migrated up to `execute/harness.rs` (the old `dispatch/harness.rs` is
+  `apply_outcome` cluster migrated up to `execute/runtime.rs` (the old `dispatch/harness.rs` is
   gone), unifying "the harness" at the `execute/` level above both `dispatch/` and `scheduler/`.
 
 ## Next items

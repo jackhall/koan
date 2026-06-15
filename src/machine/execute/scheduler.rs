@@ -5,8 +5,8 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope};
 
-use super::harness::KoanHarness;
 use super::nodes::NodeScope;
+use super::runtime::KoanRuntime;
 use dep_graph::DepGraph;
 use node_store::NodeStore;
 use work_queues::WorkQueues;
@@ -66,14 +66,14 @@ pub struct Scheduler<'run> {
     /// tail call *within* an established chain. A deferred-return FN dispatched here is a subsequent
     /// tail call whose own contract would be discarded by the keep-first rule, so it skips resolving
     /// its (possibly async `Expression`-form) return type and just tail-replaces its body. Set per
-    /// step in [`KoanHarness::execute`](super::harness::KoanHarness::execute); read via `Scheduler::in_contract_chain`.
+    /// step in [`KoanRuntime::execute`](super::runtime::KoanRuntime::execute); read via `Scheduler::in_contract_chain`.
     pub(in crate::machine::execute::scheduler) active_in_contract_chain: bool,
     #[cfg(test)]
     pub(in crate::machine::execute::scheduler) tail_reuse_count: usize,
 }
 
 /// RAII-shaped save/restore wrapper around the per-step `active_frame`, `active_chain`,
-/// and `active_reserve` swap that brackets each iteration of [`KoanHarness::execute`](super::harness::KoanHarness::execute).
+/// and `active_reserve` swap that brackets each iteration of [`KoanRuntime::execute`](super::runtime::KoanRuntime::execute).
 /// Bookkeeping spine for the ping-pong reserve-frame rotation; see
 /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
 pub(in crate::machine::execute::scheduler) struct SlotStepGuard<'run> {
@@ -295,9 +295,9 @@ impl<'run> Default for Scheduler<'run> {
 }
 
 /// The scheduler's frame/chain reads and the per-call-frame allocator that
-/// [`KoanHarness`](super::harness::KoanHarness) — the sole `&mut Scheduler` — calls while realizing
+/// [`KoanRuntime`](super::runtime::KoanRuntime) — the sole `&mut Scheduler` — calls while realizing
 /// a decided [`Outcome`](super::outcome::Outcome). AST-free state operations: the AST-aware
-/// submission wrappers (`enter_block`, `dispatch_here`, …) live on `KoanHarness`.
+/// submission wrappers (`enter_block`, `dispatch_here`, …) live on `KoanRuntime`.
 impl<'run> Scheduler<'run> {
     /// Active slot's `Rc<CallArena>`. See
     /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
@@ -334,8 +334,8 @@ impl<'run> Scheduler<'run> {
 
 /// The AST-aware submission wrappers — the dispatch-submission surface the roadmap moves onto the
 /// harness. Each resolves `(scope, node_scope, chain)` from scheduler state and forwards to
-/// [`Self::submit_dispatch`]; none holds `&mut Scheduler` outside `KoanHarness`.
-impl<'run> KoanHarness<'run> {
+/// [`Self::submit_dispatch`]; none holds `&mut Scheduler` outside `KoanRuntime`.
+impl<'run> KoanRuntime<'run> {
     /// Submit each `statement` as a fresh lexical block over `scope`: mint a frame `(scope_id, i+1)`
     /// per statement (parent = current `active_chain`) and dispatch each against `scope`. The
     /// program / REPL / test entry point for a block of top-level statements.

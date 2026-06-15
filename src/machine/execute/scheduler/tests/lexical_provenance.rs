@@ -11,7 +11,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::RuntimeArena;
 
 use super::let_expr;
-use crate::machine::execute::KoanHarness;
+use crate::machine::execute::KoanRuntime;
 
 fn lit<'run>(name: &str) -> KExpression<'run> {
     KExpression::new(vec![Spanned::bare(ExpressionPart::Keyword(name.into()))])
@@ -21,7 +21,7 @@ fn lit<'run>(name: &str) -> KExpression<'run> {
 fn top_level_statements_get_root_frames_with_consecutive_indices() {
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     let ids = sched.enter_block(
         root.id,
         vec![let_expr("a", 1.0), let_expr("b", 2.0), let_expr("c", 3.0)],
@@ -45,7 +45,7 @@ fn top_level_statements_get_root_frames_with_consecutive_indices() {
 fn sibling_statements_in_inner_block_share_parent_rc() {
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     let ids = sched.enter_block(root.id, vec![lit("ANY1"), lit("ANY2")], root);
     let chain_a = sched.chain_of(ids[0]).unwrap();
     let chain_b = sched.chain_of(ids[1]).unwrap();
@@ -67,7 +67,7 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
     use crate::machine::model::values::Module;
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     let module_expr = parse_one("MODULE Foo = (LET x = 1)");
     let ids = sched.enter_block(root.id, vec![module_expr], root);
     let top_id = ids[0];
@@ -147,7 +147,7 @@ fn cons_head_subdispatch_inherits_parent_chain() {
 fn add_with_chain_without_chain_panics() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     sched.add_with_chain(
         crate::machine::execute::dispatch::decide(KExpression::new(vec![Spanned::bare(
             ExpressionPart::Literal(KLiteral::Number(1.0)),

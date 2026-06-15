@@ -7,7 +7,7 @@ use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::core::source::Spanned;
 use crate::machine::core::BindingIndex;
-use crate::machine::execute::KoanHarness;
+use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
@@ -86,7 +86,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         Spanned::bare(ExpressionPart::Keyword("MARK".into())),
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
     ]);
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     let id = sched.add_dispatch(expr, inner);
     sched.execute().unwrap();
     let result = sched.read(id).object();
@@ -121,7 +121,7 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "foo".into(),
     ))]);
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().unwrap();
     let err = match sched.read_result(id) {
@@ -161,7 +161,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
         Spanned::bare(ExpressionPart::Keyword("FOO".into())),
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
     ]);
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().unwrap();
     let result = sched.read(id).object();

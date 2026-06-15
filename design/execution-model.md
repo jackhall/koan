@@ -95,10 +95,10 @@ them. The three pieces:
   variant carries the call's AST. Each is pure data — no `&mut Scheduler` is
   captured.
 - **The write harness** —
-  [`KoanHarness<'run>`](../src/machine/execute/harness.rs) owns the `Scheduler`
+  [`KoanRuntime<'run>`](../src/machine/execute/runtime.rs) owns the `Scheduler`
   by composition (a `sched` field, not a `&mut` borrow) and is the **sole**
   holder of `&mut Scheduler` across the execute tree. Its
-  [`apply_outcome`](../src/machine/execute/harness.rs) interprets a returned
+  [`apply_outcome`](../src/machine/execute/runtime.rs) interprets a returned
   outcome into graph writes and the slot's `NodeStep`. Because only the harness
   reborrows the scheduler mutably, no decide handler holds `&mut Scheduler` —
   decide (against a read-only view) and apply (against `&mut self`) never
@@ -106,7 +106,7 @@ them. The three pieces:
   a naming convention. The execute loop, the AST-aware submission wrappers
   (`enter_block`, `dispatch_here`, `add_dispatch_in_frame`,
   `dispatch_body_statements`, `combine_here`), `submit_dispatch`, and the
-  aggregate-literal lowering are all `&mut self` methods on `KoanHarness`. The
+  aggregate-literal lowering are all `&mut self` methods on `KoanRuntime`. The
   unified node handler
   ([`run_wait`](../src/machine/execute/scheduler/finish.rs)) collects the slot's
   resolved dep terminals, builds a `SchedulerView`, runs the `cont` closure,
@@ -120,7 +120,7 @@ write primitives (`submit_node`, `alloc_slot`, `add_owned_edge` /
 primitives are inherent methods capped `pub(in crate::machine::execute)`, so
 only the harness reaches them. A builtin invoked mid-dispatch
 (e.g. `newtype_construct`) routes through the shared
-[`run_action`](../src/machine/execute/harness.rs) harness as a pure
+[`run_action`](../src/machine/execute/runtime.rs) harness as a pure
 `Action → Outcome` lowering; `exec::invoke` reads the dispatcher's ambient
 `current_frame` / `current_lexical_chain` off the view to build the builtin's
 `BodyCtx`.
@@ -583,7 +583,7 @@ field of the parked state, and `KeywordedState::resume` hands it back to
 not re-allocate the pre-submitted children.
 
 Statement indices are per-`enter_block` call: each call to
-[`KoanHarness::enter_block`](../src/machine/execute/scheduler.rs) mints
+[`KoanRuntime::enter_block`](../src/machine/execute/scheduler.rs) mints
 chain frames at indices `1..N` for the N statements it submits. A REPL
 or test fixture that submits without an ambient chain (the
 [`Scheduler::add`](../src/machine/execute/scheduler/submit.rs) auto-root
@@ -1202,10 +1202,10 @@ a top-level statement. Sibling statements in the same block share their
 `parent` `Rc` (cactus sharing), so the chain is constant-space per
 sibling on top of the shared spine.
 
-### Single entry point: `KoanHarness::enter_block`
+### Single entry point: `KoanRuntime::enter_block`
 
 Every dispatched node has a chain because every new lexical block is
-entered through one primitive. `KoanHarness::enter_block(scope_id,
+entered through one primitive. `KoanRuntime::enter_block(scope_id,
 statements, scope)` prepends a frame `(scope_id, i)` for each
 statement `i` onto the current ambient chain and submits the
 statements as dispatch nodes:
@@ -1215,7 +1215,7 @@ statements as dispatch nodes:
   `enter_block(root.id, exprs, root)` against an empty parent chain.
 - `MODULE` and `SIG` bodies enter through the dispatch harness's `InScope`
   fan-out
-  ([`apply_outcome`](../src/machine/execute/harness.rs)), which splits
+  ([`apply_outcome`](../src/machine/execute/runtime.rs)), which splits
   via the shared
   [`split_body_statements`](../src/machine/core/kfunction/body.rs) helper and
   submits each statement through `enter_block`. The scheduler itself never
@@ -1261,7 +1261,7 @@ sets allow it. Backward references across siblings work — a `LET b =
 visibility predicate admits the earlier sibling's binding at the
 consumer's cutoff. `match_case` arms and `TRY` arms ride the same split
 through the `Action::Tail { leading, block_entry }` shape (see
-[Single entry point: `KoanHarness::enter_block`](#single-entry-point-koanharnessenter_block)
+[Single entry point: `KoanRuntime::enter_block`](#single-entry-point-koanharnessenter_block)
 above).
 
 ### FN-body chain assembly

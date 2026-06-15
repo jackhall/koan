@@ -5,9 +5,9 @@ use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
 use crate::machine::{KError, KErrorKind, NameOutcome, NodeId, TraceFrame};
 
-use super::super::harness::KoanHarness;
 use super::super::nodes::NodeOutput;
 use super::super::outcome::Outcome;
+use super::super::runtime::KoanRuntime;
 use super::super::CombineFinish;
 use super::resolve_name_part;
 
@@ -33,7 +33,7 @@ impl<'run> Slot<'run> {
     }
 }
 
-impl<'run> KoanHarness<'run> {
+impl<'run> KoanRuntime<'run> {
     /// Schedule a list-literal materialization as a Combine over its element producers.
     pub(in crate::machine::execute) fn schedule_list_literal(
         &mut self,

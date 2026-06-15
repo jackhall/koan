@@ -5,13 +5,13 @@ use crate::machine::core::{assemble_body_chain, ScopeId};
 use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 
-use super::super::harness::KoanHarness;
 use super::super::lift::{lift_kobject, lift_ktype};
 use super::super::nodes::{CallFrame, Node, NodeOutput, NodeStep, NodeWork};
+use super::super::runtime::KoanRuntime;
 use super::Scheduler;
 use crate::machine::model::Carried;
 
-impl<'run> KoanHarness<'run> {
+impl<'run> KoanRuntime<'run> {
     /// On `Done` with a frame, the return `Value` references the per-call arena that's
     /// about to drop, so it must be lifted into the captured scope's arena before the
     /// frame is released. See design/memory-model.md.

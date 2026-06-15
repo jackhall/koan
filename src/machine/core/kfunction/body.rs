@@ -90,8 +90,8 @@ impl ErasedContract {
 /// Split an FN / MATCH-arm / TRY-arm body into top-level statements. The single source of
 /// truth for the all-`Expression` multi-statement detection: any non-`Expression` part or
 /// fewer than two parts leaves the body as a single statement. Always returns at least one
-/// element. The scheduler's `InScope` body fan-out (`dispatch::harness`) routes through here
-/// before `enter_block`, so the scheduler never inspects AST shape itself.
+/// element. The runtime's `InScope` body fan-out (`KoanRuntime::apply_outcome`) routes through
+/// here before `enter_block`, so the scheduler never inspects AST shape itself.
 pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpression<'a>> {
     let is_multi = body.parts.len() >= 2
         && body
@@ -158,7 +158,7 @@ pub type BinderBucketFn = for<'a> fn(&KExpression<'a>) -> Option<UntypedKey>;
 pub enum Body<'a> {
     UserDefined(KExpression<'a>),
     /// A builtin authored against the `Action` harness. Runs through
-    /// `machine::execute::harness::run_action`.
+    /// `machine::execute::runtime::run_action`.
     Builtin(super::action::ActionFn),
 }
 

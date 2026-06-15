@@ -1,7 +1,7 @@
 //! Run-root arena and scheduler-slot reclamation invariants for user FN calls.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
-use crate::machine::execute::KoanHarness;
+use crate::machine::execute::KoanRuntime;
 use crate::machine::RuntimeArena;
 
 #[test]
@@ -15,7 +15,7 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
          FN (AA) -> Null = (BB)",
     );
 
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     sched.add_dispatch(parse_one("AA"), scope);
     sched.execute().expect("AA should run");
 
@@ -41,7 +41,7 @@ fn chained_tail_calls_reuse_frames() {
          FN (AA) -> Null = (BB)",
     );
 
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     sched.add_dispatch(parse_one("AA"), scope);
     sched.execute().expect("AA should run");
 
@@ -77,7 +77,7 @@ fn leading_statements_run_before_tail_across_chain() {
          FN (AA) -> Str = ((PRINT \"a\") (BB))",
     );
 
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     sched.add_dispatch(parse_one("AA"), scope);
     sched.execute().expect("AA should run");
 
@@ -108,7 +108,7 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
          FN (AA) -> Str = ((PRINT \"a\") (BB))",
     );
 
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     sched.add_dispatch(parse_one("AA"), scope);
     sched.execute().expect("AA should run");
 
@@ -145,7 +145,7 @@ fn match_driven_tail_recursion_completes() {
          ))",
     );
 
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     sched.add_dispatch(parse_one("HOP (Bit (One null))"), scope);
     sched.execute().expect("HOP should run");
 
@@ -171,7 +171,7 @@ fn match_arm_leading_statement_runs_before_tail_recursion() {
          ))",
     );
 
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     sched.add_dispatch(parse_one("HOP (Bit (One null))"), scope);
     sched.execute().expect("HOP should run");
 
@@ -187,7 +187,7 @@ fn match_arm_leading_statement_runs_before_tail_recursion() {
 /// Pins that a tail chain keeps the **first** caller's return contract.
 #[test]
 fn tail_call_enforces_first_callers_return_contract() {
-    use crate::machine::execute::KoanHarness;
+    use crate::machine::execute::KoanRuntime;
     use crate::machine::KErrorKind;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
@@ -196,7 +196,7 @@ fn tail_call_enforces_first_callers_return_contract() {
         "FN (GG) -> Str = (\"hello\")\n\
          FN (FF) -> Number = (GG)",
     );
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     let id = sched.add_dispatch(parse_one("FF"), scope);
     sched
         .execute()
@@ -275,7 +275,7 @@ fn body_subexpression_slots_recycle_across_calls() {
          ))",
     );
 
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
 
     // Warmup: populates the free-list with the body's transient pool.
     sched.add_dispatch(parse_one("LOOK (Bit (One null))"), scope);

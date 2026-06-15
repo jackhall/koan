@@ -5,17 +5,17 @@
 //! carriers.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_one_type, run_root_silent};
-use crate::machine::execute::KoanHarness;
+use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, RuntimeArena, Scope};
 
-/// Tolerates the error surfacing either from `KoanHarness::execute()` (resolve
+/// Tolerates the error surfacing either from `KoanRuntime::execute()` (resolve
 /// rejects at admission) or from `read_result` (auto-wrap committed and bind
 /// later refused). Compare `test_support::run_one_err`, which panics on the
 /// first path.
 fn run_expecting_dispatch_error<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KError {
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     let id = sched.add_dispatch(expr, scope);
     match sched.execute() {
         Err(e) => e,
@@ -155,11 +155,11 @@ fn functor_deferred_return_resolves_against_builtin_keyed_bind() {
 /// route through the same Combine-finish slot check.
 #[test]
 fn functor_deferred_return_builtin_keyed_mismatch_surfaces_per_call_diagnostic() {
-    use crate::machine::execute::KoanHarness;
+    use crate::machine::execute::KoanRuntime;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "FUNCTOR (BUILD Elt :Type) -> :Elt = (42)");
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     let id = sched.add_dispatch(parse_one("BUILD Str"), scope);
     sched
         .execute()

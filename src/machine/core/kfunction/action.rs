@@ -3,7 +3,7 @@
 //! *unaware*), `Action` is what a builtin returns and what the harness interprets (scheduler-*aware*).
 //! These are the **types only** — they reference core/model types, never the scheduler. The
 //! interpreter that drives the scheduler from an `Action` lives one layer up in
-//! `machine::execute::harness::run_action` (the peer of `dispatch/exec.rs::invoke`).
+//! `machine::execute::runtime::run_action` (the peer of `dispatch/exec.rs::invoke`).
 
 use std::rc::Rc;
 

@@ -38,7 +38,7 @@ pub(super) fn run<'run>(
 ) -> &'run Scope<'run> {
     let exprs = parse(source).expect("parse should succeed");
     let root = default_scope(arena, Box::new(SharedBuf(captured)));
-    let mut scheduler = KoanHarness::new();
+    let mut scheduler = KoanRuntime::new();
     for expr in exprs {
         scheduler.add_dispatch(expr, root);
     }

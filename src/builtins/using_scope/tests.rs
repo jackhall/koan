@@ -5,7 +5,7 @@
 //! (`DBL`, `GETIT`, `GETV`, `NOOP`) stay all-uppercase.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-use crate::machine::execute::KoanHarness;
+use crate::machine::execute::KoanRuntime;
 use crate::machine::model::KObject;
 use crate::machine::{KErrorKind, RuntimeArena};
 
@@ -162,7 +162,7 @@ fn using_on_non_module_fails_dispatch() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET n = 5");
-    let mut sched = KoanHarness::new();
+    let mut sched = KoanRuntime::new();
     let root = sched.add_dispatch(parse_one("USING n SCOPE (1)"), scope);
     sched
         .execute()

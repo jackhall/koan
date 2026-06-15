@@ -15,8 +15,8 @@ use crate::machine::model::types::UntypedKey;
 use crate::machine::model::{KType, SignatureElement};
 use crate::machine::{BindingIndex, FunctionLookup, KFunction, LexicalFrame, NodeId, Scope};
 
-use super::super::harness::KoanHarness;
 use super::super::nodes::NodeScope;
+use super::super::runtime::KoanRuntime;
 
 /// Submission-time binder-install info — see the module docs for the per-bucket eager-slot mask
 /// rules.
@@ -94,7 +94,7 @@ fn extract_binder_install<'run, 'step>(
     None
 }
 
-impl<'run> KoanHarness<'run> {
+impl<'run> KoanRuntime<'run> {
     /// Submit `expr` as a dispatch slot against `scope` (with handle `node_scope` and
     /// `explicit_chain`, resolved by the calling submission wrapper). Computes binder-install,
     /// pre-submits the eager argument slots as sub-dispatches (so a nested binder's placeholder

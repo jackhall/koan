@@ -3,8 +3,8 @@ use std::rc::Rc;
 use crate::machine::model::ast::KExpression;
 use crate::machine::{LexicalFrame, NodeId, Scope};
 
-use super::super::harness::KoanHarness;
 use super::super::nodes::{work_park_producers, CallFrame, Node, NodeScope, NodeWork};
+use super::super::runtime::KoanRuntime;
 use super::super::CombineFinish;
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
@@ -23,7 +23,7 @@ impl<'run> Scheduler<'run> {
     /// this Combine allocated (cascade-freed on success); `park_producers` are existing sibling
     /// slots it splices but does not own (kept alive past success via `Notify` edges). The finish
     /// closure sees results as `[park_producers..., owned_subs...]`. Test fixture entry point; the
-    /// run path uses [`KoanHarness::combine_here`](super::super::harness::KoanHarness::combine_here).
+    /// run path uses [`KoanRuntime::combine_here`](super::super::runtime::KoanRuntime::combine_here).
     #[cfg(test)]
     pub(in crate::machine::execute) fn add_combine(
         &mut self,
@@ -41,8 +41,8 @@ impl<'run> Scheduler<'run> {
     /// Generic ambient-chain submission for any `NodeWork` — a test fixture entry point. When
     /// there is no ambient chain (test fixtures) it synthesizes a detached chain so the visibility
     /// predicate treats every scope as "complete". The run path submits a `Dispatch` through
-    /// [`KoanHarness::submit_dispatch`](super::super::harness::KoanHarness::submit_dispatch)
-    /// (binder-aware) and a `Combine`/`Catch` through `KoanHarness::combine_here` / the harness.
+    /// [`KoanRuntime::submit_dispatch`](super::super::runtime::KoanRuntime::submit_dispatch)
+    /// (binder-aware) and a `Combine`/`Catch` through `KoanRuntime::combine_here` / the harness.
     #[cfg(test)]
     pub(in crate::machine::execute::scheduler) fn add(
         &mut self,
@@ -59,7 +59,7 @@ impl<'run> Scheduler<'run> {
     /// `self.active_chain`). Decides the slot's [`NodeScope`] handle — `Yoked` when this
     /// runs inside the per-call frame whose own child is `scope` (re-projected from the
     /// cart), else `Root` — then hands off to [`Self::submit_node`]. Test fixture entry; the run
-    /// path routes a `Dispatch` through `KoanHarness::submit_dispatch`.
+    /// path routes a `Dispatch` through `KoanRuntime::submit_dispatch`.
     #[cfg(test)]
     pub(super) fn add_with_chain(
         &mut self,
@@ -111,7 +111,7 @@ impl<'run> Scheduler<'run> {
     }
 
     /// Node-creation core, shared by the run-lifetime [`Self::add_with_chain`] and the framed
-    /// [`KoanHarness::add_dispatch_in_frame`](super::super::harness::KoanHarness::add_dispatch_in_frame).
+    /// [`KoanRuntime::add_dispatch_in_frame`](super::super::runtime::KoanRuntime::add_dispatch_in_frame).
     /// `scope` is read only transiently
     /// (binder-install, placeholder install, `pre_subs` recursion) and never retained — the
     /// node keeps a `NodeScope<'run>` handle, not this borrow — so it is clamped to a `'step`
@@ -178,7 +178,7 @@ impl<'run> Scheduler<'run> {
     }
 }
 
-impl<'run> KoanHarness<'run> {
+impl<'run> KoanRuntime<'run> {
     /// Submit an unresolved expression for the scheduler to dispatch + execute
     /// against `scope`. The only public way to add work.
     pub fn add_dispatch(&mut self, expr: KExpression<'run>, scope: &'run Scope<'run>) -> NodeId {
@@ -234,7 +234,7 @@ impl<'run> KoanHarness<'run> {
 /// (`add` / `add_with_chain` / `add_combine`), so scheduler tests build raw `NodeWork` slots
 /// through the harness without naming the scheduler.
 #[cfg(test)]
-impl<'run> KoanHarness<'run> {
+impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn add(
         &mut self,
         work: NodeWork<'run>,

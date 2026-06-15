@@ -4,8 +4,8 @@
 //! (never `&mut`) for its reads — the static-over-the-step ones (`current_scope`, `chain_deref`,
 //! …) and the live reads of *pre-existing* producers (`is_result_ready`, `would_create_cycle`,
 //! `read_result`) — and the decide *returns* a
-//! [`Outcome`](super::Outcome) the [`harness`](super::harness) applies.
-//! [`KoanHarness`](super::harness::KoanHarness) owns the scheduler and is the sole holder of `&mut
+//! [`Outcome`](super::Outcome) the [`harness`](super::runtime) applies.
+//! [`KoanRuntime`](super::runtime::KoanRuntime) owns the scheduler and is the sole holder of `&mut
 //! Scheduler` across the execute tree, so no decide handler touches it — the scheduler's write
 //! primitives are inherent methods the harness alone calls.
 //!

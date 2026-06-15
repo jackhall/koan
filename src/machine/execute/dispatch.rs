@@ -17,7 +17,7 @@
 //!
 //! State and transitions live with their shape; this file keeps the cross-shape glue. Every
 //! per-shape handler *decides* against a read-only [`SchedulerView`] and returns a
-//! [`Outcome`] that [`KoanHarness`](super::harness::KoanHarness) applies — the harness holds the
+//! [`Outcome`] that [`KoanRuntime`](super::runtime::KoanRuntime) applies — the harness holds the
 //! only `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field
 //! names).
 
@@ -151,7 +151,7 @@ pub(in crate::machine::execute) enum PendingSub<'run> {
 }
 
 /// A dependency a [`Outcome::ParkThenContinue`] declares — the data the read-only decide phase hands
-/// the harness (`KoanHarness::apply_outcome`; the harness is the sole `&mut Scheduler` holder),
+/// the harness (`KoanRuntime::apply_outcome`; the harness is the sole `&mut Scheduler` holder),
 /// which runs the matching write. The
 /// decide phase issues no graph write itself. `Dispatch` / `*Lit` / `BodyBlock` are fresh producers the harness submits
 /// (and owns); `Existing` is a pre-existing producer the decide phase found that the slot merely
