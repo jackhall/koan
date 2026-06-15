@@ -1,10 +1,11 @@
 use std::rc::Rc;
 
-use crate::machine::model::ast::KExpression;
 use crate::machine::{LexicalFrame, NodeId, Scope};
 
 use super::super::nodes::{work_park_producers, CallFrame, Node, NodeScope, NodeWork};
+#[cfg(test)]
 use super::super::runtime::KoanRuntime;
+#[cfg(test)]
 use super::super::CombineFinish;
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
@@ -75,7 +76,7 @@ impl<'run> Scheduler<'run> {
     /// Establish the run frame on the first run-lifetime submission (top-level run scope), so every
     /// top-level slot carries a frame cart and `active_frame` is never `None` during a top-level
     /// step. Adopts the passed scope without minting a child. Idempotent.
-    pub(super) fn ensure_run_frame(&mut self, scope: &'run Scope<'run>) {
+    pub(in crate::machine::execute) fn ensure_run_frame(&mut self, scope: &'run Scope<'run>) {
         if self.run_frame.is_none() {
             self.run_frame = Some(crate::machine::CallArena::adopting(scope));
         }
@@ -84,7 +85,7 @@ impl<'run> Scheduler<'run> {
     /// Decide a run-scope submission's [`NodeScope`] handle: `Yoked` when this runs inside the
     /// per-call frame whose own child is `scope` (re-projected from the cart at the read boundary —
     /// no fabricated `&'run` persisted), else `Anchored` at `'run`.
-    pub(super) fn resolve_node_scope(&self, scope: &'run Scope<'run>) -> NodeScope<'run> {
+    pub(in crate::machine::execute) fn resolve_node_scope(&self, scope: &'run Scope<'run>) -> NodeScope<'run> {
         match &self.active_frame {
             Some(f)
                 if std::ptr::eq(
@@ -102,7 +103,7 @@ impl<'run> Scheduler<'run> {
     /// `Anchored(&'run)` re-uses the genuine run-lived borrow the slot already holds; `Yoked`
     /// re-projects from the active frame cart at the read boundary. Backs the `*_here` methods —
     /// the honest re-dispatch-against-my-own-scope path.
-    pub(super) fn submit_here(&mut self, work: NodeWork<'run>) -> NodeId {
+    pub(in crate::machine::execute) fn submit_here(&mut self, work: NodeWork<'run>) -> NodeId {
         let node_scope = self
             .active_node_scope
             .expect("a slot step installs active_node_scope before the body submits");
@@ -175,58 +176,6 @@ impl<'run> Scheduler<'run> {
             }
         }
         id
-    }
-}
-
-impl<'run> KoanRuntime<'run> {
-    /// Submit an unresolved expression for the scheduler to dispatch + execute
-    /// against `scope`. The only public way to add work.
-    pub fn add_dispatch(&mut self, expr: KExpression<'run>, scope: &'run Scope<'run>) -> NodeId {
-        let explicit_chain = self.sched.ambient_or_detached_chain();
-        self.sched.ensure_run_frame(scope);
-        let node_scope = self.sched.resolve_node_scope(scope);
-        self.submit_dispatch(expr, scope, node_scope, explicit_chain)
-    }
-
-    /// Dispatch `expr` against the executing slot's own scope handle — the honest
-    /// re-dispatch-against-my-own-scope path (the `OwnScope` dep placement). Routes through
-    /// [`Self::submit_dispatch`] so a binder spliced here still installs its placeholder; the
-    /// concrete scope is materialized from the handle (`Anchored`'s borrow / a `Yoked` frame's
-    /// `scope_for_bind`).
-    pub(in crate::machine::execute) fn dispatch_here(&mut self, expr: KExpression<'run>) -> NodeId {
-        let node_scope = self
-            .sched
-            .active_node_scope
-            .expect("a slot step installs active_node_scope before the body submits");
-        let explicit_chain = self.sched.ambient_or_detached_chain();
-        match node_scope {
-            NodeScope::Anchored(scope) => {
-                self.submit_dispatch(expr, scope, node_scope, explicit_chain)
-            }
-            NodeScope::Yoked => {
-                let frame = self
-                    .sched
-                    .active_frame
-                    .clone()
-                    .expect("a Yoked slot step has an active frame");
-                let scope = frame.scope_for_bind();
-                self.submit_dispatch(expr, scope, NodeScope::Yoked, explicit_chain)
-            }
-        }
-    }
-
-    /// Schedule a `Combine` against the executing slot's own scope handle.
-    pub(in crate::machine::execute) fn combine_here(
-        &mut self,
-        owned_subs: Vec<NodeId>,
-        park_producers: Vec<NodeId>,
-        finish: CombineFinish<'run>,
-    ) -> NodeId {
-        let park_count = park_producers.len();
-        let mut deps = park_producers;
-        deps.extend(owned_subs);
-        self.sched
-            .submit_here(NodeWork::combine(deps, park_count, finish))
     }
 }
 

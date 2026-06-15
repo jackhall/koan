@@ -1,12 +1,9 @@
 use std::rc::Rc;
 
-use crate::machine::core::{assemble_body_chain, ScopeId};
-use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope};
 
 use super::nodes::NodeScope;
-use super::runtime::KoanRuntime;
 use dep_graph::DepGraph;
 use node_store::NodeStore;
 use work_queues::WorkQueues;
@@ -286,6 +283,13 @@ impl<'run> Scheduler<'run> {
             ),
         }
     }
+
+    /// The executing slot's raw [`NodeScope`] handle (`Anchored`/`Yoked`), before materialization.
+    /// [`KoanRuntime::dispatch_here`](super::runtime::KoanRuntime::dispatch_here) matches the arm to
+    /// pick its re-dispatch path; [`Self::current_scope`] is the materialized form.
+    pub(in crate::machine::execute) fn current_node_scope(&self) -> Option<NodeScope<'run>> {
+        self.active_node_scope
+    }
 }
 
 impl<'run> Default for Scheduler<'run> {
@@ -303,6 +307,16 @@ impl<'run> Scheduler<'run> {
     /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
     pub(in crate::machine::execute) fn current_frame(&self) -> Option<Rc<CallArena>> {
         self.active_frame.clone()
+    }
+
+    /// Install `frame` as the ambient cart and return the previous one — the transient save/restore
+    /// [`dispatch_body_statements`](super::runtime::KoanRuntime::dispatch_body_statements) wraps each
+    /// body sub-slot in, so the sub-slot inherits the body frame rather than the caller's.
+    pub(in crate::machine::execute) fn swap_active_frame(
+        &mut self,
+        frame: Option<Rc<CallArena>>,
+    ) -> Option<Rc<CallArena>> {
+        std::mem::replace(&mut self.active_frame, frame)
     }
 
     /// Reuse the slot's reserve cart (reset in place) when uniquely owned, else allocate fresh
@@ -329,103 +343,5 @@ impl<'run> Scheduler<'run> {
     /// Active slot's lexical chain. Mirrors [`Self::current_frame`].
     pub(in crate::machine::execute) fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>> {
         self.active_chain.clone()
-    }
-}
-
-/// The AST-aware submission wrappers — the dispatch-submission surface the roadmap moves onto the
-/// harness. Each resolves `(scope, node_scope, chain)` from scheduler state and forwards to
-/// [`Self::submit_dispatch`]; none holds `&mut Scheduler` outside `KoanRuntime`.
-impl<'run> KoanRuntime<'run> {
-    /// Submit each `statement` as a fresh lexical block over `scope`: mint a frame `(scope_id, i+1)`
-    /// per statement (parent = current `active_chain`) and dispatch each against `scope`. The
-    /// program / REPL / test entry point for a block of top-level statements.
-    pub fn enter_block(
-        &mut self,
-        scope_id: ScopeId,
-        statements: Vec<KExpression<'run>>,
-        scope: &'run Scope<'run>,
-    ) -> Vec<NodeId> {
-        let parent = self.sched.active_chain.clone();
-        // Indices start at 1: visibility is strict less-than and builtins sit at idx 0,
-        // so a top-level statement at index 1 sees them via `0 < 1`.
-        statements
-            .into_iter()
-            .enumerate()
-            .map(|(i, expr)| {
-                let chain = LexicalFrame::push(parent.clone(), scope_id, i + 1);
-                self.add_dispatch_with_chain(expr, scope, chain)
-            })
-            .collect()
-    }
-
-    /// Schedule `expr` against `scope` with `chain` attached explicitly. The ambient
-    /// `add_dispatch` reads `active_chain` instead; this is the only way to override that.
-    pub(in crate::machine::execute) fn add_dispatch_with_chain(
-        &mut self,
-        expr: KExpression<'run>,
-        scope: &'run Scope<'run>,
-        chain: Rc<LexicalFrame>,
-    ) -> NodeId {
-        self.sched.ensure_run_frame(scope);
-        let node_scope = self.sched.resolve_node_scope(scope);
-        self.submit_dispatch(expr, scope, node_scope, Some(chain))
-    }
-
-    /// Dispatch `expr` as a sub-slot of the currently-active per-call frame, storing the slot's
-    /// scope as a `Yoked` handle re-projected from the frame cart rather than a fabricated `&'run`.
-    /// The caller must have installed the per-call frame as `active_frame` (the run loop does this
-    /// per step; [`Self::dispatch_body_statements`] does it transiently). `chain` is the explicit
-    /// lexical chain (`Some` for an `enter_block`-routed body statement; the ambient-inheriting
-    /// `ActiveFrame` placement passes [`Scheduler::ambient_or_detached_chain`]).
-    pub(in crate::machine::execute) fn add_dispatch_in_frame(
-        &mut self,
-        expr: KExpression<'run>,
-        chain: Option<Rc<LexicalFrame>>,
-    ) -> NodeId {
-        let frame = self
-            .sched
-            .active_frame
-            .clone()
-            .expect("in-frame dispatch requires an active frame");
-        // `scope_for_bind` is `Rc`-bounded — not a free `'run`-fabrication. The
-        // slot stores `Yoked` and re-projects the scope from the frame cart at the read
-        // boundary, so this short borrow only needs to outlive the `submit_dispatch` call.
-        let scope = frame.scope_for_bind();
-        self.submit_dispatch(expr, scope, NodeScope::Yoked, chain)
-    }
-
-    /// Dispatch a body's non-tail `statements` as sibling sub-slots in `frame`, each positioned at
-    /// body-chain index `i + 1` (the params / `it` sit at idx 0) over the frame's body scope, with
-    /// the parent chain reconstructed from the call site via [`assemble_body_chain`]. The shared
-    /// "execute a block of expressions" primitive: a multi-statement FN body (`KFunction::invoke`),
-    /// a deferred return-type dep, and a MATCH/TRY arm body (the action harness) all use it. The
-    /// caller tail-replaces into the body's last statement separately. Returns the sub-slots' ids.
-    pub(in crate::machine::execute) fn dispatch_body_statements(
-        &mut self,
-        frame: &Rc<CallArena>,
-        statements: Vec<KExpression<'run>>,
-    ) -> Vec<NodeId> {
-        let body_scope = frame.scope_for_bind();
-        let body_scope_id = body_scope.id;
-        let parent = assemble_body_chain(
-            body_scope,
-            self.sched
-                .current_lexical_chain()
-                .expect("a body block runs inside an active lexical chain"),
-            0,
-        )
-        .parent
-        .clone();
-        let mut ids = Vec::with_capacity(statements.len());
-        for (i, statement) in statements.into_iter().enumerate() {
-            let statement_chain = LexicalFrame::push(parent.clone(), body_scope_id, i + 1);
-            // Install `frame` as the ambient cart so `add_dispatch_in_frame` reads it back, then
-            // restore the previous — the sub-slot inherits this frame, not the caller's.
-            let prev = self.sched.active_frame.replace(frame.clone());
-            let bid = self.add_dispatch_in_frame(statement, Some(statement_chain));
-            self.sched.active_frame = prev;
-            ids.push(bid);
-        }
-        ids
     }
 }

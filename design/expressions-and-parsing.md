@@ -174,7 +174,7 @@ A builtin can opt out of eager evaluation for specific slot positions: it
 declares the slot as lazy at registration, the scheduler hands it the
 unevaluated `KExpression` instead of a value, and the builtin emits a fresh
 `Dispatch` for the chosen branch only. Two mechanisms exist:
-[`KoanRuntime::add_dispatch`](../src/machine/execute/runtime.rs) submits a child
+[`KoanRuntime::add_dispatch`](../src/machine/execute/runtime/submit.rs) submits a child
 node directly, while [`Action::Tail`](../src/machine/core/kfunction/action.rs) — used
 by `MATCH` — tail-returns the chosen branch so the scheduler dispatches it in
 place.

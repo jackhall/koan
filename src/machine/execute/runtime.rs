@@ -11,7 +11,10 @@
 //!
 //! The [`interpret`] submodule holds the program entry points ([`interpret`], [`interpret_with_writer`],
 //! [`interpret_with_writer_path`]); they parse, stand up the arena/root scope, and drive the run via
-//! [`KoanRuntime::run_program`].
+//! [`KoanRuntime::run_program`]. The [`submit`] submodule holds the AST-aware dispatch-submission
+//! wrappers ([`KoanRuntime::enter_block`], [`KoanRuntime::add_dispatch`], `dispatch_here`,
+//! `dispatch_body_statements`, `combine_here`) — the only callers that turn a `KExpression` into
+//! scheduler work.
 
 use std::rc::Rc;
 
@@ -28,6 +31,7 @@ use super::scheduler::Scheduler;
 use super::{catch_cont, ignore_results, short_circuit, CatchFinish, CombineFinish};
 
 mod interpret;
+mod submit;
 
 pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path};
 

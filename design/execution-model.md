@@ -583,7 +583,7 @@ field of the parked state, and `KeywordedState::resume` hands it back to
 not re-allocate the pre-submitted children.
 
 Statement indices are per-`enter_block` call: each call to
-[`KoanRuntime::enter_block`](../src/machine/execute/scheduler.rs) mints
+[`KoanRuntime::enter_block`](../src/machine/execute/runtime/submit.rs) mints
 chain frames at indices `1..N` for the N statements it submits. A REPL
 or test fixture that submits without an ambient chain (the
 [`Scheduler::add`](../src/machine/execute/scheduler/submit.rs) auto-root
