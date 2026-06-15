@@ -152,7 +152,7 @@ fn functor_deferred_return_resolves_against_builtin_keyed_bind() {
 
 /// Wrong-typed body surfaces the per-call `TypeMismatch` diagnostic (same
 /// wording as the nominal-keyed path), pinning that builtin-keyed binds
-/// route through the same Combine-finish slot check.
+/// route through the same dep-finish slot check.
 #[test]
 fn functor_deferred_return_builtin_keyed_mismatch_surfaces_per_call_diagnostic() {
     use crate::machine::execute::KoanRuntime;

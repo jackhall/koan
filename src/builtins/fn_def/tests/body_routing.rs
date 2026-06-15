@@ -1,5 +1,5 @@
 //! Branch coverage for the FN-def `body()` routing matrix and `ReturnTypeCapture`
-//! variants on the Combine-finish path, plus the Stage B param-name scan utility arms.
+//! variants on the dep-finish path, plus the Stage B param-name scan utility arms.
 
 use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, run, run_root_silent};
 use crate::machine::execute::KoanRuntime;
@@ -49,8 +49,8 @@ fn fn_def_sigil_return_type_with_dict_literal_param_ref_defers() {
 }
 
 /// An FN whose return type references a parameter name and whose parameter type
-/// elaboration parks on a same-batch SIG routes through `defer_via_combine` carrying
-/// `ReturnTypeCapture::Deferred(_)`; the Combine finish lifts that carrier verbatim
+/// elaboration parks on a same-batch SIG routes through `defer` carrying
+/// `ReturnTypeCapture::Deferred(_)`; the dep-finish lifts that carrier verbatim
 /// into `ReturnType::Deferred(_)` once the SIG terminalizes.
 #[test]
 fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
@@ -64,14 +64,14 @@ fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
     let f = lookup_fn(scope, "USE_ORD");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
-        "USE_ORD return type should be Deferred after Combine wake, got {:?}",
+        "USE_ORD return type should be Deferred after dep-finish wake, got {:?}",
         f.signature.return_type,
     );
 }
 
 /// A sigil-form return type that sub-dispatches at FN-def (no parameter reference)
 /// and a parameter slot that parks on a forward-LET binding both join the same
-/// Combine; the return-type sub-dispatch's `results_pos` says where the closure picks
+/// dep-finish; the return-type sub-dispatch's `results_pos` says where the closure picks
 /// the lifted `KTypeValue` out of `&[&KObject]`.
 #[test]
 fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine() {
@@ -86,7 +86,7 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
     assert_eq!(
         f.signature.return_type,
         ReturnType::Resolved(KType::List(Box::new(KType::Number))),
-        "USE return type should resolve to List<Number> after Combine wake",
+        "USE return type should resolve to List<Number> after dep-finish wake",
     );
 }
 
@@ -134,7 +134,7 @@ fn fn_def_parens_param_type_non_type_value_errors() {
 
 /// A sigil-form return type that sub-dispatches to a non-`KTypeValue` must surface
 /// a `ShapeError` naming the return-type slot (the
-/// `ReturnTypeCapture::ReturnTypeExpr` arm of the Combine finish).
+/// `ReturnTypeCapture::ReturnTypeExpr` arm of the dep-finish).
 #[test]
 fn fn_def_sigil_return_type_non_type_value_errors() {
     let arena = RuntimeArena::new();

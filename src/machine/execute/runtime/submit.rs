@@ -40,7 +40,11 @@ impl<'run> KoanRuntime<'run> {
     /// Submit an unresolved expression for the scheduler to dispatch + execute against `scope`,
     /// inheriting the ambient (or, at top level, a detached) lexical chain. The only public way to
     /// add work.
-    pub fn dispatch_in_scope(&mut self, expr: KExpression<'run>, scope: &'run Scope<'run>) -> NodeId {
+    pub fn dispatch_in_scope(
+        &mut self,
+        expr: KExpression<'run>,
+        scope: &'run Scope<'run>,
+    ) -> NodeId {
         let chain = self.sched.ambient_or_detached_chain();
         self.dispatch_in_scope_with_chain(expr, scope, chain)
     }
@@ -89,7 +93,10 @@ impl<'run> KoanRuntime<'run> {
     /// reuses its genuine run-lived borrow; a `Yoked` slot routes through
     /// [`Self::dispatch_in_active_frame`] to re-project from the active frame cart. Either way routes
     /// through [`Self::submit_dispatch`], so a binder spliced here still installs its placeholder.
-    pub(in crate::machine::execute) fn dispatch_in_own_scope(&mut self, expr: KExpression<'run>) -> NodeId {
+    pub(in crate::machine::execute) fn dispatch_in_own_scope(
+        &mut self,
+        expr: KExpression<'run>,
+    ) -> NodeId {
         let node_scope = self
             .sched
             .current_node_scope()
@@ -136,7 +143,7 @@ impl<'run> KoanRuntime<'run> {
         ids
     }
 
-    /// Schedule a `Combine` against the executing slot's own scope handle. `owned_subs` are
+    /// Schedule a `AwaitDeps` against the executing slot's own scope handle. `owned_subs` are
     /// cascade-freed on success; `park_producers` are existing siblings the combine reads but does
     /// not own. The finish sees results as `[park_producers..., owned_subs...]`.
     pub(in crate::machine::execute) fn submit_dep_finish_in_own_scope(

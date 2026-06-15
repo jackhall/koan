@@ -1,5 +1,5 @@
 //! FN return-type pipeline: extraction → classification → carriage across the
-//! Combine boundary → resolution at finish time.
+//! dep-finish boundary → resolution at finish time.
 
 use std::collections::HashMap;
 
@@ -35,7 +35,7 @@ pub(crate) enum ReturnTypeState<'a> {
     Deferred(DeferredReturn<'a>),
     /// `Expression(_)` carrier (e.g. `-> :(Mo.Ty)`) that doesn't reference any FN
     /// parameter; safe to resolve once at FN-def time. Scheduling happens via
-    /// `super::finalize::defer_via_combine` so all owned-sub registration lives
+    /// `super::finalize::defer` so all owned-sub registration lives
     /// at one site.
     ExprToSubDispatch(KExpression<'a>),
 }
@@ -44,7 +44,7 @@ pub(crate) enum ReturnTypeCapture<'a> {
     Resolved(KType<'a>),
     Unresolved(String),
     Deferred(DeferredReturn<'a>),
-    /// `results_pos` indexes the Combine closure's `&[Carried<'a>]` slice.
+    /// `results_pos` indexes the dep-finish closure's `&[Carried<'a>]` slice.
     ReturnTypeExpr {
         results_pos: usize,
     },
@@ -77,8 +77,8 @@ pub(crate) enum AdmissibleVerdict {
     Admissible,
     /// `Pending` and `ExprToSubDispatch` carriers can't be classified until the resolved
     /// `KType` is in hand; the `is_functor: true` flag threaded through
-    /// `defer_via_combine` re-runs the predicate at Combine-finish.
-    DeferredToCombine,
+    /// `defer` re-runs the predicate at dep-finish.
+    Deferred,
     /// Diagnostic is already formatted with the `FUNCTOR return-type slot` prefix.
     Rejected(KError),
 }
@@ -134,7 +134,7 @@ pub(crate) fn classify_return_type<'a>(
                 ReturnTypeState::Done(kt) => {
                     verdict_for_resolved(kt, functor_param_types.is_some())
                 }
-                _ => AdmissibleVerdict::DeferredToCombine,
+                _ => AdmissibleVerdict::Deferred,
             };
             Ok((state, verdict))
         }
@@ -151,7 +151,7 @@ pub(crate) fn classify_return_type<'a>(
             } else {
                 Ok((
                     ReturnTypeState::ExprToSubDispatch(e),
-                    AdmissibleVerdict::DeferredToCombine,
+                    AdmissibleVerdict::Deferred,
                 ))
             }
         }
@@ -230,7 +230,7 @@ pub(super) fn make_capture<'a>(te: TypeName) -> ReturnTypeCapture<'a> {
 }
 
 /// Park-arm outcomes from `Scope::resolve_type_expr` are protocol errors here: every
-/// parked producer is terminal by the Combine-finish invariant, so a second park would
+/// parked producer is terminal by the dep-finish invariant, so a second park would
 /// loop forever and is surfaced as a structured error.
 pub(super) fn resolve_capture_at_finish<'a>(
     capture: ReturnTypeCapture<'a>,
@@ -244,7 +244,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
             match scope.resolve_type_expr(&te, None) {
                 ResolveTypeExprOutcome::Done(kt) => Ok(ReturnType::Resolved(kt.clone())),
                 ResolveTypeExprOutcome::Park(_) => Err(KError::new(KErrorKind::ShapeError(
-                    "FN return type parked after Combine wake".to_string(),
+                    "FN return type parked after dep-finish wake".to_string(),
                 ))),
                 ResolveTypeExprOutcome::Unbound(msg) => match KType::from_name(&name) {
                     Some(kt) => Ok(ReturnType::Resolved(kt)),

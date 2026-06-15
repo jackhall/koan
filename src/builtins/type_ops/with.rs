@@ -5,7 +5,7 @@
 //! The `{Slot = Type}` record literal eager-evaluates to a `KObject::Record` whose field
 //! values are resolved `KTypeValue`s — a dotted `Er.Type` value sub-dispatches in value
 //! context for free — so the body reads `(name, KTypeValue)` entries directly: no lazy
-//! binding slot, no `Combine`.
+//! binding slot, no `AwaitDeps`.
 
 use std::collections::HashSet;
 

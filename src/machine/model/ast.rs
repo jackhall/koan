@@ -287,7 +287,7 @@ pub enum DispatchShape {
     /// Single-part `:(...)` sigiled type-expression wrapper.
     SigiledTypeExpr,
     /// Single-part `:{…}` record-type sigil. The handler folds the field list straight
-    /// to `KType::Record` (deferring through a Combine when a field type sub-dispatches
+    /// to `KType::Record` (deferring through a dep-finish when a field type sub-dispatches
     /// or forward-references), with no internal type-constructor builtin behind it.
     RecordType,
     /// Single-part literal-shaped expression — `Literal`, `Future`, nested

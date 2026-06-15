@@ -114,10 +114,10 @@ impl<'run, 's> SchedulerView<'run, 's> {
     /// Stage each `PendingSub` and decide the eager-subs outcome. A `Reuse` of an already-resolved
     /// producer splices inline (a read of a static-over-this-step slot) and rides on the outcome's
     /// `free`; a freshly minted sub is never terminal in the same step, so it becomes an owned
-    /// `Combine` dep. The finish splices the resolved values into `working_expr` and routes on
+    /// `AwaitDeps` dep. The finish splices the resolved values into `working_expr` and routes on
     /// `picked` — `Some(f)` folds the committed call into a frame-installing `Continue`, `None`
     /// re-resolves via [`keyworded::finish`](super::keyworded::finish). When every sub spliced
-    /// inline, that routing happens now; otherwise the slot parks as a `Combine` and the routing
+    /// inline, that routing happens now; otherwise the slot parks as a `AwaitDeps` and the routing
     /// runs in the finish. The `<bind>` dep-error frame rides on `dep_error_frame`. Read-only —
     /// every write the outcome implies is the harness's.
     pub(super) fn install_eager_subs(
@@ -165,7 +165,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
         }
         if deps.is_empty() {
             // Every sub was an already-resolved `Reuse` spliced inline — `working_expr` is fully
-            // resolved, so route to the finish now instead of parking on a Combine; the inline
+            // resolved, so route to the finish now instead of parking on a dep-finish; the inline
             // frees ride on the resulting Invoke/Redispatch outcome.
             return finish_eager_subs(working_expr, picked, free);
         }
@@ -176,7 +176,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
         let finish: DepFinish<'run> = Box::new(move |_ctx, results| {
             // The short-circuit already guaranteed every dep resolved; splice each into the
             // slot it was staged from, then route the continuation. No inline frees remain at
-            // wake — those were drained when the Combine was installed.
+            // wake — those were drained when the dep-finish was installed.
             for (slot, value) in part_indices.iter().zip(results) {
                 working_expr.parts[*slot].value = ExpressionPart::Future(*value);
             }
@@ -187,7 +187,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
 }
 
 /// Route a fully-spliced eager-subs `working_expr` to its continuation — the shared tail of
-/// the `Combine` finish and its all-inline fast path. `Some(f)` folds the committed call into a
+/// the `AwaitDeps` finish and its all-inline fast path. `Some(f)` folds the committed call into a
 /// frame-installing [`Outcome::Continue`] (via [`invoke_continue`](super::exec::invoke_continue));
 /// `None` defers to a re-resolve `Continue` (via
 /// [`redispatch_continue`](super::keyworded::redispatch_continue), which re-runs

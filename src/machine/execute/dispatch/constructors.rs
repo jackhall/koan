@@ -2,8 +2,8 @@
 //! and the `FunctionValueCall` fast lane (fn_value) route a resolved verb-carrier here. Args
 //! resolve through per-value eager sub-Dispatches; when all are bound, `finish` validates
 //! types and emits the `KObject::Wrapped` / `KObject::Tagged` directly — no bucket lookup, no
-//! re-dispatch. Reusing the eager-subs `Combine` machinery (rather than a
-//! standalone `Combine`) is load-bearing: it stages an already-ready value in place and parks
+//! re-dispatch. Reusing the eager-subs `AwaitDeps` machinery (rather than a
+//! standalone `AwaitDeps`) is load-bearing: it stages an already-ready value in place and parks
 //! a deferred one on the construction node itself, so a newtype built from a still-pending
 //! reference (`(Boxed (p))` where `p` is a sibling construction) finalizes correctly.
 

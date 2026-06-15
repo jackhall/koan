@@ -249,18 +249,18 @@ fn union_field_accepts_keyworded_map_sigil() {
 // --- Forward type reference inside sigil body ---
 
 /// A sigiled FUNCTOR type expression whose inner parameter type references a
-/// forward-declared sibling SIG defers through a Combine: at body-run time the
+/// forward-declared sibling SIG defers through a dep-finish: at body-run time the
 /// SIG is still parked on its own elaboration, so `extract_param_types`
-/// returns `Park(producers)`; the body schedules a Combine over the producers
+/// returns `Park(producers)`; the body schedules a dep-finish over the producers
 /// and re-runs the walk at finish against the now-final SIG. Pins the
-/// [`defer_via_combine`] path in `body_fn` / `body_functor`.
+/// [`defer`] path in `body_fn` / `body_functor`.
 ///
 /// Index gating means a SIG-internal VAL whose annotation references a
 /// later-sibling top-level SIG can't see the forward sibling at submission
 /// time, so the type-language sigil's resolver parks. Submission order:
 /// top-level SIG `Outer` (which contains the VAL), then top-level SIG
 /// `OrderedSig`. The VAL's sigiled FUNCTOR type annotation parks on
-/// `OrderedSig`'s producer and resumes via Combine.
+/// `OrderedSig`'s producer and resumes via dep-finish.
 #[test]
 fn sigil_functor_forward_reference_defers_via_combine() {
     let arena = RuntimeArena::new();
@@ -273,7 +273,7 @@ fn sigil_functor_forward_reference_defers_via_combine() {
     match mk {
         KType::KFunctor { params, ret, .. } => {
             assert_eq!(params.len(), 1);
-            // OrderedSig resolves to its `Signature { .. }` identity post-Combine.
+            // OrderedSig resolves to its `Signature { .. }` identity post-dep-finish.
             // The carrier type's name (`OrderedSig`) is enough to confirm the
             // forward reference resolved through the deferral path.
             let ty = params.get("Ty").expect("param `Ty` must be present");

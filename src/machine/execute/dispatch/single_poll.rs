@@ -2,7 +2,7 @@
 //! bare-`Type`-head call, sigiled type expression, literal pass-through.
 //! Most terminate (or single-producer-park) in one poll. Two carry a resume:
 //! `TypeCall` parks on per-value-cell eager-subs (its value subs as a
-//! `Combine`) or on a still-finalizing head binding, re-running
+//! `AwaitDeps`) or on a still-finalizing head binding, re-running
 //! [`type_call`] on wake; `BareTypeLeaf` parks on a still-finalizing referent
 //! and re-resolves [`bare_type_leaf`]. Both park through a [`park_resume`] closure.
 
@@ -18,7 +18,7 @@ use crate::machine::{KError, KErrorKind, Resolution};
 use super::super::DepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
-use super::{become_dispatch, park_on_deps, park_lift, park_resume, DepRequest, Outcome};
+use super::{become_dispatch, park_lift, park_on_deps, park_resume, DepRequest, Outcome};
 
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
 /// slot is resolved. `(set, index)` is the sealed-member identity stamped onto the produced
@@ -107,7 +107,7 @@ pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> Outcome<'run> 
 
 /// `:{x :Number, y :Str}` — a single-part record-type sigil. Folds the field list straight
 /// to `KObject::KTypeValue(KType::Record(_))` via the shared field-list elaborator, deferring
-/// through a Combine when a field forward-references or sub-dispatches. No type-constructor
+/// through a dep-finish when a field forward-references or sub-dispatches. No type-constructor
 /// builtin is involved — the record type is structural.
 pub(super) fn record_type<'run>(
     ctx: &SchedulerView<'run, '_>,

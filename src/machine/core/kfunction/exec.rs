@@ -62,7 +62,7 @@ pub enum ExecOutcome<'ast, 'frame> {
         ret: PerCallReturn<'frame>,
     },
     /// A deferred-`Expression` return on its **first** call: resolve `type_expr` (an async
-    /// sub-dispatch — `Er.Carrier`, `sig WITH {…}`) as a single Combine dep, run `leading` as
+    /// sub-dispatch — `Er.Carrier`, `sig WITH {…}`) as a single dep-finish dependency, run `leading` as
     /// sibling statements, then tail-replace into `tail` carrying the resolved per-call type as a
     /// `PerCall` contract. A proper tail call once the type is known, so the recursion (whose
     /// subsequent calls skip resolution under keep-first) stays TCO-flat.
@@ -76,7 +76,7 @@ pub enum ExecOutcome<'ast, 'frame> {
 /// The return contract a [`ExecOutcome::Tail`] carries. A resolved-return FN reads its type off
 /// the signature (`FromSignature` → `ReturnContract::Function`); a deferred-return FN whose type
 /// resolved synchronously carries the resolved `KType` (`Resolved` → `ReturnContract::PerCall`),
-/// so the body tail-replaces and the lift boundary checks + stamps against it — no Combine, TCO
+/// so the body tail-replaces and the lift boundary checks + stamps against it — no dep-finish, TCO
 /// preserved.
 pub enum PerCallReturn<'frame> {
     FromSignature,
@@ -184,7 +184,7 @@ pub fn run_user_fn<'ast, 'frame>(
                     }
                 }
                 // `Expression` form (`-> Er.Carrier`, `sig WITH {…}`): the type needs a sub-dispatch,
-                // so hand it back for the lowering to resolve as a Combine dep before tail-replacing.
+                // so hand it back for the lowering to resolve as a dep-finish dependency before tail-replacing.
                 DeferredReturn::Expression(return_expr) => {
                     let (leading, tail) = split_leading_tail(body_expr);
                     ExecOutcome::DeferredExprTail {

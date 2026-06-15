@@ -18,7 +18,7 @@ fn val_inside_sig_binds_typeexpr_carrier() {
 }
 
 /// Pins the parking path: sibling statement order isn't guaranteed, so VAL parks
-/// on LET's placeholder and resumes via Combine, picking the SIG-local shadow over
+/// on LET's placeholder and resumes via dep-finish, picking the SIG-local shadow over
 /// the meta-type builtin. The shadow binds a `Sig`-rooted `AbstractType` (so the
 /// slot records that it *names* the abstract member `Type`), not the collapsed
 /// underlying `Number`.

@@ -12,7 +12,7 @@
 //! shared `RecursiveSet` (members `pending`), and dispatch the declarations against a child
 //! scope that carries the set — so each declaration's elaborator threads the group. Each
 //! member's own finalize fills its slot in the shared set (the pre-installed `SetRef` routes
-//! it there rather than minting a singleton). A Combine over the member dispatches mirrors
+//! it there rather than minting a singleton). A dep-finish over the member dispatches mirrors
 //! the sealed members into the enclosing scope and binds the group handle: exiting the block
 //! guarantees every forward reference resolved.
 
@@ -91,14 +91,14 @@ fn leading_keyword<'b>(decl: &'b KExpression<'_>) -> Option<&'b str> {
 }
 
 /// `Action`-harness twin of the legacy body: discovers the members, mints the set + carrying child
-/// scope, pre-installs each member's `SetRef`, dispatches the body block (an `InScope` Combine dep
+/// scope, pre-installs each member's `SetRef`, dispatches the body block (an `InScope` dep-finish dependency
 /// that fans out per declaration), and the finish mirrors the sealed members + binds the group
 /// handle into the enclosing scope.
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        require_bare_type_name, require_kexpression, Action, Cont, Dep, DepPlacement,
+        require_bare_type_name, require_kexpression, Action, AwaitContinue, Dep, DepPlacement,
     };
     use crate::machine::model::Carried;
 
@@ -130,7 +130,7 @@ pub fn body<'a>(
     }
 
     let bind_index = ctx.bind_index();
-    let finish: Cont<'a> = Box::new(move |fctx, _results| {
+    let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
         let frame =
             || TraceFrame::bare("<recursive-types>", format!("RECURSIVE TYPES {group_name}"));
         for (index, (name, _)) in members.iter().enumerate() {
@@ -165,7 +165,7 @@ pub fn body<'a>(
             Err(e) => Action::Done(Err(e.with_frame(frame()))),
         }
     });
-    Action::Combine {
+    Action::AwaitDeps {
         deps: vec![Dep::Dispatch {
             expr: body_expr,
             placement: DepPlacement::InScope(child),

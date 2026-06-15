@@ -97,7 +97,7 @@ fn fn_with_user_bound_return_type_works() {
     assert_eq!(bytes, b"7\n");
 }
 
-/// Forward reference: FN's body parks on `MyT`'s submit-time placeholder via Combine
+/// Forward reference: FN's body parks on `MyT`'s submit-time placeholder via dep-finish
 /// and re-elaborates against the final scope when the LET wakes.
 #[test]
 fn fn_with_forward_user_bound_return_type_works() {

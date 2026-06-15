@@ -17,7 +17,7 @@ use std::collections::HashSet;
 pub enum FieldListOutcome<'a> {
     Done(Vec<(String, KType<'a>)>),
     /// `sub_dispatches` carries each sigil field's wrapped expression in DFS walk
-    /// order. The caller schedules them in that order and, on the Combine re-walk,
+    /// order. The caller schedules them in that order and, on the dep-finish re-walk,
     /// feeds the resolved `KObject::KTypeValue`s back through a [`ResultFeed`] — the walk
     /// re-descends in the same order, so no slot index is needed.
     Pending {
@@ -27,7 +27,7 @@ pub enum FieldListOutcome<'a> {
     Err(String),
 }
 
-/// Walk-order feed of resolved sub-dispatch carriers for the Combine re-walk. The first
+/// Walk-order feed of resolved sub-dispatch carriers for the dep-finish re-walk. The first
 /// walk records one sub-Dispatch per sigil field (in DFS order, descending into nested
 /// records); the re-walk replays the same traversal and [`pop`](ResultFeed::pop)s each
 /// resolved carrier back in. A concrete cursor (rather than a `dyn Iterator`) so it
@@ -55,12 +55,12 @@ impl<'b, 'a> ResultFeed<'b, 'a> {
 /// Entry point used by STRUCT / UNION / FN / FUNCTOR. Routes each field type through the
 /// scheduler-aware [`elaborate_type_expr`], accumulating parking producers and
 /// pending sub-Dispatches across the whole walk so the caller can install one
-/// Combine for the merged set. `name_kind` selects which token shapes are valid as a
+/// dep-finish for the merged set. `name_kind` selects which token shapes are valid as a
 /// field/parameter name (STRUCT / UNION pass `Identifier`; FN / FUNCTOR pass
 /// `IdentifierOrType` so capitalized type-parameter names like `Ty` are accepted).
 ///
 /// `results` is `None` on the first walk (each sigil field schedules a sub-Dispatch,
-/// collected into `Pending.sub_dispatches`) and `Some(iter)` on the Combine re-walk
+/// collected into `Pending.sub_dispatches`) and `Some(iter)` on the dep-finish re-walk
 /// (each sigil field consumes the next resolved `KObject::KTypeValue` from `iter` in DFS
 /// walk order instead of re-scheduling). Because the re-walk re-descends the field list
 /// in the same deterministic order the first walk produced the subs, positional
@@ -101,7 +101,7 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
                         other.summarize(),
                     )),
                     None if results.is_some() => Err(format!(
-                        "{context}: Combine re-walk found fewer resolved sub-dispatches than slots",
+                        "{context}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
                     )),
                     // First walk: pre-resolve threaded self-refs, then schedule a sub-Dispatch.
                     None => {

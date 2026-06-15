@@ -5,7 +5,7 @@
 //! Body statements dispatch on the OUTER scheduler against a fresh child scope, so a
 //! body statement referencing an earlier sibling at the same outer block parks on the
 //! outer placeholder like any other forward reference. The MODULE slot returns an
-//! `Action::Combine` over those body slots, so the parent binding lands at Combine-finish,
+//! `Action::AwaitDeps` over those body slots, so the parent binding lands at dep-finish,
 //! not when MODULE's body returns to the dispatcher.
 
 use crate::machine::model::types::KKind;
@@ -16,13 +16,13 @@ use crate::machine::{Scope, TraceFrame};
 use super::{arg, kw, sig};
 
 /// `Action`-harness twin of the legacy body: mints the child scope, dispatches the body block
-/// against it (an `InScope` Combine dep), and the finish installs the `KType::Module` identity into
+/// against it (an `InScope` dep-finish dependency), and the finish installs the `KType::Module` identity into
 /// the parent scope.
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        require_bare_type_name, require_kexpression, Action, Cont, Dep, DepPlacement,
+        require_bare_type_name, require_kexpression, Action, AwaitContinue, Dep, DepPlacement,
     };
     use crate::machine::model::Carried;
     use std::rc::Rc;
@@ -36,7 +36,7 @@ pub fn body<'a>(
     let active_frame = ctx.frame.map(Rc::clone);
     let bind_index = ctx.bind_index();
     let name_for_finish = name;
-    let finish: Cont<'a> = Box::new(move |fctx, _results| {
+    let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
         // Idempotent-finalize guard: a re-bound name short-circuits.
         if let Some(kt) = fctx.scope.bindings().lookup_type(&name_for_finish, None) {
             return Action::Done(Ok(Carried::Type(fctx.scope.arena.alloc_ktype(kt.clone()))));
@@ -75,7 +75,7 @@ pub fn body<'a>(
             )))),
         }
     });
-    Action::Combine {
+    Action::AwaitDeps {
         deps: vec![Dep::Dispatch {
             expr: body_expr,
             placement: DepPlacement::InScope(child_scope),
@@ -245,7 +245,7 @@ mod tests {
         assert!(std::ptr::eq(foo, module));
     }
 
-    /// Miri audit-slate: exercises the MODULE Combine continuation's captured
+    /// Miri audit-slate: exercises the MODULE dep-finish continuation's captured
     /// `child_scope: &'a Scope<'a>` and finalize writes under tree borrows.
     #[test]
     fn module_body_dispatch_does_not_dangle() {

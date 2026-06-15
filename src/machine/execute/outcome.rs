@@ -81,7 +81,7 @@ pub(in crate::machine::execute) enum Outcome<'run> {
 ///   errored dep (under the [`Outcome::ParkThenContinue::dep_error_frame`]) and otherwise hands the
 ///   resolved dep values to a [`DepFinish`]. This is both a dispatch decide's re-park/splice (it
 ///   carries the consuming call's frame, or `None` frameless) and the action-harness / literal
-///   dep-finishes ([`run_action`](super::runtime::run_action)'s `Action::Combine`, the literal
+///   dep-finishes ([`run_action`](super::runtime::run_action)'s `Action::AwaitDeps`, the literal
 ///   builders — labelled [`dep_error_frame`]). Its finish consumes the dep values, runs against a
 ///   read-only [`SchedulerView`], and returns another [`Outcome`] (it may itself re-park).
 /// - `Catch` is the action-harness catch ([`run_action`](super::runtime::run_action)'s

@@ -251,7 +251,11 @@ fn compute_done_output<'run>(
         (Ok(Carried::Type(t)), Some(frame)) => {
             let dest = dest_arena.expect("per-call scope must have an outer (its captured scope)");
             let lifted_t = lift_ktype(t, frame);
-            check_declared_return(prev_function, |d| d.matches_type(&lifted_t), || lifted_t.name())?;
+            check_declared_return(
+                prev_function,
+                |d| d.matches_type(&lifted_t),
+                || lifted_t.name(),
+            )?;
             Ok(Carried::Type(dest.alloc_ktype(lifted_t)))
         }
         (Err(e), Some(_frame)) => {

@@ -12,7 +12,7 @@ use super::let_expr;
 
 #[test]
 fn dep_finish_waits_on_deps_then_runs_finish() {
-    // Pins that Combine waits on every dep before invoking finish and that
+    // Pins that dep-finish waits on every dep before invoking finish and that
     // finish-returned Outcome::Done(Value) lands in the slot's result.
     use crate::machine::execute::DepFinish;
     let arena = RuntimeArena::new();
@@ -102,23 +102,23 @@ fn dep_finish_short_circuits_on_dep_error() {
 
 #[test]
 fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
-    // Pins the binder-body wrap-up shape MODULE / SIG use: an `Action::Combine` body parks the
-    // slot as a Combine and leaves it with the Combine's terminal.
+    // Pins the binder-body wrap-up shape MODULE / SIG use: an `Action::AwaitDeps` body parks the
+    // slot as a dep-finish and leaves it with the dep-finish's terminal.
     use crate::builtins::{default_scope, register_builtin};
-    use crate::machine::core::kfunction::action::{Action, BodyCtx, Cont};
+    use crate::machine::core::kfunction::action::{Action, AwaitContinue, BodyCtx};
     use crate::machine::model::ast::ExpressionPart;
     use crate::machine::model::Carried;
     use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
 
     fn body<'run>(_ctx: &BodyCtx<'run, '_>) -> Action<'run> {
-        let finish: Cont<'run> = Box::new(|fctx, _results| {
+        let finish: AwaitContinue<'run> = Box::new(|fctx, _results| {
             let v = fctx
                 .scope
                 .arena
                 .alloc_object(KObject::KString("from-combine".into()));
             Action::Done(Ok(Carried::Object(v)))
         });
-        Action::Combine {
+        Action::AwaitDeps {
             deps: Vec::new(),
             finish,
         }
@@ -146,7 +146,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
     sched.execute().unwrap();
     assert!(
         matches!(sched.read(id).object(), KObject::KString(s) if s == "from-combine"),
-        "DEFERTEST slot's terminal should match the Combine's terminal",
+        "DEFERTEST slot's terminal should match the dep-finish's terminal",
     );
 }
 

@@ -44,7 +44,9 @@ impl<'run> Slot<'run> {
 /// Allocate `obj` in the executing slot's arena and wrap it as a successful combine result — the
 /// shared tail of every aggregate-literal finish.
 fn done_object<'run>(view: &SchedulerView<'run, '_>, obj: KObject<'run>) -> Outcome<'run> {
-    Outcome::Done(Ok(Carried::Object(view.current_scope().arena.alloc_object(obj))))
+    Outcome::Done(Ok(Carried::Object(
+        view.current_scope().arena.alloc_object(obj),
+    )))
 }
 
 impl<'run> KoanRuntime<'run> {
@@ -169,7 +171,9 @@ impl<'run> KoanRuntime<'run> {
             ExpressionPart::RecordLiteral(inner) => {
                 Slot::owned(deps, self.schedule_record_literal(inner))
             }
-            ExpressionPart::Expression(boxed) => Slot::owned(deps, self.dispatch_in_own_scope(*boxed)),
+            ExpressionPart::Expression(boxed) => {
+                Slot::owned(deps, self.dispatch_in_own_scope(*boxed))
+            }
             ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
                 // A `:(...)` / `:{…}` type value is a type-context sub-Dispatch to a
                 // `KTypeValue`, like the keyworded eager-subs path — it cannot `resolve()`.

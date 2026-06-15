@@ -206,7 +206,7 @@ impl<'a> Scope<'a> {
     /// Child scope for a `RECURSIVE TYPES` block body: carries the shared [`RecursiveSet`]
     /// whose members are co-declared. Members dispatch against this scope, so the elaborator
     /// threads the group (a member name lowers to `RecursiveRef`). `outer` is the lexical
-    /// parent; the sealed members are mirrored up into it at the block's Combine-finish.
+    /// parent; the sealed members are mirrored up into it at the block's dep-finish.
     pub fn child_recursive_group(outer: &Scope<'a>, set: Rc<RecursiveSet<'a>>) -> Scope<'a> {
         Scope {
             outer: Some(BoundedScopePtr::erase(outer)),
@@ -474,7 +474,7 @@ impl<'a> Scope<'a> {
     /// `KObject::KTypeValue`. Same conditional-defer shape as [`Self::register_type`];
     /// `Err(Rebind)` on a genuine non-equal collision.
     ///
-    /// Finalize runs post-Combine, past the re-entrant queue point — a `Conflict` here
+    /// Finalize runs post-dep-finish, past the re-entrant queue point — a `Conflict` here
     /// is a programming error, so it panics rather than deferring (deferring would risk
     /// a window where the type resolves with the pre-install's empty payload).
     pub fn register_type_upsert(
@@ -498,7 +498,7 @@ impl<'a> Scope<'a> {
             ApplyOutcome::Applied => Ok(kt_ref),
             ApplyOutcome::Conflict => panic!(
                 "register_type_upsert borrow conflict on `{name}` — nominal finalize sites \
-                 run post-Combine outside the re-entrant bind hot path",
+                 run post-dep-finish outside the re-entrant bind hot path",
             ),
         }
     }

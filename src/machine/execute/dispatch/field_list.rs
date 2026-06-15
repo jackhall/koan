@@ -2,7 +2,7 @@
 //! scheduled sub-Dispatches for sigil field types — FN/FUNCTOR parameter lists, the
 //! NEWTYPE record repr, the UNION schema, and the standalone record-type sigil.
 //!
-//! One Combine waits on `[park_producers ++ owned_subs]`; its finish re-walks the field
+//! One dep-finish waits on `[park_producers ++ owned_subs]`; its finish re-walks the field
 //! list through [`parse_typed_field_list_via_elaborator`], feeding the resolved
 //! sub-Dispatch carriers back through that walker's `results` channel in DFS order, then
 //! hands the sealed `(name, KType)` pairs to a caller-supplied `finalize` that folds them
@@ -25,9 +25,9 @@ use super::super::DepFinish;
 use super::DepRequest;
 use super::SchedulerView;
 
-/// Folds the elaborated `(name, KType)` pairs into the caller's carrier on the Combine's
+/// Folds the elaborated `(name, KType)` pairs into the caller's carrier on the dep-finish's
 /// `Done` arm. The scheduler-currency variant, returning [`Outcome`] — used by
-/// [`defer_field_list_via_combine`].
+/// [`defer_field_list`].
 pub(crate) type FieldListFinalize<'run> = Box<
     dyn for<'step> FnOnce(&'step Scope<'run>, Vec<(String, KType<'run>)>) -> Outcome<'run> + 'run,
 >;
@@ -42,13 +42,13 @@ pub(crate) type FieldListFinalizeAction<'run> = Box<
         + 'run,
 >;
 
-/// Declare the sigil sub-Dispatches (in DFS order) and the Combine that re-walks `expr` once they
+/// Declare the sigil sub-Dispatches (in DFS order) and the dep-finish that re-walks `expr` once they
 /// and `park_producers` resolve, as a [`Outcome::ParkThenContinue`] — a pure decide, no write.
 /// `threaded` / `chain` rebuild the elaborator for the re-walk; `pending_guard` (when present)
 /// rides into the closure so its Drop fires on every finish arm; `error_frame` is attached to the
 /// user-facing `Err` arm.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn defer_field_list_via_combine<'run>(
+pub(crate) fn defer_field_list<'run>(
     expr: KExpression<'run>,
     park_producers: Vec<NodeId>,
     sub_dispatches: Vec<KExpression<'run>>,
@@ -85,11 +85,11 @@ pub(crate) fn defer_field_list_via_combine<'run>(
                     None => error,
                 }))
             }
-            // Every producer waited on is terminal by Combine invariant, so a second
+            // Every producer waited on is terminal by dep-finish invariant, so a second
             // park is a scheduling inconsistency rather than a recoverable forward ref.
             FieldListOutcome::Pending { .. } => {
                 Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "{context}: forward type reference still unresolved after Combine wake"
+                    "{context}: forward type reference still unresolved after dep-finish wake"
                 )))))
             }
         }
@@ -113,7 +113,7 @@ pub(crate) fn defer_field_list_via_combine<'run>(
     }
 }
 
-/// `Action`-harness twin of [`defer_field_list_via_combine`]: build the same Combine as an
+/// `Action`-harness twin of [`defer_field_list`]: build the same dep-finish as an
 /// [`Action`](crate::machine::core::kfunction::action::Action) — park producers become
 /// `Dep::Existing`, sigil sub-Dispatches `Dep::Dispatch { OwnScope }`, and the finish re-walks
 /// `expr` then wraps the `finalize` result in `Action::Done`.
@@ -130,7 +130,7 @@ pub(crate) fn defer_field_list_action<'a>(
     error_frame: Option<TraceFrame>,
     finalize: FieldListFinalizeAction<'a>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{Action, Cont, Dep, DepPlacement};
+    use crate::machine::core::kfunction::action::{Action, AwaitContinue, Dep, DepPlacement};
     // `deps` order [park ++ subs] makes the harness split owned = subs (DFS order), park =
     // park_producers, and the scheduler feeds results as [park.. , owned..] — so the re-walk
     // consumes `results[park_count..]`, exactly as the scheduler-side twin does.
@@ -140,7 +140,7 @@ pub(crate) fn defer_field_list_action<'a>(
         expr: sub,
         placement: DepPlacement::OwnScope,
     }));
-    let finish: Cont<'a> = Box::new(move |fctx, results| {
+    let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
         let mut feed = ResultFeed::new(&results[park_count..]);
@@ -164,19 +164,19 @@ pub(crate) fn defer_field_list_action<'a>(
             }
             FieldListOutcome::Pending { .. } => {
                 Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "{context}: forward type reference still unresolved after Combine wake"
+                    "{context}: forward type reference still unresolved after dep-finish wake"
                 )))))
             }
         }
     });
-    Action::Combine { deps, finish }
+    Action::AwaitDeps { deps, finish }
 }
 
 /// Elaborate a standalone `:{…}` record type to `KObject::KTypeValue(KType::Record(_))`.
 /// The `fields` expression is the record's `(name :Type, …)` field list. A record type at a
 /// value/type position declares no binder, so the elaborator threads no self-reference; a
 /// field naming a forward type parks and a sigil field type sub-dispatches, both deferred
-/// through one Combine (the field walker's own re-walk handles nested records).
+/// through one dep-finish (the field walker's own re-walk handles nested records).
 pub(crate) fn elaborate_record_value<'run, 's>(
     view: &SchedulerView<'run, 's>,
     fields: KExpression<'run>,
@@ -200,7 +200,7 @@ pub(crate) fn elaborate_record_value<'run, 's>(
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,
-        } => defer_field_list_via_combine(
+        } => defer_field_list(
             fields,
             park_producers,
             sub_dispatches,

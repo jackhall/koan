@@ -43,7 +43,7 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
 pub(crate) enum ParamListOutcome<'a> {
     Done(Vec<SignatureElement<'a>>),
     /// One or more parameter slots couldn't elaborate synchronously. The caller schedules
-    /// a `Combine` over `park_producers` and any sub-Dispatches; the closure splices each
+    /// a `AwaitDeps` over `park_producers` and any sub-Dispatches; the closure splices each
     /// sub-Dispatch's `KObject::KTypeValue` result into the corresponding slot of
     /// `signature_expr.parts` (replacing `Expression(_)` with `Future(obj)`) and re-runs
     /// `parse_fn_param_list`.
@@ -58,7 +58,7 @@ pub(crate) enum ParamListOutcome<'a> {
 /// Type-name resolution rides on [`elaborate_type_expr`], which returns
 /// `ElabResult::Park(producers)` for type-binding names that have dispatched but not
 /// finalized. Parking producers and sub-Dispatches accumulate across the whole signature
-/// walk so the caller can register every blocker in one Combine.
+/// walk so the caller can register every blocker in one dep-finish.
 pub(crate) fn parse_fn_param_list<'a>(
     signature: &KExpression<'a>,
     elaborator: &mut Elaborator<'_, 'a>,
@@ -110,7 +110,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                     }
                     Some(ExpressionPart::SigiledTypeExpr(boxed)) => {
                         // Wrap and sub-Dispatch so the dispatcher routes the inner
-                        // expression through its standard classifier; the Combine finish
+                        // expression through its standard classifier; the dep-finish
                         // splices the type-side carrier back as `Future(_)`.
                         let wrapped = KExpression::new(vec![Spanned::bare(
                             ExpressionPart::SigiledTypeExpr(boxed.clone()),
@@ -120,7 +120,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                     }
                     Some(ExpressionPart::RecordType(boxed)) => {
                         // A `:{…}` record param type sub-Dispatches to a `KType::Record`
-                        // carrier the Combine finish splices back as `Future(_)`.
+                        // carrier the dep-finish splices back as `Future(_)`.
                         let wrapped = KExpression::new(vec![Spanned::bare(
                             ExpressionPart::RecordType(boxed.clone()),
                         )]);

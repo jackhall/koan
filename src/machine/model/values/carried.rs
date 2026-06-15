@@ -124,7 +124,7 @@ pub enum Held<'a> {
 
 impl<'a> Held<'a> {
     /// Owned-ify a borrowed channel [`Carried`] into a cell: deep-clone the object arm,
-    /// clone the type arm. Used by the literal-aggregate `Combine` finish.
+    /// clone the type arm. Used by the literal-aggregate `AwaitDeps` finish.
     pub fn from_carried(c: Carried<'a>) -> Held<'a> {
         match c {
             Carried::Object(o) => Held::Object(o.deep_clone()),

@@ -116,8 +116,8 @@ impl<'run> KoanRuntime<'run> {
 }
 
 /// Lower an [`Action`] into the scheduler's [`Outcome`] currency — a pure `Action -> Outcome`
-/// transform that reads nothing: a `Combine`/`Catch` declares its deps (and a wrapped finish that
-/// recurses `run_action` on the `Cont`/`CatchCont` it produces) as a [`Outcome::ParkThenContinue`],
+/// transform that reads nothing: a `AwaitDeps`/`Catch` declares its deps (and a wrapped finish that
+/// recurses `run_action` on the `AwaitContinue`/`CatchCont` it produces) as a [`Outcome::ParkThenContinue`],
 /// and the harness submits and applies. Every scheduler read the body needs is deferred into the
 /// finish, which sees a read-only [`SchedulerView`](super::dispatch::SchedulerView) at wake.
 pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Outcome<'run> {
@@ -183,11 +183,11 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
             }
         }
 
-        Action::Combine { deps, finish } => {
+        Action::AwaitDeps { deps, finish } => {
             // `Existing` deps are park-producers the combine reads but doesn't own; `Dispatch`
             // deps are owned sub-slots (an `InScope` body fans out one per statement at apply
             // time). The harness orders the realized deps `[park..., owned...]`; `park_count` is
-            // the park prefix length. The wrapped finish recurses `run_action` on the `Cont`.
+            // the park prefix length. The wrapped finish recurses `run_action` on the `AwaitContinue`.
             let mut park: Vec<DepRequest<'run>> = Vec::new();
             let mut owned: Vec<DepRequest<'run>> = Vec::new();
             for dep in deps {
@@ -258,7 +258,11 @@ impl<'run> KoanRuntime<'run> {
     /// per-call frame; `InScope` enters a fresh **single-statement** block (so an inner `LET` stays
     /// local). A multi-statement body splits separately — see the `InScope` arm of [`Self::apply_outcome`]
     /// and [`Self::dispatch_body`].
-    fn realize_dispatch(&mut self, expr: KExpression<'run>, placement: DepPlacement<'run>) -> NodeId {
+    fn realize_dispatch(
+        &mut self,
+        expr: KExpression<'run>,
+        placement: DepPlacement<'run>,
+    ) -> NodeId {
         match placement {
             DepPlacement::OwnScope => self.dispatch_in_own_scope(expr),
             DepPlacement::ActiveFrame => {
@@ -381,7 +385,7 @@ impl<'run> KoanRuntime<'run> {
                 // Edge install: the `[..park_count]` prefix is notify-parked (sibling producers
                 // the slot waits on but doesn't own); the `[park_count..]` suffix is owned
                 // (cascade-freed on resolve). Each continuation sets `park_count` to match: a
-                // dispatch `Finish` owns all its deps (`park_count: 0`); an action `Combine` parks
+                // dispatch `Finish` owns all its deps (`park_count: 0`); an action `AwaitDeps` parks
                 // its `Existing` prefix and owns its `Dispatch` suffix; `Replay` parks every
                 // producer (`park_count: len`); a bare-name `Forward` parks its one producer
                 // (`park_count: 1`) while a deferred-combine `Forward` owns it (`park_count: 0`).

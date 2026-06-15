@@ -85,7 +85,10 @@ impl<'run> Scheduler<'run> {
     /// Decide a run-scope submission's [`NodeScope`] handle: `Yoked` when this runs inside the
     /// per-call frame whose own child is `scope` (re-projected from the cart at the read boundary —
     /// no fabricated `&'run` persisted), else `Anchored` at `'run`.
-    pub(in crate::machine::execute) fn resolve_node_scope(&self, scope: &'run Scope<'run>) -> NodeScope<'run> {
+    pub(in crate::machine::execute) fn resolve_node_scope(
+        &self,
+        scope: &'run Scope<'run>,
+    ) -> NodeScope<'run> {
         match &self.active_frame {
             Some(f)
                 if std::ptr::eq(
@@ -103,7 +106,10 @@ impl<'run> Scheduler<'run> {
     /// `Anchored(&'run)` re-uses the genuine run-lived borrow the slot already holds; `Yoked`
     /// re-projects from the active frame cart at the read boundary. Backs the `*_here` methods —
     /// the honest re-dispatch-against-my-own-scope path.
-    pub(in crate::machine::execute) fn submit_in_own_scope(&mut self, work: NodeWork<'run>) -> NodeId {
+    pub(in crate::machine::execute) fn submit_in_own_scope(
+        &mut self,
+        work: NodeWork<'run>,
+    ) -> NodeId {
         let node_scope = self
             .active_node_scope
             .expect("a slot step installs active_node_scope before the body submits");

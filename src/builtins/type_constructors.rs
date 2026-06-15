@@ -22,7 +22,7 @@ use super::{arg, kw, sig};
 use crate::machine::execute::defer_field_list_action;
 
 /// Which carrier the shared field-list path builds. All three ride the same parser and
-/// Combine/defer machinery; they differ only in the `KType` they fold their fields into,
+/// dep-finish/defer machinery; they differ only in the `KType` they fold their fields into,
 /// the diagnostic context string, and the field-name policy (both admit capitalized `Type`
 /// param names like `Ty`). The record type `:{…}` is structural — a first-class
 /// `ExpressionPart::RecordType` the dispatcher folds to `KType::Record` directly — so it is
@@ -50,7 +50,7 @@ impl CarrierKind {
 
 /// Fold the elaborated `(name, type)` pairs into the parameter record and wrap the
 /// `KFunction` / `KFunctor` identity in a `KTypeValue`. Shared by the synchronous and
-/// Combine-finish paths.
+/// dep-finish paths.
 fn finalize_carrier<'a>(
     scope: &Scope<'a>,
     fields: Vec<(String, KType<'a>)>,
