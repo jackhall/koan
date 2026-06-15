@@ -22,6 +22,7 @@ use crate::machine::core::kfunction::action::{
     Action, Dep, DepPlacement, FinishCtx, FramePlacement,
 };
 use crate::machine::core::kfunction::body::split_body_statements;
+use crate::machine::model::ast::KExpression;
 use crate::machine::{CallArena, KError, NodeId};
 
 use super::dispatch::DepRequest;
@@ -252,25 +253,34 @@ impl<'run> KoanRuntime<'run> {
         }
     }
 
+    /// Realize a single-statement dispatch dep at `placement` to its producer slot. `OwnScope`
+    /// re-dispatches against the executing slot's own scope; `ActiveFrame` inherits the ambient
+    /// per-call frame; `InScope` enters a fresh **single-statement** block (so an inner `LET` stays
+    /// local). A multi-statement body splits separately — see the `InScope` arm of [`Self::apply_outcome`]
+    /// and [`Self::dispatch_body_statements`].
+    fn realize_dispatch(&mut self, expr: KExpression<'run>, placement: DepPlacement<'run>) -> NodeId {
+        match placement {
+            DepPlacement::OwnScope => self.dispatch_here(expr),
+            DepPlacement::ActiveFrame => {
+                let chain = self.sched.ambient_or_detached_chain();
+                self.add_dispatch_in_frame(expr, chain)
+            }
+            DepPlacement::InScope(scope) => self
+                .enter_block(scope.id, vec![expr], scope)
+                .into_iter()
+                .next()
+                .expect("enter_block of one statement yields one node"),
+        }
+    }
+
     /// Realize a [`Catch`](Continuation::Catch)'s single watched [`Dep`] to a producer `NodeId`.
-    /// Unlike a Combine body, an `InScope` watched expr enters a fresh **single-statement** block
-    /// (TRY's `child_under` body scope) so an inner `LET` stays local; `Existing` is already a
-    /// producer the builtin found in scope.
+    /// `Existing` is already a producer the builtin found in scope; a `Dispatch` realizes as a
+    /// single statement (an `InScope` watched expr enters a fresh single-statement block — see
+    /// [`Self::realize_dispatch`]).
     fn realize_catch_dep(&mut self, dep: Dep<'run>) -> NodeId {
         match dep {
             Dep::Existing(id) => id,
-            Dep::Dispatch { expr, placement } => match placement {
-                DepPlacement::OwnScope => self.dispatch_here(expr),
-                DepPlacement::ActiveFrame => {
-                    let chain = self.sched.ambient_or_detached_chain();
-                    self.add_dispatch_in_frame(expr, chain)
-                }
-                DepPlacement::InScope(scope) => self
-                    .enter_block(scope.id, vec![expr], scope)
-                    .into_iter()
-                    .next()
-                    .expect("enter_block of one statement yields one node"),
-            },
+            Dep::Dispatch { expr, placement } => self.realize_dispatch(expr, placement),
         }
     }
 
@@ -340,17 +350,19 @@ impl<'run> KoanRuntime<'run> {
                 let mut dep_ids: Vec<NodeId> = Vec::with_capacity(deps.len());
                 for dep in deps {
                     match dep {
-                        DepRequest::Dispatch { expr, placement } => match placement {
-                            DepPlacement::OwnScope => dep_ids.push(self.dispatch_here(expr)),
-                            DepPlacement::ActiveFrame => {
-                                let chain = self.sched.ambient_or_detached_chain();
-                                dep_ids.push(self.add_dispatch_in_frame(expr, chain))
-                            }
-                            DepPlacement::InScope(scope) => {
-                                let statements = split_body_statements(expr);
-                                dep_ids.extend(self.enter_block(scope.id, statements, scope))
-                            }
-                        },
+                        // An `InScope` body fans out one producer per statement (multi-statement
+                        // split); `OwnScope` / `ActiveFrame` realize as a single producer via the
+                        // shared [`Self::realize_dispatch`].
+                        DepRequest::Dispatch {
+                            expr,
+                            placement: DepPlacement::InScope(scope),
+                        } => {
+                            let statements = split_body_statements(expr);
+                            dep_ids.extend(self.enter_block(scope.id, statements, scope))
+                        }
+                        DepRequest::Dispatch { expr, placement } => {
+                            dep_ids.push(self.realize_dispatch(expr, placement))
+                        }
                         DepRequest::ListLit(items) => {
                             dep_ids.push(self.schedule_list_literal(items))
                         }

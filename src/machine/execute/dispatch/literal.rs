@@ -8,6 +8,7 @@ use crate::machine::{KError, KErrorKind, NameOutcome, NodeId, TraceFrame};
 use super::super::outcome::Outcome;
 use super::super::runtime::KoanRuntime;
 use super::super::CombineFinish;
+use super::ctx::SchedulerView;
 use super::resolve_name_part;
 
 /// One element of a list literal or one side of a dict-literal pair. Indices are into the
@@ -20,6 +21,14 @@ enum Slot<'run> {
 }
 
 impl<'run> Slot<'run> {
+    /// Append `id` as an owned sub-dependency and return the `Owned` slot that reads its result.
+    /// The one place the "push a sub-dispatch, point a slot at it" tail lives.
+    fn owned(deps: &mut Vec<NodeId>, id: NodeId) -> Self {
+        let pos = deps.len();
+        deps.push(id);
+        Slot::Owned(pos)
+    }
+
     /// Deep-clones `Park` / `Owned` results because the produced container owns its cells
     /// and can't borrow a `&'run` carrier into its `Rc<…>`. A literal element may be a runtime
     /// value *or* a first-class type, so each carrier widens to a [`Held`] cell.
@@ -30,6 +39,12 @@ impl<'run> Slot<'run> {
             Slot::Owned(j) => Held::from_carried(results[park_count + j]),
         }
     }
+}
+
+/// Allocate `obj` in the executing slot's arena and wrap it as a successful combine result — the
+/// shared tail of every aggregate-literal finish.
+fn done_object<'run>(view: &SchedulerView<'run, '_>, obj: KObject<'run>) -> Outcome<'run> {
+    Outcome::Done(Ok(Carried::Object(view.current_scope().arena.alloc_object(obj))))
 }
 
 impl<'run> KoanRuntime<'run> {
@@ -52,11 +67,7 @@ impl<'run> KoanRuntime<'run> {
                 .into_iter()
                 .map(|slot| slot.materialize(results, park_count))
                 .collect();
-            let allocated: &'run KObject<'run> = _sched
-                .current_scope()
-                .arena
-                .alloc_object(KObject::list_of_held(items));
-            Outcome::Done(Ok(Carried::Object(allocated)))
+            done_object(_sched, KObject::list_of_held(items))
         });
         self.combine_here(deps, park_producers, finish)
     }
@@ -104,11 +115,7 @@ impl<'run> KoanRuntime<'run> {
                 };
                 map.insert(Box::new(kkey), value_held);
             }
-            let allocated: &'run KObject<'run> = _sched
-                .current_scope()
-                .arena
-                .alloc_object(KObject::dict_of_held(map));
-            Outcome::Done(Ok(Carried::Object(allocated)))
+            done_object(_sched, KObject::dict_of_held(map))
         });
         self.combine_here(deps, park_producers, finish)
     }
@@ -137,11 +144,7 @@ impl<'run> KoanRuntime<'run> {
                 .zip(layout)
                 .map(|(name, slot)| (name, slot.materialize(results, park_count)))
                 .collect();
-            let allocated: &'run KObject<'run> = _sched
-                .current_scope()
-                .arena
-                .alloc_object(KObject::record_of_held(record));
-            Outcome::Done(Ok(Carried::Object(allocated)))
+            done_object(_sched, KObject::record_of_held(record))
         });
         self.combine_here(deps, park_producers, finish)
     }
@@ -158,38 +161,21 @@ impl<'run> KoanRuntime<'run> {
     ) -> Slot<'run> {
         match part {
             ExpressionPart::ListLiteral(inner) => {
-                let nested_id = self.schedule_list_literal(inner);
-                let pos = deps.len();
-                deps.push(nested_id);
-                Slot::Owned(pos)
+                Slot::owned(deps, self.schedule_list_literal(inner))
             }
             ExpressionPart::DictLiteral(inner) => {
-                let nested_id = self.schedule_dict_literal(inner);
-                let pos = deps.len();
-                deps.push(nested_id);
-                Slot::Owned(pos)
+                Slot::owned(deps, self.schedule_dict_literal(inner))
             }
             ExpressionPart::RecordLiteral(inner) => {
-                let nested_id = self.schedule_record_literal(inner);
-                let pos = deps.len();
-                deps.push(nested_id);
-                Slot::Owned(pos)
+                Slot::owned(deps, self.schedule_record_literal(inner))
             }
-            ExpressionPart::Expression(boxed) => {
-                let sub_id = self.dispatch_here(*boxed);
-                let pos = deps.len();
-                deps.push(sub_id);
-                Slot::Owned(pos)
-            }
+            ExpressionPart::Expression(boxed) => Slot::owned(deps, self.dispatch_here(*boxed)),
             ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
                 // A `:(...)` / `:{…}` type value is a type-context sub-Dispatch to a
                 // `KTypeValue`, like the keyworded eager-subs path — it cannot `resolve()`.
                 let wrapped =
                     crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part)]);
-                let sub_id = self.dispatch_here(wrapped);
-                let pos = deps.len();
-                deps.push(sub_id);
-                Slot::Owned(pos)
+                Slot::owned(deps, self.dispatch_here(wrapped))
             }
             ref p @ ExpressionPart::Identifier(_) if wrap_identifiers => {
                 self.resolve_aggregate_bare_name(p, deps, park_producers)
@@ -223,10 +209,7 @@ impl<'run> KoanRuntime<'run> {
             NameOutcome::Unbound(_) | NameOutcome::ProducerErrored(_) | NameOutcome::Cycle(_) => {
                 let expr =
                     crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part.clone())]);
-                let sub_id = self.dispatch_here(expr);
-                let pos = deps.len();
-                deps.push(sub_id);
-                Slot::Owned(pos)
+                Slot::owned(deps, self.dispatch_here(expr))
             }
         }
     }
