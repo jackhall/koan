@@ -4,6 +4,7 @@ use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::{assemble_body_chain, ScopeId};
 use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 
+use super::super::dispatch::reattach_node_scope;
 use super::super::finalize::NodeFinalize;
 use super::super::nodes::{CallFrame, Node, NodePayload, NodeStep, NodeWork};
 use super::super::runtime::KoanRuntime;
@@ -48,8 +49,9 @@ impl<'run> KoanRuntime<'run> {
             // `active_frame` allowed is unspellable here.
             let post = self.sched.exit_slot_step(guard);
             self.sched.active_in_contract_chain = false;
-            // Drain re-entrant writes against the step scope.
-            post.step_scope().drain_pending();
+            // Drain re-entrant writes against the step scope (re-anchored at the workload boundary
+            // from the slot's raw handle and the authoritative post-step frame).
+            reattach_node_scope(post.node_scope(), Some(&post.prev_frame)).drain_pending();
             match step {
                 NodeStep::Done(output) => {
                     let frame = (!post.prev_frame.non_dying()).then_some(&post.prev_frame);
@@ -62,7 +64,8 @@ impl<'run> KoanRuntime<'run> {
                     // (pinned below); the producer does **not** lift it at Done.
                     let result = self.finalize_terminal(output, frame, prev_contract);
                     if result.is_err() {
-                        post.step_scope().clear_placeholders_for_producer(id);
+                        reattach_node_scope(post.node_scope(), Some(&post.prev_frame))
+                            .clear_placeholders_for_producer(id);
                     }
                     // Pin the producer's per-call frame in the slot's terminal: a dying frame is
                     // held until the slot is freed (frame death Done->free), keeping the terminal

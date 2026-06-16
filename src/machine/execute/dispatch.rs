@@ -53,7 +53,7 @@ mod submit;
 mod tests;
 
 pub(in crate::machine::execute) use super::outcome::{Continuation, Outcome};
-pub(in crate::machine::execute) use ctx::SchedulerView;
+pub(in crate::machine::execute) use ctx::{current_scope, reattach_node_scope, SchedulerView};
 pub(crate) use field_list::defer_field_list_action;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
@@ -97,7 +97,7 @@ pub(super) fn resolve_name_part<'run>(
         // not-yet-sealed referent parks on its single producer (a visible type alias has
         // already resolved its RHS, so a leaf parks on at most one binder), reusing the
         // same ready/cycle disposition the value-side placeholder arm applies.
-        Some(t) => match resolve_type_leaf_carrier(scope, t, scheduler.active_chain_clone()) {
+        Some(t) => match resolve_type_leaf_carrier(scope, t, scheduler.active_chain_raw()) {
             TypeLeafCarrier::Resolved(kt) => NameOutcome::Resolved(Carried::Type(kt)),
             TypeLeafCarrier::Unbound(n) => NameOutcome::Unbound(n),
             TypeLeafCarrier::Park(producers) => match producers.first() {

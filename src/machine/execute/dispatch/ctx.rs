@@ -23,8 +23,48 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 
+use super::super::nodes::NodeScope;
 use super::super::scheduler::Scheduler;
 use super::{park_on_deps, resolve_name_part, DepRequest, Outcome, PendingSub};
+
+/// Re-anchor a raw [`NodeScope`] handle into a usable `&Scope` — the Koan scope interpretation the
+/// scheduler no longer owns. The scheduler hands back the opaque handle
+/// ([`Scheduler::active_node_scope_raw`](super::super::scheduler::Scheduler::active_node_scope_raw)
+/// / `PostStep::node_scope`) plus the per-call cart the slot
+/// ran against; this workload-side helper reattaches them. An `Anchored` slot reattaches its erased
+/// run-lived [`ScopePtr`](crate::machine::core::ScopePtr) (`reattach_bounded`); a `Yoked` slot
+/// re-projects from `frame`. Content lifetime free, borrow bounded by `frame` — so the result
+/// cannot outlive the cart it names.
+pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
+    node_scope: &'step NodeScope,
+    frame: Option<&'step Rc<CallArena>>,
+) -> &'step Scope<'b> {
+    match node_scope {
+        // SAFETY: the `Anchored` pointer was erased from a genuinely run-lived scope
+        // (`resolve_node_scope`), which outlives `frame`; the returned borrow is bounded by `frame`,
+        // so the free content lifetime cannot be cashed past the run-lived pointee.
+        NodeScope::Anchored(ptr) => unsafe { ptr.reattach_bounded() },
+        NodeScope::Yoked => frame
+            .expect("a Yoked slot keeps its active cart")
+            .scope_bounded(),
+    }
+}
+
+/// The active slot's scope, re-anchored from the scheduler's raw handle. The workload-side form of
+/// the read the scheduler core no longer owns: it materializes a `&Scope` so `scheduler/**` names
+/// none. Panics outside a slot step (no `active_node_scope`); within a step the scope is always
+/// present — an `Anchored` slot carries its own pointer, and a `Yoked` slot's active cart is never
+/// emptied mid-step (an invoke reuses the reserve, not the active cart).
+pub(in crate::machine::execute) fn current_scope<'a, 'run>(
+    sched: &'a Scheduler<'run>,
+) -> &'a Scope<'run> {
+    reattach_node_scope(
+        sched
+            .active_node_scope_raw()
+            .expect("a slot step installs active_node_scope (and a Yoked slot keeps its frame)"),
+        sched.active_frame_ref(),
+    )
+}
 
 /// Read-only dispatch view — the decide-phase context. It holds only `&Scheduler`, never `&mut`.
 /// A shape handler decides against this and *returns* a
@@ -47,7 +87,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
     // scheduler.
 
     pub(in crate::machine::execute) fn current_scope(&self) -> &Scope<'run> {
-        self.sched.current_scope()
+        current_scope(self.sched)
     }
 
     pub(super) fn chain_deref(&self) -> Option<&LexicalFrame> {
@@ -57,13 +97,13 @@ impl<'run, 's> SchedulerView<'run, 's> {
     /// Cloned `Rc` to the active chain — the type-leaf and field-list reads that take the
     /// chain by value.
     pub(super) fn active_chain(&self) -> Option<Rc<LexicalFrame>> {
-        self.sched.active_chain_clone()
+        self.sched.active_chain_raw()
     }
 
     /// Cloned `Rc` to the active lexical chain — the `record_type` elaborator deferral needs
     /// it by value.
     pub(super) fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>> {
-        self.sched.current_lexical_chain()
+        self.sched.active_chain_raw()
     }
 
     /// Cloned `Rc` to the active per-call frame — the `invoke` decide reads it to build a

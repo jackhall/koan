@@ -8,7 +8,7 @@ use crate::machine::{KError, KErrorKind, NameOutcome, NodeId, TraceFrame};
 use super::super::outcome::Outcome;
 use super::super::runtime::KoanRuntime;
 use super::super::DepFinish;
-use super::ctx::SchedulerView;
+use super::ctx::{current_scope, SchedulerView};
 use super::resolve_name_part;
 
 /// One element of a list literal or one side of a dict-literal pair. Indices are into the
@@ -201,7 +201,7 @@ impl<'run> KoanRuntime<'run> {
         deps: &mut Vec<NodeId>,
         park_producers: &mut Vec<NodeId>,
     ) -> Slot<'run> {
-        match resolve_name_part(self.sched.current_scope(), part, &self.sched, None) {
+        match resolve_name_part(current_scope(&self.sched), part, &self.sched, None) {
             // An aggregate literal element may resolve to a value or a first-class type;
             // both ride into the cell as a `Held`.
             NameOutcome::Resolved(c) => Slot::Static(Held::from_carried(c)),

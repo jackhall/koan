@@ -25,7 +25,7 @@ use crate::machine::core::kfunction::body::split_body_statements;
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallArena, KError, NodeId};
 
-use super::dispatch::DepRequest;
+use super::dispatch::{current_scope, DepRequest};
 use super::lift::NodeLift;
 use super::nodes::{NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, pin_carried_to_run, Continuation, Outcome};
@@ -430,7 +430,7 @@ impl<'run> KoanRuntime<'run> {
                 // then this slot's consumers pull from here. Otherwise splice the slot out: move its
                 // consumers onto `producer`'s notify list and alias the slot to `producer`.
                 if self.sched.is_result_ready(producer) {
-                    let dest = self.sched.current_scope().arena;
+                    let dest = current_scope(&self.sched).arena;
                     let pulled = match self.sched.read_result_with_frame(producer) {
                         Ok((value, frame)) => Ok((value, frame)),
                         Err(e) => Err(e.clone_for_propagation()),

@@ -24,7 +24,7 @@ impl<'run> KoanRuntime<'run> {
         statements: Vec<KExpression<'run>>,
         scope: &'run Scope<'run>,
     ) -> Vec<NodeId> {
-        let parent = self.sched.active_chain_clone();
+        let parent = self.sched.active_chain_raw();
         // Indices start at 1: visibility is strict less-than and builtins sit at idx 0,
         // so a top-level statement at index 1 sees them via `0 < 1`.
         statements
@@ -97,9 +97,9 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         expr: KExpression<'run>,
     ) -> NodeId {
-        let node_scope = self
+        let node_scope = *self
             .sched
-            .current_node_scope()
+            .active_node_scope_raw()
             .expect("a slot step installs active_node_scope before the body submits");
         let chain = self.sched.ambient_or_detached_chain();
         match node_scope {
@@ -130,7 +130,7 @@ impl<'run> KoanRuntime<'run> {
         let parent = assemble_body_chain(
             body_scope,
             self.sched
-                .current_lexical_chain()
+                .active_chain_raw()
                 .expect("a body block runs inside an active lexical chain"),
             0,
         )

@@ -5,11 +5,11 @@ src/machine/core/arena.rs: 12
 src/machine/core/kfunction/body.rs: 3
 src/machine/core/scope_ptr.rs: 7
 src/machine/core/storage_frame.rs: 4
+src/machine/execute/dispatch/ctx.rs: 1
 src/machine/execute/finalize.rs: 1
 src/machine/execute/nodes.rs: 1
 src/machine/execute/outcome.rs: 5
 src/machine/execute/runtime/submit.rs: 1
-src/machine/execute/scheduler.rs: 2
 src/machine/model/values/module.rs: 1
 -->
 
@@ -186,11 +186,14 @@ round-trip directly, plus a sibling-pointer arena mutation while the re-attached
 
 - `node_scope_anchored_erase_reattach_roundtrip`
 
-**`NodeScope::Anchored` re-attach — scheduler read sites** ([src/machine/execute/scheduler.rs](../src/machine/execute/scheduler.rs))
-— the `unsafe { ptr.reattach_bounded() }` calls in `Scheduler::current_scope_opt` /
-`PostStep::step_scope` materialize the executing slot's scope; they run the transmute defined in the
-group above and carry none of their own, so `node_scope_anchored_erase_reattach_roundtrip` — and
-end-to-end every scheduler-driving slate test — pins them. No separate minimal test.
+**`NodeScope::Anchored` re-attach — workload read boundary** ([src/machine/execute/dispatch/ctx.rs](../src/machine/execute/dispatch/ctx.rs))
+— the `unsafe { ptr.reattach_bounded() }` in the `reattach_node_scope` helper materializes the
+executing slot's scope from its raw `NodeScope` handle (the scheduler core hands the handle back but
+no longer interprets it). Both the decide-phase read (`current_scope`, via `SchedulerView`) and the
+Done-boundary post-step read ([src/machine/execute/scheduler/execute.rs](../src/machine/execute/scheduler/execute.rs))
+route through it. It runs the transmute defined in the group above and carries none of its own, so
+`node_scope_anchored_erase_reattach_roundtrip` — and end-to-end every scheduler-driving slate test —
+pins it. No separate minimal test.
 
 **`NodeScope::Anchored` re-attach — own-scope re-dispatch** ([src/machine/execute/runtime/submit.rs](../src/machine/execute/runtime/submit.rs))
 — the `unsafe { ptr.reattach_bounded() }` in `KoanRuntime::dispatch_in_own_scope` re-dispatches
@@ -274,9 +277,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-16: 614s — 24 tests, 0 leaks, 0 UB
+- 2026-06-16: 621s — 24 tests, 0 leaks, 0 UB
 - 2026-06-16: 610s — 24 tests, 0 leaks, 0 UB
 - 2026-06-16: 1013s — 23 tests, 0 leaks, 0 UB
 - 2026-06-16: 577s — 23 tests, 0 leaks, 0 UB
-- 2026-06-14: 540s — 22 tests, 0 leaks, 0 UB
-- 2026-06-14: 817s — 22 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

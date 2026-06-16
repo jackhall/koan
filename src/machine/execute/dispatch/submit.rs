@@ -112,7 +112,7 @@ impl<'run> KoanRuntime<'run> {
         // therefore its visibility index); pass it back to `submit_node` explicitly so it does not
         // re-derive a detached one.
         let chain = explicit_chain
-        .or_else(|| self.sched.active_chain_clone())
+        .or_else(|| self.sched.active_chain_raw())
         .expect("every dispatched node has a chain — submission outside enter_block / ambient active_chain is a bug");
         let install = extract_binder_install(&expr, scope);
         let pre_subs: Vec<(usize, NodeId)> = match &install {

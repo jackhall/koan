@@ -1,7 +1,7 @@
 use crate::machine::model::Carried;
 use crate::machine::{KError, NodeId};
 
-use super::super::dispatch::SchedulerView;
+use super::super::dispatch::{current_scope, SchedulerView};
 use super::super::lift::NodeLift;
 use super::super::nodes::NodeStep;
 use super::super::outcome::deps_at_step;
@@ -42,7 +42,7 @@ impl<'run> KoanRuntime<'run> {
         // arena, so the value dies with the consumer and the producer keeps no surviving copy that
         // would outlive its own dying frame. A frameless / run-arena terminal already survives and
         // is forwarded as-is.
-        let dest = self.sched.current_scope().arena;
+        let dest = current_scope(&self.sched).arena;
         let results: Vec<Result<Carried<'run>, KError>> = deps
             .iter()
             .map(|d| match self.sched.read_result_with_frame(*d) {

@@ -366,9 +366,9 @@ impl CallArena {
     /// (`'a: 'step`). This is the read boundary: it hands back a reference that *cannot outlive the
     /// `Rc` it borrows from*, so storing it past the frame is a compile error rather than a
     /// fabrication. Invariance in `'a` rides structurally on the returned `Scope<'a>` (`Scope` is
-    /// invariant), so this ephemeral form needs no separate brand struct. Reached through
-    /// [`Scheduler::current_scope`](crate::machine::execute::scheduler::Scheduler) (`Yoked` slots)
-    /// and [`Self::with_anchored_child`] (the seed binds).
+    /// invariant), so this ephemeral form needs no separate brand struct. Reached through the
+    /// scheduler's workload-side scope re-anchor (`reattach_node_scope`, `Yoked` slots) and
+    /// [`Self::with_anchored_child`] (the seed binds).
     ///
     /// SAFETY: delegates to [`ScopePtr::reattach_bounded`]; the `&'step Rc<Self>` receiver pins
     /// the arena and child scope for all of `'step`, so the `'step`-bounded borrow cannot dangle.
