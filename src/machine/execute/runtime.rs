@@ -28,7 +28,7 @@ use crate::machine::{CallArena, KError, NodeId};
 
 use super::dispatch::{current_scope, DepRequest};
 use super::lift::NodeLift;
-use super::nodes::{NodeStep, NodeWork};
+use super::nodes::{NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, pin_carried_to_run, Continuation, Outcome};
 use super::scheduler::Scheduler;
 use super::{catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedValue};
@@ -48,9 +48,9 @@ pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path
 ///
 /// See design/execution-model.md § the dispatcher / scheduler boundary.
 pub struct KoanRuntime<'run> {
-    pub(in crate::machine::execute) sched: Scheduler<ErasedValue>,
+    pub(in crate::machine::execute) sched: Scheduler<NodePayload, ErasedValue>,
     /// The run lifetime the harness processes its AST/scope against. The scheduler is value-erased
-    /// (`Scheduler<ErasedValue>`), so `'run` lives only in the harness's own method signatures; this
+    /// (`Scheduler<NodePayload, ErasedValue>`), so `'run` lives only in the harness's own method signatures; this
     /// marker keeps it on the type.
     _run: PhantomData<&'run ()>,
 }
@@ -100,14 +100,14 @@ impl<'run> KoanRuntime<'run> {
 /// Scheduler` escapes — the accessor hands out `&Scheduler`, keeping the harness the sole writer.
 #[cfg(test)]
 impl<'run> KoanRuntime<'run> {
-    pub(in crate::machine::execute) fn scheduler(&self) -> &Scheduler<ErasedValue> {
+    pub(in crate::machine::execute) fn scheduler(&self) -> &Scheduler<NodePayload, ErasedValue> {
         &self.sched
     }
 
     /// Mutable scheduler access for the white-box scheduler tests that poke `store` / `deps` /
     /// `queues` directly. Test-only — production drives every write through the harness's own
     /// `&mut self` methods, so this is the one sanctioned `&mut Scheduler` outside them.
-    pub(in crate::machine::execute) fn scheduler_mut(&mut self) -> &mut Scheduler<ErasedValue> {
+    pub(in crate::machine::execute) fn scheduler_mut(&mut self) -> &mut Scheduler<NodePayload, ErasedValue> {
         &mut self.sched
     }
 
@@ -116,7 +116,7 @@ impl<'run> KoanRuntime<'run> {
     }
 
     pub fn chain_of(&self, id: NodeId) -> Option<Rc<crate::machine::LexicalFrame>> {
-        self.sched.chain_of(id)
+        self.sched.payload_of(id).map(|p| p.chain.clone())
     }
 
     pub fn tail_reuse_count(&self) -> usize {
@@ -261,7 +261,7 @@ impl<'run> KoanRuntime<'run> {
         match placement {
             DepPlacement::OwnScope => self.dispatch_in_own_scope(expr),
             DepPlacement::ActiveFrame => {
-                let chain = self.sched.ambient_or_detached_chain();
+                let chain = self.ambient_or_detached_chain();
                 self.dispatch_in_active_frame(expr, chain)
             }
             DepPlacement::InScope(scope) => self

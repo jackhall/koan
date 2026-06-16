@@ -15,7 +15,7 @@ use crate::machine::model::types::UntypedKey;
 use crate::machine::model::{KType, SignatureElement};
 use crate::machine::{BindingIndex, FunctionLookup, KFunction, LexicalFrame, NodeId, Scope};
 
-use super::super::nodes::NodeScope;
+use super::super::nodes::{NodePayload, NodeScope};
 use super::super::runtime::KoanRuntime;
 
 /// Submission-time binder-install info — see the module docs for the per-bucket eager-slot mask
@@ -112,8 +112,8 @@ impl<'run> KoanRuntime<'run> {
         // therefore its visibility index); pass it back to `submit_node` explicitly so it does not
         // re-derive a detached one.
         let chain = explicit_chain
-        .or_else(|| self.sched.active_chain_raw())
-        .expect("every dispatched node has a chain — submission outside enter_block / ambient active_chain is a bug");
+        .or_else(|| self.sched.active_payload().map(|p| p.chain.clone()))
+        .expect("every dispatched node has a chain — submission outside enter_block / ambient payload is a bug");
         let install = extract_binder_install(&expr, scope);
         let pre_subs: Vec<(usize, NodeId)> = match &install {
             Some(install) => {
@@ -136,8 +136,10 @@ impl<'run> KoanRuntime<'run> {
         };
         let id = self.sched.submit_node(
             super::decide_with_presubs(expr, pre_subs),
-            node_scope,
-            Some(chain.clone()),
+            NodePayload {
+                scope: node_scope,
+                chain: chain.clone(),
+            },
         );
         if let Some(install) = install {
             // Stamp the placeholder at the binder's lexical position — the SAME `BindingIndex` the

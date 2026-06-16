@@ -1,77 +1,15 @@
-use std::rc::Rc;
+use crate::machine::{NodeId, Scope};
 
-use crate::machine::core::ScopePtr;
-use crate::machine::{LexicalFrame, NodeId, Scope};
-
-use super::super::nodes::{work_park_producers, CallFrame, Node, NodePayload, NodeScope, NodeWork};
-#[cfg(test)]
-use super::super::runtime::KoanRuntime;
-#[cfg(test)]
-use super::super::DepFinish;
+use super::super::nodes::{work_park_producers, CallFrame, Node, NodeWork};
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
-impl<'run, V: Copy> Scheduler<V> {
-    /// The explicit chain a submission passes when there is no ambient `active_chain`: a detached
-    /// chain so the visibility predicate treats every scope as "complete" (test fixtures /
-    /// top-level), else `None` to inherit the ambient one.
-    pub(in crate::machine::execute) fn ambient_or_detached_chain(
-        &self,
-    ) -> Option<Rc<LexicalFrame>> {
-        self.active_chain.is_none().then(LexicalFrame::detached)
-    }
-
-    /// Schedule a dep-finish slot against an explicit `scope`. `owned_subs` are sub-Dispatches
-    /// this dep-finish allocated (cascade-freed on success); `park_producers` are existing sibling
-    /// slots it splices but does not own (kept alive past success via `Notify` edges). The finish
-    /// closure sees results as `[park_producers..., owned_subs...]`. Test fixture entry point; the
-    /// run path uses [`KoanRuntime::submit_dep_finish_in_own_scope`](super::super::runtime::KoanRuntime::submit_dep_finish_in_own_scope).
-    #[cfg(test)]
-    pub(in crate::machine::execute) fn add_dep_finish(
-        &mut self,
-        owned_subs: Vec<NodeId>,
-        park_producers: Vec<NodeId>,
-        scope: &'run Scope<'run>,
-        finish: DepFinish<'run>,
-    ) -> NodeId {
-        let park_count = park_producers.len();
-        let mut deps = park_producers;
-        deps.extend(owned_subs);
-        self.add(NodeWork::awaiting(deps, park_count, finish), scope)
-    }
-
-    /// Generic ambient-chain submission for any `NodeWork` — a test fixture entry point. When
-    /// there is no ambient chain (test fixtures) it synthesizes a detached chain so the visibility
-    /// predicate treats every scope as "complete". The run path submits a `Dispatch` through
-    /// [`KoanRuntime::submit_dispatch`](super::super::runtime::KoanRuntime::submit_dispatch)
-    /// (binder-aware) and a dep-finish / catch through `KoanRuntime::submit_dep_finish_in_own_scope` / the harness.
-    #[cfg(test)]
-    pub(in crate::machine::execute::scheduler) fn add(
-        &mut self,
-        work: NodeWork,
-        scope: &'run Scope<'run>,
-    ) -> NodeId {
-        let explicit_chain = self.ambient_or_detached_chain();
-        self.add_with_chain(work, scope, explicit_chain)
-    }
-
-    /// Run-lifetime submission funnel. `explicit_chain` is `Some` for
-    /// `enter_block`-routed submissions (top-level, MODULE / SIG body, TRY body
-    /// success-as-block, FN body invoke), `None` otherwise (inherits
-    /// `self.active_chain`). Decides the slot's [`NodeScope`] handle — `Yoked` when this
-    /// runs inside the per-call frame whose own child is `scope` (re-projected from the
-    /// cart), else `Root` — then hands off to [`Self::submit_node`]. Test fixture entry; the run
-    /// path routes a `Dispatch` through `KoanRuntime::submit_dispatch`.
-    #[cfg(test)]
-    pub(super) fn add_with_chain(
-        &mut self,
-        work: NodeWork,
-        scope: &'run Scope<'run>,
-        explicit_chain: Option<Rc<LexicalFrame>>,
-    ) -> NodeId {
-        self.ensure_run_frame(scope);
-        let node_scope = self.resolve_node_scope(scope);
-        self.submit_node(work, node_scope, explicit_chain)
+impl<'run, P, V: Copy> Scheduler<P, V> {
+    /// Whether a slot step is currently installed (a non-`None` ambient payload). The workload reads
+    /// this to decide whether to default a submission's chain to the ambient one or synthesize a
+    /// detached chain (test fixtures / top level).
+    pub(in crate::machine::execute) fn has_active_payload(&self) -> bool {
+        self.active_payload.is_some()
     }
 
     /// Establish the run frame on the first run-lifetime submission (top-level run scope), so every
@@ -83,64 +21,20 @@ impl<'run, V: Copy> Scheduler<V> {
         }
     }
 
-    /// Decide a run-scope submission's [`NodeScope`] handle: `Yoked` when this runs inside the
-    /// per-call frame whose own child is `scope` (re-projected from the cart at the read boundary —
-    /// no fabricated `&'run` persisted), else `Anchored` at `'run`.
-    pub(in crate::machine::execute) fn resolve_node_scope(
-        &self,
-        scope: &'run Scope<'run>,
-    ) -> NodeScope {
-        match &self.active_frame {
-            Some(f)
-                if std::ptr::eq(
-                    f.scope() as *const Scope<'_> as *const (),
-                    scope as *const Scope<'_> as *const (),
-                ) =>
-            {
-                NodeScope::Yoked
-            }
-            // Erase the genuinely run-lived borrow to a lifetime-free pointer; it reattaches
-            // (`reattach_bounded`) at the read boundary, sound because the scope lives for `'run`.
-            _ => NodeScope::Anchored(ScopePtr::erase_static(scope)),
-        }
-    }
-
-    /// Submit `work` against the executing slot's own [`NodeScope`] handle (`active_node_scope`):
-    /// `Anchored` re-uses the erased run-lived `ScopePtr` the slot already holds; `Yoked`
-    /// re-projects from the active frame cart at the read boundary. Backs the `*_here` methods —
-    /// the honest re-dispatch-against-my-own-scope path.
-    pub(in crate::machine::execute) fn submit_in_own_scope(
-        &mut self,
-        work: NodeWork,
-    ) -> NodeId {
-        let node_scope = self
-            .active_node_scope
-            .expect("a slot step installs active_node_scope before the body submits");
-        let explicit_chain = self.ambient_or_detached_chain();
-        self.submit_node(work, node_scope, explicit_chain)
-    }
-
-    /// Node-creation core, shared by the run-lifetime [`Self::add_with_chain`] and the framed
+    /// Node-creation core, shared by the run-lifetime [`KoanRuntime::add_with_chain`] and the framed
     /// [`KoanRuntime::dispatch_in_active_frame`](super::super::runtime::KoanRuntime::dispatch_in_active_frame).
-    /// `scope` is read only transiently
-    /// (binder-install, placeholder install, `pre_subs` recursion) and never retained — the
-    /// node keeps a lifetime-free `NodeScope` handle, not this borrow — so it is clamped to a `'step`
-    /// read: a run scope and a `scope_for_bind` re-projection both shorten into it.
-    /// `node_scope` is the pre-decided slot handle the caller built (`Root` at `'run` for a run
-    /// scope, `Yoked` for a framed one).
+    /// `payload` is the ready-built opaque workload payload (Koan: the pre-decided `NodeScope` handle
+    /// plus the resolved lexical chain); the scheduler stores it on the slot and hands it back but
+    /// never inspects it. This allocator never names a Koan type — it only wires the slot's deps and
+    /// its frame cart.
     pub(in crate::machine::execute) fn submit_node(
         &mut self,
         work: NodeWork,
-        node_scope: NodeScope,
-        explicit_chain: Option<Rc<LexicalFrame>>,
+        payload: P,
     ) -> NodeId {
         // A binder-shaped Dispatch arrives with its `pre_subs` already populated and its
         // placeholder already installed by `dispatch::submit_dispatch`; this allocator never
         // inspects the work's AST.
-        let chain = explicit_chain.or_else(|| self.active_chain.clone()).expect(
-            "every dispatched node has a chain — submission outside enter_block / \
-                 ambient active_chain is a bug",
-        );
         let owned_edges = work_owned_edges(&work);
         let no_owned = owned_edges.is_empty();
         // Top-level submissions (no active frame) fall back to the run frame, so every slot
@@ -165,10 +59,7 @@ impl<'run, V: Copy> Scheduler<V> {
         let no_park = work_park_producers(&work).is_empty();
         let id = self.store.alloc_slot(Node {
             work,
-            payload: NodePayload {
-                scope: node_scope,
-                chain,
-            },
+            payload,
             frame: CallFrame {
                 cart,
                 reserve: None,
@@ -187,39 +78,5 @@ impl<'run, V: Copy> Scheduler<V> {
             }
         }
         id
-    }
-}
-
-/// Test-fixture forwarders for the AST-free submission prims that stay on [`Scheduler`]
-/// (`add` / `add_with_chain` / `add_dep_finish`), so scheduler tests build raw `NodeWork` slots
-/// through the harness without naming the scheduler.
-#[cfg(test)]
-impl<'run> KoanRuntime<'run> {
-    pub(in crate::machine::execute) fn add(
-        &mut self,
-        work: NodeWork,
-        scope: &'run Scope<'run>,
-    ) -> NodeId {
-        self.sched.add(work, scope)
-    }
-
-    pub(in crate::machine::execute) fn add_with_chain(
-        &mut self,
-        work: NodeWork,
-        scope: &'run Scope<'run>,
-        explicit_chain: Option<Rc<LexicalFrame>>,
-    ) -> NodeId {
-        self.sched.add_with_chain(work, scope, explicit_chain)
-    }
-
-    pub(in crate::machine::execute) fn add_dep_finish(
-        &mut self,
-        owned_subs: Vec<NodeId>,
-        park_producers: Vec<NodeId>,
-        scope: &'run Scope<'run>,
-        finish: DepFinish<'run>,
-    ) -> NodeId {
-        self.sched
-            .add_dep_finish(owned_subs, park_producers, scope, finish)
     }
 }

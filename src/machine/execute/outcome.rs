@@ -199,7 +199,7 @@ impl ErasedCont {
 /// value channel: `erase` forgets the value's lifetime for storage in the scheduler's lifetime-free
 /// slot table; `reattach` transmutes it back to a `'run` that the producer-frame `Rc` co-stored in
 /// the slot pins (or, for a frameless / run-arena value, the run arena keeps live). The scheduler
-/// stores this opaquely (`Scheduler<V>`) and never inspects it; only the workload erases / re-anchors.
+/// stores this opaquely (the `V` of `Scheduler<P, V>`) and never inspects it; only the workload erases / re-anchors.
 #[derive(Clone, Copy)]
 pub(in crate::machine::execute) struct ErasedValue {
     inner: Carried<'static>,

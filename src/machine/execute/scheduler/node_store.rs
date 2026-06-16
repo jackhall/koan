@@ -15,12 +15,11 @@
 use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::body::ErasedContract;
-use crate::machine::core::{CallArena, LexicalFrame};
+use crate::machine::core::CallArena;
 use crate::machine::KError;
 use crate::machine::NodeId;
 
-use super::super::nodes::{CallFrame, Node, NodePayload, NodeScope, NodeWork};
+use super::super::nodes::{Node, NodeWork};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -60,8 +59,8 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
     }
 }
 
-enum SlotState<V> {
-    PreRun(Node),
+enum SlotState<P, V> {
+    PreRun(Node<P>),
     /// Node payload has been moved out by `take_for_run`. A matching
     /// `reinstall*` / `finalize` / `free_one` exits this state.
     Running,
@@ -100,15 +99,15 @@ fn work_deadlock_sample(work: &NodeWork) -> DeadlockSample {
     }
 }
 
-pub(in crate::machine::execute::scheduler) struct NodeStore<V> {
-    slots: SlotVec<SlotState<V>>,
+pub(in crate::machine::execute::scheduler) struct NodeStore<P, V> {
+    slots: SlotVec<SlotState<P, V>>,
     /// Reclaimed slot indices. `alloc_slot` pulls from here before
     /// extending `slots`, giving constant scheduler memory across
     /// tail-recursive bodies.
     free_list: Vec<NodeId>,
 }
 
-impl<V: Copy> NodeStore<V> {
+impl<P, V: Copy> NodeStore<P, V> {
     pub(super) fn new() -> Self {
         Self {
             slots: SlotVec::new(),
@@ -119,7 +118,7 @@ impl<V: Copy> NodeStore<V> {
     /// The only path that picks an index. `DepGraph::install_for_slot`
     /// mirrors the recycle-vs.-extend choice via
     /// `consumer.index() < notify_list.len()`.
-    pub(super) fn alloc_slot(&mut self, node: Node) -> NodeId {
+    pub(super) fn alloc_slot(&mut self, node: Node<P>) -> NodeId {
         match self.free_list.pop() {
             Some(id) => {
                 self.slots[id] = SlotState::PreRun(node);
@@ -134,7 +133,7 @@ impl<V: Copy> NodeStore<V> {
     }
 
     /// Panics if the slot wasn't `PreRun`.
-    pub(super) fn take_for_run(&mut self, id: NodeId) -> Node {
+    pub(super) fn take_for_run(&mut self, id: NodeId) -> Node<P> {
         match std::mem::replace(&mut self.slots[id], SlotState::Running) {
             SlotState::PreRun(node) => node,
             _ => panic!("scheduler must not revisit a completed node"),
@@ -142,37 +141,16 @@ impl<V: Copy> NodeStore<V> {
     }
 
     /// Tail-call path: reuse the slot index for a new node payload.
-    pub(super) fn reinstall(&mut self, id: NodeId, node: Node) {
+    pub(super) fn reinstall(&mut self, id: NodeId, node: Node<P>) {
         self.slots[id] = SlotState::PreRun(node);
     }
 
-    /// Replace the node payload with a fresh per-call frame; the slot stores its scope as a
-    /// payload-less [`NodeScope::Yoked`] re-projected from the co-located `frame` cart. See
+    /// Replace the slot with a fresh per-call frame. The workload built the slot's `payload` — for
+    /// the Koan workload a payload-less [`NodeScope::Yoked`] re-projected from the co-located `cart`
+    /// at the read boundary, so no persisted `&'run` dangles across a TCO reset. See
     /// [per-call-arena-protocol.md § Slot-table scope handle](../../../../design/per-call-arena-protocol.md#slot-table-scope-handle).
-    pub(super) fn reinstall_with_frame(
-        &mut self,
-        id: NodeId,
-        cart: Rc<CallArena>,
-        reserve: Option<Rc<CallArena>>,
-        work: NodeWork,
-        contract: Option<ErasedContract>,
-        chain: Rc<LexicalFrame>,
-    ) {
-        // The tail-replace slot's scope is always this `cart`'s own child, so store it as a
-        // payload-less `NodeScope::Yoked` and let the read boundary re-project it from the
-        // co-located `cart` each step — no persisted `&'run` to dangle across a TCO reset.
-        self.slots[id] = SlotState::PreRun(Node {
-            work,
-            payload: NodePayload {
-                scope: NodeScope::Yoked,
-                chain,
-            },
-            frame: CallFrame {
-                cart,
-                reserve,
-                contract,
-            },
-        });
+    pub(super) fn reinstall_with_frame(&mut self, id: NodeId, node: Node<P>) {
+        self.slots[id] = SlotState::PreRun(node);
     }
 
     /// Replace a finalized terminal in place, dropping any pinned producer frame. The drain
@@ -337,11 +315,12 @@ impl<V: Copy> NodeStore<V> {
         self.free_list.len()
     }
 
-    /// Returns `None` if the slot has already terminalized.
+    /// The live slot's opaque payload, or `None` once it has terminalized. The workload extracts
+    /// the field it wants (e.g. the lexical chain). Test-only.
     #[cfg(test)]
-    pub(super) fn chain_of(&self, id: NodeId) -> Option<Rc<LexicalFrame>> {
+    pub(super) fn payload_of(&self, id: NodeId) -> Option<&P> {
         match self.slots.get(id) {
-            Some(SlotState::PreRun(node)) => Some(node.payload.chain.clone()),
+            Some(SlotState::PreRun(node)) => Some(&node.payload),
             _ => None,
         }
     }

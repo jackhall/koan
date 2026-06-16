@@ -6,7 +6,7 @@ use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 
 use super::super::dispatch::reattach_node_scope;
 use super::super::finalize::NodeFinalize;
-use super::super::nodes::{CallFrame, Node, NodePayload, NodeStep, NodeWork};
+use super::super::nodes::{CallFrame, Node, NodePayload, NodeScope, NodeStep, NodeWork};
 use super::super::{ErasedValue, NodeCont};
 use super::super::runtime::KoanRuntime;
 use super::Scheduler;
@@ -42,9 +42,14 @@ impl<'run> KoanRuntime<'run> {
             // boundary — the same erase / reattach discipline, generalized to the whole closure.
             // SAFETY: `cart` is the witness pinning the captures' home for the whole step.
             let cont: NodeCont<'run> = unsafe { erased_cont.reattach(&cart) };
-            let guard =
-                self.sched
-                    .enter_slot_step(cart, reserve, prev_chain_carrier.clone(), node_scope);
+            let guard = self.sched.enter_slot_step(
+                cart,
+                reserve,
+                NodePayload {
+                    scope: node_scope,
+                    chain: prev_chain_carrier.clone(),
+                },
+            );
             // Expose to the dispatch step whether this slot is a tail call within an established
             // contract chain — a deferred-return FN dispatched here skips resolving its own return
             // type (keep-first discards it anyway).
@@ -57,7 +62,7 @@ impl<'run> KoanRuntime<'run> {
             self.sched.active_in_contract_chain = false;
             // Drain re-entrant writes against the step scope (re-anchored at the workload boundary
             // from the slot's raw handle and the authoritative post-step frame).
-            reattach_node_scope(post.node_scope(), Some(&post.prev_frame)).drain_pending();
+            reattach_node_scope(&post.payload().scope, Some(&post.prev_frame)).drain_pending();
             match step {
                 NodeStep::Done(output) => {
                     let frame = (!post.prev_frame.non_dying()).then_some(&post.prev_frame);
@@ -70,7 +75,7 @@ impl<'run> KoanRuntime<'run> {
                     // (pinned below); the producer does **not** lift it at Done.
                     let result = self.finalize_terminal(output, frame, prev_contract);
                     if result.is_err() {
-                        reattach_node_scope(post.node_scope(), Some(&post.prev_frame))
+                        reattach_node_scope(&post.payload().scope, Some(&post.prev_frame))
                             .clear_placeholders_for_producer(id);
                     }
                     // Pin the producer's per-call frame in the slot's terminal: a dying frame is
@@ -119,13 +124,25 @@ impl<'run> KoanRuntime<'run> {
                             // frame's drop. Treat it as no reserve — the run scope is re-reached
                             // through the scheduler's `run_frame`, never a reset reserve.
                             let new_reserve = (!prev_frame.non_dying()).then_some(prev_frame);
+                            // The tail-replace slot's scope is always this `f` cart's own child, so
+                            // store a payload-less `NodeScope::Yoked` re-projected from the co-located
+                            // cart at the read boundary — no persisted `&'run` to dangle across a TCO
+                            // reset. This Yoked payload is the Koan workload's, built here off the
+                            // scheduler.
                             self.sched.store.reinstall_with_frame(
                                 id,
-                                f,
-                                new_reserve,
-                                new_work,
-                                next_contract,
-                                new_chain,
+                                Node {
+                                    work: new_work,
+                                    payload: NodePayload {
+                                        scope: NodeScope::Yoked,
+                                        chain: new_chain,
+                                    },
+                                    frame: CallFrame {
+                                        cart: f,
+                                        reserve: new_reserve,
+                                        contract: next_contract,
+                                    },
+                                },
                             );
                         }
                         None => {
@@ -177,7 +194,7 @@ impl<'run> KoanRuntime<'run> {
     }
 }
 
-impl<V: Copy> Scheduler<V> {
+impl<P, V: Copy> Scheduler<P, V> {
     /// Invariant: every consumer drained here is parked with a non-zero counter;
     /// freed slots are scrubbed from every producer's `notify_list` before the
     /// producer drains.

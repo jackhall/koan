@@ -1,8 +1,7 @@
 use std::rc::Rc;
 
-use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope};
+use crate::machine::{CallArena, KError, NodeId, Scope};
 
-use super::nodes::NodeScope;
 use dep_graph::DepGraph;
 use node_store::NodeStore;
 use work_queues::WorkQueues;
@@ -28,15 +27,18 @@ mod work_queues;
 /// a cycle that drains with both slots still `PreRun`; `execute` detects the leftover parked
 /// slots and returns `KErrorKind::SchedulerDeadlock`.
 ///
-/// Each node carries the scope it runs against in its `Node::payload` (`NodePayload::scope`).
-/// Sub-nodes default to the spawning node's scope; user-fn invocation installs a per-call child
-/// scope via `NodeStep::Replace`.
+/// Generic over an opaque per-node workload payload `P` (persisted across a slot's steps; Koan:
+/// scope handle + lexical chain) and an inter-node value `V` passed along dep edges (Koan: the
+/// lifted `Carried`). The scheduler stores both and hands them back but inspects neither — it names
+/// no Koan value, scope, or AST type. The Koan workload carries the scope a node runs against in its
+/// payload; sub-nodes default to the spawning node's payload, and a user-fn invocation installs a
+/// per-call child via `NodeStep::Replace`.
 ///
 /// See design/execution-model.md and design/memory-model.md.
-pub struct Scheduler<V> {
+pub struct Scheduler<P, V> {
     pub(in crate::machine::execute::scheduler) queues: WorkQueues,
     pub(in crate::machine::execute::scheduler) deps: DepGraph,
-    pub(in crate::machine::execute::scheduler) store: NodeStore<V>,
+    pub(in crate::machine::execute::scheduler) store: NodeStore<P, V>,
     /// TraceFrame Rc of the slot currently being executed. See
     /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
     pub(in crate::machine::execute::scheduler) active_frame: Option<Rc<CallArena>>,
@@ -45,19 +47,14 @@ pub struct Scheduler<V> {
     /// `active_frame` is never `None` during a top-level step and a body's re-dispatch against its
     /// own scope is uniformly framed (Yoked) at every depth. See [`CallArena::adopting`].
     pub(in crate::machine::execute::scheduler) run_frame: Option<Rc<CallArena>>,
-    /// Lexical chain of the slot currently executing. `Scheduler::add` reads this to attach
-    /// a chain to every sub-slot that doesn't carry an explicit `enter_block` chain, so
-    /// internal binder sub-dispatches inherit the parent's chain implicitly.
-    pub(in crate::machine::execute::scheduler) active_chain: Option<Rc<LexicalFrame>>,
     /// Per-slot reserve frame for the running step. `None` between slot steps. See
     /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
     pub(in crate::machine::execute::scheduler) active_reserve: Option<Rc<CallArena>>,
-    /// The executing slot's own [`NodeScope`] handle, installed per step. A body that
-    /// re-dispatches *against its own scope* reads this through the `*_here` handle methods, so
-    /// the sub-slot inherits the slot's honest handle — `Anchored(ScopePtr<'static>)` for a
-    /// genuinely run-lived scope (a binder's decl-scope), `Yoked` for a per-call frame child —
-    /// rather than the body trying (and failing) to widen its `&'frame` borrow back to `&'run`.
-    pub(in crate::machine::execute::scheduler) active_node_scope: Option<NodeScope>,
+    /// The executing slot's own opaque workload payload, installed per step (Koan: scope handle +
+    /// lexical chain). A body that re-dispatches *against its own scope*, or that needs the ambient
+    /// chain, reads this back through [`Self::active_payload`]; the scheduler stores and hands it
+    /// back but never inspects it. `None` between slot steps.
+    pub(in crate::machine::execute::scheduler) active_payload: Option<P>,
     /// Whether the slot currently executing already carries a kept return contract — i.e. it is a
     /// tail call *within* an established chain. A deferred-return FN dispatched here is a subsequent
     /// tail call whose own contract would be discarded by the keep-first rule, so it skips resolving
@@ -68,30 +65,29 @@ pub struct Scheduler<V> {
     pub(in crate::machine::execute::scheduler) tail_reuse_count: usize,
 }
 
-/// RAII-shaped save/restore wrapper around the per-step `active_frame`, `active_chain`,
+/// RAII-shaped save/restore wrapper around the per-step `active_frame`, `active_payload`,
 /// and `active_reserve` swap that brackets each iteration of [`KoanRuntime::execute`](super::runtime::KoanRuntime::execute).
 /// Bookkeeping spine for the ping-pong reserve-frame rotation; see
 /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
-pub(in crate::machine::execute::scheduler) struct SlotStepGuard {
+pub(in crate::machine::execute::scheduler) struct SlotStepGuard<P> {
     prev_frame: Option<Rc<CallArena>>,
-    prev_chain: Option<Rc<LexicalFrame>>,
+    prev_payload: Option<P>,
     /// Saved so nested slot runs (combinator finish closures) don't inherit the
     /// outer slot's reserve frame.
     prev_reserve: Option<Rc<CallArena>>,
-    prev_node_scope: Option<NodeScope>,
-    /// The step's own handle, kept so [`Scheduler::exit_slot_step`] can hand it back inside the
-    /// [`PostStep`] token — the step scope is then re-derivable from the *returned* frame, never
-    /// the ambient (and possibly invoke-swapped) `active_frame`.
-    step_node_scope: NodeScope,
+    /// The step's own payload, kept so [`Scheduler::exit_slot_step`] can hand it back inside the
+    /// [`PostStep`] token — the step's scope is then re-derivable from the *returned* payload (and
+    /// frame), never the ambient (and possibly invoke-swapped) state.
+    step_payload: P,
 }
 
-/// The frames and scope of a just-finished step, returned by [`Scheduler::exit_slot_step`]. Owns
+/// The frames and payload of a just-finished step, returned by [`Scheduler::exit_slot_step`]. Owns
 /// `prev_frame` (the slot's frame *at step end* — an in-step invoke may have swapped the ambient
 /// `active_frame`, so this returned value, not `self.active_frame`, is the authoritative source)
-/// and exposes the slot's raw scope handle through [`Self::node_scope`]; the workload reattaches it
-/// against `prev_frame` at the Done boundary. Reading the step scope from ambient scheduler state
-/// post-step is thereby unspellable.
-pub(in crate::machine::execute::scheduler) struct PostStep {
+/// and hands back the slot's opaque workload payload through [`Self::payload`]; the workload
+/// re-anchors it against `prev_frame` at the Done boundary. Reading the step state from ambient
+/// scheduler state post-step is thereby unspellable.
+pub(in crate::machine::execute::scheduler) struct PostStep<P> {
     /// The slot's cart at step end. Always present: `enter_slot_step` installs the node's cart and
     /// an invoke never empties `active_frame` — reuse draws from the reserve via
     /// `acquire_tail_frame`, never the live active cart — so the slot's own cart rides through. The
@@ -99,44 +95,43 @@ pub(in crate::machine::execute::scheduler) struct PostStep {
     pub(in crate::machine::execute::scheduler) prev_frame: Rc<CallArena>,
     /// The slot's reserve frame at step end (see ping-pong reserve rotation).
     pub(in crate::machine::execute::scheduler) post_step_reserve: Option<Rc<CallArena>>,
-    node_scope: NodeScope,
+    payload: P,
 }
 
-impl PostStep {
-    /// The slot's raw [`NodeScope`] handle at step end — lifetime-free and uninterpreted. The
-    /// workload re-anchors it against [`Self::prev_frame`] at the Done boundary
-    /// ([`reattach_node_scope`](super::dispatch::reattach_node_scope)); `PostStep` never
-    /// materializes a `&Scope` itself, so reading the step scope from ambient (possibly
-    /// invoke-swapped) state stays unspellable.
-    pub(in crate::machine::execute::scheduler) fn node_scope(&self) -> &NodeScope {
-        &self.node_scope
+impl<P> PostStep<P> {
+    /// The slot's opaque workload payload at step end — lifetime-free and uninterpreted. The
+    /// workload re-anchors it (Koan: the scope handle) against [`Self::prev_frame`] at the Done
+    /// boundary; `PostStep` never materializes a `&Scope` itself, so reading the step scope from
+    /// ambient (possibly invoke-swapped) state stays unspellable.
+    pub(in crate::machine::execute::scheduler) fn payload(&self) -> &P {
+        &self.payload
     }
 }
 
-impl<V: Copy> Scheduler<V> {
-    /// Install the slot's frame/chain/reserve as the ambient values for one step. The
+impl<P: Clone, V: Copy> Scheduler<P, V> {
+    /// Install the slot's frame/payload/reserve as the ambient values for one step. The
     /// caller passes the returned guard to [`Scheduler::exit_slot_step`] when the step
-    /// returns; the `node_chain` Rc is cloned only here, so the caller's own clone for
-    /// the Replace arm doesn't double-count.
+    /// returns; `node_payload` is cloned only here (so the caller can keep its own copy for
+    /// the Replace arm without double-counting any `Rc` it holds). The sole `P: Clone` site.
     pub(in crate::machine::execute::scheduler) fn enter_slot_step(
         &mut self,
         node_frame: Rc<CallArena>,
         node_reserve: Option<Rc<CallArena>>,
-        node_chain: Rc<LexicalFrame>,
-        node_scope: NodeScope,
-    ) -> SlotStepGuard {
+        node_payload: P,
+    ) -> SlotStepGuard<P> {
         let prev_frame = self.active_frame.replace(node_frame);
-        let prev_chain = self.active_chain.replace(node_chain);
         let prev_reserve = std::mem::replace(&mut self.active_reserve, node_reserve);
-        let prev_node_scope = self.active_node_scope.replace(node_scope);
+        let prev_payload = self.active_payload.replace(node_payload.clone());
         SlotStepGuard {
             prev_frame,
-            prev_chain,
+            prev_payload,
             prev_reserve,
-            prev_node_scope,
-            step_node_scope: node_scope,
+            step_payload: node_payload,
         }
     }
+}
+
+impl<P, V: Copy> Scheduler<P, V> {
 
     /// Restore the values saved by [`Scheduler::enter_slot_step`] and return
     /// `(post_step_frame, post_step_reserve)`.
@@ -153,18 +148,17 @@ impl<V: Copy> Scheduler<V> {
     /// legitimately `None` *between* steps.
     pub(in crate::machine::execute::scheduler) fn exit_slot_step(
         &mut self,
-        guard: SlotStepGuard,
-    ) -> PostStep {
+        guard: SlotStepGuard<P>,
+    ) -> PostStep<P> {
         let post_step_frame = std::mem::replace(&mut self.active_frame, guard.prev_frame);
-        self.active_chain = guard.prev_chain;
         let post_step_reserve = std::mem::replace(&mut self.active_reserve, guard.prev_reserve);
-        self.active_node_scope = guard.prev_node_scope;
+        self.active_payload = guard.prev_payload;
         PostStep {
             prev_frame: post_step_frame.expect(
                 "a step runs against a cart; an invoke reuses the reserve, never the active",
             ),
             post_step_reserve,
-            node_scope: guard.step_node_scope,
+            payload: guard.step_payload,
         }
     }
 
@@ -175,8 +169,7 @@ impl<V: Copy> Scheduler<V> {
             store: NodeStore::new(),
             active_frame: None,
             run_frame: None,
-            active_node_scope: None,
-            active_chain: None,
+            active_payload: None,
             active_reserve: None,
             active_in_contract_chain: false,
             #[cfg(test)]
@@ -189,11 +182,11 @@ impl<V: Copy> Scheduler<V> {
         self.tail_reuse_count
     }
 
-    /// Only valid before the slot terminalizes — once a slot is `Done` the payload
-    /// (and its chain) has been moved out by `take_for_run`.
+    /// The live slot's opaque workload payload, or `None` once it has terminalized — at which point
+    /// `take_for_run` has moved the payload out. Test-only; the workload extracts the field it wants.
     #[cfg(test)]
-    pub fn chain_of(&self, id: NodeId) -> Option<Rc<LexicalFrame>> {
-        self.store.chain_of(id)
+    pub fn payload_of(&self, id: NodeId) -> Option<&P> {
+        self.store.payload_of(id)
     }
 
     pub fn len(&self) -> usize {
@@ -261,34 +254,18 @@ impl<V: Copy> Scheduler<V> {
         self.deps.would_create_cycle(producer, consumer)
     }
 
-    /// Borrow the ambient lexical chain (`&self.active_chain.as_deref()`).
-    /// Name-resolution helpers read this to apply chain-aware visibility.
-    pub(in crate::machine::execute) fn chain_deref(&self) -> Option<&LexicalFrame> {
-        self.active_chain.as_deref()
-    }
-
-    /// Cloned `Rc` to the ambient lexical chain — the single raw chain handoff. Initial-resolve
-    /// sites capture the chain's `index` for `BindingIndex`; body/elaborator deferrals take it by
-    /// value. The scheduler stores and hands this back but never inspects it.
-    pub(in crate::machine::execute) fn active_chain_raw(&self) -> Option<Rc<LexicalFrame>> {
-        self.active_chain.clone()
+    /// Borrow the executing slot's opaque workload payload (Koan: scope handle + lexical chain),
+    /// installed per step by [`Self::enter_slot_step`]. The single accessor the workload reads its
+    /// name-resolution state back through; the scheduler stores and hands it back but never inspects
+    /// it. `None` between slot steps.
+    pub(in crate::machine::execute) fn active_payload(&self) -> Option<&P> {
+        self.active_payload.as_ref()
     }
 
     /// Whether the executing slot already carries a kept return contract (a tail call inside an
     /// established chain). See [`Self::active_in_contract_chain`].
     pub(in crate::machine::execute) fn in_contract_chain(&self) -> bool {
         self.active_in_contract_chain
-    }
-
-    /// The executing slot's raw [`NodeScope`] handle (`Anchored`/`Yoked`) — lifetime-free and
-    /// uninterpreted: the scheduler hands it back but never reattaches it to a live `&Scope`. The
-    /// workload re-anchors it at the read boundary
-    /// ([`current_scope`](super::dispatch::current_scope) /
-    /// [`reattach_node_scope`](super::dispatch::reattach_node_scope)), and
-    /// [`KoanRuntime::dispatch_in_own_scope`](super::runtime::KoanRuntime::dispatch_in_own_scope)
-    /// matches the arm to pick its re-dispatch path.
-    pub(in crate::machine::execute) fn active_node_scope_raw(&self) -> Option<&NodeScope> {
-        self.active_node_scope.as_ref()
     }
 
     /// Borrow the active per-call cart — the witness the workload binds a `Yoked` slot's
@@ -299,7 +276,7 @@ impl<V: Copy> Scheduler<V> {
     }
 }
 
-impl<V: Copy> Default for Scheduler<V> {
+impl<P, V: Copy> Default for Scheduler<P, V> {
     fn default() -> Self {
         Self::new()
     }
@@ -309,7 +286,7 @@ impl<V: Copy> Default for Scheduler<V> {
 /// [`KoanRuntime`](super::runtime::KoanRuntime) — the sole `&mut Scheduler` — calls while realizing
 /// a decided [`Outcome`](super::outcome::Outcome). AST-free state operations: the AST-aware
 /// submission wrappers (`enter_block`, `dispatch_in_own_scope`, …) live on `KoanRuntime`.
-impl<V: Copy> Scheduler<V> {
+impl<P, V: Copy> Scheduler<P, V> {
     /// Active slot's `Rc<CallArena>`. See
     /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
     pub(in crate::machine::execute) fn current_frame(&self) -> Option<Rc<CallArena>> {

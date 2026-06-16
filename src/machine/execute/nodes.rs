@@ -158,8 +158,10 @@ pub(super) struct CallFrame {
 /// slot, threads through a step, and hands back, but does not own as scheduler machinery — the
 /// slot's [`NodeScope`] handle and its lexical [`chain`](Self::chain). Lifetime-free (the scope is
 /// an erased `NodeScope`, the chain an `Rc`), so the node it sits on pins no `'run` through it. This
-/// is the concrete Koan stand-in for the generic workload payload the scheduler becomes parametric
-/// over in slice 2b.
+/// is the concrete Koan stand-in for the generic workload payload the scheduler is parametric
+/// over (`Scheduler<NodePayload, ErasedValue>`). Cheap-`Clone`: `NodeScope` is `Copy`, the chain
+/// is an `Rc`.
+#[derive(Clone)]
 pub(super) struct NodePayload {
     pub(super) scope: NodeScope,
     /// Immutable cactus-chain naming this node's lexical position. Head frame is the
@@ -168,11 +170,11 @@ pub(super) struct NodePayload {
     pub(super) chain: Rc<LexicalFrame>,
 }
 
-pub(super) struct Node {
+pub(super) struct Node<P> {
     pub(super) work: NodeWork,
-    /// The slot's opaque name-resolution payload (scope handle + lexical chain). See
-    /// [`NodePayload`].
-    pub(super) payload: NodePayload,
+    /// The slot's opaque workload payload, stored and handed back but never inspected by the
+    /// scheduler. The Koan instantiation is [`NodePayload`] (scope handle + lexical chain).
+    pub(super) payload: P,
     /// The slot's per-call frame state (cart + reserve + erased contract) — never absent, see
     /// [`CallFrame`].
     pub(super) frame: CallFrame,

@@ -29,7 +29,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
 
-use super::nodes::NodeWork;
+use super::nodes::{NodePayload, NodeWork};
 use super::scheduler::Scheduler;
 use super::{ignore_results, DepFinish, ErasedValue};
 use crate::machine::core::kfunction::action::{DepPlacement, FramePlacement};
@@ -74,7 +74,7 @@ pub use crate::machine::model::ast::{classify_dispatch_shape, DispatchShape};
 pub(super) fn resolve_name_part<'run>(
     scope: &Scope<'run>,
     part: &ExpressionPart<'run>,
-    scheduler: &Scheduler<ErasedValue>,
+    scheduler: &Scheduler<NodePayload, ErasedValue>,
     consumer: Option<NodeId>,
 ) -> NameOutcome<'run> {
     let (name, is_type) = match part {
@@ -82,7 +82,7 @@ pub(super) fn resolve_name_part<'run>(
         ExpressionPart::Type(t) => (t.as_str(), Some(t)),
         _ => unreachable!("resolve_name_part only called on bare-name parts"),
     };
-    let chain = scheduler.chain_deref();
+    let chain = scheduler.active_payload().map(|p| &*p.chain);
     match scope.resolve_with_chain(name, chain) {
         Resolution::Placeholder(producer) => {
             return disposition_for_producer(scheduler, name, producer, consumer);
@@ -97,7 +97,11 @@ pub(super) fn resolve_name_part<'run>(
         // not-yet-sealed referent parks on its single producer (a visible type alias has
         // already resolved its RHS, so a leaf parks on at most one binder), reusing the
         // same ready/cycle disposition the value-side placeholder arm applies.
-        Some(t) => match resolve_type_leaf_carrier(scope, t, scheduler.active_chain_raw()) {
+        Some(t) => match resolve_type_leaf_carrier(
+            scope,
+            t,
+            scheduler.active_payload().map(|p| p.chain.clone()),
+        ) {
             TypeLeafCarrier::Resolved(kt) => NameOutcome::Resolved(Carried::Type(kt)),
             TypeLeafCarrier::Unbound(n) => NameOutcome::Unbound(n),
             TypeLeafCarrier::Park(producers) => match producers.first() {
@@ -114,7 +118,7 @@ pub(super) fn resolve_name_part<'run>(
 /// name finalized to a non-shadowing value (`Unbound`), a parking edge that would close a
 /// wake cycle is `Cycle`, and otherwise the name parks on the producer.
 fn disposition_for_producer<'run>(
-    scheduler: &Scheduler<ErasedValue>,
+    scheduler: &Scheduler<NodePayload, ErasedValue>,
     name: &str,
     producer: NodeId,
     consumer: Option<NodeId>,
