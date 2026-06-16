@@ -62,7 +62,7 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
 }
 
 enum SlotState<'run> {
-    PreRun(Node<'run>),
+    PreRun(Node),
     /// Node payload has been moved out by `take_for_run`. A matching
     /// `reinstall*` / `finalize` / `free_one` exits this state.
     Running,
@@ -93,7 +93,7 @@ enum DeadlockSample {
 /// Map a stuck slot's `work` to its deadlock-sample contribution. A `Some`-carrier `Wait` (a
 /// dispatch decide) carries a renderable expression summary (`Preferred`); a carrier-less wait
 /// (combine / catch) carries only a generic tag (`Fallback`).
-fn work_deadlock_sample<'run>(work: &NodeWork<'run>) -> DeadlockSample {
+fn work_deadlock_sample(work: &NodeWork) -> DeadlockSample {
     let NodeWork { carrier, .. } = work;
     match carrier {
         Some(carrier) => DeadlockSample::Preferred(carrier.clone()),
@@ -120,7 +120,7 @@ impl<'run> NodeStore<'run> {
     /// The only path that picks an index. `DepGraph::install_for_slot`
     /// mirrors the recycle-vs.-extend choice via
     /// `consumer.index() < notify_list.len()`.
-    pub(super) fn alloc_slot(&mut self, node: Node<'run>) -> NodeId {
+    pub(super) fn alloc_slot(&mut self, node: Node) -> NodeId {
         match self.free_list.pop() {
             Some(id) => {
                 self.slots[id] = SlotState::PreRun(node);
@@ -135,7 +135,7 @@ impl<'run> NodeStore<'run> {
     }
 
     /// Panics if the slot wasn't `PreRun`.
-    pub(super) fn take_for_run(&mut self, id: NodeId) -> Node<'run> {
+    pub(super) fn take_for_run(&mut self, id: NodeId) -> Node {
         match std::mem::replace(&mut self.slots[id], SlotState::Running) {
             SlotState::PreRun(node) => node,
             _ => panic!("scheduler must not revisit a completed node"),
@@ -143,7 +143,7 @@ impl<'run> NodeStore<'run> {
     }
 
     /// Tail-call path: reuse the slot index for a new node payload.
-    pub(super) fn reinstall(&mut self, id: NodeId, node: Node<'run>) {
+    pub(super) fn reinstall(&mut self, id: NodeId, node: Node) {
         self.slots[id] = SlotState::PreRun(node);
     }
 
@@ -155,7 +155,7 @@ impl<'run> NodeStore<'run> {
         id: NodeId,
         cart: Rc<CallArena>,
         reserve: Option<Rc<CallArena>>,
-        work: NodeWork<'run>,
+        work: NodeWork,
         contract: Option<ErasedContract>,
         chain: Rc<LexicalFrame>,
     ) {
@@ -352,13 +352,13 @@ impl<'run> NodeStore<'run> {
 mod tests {
     use super::*;
 
-    fn sample_wait<'r>(carrier: Option<String>) -> NodeWork<'r> {
-        NodeWork {
-            deps: Vec::new(),
-            park_count: 0,
-            cont: Box::new(|_view, _results, _idx| unreachable!("sample test never runs")),
+    fn sample_wait(carrier: Option<String>) -> NodeWork {
+        NodeWork::new(
+            Vec::new(),
+            0,
+            Box::new(|_view, _results, _idx| unreachable!("sample test never runs")),
             carrier,
-        }
+        )
     }
 
     #[test]

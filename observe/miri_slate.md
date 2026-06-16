@@ -8,8 +8,9 @@ src/machine/core/storage_frame.rs: 4
 src/machine/execute/dispatch/ctx.rs: 1
 src/machine/execute/finalize.rs: 1
 src/machine/execute/nodes.rs: 1
-src/machine/execute/outcome.rs: 5
+src/machine/execute/outcome.rs: 8
 src/machine/execute/runtime/submit.rs: 1
+src/machine/execute/scheduler/execute.rs: 1
 src/machine/model/values/module.rs: 1
 -->
 
@@ -42,7 +43,7 @@ unsafe and fingerprint-drift checks still fire.
 
 ## The slate
 
-24 tests, grouped by the unsafe site each pins down. Names below are the exact
+25 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallArena` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -217,6 +218,26 @@ erase → reattach round-trip directly.
 transmute defined in the group above; it carries no transmute of its own, so the same `erased_contract_reattach_roundtrip`
 (and end-to-end `recursive_tagged_match_no_uaf`) pins it. No separate minimal test.
 
+**`ErasedCont` continuation erasure** ([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs))
+— the continuation generalizes the `ErasedContract` discipline from a `ReturnContract` enum to the
+whole `NodeCont` (`Box<dyn FnOnce>`): `erase` forgets the captured `'run` for storage on a
+lifetime-free node, and the `unsafe` `reattach` transmutes `NodeCont<'static>` back to a `'run`
+witnessed by the slot's cart `Rc` (which pins the captures' home — the run arena or a strict ancestor
+of the cart). Distinct shape from the contract group above: the transmute is over a **fat pointer**
+(data + vtable), not a thin enum, so it carries its own minimal test. The re-attach call site in
+[src/machine/execute/scheduler/execute.rs](../src/machine/execute/scheduler/execute.rs) (the run loop,
+just before `run_wait`) runs the same transmute end-to-end every step. This test pins the
+erase → reattach → invoke round-trip directly, calling the reattached closure so tree borrows checks
+the capture read.
+
+- `erased_cont_reattach_roundtrip`
+
+**`ErasedCont` re-attach — run-loop call site** ([src/machine/execute/scheduler/execute.rs](../src/machine/execute/scheduler/execute.rs))
+— the `unsafe { erased_cont.reattach(&cart) }` at the top of the execute loop runs the transmute
+defined in the group above with none of its own, re-anchoring each slot's continuation against its
+cart before `run_wait`; the same `erased_cont_reattach_roundtrip` (and end-to-end every
+scheduler-driving slate test) pins it. No separate minimal test.
+
 **`Module` interior mutation under a live `&'a Module`** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — `Module`
 mutates a `RefCell<HashMap>` (`type_members` / `slot_type_tags`) while a `&'a Module<'a>` is
 live — the opaque-ascription shape. (The scope re-attach itself is the `ScopePtr` group above;
@@ -277,9 +298,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-16: 1225s — 25 tests, 0 leaks, 0 UB
 - 2026-06-16: 614s — 24 tests, 0 leaks, 0 UB
 - 2026-06-16: 621s — 24 tests, 0 leaks, 0 UB
 - 2026-06-16: 610s — 24 tests, 0 leaks, 0 UB
 - 2026-06-16: 1013s — 23 tests, 0 leaks, 0 UB
-- 2026-06-16: 577s — 23 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

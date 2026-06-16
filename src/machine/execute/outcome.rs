@@ -17,11 +17,13 @@
 //!   another outcome.
 //! - [`Outcome::Forward`] — splice the slot out as an alias of an existing producer.
 
+use std::rc::Rc;
+
 use crate::machine::core::kfunction::action::{Dep, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::ScopeId;
 use crate::machine::model::values::{Carried, KObject};
-use crate::machine::{KError, NodeId, TraceFrame};
+use crate::machine::{CallArena, KError, NodeId, TraceFrame};
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
 use super::nodes::NodeWork;
@@ -47,7 +49,7 @@ pub(in crate::machine::execute) enum Outcome<'run, 's> {
     /// leading siblings cascade-free before the tail-replace — restoring frame uniqueness for TCO
     /// reuse. `body_index` already accounts for their count.
     Continue {
-        work: NodeWork<'run>,
+        work: NodeWork,
         frame: FramePlacement<'run>,
         contract: Option<ReturnContract<'run>>,
         block_entry: Option<ScopeId>,
@@ -146,6 +148,51 @@ pub(in crate::machine::execute) type NodeCont<'a> = Box<
         ) -> Outcome<'a, 's>
         + 'a,
 >;
+
+/// A [`NodeCont`] with its captured `'run` lifetime erased to `'static` for storage on a
+/// lifetime-free node. The continuation captures run-lived data (the parked AST, a finish closure's
+/// captured scope); that data lives in the run arena or a strict ancestor of the slot's per-call
+/// cart, which the node's [`CallFrame`](super::nodes::CallFrame) cart `Rc` keeps live across the
+/// step. So the cart is the liveness witness, exactly as for [`ErasedContract`] — this generalizes
+/// that contract erasure from `ReturnContract` to the whole continuation
+/// ([`ScopePtr`](crate::machine::core::ScopePtr) is the same discipline for a scope pointer).
+///
+/// Unlike `ErasedContract` (a `Copy` enum), the continuation is a `Box<dyn FnOnce>` consumed once,
+/// so this owns its box and [`Self::reattach`] takes `self` by value — mirroring the single-shot run.
+pub(in crate::machine::execute) struct ErasedCont {
+    inner: NodeCont<'static>,
+}
+
+impl ErasedCont {
+    /// Erase a live continuation to its storable `'static` form. Safe: forgetting the captured
+    /// lifetime for storage cannot fabricate one — the boxed closure is never *called* at `'static`,
+    /// only stored, and [`Self::reattach`] shortens it back to a cart-witnessed lifetime before it
+    /// runs.
+    pub(in crate::machine::execute) fn erase(cont: NodeCont<'_>) -> Self {
+        // SAFETY: `NodeCont<'a>` and `NodeCont<'static>` are both `Box<dyn …>` fat pointers of
+        // identical layout — a lifetime parameter never changes representation. The erased box is
+        // stored, not invoked, until `reattach` re-anchors it.
+        ErasedCont {
+            inner: unsafe { std::mem::transmute::<NodeCont<'_>, NodeCont<'static>>(cont) },
+        }
+    }
+
+    /// Re-anchor the continuation to a caller-chosen `'run`, witnessed by the node's cart `Rc`. The
+    /// single fabrication for this carrier — mirrors [`ErasedContract::reattach`] and
+    /// [`CallArena::scope`](crate::machine::core::CallArena::scope).
+    ///
+    /// SAFETY: `_witness` is the cart that pins the captured data's home (the run arena or a strict
+    /// ancestor of the cart's own frame) for as long as it is held. The caller re-anchors only when
+    /// about to run the step, holding the cart (via the slot-step guard) across the run, so the
+    /// returned `'run` closure cannot outlive its captures. `'run` is driven by the return-type
+    /// annotation, not a turbofish argument.
+    pub(in crate::machine::execute) unsafe fn reattach<'run>(
+        self,
+        _witness: &Rc<CallArena>,
+    ) -> NodeCont<'run> {
+        std::mem::transmute::<NodeCont<'static>, NodeCont<'run>>(self.inner)
+    }
+}
 
 /// Dep-finish continuation: short-circuit on the first errored dep (labelled with `dep_error_frame`),
 /// else hand the resolved [`Carried`] values to a value-only [`DepFinish`]. The short-circuit
@@ -252,4 +299,48 @@ pub(in crate::machine::execute) fn shorten_outcome<'run, 's>(
     // SAFETY: lifetime-only reattach of an invariant carrier whose `'s` payload outlives `'s`; see
     // the doc comment. Same shape as the arena re-exposure transmutes the per-call protocol uses.
     unsafe { std::mem::transmute::<Outcome<'run, 'run>, Outcome<'run, 's>>(outcome) }
+}
+
+#[cfg(test)]
+mod erased_cont_tests {
+    //! Miri coverage for the [`ErasedCont`] continuation erasure: the test pins the
+    //! erase → reattach → invoke round-trip under tree borrows; logical assertions are minimal —
+    //! it fails when Miri reports UB, not on values.
+
+    use super::*;
+    use crate::builtins::default_scope;
+    use crate::machine::core::{CallArena, RuntimeArena};
+    use crate::machine::execute::scheduler::Scheduler;
+
+    /// A continuation capturing run-lived data (a `&'run KObject` in the run arena — a strict
+    /// ancestor of the cart) is erased to `'static`, reattached against the cart `Rc`, and then
+    /// *invoked*, so tree borrows checks the capture read through the lifetime-fabricated box. The
+    /// run arena outlives the cart, so the fabricated `'run` is honest. Mirrors the erase → reattach
+    /// transmute pair plus the single-shot call site (execute.rs); fails on UB, not values.
+    #[test]
+    fn erased_cont_reattach_roundtrip() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        // The captured value lives in the run arena — the ancestor the cart's `outer` chain pins.
+        let captured: &KObject = arena.alloc_object(KObject::Number(7.0));
+        let cart = CallArena::new(scope, None);
+
+        let cont: NodeCont = Box::new(move |_view, _results, _idx| {
+            // Read the run-lived capture through the reattached box.
+            assert!(matches!(captured, KObject::Number(n) if *n == 7.0));
+            Outcome::Done(Err(KError::new(crate::machine::KErrorKind::ShapeError(
+                "ran".to_string(),
+            ))))
+        });
+        let erased = ErasedCont::erase(cont);
+        // Reattach witnessed by the cart `Rc`, then run the single-shot continuation.
+        let reattached: NodeCont<'_> = unsafe { erased.reattach(&cart) };
+        let sched = Scheduler::new();
+        let view = SchedulerView::new(&sched);
+        let out = reattached(&view, &[], 0);
+        assert!(matches!(out, Outcome::Done(Err(_))));
+        // Mutate the arena through a sibling pointer after the call to catch a stacked-borrow regression.
+        let _other = arena.alloc_object(KObject::Number(8.0));
+        assert!(matches!(captured, KObject::Number(n) if *n == 7.0));
+    }
 }

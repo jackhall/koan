@@ -6,7 +6,7 @@ use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId};
 
 use super::outcome::dep_error_frame;
-use super::{short_circuit, DepFinish, NodeCont};
+use super::{short_circuit, DepFinish, ErasedCont, NodeCont};
 
 /// Outcome of a node's run. `Replace` is the tail-call path: rewrite the slot's work and
 /// re-enqueue the same index so it runs again with no fresh slot allocated, giving constant
@@ -28,7 +28,7 @@ use super::{short_circuit, DepFinish, NodeCont};
 pub(super) enum NodeStep<'run> {
     Done(Result<Carried<'run>, KError>),
     Replace {
-        work: NodeWork<'run>,
+        work: NodeWork,
         frame: Option<Rc<CallArena>>,
         function: Option<ReturnContract<'run>>,
         block_entry: Option<ScopeId>,
@@ -54,14 +54,33 @@ pub(super) enum NodeStep<'run> {
 /// [`short_circuit`](super::outcome::short_circuit) / [`catch_cont`](super::outcome::catch_cont) /
 /// [`ignore_results`](super::outcome::ignore_results) combinators, so the node itself never
 /// branches and names no AST.
-pub(super) struct NodeWork<'run> {
+pub(super) struct NodeWork {
     pub(in crate::machine::execute) deps: Vec<NodeId>,
     pub(in crate::machine::execute) park_count: usize,
-    pub(in crate::machine::execute) cont: NodeCont<'run>,
+    /// The slot's continuation, stored lifetime-erased ([`ErasedCont`]) so the node it sits on pins
+    /// no `'run`. Re-anchored against the slot's cart at run time ([`execute`](super::scheduler)).
+    pub(in crate::machine::execute) cont: ErasedCont,
     pub(in crate::machine::execute) carrier: Option<String>,
 }
 
-impl<'run> NodeWork<'run> {
+impl NodeWork {
+    /// Build node work from a live continuation, erasing it for lifetime-free storage. The single
+    /// erase boundary: every `NodeWork` is born here, so the continuation is `'run` only until it is
+    /// stored, then re-anchored against the slot's cart when the step runs.
+    pub(in crate::machine::execute) fn new(
+        deps: Vec<NodeId>,
+        park_count: usize,
+        cont: NodeCont<'_>,
+        carrier: Option<String>,
+    ) -> Self {
+        NodeWork {
+            deps,
+            park_count,
+            cont: ErasedCont::erase(cont),
+            carrier,
+        }
+    }
+
     /// A dep-finish node built for direct submission (not via `apply_outcome`): the path shared by
     /// `submit_dep_finish_in_own_scope` and the test fixture. Waits on `deps` (a `park_count`-long
     /// park prefix, owned suffix), short-circuits on the first errored dep under the
@@ -69,14 +88,14 @@ impl<'run> NodeWork<'run> {
     pub(in crate::machine::execute) fn awaiting(
         deps: Vec<NodeId>,
         park_count: usize,
-        finish: DepFinish<'run>,
+        finish: DepFinish<'_>,
     ) -> Self {
-        NodeWork {
+        NodeWork::new(
             deps,
             park_count,
-            cont: short_circuit(Some(dep_error_frame()), finish),
-            carrier: None,
-        }
+            short_circuit(Some(dep_error_frame()), finish),
+            None,
+        )
     }
 }
 
@@ -149,8 +168,8 @@ pub(super) struct NodePayload {
     pub(super) chain: Rc<LexicalFrame>,
 }
 
-pub(super) struct Node<'run> {
-    pub(super) work: NodeWork<'run>,
+pub(super) struct Node {
+    pub(super) work: NodeWork,
     /// The slot's opaque name-resolution payload (scope handle + lexical chain). See
     /// [`NodePayload`].
     pub(super) payload: NodePayload,
@@ -161,13 +180,13 @@ pub(super) struct Node<'run> {
 
 /// Owned `NodeId`s a node must read before running: the `deps[park_count..]` suffix. The
 /// park-producer prefix is installed separately as `Notify` edges.
-pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Vec<NodeId> {
+pub(super) fn work_deps(work: &NodeWork) -> Vec<NodeId> {
     work.deps[work.park_count..].to_vec()
 }
 
 /// Park-producer prefix (sibling slots whose values the node reads but does not own). The caller
 /// installs each as a `Notify` edge separately from the Owned path.
-pub(super) fn work_park_producers<'run, 'b>(work: &'b NodeWork<'run>) -> &'b [NodeId] {
+pub(super) fn work_park_producers(work: &NodeWork) -> &[NodeId] {
     &work.deps[..work.park_count]
 }
 

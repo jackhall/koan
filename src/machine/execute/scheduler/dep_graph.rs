@@ -27,7 +27,7 @@ impl DepEdge {
 
 /// Owned-edge sidecar built from `work_deps`. Park edges are installed
 /// separately via `add_park_edge`.
-pub(super) fn work_owned_edges<'run>(work: &NodeWork<'run>) -> Vec<DepEdge> {
+pub(super) fn work_owned_edges(work: &NodeWork) -> Vec<DepEdge> {
     work_deps(work).into_iter().map(DepEdge::Owned).collect()
 }
 

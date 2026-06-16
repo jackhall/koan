@@ -52,16 +52,14 @@ pub(super) fn invoke_continue<'run>(
 fn invoke_work<'run>(
     picked: &'run KFunction<'run>,
     working_expr: KExpression<'run>,
-) -> NodeWork<'run> {
+) -> NodeWork {
     let carrier = working_expr.summarize();
-    NodeWork {
-        deps: Vec::new(),
-        park_count: 0,
-        cont: ignore_results(Box::new(move |view, _idx| {
-            invoke(view, picked, working_expr)
-        })),
-        carrier: Some(carrier),
-    }
+    NodeWork::new(
+        Vec::new(),
+        0,
+        ignore_results(Box::new(move |view, _idx| invoke(view, picked, working_expr))),
+        Some(carrier),
+    )
 }
 
 /// The single invoke entry for the dispatcher's bind sites — run a resolved call:

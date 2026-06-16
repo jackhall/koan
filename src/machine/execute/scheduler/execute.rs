@@ -7,6 +7,7 @@ use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 use super::super::dispatch::reattach_node_scope;
 use super::super::finalize::NodeFinalize;
 use super::super::nodes::{CallFrame, Node, NodePayload, NodeStep, NodeWork};
+use super::super::NodeCont;
 use super::super::runtime::KoanRuntime;
 use super::Scheduler;
 use crate::machine::model::Carried;
@@ -23,13 +24,25 @@ impl<'run> KoanRuntime<'run> {
             // re-acquire it per use, so nothing holds a scope borrow across the step's `&mut self`
             // work or the in-step TCO frame reset.
             let node_scope = node.payload.scope;
-            let work = node.work;
             let CallFrame {
                 cart,
                 reserve,
                 contract: prev_contract,
             } = node.frame;
             let prev_chain_carrier = node.payload.chain;
+            let NodeWork {
+                deps,
+                park_count,
+                cont: erased_cont,
+                carrier: _,
+            } = node.work;
+            // Re-anchor the slot's erased continuation against its own cart before that cart moves
+            // into the step guard. The guard keeps the cart live across `run_wait`, so the
+            // fabricated `'run` cannot outlive the continuation's captures (which live in the run
+            // arena or a strict ancestor of the cart). Mirrors the contract re-anchor at the Done
+            // boundary — the same erase / reattach discipline, generalized to the whole closure.
+            // SAFETY: `cart` is the witness pinning the captures' home for the whole step.
+            let cont: NodeCont<'run> = unsafe { erased_cont.reattach(&cart) };
             let guard =
                 self.sched
                     .enter_slot_step(cart, reserve, prev_chain_carrier.clone(), node_scope);
@@ -37,12 +50,6 @@ impl<'run> KoanRuntime<'run> {
             // contract chain — a deferred-return FN dispatched here skips resolving its own return
             // type (keep-first discards it anyway).
             self.sched.active_in_contract_chain = prev_contract.is_some();
-            let NodeWork {
-                deps,
-                park_count,
-                cont,
-                ..
-            } = work;
             let step = self.run_wait(deps, park_count, cont, idx);
             // The post-step token owns the slot's frame at step end and is the *only* source of
             // the step scope (via `post.step_scope()`), so the wrong-frame read that ambient

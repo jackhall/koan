@@ -385,7 +385,7 @@ pub(in crate::machine::execute) type ResumeFn<'run> =
 /// Build a birth dispatch [`NodeWork`](super::nodes::NodeWork) for `expr` with empty `pre_subs` — the dispatch-layer
 /// constructor every tail-replace / re-dispatch site uses instead of a raw work literal. The
 /// captured closure classifies `expr` on first poll; `carrier` is its deadlock-summary.
-pub(in crate::machine::execute) fn decide<'run>(expr: KExpression<'run>) -> NodeWork<'run> {
+pub(in crate::machine::execute) fn decide<'run>(expr: KExpression<'run>) -> NodeWork {
     decide_with_presubs(expr, Vec::new())
 }
 
@@ -394,18 +394,18 @@ pub(in crate::machine::execute) fn decide<'run>(expr: KExpression<'run>) -> Node
 pub(in crate::machine::execute) fn decide_with_presubs<'run>(
     expr: KExpression<'run>,
     pre_subs: Vec<(usize, NodeId)>,
-) -> NodeWork<'run> {
+) -> NodeWork {
     let carrier = expr.summarize();
     // A birth decide waits on no deps and ignores the (empty) results slice; it runs on first poll,
     // classifies, and routes. `ignore_results` adapts the decide closure to the unified `NodeCont`.
-    NodeWork {
-        deps: Vec::new(),
-        park_count: 0,
-        cont: ignore_results(Box::new(move |view, idx| {
+    NodeWork::new(
+        Vec::new(),
+        0,
+        ignore_results(Box::new(move |view, idx| {
             classify_dispatch(view, expr, pre_subs, idx)
         })),
-        carrier: Some(carrier),
-    }
+        Some(carrier),
+    )
 }
 
 /// Classify a freshly-born dispatch expression's shape and route to the matching per-shape decide,

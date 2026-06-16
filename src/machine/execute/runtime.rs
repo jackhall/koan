@@ -386,34 +386,23 @@ impl<'run> KoanRuntime<'run> {
                     // label. Both install the same `Wait` over the realized deps (edges already
                     // installed by the loop above), the short-circuit baked into the continuation by
                     // `short_circuit`.
-                    Continuation::Finish(finish) => NodeWork {
-                        deps: dep_ids,
-                        park_count,
-                        cont: short_circuit(dep_error_frame, finish),
-                        carrier: None,
-                    },
+                    Continuation::Finish(finish) => {
+                        NodeWork::new(dep_ids, park_count, short_circuit(dep_error_frame, finish), None)
+                    }
                     // The action-harness catch carries its single watched dep unrealized (its
                     // placement differs from a dep-finish body's fan-out); realize and own it here.
                     // `catch_cont` runs the finish without short-circuiting on a dep error.
                     Continuation::Catch { watched, finish } => {
                         let from = self.realize_catch_dep(watched);
                         self.sched.add_owned_edge(from, NodeId(idx));
-                        NodeWork {
-                            deps: vec![from],
-                            park_count: 0,
-                            cont: catch_cont(finish),
-                            carrier: None,
-                        }
+                        NodeWork::new(vec![from], 0, catch_cont(finish), None)
                     }
                     // The resume closure carries the evolving `working_expr` from here on; the
                     // `carrier` it travels with is only the deadlock-summary sample. A decide takes
                     // no dep values, so `ignore_results` drops the (park-only) results slice.
-                    Continuation::Resume { carrier, resume } => NodeWork {
-                        deps: dep_ids,
-                        park_count,
-                        cont: ignore_results(resume),
-                        carrier,
-                    },
+                    Continuation::Resume { carrier, resume } => {
+                        NodeWork::new(dep_ids, park_count, ignore_results(resume), carrier)
+                    }
                 };
                 NodeStep::Replace {
                     work,

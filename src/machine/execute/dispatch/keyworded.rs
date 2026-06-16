@@ -160,12 +160,12 @@ pub(super) fn finish<'run>(
 /// pick. `Inherit` — a re-resolve runs in the slot's current frame.
 pub(super) fn redispatch_continue<'run>(working_expr: KExpression<'run>) -> Outcome<'run, 'run> {
     let carrier = working_expr.summarize();
-    let work = NodeWork {
-        deps: Vec::new(),
-        park_count: 0,
-        cont: ignore_results(Box::new(move |ctx, idx| finish(ctx, working_expr, idx))),
-        carrier: Some(carrier),
-    };
+    let work = NodeWork::new(
+        Vec::new(),
+        0,
+        ignore_results(Box::new(move |ctx, idx| finish(ctx, working_expr, idx))),
+        Some(carrier),
+    );
     Outcome::Continue {
         work,
         frame: FramePlacement::Inherit,

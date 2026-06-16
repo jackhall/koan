@@ -48,7 +48,7 @@ impl<'run> Scheduler<'run> {
     #[cfg(test)]
     pub(in crate::machine::execute::scheduler) fn add(
         &mut self,
-        work: NodeWork<'run>,
+        work: NodeWork,
         scope: &'run Scope<'run>,
     ) -> NodeId {
         let explicit_chain = self.ambient_or_detached_chain();
@@ -65,7 +65,7 @@ impl<'run> Scheduler<'run> {
     #[cfg(test)]
     pub(super) fn add_with_chain(
         &mut self,
-        work: NodeWork<'run>,
+        work: NodeWork,
         scope: &'run Scope<'run>,
         explicit_chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
@@ -111,7 +111,7 @@ impl<'run> Scheduler<'run> {
     /// the honest re-dispatch-against-my-own-scope path.
     pub(in crate::machine::execute) fn submit_in_own_scope(
         &mut self,
-        work: NodeWork<'run>,
+        work: NodeWork,
     ) -> NodeId {
         let node_scope = self
             .active_node_scope
@@ -130,7 +130,7 @@ impl<'run> Scheduler<'run> {
     /// scope, `Yoked` for a framed one).
     pub(in crate::machine::execute) fn submit_node(
         &mut self,
-        work: NodeWork<'run>,
+        work: NodeWork,
         node_scope: NodeScope,
         explicit_chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
@@ -197,7 +197,7 @@ impl<'run> Scheduler<'run> {
 impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn add(
         &mut self,
-        work: NodeWork<'run>,
+        work: NodeWork,
         scope: &'run Scope<'run>,
     ) -> NodeId {
         self.sched.add(work, scope)
@@ -205,7 +205,7 @@ impl<'run> KoanRuntime<'run> {
 
     pub(in crate::machine::execute) fn add_with_chain(
         &mut self,
-        work: NodeWork<'run>,
+        work: NodeWork,
         scope: &'run Scope<'run>,
         explicit_chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
