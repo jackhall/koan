@@ -85,7 +85,10 @@ impl<'run> KoanRuntime<'run> {
                     if result.is_err() {
                         post.step_scope().clear_placeholders_for_producer(id);
                     }
-                    self.sched.finalize(idx, result);
+                    // Pin the producer's per-call frame in the slot's terminal: a dying frame is
+                    // held until the slot is freed (frame death Done->free); a frameless / run-frame
+                    // producer pins nothing.
+                    self.sched.finalize(idx, result, frame.cloned());
                 }
                 NodeStep::Replace {
                     work: new_work,
@@ -193,9 +196,10 @@ impl<'run> Scheduler<'run> {
         &mut self,
         idx: usize,
         output: Result<Carried<'run>, KError>,
+        frame: Option<Rc<crate::machine::core::CallArena>>,
     ) {
         let id = NodeId(idx);
-        self.store.finalize(id, output);
+        self.store.finalize(id, output, frame);
         let drained = self.deps.drain_notify(idx);
         let mut woken: Vec<usize> = Vec::new();
         for (consumer, hit_zero) in drained {

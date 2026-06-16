@@ -66,7 +66,12 @@ enum SlotState<'run> {
     /// Node payload has been moved out by `take_for_run`. A matching
     /// `reinstall*` / `finalize` / `free_one` exits this state.
     Running,
-    Done(Result<Carried<'run>, KError>),
+    /// A finalized terminal, plus the producer frame `Rc` that backs it (`None` for a frameless /
+    /// run-arena value). Holding the frame `Rc` here pins the producer's per-call arena until the
+    /// slot is freed, so frame death moves from Done to free. The pin is established now and read by
+    /// the consumer-pull lift, which copies the terminal out of this frame into the consumer arena.
+    #[allow(dead_code)] // read by the consumer-pull lift (run_wait); held to pin the frame meanwhile
+    Done(Result<Carried<'run>, KError>, Option<Rc<CallArena>>),
     /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
     /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
     /// slot's consumers were moved onto `producer`'s notify list at splice time, so `producer`'s
@@ -171,9 +176,15 @@ impl<'run> NodeStore<'run> {
     }
 
     /// Callers must pair this with the dep-graph notify-walk so consumers
-    /// wake atomically with the write.
-    pub(super) fn finalize(&mut self, id: NodeId, output: Result<Carried<'run>, KError>) {
-        self.slots[id] = SlotState::Done(output);
+    /// wake atomically with the write. `frame` is the producer's per-call frame, pinned in the
+    /// slot until it is freed (`None` for a frameless / run-arena terminal).
+    pub(super) fn finalize(
+        &mut self,
+        id: NodeId,
+        output: Result<Carried<'run>, KError>,
+        frame: Option<Rc<CallArena>>,
+    ) {
+        self.slots[id] = SlotState::Done(output, frame);
     }
 
     /// Idempotent on already-`Free` slots when paired with the cascade-free
@@ -196,15 +207,15 @@ impl<'run> NodeStore<'run> {
 
     /// Raw readiness — callers pass an already alias-resolved id.
     pub(super) fn is_result_ready(&self, id: NodeId) -> bool {
-        matches!(self.slots.get(id), Some(SlotState::Done(_)))
+        matches!(self.slots.get(id), Some(SlotState::Done(..)))
     }
 
     /// Only safe on IDs whose slot has been finalized; internal slots may have been eagerly freed by
     /// their parent. Raw — callers pass an already alias-resolved id.
     pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
         match &self.slots[id] {
-            &SlotState::Done(Ok(c)) => Ok(c),
-            SlotState::Done(Err(e)) => Err(e),
+            &SlotState::Done(Ok(c), _) => Ok(c),
+            SlotState::Done(Err(e), _) => Err(e),
             _ => panic!("result must be ready by the time it's read"),
         }
     }
@@ -258,7 +269,7 @@ impl<'run> NodeStore<'run> {
     /// not double-push onto `free_list`. Assumes `is_live` has already
     /// excluded `PreRun` upstream.
     pub(super) fn is_reclaimed(&self, id: NodeId) -> bool {
-        !matches!(self.slots[id], SlotState::Done(_))
+        !matches!(self.slots[id], SlotState::Done(..))
     }
 
     /// Splice a bare-name forward out: the running slot becomes an alias of `producer` (a
@@ -278,17 +289,17 @@ impl<'run> NodeStore<'run> {
 
     #[cfg(test)]
     pub(super) fn set_result(&mut self, id: NodeId, output: Result<Carried<'run>, KError>) {
-        self.slots[id] = SlotState::Done(output);
+        self.slots[id] = SlotState::Done(output, None);
     }
 
     #[cfg(test)]
     pub(super) fn result_is_some(&self, id: NodeId) -> bool {
-        matches!(self.slots[id], SlotState::Done(_))
+        matches!(self.slots[id], SlotState::Done(..))
     }
 
     #[cfg(test)]
     pub(super) fn result_is_none(&self, id: NodeId) -> bool {
-        !matches!(self.slots[id], SlotState::Done(_))
+        !matches!(self.slots[id], SlotState::Done(..))
     }
 
     #[cfg(test)]
