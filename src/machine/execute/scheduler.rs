@@ -58,7 +58,7 @@ pub struct Scheduler<'run> {
     /// the sub-slot inherits the slot's honest handle — `Anchored(&'run)` for a genuinely run-lived
     /// scope (a binder's decl-scope), `Yoked` for a per-call frame child — rather than the body
     /// trying (and failing) to widen its `&'frame` borrow back to `&'run`.
-    pub(in crate::machine::execute::scheduler) active_node_scope: Option<NodeScope<'run>>,
+    pub(in crate::machine::execute::scheduler) active_node_scope: Option<NodeScope>,
     /// Whether the slot currently executing already carries a kept return contract — i.e. it is a
     /// tail call *within* an established chain. A deferred-return FN dispatched here is a subsequent
     /// tail call whose own contract would be discarded by the keep-first rule, so it skips resolving
@@ -73,17 +73,17 @@ pub struct Scheduler<'run> {
 /// and `active_reserve` swap that brackets each iteration of [`KoanRuntime::execute`](super::runtime::KoanRuntime::execute).
 /// Bookkeeping spine for the ping-pong reserve-frame rotation; see
 /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
-pub(in crate::machine::execute::scheduler) struct SlotStepGuard<'run> {
+pub(in crate::machine::execute::scheduler) struct SlotStepGuard {
     prev_frame: Option<Rc<CallArena>>,
     prev_chain: Option<Rc<LexicalFrame>>,
     /// Saved so nested slot runs (combinator finish closures) don't inherit the
     /// outer slot's reserve frame.
     prev_reserve: Option<Rc<CallArena>>,
-    prev_node_scope: Option<NodeScope<'run>>,
+    prev_node_scope: Option<NodeScope>,
     /// The step's own handle, kept so [`Scheduler::exit_slot_step`] can hand it back inside the
     /// [`PostStep`] token — the step scope is then re-derivable from the *returned* frame, never
     /// the ambient (and possibly invoke-swapped) `active_frame`.
-    step_node_scope: NodeScope<'run>,
+    step_node_scope: NodeScope,
 }
 
 /// The frames and scope of a just-finished step, returned by [`Scheduler::exit_slot_step`]. Owns
@@ -91,7 +91,7 @@ pub(in crate::machine::execute::scheduler) struct SlotStepGuard<'run> {
 /// `active_frame`, so this returned value, not `self.active_frame`, is the authoritative source)
 /// and exposes the step scope only through [`Self::step_scope`], which derives it from that frame.
 /// Reading the step scope from ambient scheduler state post-step is thereby unspellable.
-pub(in crate::machine::execute::scheduler) struct PostStep<'run> {
+pub(in crate::machine::execute::scheduler) struct PostStep {
     /// The slot's cart at step end. Always present: `enter_slot_step` installs the node's cart and
     /// an invoke never empties `active_frame` — reuse draws from the reserve via
     /// `acquire_tail_frame`, never the live active cart — so the slot's own cart rides through. The
@@ -99,16 +99,20 @@ pub(in crate::machine::execute::scheduler) struct PostStep<'run> {
     pub(in crate::machine::execute::scheduler) prev_frame: Rc<CallArena>,
     /// The slot's reserve frame at step end (see ping-pong reserve rotation).
     pub(in crate::machine::execute::scheduler) post_step_reserve: Option<Rc<CallArena>>,
-    node_scope: NodeScope<'run>,
+    node_scope: NodeScope,
 }
 
-impl<'run> PostStep<'run> {
-    /// The step's scope, re-handed from the authoritative `prev_frame` via the bounded brand (an
-    /// `Anchored` slot carries its own run-lived borrow). Borrow bounded by `&self`, so it cannot
-    /// outlive this token's `prev_frame`.
-    pub(in crate::machine::execute::scheduler) fn step_scope(&self) -> &Scope<'run> {
-        match self.node_scope {
-            NodeScope::Anchored(scope) => scope,
+impl PostStep {
+    /// The step's scope, re-handed with a borrow bounded by `&self`. An `Anchored` slot reattaches
+    /// its erased run-lived [`ScopePtr`] (`reattach_bounded`); a `Yoked` slot re-projects from the
+    /// authoritative `prev_frame` cart. Content lifetime is free, borrow bounded, so it cannot
+    /// outlive this token's `prev_frame` / the run-lived scope it names.
+    pub(in crate::machine::execute::scheduler) fn step_scope<'a>(&self) -> &Scope<'a> {
+        match &self.node_scope {
+            // SAFETY: the `Anchored` pointer was erased from a genuinely run-lived scope
+            // (`resolve_node_scope`), which outlives this token; the returned borrow is bounded by
+            // `&self`, so the free content lifetime cannot be cashed past the pointee.
+            NodeScope::Anchored(ptr) => unsafe { ptr.reattach_bounded() },
             NodeScope::Yoked => self.prev_frame.scope_bounded(),
         }
     }
@@ -124,8 +128,8 @@ impl<'run> Scheduler<'run> {
         node_frame: Rc<CallArena>,
         node_reserve: Option<Rc<CallArena>>,
         node_chain: Rc<LexicalFrame>,
-        node_scope: NodeScope<'run>,
-    ) -> SlotStepGuard<'run> {
+        node_scope: NodeScope,
+    ) -> SlotStepGuard {
         let prev_frame = self.active_frame.replace(node_frame);
         let prev_chain = self.active_chain.replace(node_chain);
         let prev_reserve = std::mem::replace(&mut self.active_reserve, node_reserve);
@@ -154,8 +158,8 @@ impl<'run> Scheduler<'run> {
     /// legitimately `None` *between* steps.
     pub(in crate::machine::execute::scheduler) fn exit_slot_step(
         &mut self,
-        guard: SlotStepGuard<'run>,
-    ) -> PostStep<'run> {
+        guard: SlotStepGuard,
+    ) -> PostStep {
         let post_step_frame = std::mem::replace(&mut self.active_frame, guard.prev_frame);
         self.active_chain = guard.prev_chain;
         let post_step_reserve = std::mem::replace(&mut self.active_reserve, guard.prev_reserve);
@@ -294,8 +298,11 @@ impl<'run> Scheduler<'run> {
     /// borrow, and a `Yoked` slot's `active_frame` is never emptied mid-step (an invoke reuses the
     /// reserve, not the active cart), so the inner `expect` cannot fire.
     pub(in crate::machine::execute) fn current_scope_opt(&self) -> Option<&Scope<'run>> {
-        match self.active_node_scope? {
-            NodeScope::Anchored(scope) => Some(scope),
+        match self.active_node_scope.as_ref()? {
+            // SAFETY: the `Anchored` pointer was erased from a genuinely run-lived scope
+            // (`resolve_node_scope`), so it outlives `&self`; the borrow is bounded by `&self`, so
+            // the free content lifetime cannot be cashed past the run-lived pointee.
+            NodeScope::Anchored(ptr) => Some(unsafe { ptr.reattach_bounded() }),
             NodeScope::Yoked => Some(
                 self.active_frame
                     .as_ref()
@@ -308,7 +315,7 @@ impl<'run> Scheduler<'run> {
     /// The executing slot's raw [`NodeScope`] handle (`Anchored`/`Yoked`), before materialization.
     /// [`KoanRuntime::dispatch_in_own_scope`](super::runtime::KoanRuntime::dispatch_in_own_scope) matches the arm to
     /// pick its re-dispatch path; [`Self::current_scope`] is the materialized form.
-    pub(in crate::machine::execute) fn current_node_scope(&self) -> Option<NodeScope<'run>> {
+    pub(in crate::machine::execute) fn current_node_scope(&self) -> Option<NodeScope> {
         self.active_node_scope
     }
 }

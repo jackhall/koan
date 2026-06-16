@@ -1,9 +1,9 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
-use crate::machine::core::ScopeId;
+use crate::machine::core::{ScopeId, ScopePtr};
 use crate::machine::model::Carried;
-use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope};
+use crate::machine::{CallArena, KError, LexicalFrame, NodeId};
 
 use super::outcome::dep_error_frame;
 use super::{short_circuit, DepFinish, NodeCont};
@@ -80,21 +80,24 @@ impl<'run> NodeWork<'run> {
     }
 }
 
-/// Slot-stored scope handle. `Anchored` holds a run-lifetime borrow directly — a genuinely
-/// run-lived scope (a fresh `&'run` child a binder body allocated in a real arena); NOT the
-/// builtins-only [`ScopeKind::Root`](crate::machine::core::ScopeKind). A per-call frame scope
-/// instead stores `Yoked` — no borrow at all — and is re-projected from the slot's own
-/// [`Node::frame`] cart at read time (single-cart: the frame `Rc` already on the slot is the
-/// sole liveness witness, so there is no second `Rc` clone and no contention with
-/// `try_reset_for_tail`'s uniqueness check). Storing the marker rather than a fabricated `&'run`
-/// is what keeps the borrow honest across a TCO `try_reset_for_tail`: nothing persisted points
-/// into the reset arena; the live frame is re-read each step.
+/// Slot-stored scope handle, carrying no lifetime so the node it sits on does not pin `'run`
+/// through its scope. `Anchored` holds an erased [`ScopePtr`] to a genuinely run-lived scope (a
+/// fresh child a binder body allocated in a real arena; NOT the builtins-only
+/// [`ScopeKind::Root`](crate::machine::core::ScopeKind)), re-attached at read with a borrow bounded
+/// by the reader (`reattach_bounded`) and a free content lifetime — sound because the pointee lives
+/// for all of `'run`. A per-call frame scope instead stores `Yoked` — no pointer at all — and is
+/// re-projected from the slot's own [`Node::frame`] cart at read time (single-cart: the frame `Rc`
+/// already on the slot is the sole liveness witness, so there is no second `Rc` clone and no
+/// contention with `try_reset_for_tail`'s uniqueness check). Storing an erased handle rather than a
+/// live `&'run` borrow keeps the borrow honest across a TCO `try_reset_for_tail` (nothing persisted
+/// points into the reset arena; the live frame is re-read each step) and keeps the scheduler from
+/// naming `'run` in its node-stored scope state.
 ///
-/// `Copy` because both arms are trivially copyable (a shared ref / a unit) and submission
+/// `Copy` because both arms are trivially copyable ([`ScopePtr`] is `Copy` / a unit) and submission
 /// threads the handle through `pre_subs` recursion without re-deriving it.
 #[derive(Clone, Copy)]
-pub(super) enum NodeScope<'run> {
-    Anchored(&'run Scope<'run>),
+pub(super) enum NodeScope {
+    Anchored(ScopePtr<'static>),
     Yoked,
 }
 
@@ -132,16 +135,28 @@ pub(super) struct CallFrame {
     pub(super) contract: Option<ErasedContract>,
 }
 
-pub(super) struct Node<'run> {
-    pub(super) work: NodeWork<'run>,
-    pub(super) scope: NodeScope<'run>,
-    /// The slot's per-call frame state (cart + reserve + erased contract) — never absent, see
-    /// [`CallFrame`].
-    pub(super) frame: CallFrame,
+/// The opaque per-node workload payload: the Koan name-resolution state the scheduler stores on a
+/// slot, threads through a step, and hands back, but does not own as scheduler machinery — the
+/// slot's [`NodeScope`] handle and its lexical [`chain`](Self::chain). Lifetime-free (the scope is
+/// an erased `NodeScope`, the chain an `Rc`), so the node it sits on pins no `'run` through it. This
+/// is the concrete Koan stand-in for the generic workload payload the scheduler becomes parametric
+/// over in slice 2b.
+pub(super) struct NodePayload {
+    pub(super) scope: NodeScope,
     /// Immutable cactus-chain naming this node's lexical position. Head frame is the
     /// innermost enclosing block; tail (`parent: None`) is top-level. See
     /// `core/lexical_frame.rs`.
     pub(super) chain: Rc<LexicalFrame>,
+}
+
+pub(super) struct Node<'run> {
+    pub(super) work: NodeWork<'run>,
+    /// The slot's opaque name-resolution payload (scope handle + lexical chain). See
+    /// [`NodePayload`].
+    pub(super) payload: NodePayload,
+    /// The slot's per-call frame state (cart + reserve + erased contract) — never absent, see
+    /// [`CallFrame`].
+    pub(super) frame: CallFrame,
 }
 
 /// Owned `NodeId`s a node must read before running: the `deps[park_count..]` suffix. The
@@ -154,4 +169,42 @@ pub(super) fn work_deps<'run>(work: &NodeWork<'run>) -> Vec<NodeId> {
 /// installs each as a `Notify` edge separately from the Owned path.
 pub(super) fn work_park_producers<'run, 'b>(work: &'b NodeWork<'run>) -> &'b [NodeId] {
     &work.deps[..work.park_count]
+}
+
+#[cfg(test)]
+mod tests {
+    //! Miri coverage for the `NodeScope::Anchored` lifetime fabrication: each test pins the
+    //! erase→reattach shape under tree borrows; logical assertions are minimal — these fail when
+    //! Miri reports UB, not on values.
+
+    use super::*;
+    use crate::builtins::default_scope;
+    use crate::machine::core::RuntimeArena;
+    use crate::machine::model::KObject;
+    use crate::machine::{BindingIndex, Scope};
+
+    /// A `NodeScope::Anchored` erases a genuinely run-lived scope to a lifetime-free `ScopePtr`
+    /// (`erase_static`) and reattaches it (`reattach_bounded`) at read — the fabrication the
+    /// scheduler performs each step for an `Anchored` slot. Mirrors the erase→reattach pair plus a
+    /// subsequent arena mutation through a sibling pointer; fails on UB, not values.
+    #[test]
+    fn node_scope_anchored_erase_reattach_roundtrip() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let v = arena.alloc_object(KObject::Number(7.0));
+        scope
+            .bind_value("k".to_string(), v, BindingIndex::BUILTIN)
+            .unwrap();
+
+        let ns = NodeScope::Anchored(ScopePtr::erase_static(scope));
+        let NodeScope::Anchored(ptr) = &ns else {
+            unreachable!("constructed Anchored")
+        };
+        // Reattach with a borrow bounded by `&ns`; read a binding back, then mutate the arena
+        // through a sibling pointer while the reattached scope is still live.
+        let reattached: &Scope<'_> = unsafe { ptr.reattach_bounded() };
+        assert!(matches!(reattached.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
+        let _other = arena.alloc_object(KObject::Number(8.0));
+        assert!(reattached.lookup("k").is_some());
+    }
 }

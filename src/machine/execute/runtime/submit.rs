@@ -103,7 +103,13 @@ impl<'run> KoanRuntime<'run> {
             .expect("a slot step installs active_node_scope before the body submits");
         let chain = self.sched.ambient_or_detached_chain();
         match node_scope {
-            NodeScope::Anchored(scope) => self.submit_dispatch(expr, scope, node_scope, chain),
+            NodeScope::Anchored(ptr) => {
+                // SAFETY: the `Anchored` pointer was erased from a genuinely run-lived scope
+                // (`resolve_node_scope`); reattach with a borrow bounded by the local `ptr`, used
+                // only for the transient `submit_dispatch` call below.
+                let scope: &Scope<'_> = unsafe { ptr.reattach_bounded() };
+                self.submit_dispatch(expr, scope, node_scope, chain)
+            }
             NodeScope::Yoked => self.dispatch_in_active_frame(expr, chain),
         }
     }

@@ -21,7 +21,7 @@ use crate::machine::model::Carried;
 use crate::machine::KError;
 use crate::machine::NodeId;
 
-use super::super::nodes::{CallFrame, Node, NodeScope, NodeWork};
+use super::super::nodes::{CallFrame, Node, NodePayload, NodeScope, NodeWork};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -164,13 +164,15 @@ impl<'run> NodeStore<'run> {
         // co-located `cart` each step — no persisted `&'run` to dangle across a TCO reset.
         self.slots[id] = SlotState::PreRun(Node {
             work,
-            scope: NodeScope::Yoked,
+            payload: NodePayload {
+                scope: NodeScope::Yoked,
+                chain,
+            },
             frame: CallFrame {
                 cart,
                 reserve,
                 contract,
             },
-            chain,
         });
     }
 
@@ -340,7 +342,7 @@ impl<'run> NodeStore<'run> {
     #[cfg(test)]
     pub(super) fn chain_of(&self, id: NodeId) -> Option<Rc<LexicalFrame>> {
         match self.slots.get(id) {
-            Some(SlotState::PreRun(node)) => Some(node.chain.clone()),
+            Some(SlotState::PreRun(node)) => Some(node.payload.chain.clone()),
             _ => None,
         }
     }

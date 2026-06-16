@@ -3,9 +3,12 @@
 <!-- slate-fingerprint
 src/machine/core/arena.rs: 12
 src/machine/core/kfunction/body.rs: 3
-src/machine/core/scope_ptr.rs: 6
+src/machine/core/scope_ptr.rs: 7
 src/machine/core/storage_frame.rs: 4
+src/machine/execute/nodes.rs: 1
 src/machine/execute/outcome.rs: 5
+src/machine/execute/runtime/submit.rs: 1
+src/machine/execute/scheduler.rs: 2
 src/machine/execute/scheduler/execute.rs: 1
 src/machine/model/values/module.rs: 1
 -->
@@ -39,7 +42,7 @@ unsafe and fingerprint-drift checks still fire.
 
 ## The slate
 
-23 tests, grouped by the unsafe site each pins down. Names below are the exact
+24 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallArena` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -171,6 +174,28 @@ constraint-free constructor, sound because the free content `'a` is reachable on
 `&'p`-bounded re-hand. `get` is exercised by every `Scope::outer()` / `ancestors()` walk, so the
 scope-walking shapes already in the slate (and `scope_bounded_reanchors_within_witness_borrow`,
 which pins the line-for-line equivalent) cover it; no separate minimal test is added.
+
+**`NodeScope::Anchored` lifetime fabrication** ([src/machine/execute/nodes.rs](../src/machine/execute/nodes.rs))
+— a genuinely run-lived scope evicted off a lifetime-free scheduler node (`NodeScope::Anchored`) is
+stored as a `ScopePtr<'static>` through the brand-dropping `ScopePtr::erase_static` (the same raw-ptr
+cast as `erase`, in [src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs)) and re-attached
+at the read boundary through the `unsafe` `ScopePtr::reattach_bounded` — a borrow bounded by the
+reader, a free content lifetime, sound because the pointee lives for all of `'run`. This is the second
+`'static`-storing scope carrier (alongside `CallArena`). This test pins the erase → reattach
+round-trip directly, plus a sibling-pointer arena mutation while the re-attached scope is live.
+
+- `node_scope_anchored_erase_reattach_roundtrip`
+
+**`NodeScope::Anchored` re-attach — scheduler read sites** ([src/machine/execute/scheduler.rs](../src/machine/execute/scheduler.rs))
+— the `unsafe { ptr.reattach_bounded() }` calls in `Scheduler::current_scope_opt` /
+`PostStep::step_scope` materialize the executing slot's scope; they run the transmute defined in the
+group above and carry none of their own, so `node_scope_anchored_erase_reattach_roundtrip` — and
+end-to-end every scheduler-driving slate test — pins them. No separate minimal test.
+
+**`NodeScope::Anchored` re-attach — own-scope re-dispatch** ([src/machine/execute/runtime/submit.rs](../src/machine/execute/runtime/submit.rs))
+— the `unsafe { ptr.reattach_bounded() }` in `KoanRuntime::dispatch_in_own_scope` re-dispatches
+against an `Anchored` slot's own scope, running the same transmute with none of its own; pinned by
+`node_scope_anchored_erase_reattach_roundtrip`. No separate minimal test.
 
 **`ErasedContract` re-attach** ([src/machine/core/kfunction/body.rs](../src/machine/core/kfunction/body.rs))
 — the contract-lifetime erasure that mirrors `ScopePtr` for `ReturnContract`: `erase` forgets the

@@ -1,8 +1,9 @@
 use std::rc::Rc;
 
+use crate::machine::core::ScopePtr;
 use crate::machine::{LexicalFrame, NodeId, Scope};
 
-use super::super::nodes::{work_park_producers, CallFrame, Node, NodeScope, NodeWork};
+use super::super::nodes::{work_park_producers, CallFrame, Node, NodePayload, NodeScope, NodeWork};
 #[cfg(test)]
 use super::super::runtime::KoanRuntime;
 #[cfg(test)]
@@ -88,7 +89,7 @@ impl<'run> Scheduler<'run> {
     pub(in crate::machine::execute) fn resolve_node_scope(
         &self,
         scope: &'run Scope<'run>,
-    ) -> NodeScope<'run> {
+    ) -> NodeScope {
         match &self.active_frame {
             Some(f)
                 if std::ptr::eq(
@@ -98,7 +99,9 @@ impl<'run> Scheduler<'run> {
             {
                 NodeScope::Yoked
             }
-            _ => NodeScope::Anchored(scope),
+            // Erase the genuinely run-lived borrow to a lifetime-free pointer; it reattaches
+            // (`reattach_bounded`) at the read boundary, sound because the scope lives for `'run`.
+            _ => NodeScope::Anchored(ScopePtr::erase_static(scope)),
         }
     }
 
@@ -128,7 +131,7 @@ impl<'run> Scheduler<'run> {
     pub(in crate::machine::execute) fn submit_node(
         &mut self,
         work: NodeWork<'run>,
-        node_scope: NodeScope<'run>,
+        node_scope: NodeScope,
         explicit_chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
         // A binder-shaped Dispatch arrives with its `pre_subs` already populated and its
@@ -162,13 +165,15 @@ impl<'run> Scheduler<'run> {
         let no_park = work_park_producers(&work).is_empty();
         let id = self.store.alloc_slot(Node {
             work,
-            scope: node_scope,
+            payload: NodePayload {
+                scope: node_scope,
+                chain,
+            },
             frame: CallFrame {
                 cart,
                 reserve: None,
                 contract: None,
             },
-            chain,
         });
         self.deps.install_for_slot(id, owned_edges, &pending_owned);
         for p in &pending_park {

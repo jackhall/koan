@@ -105,7 +105,7 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         expr: KExpression<'run>,
         scope: &'step Scope<'step>,
-        node_scope: NodeScope<'run>,
+        node_scope: NodeScope,
         explicit_chain: Option<std::rc::Rc<LexicalFrame>>,
     ) -> NodeId {
         // Resolve the chain once so the recursive pre-subs inherit the parent's lexical chain (and

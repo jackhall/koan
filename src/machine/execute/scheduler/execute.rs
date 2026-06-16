@@ -5,7 +5,7 @@ use crate::machine::core::{assemble_body_chain, ScopeId};
 use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 
-use super::super::nodes::{CallFrame, Node, NodeStep, NodeWork};
+use super::super::nodes::{CallFrame, Node, NodePayload, NodeStep, NodeWork};
 use super::super::runtime::KoanRuntime;
 use super::Scheduler;
 use crate::machine::model::Carried;
@@ -21,14 +21,14 @@ impl<'run> KoanRuntime<'run> {
             // The step reads its scope on demand (`current_scope`), and the post-step uses below
             // re-acquire it per use, so nothing holds a scope borrow across the step's `&mut self`
             // work or the in-step TCO frame reset.
-            let node_scope = node.scope;
+            let node_scope = node.payload.scope;
             let work = node.work;
             let CallFrame {
                 cart,
                 reserve,
                 contract: prev_contract,
             } = node.frame;
-            let prev_chain_carrier = node.chain;
+            let prev_chain_carrier = node.payload.chain;
             let guard =
                 self.sched
                     .enter_slot_step(cart, reserve, prev_chain_carrier.clone(), node_scope);
@@ -134,13 +134,15 @@ impl<'run> KoanRuntime<'run> {
                                 id,
                                 Node {
                                     work: new_work,
-                                    scope: node_scope,
+                                    payload: NodePayload {
+                                        scope: node_scope,
+                                        chain: new_chain,
+                                    },
                                     frame: CallFrame {
                                         cart: prev_frame,
                                         reserve: post_step_reserve,
                                         contract: next_contract,
                                     },
-                                    chain: new_chain,
                                 },
                             );
                         }
