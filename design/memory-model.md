@@ -245,11 +245,6 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
 
 ## Open work
 
-- **Scheduler lifts node outputs**
-  ([roadmap/scheduler-lifts-node-outputs.md](../roadmap/refactor/scheduler-lifts-node-outputs.md)).
-  Lift currently re-homes a value typed `'run` into the consumer's arena. Binding a node's output
-  to its own per-call frame lifetime makes the lift a genuine per-node→consumer promotion and the
-  scheduler's own step, with the `KObject`-aware relocation behind a workload hook.
 - **Workload-independent DAG runtime**
   ([roadmap/workload-independent-dag-runtime.md](../roadmap/refactor/workload-independent-dag-runtime.md)).
   Move `CallArena` into the scheduler as the per-node memory manager and store node scopes as

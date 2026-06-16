@@ -77,11 +77,14 @@ them. The three pieces:
   scheduler internal rename (`active_chain` → ..., `DepGraph` split) is a
   single-file change inside `scheduler/`.
 - **The effect** —
-  [`Outcome<'run>`](../src/machine/execute/outcome.rs) is the one currency
+  [`Outcome<'run, 's>`](../src/machine/execute/outcome.rs) is the one currency
   every producer and finish returns (the dispatch-side peer of the builtin
   [`Action`](../src/machine/core/kfunction/action.rs)). It is AST-free — no
-  variant names a `KFunction` or a `KExpression`. Four variants: `Done` (a
-  value to lift, or an error), `Continue` (replace this slot's work and frame,
+  variant names a `KFunction` or a `KExpression`. Its second lifetime `'s` is the
+  per-step frame lifetime the `Done` value is born at; the consumer pull-lifts it
+  across each dep edge ([per-call-arena-protocol.md § Consumer-pull node-output lift](per-call-arena-protocol.md#consumer-pull-node-output-lift)).
+  Four variants: `Done` (the node's terminal value at `'s`, or an
+  error), `Continue` (replace this slot's work and frame,
   re-run, no park), `ParkThenContinue` (park on deps, then run a
   [`Continuation`](../src/machine/execute/outcome.rs) that yields another
   outcome), and `Forward` (the slot's result *is* a named producer's — the
@@ -1302,10 +1305,13 @@ side. `MATCH <v> -> :T WITH (...)` and `TRY (<e>) -> :T WITH (...)` carry
 a mandatory declared return type `T` that every arm agrees on. The
 selected arm tail-replaces carrying a
 [`ReturnContract::Arm`](../src/machine/core/kfunction/body.rs) on the
-slot, and when its value lifts the scheduler's Done arm checks it against
+slot, and at the slot's Done step the scheduler's contract layer checks it against
 `T` — [`TypeMismatch`](../src/machine/core/kerror.rs) with a `<return>`
 arg on a miss — then re-tags it to `T` so a downstream consumer dispatches
-on the declared shape regardless of which arm ran. Enforcement is runtime
+on the declared shape regardless of which arm ran. (The re-tag is the one
+contract-driven relocation that survives at Done; the bare per-consumer lift
+is a separate step — see
+[per-call-arena-protocol.md § Consumer-pull node-output lift](per-call-arena-protocol.md#consumer-pull-node-output-lift).) Enforcement is runtime
 and per-arm (the arm that runs is the arm that's checked), the same
 discipline FN return types follow — see
 [typing/ktype.md § Function signatures](typing/ktype.md#function-signatures).
@@ -1348,11 +1354,12 @@ for test fixtures and builtin-registration paths.
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
 - **Workload-independent DAG runtime**
-  ([roadmap/workload-independent-dag-runtime.md](../roadmap/refactor/workload-independent-dag-runtime.md),
-  building on [roadmap/scheduler-lifts-node-outputs.md](../roadmap/refactor/scheduler-lifts-node-outputs.md)).
-  The scheduler still stores Koan-semantic state (a node's `scope` / `chain`) and
-  `'run`-capturing continuations, so `'run` threads through every `scheduler/` file. Shrinking the
-  continuation output to a per-node lifetime (lift becomes the scheduler's step) and then making the
+  ([roadmap/workload-independent-dag-runtime.md](../roadmap/refactor/workload-independent-dag-runtime.md)).
+  The continuation's *output* lifetime is already a per-step `'s` — lift is the scheduler's own
+  consumer-pull delivery step behind the `NodeLift` hook (see
+  [per-call-arena-protocol.md § Consumer-pull node-output lift](per-call-arena-protocol.md#consumer-pull-node-output-lift)).
+  But the scheduler still stores Koan-semantic state (a node's `scope` / `chain`) and
+  `'run`-capturing continuations, so `'run` still threads through every `scheduler/` file. Making the
   scheduler generic over two lifetime-erased workload types — a node-stored payload and an
   inter-node value, re-anchored to the node frame lifetime at run / read — evicts those concerns,
   leaving a generic per-node-memory DAG runtime with `'run` confined to `KoanRuntime`.

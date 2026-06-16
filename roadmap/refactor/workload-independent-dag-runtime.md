@@ -9,8 +9,9 @@ ways that keep `'run` smeared across every `scheduler/` file. First, the boxed
 per-node continuation `NodeCont<'a>`
 ([`src/machine/execute/outcome.rs`](../../src/machine/execute/outcome.rs))
 *captures* run-lived data (function AST, captured scope), so the `+ 'a` bound on the
-box pins `'run` even once its output lifetime is shrunk by
-[Scheduler lifts node outputs](scheduler-lifts-node-outputs.md). Second, the
+box pins `'run` even though the continuation's *output* lifetime is already a per-step
+`'s` (the scheduler lifts each dep into the consuming frame at read —
+[per-call-arena-protocol.md § Consumer-pull node-output lift](../../design/per-call-arena-protocol.md#consumer-pull-node-output-lift)). Second, the
 scheduler stores Koan-semantic state that does not belong to a generic DAG runtime:
 each `Node` carries `scope: NodeScope<'run>` and `chain: Rc<LexicalFrame>`
 ([`src/machine/execute/nodes.rs`](../../src/machine/execute/nodes.rs)) alongside its
@@ -57,21 +58,20 @@ value/scope model.
   no workload lifetime. The per-node frame lifetime the scheduler manages is a *distinct*
   lifetime, not folded into either type parameter — a node's payload / value is
   re-anchored to it at run / read time. Lift still erases lifetimes (the inter-node value
-  is erased out of the producing frame and re-anchored on delivery — see
-  [Scheduler lifts node outputs](scheduler-lifts-node-outputs.md)).
-- *Lift hook — deferred.* The lift policy / mechanism split is owned by
-  [Scheduler lifts node outputs](scheduler-lifts-node-outputs.md); this item consumes
-  its workload hook rather than redefining it.
+  is erased out of the producing frame and re-anchored on delivery — the shipped
+  consumer-pull lift, see
+  [per-call-arena-protocol.md § Consumer-pull node-output lift](../../design/per-call-arena-protocol.md#consumer-pull-node-output-lift)).
+- *Lift hook — decided.* The lift policy / mechanism split is the shipped `NodeLift`
+  workload hook ([`src/machine/execute/lift.rs`](../../src/machine/execute/lift.rs)); this
+  item consumes it generically rather than redefining it.
 
 ## Dependencies
 
-This is the second half: [Scheduler lifts node outputs](scheduler-lifts-node-outputs.md)
-shrinks the continuation's *output* lifetime; this item erases its *captures* and
-evicts the remaining Koan-semantic state so `'run` collapses to the run frame
-`KoanRuntime` holds.
+This is the second half: the continuation's *output* lifetime has already been
+shrunk to a per-step `'s` behind the shipped `NodeLift` hook (consumer-pull delivery);
+this item erases its *captures* and evicts the remaining Koan-semantic state so `'run`
+collapses to the run frame `KoanRuntime` holds.
 
-**Requires:**
-- [Scheduler lifts node outputs](scheduler-lifts-node-outputs.md) — the output must
-  be per-node before the captures can be erased and `'run` confined.
+**Requires:** none — the output-lifetime/lift-hook prerequisite has shipped.
 
 **Unblocks:** none tracked yet.

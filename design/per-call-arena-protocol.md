@@ -72,6 +72,54 @@ short-circuit: when no descendant needs anchoring, the existing
 Koan's collection-immutability contract is what makes the structural
 sharing safe.
 
+## Consumer-pull node-output lift
+
+A node continuation produces its value at the node's own per-call frame
+lifetime `'s` ([`Outcome<'run, 's>`](../src/machine/execute/outcome.rs)),
+not `'run`: the value is born in the producer's frame (a builtin allocates
+it there) or arrives as a dep already lifted into that frame. The scheduler
+relocates it across each dep edge — never the producer.
+
+- **Producer Done keeps the terminal in its own frame.** The producer does
+  not lift at Done. Its [`SlotState::Done`](../src/machine/execute/scheduler.rs)
+  co-stores the terminal with the backing `Rc<CallArena>`, pinning the
+  producer frame until the slot is freed — frame death moves from Done to
+  free. The stored `'run` view is re-exposed against that held `Rc` (the same
+  held-Rc seam as [§ Seed-side re-anchor](#seed-side-re-anchor)); honest `'s`
+  typing rides the continuation in/out and the pull-lift destination, not
+  storage. The single workload `NodeLift` hook
+  ([`src/machine/execute/lift.rs`](../src/machine/execute/lift.rs)) owns the
+  `KObject`-invariant copy; the scheduler loop names no `KObject` / `KType`.
+- **Consumers pull-lift at read.** When a consumer runs
+  ([`run_wait`](../src/machine/execute/scheduler/finish.rs)) it lifts each dep
+  from the producer's frame into its own call arena, promoting the producer's
+  output to the consuming node's lifetime. A value read by N consumers is
+  lifted N times — once per consumer — and each copy dies with its consumer's
+  frame. One mechanism serves parked-then-woken, late-parking, and
+  bare-name-forward consumers alike.
+- **Roots drain to the run arena.** A consumer-less terminal — a top-level
+  statement result — has no consumer to pull it, so
+  [`run_program`](../src/machine/execute/runtime/interpret.rs) lifts each into
+  the run arena at the drain boundary and re-homes the slot, releasing the
+  pinned producer frame. The `run_one` test helper reads roots through the
+  frame pin instead, so it is not a drain boundary.
+- **Return-contract enforcement is a separate layer**, run once at producer
+  Done before the pin: it reattaches the erased contract against the producer
+  cart, runs the declared-return check, and (only on a coarsening re-tag, e.g.
+  `List<Number>` through `:(LIST OF Any)`) re-allocates the stamped value into
+  the contract's captured-scope arena so it outlives the reused/freed producer
+  frame. A non-coarsened terminal stays in the producer frame. The bare
+  `NodeLift` hook is thereby reusable for any delivery edge.
+
+Because `KObject` / `Carried` / `Scope` are invariant in their lifetime, none
+of these transitions can be a coercion — each cross-frame move is a genuine
+`NodeLift` copy (or the held-Rc re-exposure at storage). Five audited
+lifetime-reattach primitives in
+[outcome.rs](../src/machine/execute/outcome.rs) bridge `'s`↔`'run` at the
+run_wait / apply / combinator boundaries (`shorten_outcome`, `deps_at_step`,
+`deps_for_builtin`, `obj_for_builtin`, `pin_carried_to_run`); they are pinned
+in the Miri slate by `tail_call_stamps_result_against_first_callers_return_contract`.
+
 ### Fast path
 
 If a dying arena allocated zero `KFunction`s (`functions_is_empty`),
@@ -394,9 +442,11 @@ mechanics:
   tail calls (`AA → BB → CC → DD → PRINT`) bumps the scheduler's
   tail-reuse counter and collapses to one slot.
 - `repeated_user_fn_calls_do_not_grow_run_root_per_call` asserts 50
-  ECHO calls grow the run-root arena by exactly 50 — one lifted
-  return value per call, with all per-call scaffolding freed at call
-  return.
+  ECHO calls grow the run-root arena by exactly 50 — one per-call
+  argument value (`Number(7)`) per call, with all per-call scaffolding
+  freed at call return. Intermediate node outputs no longer land in
+  run-root: a consumed value dies with its consumer's frame, and only a
+  consumer-less root drains to the run arena.
 - The audit slate runs cycle-free across every unsafe site that
   routes through the protocol under `MIRIFLAGS=-Zmiri-tree-borrows`
   with zero UB and zero process-exit leaks. The canonical slate list
@@ -404,12 +454,6 @@ mechanics:
 
 ## Open work
 
-- **Scheduler lifts node outputs**
-  ([roadmap/scheduler-lifts-node-outputs.md](../roadmap/refactor/scheduler-lifts-node-outputs.md)).
-  Bind a node continuation's output to its own per-call frame lifetime and make the
-  Done-boundary lift the scheduler's own step (policy in the scheduler, KObject-aware
-  relocation behind a workload hook), so the value is promoted per-node→consumer rather
-  than re-homed within a uniform `'run`.
 - **Workload-independent DAG runtime**
   ([roadmap/workload-independent-dag-runtime.md](../roadmap/refactor/workload-independent-dag-runtime.md)).
   Make the scheduler generic over two lifetime-erased workload types — a node-stored payload

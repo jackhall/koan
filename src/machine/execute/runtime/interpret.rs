@@ -54,9 +54,10 @@ impl<'run> KoanRuntime<'run> {
         let top_level = self.enter_block(root.id, exprs, root);
         self.execute()?;
         // Drain boundary: each top-level statement is a consumer-less root, so its terminal stays
-        // pinned in the producer's per-call frame (C2 — the producer does not lift at Done). Lift
-        // each into the run arena here so the root lives run-long and its per-call frame is
-        // released. A frameless / run-arena or errored terminal needs no lift.
+        // pinned in the producer's per-call frame (a producer keeps its terminal in-frame and does
+        // not lift at Done; each consumer pull-lifts instead). Lift each into the run arena here so
+        // the root lives run-long and its per-call frame is released. A frameless / run-arena or
+        // errored terminal needs no lift.
         for &id in &top_level {
             if let Ok((value, Some(frame))) = self.sched.read_result_with_frame(id) {
                 let lifted = self.lift(value, &frame, root.arena);

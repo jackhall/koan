@@ -134,7 +134,8 @@ impl<'run, 's> SchedulerView<'run, 's> {
             // pre-existing producer as an `Existing` dep (a ready one is a late parker the pull-lift
             // serves), a freshly-staged sub is a fresh dep the harness submits. No value is read and
             // spliced inline at decide time — that would embed a producer's frame-local terminal,
-            // which the producer's frame no longer outlives once it stops lifting at Done.
+            // which its per-call frame does not keep alive past the frame's own free (a producer
+            // holds its terminal in-frame and never lifts at Done), so the reference would dangle.
             let dep = match pending {
                 PendingSub::Reuse(id) => DepRequest::Existing(id),
                 PendingSub::Dispatch(sub_expr) => DepRequest::Dispatch {
