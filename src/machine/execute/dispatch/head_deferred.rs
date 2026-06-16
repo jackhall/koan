@@ -35,7 +35,9 @@ use super::{park_on_deps, DepRequest, Outcome};
 
 /// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly, then
 /// applied to `parts[1..]` once it resolves.
-pub(in crate::machine::execute) fn initial_expr<'run>(expr: KExpression<'run>) -> Outcome<'run> {
+pub(in crate::machine::execute) fn initial_expr<'run>(
+    expr: KExpression<'run>,
+) -> Outcome<'run, 'run> {
     let head = match &expr.parts[0].value {
         ExpressionPart::Expression(boxed) => (**boxed).clone(),
         _ => unreachable!("HeadDeferred shape implies nested Expression head"),
@@ -46,7 +48,9 @@ pub(in crate::machine::execute) fn initial_expr<'run>(expr: KExpression<'run>) -
 /// `TypeHeadDeferred` entry: head is a `:(...)` sigil. Wrap it as a one-part
 /// `KExpression` so the type marker survives the sub-dispatch (mirrors
 /// `stage_all_eager_parts`).
-pub(in crate::machine::execute) fn initial_type<'run>(expr: KExpression<'run>) -> Outcome<'run> {
+pub(in crate::machine::execute) fn initial_type<'run>(
+    expr: KExpression<'run>,
+) -> Outcome<'run, 'run> {
     let head = match &expr.parts[0].value {
         ExpressionPart::SigiledTypeExpr(boxed) => KExpression::new(vec![Spanned::bare(
             ExpressionPart::SigiledTypeExpr(boxed.clone()),
@@ -66,7 +70,7 @@ fn park_on_head<'run>(
     expr: KExpression<'run>,
     head: KExpression<'run>,
     type_only: bool,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     let finish: DepFinish<'run> = Box::new(move |ctx, results| {
         let callable = match classify_head(results[0], type_only) {
             Ok(c) => c,
@@ -83,7 +87,6 @@ fn park_on_head<'run>(
         }],
         None,
         finish,
-        Vec::new(),
     )
 }
 

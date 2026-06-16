@@ -221,6 +221,27 @@ impl<'run> Scheduler<'run> {
         self.store.read(self.resolve_alias(id))
     }
 
+    /// Read a terminal with the producer frame `Rc` backing it, for the consumer-pull lift. Follows
+    /// a bare-name-forward alias to the real producer (which holds the value in its own frame).
+    pub(in crate::machine::execute) fn read_result_with_frame(
+        &self,
+        id: NodeId,
+    ) -> Result<(Carried<'run>, Option<Rc<CallArena>>), &KError> {
+        self.store.read_result_with_frame(self.resolve_alias(id))
+    }
+
+    /// Re-home a finalized terminal (already lifted into a surviving arena), dropping the pinned
+    /// producer frame. The drain boundary uses this for consumer-less roots. Resolves a bare-name
+    /// alias so the real producer's frame — not the alias slot — is released.
+    pub(in crate::machine::execute) fn rehome_terminal(
+        &mut self,
+        id: NodeId,
+        output: Result<Carried<'run>, KError>,
+    ) {
+        let target = self.resolve_alias(id);
+        self.store.rehome_terminal(target, output);
+    }
+
     // ----- Narrow dispatcher-facing surface (pub(in execute)) -----
     //
     // These methods are the dispatcher's named contract with the scheduler:

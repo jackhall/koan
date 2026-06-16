@@ -70,7 +70,6 @@ enum SlotState<'run> {
     /// run-arena value). Holding the frame `Rc` here pins the producer's per-call arena until the
     /// slot is freed, so frame death moves from Done to free. The pin is established now and read by
     /// the consumer-pull lift, which copies the terminal out of this frame into the consumer arena.
-    #[allow(dead_code)] // read by the consumer-pull lift (run_wait); held to pin the frame meanwhile
     Done(Result<Carried<'run>, KError>, Option<Rc<CallArena>>),
     /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
     /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
@@ -175,6 +174,17 @@ impl<'run> NodeStore<'run> {
         });
     }
 
+    /// Replace a finalized terminal in place, dropping any pinned producer frame. The drain
+    /// boundary uses this to re-home a consumer-less root into the run arena (`output` already
+    /// lifted there), releasing the per-call frame the producer kept it in.
+    pub(super) fn rehome_terminal(&mut self, id: NodeId, output: Result<Carried<'run>, KError>) {
+        debug_assert!(
+            matches!(self.slots[id], SlotState::Done(..)),
+            "rehome_terminal expects a finalized slot",
+        );
+        self.slots[id] = SlotState::Done(output, None);
+    }
+
     /// Callers must pair this with the dep-graph notify-walk so consumers
     /// wake atomically with the write. `frame` is the producer's per-call frame, pinned in the
     /// slot until it is freed (`None` for a frameless / run-arena terminal).
@@ -215,6 +225,20 @@ impl<'run> NodeStore<'run> {
     pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
         match &self.slots[id] {
             &SlotState::Done(Ok(c), _) => Ok(c),
+            SlotState::Done(Err(e), _) => Err(e),
+            _ => panic!("result must be ready by the time it's read"),
+        }
+    }
+
+    /// Read a finalized terminal together with the producer frame `Rc` that backs it (`None` for a
+    /// frameless / run-arena value, which is already in a surviving arena). The consumer-pull lift
+    /// copies the value out of that frame into the consumer's arena before the producer slot frees.
+    pub(super) fn read_result_with_frame(
+        &self,
+        id: NodeId,
+    ) -> Result<(Carried<'run>, Option<Rc<CallArena>>), &KError> {
+        match &self.slots[id] {
+            SlotState::Done(Ok(c), frame) => Ok((*c, frame.clone())),
             SlotState::Done(Err(e), _) => Err(e),
             _ => panic!("result must be ready by the time it's read"),
         }

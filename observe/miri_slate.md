@@ -4,6 +4,7 @@
 src/machine/core/arena.rs: 16
 src/machine/core/kfunction/body.rs: 3
 src/machine/core/scope_ptr.rs: 6
+src/machine/execute/outcome.rs: 5
 src/machine/execute/scheduler/execute.rs: 1
 src/machine/model/values/module.rs: 1
 -->
@@ -37,7 +38,7 @@ unsafe and fingerprint-drift checks still fire.
 
 ## The slate
 
-22 tests, grouped by the unsafe site each pins down. Names below are the exact
+23 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallArena` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -209,6 +210,18 @@ point (and transitively by user-fn TCO; that path is covered by the MATCH-on-
 - `lift_park_minimal_program_for_miri`
 - `replay_park_minimal_program_for_miri`
 
+**`Outcome` step-lifetime reattach** ([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs)) —
+the lifetime-only transmutes bridging a node continuation's per-step `'s` output against the
+run-lived AST and the frame-pinned slot store: `shorten_outcome` (a decide's `'run` outcome down to
+`'s`), `deps_at_step` (consumer-pull dep terminals down to `'s`), `deps_for_builtin` /
+`obj_for_builtin` (deps back up to `'run` across the concrete builtin boundary), and
+`pin_carried_to_run` (a Done terminal up to `'run` for the frame-pinned store). All are exercised by
+every program; this test pins the hardest shape directly — a tail-chain return-type **coarsening**,
+where the re-tagged terminal must be homed in the contract's scope to outlive the reused producer
+frame, then re-read after the run drains the root into the run arena.
+
+- `tail_call_stamps_result_against_first_callers_return_contract`
+
 ## Adding tests to the slate
 
 Add a test to the slate when a new unsafe site lands — a transmute, raw-pointer
@@ -229,9 +242,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-16: 577s — 23 tests, 0 leaks, 0 UB
 - 2026-06-14: 540s — 22 tests, 0 leaks, 0 UB
 - 2026-06-14: 817s — 22 tests, 0 leaks, 0 UB
 - 2026-06-13: 538s — 22 tests, 0 leaks, 0 UB
 - 2026-06-13: 538s — 22 tests, 0 leaks, 0 UB
-- 2026-06-13: 1015s — 22 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

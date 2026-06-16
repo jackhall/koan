@@ -2,7 +2,9 @@ use crate::machine::model::Carried;
 use crate::machine::{KError, NodeId};
 
 use super::super::dispatch::SchedulerView;
+use super::super::lift::NodeLift;
 use super::super::nodes::NodeStep;
+use super::super::outcome::deps_at_step;
 use super::super::runtime::KoanRuntime;
 use super::super::NodeCont;
 use super::Scheduler;
@@ -36,12 +38,26 @@ impl<'run> KoanRuntime<'run> {
         cont: NodeCont<'run>,
         idx: usize,
     ) -> NodeStep<'run> {
+        // Consumer-pull: lift each dep's terminal out of its producer frame into this consumer's
+        // arena, so the value dies with the consumer and the producer keeps no surviving copy that
+        // would outlive its own dying frame. A frameless / run-arena terminal already survives and
+        // is forwarded as-is.
+        let dest = self.sched.current_scope().arena;
         let results: Vec<Result<Carried<'run>, KError>> = deps
             .iter()
-            .map(|d| self.sched.read_result(*d).map_err(|e| e.clone()))
+            .map(|d| match self.sched.read_result_with_frame(*d) {
+                Ok((value, Some(frame))) => Ok(self.lift(value, &frame, dest)),
+                Ok((value, None)) => Ok(value),
+                Err(e) => Err(e.clone()),
+            })
             .collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
-        let outcome = cont(&SchedulerView::new(&self.sched), &results, idx);
+        // The pull-lifted values die with this consumer's frame; deliver them at that `'s`.
+        let outcome = cont(
+            &SchedulerView::new(&self.sched),
+            deps_at_step(&results),
+            idx,
+        );
         self.sched.reclaim_deps(idx, owned_indices);
         self.apply_outcome(outcome, idx)
     }

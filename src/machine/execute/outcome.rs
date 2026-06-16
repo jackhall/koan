@@ -32,9 +32,12 @@ use super::nodes::NodeWork;
 // frame/contract/chain tail-call payload), mirroring `NodeStep::Replace`; boxing the hot
 // continuation path to balance variants is the wrong trade.
 #[allow(clippy::large_enum_variant)]
-pub(in crate::machine::execute) enum Outcome<'run> {
-    /// The node dies with a value (to lift out of the dying frame) or an error.
-    Done(Result<Carried<'run>, KError>),
+pub(in crate::machine::execute) enum Outcome<'run, 's> {
+    /// The node dies with a value or an error. The value is bound to the per-step frame lifetime
+    /// `'s`, not `'run`: it is born in the node's own per-call frame (a builtin allocates it there,
+    /// a forwarded dep arrives already lifted into it) and the scheduler relocates it across each
+    /// dep edge — the consumer-pull lift — into the consuming node's frame. `'run: 's`.
+    Done(Result<Carried<'s>, KError>),
     /// The node lives: install `work` and run again immediately (no park). `frame` rotates the
     /// per-call cart (`Inherit` keeps it; `ReuseReserve`/`FreshChild` install a new one — the
     /// harness resolves the placement to a cart); `contract` / `block_entry` / `body_index` carry
@@ -42,29 +45,25 @@ pub(in crate::machine::execute) enum Outcome<'run> {
     /// carried here: a producer with leading statements parks on them as owned deps (a
     /// [`DepRequest::BodyBlock`]) and emits this `Continue` only from the resolving finish, so the
     /// leading siblings cascade-free before the tail-replace — restoring frame uniqueness for TCO
-    /// reuse. `body_index` already accounts for their count. `free` reclaims producers the decide
-    /// phase consumed inline (a ready eager-subs `Reuse` spliced into the `work`'s expression),
-    /// drained by the harness before the placement resolves and the re-decide runs.
+    /// reuse. `body_index` already accounts for their count.
     Continue {
         work: NodeWork<'run>,
         frame: FramePlacement<'run>,
         contract: Option<ReturnContract<'run>>,
         block_entry: Option<ScopeId>,
         body_index: usize,
-        free: Vec<usize>,
     },
     /// Park the slot on `deps` and run `cont` when they resolve. `deps` layout is
     /// `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix length
     /// (`Notify` edges, kept alive), the suffix installs as `Owned` (cascade-freed). For a
     /// [`Continuation::Resume`] every dep parks (notify-only).
     /// `dep_error_frame` is attached to a dep-error short-circuit (dep-finish-style) before the
-    /// finish runs; `free` reclaims producers the decide phase consumed inline.
+    /// finish runs.
     ParkThenContinue {
         deps: Vec<DepRequest<'run>>,
         park_count: usize,
         cont: Continuation<'run>,
         dep_error_frame: Option<TraceFrame>,
-        free: Vec<usize>,
     },
     /// The slot's result *is* `producer`'s result (a bare name resolving to a binding). Rather than
     /// installing a forwarding node, the harness splices the slot out: if `producer` is ready the
@@ -116,7 +115,7 @@ pub(in crate::machine::execute) enum Continuation<'run> {
 /// decides against a read-only [`SchedulerView`] and returns an [`Outcome`] the harness applies —
 /// it issues no graph write of its own.
 pub(in crate::machine::execute) type DepFinish<'a> =
-    Box<dyn for<'s> FnOnce(&SchedulerView<'a, 's>, &[Carried<'a>]) -> Outcome<'a> + 'a>;
+    Box<dyn for<'v> FnOnce(&SchedulerView<'a, 'v>, &[Carried<'a>]) -> Outcome<'a, 'a> + 'a>;
 
 /// The error-frame label a dep-finish attaches when a dependency errors — an action-harness combine
 /// (a fanned-out FN arg / arm body) or a literal builder (a list element / dict value). A dispatch
@@ -129,7 +128,8 @@ pub(in crate::machine::execute) fn dep_error_frame() -> TraceFrame {
 /// Host-side closure for a catch [`NodeWork`](super::nodes::NodeWork). Receives the watched slot's terminal as a
 /// `Result` so the closure can branch on either outcome, plus a read-only [`SchedulerView`].
 pub(in crate::machine::execute) type CatchFinish<'a> = Box<
-    dyn for<'s> FnOnce(&SchedulerView<'a, 's>, Result<&'a KObject<'a>, KError>) -> Outcome<'a> + 'a,
+    dyn for<'v> FnOnce(&SchedulerView<'a, 'v>, Result<&'a KObject<'a>, KError>) -> Outcome<'a, 'a>
+        + 'a,
 >;
 
 /// The one continuation every node runs when its deps resolve — the unified currency
@@ -139,7 +139,11 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
 /// applies. The per-family behaviors (combine short-circuit, catch recover, dispatch decide) are
 /// built into the closure by the combinators below, so the node itself never branches.
 pub(in crate::machine::execute) type NodeCont<'a> = Box<
-    dyn for<'s> FnOnce(&SchedulerView<'a, 's>, &[Result<Carried<'a>, KError>], usize) -> Outcome<'a>
+    dyn for<'v, 's> FnOnce(
+            &SchedulerView<'a, 'v>,
+            &[Result<Carried<'s>, KError>],
+            usize,
+        ) -> Outcome<'a, 's>
         + 'a,
 >;
 
@@ -151,7 +155,7 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
     finish: DepFinish<'a>,
 ) -> NodeCont<'a> {
     Box::new(move |view, results, _idx| {
-        let mut values: Vec<Carried<'a>> = Vec::with_capacity(results.len());
+        let mut values: Vec<Carried<'_>> = Vec::with_capacity(results.len());
         for r in results {
             match r {
                 Ok(c) => values.push(*c),
@@ -160,7 +164,9 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
                 }
             }
         }
-        finish(view, &values)
+        // The deps were pull-lifted into this node's frame; re-expose them at `'run` for the
+        // concrete finish, then reattach its outcome to the step lifetime `'s`.
+        shorten_outcome(finish(view, deps_for_builtin(&values)))
     })
 }
 
@@ -169,16 +175,81 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
 pub(in crate::machine::execute) fn catch_cont<'a>(finish: CatchFinish<'a>) -> NodeCont<'a> {
     Box::new(move |view, results, _idx| {
         let result = match &results[0] {
-            Ok(c) => Ok(c.object()),
+            // Re-expose the watched terminal at `'run` for the concrete finish (pull-lifted here).
+            Ok(c) => Ok(obj_for_builtin(c.object())),
             // Frameless: the recovery-site dispatch attaches its own frame.
             Err(e) => Err(propagate_dep_error(e, None)),
         };
-        finish(view, result)
+        shorten_outcome(finish(view, result))
     })
 }
 
 /// Dispatch-decide continuation: a [`ResumeFn`] takes no dep values (it reads the view and spawns /
 /// re-resolves), so its deps are park-only and the results slice is ignored.
 pub(in crate::machine::execute) fn ignore_results<'a>(resume: ResumeFn<'a>) -> NodeCont<'a> {
-    Box::new(move |view, _results, idx| resume(view, idx))
+    Box::new(move |view, _results, idx| shorten_outcome(resume(view, idx)))
+}
+
+/// Reattach a step-bound `'s` terminal up to `'run` for storage in the slot table. The value is
+/// born in the producer's per-call frame (or is genuinely `'run`-lived), and the harness pins that
+/// frame's `Rc` alongside the terminal in [`SlotState::Done`](super::scheduler) until the slot is
+/// freed, so the stored `'run` view cannot outlive its backing arena. The reattach is needed only
+/// because `Carried` is invariant; this is the held-`Rc` re-exposure seam.
+pub(in crate::machine::execute) fn pin_carried_to_run<'run>(value: Carried<'_>) -> Carried<'run> {
+    // SAFETY: lifetime-only reattach; the frame `Rc` co-stored in `SlotState::Done` heap-pins the
+    // backing arena for as long as the terminal is readable. See the doc comment.
+    unsafe { std::mem::transmute::<Carried<'_>, Carried<'run>>(value) }
+}
+
+/// Reattach the dep terminals delivered at the step lifetime `'s` up to `'run` for the duration of
+/// a synchronous builtin finish. The values were pull-lifted into the consumer's per-call frame,
+/// which is heap-pinned for the whole step, so re-exposing them at `'run` across the finish call
+/// cannot dangle; the reattach is needed only because `Carried` is invariant. The builtin action
+/// boundary ([`AwaitContinue`](crate::machine::core::kfunction::action) / `CatchCont`) is concrete
+/// in `'run`, so the deps meet it at `'run`.
+pub(in crate::machine::execute) fn deps_for_builtin<'b, 'run, 's>(
+    results: &'b [Carried<'s>],
+) -> &'b [Carried<'run>] {
+    // SAFETY: `'run: 's`; the values outlive the synchronous finish call (frame-pinned). Lifetime-
+    // only reattach of an invariant carrier — see the doc comment.
+    unsafe { std::mem::transmute::<&[Carried<'s>], &[Carried<'run>]>(results) }
+}
+
+/// Reattach the consumer's pull-lifted dep terminals down to the step lifetime `'s` for delivery to
+/// the continuation. The lift hook returns `'run`, but each value was just copied into this
+/// consumer's per-call frame and dies with it, so the honest type is `'s` (`'run: 's`); the reattach
+/// is needed only because `Carried` is invariant.
+pub(in crate::machine::execute) fn deps_at_step<'b, 'run, 's>(
+    results: &'b [Result<Carried<'run>, KError>],
+) -> &'b [Result<Carried<'s>, KError>] {
+    // SAFETY: lifetime-only reattach of an invariant carrier to a shorter lifetime it genuinely
+    // outlives (the values die with the consumer frame, i.e. at `'s`). See the doc comment.
+    unsafe {
+        std::mem::transmute::<&'b [Result<Carried<'run>, KError>], &'b [Result<Carried<'s>, KError>]>(
+            results,
+        )
+    }
+}
+
+/// The single-object dual of [`deps_for_builtin`] for a catch's watched terminal. Same soundness
+/// (frame-pinned across the synchronous finish call); reattach needed only for `KObject`'s invariance.
+pub(in crate::machine::execute) fn obj_for_builtin<'run>(obj: &KObject<'_>) -> &'run KObject<'run> {
+    // SAFETY: `'run: 's`; the watched value outlives the synchronous finish call (frame-pinned).
+    unsafe { std::mem::transmute::<&KObject<'_>, &'run KObject<'run>>(obj) }
+}
+
+/// Reattach an `Outcome`'s output lifetime from `'run` down to a per-step `'s` (`'run: 's`). A
+/// decide composes at `Outcome<'run, 'run>`; a continuation that returns a decide's outcome must
+/// hand it back at the step lifetime `'s` the continuation is parameterized over.
+///
+/// Sound because only the `Done(Carried<'s>)` arm carries an `'s`-typed payload, and that payload
+/// is genuinely `'run`-lived (born in the producer frame, which outlives the step), so viewing it
+/// at the shorter `'s` cannot dangle; the reattach is needed only because [`Outcome`] is invariant
+/// in `'s`. The other arms carry `'run` work untouched.
+pub(in crate::machine::execute) fn shorten_outcome<'run, 's>(
+    outcome: Outcome<'run, 'run>,
+) -> Outcome<'run, 's> {
+    // SAFETY: lifetime-only reattach of an invariant carrier whose `'s` payload outlives `'s`; see
+    // the doc comment. Same shape as the arena re-exposure transmutes the per-call protocol uses.
+    unsafe { std::mem::transmute::<Outcome<'run, 'run>, Outcome<'run, 's>>(outcome) }
 }

@@ -5,7 +5,6 @@ use crate::machine::core::{assemble_body_chain, ScopeId};
 use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 
-use super::super::lift::NodeLift;
 use super::super::nodes::{CallFrame, Node, NodeStep, NodeWork};
 use super::super::runtime::KoanRuntime;
 use super::Scheduler;
@@ -62,32 +61,27 @@ impl<'run> KoanRuntime<'run> {
                         (Some(c), Some(witness)) => Some(unsafe { c.reattach(witness) }),
                         _ => None,
                     };
-                    // Contract layer: check the declared return and stamp the declared type, in
-                    // place in the producer frame's own arena (`producer_arena`, where `output`
-                    // already lives). No lift — kept separate from the relocation below.
-                    let producer_arena = post.step_scope().arena;
-                    let checked =
-                        enforce_return_contract(output, frame, prev_function, producer_arena);
-                    // Lift layer: relocate the now-final producer-frame terminal into the surviving
-                    // captured-scope arena (`dest_arena`, a genuine `&'run`) via the workload hook.
-                    // A non-dying run frame (empty arena; top-level values live in the run arena)
-                    // reads as frameless and passes through untouched.
-                    let result = match (checked, frame) {
-                        (Ok(c), Some(src)) => {
-                            let dest =
-                                post.step_scope().outer().map(|o| o.arena).expect(
-                                    "per-call scope must have an outer (its captured scope)",
-                                );
-                            Ok(self.lift(c, src, dest))
-                        }
-                        (other, _) => other,
-                    };
+                    // Contract layer: check the declared return and, when the declared type coarsens
+                    // the value (e.g. `List<Number>` through `:(LIST OF Any)`), re-tag it. The
+                    // re-tagged terminal is homed in the captured (outer) scope — the contract's own
+                    // arena, which outlives the call frame — so it survives to every consumer's
+                    // pull-lift and the top-level read even when the producer frame is reused/freed.
+                    // A non-coarsened terminal is returned unchanged, staying in the producer's own
+                    // frame (pinned below); the producer does **not** lift it at Done.
+                    let contract_arena = post
+                        .step_scope()
+                        .outer()
+                        .map(|o| o.arena)
+                        .unwrap_or(post.step_scope().arena);
+                    let result =
+                        enforce_return_contract(output, frame, prev_function, contract_arena);
                     if result.is_err() {
                         post.step_scope().clear_placeholders_for_producer(id);
                     }
                     // Pin the producer's per-call frame in the slot's terminal: a dying frame is
-                    // held until the slot is freed (frame death Done->free); a frameless / run-frame
-                    // producer pins nothing.
+                    // held until the slot is freed (frame death Done->free), keeping the terminal
+                    // readable until every consumer has pulled it; a frameless / run-frame producer
+                    // pins nothing (its value already lives in the run arena).
                     self.sched.finalize(idx, result, frame.cloned());
                 }
                 NodeStep::Replace {
@@ -235,18 +229,18 @@ impl<'run> Scheduler<'run> {
     }
 }
 
-/// Enforce a `Done` step's declared return contract, in place in the producer frame, returning the
-/// terminal still bound to that frame (the relocation into the captured-scope arena is a separate
-/// step — the `lift` hook — run by the caller). A `None` frame (a frameless slot or the non-dying
-/// run frame) passes the value through untouched. A failed return-type check becomes `Err` — the
-/// caller clears placeholders and finalizes. `producer_arena` is the producer frame's own arena,
-/// where a re-tagged `Object` is re-allocated in place. Pure: the scope-derived inputs were
-/// captured by the caller while the step's scope was still ambient, so this holds no scope borrow.
+/// Enforce a `Done` step's declared return contract, returning the slot's final terminal. A `None`
+/// frame (a frameless slot or the non-dying run frame) passes the value through untouched. A failed
+/// return-type check becomes `Err` — the caller clears placeholders and finalizes. A non-coarsening
+/// check leaves the value in the producer frame; a coarsening re-tag is re-allocated into
+/// `contract_arena` (the captured/outer scope — the contract's own run-lived arena) so the re-tagged
+/// terminal outlives the reused/freed producer frame. Pure: the scope-derived inputs were captured
+/// by the caller while the step's scope was still ambient, so this holds no scope borrow.
 fn enforce_return_contract<'run>(
     output: Result<Carried<'run>, KError>,
     frame: Option<&Rc<crate::machine::core::CallArena>>,
     prev_function: Option<ReturnContract<'run>>,
-    producer_arena: &'run crate::machine::core::RuntimeArena,
+    contract_arena: &'run crate::machine::core::RuntimeArena,
 ) -> Result<Carried<'run>, KError> {
     match (output, frame) {
         (Ok(Carried::Object(v)), Some(_)) => {
@@ -254,10 +248,11 @@ fn enforce_return_contract<'run>(
             {
                 // Re-tag to the declared return type so downstream dispatch sees the contract
                 // (may coarsen, e.g. `List<Number>` through `:(LIST OF Any)` -> `List<Any>`). The
-                // re-tag is a shallow rebuild re-allocated in place in the producer frame.
+                // re-tag is a shallow rebuild homed in the contract's run-lived arena, since the
+                // producer frame it was born in may be reused or freed before consumers read it.
                 Some(declared) => {
                     let stamped = v.deep_clone().stamp_type(declared);
-                    Ok(Carried::Object(producer_arena.alloc_object(stamped)))
+                    Ok(Carried::Object(contract_arena.alloc_object(stamped)))
                 }
                 None => Ok(Carried::Object(v)),
             }

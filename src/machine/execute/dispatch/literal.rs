@@ -43,7 +43,7 @@ impl<'run> Slot<'run> {
 
 /// Allocate `obj` in the executing slot's arena and wrap it as a successful combine result — the
 /// shared tail of every aggregate-literal finish.
-fn done_object<'run>(view: &SchedulerView<'run, '_>, obj: KObject<'run>) -> Outcome<'run> {
+fn done_object<'run>(view: &SchedulerView<'run, '_>, obj: KObject<'run>) -> Outcome<'run, 'run> {
     Outcome::Done(Ok(Carried::Object(
         view.current_scope().arena.alloc_object(obj),
     )))

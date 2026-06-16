@@ -51,7 +51,7 @@ pub(in crate::machine::execute) fn apply_callable<'run>(
     ctx: &SchedulerView<'run, '_>,
     callable: ResolvedCallable<'run>,
     expr: &KExpression<'run>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     match callable {
         // A constructor branches on the projected schema before deciding what body shape it
         // admits; the newtype arm in particular takes the trailing parts directly (so
@@ -79,7 +79,7 @@ fn apply_constructor<'run>(
     ctx: &SchedulerView<'run, '_>,
     identity: &'run KType<'run>,
     expr: &KExpression<'run>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     let KType::SetRef { set, index } = identity else {
         return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
@@ -168,7 +168,7 @@ fn apply_function<'run>(
     f: &'run KFunction<'run>,
     expr: &KExpression<'run>,
     body: CallBody<'run>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     match body {
         CallBody::Named(fields) => match f.reconstruct_positional(fields) {
             Ok(rebuilt) => install_eager_subs_track(ctx, rebuilt, f),
@@ -186,7 +186,7 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
     ctx: &SchedulerView<'run, '_>,
     expr: KExpression<'run>,
     picked: &'run KFunction<'run>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     // `picked` is already committed (the head uniquely resolved to it), so bare-name
     // value slots resolve by sub-Dispatch rather than the keyword path's pre-pick
     // `bare_outcomes` lookup — their resolved carrier then reaches `accepts_part` at bind.

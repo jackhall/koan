@@ -228,7 +228,7 @@ pub(super) const POSITIONAL_ONLY: &str =
     "positional construction takes `(value)`, not a record literal `{name = value}`";
 
 /// Loud non-match for a call body whose surface shape the resolved carrier doesn't admit.
-pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> Outcome<'run> {
+pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> Outcome<'run, 'run> {
     Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
         expr: expr.summarize(),
         reason: reason.to_string(),
@@ -245,30 +245,21 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<TraceFrame>) -> KErr
     }
 }
 
-/// Shape a dep-error terminal with the `<bind>` surface frame keyed
-/// off `working_expr`.
-pub(super) fn bind_frame_err<'run>(e: &KError, working_expr: &KExpression<'run>) -> Outcome<'run> {
-    let frame = TraceFrame::from_expr("<bind>", working_expr);
-    Outcome::Done(Err(propagate_dep_error(e, Some(frame))))
-}
-
 // ---------- Outcome constructors (the dispatch-currency → Outcome mapping) ----------
 
 /// Park the slot on `deps` as a [`NodeWork`](super::nodes::NodeWork) whose
 /// `finish` runs over their resolved values (the dispatch combine — short-circuits on dep error).
-/// Every dep is owned (`park_count: 0`); `free` reclaims `Reuse` producers consumed inline.
+/// Every dep is owned (`park_count: 0`).
 pub(in crate::machine::execute) fn park_on_deps<'run>(
     deps: Vec<DepRequest<'run>>,
     dep_error_frame: Option<TraceFrame>,
     finish: DepFinish<'run>,
-    free: Vec<usize>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     Outcome::ParkThenContinue {
         deps,
         park_count: 0,
         cont: Continuation::Finish(finish),
         dep_error_frame,
-        free,
     }
 }
 
@@ -281,19 +272,18 @@ pub(in crate::machine::execute) fn park_resume<'run>(
     producers: Vec<NodeId>,
     carrier: Option<String>,
     resume: ResumeFn<'run>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     Outcome::ParkThenContinue {
         park_count: producers.len(),
         deps: producers.into_iter().map(DepRequest::Existing).collect(),
         cont: Continuation::Resume { carrier, resume },
         dep_error_frame: None,
-        free: Vec::new(),
     }
 }
 
 /// A bare-identifier slot whose name binds to `producer`: the slot's result *is* `producer`'s
 /// result, so the harness splices the slot out (no forwarding node) — see [`Outcome::Forward`].
-pub(in crate::machine::execute) fn park_lift<'run>(producer: NodeId) -> Outcome<'run> {
+pub(in crate::machine::execute) fn park_lift<'run>(producer: NodeId) -> Outcome<'run, 'run> {
     Outcome::Forward(producer)
 }
 
@@ -301,14 +291,13 @@ pub(in crate::machine::execute) fn park_lift<'run>(producer: NodeId) -> Outcome<
 /// expression to a nested one to re-classify (`(inner)`, `:(...)` unwrap).
 pub(in crate::machine::execute) fn become_dispatch<'run>(
     inner: KExpression<'run>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     Outcome::Continue {
         work: decide(inner),
         frame: FramePlacement::Inherit,
         contract: None,
         block_entry: None,
         body_index: 0,
-        free: Vec::new(),
     }
 }
 
@@ -389,7 +378,7 @@ pub(super) fn stage_all_eager_parts<'run>(
 /// the decide its park captured (a bare leaf, an evolving `working_expr`). Boxing keeps the router
 /// blind to which family it is — every `Wait` wakes through `run_wait` uniformly.
 pub(in crate::machine::execute) type ResumeFn<'run> =
-    Box<dyn for<'a> FnOnce(&SchedulerView<'run, 'a>, usize) -> Outcome<'run> + 'run>;
+    Box<dyn for<'v> FnOnce(&SchedulerView<'run, 'v>, usize) -> Outcome<'run, 'run> + 'run>;
 
 // ---------- Cross-shape driver ----------
 
@@ -428,7 +417,7 @@ fn classify_dispatch<'run>(
     expr: KExpression<'run>,
     pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     match expr.shape() {
         DispatchShape::BareTypeLeaf => {
             debug_assert!(pre_subs.is_empty());

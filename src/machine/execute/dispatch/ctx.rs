@@ -24,7 +24,7 @@ use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 
 use super::super::scheduler::Scheduler;
-use super::{bind_frame_err, park_on_deps, resolve_name_part, DepRequest, Outcome, PendingSub};
+use super::{park_on_deps, resolve_name_part, DepRequest, Outcome, PendingSub};
 
 /// Read-only dispatch view — the decide-phase context. It holds only `&Scheduler`, never `&mut`.
 /// A shape handler decides against this and *returns* a
@@ -125,33 +125,18 @@ impl<'run, 's> SchedulerView<'run, 's> {
         mut working_expr: KExpression<'run>,
         staged_subs: Vec<(usize, PendingSub<'run>)>,
         picked: Option<&'run KFunction<'run>>,
-    ) -> Outcome<'run> {
+    ) -> Outcome<'run, 'run> {
         use super::super::DepFinish;
         let mut deps: Vec<DepRequest<'run>> = Vec::with_capacity(staged_subs.len());
         let mut part_indices: Vec<usize> = Vec::with_capacity(staged_subs.len());
-        // Reuse producers consumed inline (spliced into `working_expr`); the harness reclaims
-        // them so the decide phase issues no `free` write.
-        let mut free: Vec<usize> = Vec::new();
         for (i, pending) in staged_subs {
-            // A `Reuse` is a pre-existing producer the pre-pick found: splice it inline if it has
-            // already resolved (a read of a static-over-this-step slot), else park on it as an
-            // `Existing` dep. A freshly-staged sub (`Dispatch`/`*Lit`) is never terminal in the
-            // same step (submission is enqueue-then-drain), so it is always a fresh dep the harness
-            // submits — never read back here.
+            // Every sub is delivered through the single consumer-pull path: a `Reuse` parks on its
+            // pre-existing producer as an `Existing` dep (a ready one is a late parker the pull-lift
+            // serves), a freshly-staged sub is a fresh dep the harness submits. No value is read and
+            // spliced inline at decide time — that would embed a producer's frame-local terminal,
+            // which the producer's frame no longer outlives once it stops lifting at Done.
             let dep = match pending {
-                PendingSub::Reuse(id) => {
-                    if self.is_result_ready(id) {
-                        match self.read_result(id) {
-                            Err(e) => return bind_frame_err(e, &working_expr),
-                            Ok(value) => {
-                                working_expr.parts[i].value = ExpressionPart::Future(value);
-                                free.push(id.index());
-                                continue;
-                            }
-                        }
-                    }
-                    DepRequest::Existing(id)
-                }
+                PendingSub::Reuse(id) => DepRequest::Existing(id),
                 PendingSub::Dispatch(sub_expr) => DepRequest::Dispatch {
                     expr: sub_expr,
                     placement: DepPlacement::OwnScope,
@@ -164,25 +149,25 @@ impl<'run, 's> SchedulerView<'run, 's> {
             part_indices.push(i);
         }
         if deps.is_empty() {
-            // Every sub was an already-resolved `Reuse` spliced inline — `working_expr` is fully
-            // resolved, so route to the finish now instead of parking on a dep-finish; the inline
-            // frees ride on the resulting Invoke/Redispatch outcome.
-            return finish_eager_subs(working_expr, picked, free);
+            // No subs to resolve — `working_expr` is already fully resolved, so route to the finish
+            // now instead of parking on a dep-finish.
+            return finish_eager_subs(working_expr, picked);
         }
         let dep_error_frame = Some(crate::machine::TraceFrame::from_expr(
             "<bind>",
             &working_expr,
         ));
         let finish: DepFinish<'run> = Box::new(move |_ctx, results| {
-            // The short-circuit already guaranteed every dep resolved; splice each into the
-            // slot it was staged from, then route the continuation. No inline frees remain at
-            // wake — those were drained when the dep-finish was installed.
+            // The short-circuit already guaranteed every dep resolved; splice each into the slot it
+            // was staged from, then route the continuation. `results` are the dep terminals,
+            // pull-lifted into this node's frame and re-exposed at `'run` by the combinator, so they
+            // splice straight into the `'run` working expression that re-dispatches in this frame.
             for (slot, value) in part_indices.iter().zip(results) {
                 working_expr.parts[*slot].value = ExpressionPart::Future(*value);
             }
-            finish_eager_subs(working_expr, picked, Vec::new())
+            finish_eager_subs(working_expr, picked)
         });
-        park_on_deps(deps, dep_error_frame, finish, free)
+        park_on_deps(deps, dep_error_frame, finish)
     }
 }
 
@@ -196,10 +181,9 @@ impl<'run, 's> SchedulerView<'run, 's> {
 fn finish_eager_subs<'run>(
     working_expr: KExpression<'run>,
     picked: Option<&'run KFunction<'run>>,
-    free: Vec<usize>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     match picked {
-        Some(f) => super::exec::invoke_continue(f, working_expr, free),
-        None => super::keyworded::redispatch_continue(working_expr, free),
+        Some(f) => super::exec::invoke_continue(f, working_expr),
+        None => super::keyworded::redispatch_continue(working_expr),
     }
 }

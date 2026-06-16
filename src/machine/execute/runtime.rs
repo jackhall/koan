@@ -26,8 +26,9 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::{CallArena, KError, NodeId};
 
 use super::dispatch::DepRequest;
+use super::lift::NodeLift;
 use super::nodes::{NodeStep, NodeWork};
-use super::outcome::{dep_error_frame, Continuation, Outcome};
+use super::outcome::{dep_error_frame, pin_carried_to_run, Continuation, Outcome};
 use super::scheduler::Scheduler;
 use super::{catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish};
 
@@ -120,7 +121,7 @@ impl<'run> KoanRuntime<'run> {
 /// recurses `run_action` on the `AwaitContinue`/`CatchCont` it produces) as a [`Outcome::ParkThenContinue`],
 /// and the harness submits and applies. Every scheduler read the body needs is deferred into the
 /// finish, which sees a read-only [`SchedulerView`](super::dispatch::SchedulerView) at wake.
-pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Outcome<'run> {
+pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Outcome<'run, 'run> {
     match action {
         // Terminal: the value the builtin already computed (scope was mutated in place first).
         Action::Done(Ok(c)) => Outcome::Done(Ok(c)),
@@ -148,7 +149,6 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
                     contract,
                     block_entry,
                     body_index,
-                    free: Vec::new(),
                 };
             }
             // Leading statements become owned siblings in the arm's frame (one `BodyBlock` dep);
@@ -169,7 +169,6 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
                 contract,
                 block_entry,
                 body_index,
-                free: Vec::new(),
             });
             Outcome::ParkThenContinue {
                 deps: vec![DepRequest::BodyBlock {
@@ -179,7 +178,6 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
                 park_count: 0,
                 cont: Continuation::Finish(finish),
                 dep_error_frame: Some(dep_error_frame()),
-                free: Vec::new(),
             }
         }
 
@@ -211,7 +209,6 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
                 park_count,
                 cont: Continuation::Finish(wrapped),
                 dep_error_frame: Some(dep_error_frame()),
-                free: Vec::new(),
             }
         }
 
@@ -232,7 +229,6 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
                     finish: wrapped,
                 },
                 dep_error_frame: None,
-                free: Vec::new(),
             }
         }
     }
@@ -244,15 +240,6 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
 /// it. `KoanRuntime` holds the sole `&mut Scheduler`, so this is the only path that mutates the
 /// graph in response to a dispatch decide.
 impl<'run> KoanRuntime<'run> {
-    /// Reclaim the producers a decide phase consumed inline (a ready `Reuse` spliced into a
-    /// `working_expr`). Deferred off the decide phase so the handler stays read-only; the harness
-    /// is the sole writer, so the free lands here.
-    fn drain_free(&mut self, free: Vec<usize>) {
-        for id in free {
-            self.sched.free(id);
-        }
-    }
-
     /// Realize a single-statement dispatch dep at `placement` to its producer slot. `OwnScope`
     /// re-dispatches against the executing slot's own scope; `ActiveFrame` inherits the ambient
     /// per-call frame; `InScope` enters a fresh **single-statement** block (so an inner `LET` stays
@@ -307,24 +294,23 @@ impl<'run> KoanRuntime<'run> {
     /// Interpret an [`Outcome`] into the scheduler effect it names and return the slot's
     /// [`NodeStep`]. This is the sole graph writer the dispatch side reaches — a decide handler
     /// never holds `&mut Scheduler`.
-    pub(in crate::machine::execute) fn apply_outcome(
+    pub(in crate::machine::execute) fn apply_outcome<'s>(
         &mut self,
-        outcome: Outcome<'run>,
+        outcome: Outcome<'run, 's>,
         idx: usize,
     ) -> NodeStep<'run> {
         match outcome {
-            Outcome::Done(output) => NodeStep::Done(output),
+            // The terminal is born at the step lifetime `'s`; re-expose it at `'run` for the slot
+            // table. The Done arm of `execute` pins the producer frame's `Rc` alongside it, so the
+            // stored `'run` view stays backed until the slot frees.
+            Outcome::Done(output) => NodeStep::Done(output.map(pin_carried_to_run)),
             Outcome::Continue {
                 work,
                 frame,
                 contract,
                 block_entry,
                 body_index,
-                free,
             } => {
-                // Reclaim the Reuse producers the decide phase consumed inline before installing the
-                // replacement (mirrors the `ParkThenContinue` arm).
-                self.drain_free(free);
                 // The body's leading statements are never dispatched here — a producer with leading
                 // statements parks on them as owned `BodyBlock` deps and emits this `Continue` only
                 // from the resolving finish (see `dispatch/exec.rs` and `run_action`).
@@ -342,11 +328,7 @@ impl<'run> KoanRuntime<'run> {
                 park_count,
                 cont,
                 dep_error_frame,
-                free,
             } => {
-                // Reclaim the Reuse producers the decide phase consumed inline before declaring
-                // deps.
-                self.drain_free(free);
                 // Submit each fresh dep (an `Existing` is already in the graph). Submission order
                 // is preserved, so a finish reads `results[k]` for the k-th declared dep — except
                 // an `InScope`-placed `Dispatch` and a `BodyBlock`, whose multi-statement body each
@@ -442,14 +424,25 @@ impl<'run> KoanRuntime<'run> {
                 }
             }
             Outcome::Forward(producer) => {
-                // The slot's result *is* `producer`'s. If `producer` is ready, finalize the slot
-                // with its terminal directly. Otherwise splice the slot out: move its consumers onto
-                // `producer`'s notify list and alias the slot to `producer` — `producer` becomes the
-                // sole producer of this result, with no forwarding node and no extra wake hop.
+                // The slot's result *is* `producer`'s. If `producer` is ready, finalize the slot by
+                // pulling its terminal into this slot's own frame (the consumer-pull lift — the
+                // producer keeps its value in its own frame, which frees out from under a bare copy),
+                // then this slot's consumers pull from here. Otherwise splice the slot out: move its
+                // consumers onto `producer`'s notify list and alias the slot to `producer`.
                 if self.sched.is_result_ready(producer) {
-                    match self.sched.read_result(producer) {
-                        Ok(c) => NodeStep::Done(Ok(c)),
-                        Err(e) => NodeStep::Done(Err(e.clone_for_propagation())),
+                    let dest = self.sched.current_scope().arena;
+                    let pulled = match self.sched.read_result_with_frame(producer) {
+                        Ok((value, frame)) => Ok((value, frame)),
+                        Err(e) => Err(e.clone_for_propagation()),
+                    };
+                    match pulled {
+                        // A per-call producer's terminal lives in its dying frame: lift it here.
+                        Ok((value, Some(frame))) => {
+                            NodeStep::Done(Ok(self.lift(value, &frame, dest)))
+                        }
+                        // A frameless / run-arena terminal already survives; forward it as-is.
+                        Ok((value, None)) => NodeStep::Done(Ok(value)),
+                        Err(e) => NodeStep::Done(Err(e)),
                     }
                 } else {
                     // Not ready: `NodeStep::Alias` drives `splice_forward` (move consumers onto the
