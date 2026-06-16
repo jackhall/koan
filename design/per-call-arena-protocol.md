@@ -357,24 +357,28 @@ two-iteration warmup.
 
 ## Slot-table scope handle
 
-A scheduler slot stores its scope as a
-[`NodeScope<'a>`](../src/machine/execute/nodes.rs), not a raw `&'a Scope<'a>`. The enum has two
-arms: `Anchored(&'a Scope<'a>)` carries a genuine run-lifetime borrow (a run-root scope, or a
-sub-scope the active frame does not directly back); `Yoked` carries no payload at all. A
+A scheduler slot stores its scope as a lifetime-free
+[`NodeScope`](../src/machine/execute/nodes.rs), not a raw `&'a Scope<'a>`, so the node it sits on
+pins no `'run` through its scope. The handle rides a grouped `NodePayload` (the scope handle plus the
+node's lexical chain) alongside the slot's frame. The enum has two arms: `Anchored(ScopePtr<'static>)`
+holds an erased pointer to a genuine run-lived scope (a run-root scope, or a sub-scope the active
+frame does not directly back), re-attached at read; `Yoked` carries no payload at all. A
 per-call frame scope rides `Yoked` — single-cart, because the slot's own `Frame::cart`
 `Rc<CallArena>` is the sole liveness witness, so there is no second `Rc` clone and no
 contention with `try_reset_for_tail`'s `strong_count == 1` TCO reuse check.
 
 The funnel `submit::add_with_chain` decides the arm: a pointer test
 (`std::ptr::eq(active_frame.scope(), scope)`) routes a frame's-own-child slot to `Yoked`,
-everything else to `Anchored`. The tail sink `NodeStore::reinstall_with_frame` always stores
-`Yoked` — a tail-replace slot's scope is always its own frame's child. Storing the marker
-rather than a fabricated `&'a` keeps the borrow honest across a TCO `try_reset_for_tail`:
-nothing persisted points into the reset arena.
+everything else to `Anchored`, erasing the run-lived borrow through `ScopePtr::erase_static`. The
+tail sink `NodeStore::reinstall_with_frame` always stores `Yoked` — a tail-replace slot's scope is
+always its own frame's child. Storing an erased handle rather than a live `&'run` keeps the borrow
+honest across a TCO `try_reset_for_tail`: nothing persisted points into the reset arena.
 
 The read boundary hands a slot's scope back on demand, not as a stored free `&'run`:
 [`Scheduler::current_scope`](../src/machine/execute/scheduler.rs) materializes it per use — an
-`Anchored` slot returns its stored run-lived borrow; a `Yoked` slot re-reads from the live
+`Anchored` slot re-attaches its erased `ScopePtr<'static>` through the `unsafe` `reattach_bounded`
+(borrow bounded by the reader, content lifetime free, sound because the pointee is run-lived); a
+`Yoked` slot re-reads from the live
 `active_frame` cart via [`CallArena::scope_bounded`](../src/machine/core/arena.rs), a
 **witness-bounded** brand whose borrow is capped at the `&Rc<CallArena>` receiver (content `'a`
 free, `'a: 'p`). Because the borrow cannot outlive the frame `Rc` it reads from, storing it past

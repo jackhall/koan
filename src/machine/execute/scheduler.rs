@@ -29,9 +29,9 @@ mod work_queues;
 /// a cycle that drains with both slots still `PreRun`; `execute` detects the leftover parked
 /// slots and returns `KErrorKind::SchedulerDeadlock`.
 ///
-/// Each node carries the scope it runs against (`Node::scope`). Sub-nodes default to the
-/// spawning node's scope; user-fn invocation installs a per-call child scope via
-/// `NodeStep::Replace`.
+/// Each node carries the scope it runs against in its `Node::payload` (`NodePayload::scope`).
+/// Sub-nodes default to the spawning node's scope; user-fn invocation installs a per-call child
+/// scope via `NodeStep::Replace`.
 ///
 /// See design/execution-model.md and design/memory-model.md.
 pub struct Scheduler<'run> {
@@ -55,9 +55,9 @@ pub struct Scheduler<'run> {
     pub(in crate::machine::execute::scheduler) active_reserve: Option<Rc<CallArena>>,
     /// The executing slot's own [`NodeScope`] handle, installed per step. A body that
     /// re-dispatches *against its own scope* reads this through the `*_here` handle methods, so
-    /// the sub-slot inherits the slot's honest handle — `Anchored(&'run)` for a genuinely run-lived
-    /// scope (a binder's decl-scope), `Yoked` for a per-call frame child — rather than the body
-    /// trying (and failing) to widen its `&'frame` borrow back to `&'run`.
+    /// the sub-slot inherits the slot's honest handle — `Anchored(ScopePtr<'static>)` for a
+    /// genuinely run-lived scope (a binder's decl-scope), `Yoked` for a per-call frame child —
+    /// rather than the body trying (and failing) to widen its `&'frame` borrow back to `&'run`.
     pub(in crate::machine::execute::scheduler) active_node_scope: Option<NodeScope>,
     /// Whether the slot currently executing already carries a kept return contract — i.e. it is a
     /// tail call *within* an established chain. A deferred-return FN dispatched here is a subsequent

@@ -97,18 +97,21 @@ value/scope model.
    `core::arena → model` edge persists (the Koan instantiation stays in `core`).
    Independently shippable: `RuntimeArena` is owned by `CallArena` in `core`, so genericizing
    storage touches neither name-resolution state nor the scheduler's `'run`.
-2a. **Scope/chain payload eviction.** Evict `scope` / `chain` off the node into an opaque
-   per-node payload the scheduler stores but never interprets, and erase the one remaining live
-   scope borrow — `NodeScope::Anchored(&'run Scope)` becomes an erased `ScopePtr` re-anchored at
-   read. A precursor makes the return contract self-describing (it carries its own re-tag home
-   arena, witnessed by the cart `Rc`), so the Done boundary's `enforce_return_contract` reads no
-   scope. Independently shippable: removes the live borrow and relocates scope/chain interpretation
-   to the workload boundary while `'run` still rides the continuation.
+2a. **Scope/chain payload eviction (lifetime eviction).** Group `scope` / `chain` off the node
+   into a lifetime-free `NodePayload` the scheduler stores but does not own as machinery, and evict
+   the one remaining live scope borrow — `NodeScope::Anchored(&'run Scope)` becomes an erased
+   `ScopePtr<'static>` re-anchored at read (`reattach_bounded`). A precursor makes the return
+   contract self-describing (it carries its own re-tag home arena via `ReturnContract::home_arena`,
+   witnessed by the cart `Rc`), so the Done boundary's `enforce_return_contract` reads no scope.
+   Independently shippable: removes the node-stored live `'run` borrow and groups the payload while
+   `'run` still rides the continuation and the scheduler still names `Scope`/chain in its accessors.
 2b. **Continuation erasure + scheduler genericization (remainder).** Store the continuation erased
    (no `'run` capture, reattached against the node frame at invoke), turn the Done-boundary
    contract enforcement into a workload finalize hook, make the scheduler generic over the two
-   workload type params, and consume `NodeLift` generically — collapsing `'run` to the
-   `KoanRuntime` boundary. The model→frame back-edge erases here, if at all.
+   workload type params (`Scheduler<P, V>`), relocate the scope/chain accessor methods off
+   `impl Scheduler` to the workload boundary so the scheduler core names no `Scope`/chain, and
+   consume `NodeLift` generically — collapsing `'run` to the `KoanRuntime` boundary. The
+   model→frame back-edge erases here, if at all.
 
 ## Dependencies
 

@@ -109,12 +109,19 @@ unbounded `'a`: `erase(&'a Scope<'a>)` records the input's `'a` in the brand, so
 that own a real `'a` — `Module::child_scope` and `Signature::decl_scope` — re-attach
 through a **safe** `reattach(&self) -> &'a Scope<'a>`, the brand carrying both the
 lifetime bound and (because `Scope<'a>` is invariant) the carrier's invariance in `'a`
-structurally. `CallArena` is non-generic — it backs `Rc<CallArena>` and carries no
-lifetime — so it stores a `ScopePtr<'static>` and is the `unsafe` re-attach
-boundary for that handle: its `scope` / `scope_for_bind` accessors fabricate an `&self`-bounded
-lifetime through `reattach_unbounded`, the one transmute the brand cannot supply by safe coercion.
-The single irreducible `'static → 'a` cast lives in `scope_ptr.rs`; the carriers no
-longer restate it.
+structurally.
+
+Two lifetime-free carriers store a `ScopePtr<'static>` and fabricate the content lifetime back,
+because neither can brand it. `CallArena` is non-generic — it backs `Rc<CallArena>` and carries no
+lifetime — so its `scope` / `scope_for_bind` accessors fabricate an `&self`-bounded lifetime through
+the `unsafe` `reattach_unbounded`. A scheduler slot's `NodeScope::Anchored` evicts a genuinely
+run-lived scope off the lifetime-free node and re-attaches a free content lifetime behind an
+`&self`-bounded borrow through the `unsafe` `reattach_bounded` (sound because the pointee lives for
+all of `'run`). Both reach the `'static` store through `ScopePtr::erase_static`, a brand-dropping
+constructor that is *safe* to call (forgetting a lifetime cannot fabricate one); the fabrication
+hazard is deferred to the `unsafe` re-attach, witnessed by the carrier's pinning (the frame `Rc`) or,
+for an `Anchored` node, the scope being run-lived. The irreducible `'static → 'a` casts live in
+`scope_ptr.rs`; the carriers no longer restate them.
 
 The constraint-free twin [`BoundedScopePtr<'a>`](../src/machine/core/scope_ptr.rs) backs the
 handles that re-hand *only* behind a reader-bounded borrow: `KFunction::captured` and a
@@ -149,10 +156,13 @@ parent-frame chain. Two invariants make the ownership unit coherent:
   outer storage they may reference, ruling out a dangling `outer` during
   drop.
 
-A scheduler slot stores a per-call frame scope as a payload-less
+A scheduler slot's scope handle is lifetime-free, so the node carries no `'run` through its scope.
+A per-call frame scope is stored as a payload-less
 [`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the slot's own
-`Node.frame` cart, not a fabricated run-length `&'a Scope<'a>`. The slot-storage scope handle
-and the seed-side `with_anchored_child` re-anchor are documented in
+`Node.frame` cart; a genuinely run-lived scope (a binder body's decl-scope child) is stored
+as `NodeScope::Anchored`, an erased `ScopePtr<'static>` re-attached at read through `reattach_bounded`.
+Both arms ride a grouped `NodePayload` (scope handle + lexical chain) alongside the slot's frame. The
+slot-storage scope handle and the seed-side `with_anchored_child` re-anchor are documented in
 [per-call-arena-protocol.md § Slot-table scope handle](per-call-arena-protocol.md#slot-table-scope-handle).
 
 ## Re-entrant scope writes
@@ -251,6 +261,6 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
 
 - **Workload-independent DAG runtime**
   ([roadmap/workload-independent-dag-runtime.md](../roadmap/refactor/workload-independent-dag-runtime.md)).
-  Move `CallArena` into the scheduler as the per-node memory manager and store node scopes as
-  erased `ScopePtr` payload re-anchored at read, rather than a live `&'run` borrow, so the run
-  lifetime is confined to `KoanRuntime`.
+  The node-scope eviction has landed (node scopes are an erased `ScopePtr` payload re-anchored at
+  read, not a live `&'run` borrow). Remaining: erase the continuation's `'run` captures and make the
+  scheduler generic over its workload payload so the run lifetime is confined to `KoanRuntime`.

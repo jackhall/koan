@@ -106,7 +106,7 @@ impl<'run> Scheduler<'run> {
     }
 
     /// Submit `work` against the executing slot's own [`NodeScope`] handle (`active_node_scope`):
-    /// `Anchored(&'run)` re-uses the genuine run-lived borrow the slot already holds; `Yoked`
+    /// `Anchored` re-uses the erased run-lived `ScopePtr` the slot already holds; `Yoked`
     /// re-projects from the active frame cart at the read boundary. Backs the `*_here` methods —
     /// the honest re-dispatch-against-my-own-scope path.
     pub(in crate::machine::execute) fn submit_in_own_scope(
@@ -124,7 +124,7 @@ impl<'run> Scheduler<'run> {
     /// [`KoanRuntime::dispatch_in_active_frame`](super::super::runtime::KoanRuntime::dispatch_in_active_frame).
     /// `scope` is read only transiently
     /// (binder-install, placeholder install, `pre_subs` recursion) and never retained — the
-    /// node keeps a `NodeScope<'run>` handle, not this borrow — so it is clamped to a `'step`
+    /// node keeps a lifetime-free `NodeScope` handle, not this borrow — so it is clamped to a `'step`
     /// read: a run scope and a `scope_for_bind` re-projection both shorten into it.
     /// `node_scope` is the pre-decided slot handle the caller built (`Root` at `'run` for a run
     /// scope, `Yoked` for a framed one).
