@@ -5,11 +5,11 @@ src/machine/core/arena.rs: 12
 src/machine/core/kfunction/body.rs: 3
 src/machine/core/scope_ptr.rs: 7
 src/machine/core/storage_frame.rs: 4
+src/machine/execute/finalize.rs: 1
 src/machine/execute/nodes.rs: 1
 src/machine/execute/outcome.rs: 5
 src/machine/execute/runtime/submit.rs: 1
 src/machine/execute/scheduler.rs: 2
-src/machine/execute/scheduler/execute.rs: 1
 src/machine/model/values/module.rs: 1
 -->
 
@@ -202,16 +202,16 @@ against an `Anchored` slot's own scope, running the same transmute with none of 
 lifetime for storage on a node's lifetime-free `Frame`, and the `unsafe` `reattach` transmutes
 `ReturnContract<'static>` back to a lifetime witnessed by the cart `Rc` that pins the contract's
 home arena (the cart's frame-outer arena — a strict ancestor). The unbounded re-attach call site
-in [src/machine/execute/scheduler/execute.rs](../src/machine/execute/scheduler/execute.rs) (the
+in [src/machine/execute/finalize.rs](../src/machine/execute/finalize.rs) (the `NodeFinalize`
 Done-boundary return-type check) runs the same transmute; end-to-end, `recursive_tagged_match_no_uaf`
 exercises it through a MATCH arm's `-> :T` carried across tail recursion. This test pins the
 erase → reattach round-trip directly.
 
 - `erased_contract_reattach_roundtrip`
 
-**`ErasedContract` re-attach — Done-boundary call site** ([src/machine/execute/scheduler/execute.rs](../src/machine/execute/scheduler/execute.rs))
-— the `unsafe { contract.reattach(&cart) }` in the Done arm runs the transmute defined in the
-group above; it carries no transmute of its own, so the same `erased_contract_reattach_roundtrip`
+**`ErasedContract` re-attach — Done-boundary call site** ([src/machine/execute/finalize.rs](../src/machine/execute/finalize.rs))
+— the `unsafe { contract.reattach(&cart) }` in the `NodeFinalize::finalize_terminal` hook runs the
+transmute defined in the group above; it carries no transmute of its own, so the same `erased_contract_reattach_roundtrip`
 (and end-to-end `recursive_tagged_match_no_uaf`) pins it. No separate minimal test.
 
 **`Module` interior mutation under a live `&'a Module`** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — `Module`

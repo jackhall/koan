@@ -188,7 +188,7 @@ mod tests {
     /// Miri slate (tree borrows): the [`ErasedContract`] erase → reattach round-trip. `erase`
     /// forgets the contract's lifetime for storage; `reattach` transmutes it back to a lifetime
     /// witnessed by the cart `Rc` that pins the contract's home arena. Minimal-shape mirror of the
-    /// transmute pair (body.rs) and its unbounded call site (execute.rs); fails on UB, not values.
+    /// transmute pair (body.rs) and its unbounded call site (finalize.rs); fails on UB, not values.
     #[test]
     fn erased_contract_reattach_roundtrip() {
         use crate::builtins::default_scope;

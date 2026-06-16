@@ -1,0 +1,150 @@
+use std::rc::Rc;
+
+use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
+use crate::machine::model::{Carried, KType};
+use crate::machine::{CallArena, KError, KErrorKind};
+
+use super::runtime::KoanRuntime;
+
+/// The workload's Done-boundary contract hook: enforce a finished node's declared return contract,
+/// returning the slot's final terminal. The scheduler's Done arm hands over the raw step output, the
+/// (optional) per-call frame, and the slot's *erased* contract; this hook re-anchors the contract
+/// against the frame (the cart `Rc` witnesses the contract's home arena) and runs the declared-return
+/// check. The scheduler decides *when* (the Done boundary); this hook owns the `ReturnContract`-/
+/// `KType`-naming *how*, so the scheduler core names neither.
+///
+/// Peer of [`NodeLift`](super::lift::NodeLift): both are workload hooks the Done boundary calls. Lift
+/// relocates a value across a dep edge; finalize enforces the return contract. They stay separate —
+/// the contract layer is never folded into the lift (see [`lift`](super::lift)).
+///
+/// Concrete in Koan types for this item; [Workload-independent DAG runtime] genericizes the
+/// scheduler over this hook alongside `NodeLift`.
+///
+/// [Workload-independent DAG runtime]: ../../../roadmap/refactor/workload-independent-dag-runtime.md
+pub(in crate::machine::execute) trait NodeFinalize<'run> {
+    /// Re-anchor `contract` against `frame` and enforce the declared return on `output`. A `None`
+    /// frame (a frameless slot or the non-dying run frame) passes the value through untouched.
+    fn finalize_terminal(
+        &self,
+        output: Result<Carried<'run>, KError>,
+        frame: Option<&Rc<CallArena>>,
+        contract: Option<ErasedContract>,
+    ) -> Result<Carried<'run>, KError>;
+}
+
+impl<'run> NodeFinalize<'run> for KoanRuntime<'run> {
+    fn finalize_terminal(
+        &self,
+        output: Result<Carried<'run>, KError>,
+        frame: Option<&Rc<CallArena>>,
+        contract: Option<ErasedContract>,
+    ) -> Result<Carried<'run>, KError> {
+        // Re-anchor the erased contract against the step's cart, witnessed by `frame`. The check
+        // below consults it only when `frame` is `Some` (a real per-call frame, which is exactly
+        // when a contract is set), so a contract on the non-dying run frame is harmlessly skipped.
+        let prev_function = match (contract, frame) {
+            // SAFETY: `frame` is the cart pinning the contract's home arena for the whole Done
+            // boundary; the re-anchored borrow is consumed within this call, so it cannot dangle.
+            // Mirrors `CallArena::scope`'s unbounded re-attach.
+            (Some(c), Some(witness)) => Some(unsafe { c.reattach(witness) }),
+            _ => None,
+        };
+        enforce_return_contract(output, frame, prev_function)
+    }
+}
+
+/// Enforce a `Done` step's declared return contract, returning the slot's final terminal. A `None`
+/// frame (a frameless slot or the non-dying run frame) passes the value through untouched. A failed
+/// return-type check becomes `Err` — the caller clears placeholders and finalizes. A non-coarsening
+/// check leaves the value in the producer frame; a coarsening re-tag is re-allocated into the
+/// contract's own home arena (`ReturnContract::home_arena` — the callee's captured-scope / arm
+/// call-site arena, a strict ancestor of the producer frame) so the re-tagged terminal outlives the
+/// reused/freed producer frame. Reads no scope: the home arena rides the contract, witnessed by the
+/// cart `Rc`.
+fn enforce_return_contract<'run>(
+    output: Result<Carried<'run>, KError>,
+    frame: Option<&Rc<CallArena>>,
+    prev_function: Option<ReturnContract<'run>>,
+) -> Result<Carried<'run>, KError> {
+    match (output, frame) {
+        (Ok(Carried::Object(v)), Some(_)) => {
+            match check_declared_return(prev_function, |d| d.matches_value(v), || v.ktype().name())?
+            {
+                // Re-tag to the declared return type so downstream dispatch sees the contract
+                // (may coarsen, e.g. `List<Number>` through `:(LIST OF Any)` -> `List<Any>`). The
+                // re-tag is a shallow rebuild homed in the contract's own home arena, since the
+                // producer frame it was born in may be reused or freed before consumers read it.
+                Some(declared) => {
+                    let stamped = v.deep_clone().stamp_type(declared);
+                    let home = prev_function
+                        .expect("a declared return type implies a contract")
+                        .home_arena();
+                    Ok(Carried::Object(home.alloc_object(stamped)))
+                }
+                None => Ok(Carried::Object(v)),
+            }
+        }
+        // A type flowing the type channel runs the shared declared-return check via `matches_type`.
+        // The type channel ignores the returned declared type — unlike the `Object` arm, it does
+        // not re-tag — so the in-frame value passes through unchanged.
+        (Ok(Carried::Type(t)), Some(_)) => {
+            check_declared_return(prev_function, |d| d.matches_type(t), || t.name())?;
+            Ok(Carried::Type(t))
+        }
+        (Err(e), Some(_frame)) => {
+            let with_frame = match prev_function {
+                Some(contract) => {
+                    let label = match contract {
+                        ReturnContract::Function(f) => f.summarize(),
+                        ReturnContract::Arm { kind, .. } => kind.to_string(),
+                        ReturnContract::PerCall { func, .. } => func.summarize(),
+                    };
+                    e.with_frame(crate::machine::TraceFrame::bare(label.clone(), label))
+                }
+                None => e,
+            };
+            Err(with_frame)
+        }
+        (other, None) => other,
+    }
+}
+
+/// The declared-return check shared by the `Object` and `Type` finalize arms: pull the
+/// declared return type off `contract` (a `Function`'s resolved `return_type`, or an
+/// `Arm`'s `-> :T`), and if there is one, verify the lifted carrier satisfies it.
+/// `satisfies` runs the channel-appropriate predicate (`matches_value` / `matches_type`)
+/// and `got_name` names the carrier for the mismatch error. Returns the declared type so
+/// the caller can re-tag against it (the `Object` arm coarsens; the `Type` arm discards
+/// it), `Ok(None)` when nothing is declared — a `Function` whose signature return is
+/// non-`Resolved` (a `Deferred` carrier still in its FN-def signature) has no type here —
+/// or `Err` with the labelled `TypeMismatch`. A `PerCall` carries the *resolved* per-call
+/// type and is checked + stamped here, labelled "per-call return type".
+fn check_declared_return<'run>(
+    contract: Option<ReturnContract<'run>>,
+    satisfies: impl FnOnce(&KType<'run>) -> bool,
+    got_name: impl FnOnce() -> String,
+) -> Result<Option<&'run KType<'run>>, KError> {
+    let (declared, label, per_call) = match contract {
+        Some(ReturnContract::Function(f)) => match &f.signature.return_type {
+            crate::machine::model::types::ReturnType::Resolved(d) => (d, f.summarize(), false),
+            _ => return Ok(None),
+        },
+        Some(ReturnContract::Arm { ret, kind, .. }) => (ret, kind.to_string(), false),
+        Some(ReturnContract::PerCall { func, ret }) => (ret, func.summarize(), true),
+        None => return Ok(None),
+    };
+    if !satisfies(declared) {
+        let expected = if per_call {
+            format!("{} (per-call return type)", declared.name())
+        } else {
+            declared.name()
+        };
+        return Err(KError::new(KErrorKind::TypeMismatch {
+            arg: "<return>".to_string(),
+            expected,
+            got: got_name(),
+        })
+        .with_frame(crate::machine::TraceFrame::bare(label.clone(), label)));
+    }
+    Ok(Some(declared))
+}

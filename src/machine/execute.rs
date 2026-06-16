@@ -7,6 +7,7 @@
 //! [design/memory-model.md](../../design/memory-model.md).
 
 mod dispatch;
+mod finalize;
 mod lift;
 mod nodes;
 mod outcome;
