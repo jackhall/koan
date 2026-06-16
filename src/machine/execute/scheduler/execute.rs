@@ -63,18 +63,13 @@ impl<'run> KoanRuntime<'run> {
                     };
                     // Contract layer: check the declared return and, when the declared type coarsens
                     // the value (e.g. `List<Number>` through `:(LIST OF Any)`), re-tag it. The
-                    // re-tagged terminal is homed in the captured (outer) scope — the contract's own
-                    // arena, which outlives the call frame — so it survives to every consumer's
-                    // pull-lift and the top-level read even when the producer frame is reused/freed.
-                    // A non-coarsened terminal is returned unchanged, staying in the producer's own
-                    // frame (pinned below); the producer does **not** lift it at Done.
-                    let contract_arena = post
-                        .step_scope()
-                        .outer()
-                        .map(|o| o.arena)
-                        .unwrap_or(post.step_scope().arena);
-                    let result =
-                        enforce_return_contract(output, frame, prev_function, contract_arena);
+                    // re-tagged terminal is homed in the contract's own home arena
+                    // (`ReturnContract::home_arena` — a strict ancestor of the call frame) so it
+                    // survives to every consumer's pull-lift and the top-level read even when the
+                    // producer frame is reused/freed. A non-coarsened terminal is returned
+                    // unchanged, staying in the producer's own frame (pinned below); the producer
+                    // does **not** lift it at Done. The home arena rides the contract — no scope walk.
+                    let result = enforce_return_contract(output, frame, prev_function);
                     if result.is_err() {
                         post.step_scope().clear_placeholders_for_producer(id);
                     }
@@ -232,15 +227,15 @@ impl<'run> Scheduler<'run> {
 /// Enforce a `Done` step's declared return contract, returning the slot's final terminal. A `None`
 /// frame (a frameless slot or the non-dying run frame) passes the value through untouched. A failed
 /// return-type check becomes `Err` — the caller clears placeholders and finalizes. A non-coarsening
-/// check leaves the value in the producer frame; a coarsening re-tag is re-allocated into
-/// `contract_arena` (the captured/outer scope — the contract's own run-lived arena) so the re-tagged
-/// terminal outlives the reused/freed producer frame. Pure: the scope-derived inputs were captured
-/// by the caller while the step's scope was still ambient, so this holds no scope borrow.
+/// check leaves the value in the producer frame; a coarsening re-tag is re-allocated into the
+/// contract's own home arena (`ReturnContract::home_arena` — the callee's captured-scope / arm
+/// call-site arena, a strict ancestor of the producer frame) so the re-tagged terminal outlives the
+/// reused/freed producer frame. Reads no scope: the home arena rides the contract, witnessed by the
+/// cart `Rc`.
 fn enforce_return_contract<'run>(
     output: Result<Carried<'run>, KError>,
     frame: Option<&Rc<crate::machine::core::CallArena>>,
     prev_function: Option<ReturnContract<'run>>,
-    contract_arena: &'run crate::machine::core::RuntimeArena,
 ) -> Result<Carried<'run>, KError> {
     match (output, frame) {
         (Ok(Carried::Object(v)), Some(_)) => {
@@ -248,11 +243,14 @@ fn enforce_return_contract<'run>(
             {
                 // Re-tag to the declared return type so downstream dispatch sees the contract
                 // (may coarsen, e.g. `List<Number>` through `:(LIST OF Any)` -> `List<Any>`). The
-                // re-tag is a shallow rebuild homed in the contract's run-lived arena, since the
+                // re-tag is a shallow rebuild homed in the contract's own home arena, since the
                 // producer frame it was born in may be reused or freed before consumers read it.
                 Some(declared) => {
                     let stamped = v.deep_clone().stamp_type(declared);
-                    Ok(Carried::Object(contract_arena.alloc_object(stamped)))
+                    let home = prev_function
+                        .expect("a declared return type implies a contract")
+                        .home_arena();
+                    Ok(Carried::Object(home.alloc_object(stamped)))
                 }
                 None => Ok(Carried::Object(v)),
             }
@@ -302,7 +300,7 @@ fn check_declared_return<'run>(
             crate::machine::model::types::ReturnType::Resolved(d) => (d, f.summarize(), false),
             _ => return Ok(None),
         },
-        Some(ReturnContract::Arm { ret, kind }) => (ret, kind.to_string(), false),
+        Some(ReturnContract::Arm { ret, kind, .. }) => (ret, kind.to_string(), false),
         Some(ReturnContract::PerCall { func, ret }) => (ret, func.summarize(), true),
         None => return Ok(None),
     };

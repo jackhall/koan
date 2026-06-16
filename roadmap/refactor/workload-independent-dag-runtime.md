@@ -97,9 +97,17 @@ value/scope model.
    `core::arena → model` edge persists (the Koan instantiation stays in `core`).
    Independently shippable: `RuntimeArena` is owned by `CallArena` in `core`, so genericizing
    storage touches neither name-resolution state nor the scheduler's `'run`.
-2. **Payload eviction + continuation erasure (remainder).** Evict `scope` / `chain` into an
-   opaque erased node payload, store the continuation erased (no `'run` capture), and make
-   the scheduler generic over the two workload type params — collapsing `'run` to the
+2a. **Scope/chain payload eviction.** Evict `scope` / `chain` off the node into an opaque
+   per-node payload the scheduler stores but never interprets, and erase the one remaining live
+   scope borrow — `NodeScope::Anchored(&'run Scope)` becomes an erased `ScopePtr` re-anchored at
+   read. A precursor makes the return contract self-describing (it carries its own re-tag home
+   arena, witnessed by the cart `Rc`), so the Done boundary's `enforce_return_contract` reads no
+   scope. Independently shippable: removes the live borrow and relocates scope/chain interpretation
+   to the workload boundary while `'run` still rides the continuation.
+2b. **Continuation erasure + scheduler genericization (remainder).** Store the continuation erased
+   (no `'run` capture, reattached against the node frame at invoke), turn the Done-boundary
+   contract enforcement into a workload finalize hook, make the scheduler generic over the two
+   workload type params, and consume `NodeLift` generically — collapsing `'run` to the
    `KoanRuntime` boundary. The model→frame back-edge erases here, if at all.
 
 ## Dependencies

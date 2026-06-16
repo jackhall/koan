@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use crate::machine::core::CallArena;
+use crate::machine::core::{CallArena, RuntimeArena};
 use crate::machine::model::types::UntypedKey;
 use crate::machine::model::KType;
 
@@ -26,9 +26,13 @@ pub enum ReturnContract<'a> {
     /// An FN / builtin call: check against `signature.return_type`, label via `summarize()`.
     Function(&'a KFunction<'a>),
     /// A MATCH / TRY arm's `-> :T`: check the lifted value against `ret`, label with `kind`.
+    /// `arena` is the arm's home arena — the call-site (outer) arena `ret` is allocated in, a
+    /// strict ancestor of the arm frame — so a coarsened re-tag re-homes there with no step-scope
+    /// walk. `&RuntimeArena` is `Copy`, so the contract stays `Copy`; the cart `Rc` witnesses it.
     Arm {
         ret: &'a KType<'a>,
         kind: &'static str,
+        arena: &'a RuntimeArena,
     },
     /// A deferred-return FN whose per-call return type resolved to `ret`. Rides the FN-body
     /// chain shape (a `Function`/`PerCall` contract) so a tail-replaced deferred body assembles its
@@ -39,6 +43,21 @@ pub enum ReturnContract<'a> {
         func: &'a KFunction<'a>,
         ret: &'a KType<'a>,
     },
+}
+
+impl<'a> ReturnContract<'a> {
+    /// The contract's home arena — where a coarsened re-tag is re-homed so it outlives the
+    /// producer frame. A `Function`/`PerCall` reads it off the callee's captured-scope arena; an
+    /// `Arm` carries it directly. All three are the cart's *outer* (ancestor) arena, witnessed by
+    /// the cart `Rc`, so the Done boundary derives it from the contract with no scope walk.
+    pub fn home_arena(self) -> &'a RuntimeArena {
+        match self {
+            ReturnContract::Function(f) | ReturnContract::PerCall { func: f, .. } => {
+                f.captured_scope().arena
+            }
+            ReturnContract::Arm { arena, .. } => arena,
+        }
+    }
 }
 
 /// A [`ReturnContract`] with its lifetime erased to `'static` for storage on a lifetime-free
@@ -180,11 +199,15 @@ mod tests {
         let cart = CallArena::new(scope, None);
         // Stands in for a MATCH/TRY arm's `-> :T`, allocated in the cart's own arena.
         let ret: &KType = cart.arena().alloc_ktype(KType::Str);
-        let erased = ErasedContract::erase(ReturnContract::Arm { ret, kind: "MATCH" });
+        let erased = ErasedContract::erase(ReturnContract::Arm {
+            ret,
+            kind: "MATCH",
+            arena: cart.arena(),
+        });
         // Reattach witnessed by the cart `Rc`, then read through the re-anchored borrow.
         let reattached: ReturnContract<'_> = unsafe { erased.reattach(&cart) };
         match reattached {
-            ReturnContract::Arm { ret, kind } => {
+            ReturnContract::Arm { ret, kind, .. } => {
                 assert!(matches!(ret, KType::Str));
                 assert_eq!(kind, "MATCH");
             }
