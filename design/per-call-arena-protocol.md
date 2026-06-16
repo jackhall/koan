@@ -162,15 +162,22 @@ arena's life because `CallArena::new` heap-pins the outer arena via
 `Rc`, and the outer always outlives this inner per the lexical-scoping
 invariant.
 
-`alloc_object` is one of six named safe wrappers — alongside `alloc_ktype`,
-`alloc_function`, `alloc_scope`, `alloc_module`, and `alloc_signature` —
-that route a single private `alloc` engine where the gate lives. Every
-family implements the sealed `ArenaStored` trait, and the engine runs the
-gate once for all of them. `KObject` and `KType` answer `anchors_to` by
-walking their composite tree; the four that cannot hold a self-targeting
-`Rc<CallArena>` — `KFunction`, `Scope`, `Module`, and `Signature` —
-declare `anchors_to => false`, so the redirect is uniform across the whole
-allocation surface and unbypassable by construction.
+`alloc_object` is one of the named safe wrappers — alongside `alloc_ktype`,
+`alloc_function`, `alloc_scope`, `alloc_module`, `alloc_signature`, and
+`alloc_operator_group` — that route a single `alloc` engine where the gate
+lives. The engine and its `unsafe` erase-store machinery live generically in
+the `StorageFrame<W>` substrate (`src/machine/core/storage_frame.rs`), which
+names no Koan type; `RuntimeArena` is the Koan instantiation
+`StorageFrame<KoanWorkload>`, with the per-family policy supplied by `Stored`
+impls in `core::arena`. Every family implements `Stored`, and the engine runs
+the gate once for all of them. `KObject` and `KType` answer `anchors_to` by
+walking their composite tree; the families that cannot hold a self-targeting
+`Rc<CallArena>` — `KFunction`, `Scope`, `Module`, `Signature`, and
+`OperatorGroup` — declare `anchors_to => false`, so the redirect is uniform
+across the whole allocation surface. `Stored` is an open in-crate extension
+point rather than sealed; unbypassability comes instead from the substrate's
+private `storage` field and that single store path — no `&Arena` is ever
+exposed, so no `Stored` impl can route a value around the redirect.
 
 ## Active-frame propagation
 
@@ -456,8 +463,11 @@ mechanics:
 
 - **Workload-independent DAG runtime**
   ([roadmap/workload-independent-dag-runtime.md](../roadmap/refactor/workload-independent-dag-runtime.md)).
-  Make the scheduler generic over two lifetime-erased workload types — a node-stored payload
-  and an inter-node value — re-anchored to the node frame lifetime at run / read (generalizing
-  the `ErasedContract` reattach). Evict `scope` / `chain` into the node payload and move
-  `CallArena` into the scheduler, leaving the active-frame plumbing here as a generic per-node
-  memory manager with `'run` confined to `KoanRuntime`.
+  The allocator substrate has shipped (the generic `StorageFrame<W>` + `Stored` trait described
+  under [Cycle gate](#cycle-gate-on-alloc_object), with `RuntimeArena = StorageFrame<KoanWorkload>`
+  as the Koan instantiation). The remaining work makes the scheduler generic over two
+  lifetime-erased workload types — a node-stored payload and an inter-node value — re-anchored to
+  the node frame lifetime at run / read (generalizing the `ErasedContract` reattach). Evict
+  `scope` / `chain` into the node payload and move `CallArena` into the scheduler, leaving the
+  active-frame plumbing here as a generic per-node memory manager with `'run` confined to
+  `KoanRuntime`.

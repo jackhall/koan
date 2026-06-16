@@ -7,8 +7,8 @@ freed when the call's slot finalizes.
 
 ## Storage shape: a graph of arena slots
 
-A `RuntimeArena` holds six `typed_arena`-backed sub-arenas — for `KObject`,
-`KFunction`, `Scope`, `Module`, `Signature`, and `KType`. Slots have stable
+A `RuntimeArena` holds seven `typed_arena`-backed sub-arenas — for `KObject`,
+`KFunction`, `Scope`, `Module`, `Signature`, `KType`, and `OperatorGroup`. Slots have stable
 heap addresses; the runtime carries cross-references between them rather
 than ownership trees. The structural edges:
 
@@ -82,13 +82,15 @@ protocol sits on top of.
 
 Every sub-arena inside [`RuntimeArena`](../src/machine/core/arena.rs) stores
 `T<'static>` rather than `T<'a>` — the `'static` is phantom so `RuntimeArena`
-itself carries no lifetime parameter. Each named `alloc*` wrapper takes input at
-the caller's `'a` and routes one private generic `alloc<K: ArenaStored>` engine:
-the engine union-moves the value into its `'static` lifetime family (`At<'static>`)
-for storage and re-anchors the returned `&'a` to the input borrow on the way out.
-The union move — `Erase<At<'a>, At<'static>>` written then read back through the
-other field, with a `const` size assert — is the single erasure all six families
-share, so there is one store-side erasure to reason about. It is sound because:
+itself carries no lifetime parameter. The erase-store engine lives generically in
+the [`StorageFrame<W>`](../src/machine/core/storage_frame.rs) substrate (`RuntimeArena`
+is the Koan instantiation `StorageFrame<KoanWorkload>`). Each named `alloc*` wrapper
+takes input at the caller's `'a` and routes one `alloc<K: Stored>` engine: the engine
+union-moves the value into its `'static` lifetime family (`At<'static>`) for storage and
+re-anchors the returned `&'a` to the input borrow on the way out. The union move —
+`Erase<At<'a>, At<'static>>` written then read back through the other field, with a
+`const` size assert — is the single erasure every family shares, so there is one
+store-side erasure to reason about. It is sound because:
 
 - Lifetimes are zero-sized, so `T<'a>` and `T<'static>` have identical layout.
 - `alloc*` returns an `&'a` tied to the input borrow; no `'static` reference
@@ -121,14 +123,16 @@ reader, so the free content `'a` is never cashed unbounded — no borrow==conten
 needed, and a frame-bounded child can hold a (possibly frame-bounded) parent without
 fabrication. It carries `Scope<'a>`'s invariance structurally for the same reason as `ScopePtr`.
 
-All six families implement the sealed `ArenaStored` trait and route the one gated
-[`alloc`](../src/machine/core/arena.rs) engine. `anchors_to` is a required trait
+Every family implements the `Stored` trait and routes the one gated
+[`alloc`](../src/machine/core/storage_frame.rs) engine. `anchors_to` is a required trait
 method, so each family declares its cycle behavior at its impl site: `KObject` and
 `KType` walk their composite tree for a self-targeting `Rc<CallArena>`, while the
-four that cannot hold one — `KFunction`, `Scope`, `Module`, and `Signature` —
-declare `anchors_to => false`. The gate is therefore uniform and unbypassable by
-construction: a self-anchoring value redirects to the escape arena no matter which
-wrapper stored it.
+families that cannot hold one — `KFunction`, `Scope`, `Module`, `Signature`, and
+`OperatorGroup` — declare `anchors_to => false`. The gate is therefore uniform and
+unbypassable by construction: `Stored` is unsealed (an in-crate extension point), but
+the substrate's `storage` bundle is private and `alloc` is the only path to it, so no
+impl can route a value around the redirect. A self-anchoring value redirects to the
+escape arena no matter which wrapper stored it.
 
 A [`CallArena`](../src/machine/core/arena.rs) bundles a `RuntimeArena`, an
 `Option<ScopePtr<'static>>` into it (the child scope; `None` only transiently during

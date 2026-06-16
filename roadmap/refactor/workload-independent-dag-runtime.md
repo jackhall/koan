@@ -43,8 +43,13 @@ value/scope model.
 
 **Directions.**
 
-- *CallArena relocation — decided.* `CallArena` / per-node memory moves into the
-  scheduler module; the scheduler becomes the per-node memory manager.
+- *CallArena relocation — decided.* The scheduler becomes the per-node memory manager —
+  it mints, reuses (TCO), and drops one memory frame per node. The frame wraps the generic
+  `StorageFrame` storage substrate (see *Storage substrate* below), which names no Koan type;
+  the frame wrapper itself (`CallArena`, holding the erased scope payload) genericizes alongside
+  the payload eviction, so the scheduler ends up managing per-node memory without naming a Koan
+  type while the model→frame back-edge keeps compiling. "Owned by the scheduler" means exclusive
+  *manager*, not definer.
 - *Scope-handle erasure — decided.* The `NodeScope::Anchored(&'run Scope)` borrow is
   the lifetime carrier that blocks a lifetime-free frame; folding it in is a
   dealbreaker. Store an erased scope pointer instead — the `ScopePtr<'static>`
@@ -64,6 +69,38 @@ value/scope model.
 - *Lift hook — decided.* The lift policy / mechanism split is the shipped `NodeLift`
   workload hook ([`src/machine/execute/lift.rs`](../../src/machine/execute/lift.rs)); this
   item consumes it generically rather than redefining it.
+- *Storage substrate (`StorageFrame`) — decided; the first slice.* The per-call allocator
+  genericizes first, independently of the payload/continuation work. A generic `StorageFrame<W>`
+  — the run-lifetime erase-store substrate (the irreducible `unsafe`) plus the `escape`
+  cycle-redirect pointer and the address membership side-table — lives in a low `core` submodule
+  and names no Koan type. A generic `Stored<W>` trait (today's `ArenaStored`, lifted off the
+  concrete families) carries each family's `At<'a>` projection, its `sub_arena`, and its required
+  `anchors_to` gate answer; the single private `alloc<K>` engine runs the cycle gate by calling
+  `anchors_to` for every family. Unbypassability comes from the substrate's *private* `storage`
+  field and that single store path — not from sealing, so `Stored` is an open extension point the
+  workload implements and no `&Arena` is ever exposed (see
+  [per-call-arena-protocol.md § Cycle gate](../../design/per-call-arena-protocol.md#cycle-gate-on-alloc_object)).
+  `RuntimeArena` becomes `StorageFrame<KoanWorkload>` — a transparent alias, so the ~676
+  `RuntimeArena` sites are untouched — and `CallArena` keeps wrapping it unchanged; the Koan
+  instantiation (the storage bundle, the `Stored` impls, the cycle-gate walkers) stays in
+  `core::arena`. Because `Scope` embeds `&RuntimeArena`, that instantiation must stay nameable
+  from `core`, so the `core::arena → model` edge persists; severing it needs the slice-2
+  `Scope`-side erasure. The win here is the Koan-agnostic substrate and the generic-once `unsafe`,
+  not an edge inversion.
+
+## Slices
+
+1. **Storage substrate (first slice).** Introduce the generic `StorageFrame` + `Stored`
+   trait in a low `core` submodule; re-express `RuntimeArena` as the Koan instantiation
+   `StorageFrame<KoanWorkload>` (a transparent alias), with `CallArena` wrapping it unchanged.
+   No change to `scope` / `chain`, the continuation, or the back-edge, and the
+   `core::arena → model` edge persists (the Koan instantiation stays in `core`).
+   Independently shippable: `RuntimeArena` is owned by `CallArena` in `core`, so genericizing
+   storage touches neither name-resolution state nor the scheduler's `'run`.
+2. **Payload eviction + continuation erasure (remainder).** Evict `scope` / `chain` into an
+   opaque erased node payload, store the continuation erased (no `'run` capture), and make
+   the scheduler generic over the two workload type params — collapsing `'run` to the
+   `KoanRuntime` boundary. The model→frame back-edge erases here, if at all.
 
 ## Dependencies
 

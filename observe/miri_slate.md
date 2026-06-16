@@ -1,9 +1,10 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena.rs: 16
+src/machine/core/arena.rs: 12
 src/machine/core/kfunction/body.rs: 3
 src/machine/core/scope_ptr.rs: 6
+src/machine/core/storage_frame.rs: 4
 src/machine/execute/outcome.rs: 5
 src/machine/execute/scheduler/execute.rs: 1
 src/machine/model/values/module.rs: 1
@@ -60,13 +61,19 @@ end-to-end — the run scope outlives the frame, so no separate minimal test.
 - `call_arena_chained_outer_frame_walkable`
 - `scope_bounded_reanchors_within_witness_borrow`
 
-**`RuntimeArena` interior mutation under live borrows** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)).
+**`StorageFrame` alloc engine under live borrows** ([src/machine/core/storage_frame.rs](../src/machine/core/storage_frame.rs)) — the
+generic `alloc` engine erases the value to `'static` (the move-through-union `erase_store`),
+stores it, records its address into the `membership` `RefCell` via `borrow_mut`, and re-anchors
+the `'static` store to `'a` — all while a prior `&` from the same frame is shared-borrowed. Pins
+that tree-borrows shape over the engine `RuntimeArena` (= `StorageFrame<KoanWorkload>`) routes.
 
 - `runtime_arena_alloc_while_prior_ref_live`
 
-**Cycle gate** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — `alloc_object` redirects
-a value carrying a self-anchored `Rc<CallArena>` to the escape arena, breaking
-the storage cycle that closure-escape returns can otherwise produce.
+**Cycle gate** ([src/machine/core/storage_frame.rs](../src/machine/core/storage_frame.rs)) — the generic `alloc`
+engine redirects a value whose family `anchors_to` answers true for `self` (a self-anchored
+`Rc<CallArena>`) to the escape frame via `escape_ptr.as_ref()`, breaking the storage cycle that
+closure-escape returns can otherwise produce. The Koan `anchors_to` walkers that drive the
+decision live in [src/machine/core/arena.rs](../src/machine/core/arena.rs).
 
 - `alloc_object_redirects_self_anchored_value_to_escape_arena`
 
@@ -242,9 +249,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-16: 1013s — 23 tests, 0 leaks, 0 UB
 - 2026-06-16: 577s — 23 tests, 0 leaks, 0 UB
 - 2026-06-14: 540s — 22 tests, 0 leaks, 0 UB
 - 2026-06-14: 817s — 22 tests, 0 leaks, 0 UB
-- 2026-06-13: 538s — 22 tests, 0 leaks, 0 UB
 - 2026-06-13: 538s — 22 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

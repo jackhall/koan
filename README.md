@@ -195,7 +195,8 @@ src/
     │       └── module.rs          Module / Signature — first-class module values
     ├── core.rs            module surface for core/
     ├── core/
-    │   ├── arena.rs       RuntimeArena, CallArena — per-run and per-call allocation
+    │   ├── arena.rs       RuntimeArena (= StorageFrame<KoanWorkload>), CallArena — the Koan instantiation of the storage substrate plus per-call allocation
+    │   ├── storage_frame.rs  StorageFrame<W> — generic run-lifetime erase-store substrate (the irreducible unsafe + cycle gate), names no Koan type
     │   ├── bindings.rs    Bindings façade — five-map (data/functions/placeholders/types/pending_overloads) with the validated try_apply write path, try_register_type for nominal type identity, and the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)])
     │   ├── bindings/pending.rs   per-binding pending-overload state
     │   ├── kerror.rs      KError, KErrorKind, Frame — structured runtime errors
