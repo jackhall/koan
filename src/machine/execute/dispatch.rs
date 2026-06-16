@@ -31,7 +31,7 @@ use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
 
 use super::nodes::NodeWork;
 use super::scheduler::Scheduler;
-use super::{ignore_results, DepFinish};
+use super::{ignore_results, DepFinish, ErasedValue};
 use crate::machine::core::kfunction::action::{DepPlacement, FramePlacement};
 
 pub(in crate::machine::execute) mod apply_callable;
@@ -74,7 +74,7 @@ pub use crate::machine::model::ast::{classify_dispatch_shape, DispatchShape};
 pub(super) fn resolve_name_part<'run>(
     scope: &Scope<'run>,
     part: &ExpressionPart<'run>,
-    scheduler: &Scheduler<'run>,
+    scheduler: &Scheduler<ErasedValue>,
     consumer: Option<NodeId>,
 ) -> NameOutcome<'run> {
     let (name, is_type) = match part {
@@ -114,7 +114,7 @@ pub(super) fn resolve_name_part<'run>(
 /// name finalized to a non-shadowing value (`Unbound`), a parking edge that would close a
 /// wake cycle is `Cycle`, and otherwise the name parks on the producer.
 fn disposition_for_producer<'run>(
-    scheduler: &Scheduler<'run>,
+    scheduler: &Scheduler<ErasedValue>,
     name: &str,
     producer: NodeId,
     consumer: Option<NodeId>,

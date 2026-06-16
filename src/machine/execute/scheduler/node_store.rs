@@ -17,7 +17,6 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ErasedContract;
 use crate::machine::core::{CallArena, LexicalFrame};
-use crate::machine::model::Carried;
 use crate::machine::KError;
 use crate::machine::NodeId;
 
@@ -61,7 +60,7 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
     }
 }
 
-enum SlotState<'run> {
+enum SlotState<V> {
     PreRun(Node),
     /// Node payload has been moved out by `take_for_run`. A matching
     /// `reinstall*` / `finalize` / `free_one` exits this state.
@@ -70,7 +69,7 @@ enum SlotState<'run> {
     /// run-arena value). Holding the frame `Rc` here pins the producer's per-call arena until the
     /// slot is freed, so frame death moves from Done to free. The pin is established now and read by
     /// the consumer-pull lift, which copies the terminal out of this frame into the consumer arena.
-    Done(Result<Carried<'run>, KError>, Option<Rc<CallArena>>),
+    Done(Result<V, KError>, Option<Rc<CallArena>>),
     /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
     /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
     /// slot's consumers were moved onto `producer`'s notify list at splice time, so `producer`'s
@@ -101,15 +100,15 @@ fn work_deadlock_sample(work: &NodeWork) -> DeadlockSample {
     }
 }
 
-pub(in crate::machine::execute::scheduler) struct NodeStore<'run> {
-    slots: SlotVec<SlotState<'run>>,
+pub(in crate::machine::execute::scheduler) struct NodeStore<V> {
+    slots: SlotVec<SlotState<V>>,
     /// Reclaimed slot indices. `alloc_slot` pulls from here before
     /// extending `slots`, giving constant scheduler memory across
     /// tail-recursive bodies.
     free_list: Vec<NodeId>,
 }
 
-impl<'run> NodeStore<'run> {
+impl<V: Copy> NodeStore<V> {
     pub(super) fn new() -> Self {
         Self {
             slots: SlotVec::new(),
@@ -179,7 +178,7 @@ impl<'run> NodeStore<'run> {
     /// Replace a finalized terminal in place, dropping any pinned producer frame. The drain
     /// boundary uses this to re-home a consumer-less root into the run arena (`output` already
     /// lifted there), releasing the per-call frame the producer kept it in.
-    pub(super) fn rehome_terminal(&mut self, id: NodeId, output: Result<Carried<'run>, KError>) {
+    pub(super) fn rehome_terminal(&mut self, id: NodeId, output: Result<V, KError>) {
         debug_assert!(
             matches!(self.slots[id], SlotState::Done(..)),
             "rehome_terminal expects a finalized slot",
@@ -193,7 +192,7 @@ impl<'run> NodeStore<'run> {
     pub(super) fn finalize(
         &mut self,
         id: NodeId,
-        output: Result<Carried<'run>, KError>,
+        output: Result<V, KError>,
         frame: Option<Rc<CallArena>>,
     ) {
         self.slots[id] = SlotState::Done(output, frame);
@@ -224,7 +223,7 @@ impl<'run> NodeStore<'run> {
 
     /// Only safe on IDs whose slot has been finalized; internal slots may have been eagerly freed by
     /// their parent. Raw — callers pass an already alias-resolved id.
-    pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
+    pub(super) fn read_result(&self, id: NodeId) -> Result<V, &KError> {
         match &self.slots[id] {
             &SlotState::Done(Ok(c), _) => Ok(c),
             SlotState::Done(Err(e), _) => Err(e),
@@ -238,7 +237,7 @@ impl<'run> NodeStore<'run> {
     pub(super) fn read_result_with_frame(
         &self,
         id: NodeId,
-    ) -> Result<(Carried<'run>, Option<Rc<CallArena>>), &KError> {
+    ) -> Result<(V, Option<Rc<CallArena>>), &KError> {
         match &self.slots[id] {
             SlotState::Done(Ok(c), frame) => Ok((*c, frame.clone())),
             SlotState::Done(Err(e), _) => Err(e),
@@ -246,7 +245,7 @@ impl<'run> NodeStore<'run> {
         }
     }
 
-    pub(super) fn read(&self, id: NodeId) -> Carried<'run> {
+    pub(super) fn read(&self, id: NodeId) -> V {
         match self.read_result(id) {
             Ok(c) => c,
             Err(e) => panic!("read called on errored node: {e}"),
@@ -314,7 +313,7 @@ impl<'run> NodeStore<'run> {
     }
 
     #[cfg(test)]
-    pub(super) fn set_result(&mut self, id: NodeId, output: Result<Carried<'run>, KError>) {
+    pub(super) fn set_result(&mut self, id: NodeId, output: Result<V, KError>) {
         self.slots[id] = SlotState::Done(output, None);
     }
 

@@ -5,12 +5,15 @@ src/machine/core/arena.rs: 12
 src/machine/core/kfunction/body.rs: 3
 src/machine/core/scope_ptr.rs: 7
 src/machine/core/storage_frame.rs: 4
-src/machine/execute/dispatch/ctx.rs: 1
+src/machine/execute/dispatch/ctx.rs: 2
 src/machine/execute/finalize.rs: 1
 src/machine/execute/nodes.rs: 1
-src/machine/execute/outcome.rs: 8
+src/machine/execute/outcome.rs: 10
+src/machine/execute/runtime.rs: 3
+src/machine/execute/runtime/interpret.rs: 1
 src/machine/execute/runtime/submit.rs: 1
 src/machine/execute/scheduler/execute.rs: 1
+src/machine/execute/scheduler/finish.rs: 2
 src/machine/model/values/module.rs: 1
 -->
 
@@ -271,12 +274,36 @@ the lifetime-only transmutes bridging a node continuation's per-step `'s` output
 run-lived AST and the frame-pinned slot store: `shorten_outcome` (a decide's `'run` outcome down to
 `'s`), `deps_at_step` (consumer-pull dep terminals down to `'s`), `deps_for_builtin` /
 `obj_for_builtin` (deps back up to `'run` across the concrete builtin boundary), and
-`pin_carried_to_run` (a Done terminal up to `'run` for the frame-pinned store). All are exercised by
-every program; this test pins the hardest shape directly — a tail-chain return-type **coarsening**,
-where the re-tagged terminal must be homed in the contract's scope to outlive the reused producer
-frame, then re-read after the run drains the root into the run arena.
+`pin_carried_to_run` (a Done terminal up to `'run` for the frame-pinned store). The `ErasedValue`
+storage erasure is the same `Carried` lifetime transmute one step earlier: `erase` forgets a
+terminal's `'run` for storage in the now-lifetime-free `Scheduler<V>` slot table (the inter-node
+value type parameter), and `reattach` re-anchors it at the workload read boundary, witnessed by the
+slot's co-stored producer-frame `Rc` (or the run arena for a frameless value) — `pin_carried_to_run`
+generalized to the generic value channel. All are exercised by every program; this test pins the
+hardest shape directly — a tail-chain return-type **coarsening**, where the re-tagged terminal must
+be homed in the contract's scope to outlive the reused producer frame, then re-read after the run
+drains the root into the run arena.
 
 - `tail_call_stamps_result_against_first_callers_return_contract`
+
+**`ErasedValue` re-attach — workload read boundary** ([src/machine/execute/runtime.rs](../src/machine/execute/runtime.rs), [src/machine/execute/runtime/interpret.rs](../src/machine/execute/runtime/interpret.rs), [src/machine/execute/scheduler/finish.rs](../src/machine/execute/scheduler/finish.rs), [src/machine/execute/dispatch/ctx.rs](../src/machine/execute/dispatch/ctx.rs))
+— the `unsafe { value.reattach() }` calls where the workload reads a terminal back out of the
+generic `Scheduler<V>` (the Forward-arm pull, the drain-boundary re-home, the consumer-pull dep lift,
+and `SchedulerView::read_result`) run the `ErasedValue` transmute defined in the group above with
+none of their own. The co-stored frame `Rc` pins the value; the same
+`tail_call_stamps_result_against_first_callers_return_contract` (and end-to-end every program, since
+every value now flows through `ErasedValue`) pins them. No separate minimal test.
+
+**`ErasedValue` re-attach — drain re-home** ([src/machine/execute/runtime/interpret.rs](../src/machine/execute/runtime/interpret.rs))
+— the drain boundary re-homes a consumer-less root into the run arena, erasing the lifted terminal
+(`ErasedValue::erase`) and reading it back (`reattach`) through the same transmute as the group
+above; pinned by `tail_call_stamps_result_against_first_callers_return_contract` and end-to-end.
+No separate minimal test.
+
+**`ErasedValue` re-attach — consumer-pull dep lift** ([src/machine/execute/scheduler/finish.rs](../src/machine/execute/scheduler/finish.rs))
+— `KoanRuntime::run_wait` reads each dep terminal out of the generic store (`reattach`) before the
+consumer-pull `NodeLift` copies it into the consuming frame; same transmute as the group above, with
+none of its own. Pinned by the lift/park slate tests end-to-end. No separate minimal test.
 
 ## Adding tests to the slate
 
@@ -298,9 +325,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-16: 616s — 25 tests, 0 leaks, 0 UB
 - 2026-06-16: 1225s — 25 tests, 0 leaks, 0 UB
 - 2026-06-16: 614s — 24 tests, 0 leaks, 0 UB
 - 2026-06-16: 621s — 24 tests, 0 leaks, 0 UB
 - 2026-06-16: 610s — 24 tests, 0 leaks, 0 UB
-- 2026-06-16: 1013s — 23 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

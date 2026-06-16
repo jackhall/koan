@@ -7,10 +7,9 @@ use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 use super::super::dispatch::reattach_node_scope;
 use super::super::finalize::NodeFinalize;
 use super::super::nodes::{CallFrame, Node, NodePayload, NodeStep, NodeWork};
-use super::super::NodeCont;
+use super::super::{ErasedValue, NodeCont};
 use super::super::runtime::KoanRuntime;
 use super::Scheduler;
-use crate::machine::model::Carried;
 
 impl<'run> KoanRuntime<'run> {
     /// On `Done` with a frame, the return `Value` references the per-call arena that's
@@ -78,7 +77,8 @@ impl<'run> KoanRuntime<'run> {
                     // held until the slot is freed (frame death Done->free), keeping the terminal
                     // readable until every consumer has pulled it; a frameless / run-frame producer
                     // pins nothing (its value already lives in the run arena).
-                    self.sched.finalize(idx, result, frame.cloned());
+                    self.sched
+                        .finalize(idx, result.map(ErasedValue::erase), frame.cloned());
                 }
                 NodeStep::Replace {
                     work: new_work,
@@ -177,7 +177,7 @@ impl<'run> KoanRuntime<'run> {
     }
 }
 
-impl<'run> Scheduler<'run> {
+impl<V: Copy> Scheduler<V> {
     /// Invariant: every consumer drained here is parked with a non-zero counter;
     /// freed slots are scrubbed from every producer's `notify_list` before the
     /// producer drains.
@@ -187,7 +187,7 @@ impl<'run> Scheduler<'run> {
     pub(in crate::machine::execute::scheduler) fn finalize(
         &mut self,
         idx: usize,
-        output: Result<Carried<'run>, KError>,
+        output: Result<V, KError>,
         frame: Option<Rc<crate::machine::core::CallArena>>,
     ) {
         let id = NodeId(idx);

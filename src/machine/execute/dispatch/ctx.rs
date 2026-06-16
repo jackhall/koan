@@ -14,6 +14,7 @@
 //! (`keyworded`, `fn_value`, `single_poll`) never name scheduler fields directly — only
 //! `cx.foo(...)` — so a future scheduler internal rename is a single-file change inside `scheduler/`.
 
+use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::DepPlacement;
@@ -25,6 +26,7 @@ use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope
 
 use super::super::nodes::NodeScope;
 use super::super::scheduler::Scheduler;
+use super::super::ErasedValue;
 use super::{park_on_deps, resolve_name_part, DepRequest, Outcome, PendingSub};
 
 /// Re-anchor a raw [`NodeScope`] handle into a usable `&Scope` — the Koan scope interpretation the
@@ -55,9 +57,9 @@ pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
 /// none. Panics outside a slot step (no `active_node_scope`); within a step the scope is always
 /// present — an `Anchored` slot carries its own pointer, and a `Yoked` slot's active cart is never
 /// emptied mid-step (an invoke reuses the reserve, not the active cart).
-pub(in crate::machine::execute) fn current_scope<'a, 'run>(
-    sched: &'a Scheduler<'run>,
-) -> &'a Scope<'run> {
+pub(in crate::machine::execute) fn current_scope<'run>(
+    sched: &Scheduler<ErasedValue>,
+) -> &Scope<'run> {
     reattach_node_scope(
         sched
             .active_node_scope_raw()
@@ -73,12 +75,19 @@ pub(in crate::machine::execute) fn current_scope<'a, 'run>(
 /// call, the handler returns an owned outcome, and the immutable borrow ends before the harness
 /// takes `&mut` — so decide and apply never overlap.
 pub(in crate::machine::execute) struct SchedulerView<'run, 's> {
-    sched: &'s Scheduler<'run>,
+    sched: &'s Scheduler<ErasedValue>,
+    /// `SchedulerView` re-anchors the value-erased scheduler's reads to `'run` (the AST/scope
+    /// lifetime the decide runs against); the scheduler itself is `Scheduler<ErasedValue>`, so
+    /// `'run` lives only on this view, kept here by the marker.
+    _run: PhantomData<&'run ()>,
 }
 
 impl<'run, 's> SchedulerView<'run, 's> {
-    pub(in crate::machine::execute) fn new(sched: &'s Scheduler<'run>) -> Self {
-        Self { sched }
+    pub(in crate::machine::execute) fn new(sched: &'s Scheduler<ErasedValue>) -> Self {
+        Self {
+            sched,
+            _run: PhantomData,
+        }
     }
 
     // Read surface (forwards on `&self`) — the static-over-the-step reads (`current_scope`,
@@ -124,7 +133,8 @@ impl<'run, 's> SchedulerView<'run, 's> {
     }
 
     pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
-        self.sched.read_result(id)
+        // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
+        self.sched.read_result(id).map(|v| unsafe { v.reattach() })
     }
 
     pub(super) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {

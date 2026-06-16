@@ -1,6 +1,5 @@
 use std::rc::Rc;
 
-use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId, Scope};
 
 use super::nodes::NodeScope;
@@ -34,10 +33,10 @@ mod work_queues;
 /// scope via `NodeStep::Replace`.
 ///
 /// See design/execution-model.md and design/memory-model.md.
-pub struct Scheduler<'run> {
+pub struct Scheduler<V> {
     pub(in crate::machine::execute::scheduler) queues: WorkQueues,
     pub(in crate::machine::execute::scheduler) deps: DepGraph,
-    pub(in crate::machine::execute::scheduler) store: NodeStore<'run>,
+    pub(in crate::machine::execute::scheduler) store: NodeStore<V>,
     /// TraceFrame Rc of the slot currently being executed. See
     /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
     pub(in crate::machine::execute::scheduler) active_frame: Option<Rc<CallArena>>,
@@ -114,7 +113,7 @@ impl PostStep {
     }
 }
 
-impl<'run> Scheduler<'run> {
+impl<V: Copy> Scheduler<V> {
     /// Install the slot's frame/chain/reserve as the ambient values for one step. The
     /// caller passes the returned guard to [`Scheduler::exit_slot_step`] when the step
     /// returns; the `node_chain` Rc is cloned only here, so the caller's own clone for
@@ -212,12 +211,12 @@ impl<'run> Scheduler<'run> {
 
     /// Only safe on IDs returned by `dispatch_in_scope`; internal slots may have been eagerly
     /// freed by their parent. Follows a bare-name-forward alias to the real producer.
-    pub fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
+    pub fn read_result(&self, id: NodeId) -> Result<V, &KError> {
         self.store.read_result(self.resolve_alias(id))
     }
 
     /// Panics on `Err`. Follows a bare-name-forward alias to the real producer.
-    pub fn read(&self, id: NodeId) -> Carried<'run> {
+    pub fn read(&self, id: NodeId) -> V {
         self.store.read(self.resolve_alias(id))
     }
 
@@ -226,7 +225,7 @@ impl<'run> Scheduler<'run> {
     pub(in crate::machine::execute) fn read_result_with_frame(
         &self,
         id: NodeId,
-    ) -> Result<(Carried<'run>, Option<Rc<CallArena>>), &KError> {
+    ) -> Result<(V, Option<Rc<CallArena>>), &KError> {
         self.store.read_result_with_frame(self.resolve_alias(id))
     }
 
@@ -236,7 +235,7 @@ impl<'run> Scheduler<'run> {
     pub(in crate::machine::execute) fn rehome_terminal(
         &mut self,
         id: NodeId,
-        output: Result<Carried<'run>, KError>,
+        output: Result<V, KError>,
     ) {
         let target = self.resolve_alias(id);
         self.store.rehome_terminal(target, output);
@@ -300,7 +299,7 @@ impl<'run> Scheduler<'run> {
     }
 }
 
-impl<'run> Default for Scheduler<'run> {
+impl<V: Copy> Default for Scheduler<V> {
     fn default() -> Self {
         Self::new()
     }
@@ -310,7 +309,7 @@ impl<'run> Default for Scheduler<'run> {
 /// [`KoanRuntime`](super::runtime::KoanRuntime) — the sole `&mut Scheduler` — calls while realizing
 /// a decided [`Outcome`](super::outcome::Outcome). AST-free state operations: the AST-aware
 /// submission wrappers (`enter_block`, `dispatch_in_own_scope`, …) live on `KoanRuntime`.
-impl<'run> Scheduler<'run> {
+impl<V: Copy> Scheduler<V> {
     /// Active slot's `Rc<CallArena>`. See
     /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
     pub(in crate::machine::execute) fn current_frame(&self) -> Option<Rc<CallArena>> {

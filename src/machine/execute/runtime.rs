@@ -16,6 +16,7 @@
 //! `dispatch_body`, `submit_dep_finish_in_own_scope`) — the only callers that turn a `KExpression` into
 //! scheduler work.
 
+use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::{
@@ -30,7 +31,7 @@ use super::lift::NodeLift;
 use super::nodes::{NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, pin_carried_to_run, Continuation, Outcome};
 use super::scheduler::Scheduler;
-use super::{catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish};
+use super::{catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedValue};
 
 mod interpret;
 mod submit;
@@ -47,13 +48,18 @@ pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path
 ///
 /// See design/execution-model.md § the dispatcher / scheduler boundary.
 pub struct KoanRuntime<'run> {
-    pub(in crate::machine::execute) sched: Scheduler<'run>,
+    pub(in crate::machine::execute) sched: Scheduler<ErasedValue>,
+    /// The run lifetime the harness processes its AST/scope against. The scheduler is value-erased
+    /// (`Scheduler<ErasedValue>`), so `'run` lives only in the harness's own method signatures; this
+    /// marker keeps it on the type.
+    _run: PhantomData<&'run ()>,
 }
 
 impl<'run> KoanRuntime<'run> {
     pub fn new() -> Self {
         Self {
             sched: Scheduler::new(),
+            _run: PhantomData,
         }
     }
 }
@@ -70,12 +76,14 @@ impl Default for KoanRuntime<'_> {
 impl<'run> KoanRuntime<'run> {
     /// Read a slot's terminal. See [`Scheduler::read_result`].
     pub fn read_result(&self, id: NodeId) -> Result<crate::machine::model::Carried<'run>, &KError> {
-        self.sched.read_result(id)
+        // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
+        self.sched.read_result(id).map(|v| unsafe { v.reattach() })
     }
 
     /// Read a slot's value terminal, panicking on `Err`. See [`Scheduler::read`].
     pub fn read(&self, id: NodeId) -> crate::machine::model::Carried<'run> {
-        self.sched.read(id)
+        // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
+        unsafe { self.sched.read(id).reattach() }
     }
 
     pub fn len(&self) -> usize {
@@ -92,14 +100,14 @@ impl<'run> KoanRuntime<'run> {
 /// Scheduler` escapes — the accessor hands out `&Scheduler`, keeping the harness the sole writer.
 #[cfg(test)]
 impl<'run> KoanRuntime<'run> {
-    pub(in crate::machine::execute) fn scheduler(&self) -> &Scheduler<'run> {
+    pub(in crate::machine::execute) fn scheduler(&self) -> &Scheduler<ErasedValue> {
         &self.sched
     }
 
     /// Mutable scheduler access for the white-box scheduler tests that poke `store` / `deps` /
     /// `queues` directly. Test-only — production drives every write through the harness's own
     /// `&mut self` methods, so this is the one sanctioned `&mut Scheduler` outside them.
-    pub(in crate::machine::execute) fn scheduler_mut(&mut self) -> &mut Scheduler<'run> {
+    pub(in crate::machine::execute) fn scheduler_mut(&mut self) -> &mut Scheduler<ErasedValue> {
         &mut self.sched
     }
 
@@ -421,7 +429,8 @@ impl<'run> KoanRuntime<'run> {
                 if self.sched.is_result_ready(producer) {
                     let dest = current_scope(&self.sched).arena;
                     let pulled = match self.sched.read_result_with_frame(producer) {
-                        Ok((value, frame)) => Ok((value, frame)),
+                        // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
+                        Ok((value, frame)) => Ok((unsafe { value.reattach() }, frame)),
                         Err(e) => Err(e.clone_for_propagation()),
                     };
                     match pulled {

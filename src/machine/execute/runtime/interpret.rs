@@ -7,6 +7,7 @@
 use super::KoanRuntime;
 use crate::builtins::default_scope;
 use crate::machine::execute::lift::NodeLift;
+use crate::machine::execute::ErasedValue;
 use crate::machine::model::ast::KExpression;
 use crate::machine::{KError, KErrorKind, RuntimeArena, Scope};
 use crate::parse::{parse, parse_with_path};
@@ -60,8 +61,9 @@ impl<'run> KoanRuntime<'run> {
         // errored terminal needs no lift.
         for &id in &top_level {
             if let Ok((value, Some(frame))) = self.sched.read_result_with_frame(id) {
-                let lifted = self.lift(value, &frame, root.arena);
-                self.sched.rehome_terminal(id, Ok(lifted));
+                // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
+                let lifted = self.lift(unsafe { value.reattach() }, &frame, root.arena);
+                self.sched.rehome_terminal(id, Ok(ErasedValue::erase(lifted)));
             }
         }
         // A bare top-level expression is an untyped resolution boundary: an unstamped

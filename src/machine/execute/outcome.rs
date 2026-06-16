@@ -194,6 +194,40 @@ impl ErasedCont {
     }
 }
 
+/// A [`Carried`] inter-node value with its `'run` erased to `'static` — the scheduler's value type
+/// parameter, instantiated by the Koan workload. Mirrors [`ErasedCont`] / [`ErasedContract`] for the
+/// value channel: `erase` forgets the value's lifetime for storage in the scheduler's lifetime-free
+/// slot table; `reattach` transmutes it back to a `'run` that the producer-frame `Rc` co-stored in
+/// the slot pins (or, for a frameless / run-arena value, the run arena keeps live). The scheduler
+/// stores this opaquely (`Scheduler<V>`) and never inspects it; only the workload erases / re-anchors.
+#[derive(Clone, Copy)]
+pub(in crate::machine::execute) struct ErasedValue {
+    inner: Carried<'static>,
+}
+
+impl ErasedValue {
+    /// Erase a live terminal to its storable `'static` form. Safe: forgetting a lifetime for storage
+    /// cannot fabricate one — the value is re-anchored by [`Self::reattach`] before any use.
+    pub(in crate::machine::execute) fn erase(value: Carried<'_>) -> Self {
+        // SAFETY: `Carried<'a>` and `Carried<'static>` share layout (a lifetime never changes
+        // representation); the erased value is stored, not dereferenced, until `reattach`.
+        ErasedValue {
+            inner: unsafe { std::mem::transmute::<Carried<'_>, Carried<'static>>(value) },
+        }
+    }
+
+    /// Re-anchor the stored terminal to a caller-chosen `'run`. The single fabrication for this
+    /// carrier — the value channel's twin of `pin_carried_to_run`.
+    ///
+    /// SAFETY: the slot's co-stored producer-frame `Rc` (or, for a frameless value, the run arena)
+    /// pins the value's backing arena for as long as the slot is `Done`; the caller re-anchors only
+    /// while the slot is live and reads the value transiently, so the fabricated `'run` cannot
+    /// outlive the pointee. `'run` is driven by the return-type annotation.
+    pub(in crate::machine::execute) unsafe fn reattach<'run>(self) -> Carried<'run> {
+        std::mem::transmute::<Carried<'static>, Carried<'run>>(self.inner)
+    }
+}
+
 /// Dep-finish continuation: short-circuit on the first errored dep (labelled with `dep_error_frame`),
 /// else hand the resolved [`Carried`] values to a value-only [`DepFinish`]. The short-circuit
 /// the handler used to do is now this combinator's job, so the node stays uniform.

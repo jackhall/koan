@@ -2,7 +2,7 @@
 
 use super::super::super::outcome::Outcome;
 use crate::builtins::default_scope;
-use crate::machine::execute::KoanRuntime;
+use crate::machine::execute::{ErasedValue, KoanRuntime};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::ReturnType;
 use crate::machine::model::{Carried, KObject};
@@ -71,7 +71,7 @@ fn dep_finish_short_circuits_on_dep_error() {
     let _ = store.queues.pop_next();
     let _ = store.queues.pop_next();
     let value = arena.alloc_object(KObject::Number(99.0));
-    store.store.set_result(dep_ok, Ok(Carried::Object(value)));
+    store.store.set_result(dep_ok, Ok(ErasedValue::erase(Carried::Object(value))));
     store.store.set_result(
         dep_err,
         Err(KError::new(KErrorKind::ShapeError(

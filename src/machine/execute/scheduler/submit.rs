@@ -11,7 +11,7 @@ use super::super::DepFinish;
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
-impl<'run> Scheduler<'run> {
+impl<'run, V: Copy> Scheduler<V> {
     /// The explicit chain a submission passes when there is no ambient `active_chain`: a detached
     /// chain so the visibility predicate treats every scope as "complete" (test fixtures /
     /// top-level), else `None` to inherit the ambient one.
