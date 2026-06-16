@@ -5,7 +5,7 @@ use crate::machine::core::{assemble_body_chain, ScopeId};
 use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 
-use super::super::lift::{lift_kobject, lift_ktype};
+use super::super::lift::NodeLift;
 use super::super::nodes::{CallFrame, Node, NodeStep, NodeWork};
 use super::super::runtime::KoanRuntime;
 use super::Scheduler;
@@ -53,20 +53,35 @@ impl<'run> KoanRuntime<'run> {
             post.step_scope().drain_pending();
             match step {
                 NodeStep::Done(output) => {
-                    // Lift the terminal out of the dying per-call frame into the surviving
-                    // captured-scope arena (`dest_arena`, a genuine `&'run`). A non-dying run frame
-                    // (empty arena; top-level values live in the run arena) reads as frameless.
-                    let dest_arena = post.step_scope().outer().map(|o| o.arena);
                     let frame = (!post.prev_frame.non_dying()).then_some(&post.prev_frame);
                     // Re-anchor the erased contract against the step's cart, witnessed by `frame`.
-                    // `compute_done_output` consults the contract only when `frame` is `Some` (a
-                    // real per-call frame, which is exactly when a contract is set), so a contract
-                    // on the non-dying run frame is harmlessly skipped.
+                    // The contract layer consults it only when `frame` is `Some` (a real per-call
+                    // frame, which is exactly when a contract is set), so a contract on the
+                    // non-dying run frame is harmlessly skipped.
                     let prev_function = match (prev_contract, frame) {
                         (Some(c), Some(witness)) => Some(unsafe { c.reattach(witness) }),
                         _ => None,
                     };
-                    let result = compute_done_output(output, frame, dest_arena, prev_function);
+                    // Contract layer: check the declared return and stamp the declared type, in
+                    // place in the producer frame's own arena (`producer_arena`, where `output`
+                    // already lives). No lift — kept separate from the relocation below.
+                    let producer_arena = post.step_scope().arena;
+                    let checked =
+                        enforce_return_contract(output, frame, prev_function, producer_arena);
+                    // Lift layer: relocate the now-final producer-frame terminal into the surviving
+                    // captured-scope arena (`dest_arena`, a genuine `&'run`) via the workload hook.
+                    // A non-dying run frame (empty arena; top-level values live in the run arena)
+                    // reads as frameless and passes through untouched.
+                    let result = match (checked, frame) {
+                        (Ok(c), Some(src)) => {
+                            let dest =
+                                post.step_scope().outer().map(|o| o.arena).expect(
+                                    "per-call scope must have an outer (its captured scope)",
+                                );
+                            Ok(self.lift(c, src, dest))
+                        }
+                        (other, _) => other,
+                    };
                     if result.is_err() {
                         post.step_scope().clear_placeholders_for_producer(id);
                     }
@@ -216,47 +231,39 @@ impl<'run> Scheduler<'run> {
     }
 }
 
-/// Lift a `Done` step's terminal out of the dying per-call `frame` into `dest_arena` (the
-/// surviving captured-scope arena) and enforce the declared return contract, returning the slot's
-/// final terminal. A `None` frame (a frameless slot or the non-dying run frame) passes the value
-/// through untouched. A failed return-type check becomes `Err` — the caller clears placeholders
-/// and finalizes. Pure: the scope-derived inputs were captured by the caller while the step's
-/// scope was still ambient, so this holds no scope borrow.
-fn compute_done_output<'run>(
+/// Enforce a `Done` step's declared return contract, in place in the producer frame, returning the
+/// terminal still bound to that frame (the relocation into the captured-scope arena is a separate
+/// step — the `lift` hook — run by the caller). A `None` frame (a frameless slot or the non-dying
+/// run frame) passes the value through untouched. A failed return-type check becomes `Err` — the
+/// caller clears placeholders and finalizes. `producer_arena` is the producer frame's own arena,
+/// where a re-tagged `Object` is re-allocated in place. Pure: the scope-derived inputs were
+/// captured by the caller while the step's scope was still ambient, so this holds no scope borrow.
+fn enforce_return_contract<'run>(
     output: Result<Carried<'run>, KError>,
     frame: Option<&Rc<crate::machine::core::CallArena>>,
-    dest_arena: Option<&'run crate::machine::core::RuntimeArena>,
     prev_function: Option<ReturnContract<'run>>,
+    producer_arena: &'run crate::machine::core::RuntimeArena,
 ) -> Result<Carried<'run>, KError> {
     match (output, frame) {
-        (Ok(Carried::Object(v)), Some(frame)) => {
-            let dest = dest_arena.expect("per-call scope must have an outer (its captured scope)");
-            let mut lifted_obj = lift_kobject(v, frame);
-            match check_declared_return(
-                prev_function,
-                |d| d.matches_value(&lifted_obj),
-                || lifted_obj.ktype().name(),
-            ) {
+        (Ok(Carried::Object(v)), Some(_)) => {
+            match check_declared_return(prev_function, |d| d.matches_value(v), || v.ktype().name())?
+            {
                 // Re-tag to the declared return type so downstream dispatch sees the contract
-                // (may coarsen, e.g. `List<Number>` through `:(LIST OF Any)` -> `List<Any>`).
-                Ok(Some(declared)) => lifted_obj = lifted_obj.stamp_type(declared),
-                Ok(None) => {}
-                Err(err) => return Err(err),
+                // (may coarsen, e.g. `List<Number>` through `:(LIST OF Any)` -> `List<Any>`). The
+                // re-tag is a shallow rebuild re-allocated in place in the producer frame.
+                Some(declared) => {
+                    let stamped = v.deep_clone().stamp_type(declared);
+                    Ok(Carried::Object(producer_arena.alloc_object(stamped)))
+                }
+                None => Ok(Carried::Object(v)),
             }
-            Ok(Carried::Object(dest.alloc_object(lifted_obj)))
         }
-        // A type flowing the type channel re-anchors any `Module` frame and re-allocs into the
-        // destination arena, after the shared declared-return check via `matches_type`. The type
-        // channel ignores the returned declared type — unlike the `Object` arm, it does not re-tag.
-        (Ok(Carried::Type(t)), Some(frame)) => {
-            let dest = dest_arena.expect("per-call scope must have an outer (its captured scope)");
-            let lifted_t = lift_ktype(t, frame);
-            check_declared_return(
-                prev_function,
-                |d| d.matches_type(&lifted_t),
-                || lifted_t.name(),
-            )?;
-            Ok(Carried::Type(dest.alloc_ktype(lifted_t)))
+        // A type flowing the type channel runs the shared declared-return check via `matches_type`.
+        // The type channel ignores the returned declared type — unlike the `Object` arm, it does
+        // not re-tag — so the in-frame value passes through unchanged.
+        (Ok(Carried::Type(t)), Some(_)) => {
+            check_declared_return(prev_function, |d| d.matches_type(t), || t.name())?;
+            Ok(Carried::Type(t))
         }
         (Err(e), Some(_frame)) => {
             let with_frame = match prev_function {
