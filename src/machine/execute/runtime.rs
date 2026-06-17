@@ -107,6 +107,24 @@ impl<'run> KoanRuntime<'run> {
         unsafe { self.sched.read(id).reattach() }
     }
 
+    /// Pull a dep's terminal lifted into `dest` (consumer-pull): a framed terminal is copied out of
+    /// its producer frame, a frameless / run-arena terminal is forwarded as-is. The `unsafe` reattach
+    /// is internal — the slot's co-stored frame `Rc` / run arena pins the value for the transient
+    /// read, and the lift copies it into `dest` — so the run loop's dep collection stays safe.
+    pub(in crate::machine::execute) fn read_lifted(
+        &self,
+        dep: NodeId,
+        dest: &'run crate::machine::core::RuntimeArena,
+    ) -> Result<crate::machine::model::Carried<'run>, KError> {
+        match self.sched.read_result_with_frame(dep) {
+            // SAFETY: the slot's co-stored frame Rc pins the value; the lift copies it into `dest`.
+            Ok((value, Some(frame))) => Ok(self.lift(unsafe { value.reattach() }, &frame, dest)),
+            // SAFETY: as above; a frameless / run-arena terminal already survives, forwarded as-is.
+            Ok((value, None)) => Ok(unsafe { value.reattach() }),
+            Err(e) => Err(e.clone()),
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.sched.len()
     }

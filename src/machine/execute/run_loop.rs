@@ -15,7 +15,6 @@ use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 
 use super::dispatch::{current_scope, reattach_node_scope, SchedulerView};
 use super::finalize::NodeFinalize;
-use super::lift::NodeLift;
 use super::nodes::{CallFrame, Node, NodePayload, NodeScope, NodeStep, NodeWork};
 use super::outcome::deps_at_step;
 use super::runtime::KoanRuntime;
@@ -219,18 +218,8 @@ impl<'run> KoanRuntime<'run> {
         // would outlive its own dying frame. A frameless / run-arena terminal already survives and
         // is forwarded as-is.
         let dest = current_scope(&self.ambient).arena;
-        let results: Vec<Result<Carried<'run>, KError>> = deps
-            .iter()
-            .map(|d| match self.sched.read_result_with_frame(*d) {
-                // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
-                Ok((value, Some(frame))) => {
-                    Ok(self.lift(unsafe { value.reattach() }, &frame, dest))
-                }
-                // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
-                Ok((value, None)) => Ok(unsafe { value.reattach() }),
-                Err(e) => Err(e.clone()),
-            })
-            .collect();
+        let results: Vec<Result<Carried<'run>, KError>> =
+            deps.iter().map(|d| self.read_lifted(*d, dest)).collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
         // The pull-lifted values die with this consumer's frame; deliver them at that `'s`.
         let outcome = cont(

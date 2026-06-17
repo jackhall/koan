@@ -881,7 +881,6 @@ digraph {
     "koan::machine::execute::run_loop" -> "koan::machine::core::scope_id" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::run_loop" -> "koan::machine::execute::dispatch::ctx" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::run_loop" -> "koan::machine::execute::finalize" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
-    "koan::machine::execute::run_loop" -> "koan::machine::execute::lift" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::run_loop" -> "koan::machine::execute::nodes" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::run_loop" -> "koan::machine::execute::outcome" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::run_loop" -> "koan::machine::execute::runtime" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge

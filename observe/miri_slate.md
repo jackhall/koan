@@ -10,8 +10,8 @@ src/machine/execute/dispatch/ctx.rs: 2
 src/machine/execute/finalize.rs: 1
 src/machine/execute/nodes.rs: 1
 src/machine/execute/outcome.rs: 8
-src/machine/execute/run_loop.rs: 3
-src/machine/execute/runtime.rs: 3
+src/machine/execute/run_loop.rs: 1
+src/machine/execute/runtime.rs: 5
 src/machine/execute/runtime/interpret.rs: 1
 src/machine/execute/runtime/submit.rs: 1
 src/machine/model/values/carried.rs: 2
@@ -318,7 +318,7 @@ drains the root into the run arena.
 
 - `tail_call_stamps_result_against_first_callers_return_contract`
 
-**`ErasedValue` re-attach — workload read boundary** ([src/machine/execute/runtime.rs](../src/machine/execute/runtime.rs), [src/machine/execute/runtime/interpret.rs](../src/machine/execute/runtime/interpret.rs), [src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs), [src/machine/execute/dispatch/ctx.rs](../src/machine/execute/dispatch/ctx.rs))
+**`ErasedValue` re-attach — workload read boundary** ([src/machine/execute/runtime.rs](../src/machine/execute/runtime.rs), [src/machine/execute/runtime/interpret.rs](../src/machine/execute/runtime/interpret.rs), [src/machine/execute/dispatch/ctx.rs](../src/machine/execute/dispatch/ctx.rs))
 — the `unsafe { value.reattach() }` calls where the workload reads a terminal back out of the
 generic `Scheduler<V>` (the Forward-arm pull, the drain-boundary re-home, the consumer-pull dep lift,
 and `SchedulerView::read_result`) run the `ErasedValue` transmute defined in the group above with
@@ -332,10 +332,11 @@ every value now flows through `ErasedValue`) pins them. No separate minimal test
 above; pinned by `tail_call_stamps_result_against_first_callers_return_contract` and end-to-end.
 No separate minimal test.
 
-**`ErasedValue` re-attach — consumer-pull dep lift** ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs))
-— `KoanRuntime::run_wait` reads each dep terminal out of the generic store (`reattach`) before the
-consumer-pull `NodeLift` copies it into the consuming frame; same transmute as the group above, with
-none of its own. Pinned by the lift/park slate tests end-to-end. No separate minimal test.
+**`ErasedValue` re-attach — consumer-pull dep lift** ([src/machine/execute/runtime.rs](../src/machine/execute/runtime.rs))
+— `KoanRuntime::read_lifted` reads each dep terminal out of the generic store (`reattach`) and the
+consumer-pull `NodeLift` copies a framed one into the consuming frame; `run_wait` collects deps by
+calling it with no `unsafe` of its own. Same transmute as the group above. Pinned by the lift/park
+slate tests end-to-end. No separate minimal test.
 
 ## Adding tests to the slate
 
@@ -357,9 +358,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-17: 620s — 25 tests, 0 leaks, 0 UB
 - 2026-06-17: 614s — 25 tests, 0 leaks, 0 UB
 - 2026-06-17: 653s — 26 tests, 0 leaks, 0 UB
 - 2026-06-17: 646s — 25 tests, 0 leaks, 0 UB
 - 2026-06-16: 637s — 25 tests, 0 leaks, 0 UB
-- 2026-06-16: 617s — 25 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
