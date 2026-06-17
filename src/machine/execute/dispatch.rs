@@ -31,9 +31,9 @@ use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
 
 use super::nodes::NodeWork;
 use super::runtime::KoanWorkload;
-use crate::scheduler::Scheduler;
 use super::{ignore_results, DepFinish, ErasedCont};
 use crate::machine::core::kfunction::action::{DepPlacement, FramePlacement};
+use crate::scheduler::Scheduler;
 
 pub(in crate::machine::execute) mod apply_callable;
 mod constructors;

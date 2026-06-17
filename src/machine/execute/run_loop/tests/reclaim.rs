@@ -125,7 +125,10 @@ fn free_does_not_recurse_through_notify_edges() {
     freed.sort();
     let mut expected = vec![s_owner, s_owned];
     expected.sort();
-    assert_eq!(freed, expected, "free must not recurse through Notify edges");
+    assert_eq!(
+        freed, expected,
+        "free must not recurse through Notify edges"
+    );
     assert!(
         sched.scheduler().result_is_some(s_sibling),
         "sibling's result must survive free of a slot that only parked on it",

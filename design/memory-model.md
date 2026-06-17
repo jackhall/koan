@@ -152,6 +152,14 @@ concrete Koan type and the `core → execute` layering is not inverted. The live
 parameter on `reattach`: each call site holds the pinning `Rc` (the frame cart, the run arena)
 across the re-anchored read, and the per-carrier doc names which one.
 
+A sibling primitive in the same module, `pin_deref`, owns the *other* unsafe shape — re-borrowing a
+raw `*const T` whose pointee a heap pin holds fixed (the self-referential `Rc<CallArena>` arena
+pointer, the storage engine's escape frame). Erase/reattach moves a value between lifetimes;
+`pin_deref` recovers a reference from a pointer the borrow checker never tracked, so it is the one
+audited home for the `&*ptr` the arena and storage engine would otherwise each open inline. The
+store side carries no `unsafe` at all: `ScopePtr::erase` builds its stored pointer with the safe
+`NonNull::from(scope).cast()`, deferring every fabrication hazard to the re-attach.
+
 Every family implements the `Stored` trait and routes the one gated
 [`alloc`](../src/machine/core/storage_frame.rs) engine. `anchors_to` is a required trait
 method, so each family declares its cycle behavior at its impl site: `KObject` and

@@ -63,7 +63,8 @@ impl<'run> KoanRuntime<'run> {
             if let Ok((value, Some(frame))) = self.sched.read_result_with_frame(id) {
                 // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
                 let lifted = self.lift(unsafe { value.reattach() }, &frame, root.arena);
-                self.sched.rehome_terminal(id, Ok(ErasedValue::erase(lifted)));
+                self.sched
+                    .rehome_terminal(id, Ok(ErasedValue::erase(lifted)));
             }
         }
         // A bare top-level expression is an untyped resolution boundary: an unstamped

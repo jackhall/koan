@@ -27,8 +27,8 @@ use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
 use super::super::runtime::KoanWorkload;
-use crate::scheduler::Scheduler;
 use super::{park_on_deps, resolve_name_part, DepRequest, Outcome, PendingSub};
+use crate::scheduler::Scheduler;
 
 /// Re-anchor a raw [`NodeScope`] handle into a usable `&Scope` — the Koan scope interpretation the
 /// scheduler no longer owns. The driver hands back the opaque payload
@@ -58,9 +58,7 @@ pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
 /// names none. Panics outside a slot step (no ambient payload); within a step the scope is always
 /// present — an `Anchored` slot carries its own pointer, and a `Yoked` slot's active cart is never
 /// emptied mid-step (an invoke reuses the reserve, not the active cart).
-pub(in crate::machine::execute) fn current_scope<'run>(
-    ambient: &AmbientContext,
-) -> &Scope<'run> {
+pub(in crate::machine::execute) fn current_scope<'run>(ambient: &AmbientContext) -> &Scope<'run> {
     let payload = ambient
         .active_payload()
         .expect("a slot step installs the ambient payload (and a Yoked slot keeps its frame)");

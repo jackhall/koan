@@ -14,6 +14,10 @@
 //! The carrier families ([`Reattachable`] impls) live beside their own types — `Carried`,
 //! `KObject`, `ReturnContract`, the `NodeCont` continuation — so this module names no concrete
 //! Koan type and the `core → execute` layering is not inverted.
+//!
+//! A sibling concern lives here too: [`pin_deref`] re-borrows a raw `*const T` whose pointee a heap
+//! pin (a frame `Rc`, the owning arena) holds fixed — the self-referential arena-pointer derefs that
+//! erase/reattach can't express, because the pointer, not its lifetime, is what's being recovered.
 
 use std::mem::ManuallyDrop;
 
@@ -135,6 +139,22 @@ pub(crate) unsafe fn reattach_slice<'i, 'o, 'a, 'b, T: Reattachable>(
 ) -> &'o [T::At<'b>] {
     // SAFETY: see the function contract; `&[_]` is a fat pointer, retyped lifetime-only.
     unsafe { retype::<&'i [T::At<'a>], &'o [T::At<'b>]>(slice) }
+}
+
+/// Materialize a `&'x T` from a raw `*const T` whose pointee a heap pin keeps fixed in place for
+/// `'x` — the audited home for the self-referential `Rc<CallArena>` arena-pointer derefs (the
+/// per-call arena and its escape frame) and the functor-result arena pin. Distinct from the
+/// `Reattachable` retypes above: those move a *value* between lifetimes; this re-borrows a pointer
+/// whose pointee an owning `Rc` (or the frame holding it) cannot relocate or drop while borrowed.
+///
+/// # Safety
+///
+/// `ptr` must be non-null, aligned, and point at a live, initialized `T` for all of `'x`; the caller
+/// holds the pin (the frame `Rc`, the owning arena) across the borrow. `'x` is driven by the
+/// return-type annotation, not a turbofish argument.
+pub(crate) unsafe fn pin_deref<'x, T: ?Sized>(ptr: *const T) -> &'x T {
+    // SAFETY: see the function contract — the caller's held pin keeps the pointee live for `'x`.
+    unsafe { &*ptr }
 }
 
 #[cfg(test)]

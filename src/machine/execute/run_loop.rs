@@ -223,7 +223,9 @@ impl<'run> KoanRuntime<'run> {
             .iter()
             .map(|d| match self.sched.read_result_with_frame(*d) {
                 // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
-                Ok((value, Some(frame))) => Ok(self.lift(unsafe { value.reattach() }, &frame, dest)),
+                Ok((value, Some(frame))) => {
+                    Ok(self.lift(unsafe { value.reattach() }, &frame, dest))
+                }
                 // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
                 Ok((value, None)) => Ok(unsafe { value.reattach() }),
                 Err(e) => Err(e.clone()),

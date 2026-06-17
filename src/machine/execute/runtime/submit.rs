@@ -11,9 +11,9 @@ use crate::machine::core::{assemble_body_chain, ScopeId, ScopePtr};
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallArena, LexicalFrame, NodeId, Scope};
 
-use super::super::nodes::{NodeScope, NodeWork};
 #[cfg(test)]
 use super::super::nodes::NodePayload;
+use super::super::nodes::{NodeScope, NodeWork};
 use super::super::outcome::dep_error_frame;
 use super::super::{short_circuit, DepFinish, ErasedCont};
 use super::{KoanRuntime, KoanWorkload};

@@ -18,10 +18,10 @@ use std::rc::Rc;
 
 use typed_arena::Arena;
 
-use super::reattach::reattach_ref;
+use super::reattach::{pin_deref, reattach_ref};
 use super::scope::Scope;
 use super::scope_ptr::{ScopeFamily, ScopePtr};
-use super::storage_frame::{StorageFrame, Stored, StorageProfile};
+use super::storage_frame::{StorageFrame, StorageProfile, Stored};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::KType;
@@ -289,7 +289,7 @@ impl CallArena {
         let arena_ptr: *const RuntimeArena = &rc.arena;
         // SAFETY: heap-pinning keeps `arena_ptr` valid for the Rc's lifetime, which exceeds
         // this function's duration; `outer` lives long enough by caller contract.
-        let arena_ref: &'static RuntimeArena = unsafe { &*arena_ptr };
+        let arena_ref: &'static RuntimeArena = unsafe { pin_deref(arena_ptr) };
         // SAFETY: lexical-scoping invariant — `outer` (the captured definition scope, or a
         // longer-lived ancestor) outlives this frame, so erasing its lifetime to `'static`
         // for the child's `outer` link is sound; the child borrow is re-anchored on read.
@@ -431,7 +431,7 @@ impl CallArena {
         this.arena = RuntimeArena::with_escape(escape);
         let arena_ptr: *const RuntimeArena = &this.arena;
         // SAFETY: heap-pinned via the `Rc` we hold; pointer is stable for the Rc's lifetime.
-        let arena_ref: &'static RuntimeArena = unsafe { &*arena_ptr };
+        let arena_ref: &'static RuntimeArena = unsafe { pin_deref(arena_ptr) };
         let mut child = Scope::child_under(outer_static);
         child.arena = arena_ref;
         // `arena_ref` is `&'static` (the `unsafe { &*arena_ptr }` above is where the `'static`

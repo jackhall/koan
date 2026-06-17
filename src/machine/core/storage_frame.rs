@@ -18,6 +18,8 @@ use std::ptr::NonNull;
 
 use typed_arena::Arena;
 
+use super::reattach::pin_deref;
+
 /// A workload's declaration of what a [`StorageFrame`] stores for it. `Storage` is the bundle of
 /// typed sub-arenas the frame owns; the workload's [`Stored`] impls project each family out of it.
 pub trait StorageProfile {
@@ -138,7 +140,7 @@ impl<W: StorageProfile> StorageFrame<W> {
     pub(crate) fn alloc<'a, K: Stored<W>>(&'a self, value: K::At<'a>) -> &'a K::At<'a> {
         if let Some(escape_ptr) = self.escape {
             if K::anchors_to(&value, self as *const StorageFrame<W>) {
-                let escape_ref: &'a StorageFrame<W> = unsafe { escape_ptr.as_ref() };
+                let escape_ref: &'a StorageFrame<W> = unsafe { pin_deref(escape_ptr.as_ptr()) };
                 return escape_ref.alloc::<K>(value);
             }
         }
@@ -147,7 +149,7 @@ impl<W: StorageProfile> StorageFrame<W> {
         let p: *const K::At<'static> = stored;
         // The post-store hook fires on the final storing frame (this one, after any redirect
         // above), so a recorded address tracks its true owner.
-        K::record_local(self, unsafe { &*p });
+        K::record_local(self, unsafe { pin_deref(p) });
         // SAFETY: `At<'static>`/`At<'a>` share layout; re-anchor the `'static` store to the
         // frame-bounded `'a`. The returned `&'a` cannot outlive `&'a self`, so no `'static`-claiming
         // reference escapes the frame's own borrow.

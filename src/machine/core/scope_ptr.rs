@@ -64,12 +64,11 @@ impl<'a> ScopePtr<'a> {
     /// in the brand. Safe: it consumes a real `&'a Scope<'a>`, so it cannot fabricate a
     /// lifetime longer than the borrow already proved.
     pub fn erase(scope: &'a Scope<'a>) -> Self {
-        // `Scope` is invariant in `'a`, so the through-`'static` cast is required.
-        #[allow(clippy::unnecessary_cast)]
-        let ptr = scope as *const Scope<'_> as *const Scope<'static>;
-        // Non-null: `ptr` is derived from a reference.
+        // Non-null by construction (from a reference); `cast` retags the pointee to `'static` for
+        // storage (`Scope` is invariant, so the lifetime cannot coerce). No `unsafe`: the
+        // fabrication hazard is deferred to the re-attach, not the store.
         ScopePtr {
-            ptr: unsafe { NonNull::new_unchecked(ptr as *mut Scope<'static>) },
+            ptr: NonNull::from(scope).cast::<Scope<'static>>(),
             _brand: PhantomData,
         }
     }
@@ -82,12 +81,10 @@ impl<'a> ScopePtr<'a> {
     /// [`Self::erase`]); forgetting the lifetime cannot fabricate one. Used by `CallArena` and by a
     /// scheduler node's `NodeScope::Anchored`.
     pub fn erase_static(scope: &Scope<'_>) -> ScopePtr<'static> {
-        // `Scope` is invariant in `'a`, so the through-`'static` cast is required.
-        #[allow(clippy::unnecessary_cast)]
-        let ptr = scope as *const Scope<'_> as *const Scope<'static>;
-        // Non-null: `ptr` is derived from a reference.
+        // Non-null by construction; `cast` retags to `'static` (same store-side erasure as
+        // [`Self::erase`]). Safe: forgetting the lifetime for storage cannot fabricate one.
         ScopePtr {
-            ptr: unsafe { NonNull::new_unchecked(ptr as *mut Scope<'static>) },
+            ptr: NonNull::from(scope).cast::<Scope<'static>>(),
             _brand: PhantomData,
         }
     }
@@ -155,11 +152,10 @@ impl<'a> BoundedScopePtr<'a> {
     /// re-hands behind a reader-bounded borrow — the free `'a` is never cashed unbounded, so a
     /// shorter witness cannot fabricate a longer-lived reference. Safe by construction.
     pub fn erase<'b>(scope: &'b Scope<'a>) -> Self {
-        #[allow(clippy::unnecessary_cast)]
-        let ptr = scope as *const Scope<'_> as *const Scope<'static>;
         BoundedScopePtr {
-            // Non-null: derived from a reference.
-            ptr: unsafe { NonNull::new_unchecked(ptr as *mut Scope<'static>) },
+            // Non-null by construction; `cast` retags to `'static` for storage. Safe — the free
+            // content `'a` is only ever cashed behind the reader-bounded [`Self::get`].
+            ptr: NonNull::from(scope).cast::<Scope<'static>>(),
             _brand: PhantomData,
         }
     }

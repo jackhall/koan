@@ -1,10 +1,10 @@
 use std::rc::Rc;
 
+use super::runtime::KoanWorkload;
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::{ScopeId, ScopePtr};
 use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId};
-use super::runtime::KoanWorkload;
 
 /// The generic per-node state lives in [`crate::scheduler::nodes`]; re-exported here so the Koan
 /// execute tree has a single `nodes` surface combining them with the Koan-side [`NodeStep`] /

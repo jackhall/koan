@@ -3,8 +3,8 @@
 <!-- slate-fingerprint
 src/machine/core/arena.rs: 12
 src/machine/core/kfunction/body.rs: 1
-src/machine/core/reattach.rs: 17
-src/machine/core/scope_ptr.rs: 8
+src/machine/core/reattach.rs: 19
+src/machine/core/scope_ptr.rs: 5
 src/machine/core/storage_frame.rs: 4
 src/machine/execute/dispatch/ctx.rs: 2
 src/machine/execute/finalize.rs: 1
@@ -80,8 +80,8 @@ that tree-borrows shape over the engine `RuntimeArena` (= `StorageFrame<KoanStor
 
 **Cycle gate** ([src/machine/core/storage_frame.rs](../src/machine/core/storage_frame.rs)) — the generic `alloc`
 engine redirects a value whose family `anchors_to` answers true for `self` (a self-anchored
-`Rc<CallArena>`) to the escape frame via `escape_ptr.as_ref()`, breaking the storage cycle that
-closure-escape returns can otherwise produce. The Koan `anchors_to` walkers that drive the
+`Rc<CallArena>`) to the escape frame via the audited `pin_deref` on the escape pointer, breaking the
+storage cycle that closure-escape returns can otherwise produce. The Koan `anchors_to` walkers that drive the
 decision live in [src/machine/core/arena.rs](../src/machine/core/arena.rs).
 
 - `alloc_object_redirects_self_anchored_value_to_escape_arena`
@@ -217,7 +217,11 @@ primitive: `CarriedFamily` / `ResultCarriedFamily`
 ([src/machine/model/values/kobject.rs](../src/machine/model/values/kobject.rs)), `ContractFamily`,
 `ContFamily`, `ScopeFamily`, and `OutcomeFamily`. The test erases a borrow-carrying family to the
 `'static` store, re-anchors it, and reads through every entry point, re-reading the first borrow
-after the helper calls to catch a tree-borrows regression.
+after the helper calls to catch a tree-borrows regression. The module's sibling `pin_deref` (the one
+audited raw heap-pin deref, materializing a `&'x T` from an `Rc`-pinned `*const T`) carries no
+minimal test of its own: every `CallArena` construction routes it (`CallArena` lifetime erasure /
+`try_reset_for_tail` groups), and the storage engine's escape redirect routes it under
+`runtime_arena_alloc_while_prior_ref_live`.
 
 - `erased_roundtrip_and_helpers`
 
@@ -353,9 +357,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-17: 614s — 25 tests, 0 leaks, 0 UB
 - 2026-06-17: 653s — 26 tests, 0 leaks, 0 UB
 - 2026-06-17: 646s — 25 tests, 0 leaks, 0 UB
 - 2026-06-16: 637s — 25 tests, 0 leaks, 0 UB
 - 2026-06-16: 617s — 25 tests, 0 leaks, 0 UB
-- 2026-06-16: 607s — 25 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

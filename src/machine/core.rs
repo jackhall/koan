@@ -26,8 +26,8 @@ pub use bindings::{
 pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};
-pub use reattach::{Erased, Reattachable};
 pub(crate) use reattach::{reattach_ref, reattach_slice, reattach_value};
+pub use reattach::{Erased, Reattachable};
 pub use scope::{KFuture, Scope, ScopeKind};
 pub use scope_id::ScopeId;
 pub use scope_ptr::ScopePtr;

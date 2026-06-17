@@ -18,9 +18,9 @@ pub mod body;
 pub mod exec;
 pub mod pick;
 
+pub use crate::scheduler::NodeId;
 pub use action::ActionFn;
 pub use body::{BinderBucketFn, BinderNameFn, Body};
-pub use crate::scheduler::NodeId;
 pub use pick::ClassifiedSlots;
 
 /// SAFETY: the captured scope is allocated in a `RuntimeArena` that outlives this

@@ -143,8 +143,7 @@ impl<'run> KoanRuntime<'run> {
     /// empties it), so the `expect` cannot fire. `active_frame` itself stays `Option` because it is
     /// legitimately `None` *between* steps.
     pub(in crate::machine::execute) fn exit_slot_step(&mut self, guard: SlotStepGuard) -> PostStep {
-        let post_step_frame =
-            std::mem::replace(&mut self.ambient.active_frame, guard.prev_frame);
+        let post_step_frame = std::mem::replace(&mut self.ambient.active_frame, guard.prev_frame);
         let post_step_reserve =
             std::mem::replace(&mut self.ambient.active_reserve, guard.prev_reserve);
         self.ambient.active_payload = guard.prev_payload;
