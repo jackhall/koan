@@ -256,11 +256,3 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   under `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB and zero process-exit
   leaks, signing off the memory model as it stands today. The canonical
   slate list lives in [observe/miri_slate.md](../observe/miri_slate.md).
-
-## Open work
-
-- **Workload-independent DAG runtime**
-  ([roadmap/workload-independent-dag-runtime.md](../roadmap/refactor/workload-independent-dag-runtime.md)).
-  The node-scope eviction has landed (node scopes are an erased `ScopePtr` payload re-anchored at
-  read, not a live `&'run` borrow). Remaining: erase the continuation's `'run` captures and make the
-  scheduler generic over its workload payload so the run lifetime is confined to `KoanRuntime`.

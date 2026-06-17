@@ -55,27 +55,33 @@ and names no AST.
 
 ## The dispatcher / scheduler boundary
 
+The scheduler ([`scheduler`](../src/scheduler.rs)) is a crate-root sibling of
+`machine`, not nested inside it: a workload-independent DAG of dependency-linked
+nodes, generic over a [`Workload`](../src/scheduler/workload.rs) and naming no Koan
+value, error, scope, memory, or AST type. The Koan interpreter is the sole
+workload — `machine::execute` instantiates it as `Scheduler<KoanWorkload>` and
+drives it from the run loop
+([`execute/run_loop.rs`](../src/machine/execute/run_loop.rs)) through the
+scheduler's inherent-method contract.
+
 The dispatch tree
-([`execute/dispatch/`](../src/machine/execute/dispatch.rs)) is a sibling
-of [`execute/scheduler/`](../src/machine/execute/run_loop.rs), not
-nested inside it. Every scheduler-facing step — a dispatch decide, a
-finish, a builtin body, an invoke — flows through one **decide → outcome →
-apply** contract: it decides against a read-only view, *returns* the
-scheduler mutations it wants as data, and a single harness method applies
-them. The three pieces:
+([`execute/dispatch/`](../src/machine/execute/dispatch.rs)) and the run-loop driver
+are both Koan-side. Every scheduler-facing step — a dispatch decide, a finish, a
+builtin body, an invoke — flows through one **decide → outcome → apply** contract:
+it decides against a read-only view, *returns* the scheduler mutations it wants as
+data, and a single harness method applies them. The three pieces:
 
 - **The read view** —
   [`SchedulerView<'run, 's>`](../src/machine/execute/dispatch/ctx.rs) wraps
-  `&'s Scheduler<'run>` (never `&mut`). It exposes only the reads a decide
-  needs: the static-over-the-step ones (`current_scope`, `chain_deref`,
-  `active_chain`, `build_bare_outcomes`) and the live reads of
-  *pre-existing* producers (`is_result_ready`, `would_create_cycle`,
-  `read_result`). It permits scope binding (interior-mutable `&Scope`) but
-  no graph write. The `DepGraph`, `NodeStore`, and active-frame fields stay
-  `pub(in execute::scheduler)`; the dispatch shape modules (`keyworded`,
-  `fn_value`, `single_poll`) never name scheduler fields directly. A future
-  scheduler internal rename (`active_chain` → ..., `DepGraph` split) is a
-  single-file change inside `scheduler/`.
+  `&'s Scheduler<KoanWorkload>` (never `&mut`) together with the driver's per-step
+  ambient context. It exposes only the reads a decide needs: the
+  static-over-the-step ones (`current_scope`, `chain_deref`, `in_contract_chain`,
+  `build_bare_outcomes`) and the live reads of *pre-existing* producers
+  (`is_result_ready`, `would_create_cycle`, `read_result`). It permits scope
+  binding (interior-mutable `&Scope`) but no graph write. The scheduler's `queues`
+  / `deps` / `store` fields stay `pub(in crate::scheduler)`; the dispatch shape
+  modules (`keyworded`, `fn_value`, `single_poll`) never name scheduler fields
+  directly.
 - **The effect** —
   [`Outcome<'run, 's>`](../src/machine/execute/outcome.rs) is the one currency
   every producer and finish returns (the dispatch-side peer of the builtin
@@ -100,7 +106,11 @@ them. The three pieces:
 - **The write harness** —
   [`KoanRuntime<'run>`](../src/machine/execute/runtime.rs) owns the `Scheduler`
   by composition (a `sched` field, not a `&mut` borrow) and is the **sole**
-  holder of `&mut Scheduler` across the execute tree. Its
+  holder of `&mut Scheduler` across the execute tree. The per-step *ambient*
+  state — the active per-call frame, the slot reserve, the run frame, the
+  executing slot's opaque payload, and the contract-chain flag — lives on the
+  driver ([`ambient`](../src/machine/execute/ambient.rs)), not the scheduler,
+  which is a pure DAG runtime. Its
   [`apply_outcome`](../src/machine/execute/runtime.rs) interprets a returned
   outcome into graph writes and the slot's `NodeStep`. Because only the harness
   reborrows the scheduler mutably, no decide handler holds `&mut Scheduler` —
@@ -115,13 +125,16 @@ them. The three pieces:
   resolved dep terminals, builds a `SchedulerView`, runs the `cont` closure,
   reclaims the owned-dep suffix, and hands the outcome to `apply_outcome`.
 
-`Scheduler`'s own surface is AST-free: it exposes read views plus the low-level
-write primitives (`submit_node`, `alloc_slot`, `add_owned_edge` /
-`add_park_edge`, `acquire_tail_frame`, `free`, `resolve_node_scope`,
-`ensure_run_frame`, scope / chain reads) — no method signature names a
-`KExpression` or an AST type. No trait wraps `Scheduler`: those graph-write
-primitives are inherent methods capped `pub(in crate::machine::execute)`, so
-only the harness reaches them. A builtin invoked mid-dispatch
+The scheduler reaches the driver only through its method contract, and every
+method names only `NodeId` and the workload's associated types — no signature
+names a `KExpression`, `Scope`, or AST type. `pop_next` / `take_for_run` /
+`replace` drive a slot's lifecycle; `submit_node` and the alias-resolving edge
+installs (`add_owned_edge` / `add_park_edge` / `splice_forward`) wire the graph;
+`finalize` / `free` / `reclaim_deps` terminalize and reclaim; `read*` /
+`is_result_ready` / `would_create_cycle` / `unresolved` are the reads. No trait
+wraps `Scheduler`: those are inherent methods capped `pub(crate)`, so only the
+Koan driver reaches them, and the `queues` / `deps` / `store` fields stay
+`pub(in crate::scheduler)`. A builtin invoked mid-dispatch
 (e.g. `newtype_construct`) routes through the shared
 [`run_action`](../src/machine/execute/runtime.rs) harness as a pure
 `Action → Outcome` lowering; `exec::invoke` reads the dispatcher's ambient
@@ -1353,13 +1366,3 @@ for test fixtures and builtin-registration paths.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
-- **Workload-independent DAG runtime**
-  ([roadmap/workload-independent-dag-runtime.md](../roadmap/refactor/workload-independent-dag-runtime.md)).
-  The continuation's *output* lifetime is already a per-step `'s` — lift is the scheduler's own
-  consumer-pull delivery step behind the `NodeLift` hook (see
-  [per-call-arena-protocol.md § Consumer-pull node-output lift](per-call-arena-protocol.md#consumer-pull-node-output-lift)).
-  But the scheduler still stores Koan-semantic state (a node's `scope` / `chain`) and
-  `'run`-capturing continuations, so `'run` still threads through every `scheduler/` file. Making the
-  scheduler generic over two lifetime-erased workload types — a node-stored payload and an
-  inter-node value, re-anchored to the node frame lifetime at run / read — evicts those concerns,
-  leaving a generic per-node-memory DAG runtime with `'run` confined to `KoanRuntime`.

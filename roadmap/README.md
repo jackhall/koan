@@ -81,9 +81,12 @@ What's shipped that the open items below build on:
   pull-lifts its deps into its own arena at read ([`run_wait`](../src/machine/execute/run_loop.rs))
   through the single [`NodeLift`](../src/machine/execute/lift.rs) workload hook, so an
   intermediate value dies with its consumer and only a consumer-less root drains to the run
-  arena. Return-contract enforcement stays a separate Done-time layer. The output-lifetime
-  shrink and lift hook are the prerequisite half of confining `'run` to `KoanRuntime`
-  ([workload-independent DAG runtime](refactor/workload-independent-dag-runtime.md)). See
+  arena. Return-contract enforcement stays a separate Done-time layer. This output-lifetime
+  shrink and lift hook were the prerequisite half of confining `'run` to `KoanRuntime`; the
+  *workload-independent DAG runtime* that completes it has shipped — the scheduler is a
+  crate-root [`mod scheduler`](../src/scheduler.rs) generic over a `Workload`, naming no Koan
+  value, scope, memory, or AST type, with the Koan driver in
+  [`execute::run_loop`](../src/machine/execute/run_loop.rs). See
   [design/per-call-arena-protocol.md § Consumer-pull node-output lift](../design/per-call-arena-protocol.md#consumer-pull-node-output-lift).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -234,7 +237,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
-- [Workload-independent DAG runtime](refactor/workload-independent-dag-runtime.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
@@ -323,7 +325,3 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
-- [Workload-independent DAG runtime](refactor/workload-independent-dag-runtime.md) — erase
-  per-node continuations and evict `scope` / `chain` into opaque workload payload (moving
-  `CallArena` in), confining `'run` to `KoanRuntime` and leaving a generic per-node-memory
-  DAG runtime.

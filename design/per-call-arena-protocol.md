@@ -338,10 +338,10 @@ The dispatcher reads the slot's reserve / active-frame state from the
 execution layer (see [execution-model.md § The dispatcher / scheduler
 boundary](execution-model.md#the-dispatcher--scheduler-boundary)):
 `dispatch::exec::invoke` is a pure decide against a `SchedulerView`, and the
-harness `apply_outcome` arm acquires the cart via `Scheduler::acquire_tail_frame`
-(an inherent write primitive) before handing it to the decide. The
-`active_frame` / `active_reserve` fields themselves stay
-`pub(in execute::scheduler)`; the accessor surface is what dispatch sees.
+harness `apply_outcome` arm acquires the cart via `KoanRuntime::acquire_tail_frame`
+before handing it to the decide. The `active_frame` / `active_reserve` state lives
+on the driver's ambient context (`KoanRuntime`), not the scheduler — the scheduler
+is a pure DAG runtime; the accessor surface is what dispatch sees.
 
 The two-iteration gap is the safety witness: when iteration N consumes
 the reserve, the reserve's scope was the active scope on iteration
@@ -464,16 +464,3 @@ mechanics:
   routes through the protocol under `MIRIFLAGS=-Zmiri-tree-borrows`
   with zero UB and zero process-exit leaks. The canonical slate list
   lives in [observe/miri_slate.md](../observe/miri_slate.md).
-
-## Open work
-
-- **Workload-independent DAG runtime**
-  ([roadmap/workload-independent-dag-runtime.md](../roadmap/refactor/workload-independent-dag-runtime.md)).
-  The allocator substrate has shipped (the generic `StorageFrame<W>` + `Stored` trait described
-  under [Cycle gate](#cycle-gate-on-alloc_object), with `RuntimeArena = StorageFrame<KoanStorageProfile>`
-  as the Koan instantiation). The remaining work makes the scheduler generic over two
-  lifetime-erased workload types — a node-stored payload and an inter-node value — re-anchored to
-  the node frame lifetime at run / read (generalizing the `ErasedContract` reattach). Evict
-  `scope` / `chain` into the node payload and move `CallArena` into the scheduler, leaving the
-  active-frame plumbing here as a generic per-node memory manager with `'run` confined to
-  `KoanRuntime`.

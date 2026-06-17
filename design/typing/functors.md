@@ -261,7 +261,7 @@ identities; both carriers feed the same dep-finish. The inline elaboration
 is the standard
 [elaboration.md § Layers](elaboration.md#layers) § Layer 3 walk against
 the per-call scope. The lift-time return-type check in
-[`scheduler/execute.rs`](../../src/machine/execute/run_loop.rs)
+[`run_loop.rs`](../../src/machine/execute/run_loop.rs)
 gates on `ReturnType::is_resolved()` so the static-typing pathway stays
 untouched and the deferred slot check runs only inside the dep-finish
 finish where the per-call elaboration is in hand. The structural

@@ -17,10 +17,8 @@ use super::runtime::KoanRuntime;
 /// relocates a value across a dep edge; finalize enforces the return contract. They stay separate —
 /// the contract layer is never folded into the lift (see [`lift`](super::lift)).
 ///
-/// Concrete in Koan types for this item; [Workload-independent DAG runtime] genericizes the
-/// scheduler over this hook alongside `NodeLift`.
-///
-/// [Workload-independent DAG runtime]: ../../../roadmap/refactor/workload-independent-dag-runtime.md
+/// A Koan-typed workload hook: the generic scheduler ([`crate::scheduler`]) drives the Done
+/// boundary through this trait (alongside `NodeLift`) and names no Koan type itself.
 pub(in crate::machine::execute) trait NodeFinalize<'run> {
     /// Re-anchor `contract` against `frame` and enforce the declared return on `output`. A `None`
     /// frame (a frameless slot or the non-dying run frame) passes the value through untouched.

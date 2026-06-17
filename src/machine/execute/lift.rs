@@ -15,10 +15,8 @@ use super::runtime::KoanRuntime;
 /// layer (see [the run loop](super::run_loop)), never folded in here, so the hook is
 /// reusable for any delivery edge.
 ///
-/// Concrete in Koan types for this item; [Workload-independent DAG runtime] genericizes the
-/// scheduler over this trait.
-///
-/// [Workload-independent DAG runtime]: ../../../roadmap/refactor/workload-independent-dag-runtime.md
+/// A Koan-typed workload hook: the generic scheduler ([`crate::scheduler`]) drives dep-edge
+/// delivery through this trait and names no Koan type itself.
 pub(in crate::machine::execute) trait NodeLift<'run> {
     /// Copy `value` (alive in `src`'s arena) into `dst`; the result dies with `dst`.
     fn lift(
