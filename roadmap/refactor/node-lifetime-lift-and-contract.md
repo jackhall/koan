@@ -58,6 +58,14 @@ run global; the `'run` annotation is the only thing that makes them look like th
   witnessed by it. The per-step terminal is `Carried<'step>` and `NodeStep` is `NodeStep<'step>`, not
   `'run`. The slot-run bracket carries no Koan semantics; the ambient-frame swap (`enter` /
   `exit_slot_step`) stays driver-side, layered on top.
+- *`'step` must come from the scheduler's single cart `Rc`, not a driver clone — decided (forced).*
+  The cart lives in `SlotState::Running` (which today holds nothing) for the step's duration, and the
+  scheduler vends `'step` bounded by that one `Rc`. A driver-side loop-local *clone* of the cart is
+  ruled out: a second `Rc` forecloses `try_reset_for_tail`'s `Rc::get_mut` uniqueness check, breaking
+  TCO frame reuse — the same single-cart invariant `NodeScope::Yoked` already documents
+  ([src/machine/execute/nodes.rs](../../src/machine/execute/nodes.rs)). So this is a scheduler
+  slot-running-model change (`Running` carries the cart; `run_step` brackets run + finalize over it;
+  TCO operates on that single `Rc`), not a driver-side tail edit.
 - *Callback step bracket returning `Outcome` — decided.* `run_step` lives on the driver
   (`KoanRuntime`, `&mut self`): it asks the scheduler to begin the step, runs a pure decide (lift deps
   + cont) against a shared read context producing `Outcome<'step>`, then applies it with `&mut self`
