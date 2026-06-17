@@ -84,7 +84,7 @@ Every sub-arena inside [`RuntimeArena`](../src/machine/core/arena.rs) stores
 `T<'static>` rather than `T<'a>` — the `'static` is phantom so `RuntimeArena`
 itself carries no lifetime parameter. The erase-store engine lives generically in
 the [`StorageFrame<W>`](../src/machine/core/storage_frame.rs) substrate (`RuntimeArena`
-is the Koan instantiation `StorageFrame<KoanWorkload>`). Each named `alloc*` wrapper
+is the Koan instantiation `StorageFrame<KoanStorageProfile>`). Each named `alloc*` wrapper
 takes input at the caller's `'a` and routes one `alloc<K: Stored>` engine: the engine
 union-moves the value into its `'static` lifetime family (`At<'static>`) for storage and
 re-anchors the returned `&'a` to the input borrow on the way out. The union move —
@@ -208,7 +208,7 @@ Several "must hold" rules are encoded in types rather than checked at runtime:
 The push/notify scheduler ([execution-model.md § Push/notify dependency
 edges](execution-model.md#pushnotify-dependency-edges)) keeps its slot-table
 state in a
-[`NodeStore`](../src/machine/execute/scheduler/node_store.rs)
+[`NodeStore`](../src/scheduler/node_store.rs)
 sub-struct that owns `slots: SlotVec<SlotState<'run>>` (each slot a `PreRun(Node)`
 / `Running` / `Done(Result<Carried, KError>)` / `Aliased(NodeId)` / `Free`) and
 `free_list: Vec<NodeId>`, behind the slot lifecycle
@@ -217,7 +217,7 @@ the only path that picks an index (pulling from `free_list` before extending
 `slots`), `finalize` is the only path that lands a terminal `Done`, and
 `free_one` is the only path that returns a slot to `Free` and pushes its index
 onto `free_list`. Dependency bookkeeping lives alongside it in a
-[`DepGraph`](../src/machine/execute/scheduler/dep_graph.rs) sub-struct
+[`DepGraph`](../src/scheduler/dep_graph.rs) sub-struct
 that bundles three `Vec`-shaped fields: `notify_list: Vec<Vec<NodeId>>`
 (each producer's dependent list), `pending_deps: Vec<usize>` (each consumer's
 unresolved-dep counter), and `dep_edges: Vec<Vec<DepEdge>>` (each slot's

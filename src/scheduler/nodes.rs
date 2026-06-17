@@ -1,0 +1,81 @@
+//! The generic per-node state the scheduler stores: a node's [`work`](self::NodeWork) (its deps and
+//! the one-shot continuation that runs over them), its opaque workload [`payload`](self::Node), and
+//! its [`frame`](self::CallFrame) (the per-call memory cart it runs against). All three are
+//! parametric over the [`Workload`](super::Workload) — the scheduler stores and hands them back but
+//! inspects no field beyond the dep wiring.
+
+use std::rc::Rc;
+
+use super::{NodeId, Workload};
+
+/// What a scheduler node will run: wait on `deps`, then run `cont` over their resolved terminals.
+/// `deps` layout is `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix
+/// (`Notify` edges, kept alive), the suffix installs `Owned` (cascade-freed at success). `carrier`
+/// is the deadlock-report sample (a workload-supplied expression summary, else `None`). The
+/// continuation is stored opaquely (`W::Continuation`) and handed back to run once; the node itself
+/// never branches and names no workload type.
+pub(crate) struct NodeWork<W: Workload> {
+    pub(crate) deps: Vec<NodeId>,
+    pub(crate) park_count: usize,
+    /// The slot's continuation, stored opaquely as `W::Continuation` so the node it sits on pins no
+    /// borrow. Handed back to the workload to run once; the scheduler never inspects it.
+    pub(crate) cont: W::Continuation,
+    pub(crate) carrier: Option<String>,
+}
+
+impl<W: Workload> NodeWork<W> {
+    /// Build node work from an already-erased continuation. The continuation is stored opaquely and
+    /// handed back to run once; the scheduler never inspects it.
+    pub(crate) fn new(
+        deps: Vec<NodeId>,
+        park_count: usize,
+        cont: W::Continuation,
+        carrier: Option<String>,
+    ) -> Self {
+        NodeWork {
+            deps,
+            park_count,
+            cont,
+            carrier,
+        }
+    }
+}
+
+/// A node's per-call frame state: the execution cart, its ping-pong reserve, and the opaque return
+/// contract. Lifetime-free — the cart `Rc` pins everything its members point at, and the contract is
+/// stored opaquely as `W::Contract` (the workload re-anchors it at the Done boundary witnessed by
+/// `cart`). Every node owns a `CallFrame`: the cart is the per-node memory the slot's step runs
+/// against. `reserve` and `contract` are sparse.
+pub(crate) struct CallFrame<W: Workload> {
+    /// The cart this slot's step runs against. The workload mints it and the `Rc` pins it for the
+    /// step; the scheduler stores and hands it back but calls no method on it.
+    pub(crate) cart: Rc<W::Frame>,
+    /// Per-slot reserve cart for the ping-pong rotation that lets a stateful resume reuse a frame
+    /// across iterations.
+    pub(crate) reserve: Option<Rc<W::Frame>>,
+    /// Return contract enforced at the Done boundary, stored opaquely and re-anchored against `cart`
+    /// by the workload. `None` for slots with no declared-return obligation.
+    pub(crate) contract: Option<W::Contract>,
+}
+
+pub(crate) struct Node<W: Workload> {
+    pub(crate) work: NodeWork<W>,
+    /// The slot's opaque workload payload, stored and handed back but never inspected by the
+    /// scheduler.
+    pub(crate) payload: W::Payload,
+    /// The slot's per-call frame state (cart + reserve + opaque contract) — never absent, see
+    /// [`CallFrame`].
+    pub(crate) frame: CallFrame<W>,
+}
+
+/// Owned `NodeId`s a node must read before running: the `deps[park_count..]` suffix. The
+/// park-producer prefix is installed separately as `Notify` edges.
+pub(in crate::scheduler) fn work_deps<W: Workload>(work: &NodeWork<W>) -> Vec<NodeId> {
+    work.deps[work.park_count..].to_vec()
+}
+
+/// Park-producer prefix (sibling slots whose values the node reads but does not own). The caller
+/// installs each as a `Notify` edge separately from the Owned path.
+pub(in crate::scheduler) fn work_park_producers<W: Workload>(work: &NodeWork<W>) -> &[NodeId] {
+    &work.deps[..work.park_count]
+}

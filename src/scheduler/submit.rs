@@ -1,30 +1,24 @@
 use std::rc::Rc;
 
-use crate::machine::NodeId;
-
-use super::super::nodes::{work_park_producers, CallFrame, Node, NodeWork};
 use super::dep_graph::work_owned_edges;
-use super::{Scheduler, Workload};
+use super::nodes::{work_park_producers, CallFrame, Node, NodeWork};
+use super::{NodeId, Scheduler, Workload};
 
 impl<W: Workload> Scheduler<W> {
-    /// Node-creation core, shared by the run-lifetime [`KoanRuntime::add_with_chain`] and the framed
-    /// [`KoanRuntime::dispatch_in_active_frame`](super::super::runtime::KoanRuntime::dispatch_in_active_frame).
-    /// `payload` is the ready-built opaque workload payload (Koan: the pre-decided `NodeScope` handle
-    /// plus the resolved lexical chain); the scheduler stores it on the slot and hands it back but
-    /// never inspects it. `cart` is the slot's frame cart, resolved by the driver from its ambient
-    /// active/run frame; `framed` is whether the driver had an active frame (`false` selects the
-    /// fresh-top-level queue for a dep-free / park-free slot, matching the in-flight-vs-fresh split).
-    /// This allocator never names a Koan type — it only wires the slot's deps and its frame cart.
-    pub(in crate::machine::execute) fn submit_node(
+    /// Node-creation core: allocate a slot for `work`, wire its dep edges, and queue it if its deps
+    /// are already satisfied. `payload` is the ready-built opaque workload payload; the scheduler
+    /// stores it on the slot and hands it back but never inspects it. `cart` is the slot's frame
+    /// cart (the workload resolves it from its own active/run frame); `framed` is whether the
+    /// workload had an active frame (`false` selects the fresh-top-level queue for a dep-free /
+    /// park-free slot, matching the in-flight-vs-fresh split). This allocator never names a workload
+    /// type — it only wires the slot's deps and its frame cart.
+    pub(crate) fn submit_node(
         &mut self,
         work: NodeWork<W>,
         payload: W::Payload,
         cart: Rc<W::Frame>,
         framed: bool,
     ) -> NodeId {
-        // A binder-shaped Dispatch arrives with its `pre_subs` already populated and its
-        // placeholder already installed by `dispatch::submit_dispatch`; this allocator never
-        // inspects the work's AST.
         let owned_edges = work_owned_edges(&work);
         let no_owned = owned_edges.is_empty();
         let pending_owned: Vec<NodeId> = owned_edges

@@ -19,7 +19,7 @@ use super::KFunction;
 ///
 /// `Arm`'s / `PerCall`'s `ret` is arena-borrowed so the whole contract stays `Copy`, matching the
 /// `&KFunction` it sits beside. Stored erased as [`ErasedContract`] on the node's `TraceFrame`. A tail
-/// chain keeps the **first** contract (the `next_contract` rule in `execute::scheduler::execute`),
+/// chain keeps the **first** contract (the `next_contract` rule in `execute::run_loop`),
 /// so the check fires against the original caller's declared return, not the tail-most callee's.
 #[derive(Clone, Copy)]
 pub enum ReturnContract<'a> {

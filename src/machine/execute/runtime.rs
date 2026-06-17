@@ -30,7 +30,7 @@ use super::dispatch::{current_scope, DepRequest};
 use super::lift::NodeLift;
 use super::nodes::{NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, pin_carried_to_run, Continuation, Outcome};
-use super::scheduler::{Scheduler, Workload};
+use crate::scheduler::{Scheduler, Workload};
 use super::{
     catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedCont, ErasedValue,
 };

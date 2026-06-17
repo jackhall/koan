@@ -4,9 +4,12 @@ use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::{ScopeId, ScopePtr};
 use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId};
-
 use super::runtime::KoanWorkload;
-use super::scheduler::Workload;
+
+/// The generic per-node state lives in [`crate::scheduler::nodes`]; re-exported here so the Koan
+/// execute tree has a single `nodes` surface combining them with the Koan-side [`NodeStep`] /
+/// [`NodePayload`] / [`NodeScope`].
+pub(super) use crate::scheduler::nodes::{CallFrame, Node, NodeWork};
 
 /// Outcome of a node's run. `Replace` is the tail-call path: rewrite the slot's work and
 /// re-enqueue the same index so it runs again with no fresh slot allocated, giving constant
@@ -44,57 +47,18 @@ pub(super) enum NodeStep<'run> {
     Alias(NodeId),
 }
 
-/// What a scheduler node will run: wait on `deps`, then run `cont` over their resolved terminals
-/// (passed as `Result`s — the continuation, not the handler, decides short-circuit vs recover).
-/// `deps` layout is `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix
-/// (`Notify` edges, kept alive), the suffix installs `Owned` (cascade-freed at success). A dispatch
-/// decide (birth or resume) waits on no owned deps and ignores the results; a combine reads its dep
-/// values; a catch reads its single dep's `Result`. `carrier` is the deadlock-report sample (a
-/// decide's expression summary, else `None`). The per-family behavior lives in `cont`, built by the
-/// [`short_circuit`](super::outcome::short_circuit) / [`catch_cont`](super::outcome::catch_cont) /
-/// [`ignore_results`](super::outcome::ignore_results) combinators, so the node itself never
-/// branches and names no AST.
-pub(super) struct NodeWork<W: Workload> {
-    pub(in crate::machine::execute) deps: Vec<NodeId>,
-    pub(in crate::machine::execute) park_count: usize,
-    /// The slot's continuation, stored opaquely as `W::Continuation` (the Koan workload erases it to
-    /// a lifetime-free [`ErasedCont`](super::ErasedCont) at the call site) so the node it sits on
-    /// pins no `'run`. Re-anchored against the slot's cart at run time ([`execute`](super::scheduler)).
-    pub(in crate::machine::execute) cont: W::Continuation,
-    pub(in crate::machine::execute) carrier: Option<String>,
-}
-
-impl<W: Workload> NodeWork<W> {
-    /// Build node work from an already-erased continuation. The continuation is stored opaquely and
-    /// handed back to run once; the scheduler never inspects it. The Koan workload erases its live
-    /// `NodeCont` at the call site before handing it here.
-    pub(in crate::machine::execute) fn new(
-        deps: Vec<NodeId>,
-        park_count: usize,
-        cont: W::Continuation,
-        carrier: Option<String>,
-    ) -> Self {
-        NodeWork {
-            deps,
-            park_count,
-            cont,
-            carrier,
-        }
-    }
-}
-
 /// Slot-stored scope handle, carrying no lifetime so the node it sits on does not pin `'run`
 /// through its scope. `Anchored` holds an erased [`ScopePtr`] to a genuinely run-lived scope (a
 /// fresh child a binder body allocated in a real arena; NOT the builtins-only
 /// [`ScopeKind::Root`](crate::machine::core::ScopeKind)), re-attached at read with a borrow bounded
 /// by the reader (`reattach_bounded`) and a free content lifetime — sound because the pointee lives
 /// for all of `'run`. A per-call frame scope instead stores `Yoked` — no pointer at all — and is
-/// re-projected from the slot's own [`Node::frame`] cart at read time (single-cart: the frame `Rc`
-/// already on the slot is the sole liveness witness, so there is no second `Rc` clone and no
-/// contention with `try_reset_for_tail`'s uniqueness check). Storing an erased handle rather than a
-/// live `&'run` borrow keeps the borrow honest across a TCO `try_reset_for_tail` (nothing persisted
-/// points into the reset arena; the live frame is re-read each step) and keeps the scheduler from
-/// naming `'run` in its node-stored scope state.
+/// re-projected from the slot's own [`Node::frame`](crate::scheduler::nodes::Node) cart at read time
+/// (single-cart: the frame `Rc` already on the slot is the sole liveness witness, so there is no
+/// second `Rc` clone and no contention with `try_reset_for_tail`'s uniqueness check). Storing an
+/// erased handle rather than a live `&'run` borrow keeps the borrow honest across a TCO
+/// `try_reset_for_tail` (nothing persisted points into the reset arena; the live frame is re-read
+/// each step) and keeps the slot from naming `'run` in its node-stored scope state.
 ///
 /// `Copy` because both arms are trivially copyable ([`ScopePtr`] is `Copy` / a unit) and submission
 /// threads the handle through `pre_subs` recursion without re-deriving it.
@@ -102,41 +66,6 @@ impl<W: Workload> NodeWork<W> {
 pub(super) enum NodeScope {
     Anchored(ScopePtr<'static>),
     Yoked,
-}
-
-/// A node's per-call frame state: the execution cart, its ping-pong reserve, and the erased
-/// return contract. Lifetime-free — the cart `Rc` pins everything its members point at, and the
-/// contract is stored opaquely as `W::Contract` (the Koan workload's erased
-/// [`ErasedContract`](crate::machine::core::kfunction::body::ErasedContract)) and re-anchored at the Done read boundary witnessed
-/// by `cart`. Every node owns a `CallFrame`: the cart is the arena the slot's step runs against,
-/// falling back to the run frame at top level (see `Scheduler::submit_node`), and an invoke
-/// reuses the *reserve* rather than the active cart, so the slot's cart is never taken out from
-/// under it. `reserve` and `contract` are sparse.
-pub(super) struct CallFrame<W: Workload> {
-    /// The cart this slot's step runs against. Cloned onto every sub-slot dispatched in the same
-    /// body, so it is uniquely owned only at a TCO collapse point (the gate
-    /// `CallArena::try_reset_for_tail` checks). The Rc drops on Done or Replace; its arena drops
-    /// then only if no escaped closure still holds the captured scope. Lexical scoping
-    /// (`KFunction::captured`) makes each per-call child's `outer` the FN's captured scope, so no
-    /// frame holds references a successor frame at the same slot needs — TCO drop is immediate
-    /// with no `prev` chain.
-    pub(super) cart: Rc<W::Frame>,
-    /// Per-slot reserve cart for the ping-pong rotation that lets stateful eager-subs resumes
-    /// reuse a `CallArena` across iterations. See
-    /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
-    pub(super) reserve: Option<Rc<W::Frame>>,
-    /// Return contract enforced on Done — an FN/builtin call (`Function`), a deferred FN's resolved
-    /// per-call type (`PerCall`), or a MATCH/TRY arm's `-> :T` (`Arm`) — erased for lifetime-free
-    /// storage and re-anchored against `cart` at the Done boundary, where it enforces the declared
-    /// return type and supplies the error-frame label. `None` for slots with no declared-return
-    /// obligation.
-    ///
-    /// Tail chains keep the **first** contract: once set, a nested tail call does not overwrite it
-    /// (`execute.rs` `next_contract`), so the runtime check fires against the *original* caller's
-    /// declared return, not the tail-most callee's. (The kept contract's pointees stay live without
-    /// pinning the first frame — a `Function`/`PerCall` points at the `'run` callee or its
-    /// captured scope, an `Arm` is only the first contract at top level.)
-    pub(super) contract: Option<W::Contract>,
 }
 
 /// The opaque per-node workload payload: the Koan name-resolution state the scheduler stores on a
@@ -153,28 +82,6 @@ pub(super) struct NodePayload {
     /// innermost enclosing block; tail (`parent: None`) is top-level. See
     /// `core/lexical_frame.rs`.
     pub(super) chain: Rc<LexicalFrame>,
-}
-
-pub(super) struct Node<W: Workload> {
-    pub(super) work: NodeWork<W>,
-    /// The slot's opaque workload payload, stored and handed back but never inspected by the
-    /// scheduler. The Koan instantiation is [`NodePayload`] (scope handle + lexical chain).
-    pub(super) payload: W::Payload,
-    /// The slot's per-call frame state (cart + reserve + erased contract) — never absent, see
-    /// [`CallFrame`].
-    pub(super) frame: CallFrame<W>,
-}
-
-/// Owned `NodeId`s a node must read before running: the `deps[park_count..]` suffix. The
-/// park-producer prefix is installed separately as `Notify` edges.
-pub(super) fn work_deps<W: Workload>(work: &NodeWork<W>) -> Vec<NodeId> {
-    work.deps[work.park_count..].to_vec()
-}
-
-/// Park-producer prefix (sibling slots whose values the node reads but does not own). The caller
-/// installs each as a `Notify` edge separately from the Owned path.
-pub(super) fn work_park_producers<W: Workload>(work: &NodeWork<W>) -> &[NodeId] {
-    &work.deps[..work.park_count]
 }
 
 #[cfg(test)]

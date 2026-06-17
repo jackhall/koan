@@ -1,6 +1,6 @@
 //! Ambient per-step context — the driver-side state a pure DAG runtime does not own.
 //!
-//! [`Scheduler`](super::scheduler::Scheduler) is a workload-independent DAG of dispatch/execution
+//! [`Scheduler`](crate::scheduler::Scheduler) is a workload-independent DAG of dispatch/execution
 //! work; the *ambient* values that float across a single step (the active per-call frame, the slot's
 //! reserve, the run frame, the executing slot's opaque payload, and the contract-chain flag) live
 //! here on the driver [`KoanRuntime`](super::runtime::KoanRuntime), which is the
@@ -43,7 +43,7 @@ pub(in crate::machine::execute) struct AmbientContext {
     /// tail call *within* an established chain. A deferred-return FN dispatched here is a subsequent
     /// tail call whose own contract would be discarded by the keep-first rule, so it skips resolving
     /// its (possibly async `Expression`-form) return type and just tail-replaces its body. Set per
-    /// step in [`KoanRuntime::execute`](super::scheduler::execute); read via
+    /// step in [`KoanRuntime::execute`](super::runtime::KoanRuntime::execute); read via
     /// [`SchedulerView::in_contract_chain`](super::dispatch::SchedulerView::in_contract_chain).
     pub(in crate::machine::execute) active_in_contract_chain: bool,
     #[cfg(test)]
@@ -51,7 +51,7 @@ pub(in crate::machine::execute) struct AmbientContext {
 }
 
 /// RAII-shaped save/restore wrapper around the per-step `active_frame`, `active_payload`,
-/// and `active_reserve` swap that brackets each iteration of [`KoanRuntime::execute`](super::scheduler::execute).
+/// and `active_reserve` swap that brackets each iteration of [`KoanRuntime::execute`](super::runtime::KoanRuntime::execute).
 /// Bookkeeping spine for the ping-pong reserve-frame rotation; see
 /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
 pub(in crate::machine::execute) struct SlotStepGuard {

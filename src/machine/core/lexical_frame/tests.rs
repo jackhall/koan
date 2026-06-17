@@ -1,5 +1,5 @@
 //! Unit tests for [`LexicalFrame`]. Higher-level scheduler-integration tests live in
-//! `src/machine/execute/scheduler/tests/`.
+//! `src/machine/execute/run_loop/tests/`.
 
 use std::rc::Rc;
 

@@ -14,8 +14,8 @@ mod nodes;
 mod outcome;
 // The write harness (KoanRuntime, sole &mut Scheduler) + the shared action harness and the
 // program entry points (interpret submodule). See runtime.rs.
+mod run_loop;
 mod runtime;
-mod scheduler;
 
 pub(in crate::machine::execute) use outcome::{
     catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedCont, ErasedValue,

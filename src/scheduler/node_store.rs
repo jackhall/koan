@@ -1,6 +1,5 @@
-//! Slot-table state pulled out of `Scheduler<'run>`. A single `slots` vector of
-//! [`SlotState`] enums encodes the per-slot lifecycle: every slot moves
-//! through `alloc_slot -> take_for_run -> reinstall* -> finalize -> free_one`.
+//! Slot-table state. A single `slots` vector of [`SlotState`] enums encodes the per-slot lifecycle:
+//! every slot moves through `alloc_slot -> take_for_run -> reinstall -> finalize -> free_one`.
 //!
 //! ## Invariants
 //!
@@ -15,10 +14,8 @@
 use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
-use crate::machine::NodeId;
-
-use super::super::nodes::{Node, NodeWork};
-use super::{FramedRead, Workload};
+use super::nodes::{Node, NodeWork};
+use super::{FramedRead, NodeId, Workload};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -61,17 +58,17 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
 enum SlotState<W: Workload> {
     PreRun(Node<W>),
     /// Node payload has been moved out by `take_for_run`. A matching
-    /// `reinstall*` / `finalize` / `free_one` exits this state.
+    /// `reinstall` / `finalize` / `free_one` exits this state.
     Running,
     /// A finalized terminal, plus the producer frame `Rc` that backs it (`None` for a frameless /
-    /// run-arena value). Holding the frame `Rc` here pins the producer's per-call arena until the
+    /// run-arena value). Holding the frame `Rc` here pins the producer's per-call memory until the
     /// slot is freed, so frame death moves from Done to free. The pin is established now and read by
-    /// the consumer-pull lift, which copies the terminal out of this frame into the consumer arena.
+    /// the consumer-pull lift, which copies the terminal out of this frame into the consumer's.
     Done(Result<W::Value, W::Error>, Option<Rc<W::Frame>>),
     /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
     /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
     /// slot's consumers were moved onto `producer`'s notify list at splice time, so `producer`'s
-    /// fire wakes them directly. See [`Outcome::Forward`](super::super::outcome::Outcome).
+    /// fire wakes them directly.
     Aliased(NodeId),
     /// Distinct from `Running` so the cascade-free walk's idempotency
     /// guard can be precise about "already freed".
@@ -79,17 +76,17 @@ enum SlotState<W: Workload> {
 }
 
 /// The drain-end deadlock-sample contribution of one parked/pending slot's work.
-/// `unresolved` shows the first `Preferred` (a real source expression) across all stuck slots,
+/// `unresolved` shows the first `Preferred` (a workload-supplied expression) across all stuck slots,
 /// falling back to the first `Fallback` (a generic work-shape tag) only when no slot carries an
-/// expression — so a stuck `(foo bar)` always out-renders a bare `<deps>`.
+/// expression — so a stuck named work always out-renders a bare `<wait>`.
 enum DeadlockSample {
     Preferred(String),
     Fallback(&'static str),
 }
 
-/// Map a stuck slot's `work` to its deadlock-sample contribution. A `Some`-carrier `Wait` (a
-/// dispatch decide) carries a renderable expression summary (`Preferred`); a carrier-less wait
-/// (combine / catch) carries only a generic tag (`Fallback`).
+/// Map a stuck slot's `work` to its deadlock-sample contribution. A `Some`-carrier wait carries a
+/// renderable expression summary (`Preferred`); a carrier-less wait carries only a generic tag
+/// (`Fallback`).
 fn work_deadlock_sample<W: Workload>(work: &NodeWork<W>) -> DeadlockSample {
     let NodeWork { carrier, .. } = work;
     match carrier {
@@ -98,7 +95,7 @@ fn work_deadlock_sample<W: Workload>(work: &NodeWork<W>) -> DeadlockSample {
     }
 }
 
-pub(in crate::machine::execute::scheduler) struct NodeStore<W: Workload> {
+pub(in crate::scheduler) struct NodeStore<W: Workload> {
     slots: SlotVec<SlotState<W>>,
     /// Reclaimed slot indices. `alloc_slot` pulls from here before
     /// extending `slots`, giving constant scheduler memory across
@@ -139,16 +136,13 @@ impl<W: Workload> NodeStore<W> {
         }
     }
 
-    /// Tail-call path: reuse the slot index for a new node. The workload built the slot's `payload`
-    /// — for the Koan workload a tail-replace stores a payload-less [`NodeScope::Yoked`] re-projected
-    /// from the co-located `cart` at the read boundary, so no persisted `&'run` dangles across a TCO
-    /// reset. See [per-call-arena-protocol.md § Slot-table scope handle](../../../../design/per-call-arena-protocol.md#slot-table-scope-handle).
+    /// Tail-call path: reuse the slot index for a new node. The workload built the slot's `payload`.
     pub(super) fn reinstall(&mut self, id: NodeId, node: Node<W>) {
         self.slots[id] = SlotState::PreRun(node);
     }
 
     /// Replace a finalized terminal in place, dropping any pinned producer frame. The drain
-    /// boundary uses this to re-home a consumer-less root into the run arena (`output` already
+    /// boundary uses this to re-home a consumer-less root into a surviving arena (`output` already
     /// lifted there), releasing the per-call frame the producer kept it in.
     pub(super) fn rehome_terminal(&mut self, id: NodeId, output: Result<W::Value, W::Error>) {
         debug_assert!(
@@ -180,7 +174,7 @@ impl<W: Workload> NodeStore<W> {
 
     /// The alias target of a spliced-out bare-name forward, or `None`. The single follow step the
     /// `Scheduler`-level [`resolve_alias`](super::Scheduler::resolve_alias) walks; resolution lives
-    /// there (with `DepGraph`), not in the store. See [`scheduler::splice`](super::splice).
+    /// there (with `DepGraph`), not in the store.
     pub(super) fn alias_target(&self, id: NodeId) -> Option<NodeId> {
         match self.slots.get(id) {
             Some(SlotState::Aliased(to)) => Some(*to),
@@ -270,8 +264,7 @@ impl<W: Workload> NodeStore<W> {
 
     /// Splice a bare-name forward out: the running slot becomes an alias of `producer` (a
     /// downstream real producer). `read_result` / `is_result_ready` follow the alias; the slot's
-    /// consumers were already moved onto `producer`'s notify list, so this just records the
-    /// redirect. See [`Outcome::Forward`](super::super::outcome::Outcome).
+    /// consumers were already moved onto `producer`'s notify list, so this just records the redirect.
     pub(super) fn alias(&mut self, id: NodeId, producer: NodeId) {
         self.slots[id] = SlotState::Aliased(producer);
     }
@@ -322,18 +315,21 @@ impl<W: Workload> NodeStore<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::execute::runtime::KoanWorkload;
-    use crate::machine::execute::ErasedCont;
 
-    fn sample_wait(carrier: Option<String>) -> NodeWork<KoanWorkload> {
-        NodeWork::new(
-            Vec::new(),
-            0,
-            ErasedCont::erase(Box::new(|_view, _results, _idx| {
-                unreachable!("sample test never runs")
-            })),
-            carrier,
-        )
+    /// A minimal workload for the white-box store tests: every associated type is trivial, so the
+    /// generic store can be exercised without naming any Koan type.
+    struct TestWorkload;
+    impl Workload for TestWorkload {
+        type Payload = ();
+        type Value = u32;
+        type Error = ();
+        type Frame = ();
+        type Contract = ();
+        type Continuation = ();
+    }
+
+    fn sample_wait(carrier: Option<String>) -> NodeWork<TestWorkload> {
+        NodeWork::new(Vec::new(), 0, (), carrier)
     }
 
     #[test]
@@ -341,7 +337,7 @@ mod tests {
         let work = sample_wait(Some("PARKED-EXPR".to_string()));
         assert!(
             matches!(work_deadlock_sample(&work), DeadlockSample::Preferred(s) if s.contains("PARKED")),
-            "a Some-carrier Wait (a dispatch decide) must surface its carrier",
+            "a Some-carrier wait must surface its carrier",
         );
     }
 
@@ -353,7 +349,7 @@ mod tests {
                 work_deadlock_sample(&work),
                 DeadlockSample::Fallback("<wait>")
             ),
-            "a carrier-less Wait must surface a generic tag, not an empty sample",
+            "a carrier-less wait must surface a generic tag, not an empty sample",
         );
     }
 }

@@ -5,7 +5,7 @@ The contract for [`Rc<CallArena>`](../src/machine/core/arena.rs): which
 per-call anchor, how
 [`lift_kobject`](../src/machine/execute/lift.rs) decides to attach one,
 how the `alloc_object` cycle gate routes self-referential allocations,
-how the [scheduler](../src/machine/execute/scheduler.rs) propagates the
+how the [scheduler](../src/machine/execute/run_loop.rs) propagates the
 active frame, how builtin-built frames chain the call-site frame
 through `outer_frame`, and how the TCO step reuses the frame shell.
 The participants live in `KObject` (carriers), `arena.rs` (allocation
@@ -81,7 +81,7 @@ it there) or arrives as a dep already lifted into that frame. The scheduler
 relocates it across each dep edge — never the producer.
 
 - **Producer Done keeps the terminal in its own frame.** The producer does
-  not lift at Done. Its [`SlotState::Done`](../src/machine/execute/scheduler.rs)
+  not lift at Done. Its [`SlotState::Done`](../src/machine/execute/run_loop.rs)
   co-stores the terminal with the backing `Rc<CallArena>`, pinning the
   producer frame until the slot is freed — frame death moves from Done to
   free. The stored `'run` view is re-exposed against that held `Rc` (the same
@@ -91,7 +91,7 @@ relocates it across each dep edge — never the producer.
   ([`src/machine/execute/lift.rs`](../src/machine/execute/lift.rs)) owns the
   `KObject`-invariant copy; the scheduler loop names no `KObject` / `KType`.
 - **Consumers pull-lift at read.** When a consumer runs
-  ([`run_wait`](../src/machine/execute/scheduler/finish.rs)) it lifts each dep
+  ([`run_wait`](../src/machine/execute/run_loop.rs)) it lifts each dep
   from the producer's frame into its own call arena, promoting the producer's
   output to the consuming node's lifetime. A value read by N consumers is
   lifted N times — once per consumer — and each copy dies with its consumer's
@@ -103,13 +103,15 @@ relocates it across each dep edge — never the producer.
   the run arena at the drain boundary and re-homes the slot, releasing the
   pinned producer frame. The `run_one` test helper reads roots through the
   frame pin instead, so it is not a drain boundary.
-- **Return-contract enforcement is a separate layer**, run once at producer
-  Done before the pin: it reattaches the erased contract against the producer
-  cart, runs the declared-return check, and (only on a coarsening re-tag, e.g.
-  `List<Number>` through `:(LIST OF Any)`) re-allocates the stamped value into
-  the contract's captured-scope arena so it outlives the reused/freed producer
-  frame. A non-coarsened terminal stays in the producer frame. The bare
-  `NodeLift` hook is thereby reusable for any delivery edge.
+- **Return-contract enforcement is a separate layer** — the
+  [`NodeFinalize`](../src/machine/execute/finalize.rs) workload hook, peer of
+  `NodeLift` — run once at producer Done before the pin: it reattaches the
+  erased contract against the producer cart, runs the declared-return check, and
+  (only on a coarsening re-tag, e.g. `List<Number>` through `:(LIST OF Any)`)
+  re-allocates the stamped value into the contract's captured-scope arena so it
+  outlives the reused/freed producer frame. A non-coarsened terminal stays in
+  the producer frame. The bare `NodeLift` hook is thereby reusable for any
+  delivery edge.
 
 Because `KObject` / `Carried` / `Scope` are invariant in their lifetime, none
 of these transitions can be a coercion — each cross-frame move is a genuine
@@ -168,7 +170,7 @@ invariant.
 lives. The engine and its `unsafe` erase-store machinery live generically in
 the `StorageFrame<W>` substrate (`src/machine/core/storage_frame.rs`), which
 names no Koan type; `RuntimeArena` is the Koan instantiation
-`StorageFrame<KoanWorkload>`, with the per-family policy supplied by `Stored`
+`StorageFrame<KoanStorageProfile>`, with the per-family policy supplied by `Stored`
 impls in `core::arena`. Every family implements `Stored`, and the engine runs
 the gate once for all of them. `KObject` and `KType` answer `anchors_to` by
 walking their composite tree; the families that cannot hold a self-targeting
@@ -188,7 +190,7 @@ state live on `Scheduler`:
 
 - **`active_frame: Option<Rc<CallArena>>`** — frame of the slot
   currently being executed. Read through
-  [`Scheduler::current_frame`](../src/machine/execute/scheduler.rs);
+  [`Scheduler::current_frame`](../src/machine/execute/run_loop.rs);
   written only by `enter_slot_step` / `exit_slot_step` (the RAII
   bracket around every iteration of `Scheduler::execute`) and the
   `swap_active_frame` save/restore. An invoke never takes it (tail
@@ -375,7 +377,7 @@ always its own frame's child. Storing an erased handle rather than a live `&'run
 honest across a TCO `try_reset_for_tail`: nothing persisted points into the reset arena.
 
 The read boundary hands a slot's scope back on demand, not as a stored free `&'run`:
-[`Scheduler::current_scope`](../src/machine/execute/scheduler.rs) materializes it per use — an
+[`Scheduler::current_scope`](../src/machine/execute/run_loop.rs) materializes it per use — an
 `Anchored` slot re-attaches its erased `ScopePtr<'static>` through the `unsafe` `reattach_bounded`
 (borrow bounded by the reader, content lifetime free, sound because the pointee is run-lived); a
 `Yoked` slot re-reads from the live
@@ -468,7 +470,7 @@ mechanics:
 - **Workload-independent DAG runtime**
   ([roadmap/workload-independent-dag-runtime.md](../roadmap/refactor/workload-independent-dag-runtime.md)).
   The allocator substrate has shipped (the generic `StorageFrame<W>` + `Stored` trait described
-  under [Cycle gate](#cycle-gate-on-alloc_object), with `RuntimeArena = StorageFrame<KoanWorkload>`
+  under [Cycle gate](#cycle-gate-on-alloc_object), with `RuntimeArena = StorageFrame<KoanStorageProfile>`
   as the Koan instantiation). The remaining work makes the scheduler generic over two
   lifetime-erased workload types — a node-stored payload and an inter-node value — re-anchored to
   the node frame lifetime at run / read (generalizing the `ErasedContract` reattach). Evict

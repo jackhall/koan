@@ -12,7 +12,7 @@ use super::runtime::KoanRuntime;
 /// rebinding the copy's lifetime to `dst` so it dies with the destination. The scheduler decides
 /// *when and where* (which frame, which arena); this hook owns the `KObject`-invariant *how* — the
 /// arena→arena copy plus the escaping-closure anchor decision. Contract enforcement is a separate
-/// layer (see [`scheduler::execute`](super::scheduler)), never folded in here, so the hook is
+/// layer (see [the run loop](super::run_loop)), never folded in here, so the hook is
 /// reusable for any delivery edge.
 ///
 /// Concrete in Koan types for this item; [Workload-independent DAG runtime] genericizes the

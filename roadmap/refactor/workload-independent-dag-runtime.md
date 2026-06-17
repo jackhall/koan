@@ -30,7 +30,7 @@ value/scope model.
 - A node's continuation is stored erased (no `'run` capture bound) and re-anchored
   against the node's own frame when run — the same erase / reattach discipline
   `ErasedContract` uses today
-  ([`src/machine/execute/scheduler/execute.rs`](../../src/machine/execute/scheduler/execute.rs)),
+  ([`src/machine/execute/scheduler/execute.rs`](../../src/machine/execute/run_loop.rs)),
   generalized from the contract to the whole continuation.
 - `scope` and `chain` are no longer fields the scheduler interprets: Koan
   name-resolution state rides as opaque per-node workload payload the scheduler

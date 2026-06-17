@@ -232,7 +232,7 @@ function bucket via a `binder_bucket` extractor — and crucially,
 *not* a `binder_name`. The two channels are reflected at the
 submission walk as `BinderKey::Name(String)` and
 `BinderKey::Bucket(UntypedKey)` (see
-[`scheduler/submit.rs`](../../src/machine/execute/scheduler/submit.rs)),
+[`scheduler/submit.rs`](../../src/scheduler/submit.rs)),
 mutually exclusive per binder.
 
 The bucket-keyed channel admits *sibling* overloads under one head

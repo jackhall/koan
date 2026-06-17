@@ -5,7 +5,7 @@
 cannot keep running past a typo, and the CLI's batch mode aborts at the first
 failed expression instead of running the next one.
 [`interpret`](../../src/machine/execute/runtime/interpret.rs) and
-[`Scheduler::execute`](../../src/machine/execute/scheduler.rs) return
+[`Scheduler::execute`](../../src/machine/execute/run_loop.rs) return
 `Result<(), KError>`, so the first error propagates all the way out.
 
 **Acceptance criteria.**

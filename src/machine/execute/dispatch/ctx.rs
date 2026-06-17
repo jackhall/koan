@@ -27,7 +27,7 @@ use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
 use super::super::runtime::KoanWorkload;
-use super::super::scheduler::Scheduler;
+use crate::scheduler::Scheduler;
 use super::{park_on_deps, resolve_name_part, DepRequest, Outcome, PendingSub};
 
 /// Re-anchor a raw [`NodeScope`] handle into a usable `&Scope` — the Koan scope interpretation the

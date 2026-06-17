@@ -274,7 +274,7 @@ pub(in crate::machine::execute) fn ignore_results<'a>(resume: ResumeFn<'a>) -> N
 
 /// Reattach a step-bound `'s` terminal up to `'run` for storage in the slot table. The value is
 /// born in the producer's per-call frame (or is genuinely `'run`-lived), and the harness pins that
-/// frame's `Rc` alongside the terminal in [`SlotState::Done`](super::scheduler) until the slot is
+/// frame's `Rc` alongside the terminal in the scheduler's finalized-slot state until the slot is
 /// freed, so the stored `'run` view cannot outlive its backing arena. The reattach is needed only
 /// because `Carried` is invariant; this is the held-`Rc` re-exposure seam.
 pub(in crate::machine::execute) fn pin_carried_to_run<'run>(value: Carried<'_>) -> Carried<'run> {
@@ -345,7 +345,7 @@ mod erased_cont_tests {
     use super::*;
     use crate::builtins::default_scope;
     use crate::machine::core::{CallArena, RuntimeArena};
-    use crate::machine::execute::scheduler::Scheduler;
+    use crate::scheduler::Scheduler;
 
     /// A continuation capturing run-lived data (a `&'run KObject` in the run arena — a strict
     /// ancestor of the cart) is erased to `'static`, reattached against the cart `Rc`, and then

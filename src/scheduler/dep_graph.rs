@@ -1,19 +1,17 @@
-//! Per-slot dependency-graph state pulled out of `Scheduler<'run>`. Each slot's
-//! [`DepRow`] holds the three coordinated fields (`notify`, `pending`,
-//! `edges`) that share the slot index — keeping them in one row makes Inv-A
+//! Per-slot dependency-graph state. Each slot's [`DepRow`] holds the three coordinated fields
+//! (`notify`, `pending`, `edges`) that share the slot index — keeping them in one row makes Inv-A
 //! (wake-pending coherence) structural rather than enforced. See
-//! [design/execution-model.md § Dependency graph invariants](../../../../design/execution-model.md#dependency-graph-invariants)
+//! [design/execution-model.md § Dependency graph invariants](../../design/execution-model.md#dependency-graph-invariants)
 //! for the Inv-A / Inv-B / Inv-C contract.
 
-use super::super::nodes::{work_deps, NodeWork};
-use super::Workload;
-use crate::machine::NodeId;
+use super::nodes::{work_deps, NodeWork};
+use super::{NodeId, Workload};
 
 /// Backward edge in `dep_edges[consumer]`. Kind only matters at reclaim:
 /// `free` recurses into `Owned` children but stops at `Notify` so the walk
 /// cannot transit into unrelated subgraphs.
 #[derive(Copy, Clone, Debug)]
-pub(super) enum DepEdge {
+pub(crate) enum DepEdge {
     Owned(NodeId),
     Notify(NodeId),
 }
@@ -47,7 +45,7 @@ pub(super) struct DepRow {
     edges: Vec<DepEdge>,
 }
 
-pub(in crate::machine::execute::scheduler) struct DepGraph {
+pub(in crate::scheduler) struct DepGraph {
     rows: Vec<DepRow>,
 }
 
@@ -89,11 +87,7 @@ impl DepGraph {
     /// Atomic +1 on the consumer's pending count, edges list, and the
     /// producer's notify list. Caller guarantees `producer` is not yet
     /// terminal.
-    pub(in crate::machine::execute::scheduler) fn add_owned_edge(
-        &mut self,
-        producer: NodeId,
-        consumer: NodeId,
-    ) {
+    pub(in crate::scheduler) fn add_owned_edge(&mut self, producer: NodeId, consumer: NodeId) {
         self.rows[producer.index()].notify.push(consumer.index());
         let row = &mut self.rows[consumer.index()];
         row.pending += 1;
@@ -104,11 +98,7 @@ impl DepGraph {
     /// pending count + edges; the backward entry is `Notify(producer)` so
     /// `free` skips past it. Caller guarantees `producer` is not yet
     /// terminal.
-    pub(in crate::machine::execute::scheduler) fn add_park_edge(
-        &mut self,
-        producer: NodeId,
-        consumer: NodeId,
-    ) {
+    pub(in crate::scheduler) fn add_park_edge(&mut self, producer: NodeId, consumer: NodeId) {
         self.rows[producer.index()].notify.push(consumer.index());
         let row = &mut self.rows[consumer.index()];
         row.pending += 1;
@@ -119,7 +109,7 @@ impl DepGraph {
     /// parking `consumer` on `producer` would deadlock (e.g. `LET Ty = Ty`,
     /// where the sub-Dispatch would park on its own ancestor). Caller surfaces
     /// a structured error instead of installing the park edge.
-    pub(in crate::machine::execute::scheduler) fn would_create_cycle(
+    pub(in crate::scheduler) fn would_create_cycle(
         &self,
         producer: NodeId,
         consumer: NodeId,
@@ -172,7 +162,7 @@ impl DepGraph {
 
     /// Eager-free on the success path. Inv-C ensures the slot's notify list
     /// is already drained by the time the caller hits this.
-    pub(in crate::machine::execute::scheduler) fn clear_dep_edges(&mut self, idx: usize) {
+    pub(in crate::scheduler) fn clear_dep_edges(&mut self, idx: usize) {
         self.rows[idx].edges.clear();
     }
 
@@ -180,11 +170,7 @@ impl DepGraph {
     /// keep their pending counts and `from`-labelled edges; `into`'s fire now drains them (and their
     /// reads of `from` follow the alias to `into`). Their pending counts are unchanged: each still
     /// waits on one dep, now serviced by `into`'s single fire.
-    pub(in crate::machine::execute::scheduler) fn splice_notify(
-        &mut self,
-        from: usize,
-        into: usize,
-    ) {
+    pub(in crate::scheduler) fn splice_notify(&mut self, from: usize, into: usize) {
         let moved = std::mem::take(&mut self.rows[from].notify);
         self.rows[into].notify.extend(moved);
     }

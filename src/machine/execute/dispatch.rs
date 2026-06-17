@@ -31,7 +31,7 @@ use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
 
 use super::nodes::NodeWork;
 use super::runtime::KoanWorkload;
-use super::scheduler::Scheduler;
+use crate::scheduler::Scheduler;
 use super::{ignore_results, DepFinish, ErasedCont};
 use crate::machine::core::kfunction::action::{DepPlacement, FramePlacement};
 

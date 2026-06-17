@@ -1,15 +1,30 @@
+//! The Koan driver over the workload-independent [`Scheduler`](crate::scheduler::Scheduler): the
+//! run loop ([`KoanRuntime::execute`]) that pops ready slots, brackets each step's ambient frame
+//! context, and applies the [`NodeStep`] the step returns through the scheduler's method contract.
+//! The scheduler stores and hands back opaque per-node state; all Koan semantics — the per-call
+//! arena lift, the return-contract enforcement, the lexical-chain assembly — live here.
+//!
+//! See design/execution-model.md and design/memory-model.md.
+
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::{assemble_body_chain, ScopeId};
+use crate::machine::model::Carried;
 use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
 
-use super::super::dispatch::reattach_node_scope;
-use super::super::finalize::NodeFinalize;
-use super::super::nodes::{CallFrame, Node, NodePayload, NodeScope, NodeStep, NodeWork};
-use super::super::{ErasedValue, NodeCont};
-use super::super::runtime::KoanRuntime;
-use super::{Scheduler, Workload};
+use super::dispatch::{current_scope, reattach_node_scope, SchedulerView};
+use super::finalize::NodeFinalize;
+use super::lift::NodeLift;
+use super::nodes::{CallFrame, Node, NodePayload, NodeScope, NodeStep, NodeWork};
+use super::outcome::deps_at_step;
+use super::runtime::KoanRuntime;
+use super::{ErasedValue, NodeCont};
+
+#[cfg(test)]
+mod run_tests;
+#[cfg(test)]
+mod tests;
 
 impl<'run> KoanRuntime<'run> {
     /// On `Done` with a frame, the return `Value` references the per-call arena that's
@@ -185,55 +200,43 @@ impl<'run> KoanRuntime<'run> {
         }
         Ok(())
     }
-}
 
-impl<W: Workload> Scheduler<W> {
-    /// Invariant: every consumer drained here is parked with a non-zero counter;
-    /// freed slots are scrubbed from every producer's `notify_list` before the
-    /// producer drains.
-    ///
-    /// Wakes must all land before any queue push: a later wake re-reading the
-    /// slot must observe the prior transition.
-    pub(in crate::machine::execute::scheduler) fn finalize(
+    /// The unified node handler: collect the resolved dep terminals (as owned `Result`s — an
+    /// errored dep is handed through, the continuation decides), run `cont` against a read-only
+    /// [`SchedulerView`], reclaim the owned-dep suffix, then apply. The continuation issues no
+    /// graph write, so the reclaim lands after it and before the apply that installs the
+    /// continuation's edges. Carried values survive the reclaim (they live in arenas, not slots).
+    fn run_wait(
         &mut self,
+        deps: Vec<NodeId>,
+        park_count: usize,
+        cont: NodeCont<'run>,
         idx: usize,
-        output: Result<W::Value, W::Error>,
-        frame: Option<Rc<W::Frame>>,
-    ) {
-        let id = NodeId(idx);
-        self.store.finalize(id, output, frame);
-        let drained = self.deps.drain_notify(idx);
-        let mut woken: Vec<usize> = Vec::new();
-        for (consumer, hit_zero) in drained {
-            if hit_zero {
-                woken.push(consumer);
-            }
-        }
-        for consumer in woken {
-            self.queues.push_woken(consumer);
-        }
-    }
-
-    /// Recurses only into `DepEdge::Owned` entries; `Notify` entries point at sibling
-    /// producers this slot merely parked on, and reclaiming a consumer must not reach
-    /// across a park edge into the producer's subtree.
-    ///
-    /// Idempotent and safe to call on a still-live slot. `&'run KObject` references
-    /// handed out by `read` survive because the value lives in an arena.
-    pub(in crate::machine::execute) fn free(&mut self, idx: usize) {
-        let mut stack: Vec<NodeId> = vec![NodeId(idx)];
-        while let Some(id) = stack.pop() {
-            if self.store.is_live(id) {
-                continue;
-            }
-            if self.store.is_reclaimed(id) && self.deps.is_dep_edges_empty(id.index()) {
-                continue;
-            }
-            for child in self.deps.owned_children(id.index()) {
-                stack.push(child);
-            }
-            self.store.free_one(id);
-        }
+    ) -> NodeStep<'run> {
+        // Consumer-pull: lift each dep's terminal out of its producer frame into this consumer's
+        // arena, so the value dies with the consumer and the producer keeps no surviving copy that
+        // would outlive its own dying frame. A frameless / run-arena terminal already survives and
+        // is forwarded as-is.
+        let dest = current_scope(&self.ambient).arena;
+        let results: Vec<Result<Carried<'run>, KError>> = deps
+            .iter()
+            .map(|d| match self.sched.read_result_with_frame(*d) {
+                // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
+                Ok((value, Some(frame))) => Ok(self.lift(unsafe { value.reattach() }, &frame, dest)),
+                // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
+                Ok((value, None)) => Ok(unsafe { value.reattach() }),
+                Err(e) => Err(e.clone()),
+            })
+            .collect();
+        let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
+        // The pull-lifted values die with this consumer's frame; deliver them at that `'s`.
+        let outcome = cont(
+            &SchedulerView::new(&self.sched, &self.ambient),
+            deps_at_step(&results),
+            idx,
+        );
+        self.sched.reclaim_deps(idx, owned_indices);
+        self.apply_outcome(outcome, idx)
     }
 }
 

@@ -47,11 +47,11 @@ What's shipped that the open items below build on:
   single owner: per-builtin typed-binder `binder_name` (one shared
   [`type_part_binder_name`](../src/builtins.rs)), the FN and FUNCTOR bodies (one shared
   [`build_fn_like`](../src/builtins/fn_def.rs) keyed on `FnKind`), the `finish.rs` dep-finish/catch handler arms (one shared
-  [`run_wait`](../src/machine/execute/scheduler/finish.rs)), the `dict_literal`
+  [`run_wait`](../src/machine/execute/run_loop.rs)), the `dict_literal`
   `accept_colon`/`accept_equals` pair (one `accept_separator`), the slot-extract error
   envelope (one [`require_kexpression`](../src/machine/core/kfunction/action.rs)
   owning the parenthesized-slot error text), and the scheduler `Object`/`Type` finalize
-  arms (one [`check_declared_return`](../src/machine/execute/scheduler/execute.rs)
+  arms (one [`check_declared_return`](../src/machine/execute/finalize.rs)
   parameterized over the lifted carrier's `matches_value`/`matches_type` predicate).
 - *Arena unsafe consolidation.* Every captured/defining-scope re-attach is funnelled behind one
   [`ScopePtr`](../src/machine/core/scope_ptr.rs); `RuntimeArena::escape` is `NonNull`.
@@ -67,7 +67,7 @@ What's shipped that the open items below build on:
   The frame re-anchor then landed in full: the free `&'run` scope fabrication at the read
   boundary is deleted, a within-step frame lifetime `'s` (`'a: 's`) threads
   `run_dispatch`/`SchedulerView`/`BuiltinFn`, and a slot's scope is now read on demand via
-  [`Scheduler::current_scope`](../src/machine/execute/scheduler.rs) through the witness-bounded
+  [`Scheduler::current_scope`](../src/machine/execute/run_loop.rs) through the witness-bounded
   [`CallArena::scope_bounded`](../src/machine/core/arena.rs) brand (the post-step loop reads it
   through a `PostStep` token off the slot's returned frame). The sole surviving free re-exposure
   is the arena half of [`CallArena::with_anchored_child`](../src/machine/core/arena.rs), the
@@ -78,7 +78,7 @@ What's shipped that the open items below build on:
   lifetime `'s` ([`Outcome<'run, 's>`](../src/machine/execute/outcome.rs)), not `'run`. The
   producer keeps its terminal in its own frame (the slot's `Done` co-stores the backing
   `Rc<CallArena>`, so frame death moves Done→free) and does not lift; each consumer
-  pull-lifts its deps into its own arena at read ([`run_wait`](../src/machine/execute/scheduler/finish.rs))
+  pull-lifts its deps into its own arena at read ([`run_wait`](../src/machine/execute/run_loop.rs))
   through the single [`NodeLift`](../src/machine/execute/lift.rs) workload hook, so an
   intermediate value dies with its consumer and only a consumer-less root drains to the run
   arena. Return-contract enforcement stays a separate Done-time layer. The output-lifetime
