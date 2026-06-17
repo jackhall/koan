@@ -6,20 +6,22 @@
 //! See [design/execution-model.md](../../design/execution-model.md) and
 //! [design/memory-model.md](../../design/memory-model.md).
 
+mod ambient;
 mod dispatch;
+mod finalize;
 mod lift;
 mod nodes;
 mod outcome;
 // The write harness (KoanRuntime, sole &mut Scheduler) + the shared action harness and the
 // program entry points (interpret submodule). See runtime.rs.
+mod run_loop;
 mod runtime;
-mod scheduler;
 
 pub(in crate::machine::execute) use outcome::{
-    catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, NodeCont,
+    catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedCont, ErasedValue,
+    NodeCont,
 };
 pub use runtime::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};
-pub use scheduler::Scheduler;
 
 pub(crate) use dispatch::{defer_field_list_action, resolve_type_leaf_carrier, TypeLeafCarrier};
 pub use dispatch::{NameOutcome, ResolveOutcome, ResolveTypeExprOutcome, Resolved};

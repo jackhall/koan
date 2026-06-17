@@ -1,10 +1,18 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena.rs: 16
+src/machine/core/arena.rs: 12
 src/machine/core/kfunction/body.rs: 3
-src/machine/core/scope_ptr.rs: 6
-src/machine/execute/scheduler/execute.rs: 1
+src/machine/core/scope_ptr.rs: 7
+src/machine/core/storage_frame.rs: 4
+src/machine/execute/dispatch/ctx.rs: 2
+src/machine/execute/finalize.rs: 1
+src/machine/execute/nodes.rs: 1
+src/machine/execute/outcome.rs: 10
+src/machine/execute/run_loop.rs: 3
+src/machine/execute/runtime.rs: 3
+src/machine/execute/runtime/interpret.rs: 1
+src/machine/execute/runtime/submit.rs: 1
 src/machine/model/values/module.rs: 1
 -->
 
@@ -37,7 +45,7 @@ unsafe and fingerprint-drift checks still fire.
 
 ## The slate
 
-22 tests, grouped by the unsafe site each pins down. Names below are the exact
+25 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallArena` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -59,13 +67,19 @@ end-to-end — the run scope outlives the frame, so no separate minimal test.
 - `call_arena_chained_outer_frame_walkable`
 - `scope_bounded_reanchors_within_witness_borrow`
 
-**`RuntimeArena` interior mutation under live borrows** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)).
+**`StorageFrame` alloc engine under live borrows** ([src/machine/core/storage_frame.rs](../src/machine/core/storage_frame.rs)) — the
+generic `alloc` engine erases the value to `'static` (the move-through-union `erase_store`),
+stores it, records its address into the `membership` `RefCell` via `borrow_mut`, and re-anchors
+the `'static` store to `'a` — all while a prior `&` from the same frame is shared-borrowed. Pins
+that tree-borrows shape over the engine `RuntimeArena` (= `StorageFrame<KoanStorageProfile>`) routes.
 
 - `runtime_arena_alloc_while_prior_ref_live`
 
-**Cycle gate** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — `alloc_object` redirects
-a value carrying a self-anchored `Rc<CallArena>` to the escape arena, breaking
-the storage cycle that closure-escape returns can otherwise produce.
+**Cycle gate** ([src/machine/core/storage_frame.rs](../src/machine/core/storage_frame.rs)) — the generic `alloc`
+engine redirects a value whose family `anchors_to` answers true for `self` (a self-anchored
+`Rc<CallArena>`) to the escape frame via `escape_ptr.as_ref()`, breaking the storage cycle that
+closure-escape returns can otherwise produce. The Koan `anchors_to` walkers that drive the
+decision live in [src/machine/core/arena.rs](../src/machine/core/arena.rs).
 
 - `alloc_object_redirects_self_anchored_value_to_escape_arena`
 
@@ -164,22 +178,67 @@ constraint-free constructor, sound because the free content `'a` is reachable on
 scope-walking shapes already in the slate (and `scope_bounded_reanchors_within_witness_borrow`,
 which pins the line-for-line equivalent) cover it; no separate minimal test is added.
 
+**`NodeScope::Anchored` lifetime fabrication** ([src/machine/execute/nodes.rs](../src/machine/execute/nodes.rs))
+— a genuinely run-lived scope evicted off a lifetime-free scheduler node (`NodeScope::Anchored`) is
+stored as a `ScopePtr<'static>` through the brand-dropping `ScopePtr::erase_static` (the same raw-ptr
+cast as `erase`, in [src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs)) and re-attached
+at the read boundary through the `unsafe` `ScopePtr::reattach_bounded` — a borrow bounded by the
+reader, a free content lifetime, sound because the pointee lives for all of `'run`. This is the second
+`'static`-storing scope carrier (alongside `CallArena`). This test pins the erase → reattach
+round-trip directly, plus a sibling-pointer arena mutation while the re-attached scope is live.
+
+- `node_scope_anchored_erase_reattach_roundtrip`
+
+**`NodeScope::Anchored` re-attach — workload read boundary** ([src/machine/execute/dispatch/ctx.rs](../src/machine/execute/dispatch/ctx.rs))
+— the `unsafe { ptr.reattach_bounded() }` in the `reattach_node_scope` helper materializes the
+executing slot's scope from its raw `NodeScope` handle (the scheduler core hands the handle back but
+no longer interprets it). Both the decide-phase read (`current_scope`, via `SchedulerView`) and the
+Done-boundary post-step read ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs))
+route through it. It runs the transmute defined in the group above and carries none of its own, so
+`node_scope_anchored_erase_reattach_roundtrip` — and end-to-end every scheduler-driving slate test —
+pins it. No separate minimal test.
+
+**`NodeScope::Anchored` re-attach — own-scope re-dispatch** ([src/machine/execute/runtime/submit.rs](../src/machine/execute/runtime/submit.rs))
+— the `unsafe { ptr.reattach_bounded() }` in `KoanRuntime::dispatch_in_own_scope` re-dispatches
+against an `Anchored` slot's own scope, running the same transmute with none of its own; pinned by
+`node_scope_anchored_erase_reattach_roundtrip`. No separate minimal test.
+
 **`ErasedContract` re-attach** ([src/machine/core/kfunction/body.rs](../src/machine/core/kfunction/body.rs))
 — the contract-lifetime erasure that mirrors `ScopePtr` for `ReturnContract`: `erase` forgets the
 lifetime for storage on a node's lifetime-free `Frame`, and the `unsafe` `reattach` transmutes
 `ReturnContract<'static>` back to a lifetime witnessed by the cart `Rc` that pins the contract's
 home arena (the cart's frame-outer arena — a strict ancestor). The unbounded re-attach call site
-in [src/machine/execute/scheduler/execute.rs](../src/machine/execute/scheduler/execute.rs) (the
+in [src/machine/execute/finalize.rs](../src/machine/execute/finalize.rs) (the `NodeFinalize`
 Done-boundary return-type check) runs the same transmute; end-to-end, `recursive_tagged_match_no_uaf`
 exercises it through a MATCH arm's `-> :T` carried across tail recursion. This test pins the
 erase → reattach round-trip directly.
 
 - `erased_contract_reattach_roundtrip`
 
-**`ErasedContract` re-attach — Done-boundary call site** ([src/machine/execute/scheduler/execute.rs](../src/machine/execute/scheduler/execute.rs))
-— the `unsafe { contract.reattach(&cart) }` in the Done arm runs the transmute defined in the
-group above; it carries no transmute of its own, so the same `erased_contract_reattach_roundtrip`
+**`ErasedContract` re-attach — Done-boundary call site** ([src/machine/execute/finalize.rs](../src/machine/execute/finalize.rs))
+— the `unsafe { contract.reattach(&cart) }` in the `NodeFinalize::finalize_terminal` hook runs the
+transmute defined in the group above; it carries no transmute of its own, so the same `erased_contract_reattach_roundtrip`
 (and end-to-end `recursive_tagged_match_no_uaf`) pins it. No separate minimal test.
+
+**`ErasedCont` continuation erasure** ([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs))
+— the continuation generalizes the `ErasedContract` discipline from a `ReturnContract` enum to the
+whole `NodeCont` (`Box<dyn FnOnce>`): `erase` forgets the captured `'run` for storage on a
+lifetime-free node, and the `unsafe` `reattach` transmutes `NodeCont<'static>` back to a `'run`
+witnessed by the slot's cart `Rc` (which pins the captures' home — the run arena or a strict ancestor
+of the cart). Distinct shape from the contract group above: the transmute is over a **fat pointer**
+(data + vtable), not a thin enum, so it carries its own minimal test. The re-attach call site in
+[src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs) (the run loop,
+just before `run_wait`) runs the same transmute end-to-end every step. This test pins the
+erase → reattach → invoke round-trip directly, calling the reattached closure so tree borrows checks
+the capture read.
+
+- `erased_cont_reattach_roundtrip`
+
+**`ErasedCont` re-attach — run-loop call site** ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs))
+— the `unsafe { erased_cont.reattach(&cart) }` at the top of the execute loop runs the transmute
+defined in the group above with none of its own, re-anchoring each slot's continuation against its
+cart before `run_wait`; the same `erased_cont_reattach_roundtrip` (and end-to-end every
+scheduler-driving slate test) pins it. No separate minimal test.
 
 **`Module` interior mutation under a live `&'a Module`** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — `Module`
 mutates a `RefCell<HashMap>` (`type_members` / `slot_type_tags`) while a `&'a Module<'a>` is
@@ -209,6 +268,42 @@ point (and transitively by user-fn TCO; that path is covered by the MATCH-on-
 - `lift_park_minimal_program_for_miri`
 - `replay_park_minimal_program_for_miri`
 
+**`Outcome` step-lifetime reattach** ([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs)) —
+the lifetime-only transmutes bridging a node continuation's per-step `'s` output against the
+run-lived AST and the frame-pinned slot store: `shorten_outcome` (a decide's `'run` outcome down to
+`'s`), `deps_at_step` (consumer-pull dep terminals down to `'s`), `deps_for_builtin` /
+`obj_for_builtin` (deps back up to `'run` across the concrete builtin boundary), and
+`pin_carried_to_run` (a Done terminal up to `'run` for the frame-pinned store). The `ErasedValue`
+storage erasure is the same `Carried` lifetime transmute one step earlier: `erase` forgets a
+terminal's `'run` for storage in the now-lifetime-free `Scheduler<V>` slot table (the inter-node
+value type parameter), and `reattach` re-anchors it at the workload read boundary, witnessed by the
+slot's co-stored producer-frame `Rc` (or the run arena for a frameless value) — `pin_carried_to_run`
+generalized to the generic value channel. All are exercised by every program; this test pins the
+hardest shape directly — a tail-chain return-type **coarsening**, where the re-tagged terminal must
+be homed in the contract's scope to outlive the reused producer frame, then re-read after the run
+drains the root into the run arena.
+
+- `tail_call_stamps_result_against_first_callers_return_contract`
+
+**`ErasedValue` re-attach — workload read boundary** ([src/machine/execute/runtime.rs](../src/machine/execute/runtime.rs), [src/machine/execute/runtime/interpret.rs](../src/machine/execute/runtime/interpret.rs), [src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs), [src/machine/execute/dispatch/ctx.rs](../src/machine/execute/dispatch/ctx.rs))
+— the `unsafe { value.reattach() }` calls where the workload reads a terminal back out of the
+generic `Scheduler<V>` (the Forward-arm pull, the drain-boundary re-home, the consumer-pull dep lift,
+and `SchedulerView::read_result`) run the `ErasedValue` transmute defined in the group above with
+none of their own. The co-stored frame `Rc` pins the value; the same
+`tail_call_stamps_result_against_first_callers_return_contract` (and end-to-end every program, since
+every value now flows through `ErasedValue`) pins them. No separate minimal test.
+
+**`ErasedValue` re-attach — drain re-home** ([src/machine/execute/runtime/interpret.rs](../src/machine/execute/runtime/interpret.rs))
+— the drain boundary re-homes a consumer-less root into the run arena, erasing the lifted terminal
+(`ErasedValue::erase`) and reading it back (`reattach`) through the same transmute as the group
+above; pinned by `tail_call_stamps_result_against_first_callers_return_contract` and end-to-end.
+No separate minimal test.
+
+**`ErasedValue` re-attach — consumer-pull dep lift** ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs))
+— `KoanRuntime::run_wait` reads each dep terminal out of the generic store (`reattach`) before the
+consumer-pull `NodeLift` copies it into the consuming frame; same transmute as the group above, with
+none of its own. Pinned by the lift/park slate tests end-to-end. No separate minimal test.
+
 ## Adding tests to the slate
 
 Add a test to the slate when a new unsafe site lands — a transmute, raw-pointer
@@ -229,9 +324,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
-- 2026-06-14: 540s — 22 tests, 0 leaks, 0 UB
-- 2026-06-14: 817s — 22 tests, 0 leaks, 0 UB
-- 2026-06-13: 538s — 22 tests, 0 leaks, 0 UB
-- 2026-06-13: 538s — 22 tests, 0 leaks, 0 UB
-- 2026-06-13: 1015s — 22 tests, 0 leaks, 0 UB
+- 2026-06-17: 646s — 25 tests, 0 leaks, 0 UB
+- 2026-06-16: 637s — 25 tests, 0 leaks, 0 UB
+- 2026-06-16: 617s — 25 tests, 0 leaks, 0 UB
+- 2026-06-16: 607s — 25 tests, 0 leaks, 0 UB
+- 2026-06-16: 609s — 25 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

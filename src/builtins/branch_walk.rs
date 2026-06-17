@@ -39,6 +39,7 @@ pub(crate) fn resolve_arm_contract<'a>(
     Ok(ReturnContract::Arm {
         ret: ctx.scope.arena.alloc_ktype(ret_kt),
         kind,
+        arena: ctx.scope.arena,
     })
 }
 

@@ -247,7 +247,7 @@ fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
     }
     let after = arena.alloc_count();
     let growth = after - baseline;
-    // Measured at 50 (one `KObject::Number(7)` lifted per call); < 150 catches
+    // Measured at 50 (one `KObject::Number(7)` per call); < 150 catches
     // any regression that re-introduces a per-call leak into run-root.
     assert!(
         growth < 50 * 3,

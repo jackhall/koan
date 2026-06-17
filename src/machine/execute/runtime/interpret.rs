@@ -6,6 +6,8 @@
 
 use super::KoanRuntime;
 use crate::builtins::default_scope;
+use crate::machine::execute::lift::NodeLift;
+use crate::machine::execute::ErasedValue;
 use crate::machine::model::ast::KExpression;
 use crate::machine::{KError, KErrorKind, RuntimeArena, Scope};
 use crate::parse::{parse, parse_with_path};
@@ -52,6 +54,18 @@ impl<'run> KoanRuntime<'run> {
     ) -> Result<(), KError> {
         let top_level = self.enter_block(root.id, exprs, root);
         self.execute()?;
+        // Drain boundary: each top-level statement is a consumer-less root, so its terminal stays
+        // pinned in the producer's per-call frame (a producer keeps its terminal in-frame and does
+        // not lift at Done; each consumer pull-lifts instead). Lift each into the run arena here so
+        // the root lives run-long and its per-call frame is released. A frameless / run-arena or
+        // errored terminal needs no lift.
+        for &id in &top_level {
+            if let Ok((value, Some(frame))) = self.sched.read_result_with_frame(id) {
+                // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
+                let lifted = self.lift(unsafe { value.reattach() }, &frame, root.arena);
+                self.sched.rehome_terminal(id, Ok(ErasedValue::erase(lifted)));
+            }
+        }
         // A bare top-level expression is an untyped resolution boundary: an unstamped
         // empty `[]` / `{}` reaching it has no element type to infer, so reject rather
         // than silently resolve to `List<Any>` / `Dict<Any, Any>`.

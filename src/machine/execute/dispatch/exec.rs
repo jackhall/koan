@@ -10,7 +10,8 @@
 
 use super::super::nodes::NodeWork;
 use super::super::outcome::{dep_error_frame, Continuation, Outcome};
-use super::super::{ignore_results, DepFinish};
+use super::super::runtime::KoanWorkload;
+use super::super::{ignore_results, DepFinish, ErasedCont};
 use super::DepRequest;
 use super::SchedulerView;
 use crate::machine::core::kfunction::action::FramePlacement;
@@ -27,13 +28,11 @@ use crate::machine::{KError, KErrorKind};
 /// `invoke` runs against it on the next pop. A user fn's `Continue` carries
 /// [`FramePlacement::ReuseReserve`] (the harness mints the TCO cart); a builtin's carries
 /// [`FramePlacement::Inherit`] (it runs in the current frame). The decide handler owns `picked`, so
-/// the builtin-vs-user-fn frame decision is made here, not in the harness. `free` reclaims the
-/// eager-subs `Reuse` producers the decide phase consumed inline.
+/// the builtin-vs-user-fn frame decision is made here, not in the harness.
 pub(super) fn invoke_continue<'run>(
     picked: &'run KFunction<'run>,
     working_expr: KExpression<'run>,
-    free: Vec<usize>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     let frame = match &picked.body {
         Body::Builtin(_) => FramePlacement::Inherit,
         _ => FramePlacement::ReuseReserve {
@@ -46,7 +45,6 @@ pub(super) fn invoke_continue<'run>(
         contract: None,
         block_entry: None,
         body_index: 0,
-        free,
     }
 }
 
@@ -55,16 +53,16 @@ pub(super) fn invoke_continue<'run>(
 fn invoke_work<'run>(
     picked: &'run KFunction<'run>,
     working_expr: KExpression<'run>,
-) -> NodeWork<'run> {
+) -> NodeWork<KoanWorkload> {
     let carrier = working_expr.summarize();
-    NodeWork {
-        deps: Vec::new(),
-        park_count: 0,
-        cont: ignore_results(Box::new(move |view, _idx| {
+    NodeWork::new(
+        Vec::new(),
+        0,
+        ErasedCont::erase(ignore_results(Box::new(move |view, _idx| {
             invoke(view, picked, working_expr)
-        })),
-        carrier: Some(carrier),
-    }
+        }))),
+        Some(carrier),
+    )
 }
 
 /// The single invoke entry for the dispatcher's bind sites — run a resolved call:
@@ -77,7 +75,7 @@ pub(super) fn invoke<'run>(
     view: &SchedulerView<'run, '_>,
     picked: &'run KFunction<'run>,
     working_expr: KExpression<'run>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     // An action-harness builtin: build a read-only `BodyCtx`, get the `Action`, and lower it
     // through the shared `run_action` interpreter. Builtins run in the current frame, so the
     // builtin call's `Continue` carries `FramePlacement::Inherit` and this reads nothing.
@@ -161,7 +159,6 @@ pub(super) fn invoke<'run>(
                     contract: Some(contract),
                     block_entry: Some(block_entry),
                     body_index,
-                    free: Vec::new(),
                 };
             }
             // Leading statements become owned siblings in `frame` (one `BodyBlock` dep); the slot
@@ -177,14 +174,12 @@ pub(super) fn invoke<'run>(
                 contract: Some(contract),
                 block_entry: Some(block_entry),
                 body_index,
-                free: Vec::new(),
             });
             Outcome::ParkThenContinue {
                 deps: vec![DepRequest::BodyBlock { frame, statements }],
                 park_count: 0,
                 cont: Continuation::Finish(finish),
                 dep_error_frame: Some(dep_error_frame()),
-                free: Vec::new(),
             }
         }
         ExecOutcome::DeferredExprTail {
@@ -207,7 +202,7 @@ pub(super) fn invoke<'run>(
             // Capture the body scope id before `frame` moves into the `BodyBlock` dep; the finish
             // re-enters that already-installed cart with `Inherit`.
             let block_entry = frame.scope().id;
-            let finish: DepFinish<'run> = Box::new(move |_view, results| {
+            let finish: DepFinish<'run> = Box::new(move |view, results| {
                 // The return-type expression is the last body statement, so its resolved value is
                 // the last result.
                 let kt = match results[results.len() - 1] {
@@ -220,8 +215,17 @@ pub(super) fn invoke<'run>(
                     }
                 };
                 // The per-call type rides the captured-scope (frame-outer) arena, a strict ancestor
-                // the cart keeps live — same home as the `TypeExpr` form's `PerCall.ret`.
-                let ret_ref = picked.captured_scope().arena.alloc_ktype(kt.clone());
+                // the cart keeps live — same home as the `TypeExpr` form's `PerCall.ret`. `kt` was
+                // pull-lifted into this node's call frame, which the captured scope outlives, so
+                // relocate it with `lift_ktype` (re-anchoring any per-call `Module` frame onto the
+                // call frame) rather than a bare clone that would dangle once the frame frees.
+                let call_frame = view
+                    .current_frame()
+                    .expect("a deferred-return finish runs against a per-call frame");
+                let ret_ref = picked
+                    .captured_scope()
+                    .arena
+                    .alloc_ktype(lift_ktype(kt, &call_frame));
                 let contract = ReturnContract::PerCall {
                     func: picked,
                     ret: ret_ref,
@@ -232,7 +236,6 @@ pub(super) fn invoke<'run>(
                     contract: Some(contract),
                     block_entry: Some(block_entry),
                     body_index,
-                    free: Vec::new(),
                 }
             });
             Outcome::ParkThenContinue {
@@ -240,7 +243,6 @@ pub(super) fn invoke<'run>(
                 park_count: 0,
                 cont: Continuation::Finish(finish),
                 dep_error_frame: Some(dep_error_frame()),
-                free: Vec::new(),
             }
         }
         ExecOutcome::Errored(e) => Outcome::Done(Err(e)),
@@ -254,7 +256,7 @@ fn run_action_builtin<'run>(
     view: &SchedulerView<'run, '_>,
     f: crate::machine::core::kfunction::ActionFn,
     args: crate::machine::model::types::Record<crate::machine::model::values::ArgValue<'run>>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     use crate::machine::core::kfunction::action::BodyCtx;
     use crate::machine::model::values::{ArgValue, Held};
     use crate::machine::model::KObject;

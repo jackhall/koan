@@ -342,10 +342,10 @@ annotation. The three boundaries are:
   declared return type (a list literal `[1, "x"]` returned where `:(LIST OF Number)`
   was declared fails with a structured `TypeMismatch` naming both types). For a
   **resolved** return type the lift-time Done boundary in
-  [`scheduler/execute.rs`](../../src/machine/execute/scheduler/execute.rs) then
+  [`finalize.rs`](../../src/machine/execute/finalize.rs) then
   stamps the carrier to the declared type (`check_declared_return` →
   `KObject::stamp_type`). The **deferred**-return (`PerCall`) path checks only: the same
-  [`check_declared_return`](../../src/machine/execute/scheduler/execute.rs) runs
+  [`check_declared_return`](../../src/machine/execute/finalize.rs) runs
   the match predicate but returns no stamp, so a satisfying value passes through
   un-stamped (a passing value
   already satisfies the declared type, at worst as a subtype).

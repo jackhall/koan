@@ -12,11 +12,17 @@
 //! three carriers that own a real `'a` — `Module`, `Signature`, `KFunction` — re-attach
 //! through `reattach` and carry no `unsafe`.
 //!
-//! The one irreducible `'static → 'a` fabrication lives at `CallArena`, which is non-generic
-//! (it backs `Rc<CallArena>` and carries no lifetime), so it stores a `ScopePtr<'static>` and
-//! must shorten that to an `&self`-bounded lifetime. That single boundary routes through the
-//! `unsafe` [`ScopePtr::reattach_unbounded`], which fabricates a caller-chosen lifetime that
-//! ignores the brand. It is the only `unsafe` re-attach in the model.
+//! Two lifetime-free carriers store a `ScopePtr<'static>` and must fabricate the content lifetime
+//! back, because neither can brand it: `CallArena` (non-generic — it backs `Rc<CallArena>` and
+//! carries no lifetime) shortens to an `&self`-bounded lifetime through the `unsafe`
+//! [`ScopePtr::reattach_unbounded`]; a scheduler node's `NodeScope::Anchored` — a genuinely
+//! run-lived scope evicted off the lifetime-free node — re-attaches a free content lifetime behind
+//! an `&self`-bounded borrow through the `unsafe` [`ScopePtr::reattach_bounded`]. Both reach the
+//! `'static` store through [`ScopePtr::erase_static`], a brand-dropping constructor that is *safe*
+//! to call (forgetting a lifetime cannot fabricate one); the fabrication hazard is deferred to the
+//! `unsafe` re-attach, witnessed by the carrier's pinning (the frame `Rc`) or, for an `Anchored`
+//! node, the scope being run-lived. The carriers that own a real `'a` — `Module`, `Signature`,
+//! `KFunction` — route the safe [`ScopePtr::reattach`] and carry no `unsafe`.
 //!
 //! See [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
 //! for the soundness argument the carriers' pinning supplies.
@@ -47,6 +53,24 @@ impl<'a> ScopePtr<'a> {
     /// in the brand. Safe: it consumes a real `&'a Scope<'a>`, so it cannot fabricate a
     /// lifetime longer than the borrow already proved.
     pub fn erase(scope: &'a Scope<'a>) -> Self {
+        // `Scope` is invariant in `'a`, so the through-`'static` cast is required.
+        #[allow(clippy::unnecessary_cast)]
+        let ptr = scope as *const Scope<'_> as *const Scope<'static>;
+        // Non-null: `ptr` is derived from a reference.
+        ScopePtr {
+            ptr: unsafe { NonNull::new_unchecked(ptr as *mut Scope<'static>) },
+            _brand: PhantomData,
+        }
+    }
+
+    /// Erase a scope to a `'static`-branded pointer for storage in a lifetime-free carrier. Unlike
+    /// [`Self::erase`], which records the borrow's `'a` for the safe [`Self::reattach`], this drops
+    /// the brand to `'static`, so the caller commits to recovering the content lifetime through an
+    /// `unsafe` re-attach ([`Self::reattach_unbounded`] / [`Self::reattach_bounded`]). Safe to
+    /// *construct*: it only casts a live reference to a `'static` pointer (same cast as
+    /// [`Self::erase`]); forgetting the lifetime cannot fabricate one. Used by `CallArena` and by a
+    /// scheduler node's `NodeScope::Anchored`.
+    pub fn erase_static(scope: &Scope<'_>) -> ScopePtr<'static> {
         // `Scope` is invariant in `'a`, so the through-`'static` cast is required.
         #[allow(clippy::unnecessary_cast)]
         let ptr = scope as *const Scope<'_> as *const Scope<'static>;

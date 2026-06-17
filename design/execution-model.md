@@ -11,7 +11,7 @@ Dispatch and execution are deliberately separate stages. **Dispatch** does
 name-resolution and signature-matching: given a `KExpression` and a `Scope`, it
 returns a [`KFuture`](../src/machine/core/scope.rs) — the resolved `&KFunction` plus
 its `ArgumentBundle`, ready to run but not yet executed. **Execution** is what
-the [`Scheduler`](../src/machine/execute/scheduler.rs) does: it owns a DAG of deferred
+the [`Scheduler`](../src/machine/execute/run_loop.rs) does: it owns a DAG of deferred
 work, decides when each `KFuture` runs, and hands its body the live scope.
 
 ## Dispatch as a scheduler node
@@ -55,33 +55,42 @@ and names no AST.
 
 ## The dispatcher / scheduler boundary
 
+The scheduler ([`scheduler`](../src/scheduler.rs)) is a crate-root sibling of
+`machine`, not nested inside it: a workload-independent DAG of dependency-linked
+nodes, generic over a [`Workload`](../src/scheduler/workload.rs) and naming no Koan
+value, error, scope, memory, or AST type. The Koan interpreter is the sole
+workload — `machine::execute` instantiates it as `Scheduler<KoanWorkload>` and
+drives it from the run loop
+([`execute/run_loop.rs`](../src/machine/execute/run_loop.rs)) through the
+scheduler's inherent-method contract.
+
 The dispatch tree
-([`execute/dispatch/`](../src/machine/execute/dispatch.rs)) is a sibling
-of [`execute/scheduler/`](../src/machine/execute/scheduler.rs), not
-nested inside it. Every scheduler-facing step — a dispatch decide, a
-finish, a builtin body, an invoke — flows through one **decide → outcome →
-apply** contract: it decides against a read-only view, *returns* the
-scheduler mutations it wants as data, and a single harness method applies
-them. The three pieces:
+([`execute/dispatch/`](../src/machine/execute/dispatch.rs)) and the run-loop driver
+are both Koan-side. Every scheduler-facing step — a dispatch decide, a finish, a
+builtin body, an invoke — flows through one **decide → outcome → apply** contract:
+it decides against a read-only view, *returns* the scheduler mutations it wants as
+data, and a single harness method applies them. The three pieces:
 
 - **The read view** —
   [`SchedulerView<'run, 's>`](../src/machine/execute/dispatch/ctx.rs) wraps
-  `&'s Scheduler<'run>` (never `&mut`). It exposes only the reads a decide
-  needs: the static-over-the-step ones (`current_scope`, `chain_deref`,
-  `active_chain`, `build_bare_outcomes`) and the live reads of
-  *pre-existing* producers (`is_result_ready`, `would_create_cycle`,
-  `read_result`). It permits scope binding (interior-mutable `&Scope`) but
-  no graph write. The `DepGraph`, `NodeStore`, and active-frame fields stay
-  `pub(in execute::scheduler)`; the dispatch shape modules (`keyworded`,
-  `fn_value`, `single_poll`) never name scheduler fields directly. A future
-  scheduler internal rename (`active_chain` → ..., `DepGraph` split) is a
-  single-file change inside `scheduler/`.
+  `&'s Scheduler<KoanWorkload>` (never `&mut`) together with the driver's per-step
+  ambient context. It exposes only the reads a decide needs: the
+  static-over-the-step ones (`current_scope`, `chain_deref`, `in_contract_chain`,
+  `build_bare_outcomes`) and the live reads of *pre-existing* producers
+  (`is_result_ready`, `would_create_cycle`, `read_result`). It permits scope
+  binding (interior-mutable `&Scope`) but no graph write. The scheduler's `queues`
+  / `deps` / `store` fields stay `pub(in crate::scheduler)`; the dispatch shape
+  modules (`keyworded`, `fn_value`, `single_poll`) never name scheduler fields
+  directly.
 - **The effect** —
-  [`Outcome<'run>`](../src/machine/execute/outcome.rs) is the one currency
+  [`Outcome<'run, 's>`](../src/machine/execute/outcome.rs) is the one currency
   every producer and finish returns (the dispatch-side peer of the builtin
   [`Action`](../src/machine/core/kfunction/action.rs)). It is AST-free — no
-  variant names a `KFunction` or a `KExpression`. Four variants: `Done` (a
-  value to lift, or an error), `Continue` (replace this slot's work and frame,
+  variant names a `KFunction` or a `KExpression`. Its second lifetime `'s` is the
+  per-step frame lifetime the `Done` value is born at; the consumer pull-lifts it
+  across each dep edge ([per-call-arena-protocol.md § Consumer-pull node-output lift](per-call-arena-protocol.md#consumer-pull-node-output-lift)).
+  Four variants: `Done` (the node's terminal value at `'s`, or an
+  error), `Continue` (replace this slot's work and frame,
   re-run, no park), `ParkThenContinue` (park on deps, then run a
   [`Continuation`](../src/machine/execute/outcome.rs) that yields another
   outcome), and `Forward` (the slot's result *is* a named producer's — the
@@ -97,7 +106,11 @@ them. The three pieces:
 - **The write harness** —
   [`KoanRuntime<'run>`](../src/machine/execute/runtime.rs) owns the `Scheduler`
   by composition (a `sched` field, not a `&mut` borrow) and is the **sole**
-  holder of `&mut Scheduler` across the execute tree. Its
+  holder of `&mut Scheduler` across the execute tree. The per-step *ambient*
+  state — the active per-call frame, the slot reserve, the run frame, the
+  executing slot's opaque payload, and the contract-chain flag — lives on the
+  driver ([`ambient`](../src/machine/execute/ambient.rs)), not the scheduler,
+  which is a pure DAG runtime. Its
   [`apply_outcome`](../src/machine/execute/runtime.rs) interprets a returned
   outcome into graph writes and the slot's `NodeStep`. Because only the harness
   reborrows the scheduler mutably, no decide handler holds `&mut Scheduler` —
@@ -108,17 +121,20 @@ them. The three pieces:
   `dispatch_body`, `submit_dep_finish_in_own_scope`), `submit_dispatch`, and the
   aggregate-literal lowering are all `&mut self` methods on `KoanRuntime`. The
   unified node handler
-  ([`run_wait`](../src/machine/execute/scheduler/finish.rs)) collects the slot's
+  ([`run_wait`](../src/machine/execute/run_loop.rs)) collects the slot's
   resolved dep terminals, builds a `SchedulerView`, runs the `cont` closure,
   reclaims the owned-dep suffix, and hands the outcome to `apply_outcome`.
 
-`Scheduler`'s own surface is AST-free: it exposes read views plus the low-level
-write primitives (`submit_node`, `alloc_slot`, `add_owned_edge` /
-`add_park_edge`, `acquire_tail_frame`, `free`, `resolve_node_scope`,
-`ensure_run_frame`, scope / chain reads) — no method signature names a
-`KExpression` or an AST type. No trait wraps `Scheduler`: those graph-write
-primitives are inherent methods capped `pub(in crate::machine::execute)`, so
-only the harness reaches them. A builtin invoked mid-dispatch
+The scheduler reaches the driver only through its method contract, and every
+method names only `NodeId` and the workload's associated types — no signature
+names a `KExpression`, `Scope`, or AST type. `pop_next` / `take_for_run` /
+`replace` drive a slot's lifecycle; `submit_node` and the alias-resolving edge
+installs (`add_owned_edge` / `add_park_edge` / `splice_forward`) wire the graph;
+`finalize` / `free` / `reclaim_deps` terminalize and reclaim; `read*` /
+`is_result_ready` / `would_create_cycle` / `unresolved` are the reads. No trait
+wraps `Scheduler`: those are inherent methods capped `pub(crate)`, so only the
+Koan driver reaches them, and the `queues` / `deps` / `store` fields stay
+`pub(in crate::scheduler)`. A builtin invoked mid-dispatch
 (e.g. `newtype_construct`) routes through the shared
 [`run_action`](../src/machine/execute/runtime.rs) harness as a pure
 `Action → Outcome` lowering; `exec::invoke` reads the dispatcher's ambient
@@ -157,14 +173,14 @@ The scheduler's edges point producer → consumer. Each slot's `DepRow` carries 
 `Value` or `Err`, the notify-walk drains its `notify` list, decrements each
 consumer's `pending`, and pushes any zero-counter consumer onto the run-set.
 The terminal write and notify-walk fire in a single
-[`Scheduler::finalize`](../src/machine/execute/scheduler/execute.rs)
+[`Scheduler::finalize`](../src/machine/execute/run_loop.rs)
 method body that pairs `NodeStore::finalize` with `DepGraph::drain_notify`,
 so the "every terminal write fires the notify" rule is type-enforced
 rather than restated at each call site. Consumers arrive on the run-set
 only when actually ready; there is no poll-and-requeue.
 
 Every consumer wakes the same way: at pop time its `pending_deps` is zero, so
-every dep is terminal, and [`run_wait`](../src/machine/execute/scheduler/finish.rs)
+every dep is terminal, and [`run_wait`](../src/machine/execute/run_loop.rs)
 reads each resolved dep off the view by index and hands the `Result` slice to the
 slot's `cont`. There is no per-edge wake-attribution side-channel — a decide that
 re-resolves reads its producers from the rebuilt scope, not a wakes list.
@@ -172,7 +188,7 @@ re-resolves reads its producers from the rebuilt scope, not a wakes list.
 enqueue-on-zero runs off a single drain.
 
 The run-set has two priority bands managed by
-[`WorkQueues`](../src/machine/execute/scheduler/work_queues.rs). Internal
+[`WorkQueues`](../src/scheduler/work_queues.rs). Internal
 work — notify-walk wake-ups, Replace-arm re-enqueues, and ready-on-arrival
 nodes registered in `add()` — routes through `WorkQueues::push_internal` /
 `push_internal_front` / `push_woken`. Top-level `dispatch_in_scope` calls route
@@ -185,7 +201,7 @@ call site.
 
 ## Dependency graph invariants
 
-[`DepGraph`](../src/machine/execute/scheduler/dep_graph.rs) stores one
+[`DepGraph`](../src/scheduler/dep_graph.rs) stores one
 `rows: Vec<DepRow>` parallel to the slot table; each `DepRow` bundles the
 three coordinated per-slot fields — `notify` (forward wake edges to this
 slot's dependents), `pending` (this slot's unresolved-dep counter), and
@@ -222,26 +238,26 @@ The push/notify model assumes a single producer slot per result. A bare-name slo
 binding-producer would otherwise become a *second* producer of that result. Instead
 the slot is **spliced out** as an alias of the producer, which stays the sole
 producer. All the graph logic lives in
-[`scheduler/splice.rs`](../src/machine/execute/scheduler/splice.rs):
+[`scheduler/splice.rs`](../src/scheduler/splice.rs):
 
 - The bare-name decide returns [`Outcome::Forward(producer)`](../src/machine/execute/outcome.rs).
   If `producer` is already ready, the harness finalizes the slot with the
   producer's terminal directly ([`NodeStep::Done`](../src/machine/execute/nodes.rs)).
 - Otherwise the slot's step yields [`NodeStep::Alias(producer)`](../src/machine/execute/nodes.rs),
-  and the execute loop calls [`Scheduler::splice_forward`](../src/machine/execute/scheduler/splice.rs):
+  and the execute loop calls [`Scheduler::splice_forward`](../src/scheduler/splice.rs):
   the consumers already parked on the slot are moved onto the producer's notify
-  list ([`DepGraph::splice_notify`](../src/machine/execute/scheduler/dep_graph.rs)),
-  and the slot's [`SlotState`](../src/machine/execute/scheduler/node_store.rs)
+  list ([`DepGraph::splice_notify`](../src/scheduler/dep_graph.rs)),
+  and the slot's [`SlotState`](../src/scheduler/node_store.rs)
   becomes `Aliased(producer)`. The aliased slot never fires; the producer's fire
   wakes the moved consumers directly.
 
 Reads follow the alias to the real producer:
-[`Scheduler::resolve_alias`](../src/machine/execute/scheduler/splice.rs) walks the
+[`Scheduler::resolve_alias`](../src/scheduler/splice.rs) walks the
 alias chain (iterative, always pointing downstream to a real producer, so it
 terminates and never cycles), and `read_result` / `is_result_ready` resolve
 through it. Edge installs resolve it too:
-[`add_owned_edge`](../src/machine/execute/scheduler/splice.rs) /
-[`add_park_edge`](../src/machine/execute/scheduler/splice.rs) wire a late consumer
+[`add_owned_edge`](../src/scheduler/splice.rs) /
+[`add_park_edge`](../src/scheduler/splice.rs) wire a late consumer
 to the *resolved* producer, and a producer that has already finalized adds no edge
 at all — the consumer reads its value directly when it runs, contributing nothing
 to its pending count. So neither the store nor the dep graph has to be
@@ -323,7 +339,7 @@ a sub-Dispatch that the parent slot parks on as an owned dep. Without
 reclamation those slots accumulate per body iteration, so realistic recursive
 code is O(n) scheduler memory even when its data footprint is O(1).
 
-Reclamation runs in [`run_wait`](../src/machine/execute/scheduler/finish.rs) after
+Reclamation runs in [`run_wait`](../src/machine/execute/run_loop.rs) after
 the `cont` closure returns its `Outcome`, before the harness applies it — so a
 dispatch splice finish's freed indices are on the free-list before the harness
 dispatches the spliced body. Once the consumer has read its dep results and either
@@ -341,7 +357,7 @@ result run in O(1) scheduler memory across iterations, with the per-iteration
 fanout (the body's transient sub-Dispatches) recycled through a
 free-list of slot indices that `add()` pulls from before extending the vecs.
 Slot-table state lives in a
-[`NodeStore`](../src/machine/execute/scheduler/node_store.rs)
+[`NodeStore`](../src/scheduler/node_store.rs)
 sub-struct on `Scheduler` that owns a single `slots` vector of `SlotState`
 enums plus a `free_list: Vec<NodeId>` of recyclable indices. One enum encodes
 the per-slot lifecycle — `PreRun(Node)` (an un-run node payload), `Running`
@@ -354,7 +370,7 @@ write, and reclamation are each encapsulated; because payload and result are the
 same enum slot, no call site outside `NodeStore` can land a `Done` without the
 node having been taken, nor read a result before it is `Done`.
 Dependency bookkeeping lives alongside it in a single
-[`DepGraph`](../src/machine/execute/scheduler/dep_graph.rs) sub-struct
+[`DepGraph`](../src/scheduler/dep_graph.rs) sub-struct
 that owns one `rows: Vec<DepRow>`, each `DepRow` bundling the three
 coordinated per-slot fields — `notify: Vec<NodeId>` (this slot's dependent
 list), `pending: usize` (its unresolved-dep counter), and `edges:
@@ -367,7 +383,7 @@ private and mutated only through a small surface (`install_for_slot`,
 invariant atomically — every forward edge in `rows[p].notify` has a matching
 backward entry in `rows[c].edges` and contributes 1 to `rows[c].pending`.
 `add_owned_edge` / `add_park_edge` (in
-[`splice.rs`](../src/machine/execute/scheduler/splice.rs)) resolve the
+[`splice.rs`](../src/scheduler/splice.rs)) resolve the
 producer through any alias and short-circuit a producer that is already
 terminal; `splice_notify` moves a spliced-out slot's dependents onto its
 producer's row.
@@ -473,7 +489,7 @@ overloads under one head keyword (e.g. two `FN (PICK xs :A) ...` /
 `placeholders[name]` slot. The two channels are mutually exclusive per
 binder: each binder uses exactly one. The submission walk reifies the
 choice as a
-[`BinderKey`](../src/machine/execute/scheduler/submit.rs) enum
+[`BinderKey`](../src/scheduler/submit.rs) enum
 (`Name(String)` vs. `Bucket(UntypedKey)`) so the dichotomy rides in
 the type rather than as a two-Option convention.
 
@@ -586,7 +602,7 @@ Statement indices are per-`enter_block` call: each call to
 [`KoanRuntime::enter_block`](../src/machine/execute/runtime/submit.rs) mints
 chain frames at indices `1..N` for the N statements it submits. A REPL
 or test fixture that submits without an ambient chain (the
-[`Scheduler::add`](../src/machine/execute/scheduler/submit.rs) auto-root
+[`Scheduler::add`](../src/scheduler/submit.rs) auto-root
 branch) gets [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs)
 — a chain that mentions no real scope, so the visibility predicate's
 `index_for → None ⇒ complete` arm makes every binding in the target
@@ -814,7 +830,7 @@ The rails the dispatch driver feeds:
   extractor, the driver appends a `(NodeId(idx), BindingIndex)` entry
   into `pending_overloads[bucket]` on the same scope. Each binder uses
   exactly one of the two channels — the `BinderKey` enum in
-  [`submit.rs`](../src/machine/execute/scheduler/submit.rs) makes the
+  [`submit.rs`](../src/scheduler/submit.rs) makes the
   dichotomy a type-level fact. Both installs are lenient against the
   matching submission-time install (see [Submission-time binder install
   and recursive sub-Dispatch](#submission-time-binder-install-and-recursive-sub-dispatch)
@@ -839,7 +855,7 @@ The rails the dispatch driver feeds:
 
   - **Wrap slot.** `Resolved(obj)` rewrites the slot to
     `ExpressionPart::Future(obj)` in place. `Parked(p)` cycle-checks
-    via [`DepGraph::would_create_cycle`](../src/machine/execute/scheduler/dep_graph.rs)
+    via [`DepGraph::would_create_cycle`](../src/scheduler/dep_graph.rs)
     and either surfaces `SchedulerDeadlock { sample: "cycle in type alias
     `<name>`" }` on a self-park or pushes `p` onto the shared
     `producers_to_wait` list. `Unbound(name)` surfaces a slot-terminal
@@ -963,13 +979,13 @@ finish closure splices each result into
 re-running the parameter-list walk against the spliced signature. STRUCT
 and UNION share the same elaborator-and-dep-finish shape for their
 field-type lists. The fused walk's per-park cycle check
-([`DepGraph::would_create_cycle`](../src/machine/execute/scheduler/dep_graph.rs),
+([`DepGraph::would_create_cycle`](../src/scheduler/dep_graph.rs),
 covered above) handles the simple trivially-cyclic cases proactively; the
 elaborator's threaded-set carry-through handles the recursive-type cases
 during STRUCT / UNION body elaboration.
 
 A drain-end guard catches any cycle the proactive check doesn't: after
-[`execute`](../src/machine/execute/scheduler/execute.rs) empties its work
+[`execute`](../src/machine/execute/run_loop.rs) empties its work
 queues, it scans the slot table for nodes still parked (`PreRun`) — a
 node parked on a dependency that can no longer fire — and returns
 `KErrorKind::SchedulerDeadlock { pending, sample }` rather than letting
@@ -986,7 +1002,7 @@ and a `carrier` deadlock-summary string. The `cont` captures a
 `SchedulerView -> Outcome` closure that reads the view, classifies / re-resolves,
 and returns an `Outcome`; it takes no dep values, so its deps are park-only. Birth
 and resume are the same shape, run through the same handler
-([`run_wait`](../src/machine/execute/scheduler/finish.rs)); the scheduler never
+([`run_wait`](../src/machine/execute/run_loop.rs)); the scheduler never
 switches on dispatch-internal state and `NodeWork` names no `KExpression`.
 
 **Birth** closures are built by the dispatch layer
@@ -1137,7 +1153,7 @@ recursive tree-walker can't get cheaply.
 ### What amortizes
 
 - **Slot recycling.** `Scheduler::reclaim_deps` frees sub-slots eagerly
-  during [`run_wait`](../src/machine/execute/scheduler/finish.rs), and `add()`
+  during [`run_wait`](../src/machine/execute/run_loop.rs), and `add()`
   pulls
   from the free-list before extending the underlying vectors. A
   steady-state recursive body reuses the same slot indices across
@@ -1236,7 +1252,7 @@ statements as dispatch nodes:
   lexical chain).
 
 The "every dispatched node has a chain" invariant is an `expect` in
-[`Scheduler::submit_node`](../src/machine/execute/scheduler/submit.rs); the
+[`Scheduler::submit_node`](../src/scheduler/submit.rs); the
 public `dispatch_in_scope` entry auto-roots a chain when no ambient one is present
 via [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs) (so
 REPL-style submissions outside `enter_block` see every prior bind in the target
@@ -1302,10 +1318,13 @@ side. `MATCH <v> -> :T WITH (...)` and `TRY (<e>) -> :T WITH (...)` carry
 a mandatory declared return type `T` that every arm agrees on. The
 selected arm tail-replaces carrying a
 [`ReturnContract::Arm`](../src/machine/core/kfunction/body.rs) on the
-slot, and when its value lifts the scheduler's Done arm checks it against
+slot, and at the slot's Done step the scheduler's contract layer checks it against
 `T` — [`TypeMismatch`](../src/machine/core/kerror.rs) with a `<return>`
 arg on a miss — then re-tags it to `T` so a downstream consumer dispatches
-on the declared shape regardless of which arm ran. Enforcement is runtime
+on the declared shape regardless of which arm ran. (The re-tag is the one
+contract-driven relocation that survives at Done; the bare per-consumer lift
+is a separate step — see
+[per-call-arena-protocol.md § Consumer-pull node-output lift](per-call-arena-protocol.md#consumer-pull-node-output-lift).) Enforcement is runtime
 and per-arm (the arm that runs is the arm that's checked), the same
 discipline FN return types follow — see
 [typing/ktype.md § Function signatures](typing/ktype.md#function-signatures).
@@ -1347,12 +1366,3 @@ for test fixtures and builtin-registration paths.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
-- **Workload-independent DAG runtime**
-  ([roadmap/workload-independent-dag-runtime.md](../roadmap/refactor/workload-independent-dag-runtime.md),
-  building on [roadmap/scheduler-lifts-node-outputs.md](../roadmap/refactor/scheduler-lifts-node-outputs.md)).
-  The scheduler still stores Koan-semantic state (a node's `scope` / `chain`) and
-  `'run`-capturing continuations, so `'run` threads through every `scheduler/` file. Shrinking the
-  continuation output to a per-node lifetime (lift becomes the scheduler's step) and then making the
-  scheduler generic over two lifetime-erased workload types — a node-stored payload and an
-  inter-node value, re-anchored to the node frame lifetime at run / read — evicts those concerns,
-  leaving a generic per-node-memory DAG runtime with `'run` confined to `KoanRuntime`.

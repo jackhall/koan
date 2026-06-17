@@ -16,7 +16,7 @@ use super::{park_resume, Outcome};
 pub(super) fn initial<'run>(
     ctx: &SchedulerView<'run, '_>,
     expr: KExpression<'run>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     let head = match &expr.parts[0].value {
         ExpressionPart::Identifier(n) => n.clone(),
         _ => unreachable!("FunctionValueCall shape implies Identifier head"),
@@ -59,7 +59,7 @@ fn dispatch_callable_value<'run>(
     ctx: &SchedulerView<'run, '_>,
     expr: KExpression<'run>,
     head_obj: &'run KObject<'run>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     let callable = match head_obj {
         KObject::KFunction(f, _) => ResolvedCallable::Function(f),
         other => {
@@ -76,7 +76,7 @@ fn dispatch_callable_value<'run>(
 /// Park the whole call on its still-finalizing head `producer` and re-run the fast lane on
 /// resume. The carrier surfaces the original (unspliced) call expression for the drain-end
 /// deadlock summary.
-fn install_head_park<'run>(producer: NodeId, expr: KExpression<'run>) -> Outcome<'run> {
+fn install_head_park<'run>(producer: NodeId, expr: KExpression<'run>) -> Outcome<'run, 'run> {
     let carrier = expr.summarize();
     park_resume(
         vec![producer],

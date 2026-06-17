@@ -47,7 +47,10 @@ pub(in crate::machine::execute) enum CtorKind<'run> {
 
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
-pub(super) fn bare_identifier<'run>(ctx: &SchedulerView<'run, '_>, name: String) -> Outcome<'run> {
+pub(super) fn bare_identifier<'run>(
+    ctx: &SchedulerView<'run, '_>,
+    name: String,
+) -> Outcome<'run, 'run> {
     match ctx
         .current_scope()
         .resolve_with_chain(&name, ctx.chain_deref())
@@ -58,7 +61,10 @@ pub(super) fn bare_identifier<'run>(ctx: &SchedulerView<'run, '_>, name: String)
     }
 }
 
-pub(super) fn bare_type_leaf<'run>(ctx: &SchedulerView<'run, '_>, t: &TypeName) -> Outcome<'run> {
+pub(super) fn bare_type_leaf<'run>(
+    ctx: &SchedulerView<'run, '_>,
+    t: &TypeName,
+) -> Outcome<'run, 'run> {
     match resolve_type_leaf_carrier(ctx.current_scope(), t, ctx.active_chain()) {
         TypeLeafCarrier::Resolved(kt) => Outcome::Done(Ok(Carried::Type(kt))),
         TypeLeafCarrier::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
@@ -94,7 +100,7 @@ pub(super) fn bare_type_leaf<'run>(ctx: &SchedulerView<'run, '_>, t: &TypeName) 
     }
 }
 
-pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> Outcome<'run> {
+pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> Outcome<'run, 'run> {
     let inner = match expr.parts.into_iter().next() {
         Some(Spanned {
             value: ExpressionPart::SigiledTypeExpr(boxed),
@@ -112,7 +118,7 @@ pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> Outcome<'run> 
 pub(super) fn record_type<'run>(
     ctx: &SchedulerView<'run, '_>,
     expr: KExpression<'run>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     let fields = match expr.parts.into_iter().next() {
         Some(Spanned {
             value: ExpressionPart::RecordType(boxed),
@@ -132,7 +138,7 @@ pub(super) fn record_type<'run>(
 pub(super) fn literal_pass_through<'run>(
     ctx: &SchedulerView<'run, '_>,
     expr: KExpression<'run>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     let only = expr
         .parts
         .into_iter()
@@ -155,9 +161,9 @@ pub(super) fn literal_pass_through<'run>(
 /// Park the slot on a single literal-producer dep as a [`Outcome::ParkThenContinue`] whose finish
 /// lifts the producer's resolved value straight through. The harness submits the literal and owns
 /// it; a dep error short-circuits frameless before the finish runs.
-fn park_on_literal<'run>(dep: DepRequest<'run>) -> Outcome<'run> {
+fn park_on_literal<'run>(dep: DepRequest<'run>) -> Outcome<'run, 'run> {
     let finish: DepFinish<'run> = Box::new(|_ctx, results| Outcome::Done(Ok(results[0])));
-    park_on_deps(vec![dep], None, finish, Vec::new())
+    park_on_deps(vec![dep], None, finish)
 }
 
 /// Synchronous resolve-then-branch for a bare-`Type`-head call. One resolution,
@@ -182,7 +188,7 @@ fn park_on_literal<'run>(dep: DepRequest<'run>) -> Outcome<'run> {
 pub(super) fn type_call<'run>(
     ctx: &SchedulerView<'run, '_>,
     expr: KExpression<'run>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     let head_t = match &expr.parts[0].value {
         ExpressionPart::Type(t) => t.clone(),
         _ => unreachable!("TypeCall shape implies leaf Type head"),

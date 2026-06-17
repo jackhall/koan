@@ -17,12 +17,11 @@ pub mod bind_by_name;
 pub mod body;
 pub mod exec;
 pub mod pick;
-pub mod scheduler_handle;
 
 pub use action::ActionFn;
 pub use body::{BinderBucketFn, BinderNameFn, Body};
+pub use crate::scheduler::NodeId;
 pub use pick::ClassifiedSlots;
-pub use scheduler_handle::NodeId;
 
 /// SAFETY: the captured scope is allocated in a `RuntimeArena` that outlives this
 /// `KFunction` — they share the arena (FN registers the function in the same scope it

@@ -100,9 +100,9 @@ the fast path when no functions were allocated — live in
 
 End-to-end verification:
 
-- [`fast_lane_closure_escapes_outer_call_and_remains_invocable`](../src/machine/execute/scheduler/tests/dispatch_shapes.rs)
+- [`fast_lane_closure_escapes_outer_call_and_remains_invocable`](../src/machine/execute/run_loop/tests/dispatch_shapes.rs)
   — return a closure from a body, call it after the outer frame has finalized.
-- [`fast_lane_escaped_closure_with_param_returns_body_value`](../src/machine/execute/scheduler/tests/dispatch_shapes.rs)
+- [`fast_lane_escaped_closure_with_param_returns_body_value`](../src/machine/execute/run_loop/tests/dispatch_shapes.rs)
   — escaped closure with a parameter resolves the captured binding correctly.
 
 ## Composition with the language extension story

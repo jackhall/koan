@@ -2,7 +2,7 @@
 
 use super::super::super::outcome::Outcome;
 use crate::builtins::default_scope;
-use crate::machine::execute::KoanRuntime;
+use crate::machine::execute::{ErasedValue, KoanRuntime};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::ReturnType;
 use crate::machine::model::{Carried, KObject};
@@ -66,13 +66,13 @@ fn dep_finish_short_circuits_on_dep_error() {
     let dep_ok = sched.add(mk_dispatch(), scope);
     let dep_err = sched.add(mk_dispatch(), scope);
     let store = sched.scheduler_mut();
-    store.store.clear_node(dep_ok);
-    store.store.clear_node(dep_err);
-    let _ = store.queues.pop_next();
-    let _ = store.queues.pop_next();
+    store.clear_node(dep_ok);
+    store.clear_node(dep_err);
+    let _ = store.pop_next();
+    let _ = store.pop_next();
     let value = arena.alloc_object(KObject::Number(99.0));
-    store.store.set_result(dep_ok, Ok(Carried::Object(value)));
-    store.store.set_result(
+    store.set_result(dep_ok, Ok(ErasedValue::erase(Carried::Object(value))));
+    store.set_result(
         dep_err,
         Err(KError::new(KErrorKind::ShapeError(
             "dep_err synthetic".into(),

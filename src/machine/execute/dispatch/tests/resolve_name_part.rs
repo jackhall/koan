@@ -17,7 +17,7 @@ fn resolve_name_part_identifier_resolved() {
         .unwrap();
     let part = ExpressionPart::Identifier("x".to_string());
     let sched = KoanRuntime::new();
-    match resolve_name_part(scope, &part, sched.scheduler(), None) {
+    match resolve_name_part(scope, &part, sched.scheduler(), None, None) {
         NameOutcome::Resolved(Carried::Object(KObject::Number(n))) => assert_eq!(*n, 7.0),
         _ => panic!("expected NameOutcome::Resolved(Number)"),
     }
@@ -29,7 +29,7 @@ fn resolve_name_part_type_resolved() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let part = ExpressionPart::Type(TypeName::leaf("Number".to_string()));
     let sched = KoanRuntime::new();
-    match resolve_name_part(scope, &part, sched.scheduler(), None) {
+    match resolve_name_part(scope, &part, sched.scheduler(), None, None) {
         NameOutcome::Resolved(Carried::Type(KType::Number)) => {}
         other => {
             let kind = match other {
@@ -57,7 +57,7 @@ fn resolve_name_part_parked() {
         .install_placeholder("fwd".to_string(), producer, BindingIndex::BUILTIN)
         .unwrap();
     let part = ExpressionPart::Identifier("fwd".to_string());
-    match resolve_name_part(scope, &part, sched.scheduler(), None) {
+    match resolve_name_part(scope, &part, sched.scheduler(), None, None) {
         NameOutcome::Parked(p) => assert_eq!(p, producer),
         _ => panic!("expected NameOutcome::Parked(producer)"),
     }
@@ -69,7 +69,7 @@ fn resolve_name_part_unbound() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let part = ExpressionPart::Identifier("missing".to_string());
     let sched = KoanRuntime::new();
-    match resolve_name_part(scope, &part, sched.scheduler(), None) {
+    match resolve_name_part(scope, &part, sched.scheduler(), None, None) {
         NameOutcome::Unbound(name) => assert_eq!(name, "missing"),
         _ => panic!("expected NameOutcome::Unbound"),
     }
@@ -91,7 +91,7 @@ fn resolve_name_part_self_park_is_cycle() {
         .install_placeholder("self_ref".to_string(), slot, BindingIndex::BUILTIN)
         .unwrap();
     let part = ExpressionPart::Identifier("self_ref".to_string());
-    match resolve_name_part(scope, &part, sched.scheduler(), Some(slot)) {
+    match resolve_name_part(scope, &part, sched.scheduler(), None, Some(slot)) {
         NameOutcome::Cycle(name) => assert_eq!(name, "self_ref"),
         _ => panic!("expected NameOutcome::Cycle"),
     }

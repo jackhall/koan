@@ -8,7 +8,7 @@ use crate::machine::{KError, KErrorKind, NameOutcome, NodeId, TraceFrame};
 use super::super::outcome::Outcome;
 use super::super::runtime::KoanRuntime;
 use super::super::DepFinish;
-use super::ctx::SchedulerView;
+use super::ctx::{current_scope, SchedulerView};
 use super::resolve_name_part;
 
 /// One element of a list literal or one side of a dict-literal pair. Indices are into the
@@ -43,7 +43,7 @@ impl<'run> Slot<'run> {
 
 /// Allocate `obj` in the executing slot's arena and wrap it as a successful combine result — the
 /// shared tail of every aggregate-literal finish.
-fn done_object<'run>(view: &SchedulerView<'run, '_>, obj: KObject<'run>) -> Outcome<'run> {
+fn done_object<'run>(view: &SchedulerView<'run, '_>, obj: KObject<'run>) -> Outcome<'run, 'run> {
     Outcome::Done(Ok(Carried::Object(
         view.current_scope().arena.alloc_object(obj),
     )))
@@ -201,7 +201,9 @@ impl<'run> KoanRuntime<'run> {
         deps: &mut Vec<NodeId>,
         park_producers: &mut Vec<NodeId>,
     ) -> Slot<'run> {
-        match resolve_name_part(self.sched.current_scope(), part, &self.sched, None) {
+        let active_chain = self.ambient.active_payload().map(|p| &p.chain);
+        match resolve_name_part(current_scope(&self.ambient), part, &self.sched, active_chain, None)
+        {
             // An aggregate literal element may resolve to a value or a first-class type;
             // both ride into the cell as a `Held`.
             NameOutcome::Resolved(c) => Slot::Static(Held::from_carried(c)),

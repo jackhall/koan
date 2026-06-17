@@ -81,7 +81,7 @@ Errors are first-class via [`KError`](src/machine/core/kerror.rs) — a `Done(Er
 
 ### execute — run the DAG
 
-[`Scheduler`](src/machine/execute/scheduler.rs) holds a slot table of in-flight work plus a push/notify dependency graph; [`KoanRuntime`](src/machine/execute/runtime.rs) owns it and is the sole holder of `&mut Scheduler`. Callers submit a top-level block via the harness's `enter_block` (and nested parts via `dispatch_in_scope`); each slot's decide spawns sub-Dispatches for the expression's nested parts and parks the parent as a dep-finish until its deps terminalize. When a producer writes its terminal, a single `finalize` step drains the producer's notify-list and wakes any consumer whose `pending_deps` counter hits zero — no polling, no result-table sweep. Tail returns (an `Action::Tail` lowered to `Outcome::Continue`) rewrite the slot's own work in place rather than allocating a new slot. See [design/execution-model.md](design/execution-model.md).
+[`Scheduler`](src/machine/execute/run_loop.rs) holds a slot table of in-flight work plus a push/notify dependency graph; [`KoanRuntime`](src/machine/execute/runtime.rs) owns it and is the sole holder of `&mut Scheduler`. Callers submit a top-level block via the harness's `enter_block` (and nested parts via `dispatch_in_scope`); each slot's decide spawns sub-Dispatches for the expression's nested parts and parks the parent as a dep-finish until its deps terminalize. When a producer writes its terminal, a single `finalize` step drains the producer's notify-list and wakes any consumer whose `pending_deps` counter hits zero — no polling, no result-table sweep. Tail returns (an `Action::Tail` lowered to `Outcome::Continue`) rewrite the slot's own work in place rather than allocating a new slot. See [design/execution-model.md](design/execution-model.md).
 
 [`interpret`](src/machine/execute/runtime/interpret.rs) is the glue: parse the source, hand the top-level block to `enter_block` against a root `default_scope`, drain the scheduler, then `read_result` each top-level node. `PRINT` output flows through the scope's pluggable writer (default stdout; tests swap in a shared `Vec<u8>` buffer to read it back), and every value the program allocated dies with the per-run `RuntimeArena` when `interpret` returns.
 
@@ -195,7 +195,8 @@ src/
     │       └── module.rs          Module / Signature — first-class module values
     ├── core.rs            module surface for core/
     ├── core/
-    │   ├── arena.rs       RuntimeArena, CallArena — per-run and per-call allocation
+    │   ├── arena.rs       RuntimeArena (= StorageFrame<KoanWorkload>), CallArena — the Koan instantiation of the storage substrate plus per-call allocation
+    │   ├── storage_frame.rs  StorageFrame<W> — generic run-lifetime erase-store substrate (the irreducible unsafe + cycle gate), names no Koan type
     │   ├── bindings.rs    Bindings façade — five-map (data/functions/placeholders/types/pending_overloads) with the validated try_apply write path, try_register_type for nominal type identity, and the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)])
     │   ├── bindings/pending.rs   per-binding pending-overload state
     │   ├── kerror.rs      KError, KErrorKind, Frame — structured runtime errors

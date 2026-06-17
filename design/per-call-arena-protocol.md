@@ -5,7 +5,7 @@ The contract for [`Rc<CallArena>`](../src/machine/core/arena.rs): which
 per-call anchor, how
 [`lift_kobject`](../src/machine/execute/lift.rs) decides to attach one,
 how the `alloc_object` cycle gate routes self-referential allocations,
-how the [scheduler](../src/machine/execute/scheduler.rs) propagates the
+how the [scheduler](../src/machine/execute/run_loop.rs) propagates the
 active frame, how builtin-built frames chain the call-site frame
 through `outer_frame`, and how the TCO step reuses the frame shell.
 The participants live in `KObject` (carriers), `arena.rs` (allocation
@@ -72,6 +72,56 @@ short-circuit: when no descendant needs anchoring, the existing
 Koan's collection-immutability contract is what makes the structural
 sharing safe.
 
+## Consumer-pull node-output lift
+
+A node continuation produces its value at the node's own per-call frame
+lifetime `'s` ([`Outcome<'run, 's>`](../src/machine/execute/outcome.rs)),
+not `'run`: the value is born in the producer's frame (a builtin allocates
+it there) or arrives as a dep already lifted into that frame. The scheduler
+relocates it across each dep edge — never the producer.
+
+- **Producer Done keeps the terminal in its own frame.** The producer does
+  not lift at Done. Its [`SlotState::Done`](../src/machine/execute/run_loop.rs)
+  co-stores the terminal with the backing `Rc<CallArena>`, pinning the
+  producer frame until the slot is freed — frame death moves from Done to
+  free. The stored `'run` view is re-exposed against that held `Rc` (the same
+  held-Rc seam as [§ Seed-side re-anchor](#seed-side-re-anchor)); honest `'s`
+  typing rides the continuation in/out and the pull-lift destination, not
+  storage. The single workload `NodeLift` hook
+  ([`src/machine/execute/lift.rs`](../src/machine/execute/lift.rs)) owns the
+  `KObject`-invariant copy; the scheduler loop names no `KObject` / `KType`.
+- **Consumers pull-lift at read.** When a consumer runs
+  ([`run_wait`](../src/machine/execute/run_loop.rs)) it lifts each dep
+  from the producer's frame into its own call arena, promoting the producer's
+  output to the consuming node's lifetime. A value read by N consumers is
+  lifted N times — once per consumer — and each copy dies with its consumer's
+  frame. One mechanism serves parked-then-woken, late-parking, and
+  bare-name-forward consumers alike.
+- **Roots drain to the run arena.** A consumer-less terminal — a top-level
+  statement result — has no consumer to pull it, so
+  [`run_program`](../src/machine/execute/runtime/interpret.rs) lifts each into
+  the run arena at the drain boundary and re-homes the slot, releasing the
+  pinned producer frame. The `run_one` test helper reads roots through the
+  frame pin instead, so it is not a drain boundary.
+- **Return-contract enforcement is a separate layer** — the
+  [`NodeFinalize`](../src/machine/execute/finalize.rs) workload hook, peer of
+  `NodeLift` — run once at producer Done before the pin: it reattaches the
+  erased contract against the producer cart, runs the declared-return check, and
+  (only on a coarsening re-tag, e.g. `List<Number>` through `:(LIST OF Any)`)
+  re-allocates the stamped value into the contract's captured-scope arena so it
+  outlives the reused/freed producer frame. A non-coarsened terminal stays in
+  the producer frame. The bare `NodeLift` hook is thereby reusable for any
+  delivery edge.
+
+Because `KObject` / `Carried` / `Scope` are invariant in their lifetime, none
+of these transitions can be a coercion — each cross-frame move is a genuine
+`NodeLift` copy (or the held-Rc re-exposure at storage). Five audited
+lifetime-reattach primitives in
+[outcome.rs](../src/machine/execute/outcome.rs) bridge `'s`↔`'run` at the
+run_wait / apply / combinator boundaries (`shorten_outcome`, `deps_at_step`,
+`deps_for_builtin`, `obj_for_builtin`, `pin_carried_to_run`); they are pinned
+in the Miri slate by `tail_call_stamps_result_against_first_callers_return_contract`.
+
 ### Fast path
 
 If a dying arena allocated zero `KFunction`s (`functions_is_empty`),
@@ -114,15 +164,22 @@ arena's life because `CallArena::new` heap-pins the outer arena via
 `Rc`, and the outer always outlives this inner per the lexical-scoping
 invariant.
 
-`alloc_object` is one of six named safe wrappers — alongside `alloc_ktype`,
-`alloc_function`, `alloc_scope`, `alloc_module`, and `alloc_signature` —
-that route a single private `alloc` engine where the gate lives. Every
-family implements the sealed `ArenaStored` trait, and the engine runs the
-gate once for all of them. `KObject` and `KType` answer `anchors_to` by
-walking their composite tree; the four that cannot hold a self-targeting
-`Rc<CallArena>` — `KFunction`, `Scope`, `Module`, and `Signature` —
-declare `anchors_to => false`, so the redirect is uniform across the whole
-allocation surface and unbypassable by construction.
+`alloc_object` is one of the named safe wrappers — alongside `alloc_ktype`,
+`alloc_function`, `alloc_scope`, `alloc_module`, `alloc_signature`, and
+`alloc_operator_group` — that route a single `alloc` engine where the gate
+lives. The engine and its `unsafe` erase-store machinery live generically in
+the `StorageFrame<W>` substrate (`src/machine/core/storage_frame.rs`), which
+names no Koan type; `RuntimeArena` is the Koan instantiation
+`StorageFrame<KoanStorageProfile>`, with the per-family policy supplied by `Stored`
+impls in `core::arena`. Every family implements `Stored`, and the engine runs
+the gate once for all of them. `KObject` and `KType` answer `anchors_to` by
+walking their composite tree; the families that cannot hold a self-targeting
+`Rc<CallArena>` — `KFunction`, `Scope`, `Module`, `Signature`, and
+`OperatorGroup` — declare `anchors_to => false`, so the redirect is uniform
+across the whole allocation surface. `Stored` is an open in-crate extension
+point rather than sealed; unbypassability comes instead from the substrate's
+private `storage` field and that single store path — no `&Arena` is ever
+exposed, so no `Stored` impl can route a value around the redirect.
 
 ## Active-frame propagation
 
@@ -133,7 +190,7 @@ state live on `Scheduler`:
 
 - **`active_frame: Option<Rc<CallArena>>`** — frame of the slot
   currently being executed. Read through
-  [`Scheduler::current_frame`](../src/machine/execute/scheduler.rs);
+  [`Scheduler::current_frame`](../src/machine/execute/run_loop.rs);
   written only by `enter_slot_step` / `exit_slot_step` (the RAII
   bracket around every iteration of `Scheduler::execute`) and the
   `swap_active_frame` save/restore. An invoke never takes it (tail
@@ -281,10 +338,10 @@ The dispatcher reads the slot's reserve / active-frame state from the
 execution layer (see [execution-model.md § The dispatcher / scheduler
 boundary](execution-model.md#the-dispatcher--scheduler-boundary)):
 `dispatch::exec::invoke` is a pure decide against a `SchedulerView`, and the
-harness `apply_outcome` arm acquires the cart via `Scheduler::acquire_tail_frame`
-(an inherent write primitive) before handing it to the decide. The
-`active_frame` / `active_reserve` fields themselves stay
-`pub(in execute::scheduler)`; the accessor surface is what dispatch sees.
+harness `apply_outcome` arm acquires the cart via `KoanRuntime::acquire_tail_frame`
+before handing it to the decide. The `active_frame` / `active_reserve` state lives
+on the driver's ambient context (`KoanRuntime`), not the scheduler — the scheduler
+is a pure DAG runtime; the accessor surface is what dispatch sees.
 
 The two-iteration gap is the safety witness: when iteration N consumes
 the reserve, the reserve's scope was the active scope on iteration
@@ -302,24 +359,28 @@ two-iteration warmup.
 
 ## Slot-table scope handle
 
-A scheduler slot stores its scope as a
-[`NodeScope<'a>`](../src/machine/execute/nodes.rs), not a raw `&'a Scope<'a>`. The enum has two
-arms: `Anchored(&'a Scope<'a>)` carries a genuine run-lifetime borrow (a run-root scope, or a
-sub-scope the active frame does not directly back); `Yoked` carries no payload at all. A
+A scheduler slot stores its scope as a lifetime-free
+[`NodeScope`](../src/machine/execute/nodes.rs), not a raw `&'a Scope<'a>`, so the node it sits on
+pins no `'run` through its scope. The handle rides a grouped `NodePayload` (the scope handle plus the
+node's lexical chain) alongside the slot's frame. The enum has two arms: `Anchored(ScopePtr<'static>)`
+holds an erased pointer to a genuine run-lived scope (a run-root scope, or a sub-scope the active
+frame does not directly back), re-attached at read; `Yoked` carries no payload at all. A
 per-call frame scope rides `Yoked` — single-cart, because the slot's own `Frame::cart`
 `Rc<CallArena>` is the sole liveness witness, so there is no second `Rc` clone and no
 contention with `try_reset_for_tail`'s `strong_count == 1` TCO reuse check.
 
 The funnel `submit::add_with_chain` decides the arm: a pointer test
 (`std::ptr::eq(active_frame.scope(), scope)`) routes a frame's-own-child slot to `Yoked`,
-everything else to `Anchored`. The tail sink `NodeStore::reinstall_with_frame` always stores
-`Yoked` — a tail-replace slot's scope is always its own frame's child. Storing the marker
-rather than a fabricated `&'a` keeps the borrow honest across a TCO `try_reset_for_tail`:
-nothing persisted points into the reset arena.
+everything else to `Anchored`, erasing the run-lived borrow through `ScopePtr::erase_static`. The
+tail sink `NodeStore::reinstall_with_frame` always stores `Yoked` — a tail-replace slot's scope is
+always its own frame's child. Storing an erased handle rather than a live `&'run` keeps the borrow
+honest across a TCO `try_reset_for_tail`: nothing persisted points into the reset arena.
 
 The read boundary hands a slot's scope back on demand, not as a stored free `&'run`:
-[`Scheduler::current_scope`](../src/machine/execute/scheduler.rs) materializes it per use — an
-`Anchored` slot returns its stored run-lived borrow; a `Yoked` slot re-reads from the live
+[`Scheduler::current_scope`](../src/machine/execute/run_loop.rs) materializes it per use — an
+`Anchored` slot re-attaches its erased `ScopePtr<'static>` through the `unsafe` `reattach_bounded`
+(borrow bounded by the reader, content lifetime free, sound because the pointee is run-lived); a
+`Yoked` slot re-reads from the live
 `active_frame` cart via [`CallArena::scope_bounded`](../src/machine/core/arena.rs), a
 **witness-bounded** brand whose borrow is capped at the `&Rc<CallArena>` receiver (content `'a`
 free, `'a: 'p`). Because the borrow cannot outlive the frame `Rc` it reads from, storing it past
@@ -394,26 +455,12 @@ mechanics:
   tail calls (`AA → BB → CC → DD → PRINT`) bumps the scheduler's
   tail-reuse counter and collapses to one slot.
 - `repeated_user_fn_calls_do_not_grow_run_root_per_call` asserts 50
-  ECHO calls grow the run-root arena by exactly 50 — one lifted
-  return value per call, with all per-call scaffolding freed at call
-  return.
+  ECHO calls grow the run-root arena by exactly 50 — one per-call
+  argument value (`Number(7)`) per call, with all per-call scaffolding
+  freed at call return. Intermediate node outputs no longer land in
+  run-root: a consumed value dies with its consumer's frame, and only a
+  consumer-less root drains to the run arena.
 - The audit slate runs cycle-free across every unsafe site that
   routes through the protocol under `MIRIFLAGS=-Zmiri-tree-borrows`
   with zero UB and zero process-exit leaks. The canonical slate list
   lives in [observe/miri_slate.md](../observe/miri_slate.md).
-
-## Open work
-
-- **Scheduler lifts node outputs**
-  ([roadmap/scheduler-lifts-node-outputs.md](../roadmap/refactor/scheduler-lifts-node-outputs.md)).
-  Bind a node continuation's output to its own per-call frame lifetime and make the
-  Done-boundary lift the scheduler's own step (policy in the scheduler, KObject-aware
-  relocation behind a workload hook), so the value is promoted per-node→consumer rather
-  than re-homed within a uniform `'run`.
-- **Workload-independent DAG runtime**
-  ([roadmap/workload-independent-dag-runtime.md](../roadmap/refactor/workload-independent-dag-runtime.md)).
-  Make the scheduler generic over two lifetime-erased workload types — a node-stored payload
-  and an inter-node value — re-anchored to the node frame lifetime at run / read (generalizing
-  the `ErasedContract` reattach). Evict `scope` / `chain` into the node payload and move
-  `CallArena` into the scheduler, leaving the active-frame plumbing here as a generic per-node
-  memory manager with `'run` confined to `KoanRuntime`.

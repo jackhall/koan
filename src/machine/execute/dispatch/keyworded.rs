@@ -8,8 +8,8 @@ use crate::machine::{
     BindingIndex, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, TraceFrame,
 };
 
-use super::super::ignore_results;
 use super::super::nodes::NodeWork;
+use super::super::{ignore_results, ErasedCont};
 use super::ctx::SchedulerView;
 use super::{bare_name_of, park_resume, propagate_dep_error, Outcome, PartWalkResult, PendingSub};
 
@@ -21,7 +21,7 @@ pub(super) fn initial<'run>(
     expr: KExpression<'run>,
     pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     let bare_outcomes = ctx.build_bare_outcomes(&expr.parts);
     // A bare-name arg whose producer already errored can never resolve.
     for outcome in bare_outcomes.iter().flatten() {
@@ -112,7 +112,7 @@ pub(super) fn initial<'run>(
     }
     if staged_subs.is_empty() {
         // The synchronous (no-eager-subs) call — the common path for builtins and simple calls.
-        return super::exec::invoke_continue(resolved.function, new_expr, Vec::new());
+        return super::exec::invoke_continue(resolved.function, new_expr);
     }
     let _ = resolved; // discard the speculative pick.
     install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs)
@@ -124,16 +124,14 @@ pub(super) fn finish<'run>(
     ctx: &SchedulerView<'run, '_>,
     working_expr: KExpression<'run>,
     idx: usize,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     match ctx
         .current_scope()
         .resolve_dispatch(&working_expr, ctx.chain_deref(), &[])
     {
         // The post-eager-subs re-dispatch lands resolved calls here — fold the resolved call into
         // the `Continue` that installs its frame and runs `invoke`.
-        ResolveOutcome::Resolved(r) => {
-            super::exec::invoke_continue(r.function, working_expr, Vec::new())
-        }
+        ResolveOutcome::Resolved(r) => super::exec::invoke_continue(r.function, working_expr),
         // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
         // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
         ResolveOutcome::Ambiguous(n) => {
@@ -159,26 +157,23 @@ pub(super) fn finish<'run>(
 
 /// Fold the post-eager-subs re-resolve into a [`Outcome::Continue`]: a dep-free decide that re-runs
 /// [`finish`] against the fully-spliced `working_expr` on the next pop, with no committed function
-/// pick. `Inherit` — a re-resolve runs in the slot's current frame; `free` reclaims the `Reuse`
-/// producers the decide phase consumed inline.
-pub(super) fn redispatch_continue<'run>(
-    working_expr: KExpression<'run>,
-    free: Vec<usize>,
-) -> Outcome<'run> {
+/// pick. `Inherit` — a re-resolve runs in the slot's current frame.
+pub(super) fn redispatch_continue<'run>(working_expr: KExpression<'run>) -> Outcome<'run, 'run> {
     let carrier = working_expr.summarize();
-    let work = NodeWork {
-        deps: Vec::new(),
-        park_count: 0,
-        cont: ignore_results(Box::new(move |ctx, idx| finish(ctx, working_expr, idx))),
-        carrier: Some(carrier),
-    };
+    let work = NodeWork::new(
+        Vec::new(),
+        0,
+        ErasedCont::erase(ignore_results(Box::new(move |ctx, idx| {
+            finish(ctx, working_expr, idx)
+        }))),
+        Some(carrier),
+    );
     Outcome::Continue {
         work,
         frame: FramePlacement::Inherit,
         contract: None,
         block_entry: None,
         body_index: 0,
-        free,
     }
 }
 
@@ -192,7 +187,7 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'run>(
     expr: KExpression<'run>,
     pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     let mut to_wait: Vec<NodeId> = Vec::new();
     for p in producers {
         if ctx.is_result_ready(p) {
@@ -225,7 +220,7 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'run>(
 fn install_eager_only<'run>(
     ctx: &SchedulerView<'run, '_>,
     expr: KExpression<'run>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     // Deferred arm: no committed pick yet (resume re-resolves on finish), so no
     // bare-name slots to pre-resolve here.
     let (new_parts, staged_subs) = super::stage_all_eager_parts(expr.parts, &[]);
@@ -245,7 +240,7 @@ fn install_bare_name_park<'run>(
     producers: Vec<NodeId>,
     working_expr: KExpression<'run>,
     pre_subs: Vec<(usize, NodeId)>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     let carrier = working_expr.summarize();
     park_resume(
         producers,
@@ -259,7 +254,7 @@ fn install_eager_subs_track<'run>(
     working_expr: KExpression<'run>,
     staged_subs: Vec<(usize, PendingSub<'run>)>,
     pre_subs: Vec<(usize, NodeId)>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     // The combine carrier owns its deps directly; the Keyworded eager-subs resume state is
     // never re-entered (a re-Dispatch never lands here — the combine finish runs instead),
     // so `pre_subs` is unused on this path.

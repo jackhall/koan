@@ -29,7 +29,8 @@ use super::SchedulerView;
 /// `Done` arm. The scheduler-currency variant, returning [`Outcome`] — used by
 /// [`defer_field_list`].
 pub(crate) type FieldListFinalize<'run> = Box<
-    dyn for<'step> FnOnce(&'step Scope<'run>, Vec<(String, KType<'run>)>) -> Outcome<'run> + 'run,
+    dyn for<'step> FnOnce(&'step Scope<'run>, Vec<(String, KType<'run>)>) -> Outcome<'run, 'run>
+        + 'run,
 >;
 
 /// `Action`-path twin of [`FieldListFinalize`], returning `Result<Carried, KError>` — used by
@@ -59,7 +60,7 @@ pub(crate) fn defer_field_list<'run>(
     pending_guard: Option<PendingBinderGuard<'run>>,
     error_frame: Option<TraceFrame>,
     finalize: FieldListFinalize<'run>,
-) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
     let park_count = park_producers.len();
     let finish: DepFinish<'run> = Box::new(move |view, results| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
@@ -109,7 +110,6 @@ pub(crate) fn defer_field_list<'run>(
         park_count,
         cont: Continuation::Finish(finish),
         dep_error_frame: Some(dep_error_frame()),
-        free: Vec::new(),
     }
 }
 
@@ -181,8 +181,8 @@ pub(crate) fn elaborate_record_value<'run, 's>(
     view: &SchedulerView<'run, 's>,
     fields: KExpression<'run>,
     chain: Option<Rc<LexicalFrame>>,
-) -> Outcome<'run> {
-    fn fold<'run>(scope: &Scope<'run>, pairs: Vec<(String, KType<'run>)>) -> Outcome<'run> {
+) -> Outcome<'run, 'run> {
+    fn fold<'run>(scope: &Scope<'run>, pairs: Vec<(String, KType<'run>)>) -> Outcome<'run, 'run> {
         let record = Record::from_pairs(pairs);
         let kt = scope.arena.alloc_ktype(KType::Record(Box::new(record)));
         Outcome::Done(Ok(Carried::Type(kt)))

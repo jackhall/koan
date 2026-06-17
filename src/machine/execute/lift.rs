@@ -6,6 +6,41 @@ use crate::machine::model::values::{ArgValue, Held};
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::{CallArena, KFuture, RuntimeArena};
 
+use super::runtime::KoanRuntime;
+
+/// The workload's value-relocation hook: copy a [`Carried`] out of `src`'s arena into `dst`,
+/// rebinding the copy's lifetime to `dst` so it dies with the destination. The scheduler decides
+/// *when and where* (which frame, which arena); this hook owns the `KObject`-invariant *how* — the
+/// arena→arena copy plus the escaping-closure anchor decision. Contract enforcement is a separate
+/// layer (see [the run loop](super::run_loop)), never folded in here, so the hook is
+/// reusable for any delivery edge.
+///
+/// A Koan-typed workload hook: the generic scheduler ([`crate::scheduler`]) drives dep-edge
+/// delivery through this trait and names no Koan type itself.
+pub(in crate::machine::execute) trait NodeLift<'run> {
+    /// Copy `value` (alive in `src`'s arena) into `dst`; the result dies with `dst`.
+    fn lift(
+        &self,
+        value: Carried<'run>,
+        src: &Rc<CallArena>,
+        dst: &'run RuntimeArena,
+    ) -> Carried<'run>;
+}
+
+impl<'run> NodeLift<'run> for KoanRuntime<'run> {
+    fn lift(
+        &self,
+        value: Carried<'run>,
+        src: &Rc<CallArena>,
+        dst: &'run RuntimeArena,
+    ) -> Carried<'run> {
+        match value {
+            Carried::Object(v) => Carried::Object(dst.alloc_object(lift_kobject(v, src))),
+            Carried::Type(t) => Carried::Type(dst.alloc_ktype(lift_ktype(t, src))),
+        }
+    }
+}
+
 /// Lift a KObject out of `dying_frame`'s arena into the destination arena, attaching
 /// an `Rc<CallArena>` to anchor any descendant that borrows into the dying arena.
 /// See [per-call-arena-protocol.md § Lift-time anchor decision](../../../design/per-call-arena-protocol.md#lift-time-anchor-decision).

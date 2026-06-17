@@ -47,11 +47,11 @@ What's shipped that the open items below build on:
   single owner: per-builtin typed-binder `binder_name` (one shared
   [`type_part_binder_name`](../src/builtins.rs)), the FN and FUNCTOR bodies (one shared
   [`build_fn_like`](../src/builtins/fn_def.rs) keyed on `FnKind`), the `finish.rs` dep-finish/catch handler arms (one shared
-  [`run_wait`](../src/machine/execute/scheduler/finish.rs)), the `dict_literal`
+  [`run_wait`](../src/machine/execute/run_loop.rs)), the `dict_literal`
   `accept_colon`/`accept_equals` pair (one `accept_separator`), the slot-extract error
   envelope (one [`require_kexpression`](../src/machine/core/kfunction/action.rs)
   owning the parenthesized-slot error text), and the scheduler `Object`/`Type` finalize
-  arms (one [`check_declared_return`](../src/machine/execute/scheduler/execute.rs)
+  arms (one [`check_declared_return`](../src/machine/execute/finalize.rs)
   parameterized over the lifted carrier's `matches_value`/`matches_type` predicate).
 - *Arena unsafe consolidation.* Every captured/defining-scope re-attach is funnelled behind one
   [`ScopePtr`](../src/machine/core/scope_ptr.rs); `RuntimeArena::escape` is `NonNull`.
@@ -67,13 +67,27 @@ What's shipped that the open items below build on:
   The frame re-anchor then landed in full: the free `&'run` scope fabrication at the read
   boundary is deleted, a within-step frame lifetime `'s` (`'a: 's`) threads
   `run_dispatch`/`SchedulerView`/`BuiltinFn`, and a slot's scope is now read on demand via
-  [`Scheduler::current_scope`](../src/machine/execute/scheduler.rs) through the witness-bounded
+  [`Scheduler::current_scope`](../src/machine/execute/run_loop.rs) through the witness-bounded
   [`CallArena::scope_bounded`](../src/machine/core/arena.rs) brand (the post-step loop reads it
   through a `PostStep` token off the slot's returned frame). The sole surviving free re-exposure
   is the arena half of [`CallArena::with_anchored_child`](../src/machine/core/arena.rs), the
   C0-irreducible seed bind, and `KFunction::captured` now rides a `BoundedScopePtr`
   (see [design/per-call-arena-protocol.md § Slot-table scope handle](../design/per-call-arena-protocol.md#slot-table-scope-handle)).
   See [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
+- *Per-node output lift.* A node continuation's output is bound to the per-step frame
+  lifetime `'s` ([`Outcome<'run, 's>`](../src/machine/execute/outcome.rs)), not `'run`. The
+  producer keeps its terminal in its own frame (the slot's `Done` co-stores the backing
+  `Rc<CallArena>`, so frame death moves Done→free) and does not lift; each consumer
+  pull-lifts its deps into its own arena at read ([`run_wait`](../src/machine/execute/run_loop.rs))
+  through the single [`NodeLift`](../src/machine/execute/lift.rs) workload hook, so an
+  intermediate value dies with its consumer and only a consumer-less root drains to the run
+  arena. Return-contract enforcement stays a separate Done-time layer. This output-lifetime
+  shrink and lift hook were the prerequisite half of confining `'run` to `KoanRuntime`; the
+  *workload-independent DAG runtime* that completes it has shipped — the scheduler is a
+  crate-root [`mod scheduler`](../src/scheduler.rs) generic over a `Workload`, naming no Koan
+  value, scope, memory, or AST type, with the Koan driver in
+  [`execute::run_loop`](../src/machine/execute/run_loop.rs). See
+  [design/per-call-arena-protocol.md § Consumer-pull node-output lift](../design/per-call-arena-protocol.md#consumer-pull-node-output-lift).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
   visibility carve-out is retired and `visible` is the single `idx < cutoff` rule across both
@@ -221,7 +235,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Scheduler lifts node outputs](refactor/scheduler-lifts-node-outputs.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
@@ -312,10 +325,3 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
-- [Scheduler lifts node outputs](refactor/scheduler-lifts-node-outputs.md) — bind a node
-  continuation's output to its own frame lifetime and make lift the scheduler's step, so the
-  uniform-`'run` output type stops smearing the run lifetime across the scheduler.
-- [Workload-independent DAG runtime](refactor/workload-independent-dag-runtime.md) — erase
-  per-node continuations and evict `scope` / `chain` into opaque workload payload (moving
-  `CallArena` in), confining `'run` to `KoanRuntime` and leaving a generic per-node-memory
-  DAG runtime.
