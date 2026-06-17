@@ -42,7 +42,7 @@ impl<'run> KoanRuntime<'run> {
         // arena, so the value dies with the consumer and the producer keeps no surviving copy that
         // would outlive its own dying frame. A frameless / run-arena terminal already survives and
         // is forwarded as-is.
-        let dest = current_scope(&self.sched).arena;
+        let dest = current_scope(&self.ambient).arena;
         let results: Vec<Result<Carried<'run>, KError>> = deps
             .iter()
             .map(|d| match self.sched.read_result_with_frame(*d) {
@@ -58,7 +58,7 @@ impl<'run> KoanRuntime<'run> {
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
         // The pull-lifted values die with this consumer's frame; deliver them at that `'s`.
         let outcome = cont(
-            &SchedulerView::new(&self.sched),
+            &SchedulerView::new(&self.sched, &self.ambient),
             deps_at_step(&results),
             idx,
         );

@@ -201,7 +201,9 @@ impl<'run> KoanRuntime<'run> {
         deps: &mut Vec<NodeId>,
         park_producers: &mut Vec<NodeId>,
     ) -> Slot<'run> {
-        match resolve_name_part(current_scope(&self.sched), part, &self.sched, None) {
+        let active_chain = self.ambient.active_payload().map(|p| &p.chain);
+        match resolve_name_part(current_scope(&self.ambient), part, &self.sched, active_chain, None)
+        {
             // An aggregate literal element may resolve to a value or a first-class type;
             // both ride into the cell as a `Held`.
             NameOutcome::Resolved(c) => Slot::Static(Held::from_carried(c)),

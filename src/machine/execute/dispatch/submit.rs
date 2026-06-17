@@ -112,7 +112,7 @@ impl<'run> KoanRuntime<'run> {
         // therefore its visibility index); pass it back to `submit_node` explicitly so it does not
         // re-derive a detached one.
         let chain = explicit_chain
-        .or_else(|| self.sched.active_payload().map(|p| p.chain.clone()))
+        .or_else(|| self.active_payload().map(|p| p.chain.clone()))
         .expect("every dispatched node has a chain — submission outside enter_block / ambient payload is a bug");
         let install = extract_binder_install(&expr, scope);
         let pre_subs: Vec<(usize, NodeId)> = match &install {
@@ -134,12 +134,15 @@ impl<'run> KoanRuntime<'run> {
             }
             None => Vec::new(),
         };
+        let (cart, framed) = self.submission_cart();
         let id = self.sched.submit_node(
             super::decide_with_presubs(expr, pre_subs),
             NodePayload {
                 scope: node_scope,
                 chain: chain.clone(),
             },
+            cart,
+            framed,
         );
         if let Some(install) = install {
             // Stamp the placeholder at the binder's lexical position — the SAME `BindingIndex` the

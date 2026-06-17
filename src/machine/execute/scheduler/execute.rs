@@ -42,7 +42,7 @@ impl<'run> KoanRuntime<'run> {
             // boundary — the same erase / reattach discipline, generalized to the whole closure.
             // SAFETY: `cart` is the witness pinning the captures' home for the whole step.
             let cont: NodeCont<'run> = unsafe { erased_cont.reattach(&cart) };
-            let guard = self.sched.enter_slot_step(
+            let guard = self.enter_slot_step(
                 cart,
                 reserve,
                 NodePayload {
@@ -53,13 +53,13 @@ impl<'run> KoanRuntime<'run> {
             // Expose to the dispatch step whether this slot is a tail call within an established
             // contract chain — a deferred-return FN dispatched here skips resolving its own return
             // type (keep-first discards it anyway).
-            self.sched.active_in_contract_chain = prev_contract.is_some();
+            self.ambient.active_in_contract_chain = prev_contract.is_some();
             let step = self.run_wait(deps, park_count, cont, idx);
             // The post-step token owns the slot's frame at step end and is the *only* source of
             // the step scope (via `post.step_scope()`), so the wrong-frame read that ambient
             // `active_frame` allowed is unspellable here.
-            let post = self.sched.exit_slot_step(guard);
-            self.sched.active_in_contract_chain = false;
+            let post = self.exit_slot_step(guard);
+            self.ambient.active_in_contract_chain = false;
             // Drain re-entrant writes against the step scope (re-anchored at the workload boundary
             // from the slot's raw handle and the authoritative post-step frame).
             reattach_node_scope(&post.payload().scope, Some(&post.prev_frame)).drain_pending();

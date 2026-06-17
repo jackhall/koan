@@ -65,6 +65,10 @@ impl Workload for KoanWorkload {
 /// See design/execution-model.md § the dispatcher / scheduler boundary.
 pub struct KoanRuntime<'run> {
     pub(in crate::machine::execute) sched: Scheduler<KoanWorkload>,
+    /// The ambient per-step context — the active per-call frame, slot reserve, run frame, the
+    /// executing slot's payload, and the contract-chain flag. The scheduler is a pure DAG runtime;
+    /// this driver-side state floats across a single step. See [`ambient`](super::ambient).
+    pub(in crate::machine::execute) ambient: super::ambient::AmbientContext,
     /// The run lifetime the harness processes its AST/scope against. The scheduler is value-erased
     /// (`Scheduler<KoanWorkload>`), so `'run` lives only in the harness's own method signatures; this
     /// marker keeps it on the type.
@@ -75,6 +79,7 @@ impl<'run> KoanRuntime<'run> {
     pub fn new() -> Self {
         Self {
             sched: Scheduler::new(),
+            ambient: super::ambient::AmbientContext::default(),
             _run: PhantomData,
         }
     }
@@ -136,7 +141,7 @@ impl<'run> KoanRuntime<'run> {
     }
 
     pub fn tail_reuse_count(&self) -> usize {
-        self.sched.tail_reuse_count()
+        self.ambient_tail_reuse_count()
     }
 }
 
@@ -321,9 +326,9 @@ impl<'run> KoanRuntime<'run> {
     /// `CallArena` minting/reset, which names the run-lived `Scope`. `try_reset_for_tail`'s
     /// `Rc::get_mut` gate is the "no escape" uniqueness check (a cloned `Rc` forecloses reuse).
     fn acquire_tail_frame(&mut self, outer: &Scope<'_>) -> Rc<CallArena> {
-        if let Some(mut reserve) = self.sched.take_active_reserve() {
+        if let Some(mut reserve) = self.take_active_reserve() {
             if reserve.try_reset_for_tail(outer) {
-                self.sched.note_tail_reuse();
+                self.note_tail_reuse();
                 return reserve;
             }
         }
@@ -464,7 +469,7 @@ impl<'run> KoanRuntime<'run> {
                 // then this slot's consumers pull from here. Otherwise splice the slot out: move its
                 // consumers onto `producer`'s notify list and alias the slot to `producer`.
                 if self.sched.is_result_ready(producer) {
-                    let dest = current_scope(&self.sched).arena;
+                    let dest = current_scope(&self.ambient).arena;
                     let pulled = match self.sched.read_result_with_frame(producer) {
                         // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
                         Ok((value, frame)) => Ok((unsafe { value.reattach() }, frame)),

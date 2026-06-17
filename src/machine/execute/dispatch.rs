@@ -76,6 +76,7 @@ pub(super) fn resolve_name_part<'run>(
     scope: &Scope<'run>,
     part: &ExpressionPart<'run>,
     scheduler: &Scheduler<KoanWorkload>,
+    active_chain: Option<&std::rc::Rc<crate::machine::LexicalFrame>>,
     consumer: Option<NodeId>,
 ) -> NameOutcome<'run> {
     let (name, is_type) = match part {
@@ -83,7 +84,7 @@ pub(super) fn resolve_name_part<'run>(
         ExpressionPart::Type(t) => (t.as_str(), Some(t)),
         _ => unreachable!("resolve_name_part only called on bare-name parts"),
     };
-    let chain = scheduler.active_payload().map(|p| &*p.chain);
+    let chain = active_chain.map(|c| &**c);
     match scope.resolve_with_chain(name, chain) {
         Resolution::Placeholder(producer) => {
             return disposition_for_producer(scheduler, name, producer, consumer);
@@ -98,11 +99,7 @@ pub(super) fn resolve_name_part<'run>(
         // not-yet-sealed referent parks on its single producer (a visible type alias has
         // already resolved its RHS, so a leaf parks on at most one binder), reusing the
         // same ready/cycle disposition the value-side placeholder arm applies.
-        Some(t) => match resolve_type_leaf_carrier(
-            scope,
-            t,
-            scheduler.active_payload().map(|p| p.chain.clone()),
-        ) {
+        Some(t) => match resolve_type_leaf_carrier(scope, t, active_chain.cloned()) {
             TypeLeafCarrier::Resolved(kt) => NameOutcome::Resolved(Carried::Type(kt)),
             TypeLeafCarrier::Unbound(n) => NameOutcome::Unbound(n),
             TypeLeafCarrier::Park(producers) => match producers.first() {

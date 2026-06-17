@@ -24,16 +24,17 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 
+use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
 use super::super::runtime::KoanWorkload;
 use super::super::scheduler::Scheduler;
 use super::{park_on_deps, resolve_name_part, DepRequest, Outcome, PendingSub};
 
 /// Re-anchor a raw [`NodeScope`] handle into a usable `&Scope` — the Koan scope interpretation the
-/// scheduler no longer owns. The scheduler hands back the opaque payload
-/// ([`Scheduler::active_payload`](super::super::scheduler::Scheduler::active_payload)
-/// / `PostStep::payload`), from which the workload extracts the scope handle, plus the per-call cart
-/// the slot ran against; this workload-side helper reattaches them. An `Anchored` slot reattaches its erased
+/// scheduler no longer owns. The driver hands back the opaque payload
+/// ([`AmbientContext::active_payload`] / `PostStep::payload`), from which the workload extracts the
+/// scope handle, plus the per-call cart the slot ran against; this workload-side helper reattaches
+/// them. An `Anchored` slot reattaches its erased
 /// run-lived [`ScopePtr`](crate::machine::core::ScopePtr) (`reattach_bounded`); a `Yoked` slot
 /// re-projects from `frame`. Content lifetime free, borrow bounded by `frame` — so the result
 /// cannot outlive the cart it names.
@@ -58,12 +59,12 @@ pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
 /// present — an `Anchored` slot carries its own pointer, and a `Yoked` slot's active cart is never
 /// emptied mid-step (an invoke reuses the reserve, not the active cart).
 pub(in crate::machine::execute) fn current_scope<'run>(
-    sched: &Scheduler<KoanWorkload>,
+    ambient: &AmbientContext,
 ) -> &Scope<'run> {
-    let payload = sched
+    let payload = ambient
         .active_payload()
         .expect("a slot step installs the ambient payload (and a Yoked slot keeps its frame)");
-    reattach_node_scope(&payload.scope, sched.active_frame_ref())
+    reattach_node_scope(&payload.scope, ambient.active_frame_ref())
 }
 
 /// Read-only dispatch view — the decide-phase context. It holds only `&Scheduler`, never `&mut`.
@@ -74,6 +75,9 @@ pub(in crate::machine::execute) fn current_scope<'run>(
 /// takes `&mut` — so decide and apply never overlap.
 pub(in crate::machine::execute) struct SchedulerView<'run, 's> {
     sched: &'s Scheduler<KoanWorkload>,
+    /// The driver's ambient per-step context: the scope/chain reads (`current_scope`, `chain_deref`,
+    /// `active_chain`, `current_frame`, `in_contract_chain`) read it, not the scheduler.
+    ambient: &'s AmbientContext,
     /// `SchedulerView` re-anchors the value-erased scheduler's reads to `'run` (the AST/scope
     /// lifetime the decide runs against); the scheduler itself is `Scheduler<KoanWorkload>`, so
     /// `'run` lives only on this view, kept here by the marker.
@@ -81,9 +85,13 @@ pub(in crate::machine::execute) struct SchedulerView<'run, 's> {
 }
 
 impl<'run, 's> SchedulerView<'run, 's> {
-    pub(in crate::machine::execute) fn new(sched: &'s Scheduler<KoanWorkload>) -> Self {
+    pub(in crate::machine::execute) fn new(
+        sched: &'s Scheduler<KoanWorkload>,
+        ambient: &'s AmbientContext,
+    ) -> Self {
         Self {
             sched,
+            ambient,
             _run: PhantomData,
         }
     }
@@ -94,36 +102,36 @@ impl<'run, 's> SchedulerView<'run, 's> {
     // scheduler.
 
     pub(in crate::machine::execute) fn current_scope(&self) -> &Scope<'run> {
-        current_scope(self.sched)
+        current_scope(self.ambient)
     }
 
     pub(super) fn chain_deref(&self) -> Option<&LexicalFrame> {
-        self.sched.active_payload().map(|p| &*p.chain)
+        self.ambient.active_payload().map(|p| &*p.chain)
     }
 
     /// Cloned `Rc` to the active chain — the type-leaf and field-list reads that take the
     /// chain by value.
     pub(super) fn active_chain(&self) -> Option<Rc<LexicalFrame>> {
-        self.sched.active_payload().map(|p| p.chain.clone())
+        self.ambient.active_payload().map(|p| p.chain.clone())
     }
 
     /// Cloned `Rc` to the active lexical chain — the `record_type` elaborator deferral needs
     /// it by value.
     pub(super) fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>> {
-        self.sched.active_payload().map(|p| p.chain.clone())
+        self.ambient.active_payload().map(|p| p.chain.clone())
     }
 
     /// Cloned `Rc` to the active per-call frame — the `invoke` decide reads it to build a
     /// builtin's `BodyCtx`. `None` only outside any frame (top-level builtins).
     pub(in crate::machine::execute) fn current_frame(&self) -> Option<Rc<CallArena>> {
-        self.sched.current_frame()
+        self.ambient.active_frame_ref().cloned()
     }
 
     /// Whether the executing slot already carries a kept return contract (a tail call within an
     /// established chain) — `invoke` reads it so a deferred-return FN skips re-resolving its
     /// keep-first-discarded return type.
     pub(in crate::machine::execute) fn in_contract_chain(&self) -> bool {
-        self.sched.in_contract_chain()
+        self.ambient.active_in_contract_chain
     }
 
     pub(super) fn is_result_ready(&self, id: NodeId) -> bool {
@@ -145,6 +153,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
         &self,
         parts: &[Spanned<ExpressionPart<'run>>],
     ) -> Vec<Option<NameOutcome<'run>>> {
+        let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         parts
             .iter()
             .map(|p| match &p.value {
@@ -152,6 +161,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
                     self.current_scope(),
                     &p.value,
                     self.sched,
+                    active_chain,
                     None,
                 )),
                 _ => None,

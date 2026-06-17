@@ -39,7 +39,7 @@ impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn ambient_or_detached_chain(
         &self,
     ) -> Option<Rc<LexicalFrame>> {
-        (!self.sched.has_active_payload()).then(LexicalFrame::detached)
+        (!self.has_active_payload()).then(LexicalFrame::detached)
     }
 
     /// Establish the run frame on the first run-lifetime submission (top-level run scope), so every
@@ -48,8 +48,8 @@ impl<'run> KoanRuntime<'run> {
     /// construction the scheduler delegates to the workload — and hands it to the scheduler, which
     /// owns the frame's lifecycle. Idempotent (guarded on `has_run_frame`).
     pub(in crate::machine::execute) fn ensure_run_frame(&mut self, scope: &'run Scope<'run>) {
-        if !self.sched.has_run_frame() {
-            self.sched.set_run_frame(CallArena::adopting(scope));
+        if !self.has_run_frame() {
+            self.set_run_frame(CallArena::adopting(scope));
         }
     }
 
@@ -62,7 +62,7 @@ impl<'run> KoanRuntime<'run> {
         &self,
         scope: &'run Scope<'run>,
     ) -> NodeScope {
-        match self.sched.active_frame_ref() {
+        match self.active_frame_ref() {
             Some(f)
                 if std::ptr::eq(
                     f.scope() as *const Scope<'_> as *const (),
@@ -88,11 +88,11 @@ impl<'run> KoanRuntime<'run> {
         // The body inherits the slot's own handle and chain (a slot step installs the payload before
         // the body submits), so clone it off the ambient before taking `&mut` for the submit.
         let payload = self
-            .sched
             .active_payload()
             .expect("a slot step installs the ambient payload before the body submits")
             .clone();
-        self.sched.submit_node(work, payload)
+        let (cart, framed) = self.submission_cart();
+        self.sched.submit_node(work, payload, cart, framed)
     }
 
     /// Submit each `statement` as a fresh lexical block over `scope`: mint a frame `(scope_id, i+1)`
@@ -104,7 +104,7 @@ impl<'run> KoanRuntime<'run> {
         statements: Vec<KExpression<'run>>,
         scope: &'run Scope<'run>,
     ) -> Vec<NodeId> {
-        let parent = self.sched.active_payload().map(|p| p.chain.clone());
+        let parent = self.active_payload().map(|p| p.chain.clone());
         // Indices start at 1: visibility is strict less-than and builtins sit at idx 0,
         // so a top-level statement at index 1 sees them via `0 < 1`.
         statements
@@ -156,7 +156,6 @@ impl<'run> KoanRuntime<'run> {
         chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
         let frame = self
-            .sched
             .current_frame()
             .expect("in-frame dispatch requires an active frame");
         // `scope_for_bind` is `Rc`-bounded — not a free `'run`-fabrication. The slot stores `Yoked`
@@ -176,7 +175,6 @@ impl<'run> KoanRuntime<'run> {
         expr: KExpression<'run>,
     ) -> NodeId {
         let node_scope = self
-            .sched
             .active_payload()
             .expect("a slot step installs the ambient payload before the body submits")
             .scope;
@@ -208,8 +206,7 @@ impl<'run> KoanRuntime<'run> {
         let body_scope_id = body_scope.id;
         let parent = assemble_body_chain(
             body_scope,
-            self.sched
-                .active_payload()
+            self.active_payload()
                 .map(|p| p.chain.clone())
                 .expect("a body block runs inside an active lexical chain"),
             0,
@@ -221,9 +218,9 @@ impl<'run> KoanRuntime<'run> {
             let statement_chain = LexicalFrame::push(parent.clone(), body_scope_id, i + 1);
             // Install `frame` as the ambient cart so `dispatch_in_active_frame` reads it back, then
             // restore the previous — the sub-slot inherits this frame, not the caller's.
-            let prev = self.sched.swap_active_frame(Some(frame.clone()));
+            let prev = self.swap_active_frame(Some(frame.clone()));
             let bid = self.dispatch_in_active_frame(statement, Some(statement_chain));
-            self.sched.swap_active_frame(prev);
+            self.swap_active_frame(prev);
             ids.push(bid);
         }
         ids
@@ -275,14 +272,17 @@ impl<'run> KoanRuntime<'run> {
         self.ensure_run_frame(scope);
         let scope_handle = self.resolve_node_scope(scope);
         let chain = explicit_chain
-            .or_else(|| self.sched.active_payload().map(|p| p.chain.clone()))
+            .or_else(|| self.active_payload().map(|p| p.chain.clone()))
             .expect("every dispatched node has a chain — submission outside enter_block / ambient payload is a bug");
+        let (cart, framed) = self.submission_cart();
         self.sched.submit_node(
             work,
             NodePayload {
                 scope: scope_handle,
                 chain,
             },
+            cart,
+            framed,
         )
     }
 

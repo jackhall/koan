@@ -371,7 +371,8 @@ mod erased_cont_tests {
         // Reattach witnessed by the cart `Rc`, then run the single-shot continuation.
         let reattached: NodeCont<'_> = unsafe { erased.reattach(&cart) };
         let sched = Scheduler::new();
-        let view = SchedulerView::new(&sched);
+        let ambient = crate::machine::execute::ambient::AmbientContext::default();
+        let view = SchedulerView::new(&sched, &ambient);
         let out = reattached(&view, &[], 0);
         assert!(matches!(out, Outcome::Done(Err(_))));
         // Mutate the arena through a sibling pointer after the call to catch a stacked-borrow regression.
