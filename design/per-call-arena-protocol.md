@@ -193,7 +193,7 @@ state live on `Scheduler`:
   currently being executed. Read through
   [`Scheduler::current_frame`](../src/machine/execute/run_loop.rs);
   written only by `enter_slot_step` / `exit_slot_step` (the RAII
-  bracket around every iteration of `Scheduler::execute`) and the
+  bracket `run_step` wraps each slot step in) and the
   `swap_active_frame` save/restore. An invoke never takes it (tail
   reuse draws from the reserve, below), so within a step it is always
   `Some` — `Node::frame` and `PostStep::prev_frame` are non-optional.

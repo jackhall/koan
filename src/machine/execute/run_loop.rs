@@ -1,23 +1,21 @@
 //! The Koan driver over the workload-independent [`Scheduler`](crate::scheduler::Scheduler): the
-//! run loop ([`KoanRuntime::execute`]) that pops ready slots, brackets each step's ambient frame
-//! context, and applies the [`NodeStep`] the step returns through the scheduler's method contract.
-//! The scheduler stores and hands back opaque per-node state; all Koan semantics — the per-call
-//! arena lift, the return-contract enforcement, the lexical-chain assembly — live here.
+//! run loop ([`KoanRuntime::execute`]) pops ready slots and hands each to [`run_step`](KoanRuntime::run_step),
+//! which brackets the step's ambient frame context end-to-end and applies the [`NodeStep`] it returns
+//! through the scheduler's method contract. The scheduler stores and hands back opaque per-node state;
+//! all Koan semantics — the per-call arena lift, the return-contract enforcement, the lexical-chain
+//! assembly — live here.
 //!
 //! See design/execution-model.md and design/memory-model.md.
 
-use std::rc::Rc;
-
-use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
-use crate::machine::core::{assemble_body_chain, ScopeId};
+use crate::machine::core::kfunction::body::ErasedContract;
 use crate::machine::model::Carried;
-use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId, RuntimeArena};
+use crate::machine::{KError, KErrorKind, NodeId, RuntimeArena};
 
 use super::dispatch::{reattach_node_scope, SchedulerView};
 use super::finalize::NodeFinalize;
 use super::nodes::{CallFrame, Node, NodePayload, NodeScope, NodeStep, NodeWork};
 use super::outcome::deps_at_step;
-use super::runtime::KoanRuntime;
+use super::runtime::{KoanRuntime, KoanWorkload};
 use super::NodeCont;
 
 #[cfg(test)]
@@ -33,57 +31,7 @@ impl<'run> KoanRuntime<'run> {
         while let Some(idx) = self.sched.pop_next() {
             let id = NodeId(idx);
             let node = self.sched.take_for_run(id);
-            // The step reads its scope on demand (`current_scope`), and the post-step uses below
-            // re-acquire it per use, so nothing holds a scope borrow across the step's `&mut self`
-            // work or the in-step TCO frame reset.
-            let node_scope = node.payload.scope;
-            let CallFrame {
-                cart,
-                reserve,
-                contract: prev_contract,
-            } = node.frame;
-            let prev_chain_carrier = node.payload.chain;
-            let NodeWork {
-                deps,
-                park_count,
-                cont: erased_cont,
-                carrier: _,
-            } = node.work;
-            // Re-anchor the slot's erased continuation against its own cart before that cart moves
-            // into the step guard. The guard keeps the cart live across `run_step`, so the
-            // fabricated `'run` cannot outlive the continuation's captures (which live in the run
-            // arena or a strict ancestor of the cart). Mirrors the contract re-anchor at the Done
-            // boundary — the same erase / reattach discipline, generalized to the whole closure.
-            // SAFETY: `cart` is the witness pinning the captures' home for the whole step; it is
-            // held live below (moved into the step guard) across the continuation's run.
-            let cont: NodeCont<'run> = unsafe { erased_cont.reattach() };
-            let guard = self.enter_slot_step(
-                cart,
-                reserve,
-                NodePayload {
-                    scope: node_scope,
-                    chain: prev_chain_carrier.clone(),
-                },
-            );
-            // Expose to the dispatch step whether this slot is a tail call within an established
-            // contract chain — a deferred-return FN dispatched here skips resolving its own return
-            // type (keep-first discards it anyway).
-            self.ambient.active_in_contract_chain = prev_contract.is_some();
-            // The whole step — decide, exit, and the `NodeStep` apply (including the Done-terminal
-            // finalize) — runs inside `run_step`, where the step lifetime `'s` is live. The Done
-            // value is finalized into the slot store there, at `'s`, never crossing back out as a
-            // fabricated `'run`.
-            self.run_step(StepInputs {
-                guard,
-                deps,
-                park_count,
-                cont,
-                idx,
-                id,
-                prev_contract,
-                prev_chain_carrier,
-                node_scope,
-            });
+            self.run_step(id, node);
         }
         // Any slot still `PreRun` after drain is parked on a dependency that can
         // no longer fire — surface the cycle rather than panic on the caller's
@@ -97,32 +45,62 @@ impl<'run> KoanRuntime<'run> {
         Ok(())
     }
 
-    /// The unified node handler, bracketing one slot step end-to-end at the step lifetime `'s`:
-    /// collect the resolved dep terminals (as owned `Result`s — an errored dep is handed through,
-    /// the continuation decides), run `cont` against a read-only [`SchedulerView`], reclaim the
-    /// owned-dep suffix, apply the decided [`Outcome`] into a [`NodeStep`], exit the step guard,
-    /// then realize that step. The continuation issues no graph write, so the reclaim lands after
-    /// it and before the apply that installs the continuation's edges.
+    /// The unified node handler, owning one slot step start to finish: enter the step's ambient frame
+    /// context, collect the resolved dep terminals (as owned `Result`s — an errored dep is handed
+    /// through, the continuation decides), run `cont` against a read-only [`SchedulerView`], reclaim
+    /// the owned-dep suffix, apply the decided [`Outcome`] into a [`NodeStep`], exit the step guard,
+    /// then realize that step. The continuation issues no graph write, so the reclaim lands after it
+    /// and before the apply that installs the continuation's edges. The whole bracket — enter and
+    /// exit — lives here, so the [`SlotStepGuard`](super::ambient::SlotStepGuard) is born and consumed
+    /// without escaping.
     ///
-    /// The whole body — including the [`NodeStep::Done`] terminal's finalize — runs while
-    /// `consumer_frame` (the step's cart `Rc`, cloned into a local that is the sole `'s` witness)
-    /// is live. So the Done value, born at `'s` in the consumer frame, is finalized into the slot
-    /// store (where `finalize` erases it) *within* `'s`: it never has to be laundered to `'run` to
-    /// cross a step-guard exit. The clone is confined to this call and dropped at return — before
-    /// the next iteration's `try_reset_for_tail`, which resets a *different* (the prior step's)
-    /// cart — so it does not contend with the TCO `Rc::get_mut` uniqueness gate.
-    fn run_step(&mut self, inputs: StepInputs<'run>) {
-        let StepInputs {
-            guard,
+    /// The whole step runs at the step lifetime `'s`: the cont re-anchor fabricates a `'run` witnessed
+    /// by the cart `Rc`, which the step guard holds live across the continuation's run — and the body,
+    /// including the [`NodeStep::Done`] terminal's finalize, runs while `consumer_frame` (the step's
+    /// cart `Rc`, cloned into the sole `'s` witness) is live. So the Done value, born at `'s` in the
+    /// consumer frame, is finalized into the slot store (where `finalize` erases it) *within* `'s`: it
+    /// never has to be laundered to `'run` to cross a step-guard exit. The clone is confined to this
+    /// call and dropped at return — before the next iteration's `try_reset_for_tail`, which resets a
+    /// *different* (the prior step's) cart — so it does not contend with the TCO `Rc::get_mut`
+    /// uniqueness gate.
+    fn run_step(&mut self, id: NodeId, node: Node<KoanWorkload>) {
+        let idx = id.index();
+        // The step reads its scope on demand (`current_scope`), and the post-step uses below
+        // re-acquire it per use, so nothing holds a scope borrow across the step's `&mut self`
+        // work or the in-step TCO frame reset.
+        let node_scope = node.payload.scope;
+        let CallFrame {
+            cart,
+            reserve,
+            contract: prev_contract,
+        } = node.frame;
+        let prev_chain_carrier = node.payload.chain;
+        let NodeWork {
             deps,
             park_count,
-            cont,
-            idx,
-            id,
-            prev_contract,
-            prev_chain_carrier,
-            node_scope,
-        } = inputs;
+            cont: erased_cont,
+            carrier: _,
+        } = node.work;
+        // Re-anchor the slot's erased continuation against its own cart before that cart moves into
+        // the step guard. The guard keeps the cart live across the whole step, so the fabricated
+        // `'run` cannot outlive the continuation's captures (which live in the run arena or a strict
+        // ancestor of the cart). Mirrors the contract re-anchor at the Done boundary — the same erase
+        // / reattach discipline, generalized to the whole closure.
+        // SAFETY: `cart` is the witness pinning the captures' home for the whole step; it is held
+        // live below (moved into the step guard) across the continuation's run.
+        let cont: NodeCont<'run> = unsafe { erased_cont.reattach() };
+        let guard = self.enter_slot_step(
+            cart,
+            reserve,
+            NodePayload {
+                scope: node_scope,
+                chain: prev_chain_carrier.clone(),
+            },
+        );
+        // Expose to the dispatch step whether this slot is a tail call within an established contract
+        // chain — a deferred-return FN dispatched here skips resolving its own return type (keep-first
+        // discards it anyway).
+        self.ambient.active_in_contract_chain = prev_contract.is_some();
         // Consumer-pull: lift each dep's terminal out of its producer frame into this consumer's
         // own scope arena, so the value dies with the consumer and the producer keeps no surviving
         // copy that would outlive its own dying frame. A frameless / run-arena terminal already
@@ -185,30 +163,23 @@ impl<'run> KoanRuntime<'run> {
             NodeStep::Replace {
                 work: new_work,
                 frame: new_frame,
-                function: new_function,
-                block_entry,
-                body_index,
+                contract: new_contract,
+                chain,
             } => {
                 let prev_frame = post.prev_frame;
                 let post_step_reserve = post.post_step_reserve;
                 // Keep the **first** contract of a tail chain: once a contract is set, a nested tail
                 // call does not overwrite it, so the chain checks the original caller's declared
-                // return — not the tail-most callee's. `compute_replace_chain` reads `new_function`
-                // (still live) for the chain-shape decision before erasure.
-                let next_contract: Option<ErasedContract> =
-                    prev_contract.or_else(|| new_function.map(ErasedContract::erase));
+                // return — not the tail-most callee's. Both contracts are already erased (the new one
+                // by `apply_outcome`), so this is a plain keep-first with no narrowing here.
+                let next_contract: Option<ErasedContract> = prev_contract.or(new_contract);
                 // The frame the body runs in: a freshly installed cart, else the slot's current one
                 // (a `FramePlacement::Inherit` FN-body re-enters the cart a prior `Continue` already
-                // installed — the folded `invoke`).
+                // installed — the folded `invoke`). The `ChainOp` reads it (for an `AssembleBody`) to
+                // walk the body scope's lexical chain.
                 let body_frame: &crate::machine::core::CallArena =
                     new_frame.as_deref().unwrap_or(&prev_frame);
-                let new_chain = compute_replace_chain(
-                    prev_chain_carrier,
-                    block_entry,
-                    new_function,
-                    body_frame,
-                    body_index,
-                );
+                let new_chain = chain.apply(prev_chain_carrier, body_frame);
                 match new_frame {
                     Some(f) => {
                         // Rotate the ping-pong reserve: the post-step reserve is superseded by
@@ -272,50 +243,4 @@ impl<'run> KoanRuntime<'run> {
     }
 }
 
-/// The per-step inputs [`KoanRuntime::execute`] hands to
-/// [`run_step`](KoanRuntime::run_step): the entered step guard plus the slot's work, identity, and
-/// the carried state the `Replace` arm reinstalls. Grouped into one struct so the step bracket
-/// takes a single argument rather than a nine-field signature.
-struct StepInputs<'run> {
-    guard: super::ambient::SlotStepGuard,
-    deps: Vec<NodeId>,
-    park_count: usize,
-    cont: NodeCont<'run>,
-    idx: usize,
-    id: NodeId,
-    prev_contract: Option<ErasedContract>,
-    prev_chain_carrier: Rc<LexicalFrame>,
-    node_scope: NodeScope,
-}
 
-/// Cases by `block_entry` / `new_function`:
-///
-/// - `None` — TCO in the same lexical block; chain unchanged.
-/// - `Some(scope_id)` + non-`Function` contract — block-entry arm (MATCH, TRY); prepend.
-/// - `Some(_)` + `Function`/`PerCall` contract — FN body invoke (a deferred FN body for
-///   `PerCall`). Chain is assembled from the FN's lexical `outer` walk so depth tracks lexical
-///   nesting, not call depth (tail-recursive loops produce equal-depth chains each iteration).
-///
-/// `body_frame` is the cart the body runs in — the freshly installed frame for a
-/// `FreshChild`/`ReuseReserve` tail, or the slot's already-installed current cart for an `Inherit`
-/// FN-body re-entry (the folded `invoke`). The body-chain decision keys off the **contract kind**,
-/// not whether a new frame was minted, so an `Inherit` FN body assembles against the current cart
-/// exactly as a `FreshChild` one assembles against the minted cart.
-fn compute_replace_chain<'run>(
-    prev_chain: Rc<LexicalFrame>,
-    block_entry: Option<ScopeId>,
-    new_function: Option<ReturnContract<'run>>,
-    body_frame: &crate::machine::core::CallArena,
-    body_index: usize,
-) -> Rc<LexicalFrame> {
-    let Some(scope_id) = block_entry else {
-        return prev_chain;
-    };
-    match new_function {
-        // `Function` and `PerCall` (a deferred FN body) both assemble the FN-body chain.
-        Some(ReturnContract::Function(_) | ReturnContract::PerCall { .. }) => {
-            assemble_body_chain(body_frame.scope(), prev_chain, body_index)
-        }
-        _ => LexicalFrame::push(Some(prev_chain), scope_id, body_index),
-    }
-}

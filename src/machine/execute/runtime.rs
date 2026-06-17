@@ -28,7 +28,7 @@ use crate::machine::{CallArena, KError, NodeId, Scope};
 
 use super::dispatch::{reattach_node_scope, DepRequest};
 use super::lift::NodeLift;
-use super::nodes::{NodePayload, NodeStep, NodeWork};
+use super::nodes::{ChainOp, NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, Continuation, Outcome};
 use super::{catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedCont};
 use crate::machine::model::values::CarriedFamily;
@@ -369,7 +369,7 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         outcome: Outcome<'run, 's>,
         idx: usize,
-    ) -> NodeStep<'run, 's> {
+    ) -> NodeStep<'s> {
         match outcome {
             // The terminal stays at the step lifetime `'s` — the run loop's `run_step` finalizes it
             // into the slot store (erasing it) before the step's frame witness drops, so it never
@@ -386,12 +386,16 @@ impl<'run> KoanRuntime<'run> {
                 // statements parks on them as owned `BodyBlock` deps and emits this `Continue` only
                 // from the resolving finish (see `dispatch/exec.rs` and `run_action`).
                 let frame = self.resolve_frame_placement(frame);
+                // Decide the chain reshape from the still-live contract variant, then erase the
+                // contract — so the `Replace` step carries no `'run` (the variant is frozen into the
+                // lifetime-free [`ChainOp`]). The run loop assembles the chain against the post-step
+                // frame and keeps the slot's prior contract first over `contract`.
+                let chain = ChainOp::decide(block_entry, contract.as_ref(), body_index);
                 NodeStep::Replace {
                     work,
                     frame,
-                    function: contract,
-                    block_entry,
-                    body_index,
+                    contract: contract.map(ErasedContract::erase),
+                    chain,
                 }
             }
             Outcome::ParkThenContinue {
@@ -484,9 +488,8 @@ impl<'run> KoanRuntime<'run> {
                 NodeStep::Replace {
                     work,
                     frame: None,
-                    function: None,
-                    block_entry: None,
-                    body_index: 0,
+                    contract: None,
+                    chain: ChainOp::Unchanged,
                 }
             }
             Outcome::Forward(producer) => {

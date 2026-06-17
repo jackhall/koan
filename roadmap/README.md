@@ -89,7 +89,7 @@ What's shipped that the open items below build on:
   [`execute::run_loop`](../src/machine/execute/run_loop.rs). The value-movement re-anchors on this
   path are now node-scale, not `'run`: `NodeFinalize::finalize_terminal` is single-lifetime
   (`'o -> 'o`), a `Done` terminal is finalized at its step lifetime `'s` *within* the producing step
-  (`NodeStep<'run, 's>`; `run_step` brackets run + finalize over the cart clone that witnesses `'s`),
+  (`NodeStep<'s>`; `run_step` owns the step start to finish — enter, run, finalize — over the cart clone that witnesses `'s`),
   and the consumer-pull / `Outcome::Forward` lift re-anchors through [`read_lifted`](../src/machine/execute/runtime.rs)
   into the consumer scope arena — so `pin_carried_to_run` survives only for the genuine run-global
   root drain. See
@@ -247,6 +247,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
+- [Narrow the dispatch decide surface from `'run` to `'node`](refactor/dispatch-decide-node-lifetime.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
@@ -340,3 +341,7 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
+- [Narrow the dispatch decide surface from `'run` to `'node`](refactor/dispatch-decide-node-lifetime.md) —
+  retype `Outcome` / `decide` / `ResumeFn` / `DepFinish` / `working_expr` to the cart-scale
+  lifetime their captures actually live at, so the continuation reattach names a locally
+  witnessed `'node` instead of an over-approximated `'run`.

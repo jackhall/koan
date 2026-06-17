@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use super::runtime::KoanWorkload;
-use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::{ScopeId, ScopePtr};
+use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
+use crate::machine::core::{assemble_body_chain, ScopeId, ScopePtr};
 use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId};
 
@@ -15,41 +15,93 @@ pub(super) use crate::scheduler::nodes::{CallFrame, Node, NodeWork};
 /// re-enqueue the same index so it runs again with no fresh slot allocated, giving constant
 /// memory across tail-call sequences. When `frame` is `Some`, its `scope()` becomes the
 /// slot's scope and its `arena()` owns per-call allocations; `None` keeps the existing
-/// frame and scope. `function`, when set, names the user-fn whose body the replacement is
-/// entering — any error landing on this slot gets a `TraceFrame` appended for the trace.
-///
-/// `block_entry` annotates lexical-block entry. `None` keeps the slot's current
-/// `LexicalFrame` chain unchanged. `Some(scope_id)` enters a new lexical block: when
-/// `function` is `None` the reinstall site prepends `(scope_id, 0)` to the chain; when
-/// `function` is `Some(_)` the chain is rebuilt via `assemble_body_chain` (the FN-body
-/// rule that keeps chain depth = lexical nesting depth, NOT call depth).
+/// frame and scope. `contract`, when set, is the erased return contract the replacement is
+/// entering — kept-first against the slot's prior contract by the reinstall site; any error
+/// landing on this slot is checked against it. `chain` is the pre-decided lexical-chain reshape
+/// (see [`ChainOp`]), already lowered from the contract variant so this whole variant is
+/// lifetime-free — the only `'`-bearing arm is `Done`.
 // `Replace` is intrinsically the large variant (it carries `NodeWork` plus the
-// frame/function/chain tail-call payload); `Done` only grows with the cached
+// frame/contract/chain tail-call payload); `Done` only grows with the cached
 // `KExpression` it indirectly holds. Boxing a short-lived return value's hot tail-call
 // path to balance the variants is the wrong trade — the imbalance is inherent.
 #[allow(clippy::large_enum_variant)]
-pub(super) enum NodeStep<'run, 's> {
+pub(super) enum NodeStep<'s> {
     /// The terminal value is born at the step lifetime `'s` (the consumer frame the step ran
-    /// against), not `'run`: it is finalized *within* the step that produced it (the run loop's
-    /// `run_step` erases it into the slot store before the step's frame witness drops), so it never
-    /// crosses the step-guard exit as a fabricated `'run`. `Replace` keeps `'run` because its
-    /// contract names run-lived types and feeds the next step's frame.
+    /// against): it is finalized *within* the step that produced it (the run loop's `run_step` erases
+    /// it into the slot store before the step's frame witness drops), so it never crosses the
+    /// step-guard exit as a fabricated `'run`. The only lifetime-bearing arm — `Replace`'s contract
+    /// is erased and its chain reshape lowered to a [`ChainOp`] in `apply_outcome`, so it carries no
+    /// `'run`.
     Done(Result<Carried<'s>, KError>),
     Replace {
         work: NodeWork<KoanWorkload>,
         frame: Option<Rc<CallArena>>,
-        function: Option<ReturnContract<'run>>,
-        block_entry: Option<ScopeId>,
-        /// Body-scope chain index for FN-body / MATCH-arm / TRY-arm tail-replace
-        /// (mirrors [`Outcome::Continue::body_index`]).
-        /// Positions the freshly-pushed block frame at index `N` for multi-statement
-        /// tail-into-last; `0` is the single-statement case.
-        body_index: usize,
+        contract: Option<ErasedContract>,
+        chain: ChainOp,
     },
     /// The slot is spliced out as an alias of `producer` (a bare-name forward whose producer was not
     /// yet ready). The slot's consumers have already been moved onto `producer`'s notify list; this
     /// just marks the slot so `read_result` follows through to `producer`. See [`Outcome::Forward`].
     Alias(NodeId),
+}
+
+/// The lexical-chain reshape a [`NodeStep::Replace`] applies, decided in `apply_outcome` from the
+/// `Continue`'s `block_entry` annotation and the contract *variant* (while still live), then
+/// assembled in the run loop against the post-step frame. Splitting the decision (contract-reading,
+/// at apply) from the assembly (frame-reading, in the run loop) is what lets `Replace` shed its
+/// `'run`: the variant is read before erasure and frozen into this lifetime-free tag.
+pub(super) enum ChainOp {
+    /// TCO in the same lexical block — chain unchanged.
+    Unchanged,
+    /// FN-body invoke (a `Function`/`PerCall` contract): rebuild from the body scope's lexical
+    /// `outer` walk so depth tracks lexical nesting, not call depth, with the body at `body_index`.
+    AssembleBody { body_index: usize },
+    /// Block entry (MATCH / TRY arm, non-`Function` contract): prepend `(scope_id, body_index)` to
+    /// the chain. `body_index` positions the pushed frame for multi-statement tail-into-last (`0` is
+    /// the single-statement case).
+    PushBlock { scope_id: ScopeId, body_index: usize },
+}
+
+impl ChainOp {
+    /// Decide the reshape from a `Continue`'s `block_entry` and the still-live contract variant,
+    /// before the contract is erased onto the [`NodeStep::Replace`]. `Function`/`PerCall` (a deferred
+    /// FN body) both assemble the FN-body chain; any other contract under a block entry prepends.
+    pub(super) fn decide(
+        block_entry: Option<ScopeId>,
+        contract: Option<&ReturnContract<'_>>,
+        body_index: usize,
+    ) -> Self {
+        let Some(scope_id) = block_entry else {
+            return ChainOp::Unchanged;
+        };
+        match contract {
+            Some(ReturnContract::Function(_) | ReturnContract::PerCall { .. }) => {
+                ChainOp::AssembleBody { body_index }
+            }
+            _ => ChainOp::PushBlock { scope_id, body_index },
+        }
+    }
+
+    /// Assemble the new chain in the run loop. `body_frame` is the cart the body runs in — the
+    /// freshly installed frame for a `FreshChild`/`ReuseReserve` tail, or the slot's already-installed
+    /// current cart for an `Inherit` FN-body re-entry (the folded `invoke`) — read only by the
+    /// `AssembleBody` arm.
+    pub(super) fn apply(
+        self,
+        prev_chain: Rc<LexicalFrame>,
+        body_frame: &CallArena,
+    ) -> Rc<LexicalFrame> {
+        match self {
+            ChainOp::Unchanged => prev_chain,
+            ChainOp::AssembleBody { body_index } => {
+                assemble_body_chain(body_frame.scope(), prev_chain, body_index)
+            }
+            ChainOp::PushBlock {
+                scope_id,
+                body_index,
+            } => LexicalFrame::push(Some(prev_chain), scope_id, body_index),
+        }
+    }
 }
 
 /// Slot-stored scope handle, carrying no lifetime so the node it sits on does not pin `'run`
