@@ -15,11 +15,10 @@
 use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
-use crate::machine::core::CallArena;
-use crate::machine::KError;
 use crate::machine::NodeId;
 
 use super::super::nodes::{Node, NodeWork};
+use super::{FramedRead, Workload};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -59,8 +58,8 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
     }
 }
 
-enum SlotState<P, V> {
-    PreRun(Node<P>),
+enum SlotState<W: Workload> {
+    PreRun(Node<W>),
     /// Node payload has been moved out by `take_for_run`. A matching
     /// `reinstall*` / `finalize` / `free_one` exits this state.
     Running,
@@ -68,7 +67,7 @@ enum SlotState<P, V> {
     /// run-arena value). Holding the frame `Rc` here pins the producer's per-call arena until the
     /// slot is freed, so frame death moves from Done to free. The pin is established now and read by
     /// the consumer-pull lift, which copies the terminal out of this frame into the consumer arena.
-    Done(Result<V, KError>, Option<Rc<CallArena>>),
+    Done(Result<W::Value, W::Error>, Option<Rc<W::Frame>>),
     /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
     /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
     /// slot's consumers were moved onto `producer`'s notify list at splice time, so `producer`'s
@@ -99,15 +98,15 @@ fn work_deadlock_sample(work: &NodeWork) -> DeadlockSample {
     }
 }
 
-pub(in crate::machine::execute::scheduler) struct NodeStore<P, V> {
-    slots: SlotVec<SlotState<P, V>>,
+pub(in crate::machine::execute::scheduler) struct NodeStore<W: Workload> {
+    slots: SlotVec<SlotState<W>>,
     /// Reclaimed slot indices. `alloc_slot` pulls from here before
     /// extending `slots`, giving constant scheduler memory across
     /// tail-recursive bodies.
     free_list: Vec<NodeId>,
 }
 
-impl<P, V: Copy> NodeStore<P, V> {
+impl<W: Workload> NodeStore<W> {
     pub(super) fn new() -> Self {
         Self {
             slots: SlotVec::new(),
@@ -118,7 +117,7 @@ impl<P, V: Copy> NodeStore<P, V> {
     /// The only path that picks an index. `DepGraph::install_for_slot`
     /// mirrors the recycle-vs.-extend choice via
     /// `consumer.index() < notify_list.len()`.
-    pub(super) fn alloc_slot(&mut self, node: Node<P>) -> NodeId {
+    pub(super) fn alloc_slot(&mut self, node: Node<W>) -> NodeId {
         match self.free_list.pop() {
             Some(id) => {
                 self.slots[id] = SlotState::PreRun(node);
@@ -133,7 +132,7 @@ impl<P, V: Copy> NodeStore<P, V> {
     }
 
     /// Panics if the slot wasn't `PreRun`.
-    pub(super) fn take_for_run(&mut self, id: NodeId) -> Node<P> {
+    pub(super) fn take_for_run(&mut self, id: NodeId) -> Node<W> {
         match std::mem::replace(&mut self.slots[id], SlotState::Running) {
             SlotState::PreRun(node) => node,
             _ => panic!("scheduler must not revisit a completed node"),
@@ -141,7 +140,7 @@ impl<P, V: Copy> NodeStore<P, V> {
     }
 
     /// Tail-call path: reuse the slot index for a new node payload.
-    pub(super) fn reinstall(&mut self, id: NodeId, node: Node<P>) {
+    pub(super) fn reinstall(&mut self, id: NodeId, node: Node<W>) {
         self.slots[id] = SlotState::PreRun(node);
     }
 
@@ -149,14 +148,14 @@ impl<P, V: Copy> NodeStore<P, V> {
     /// the Koan workload a payload-less [`NodeScope::Yoked`] re-projected from the co-located `cart`
     /// at the read boundary, so no persisted `&'run` dangles across a TCO reset. See
     /// [per-call-arena-protocol.md § Slot-table scope handle](../../../../design/per-call-arena-protocol.md#slot-table-scope-handle).
-    pub(super) fn reinstall_with_frame(&mut self, id: NodeId, node: Node<P>) {
+    pub(super) fn reinstall_with_frame(&mut self, id: NodeId, node: Node<W>) {
         self.slots[id] = SlotState::PreRun(node);
     }
 
     /// Replace a finalized terminal in place, dropping any pinned producer frame. The drain
     /// boundary uses this to re-home a consumer-less root into the run arena (`output` already
     /// lifted there), releasing the per-call frame the producer kept it in.
-    pub(super) fn rehome_terminal(&mut self, id: NodeId, output: Result<V, KError>) {
+    pub(super) fn rehome_terminal(&mut self, id: NodeId, output: Result<W::Value, W::Error>) {
         debug_assert!(
             matches!(self.slots[id], SlotState::Done(..)),
             "rehome_terminal expects a finalized slot",
@@ -170,8 +169,8 @@ impl<P, V: Copy> NodeStore<P, V> {
     pub(super) fn finalize(
         &mut self,
         id: NodeId,
-        output: Result<V, KError>,
-        frame: Option<Rc<CallArena>>,
+        output: Result<W::Value, W::Error>,
+        frame: Option<Rc<W::Frame>>,
     ) {
         self.slots[id] = SlotState::Done(output, frame);
     }
@@ -201,7 +200,7 @@ impl<P, V: Copy> NodeStore<P, V> {
 
     /// Only safe on IDs whose slot has been finalized; internal slots may have been eagerly freed by
     /// their parent. Raw — callers pass an already alias-resolved id.
-    pub(super) fn read_result(&self, id: NodeId) -> Result<V, &KError> {
+    pub(super) fn read_result(&self, id: NodeId) -> Result<W::Value, &W::Error> {
         match &self.slots[id] {
             &SlotState::Done(Ok(c), _) => Ok(c),
             SlotState::Done(Err(e), _) => Err(e),
@@ -212,10 +211,7 @@ impl<P, V: Copy> NodeStore<P, V> {
     /// Read a finalized terminal together with the producer frame `Rc` that backs it (`None` for a
     /// frameless / run-arena value, which is already in a surviving arena). The consumer-pull lift
     /// copies the value out of that frame into the consumer's arena before the producer slot frees.
-    pub(super) fn read_result_with_frame(
-        &self,
-        id: NodeId,
-    ) -> Result<(V, Option<Rc<CallArena>>), &KError> {
+    pub(super) fn read_result_with_frame(&self, id: NodeId) -> FramedRead<'_, W> {
         match &self.slots[id] {
             SlotState::Done(Ok(c), frame) => Ok((*c, frame.clone())),
             SlotState::Done(Err(e), _) => Err(e),
@@ -223,10 +219,12 @@ impl<P, V: Copy> NodeStore<P, V> {
         }
     }
 
-    pub(super) fn read(&self, id: NodeId) -> V {
+    pub(super) fn read(&self, id: NodeId) -> W::Value {
         match self.read_result(id) {
             Ok(c) => c,
-            Err(e) => panic!("read called on errored node: {e}"),
+            // The scheduler stores the opaque error but never inspects it, so the misuse panic
+            // names the node, not the error value.
+            Err(_) => panic!("read called on errored node"),
         }
     }
 
@@ -291,7 +289,7 @@ impl<P, V: Copy> NodeStore<P, V> {
     }
 
     #[cfg(test)]
-    pub(super) fn set_result(&mut self, id: NodeId, output: Result<V, KError>) {
+    pub(super) fn set_result(&mut self, id: NodeId, output: Result<W::Value, W::Error>) {
         self.slots[id] = SlotState::Done(output, None);
     }
 
@@ -318,7 +316,7 @@ impl<P, V: Copy> NodeStore<P, V> {
     /// The live slot's opaque payload, or `None` once it has terminalized. The workload extracts
     /// the field it wants (e.g. the lexical chain). Test-only.
     #[cfg(test)]
-    pub(super) fn payload_of(&self, id: NodeId) -> Option<&P> {
+    pub(super) fn payload_of(&self, id: NodeId) -> Option<&W::Payload> {
         match self.slots.get(id) {
             Some(SlotState::PreRun(node)) => Some(&node.payload),
             _ => None,

@@ -9,7 +9,7 @@ use super::super::finalize::NodeFinalize;
 use super::super::nodes::{CallFrame, Node, NodePayload, NodeScope, NodeStep, NodeWork};
 use super::super::{ErasedValue, NodeCont};
 use super::super::runtime::KoanRuntime;
-use super::Scheduler;
+use super::{Scheduler, Workload};
 
 impl<'run> KoanRuntime<'run> {
     /// On `Done` with a frame, the return `Value` references the per-call arena that's
@@ -194,7 +194,7 @@ impl<'run> KoanRuntime<'run> {
     }
 }
 
-impl<P, V: Copy> Scheduler<P, V> {
+impl<W: Workload> Scheduler<W> {
     /// Invariant: every consumer drained here is parked with a non-zero counter;
     /// freed slots are scrubbed from every producer's `notify_list` before the
     /// producer drains.
@@ -204,8 +204,8 @@ impl<P, V: Copy> Scheduler<P, V> {
     pub(in crate::machine::execute::scheduler) fn finalize(
         &mut self,
         idx: usize,
-        output: Result<V, KError>,
-        frame: Option<Rc<crate::machine::core::CallArena>>,
+        output: Result<W::Value, W::Error>,
+        frame: Option<Rc<W::Frame>>,
     ) {
         let id = NodeId(idx);
         self.store.finalize(id, output, frame);

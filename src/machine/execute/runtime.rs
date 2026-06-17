@@ -30,13 +30,25 @@ use super::dispatch::{current_scope, DepRequest};
 use super::lift::NodeLift;
 use super::nodes::{NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, pin_carried_to_run, Continuation, Outcome};
-use super::scheduler::Scheduler;
+use super::scheduler::{Scheduler, Workload};
 use super::{catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedValue};
 
 mod interpret;
 mod submit;
 
 pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path};
+
+/// The Koan instantiation of the scheduler's [`Workload`] interface — the marker that binds the four
+/// opaque scheduler types to their concrete Koan forms. The scheduler is generic over `W: Workload`
+/// and names none of these directly; the workload side (this module, `dispatch/**`) supplies them.
+pub(in crate::machine::execute) struct KoanWorkload;
+
+impl Workload for KoanWorkload {
+    type Payload = NodePayload;
+    type Value = ErasedValue;
+    type Error = KError;
+    type Frame = CallArena;
+}
 
 /// The write harness: the sole holder of `&mut Scheduler` across the execute tree. It owns the
 /// [`Scheduler`] by composition (a `sched` field, not a `&mut` borrow) and carries every AST-aware
@@ -48,9 +60,9 @@ pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path
 ///
 /// See design/execution-model.md § the dispatcher / scheduler boundary.
 pub struct KoanRuntime<'run> {
-    pub(in crate::machine::execute) sched: Scheduler<NodePayload, ErasedValue>,
+    pub(in crate::machine::execute) sched: Scheduler<KoanWorkload>,
     /// The run lifetime the harness processes its AST/scope against. The scheduler is value-erased
-    /// (`Scheduler<NodePayload, ErasedValue>`), so `'run` lives only in the harness's own method signatures; this
+    /// (`Scheduler<KoanWorkload>`), so `'run` lives only in the harness's own method signatures; this
     /// marker keeps it on the type.
     _run: PhantomData<&'run ()>,
 }
@@ -100,14 +112,14 @@ impl<'run> KoanRuntime<'run> {
 /// Scheduler` escapes — the accessor hands out `&Scheduler`, keeping the harness the sole writer.
 #[cfg(test)]
 impl<'run> KoanRuntime<'run> {
-    pub(in crate::machine::execute) fn scheduler(&self) -> &Scheduler<NodePayload, ErasedValue> {
+    pub(in crate::machine::execute) fn scheduler(&self) -> &Scheduler<KoanWorkload> {
         &self.sched
     }
 
     /// Mutable scheduler access for the white-box scheduler tests that poke `store` / `deps` /
     /// `queues` directly. Test-only — production drives every write through the harness's own
     /// `&mut self` methods, so this is the one sanctioned `&mut Scheduler` outside them.
-    pub(in crate::machine::execute) fn scheduler_mut(&mut self) -> &mut Scheduler<NodePayload, ErasedValue> {
+    pub(in crate::machine::execute) fn scheduler_mut(&mut self) -> &mut Scheduler<KoanWorkload> {
         &mut self.sched
     }
 

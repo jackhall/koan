@@ -2,9 +2,9 @@ use crate::machine::NodeId;
 
 use super::super::nodes::{work_park_producers, CallFrame, Node, NodeWork};
 use super::dep_graph::work_owned_edges;
-use super::Scheduler;
+use super::{Scheduler, Workload};
 
-impl<P, V: Copy> Scheduler<P, V> {
+impl<W: Workload> Scheduler<W> {
     /// Whether a slot step is currently installed (a non-`None` ambient payload). The workload reads
     /// this to decide whether to default a submission's chain to the ambient one or synthesize a
     /// detached chain (test fixtures / top level).
@@ -21,7 +21,7 @@ impl<P, V: Copy> Scheduler<P, V> {
     pub(in crate::machine::execute) fn submit_node(
         &mut self,
         work: NodeWork,
-        payload: P,
+        payload: W::Payload,
     ) -> NodeId {
         // A binder-shaped Dispatch arrives with its `pre_subs` already populated and its
         // placeholder already installed by `dispatch::submit_dispatch`; this allocator never

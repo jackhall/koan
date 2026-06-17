@@ -7,9 +7,9 @@ use super::super::nodes::NodeStep;
 use super::super::outcome::deps_at_step;
 use super::super::runtime::KoanRuntime;
 use super::super::NodeCont;
-use super::Scheduler;
+use super::{Scheduler, Workload};
 
-impl<P, V: Copy> Scheduler<P, V> {
+impl<W: Workload> Scheduler<W> {
     /// Success-path eager free; the error path leaves deps for chain-free
     /// at slot drop. Inv-B is what makes `dep_edges[idx].clear()` sound
     /// here — see [design/execution-model.md § Dependency graph invariants](../../../../design/execution-model.md#dependency-graph-invariants).

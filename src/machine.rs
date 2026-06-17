@@ -17,5 +17,5 @@ pub use core::{
 };
 pub use execute::{
     interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime, NameOutcome,
-    ResolveOutcome, ResolveTypeExprOutcome, Resolved, Scheduler,
+    ResolveOutcome, ResolveTypeExprOutcome, Resolved,
 };

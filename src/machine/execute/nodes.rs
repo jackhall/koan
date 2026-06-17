@@ -6,6 +6,7 @@ use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId};
 
 use super::outcome::dep_error_frame;
+use super::scheduler::Workload;
 use super::{short_circuit, DepFinish, ErasedCont, NodeCont};
 
 /// Outcome of a node's run. `Replace` is the tail-call path: rewrite the slot's work and
@@ -127,7 +128,7 @@ pub(super) enum NodeScope {
 /// falling back to the run frame at top level (see `Scheduler::submit_node`), and an invoke
 /// reuses the *reserve* rather than the active cart, so the slot's cart is never taken out from
 /// under it. `reserve` and `contract` are sparse.
-pub(super) struct CallFrame {
+pub(super) struct CallFrame<W: Workload> {
     /// The cart this slot's step runs against. Cloned onto every sub-slot dispatched in the same
     /// body, so it is uniquely owned only at a TCO collapse point (the gate
     /// `CallArena::try_reset_for_tail` checks). The Rc drops on Done or Replace; its arena drops
@@ -135,11 +136,11 @@ pub(super) struct CallFrame {
     /// (`KFunction::captured`) makes each per-call child's `outer` the FN's captured scope, so no
     /// frame holds references a successor frame at the same slot needs — TCO drop is immediate
     /// with no `prev` chain.
-    pub(super) cart: Rc<CallArena>,
+    pub(super) cart: Rc<W::Frame>,
     /// Per-slot reserve cart for the ping-pong rotation that lets stateful eager-subs resumes
     /// reuse a `CallArena` across iterations. See
     /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
-    pub(super) reserve: Option<Rc<CallArena>>,
+    pub(super) reserve: Option<Rc<W::Frame>>,
     /// Return contract enforced on Done — an FN/builtin call (`Function`), a deferred FN's resolved
     /// per-call type (`PerCall`), or a MATCH/TRY arm's `-> :T` (`Arm`) — erased for lifetime-free
     /// storage and re-anchored against `cart` at the Done boundary, where it enforces the declared
@@ -159,7 +160,7 @@ pub(super) struct CallFrame {
 /// slot's [`NodeScope`] handle and its lexical [`chain`](Self::chain). Lifetime-free (the scope is
 /// an erased `NodeScope`, the chain an `Rc`), so the node it sits on pins no `'run` through it. This
 /// is the concrete Koan stand-in for the generic workload payload the scheduler is parametric
-/// over (`Scheduler<NodePayload, ErasedValue>`). Cheap-`Clone`: `NodeScope` is `Copy`, the chain
+/// over (`KoanWorkload::Payload`). Cheap-`Clone`: `NodeScope` is `Copy`, the chain
 /// is an `Rc`.
 #[derive(Clone)]
 pub(super) struct NodePayload {
@@ -170,14 +171,14 @@ pub(super) struct NodePayload {
     pub(super) chain: Rc<LexicalFrame>,
 }
 
-pub(super) struct Node<P> {
+pub(super) struct Node<W: Workload> {
     pub(super) work: NodeWork,
     /// The slot's opaque workload payload, stored and handed back but never inspected by the
     /// scheduler. The Koan instantiation is [`NodePayload`] (scope handle + lexical chain).
-    pub(super) payload: P,
+    pub(super) payload: W::Payload,
     /// The slot's per-call frame state (cart + reserve + erased contract) — never absent, see
     /// [`CallFrame`].
-    pub(super) frame: CallFrame,
+    pub(super) frame: CallFrame<W>,
 }
 
 /// Owned `NodeId`s a node must read before running: the `deps[park_count..]` suffix. The

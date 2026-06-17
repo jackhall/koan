@@ -21,7 +21,6 @@ pub(in crate::machine::execute) use outcome::{
     NodeCont,
 };
 pub use runtime::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};
-pub use scheduler::Scheduler;
 
 pub(crate) use dispatch::{defer_field_list_action, resolve_type_leaf_carrier, TypeLeafCarrier};
 pub use dispatch::{NameOutcome, ResolveOutcome, ResolveTypeExprOutcome, Resolved};

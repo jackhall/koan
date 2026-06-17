@@ -24,9 +24,9 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 
-use super::super::nodes::{NodePayload, NodeScope};
+use super::super::nodes::NodeScope;
+use super::super::runtime::KoanWorkload;
 use super::super::scheduler::Scheduler;
-use super::super::ErasedValue;
 use super::{park_on_deps, resolve_name_part, DepRequest, Outcome, PendingSub};
 
 /// Re-anchor a raw [`NodeScope`] handle into a usable `&Scope` — the Koan scope interpretation the
@@ -58,7 +58,7 @@ pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
 /// present — an `Anchored` slot carries its own pointer, and a `Yoked` slot's active cart is never
 /// emptied mid-step (an invoke reuses the reserve, not the active cart).
 pub(in crate::machine::execute) fn current_scope<'run>(
-    sched: &Scheduler<NodePayload, ErasedValue>,
+    sched: &Scheduler<KoanWorkload>,
 ) -> &Scope<'run> {
     let payload = sched
         .active_payload()
@@ -73,15 +73,15 @@ pub(in crate::machine::execute) fn current_scope<'run>(
 /// call, the handler returns an owned outcome, and the immutable borrow ends before the harness
 /// takes `&mut` — so decide and apply never overlap.
 pub(in crate::machine::execute) struct SchedulerView<'run, 's> {
-    sched: &'s Scheduler<NodePayload, ErasedValue>,
+    sched: &'s Scheduler<KoanWorkload>,
     /// `SchedulerView` re-anchors the value-erased scheduler's reads to `'run` (the AST/scope
-    /// lifetime the decide runs against); the scheduler itself is `Scheduler<NodePayload, ErasedValue>`, so
+    /// lifetime the decide runs against); the scheduler itself is `Scheduler<KoanWorkload>`, so
     /// `'run` lives only on this view, kept here by the marker.
     _run: PhantomData<&'run ()>,
 }
 
 impl<'run, 's> SchedulerView<'run, 's> {
-    pub(in crate::machine::execute) fn new(sched: &'s Scheduler<NodePayload, ErasedValue>) -> Self {
+    pub(in crate::machine::execute) fn new(sched: &'s Scheduler<KoanWorkload>) -> Self {
         Self {
             sched,
             _run: PhantomData,

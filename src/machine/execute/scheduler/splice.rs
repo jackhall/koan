@@ -19,9 +19,9 @@
 
 use crate::machine::NodeId;
 
-use super::Scheduler;
+use super::{Scheduler, Workload};
 
-impl<P, V: Copy> Scheduler<P, V> {
+impl<W: Workload> Scheduler<W> {
     /// Follow a chain of bare-name-forward aliases to the slot that actually holds the result.
     /// Aliases always point downstream to a real producer, so the walk terminates.
     pub(in crate::machine::execute) fn resolve_alias(&self, mut id: NodeId) -> NodeId {
