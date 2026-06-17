@@ -32,7 +32,7 @@ use super::nodes::{NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, pin_carried_to_run, Continuation, Outcome};
 use super::{catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedCont};
 use crate::machine::model::values::CarriedFamily;
-use crate::scheduler::{Scheduler, Workload};
+use crate::scheduler::{reattach_value, Scheduler, Workload};
 
 mod interpret;
 mod submit;
@@ -110,19 +110,26 @@ impl<'run> KoanRuntime<'run> {
     /// its producer frame, a frameless / run-arena terminal is forwarded as-is. The `unsafe` reattach
     /// is internal — the slot's co-stored frame `Rc` / run arena pins the value for the transient
     /// read, and the lift copies it into `dest` — so the run loop's dep collection stays safe.
-    pub(in crate::machine::execute) fn read_lifted(
+    pub(in crate::machine::execute) fn read_lifted<'o>(
         &self,
         dep: NodeId,
-        dest: &'run crate::machine::core::RuntimeArena,
-    ) -> Result<crate::machine::model::Carried<'run>, KError> {
+        dest: &'o crate::machine::core::RuntimeArena,
+    ) -> Result<crate::machine::model::Carried<'o>, KError> {
         match self.sched.read_result_with_frame(dep) {
-            // The scheduler hands back the value re-anchored to this `&self` borrow; `lift` needs
-            // `'run` (it forwards `'run` refs and self-anchors via the producer frame `Rc`), so the
-            // `'node -> 'run` re-anchor stays here for now — node-lifetime-lift-and-contract.md
-            // rethreads `lift` to a node output lifetime and retires it.
-            Ok((value, Some(frame))) => Ok(self.lift(pin_carried_to_run(value), &frame, dest)),
-            // A frameless / run-arena terminal already survives; same deferred `'run` re-anchor.
-            Ok((value, None)) => Ok(pin_carried_to_run(value)),
+            // Re-anchor the scheduler's `'node` read to the destination *node* lifetime `'o` (the
+            // consumer scope's arena, bounded by the held consumer-frame `Rc`), then lift it into
+            // `dest`. The held producer frame `Rc` witnesses the framed re-anchor (the lift
+            // self-anchors the copy via the embedded `Rc`); a frameless terminal lives in a run arena
+            // that outlives `'o`. Node-scale — no `'run` fabrication.
+            // SAFETY: `'node` and `'o` are both pinned for the read+lift by the held producer frame
+            // `Rc` (Some) / the run arena (None); the carrier is invariant, so the lifetime-only
+            // re-anchor routes `reattach_value`.
+            Ok((value, Some(frame))) => Ok(self.lift(
+                unsafe { reattach_value::<CarriedFamily>(value) },
+                &frame,
+                dest,
+            )),
+            Ok((value, None)) => Ok(unsafe { reattach_value::<CarriedFamily>(value) }),
             Err(e) => Err(e.clone()),
         }
     }

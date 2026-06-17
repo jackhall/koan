@@ -12,6 +12,7 @@ src/machine/execute/finalize.rs: 1
 src/machine/execute/nodes.rs: 1
 src/machine/execute/outcome.rs: 8
 src/machine/execute/run_loop.rs: 1
+src/machine/execute/runtime.rs: 2
 src/machine/execute/runtime/submit.rs: 1
 src/machine/model/values/carried.rs: 2
 src/machine/model/values/kobject.rs: 1
@@ -328,6 +329,15 @@ backing arena. The generic `retype` primitive (`erase.rs` group above) does the 
 its stored-carrier consumers. Exercised end-to-end by every scheduler-driving program — every dep
 delivery and top-level read routes a re-anchor — and pinned by
 `tail_call_stamps_result_against_first_callers_return_contract`. No separate minimal test.
+
+**`Carried` re-attach — consumer-pull dep lift** ([src/machine/execute/runtime.rs](../src/machine/execute/runtime.rs))
+— `KoanRuntime::read_lifted` re-anchors a producer's scheduler read (`'node`) to the destination
+*node* lifetime `'o` — the consumer scope's arena, bounded by the active frame `Rc` cloned in
+`run_wait` — then the `NodeLift` copy relocates it into that arena. Node-to-node, not a `'run`
+fabrication: the held producer-frame `Rc` (framed) / the run arena (frameless) pins the read for the
+copy, and the lift self-anchors the result via the embedded `Rc`. Same `retype` primitive as the
+`erase.rs` group. Exercised end-to-end by the lift/park slate tests
+(`lift_park_minimal_program_for_miri`, `recursive_tagged_match_no_uaf`, …). No separate minimal test.
 
 **`Carried` re-attach — test-only terminal extraction** ([src/builtins/test_support.rs](../src/builtins/test_support.rs))
 — `extract_terminal` widens the scheduler's `'node` read to the scope lifetime for test helpers

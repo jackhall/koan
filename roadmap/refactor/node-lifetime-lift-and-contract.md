@@ -23,12 +23,13 @@ run global; the `'run` annotation is the only thing that makes them look like th
 
 **Acceptance criteria.**
 
-- `NodeLift::lift` and `NodeFinalize::finalize_terminal` carry distinct input/output lifetimes
-  (`lift(value: Carried<'i>, src, dst: &'o RuntimeArena) -> Carried<'o>` and the contract dual), not
-  one collapsed `'run`.
-- The producer→consumer (lift) and producer→home-arena (contract) re-anchor is node-scale (`'i ->
-  'o`), witnessed by the held producer-frame `Rc` plus the embedded anchor — not a `'node -> 'run`
-  fabrication.
+- `NodeLift::lift` and `NodeFinalize::finalize_terminal` are typed at the destination node lifetime
+  `'o` (the consumer frame arena for lift, the contract home arena for finalize), not `'run`. Under
+  the scheduler-owned re-anchor the hook is single-lifetime (`'o -> 'o`): the scheduler hands it a
+  value already re-anchored to `'o`, so the `KObject`-invariant copy never re-types a reference.
+- The producer-read re-anchor to `'o` lives in the scheduler's dep-delivery (lift) and Done
+  (contract) path, witnessed by the held producer-frame `Rc` (plus the embedded anchor the copy
+  installs) — a node-scale `'node -> 'o`, not a `'node -> 'run` fabrication.
 - `read_lifted` performs no `'run` reattach: the scheduler hands the lift hook a destination-lifetime
   value.
 - `pin_carried_to_run` no longer reattaches `'s -> 'run` for the contract layer; `apply_outcome`
@@ -38,12 +39,14 @@ run global; the `'run` annotation is the only thing that makes them look like th
 
 **Directions.**
 
-- *Thread `<'i, 'o>` through both hooks — decided.* Input value lifetime and output/destination
-  arena lifetime are distinct; the re-anchor between them is the node-scale movement.
-- *Where the re-anchor lives — open.* The scheduler holds both frames and drives both hooks, so it
-  can own the `'i -> 'o` re-anchor (handing the hook a destination-lifetime value), or the hook can
-  keep it behind the `NodeLift` / `NodeFinalize` boundary. Recommended: scheduler-owned, mirroring
-  the `'node` read surface — it concentrates the value-movement re-anchor in one place.
+- *Type both hooks at the destination node lifetime `'o` — decided.* Not `'run`. The scheduler-owned
+  re-anchor (below) hands the hook a value already at `'o`, so the hook is single-lifetime (`'o ->
+  'o`) — no `<'i, 'o>` split inside the `KObject` copy. `'o` is the consumer frame arena (lift) or the
+  contract home arena (finalize), sourced from the held frame `Rc` at a node borrow.
+- *Where the re-anchor lives — decided: scheduler-owned.* The scheduler holds both frames and drives
+  both hooks, so it owns the `'i -> 'o` re-anchor and hands the hook a destination-lifetime value;
+  the hook does only the `KObject`-invariant copy. Mirrors the `'node` read surface — the
+  value-movement re-anchor concentrates in one place.
 - *The `KObject`-invariant copy and embedded `Rc` anchor stay a Koan hook detail — decided.* The
   arena→arena `KObject` copy and the escaping-closure anchor decision remain in `lift.rs`; the
   scheduler names no `KObject`, so only the lifetime re-anchor (not the copy) can move scheduler-side.

@@ -11,9 +11,9 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::{assemble_body_chain, ScopeId};
 use crate::machine::model::Carried;
-use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId};
+use crate::machine::{KError, KErrorKind, LexicalFrame, NodeId, RuntimeArena};
 
-use super::dispatch::{current_scope, reattach_node_scope, SchedulerView};
+use super::dispatch::{reattach_node_scope, SchedulerView};
 use super::finalize::NodeFinalize;
 use super::nodes::{CallFrame, Node, NodePayload, NodeScope, NodeStep, NodeWork};
 use super::outcome::deps_at_step;
@@ -214,11 +214,23 @@ impl<'run> KoanRuntime<'run> {
         idx: usize,
     ) -> NodeStep<'run> {
         // Consumer-pull: lift each dep's terminal out of its producer frame into this consumer's
-        // arena, so the value dies with the consumer and the producer keeps no surviving copy that
-        // would outlive its own dying frame. A frameless / run-arena terminal already survives and
-        // is forwarded as-is.
-        let dest = current_scope(&self.ambient).arena;
-        let results: Vec<Result<Carried<'run>, KError>> =
+        // own scope arena, so the value dies with the consumer and the producer keeps no surviving
+        // copy that would outlive its own dying frame. A frameless / run-arena terminal already
+        // survives and is forwarded as-is.
+        //
+        // `dest` is the consumer *scope's* arena (the right arena even for a transparent USING
+        // window, whose scope arena differs from the active frame's), re-anchored at a *node*
+        // lifetime bounded by the active frame `Rc` cloned into `consumer_frame` — not the run
+        // global. `read_lifted` re-anchors each producer read to it.
+        let consumer_frame = self.ambient.active_frame_ref().cloned();
+        let dest: &RuntimeArena = {
+            let payload = self
+                .ambient
+                .active_payload()
+                .expect("a slot step installs the ambient payload");
+            reattach_node_scope(&payload.scope, consumer_frame.as_ref()).arena
+        };
+        let results: Vec<Result<Carried<'_>, KError>> =
             deps.iter().map(|d| self.read_lifted(*d, dest)).collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
         // The pull-lifted values die with this consumer's frame; deliver them at that `'s`.
