@@ -1,11 +1,11 @@
 //! Generic run-lifetime storage substrate. Owns the erase-store machinery (the irreducible
 //! `unsafe`), the cycle-redirect `escape` pointer, and an address membership side-table — and
-//! names no workload type. A [`Workload`] injects its storage families via [`Stored`]; the single
+//! names no workload type. A [`StorageProfile`] injects its storage families via [`Stored`]; the single
 //! [`StorageFrame::alloc`] engine runs the cycle gate uniformly. The gate is unbypassable because
 //! [`StorageFrame::storage`] is private and `alloc` is the only path that reaches it — no `&Arena`
 //! ever escapes, so no `Stored` impl can route a value around the redirect.
 //!
-//! The Koan instantiation (`RuntimeArena = StorageFrame<KoanWorkload>`, the family `Stored` impls,
+//! The Koan instantiation (`RuntimeArena = StorageFrame<KoanStorageProfile>`, the family `Stored` impls,
 //! the cycle-gate walkers) lives in [`super::arena`]. See
 //! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
 //! for the transmute soundness argument and
@@ -20,7 +20,7 @@ use typed_arena::Arena;
 
 /// A workload's declaration of what a [`StorageFrame`] stores for it. `Storage` is the bundle of
 /// typed sub-arenas the frame owns; the workload's [`Stored`] impls project each family out of it.
-pub trait Workload {
+pub trait StorageProfile {
     type Storage: Default;
 }
 
@@ -33,7 +33,7 @@ pub trait Workload {
 /// Not sealed: this is the workload's extension point. Unbypassability comes from elsewhere — the
 /// engine is the only path to the private [`StorageFrame::storage`], so an impl can supply policy
 /// but cannot route a value around the cycle gate.
-pub trait Stored<W: Workload>: Sized + 'static {
+pub trait Stored<W: StorageProfile>: Sized + 'static {
     /// The lifetime family of the stored type. `At<'static>` is `Self`. Because the engine keys on
     /// the `'static` form, the live and stored forms are both projections of this one GAT and
     /// cannot name different constructors — a wrong binding fails to compile in the safe wrapper.
@@ -56,7 +56,7 @@ pub trait Stored<W: Workload>: Sized + 'static {
 /// generic `mem::transmute::<K::At<'a>, K::At<'static>>` will not compile — the compiler cannot
 /// prove the two GAT projections share a size — so the move-through-union form stands in, with a
 /// `const` assert restoring the size check `transmute` would emit.
-fn erase_store<'a, W: Workload, K: Stored<W>>(value: K::At<'a>) -> K::At<'static> {
+fn erase_store<'a, W: StorageProfile, K: Stored<W>>(value: K::At<'a>) -> K::At<'static> {
     const { assert!(size_of::<K::At<'a>>() == size_of::<K::At<'static>>()) };
     union Erase<A, B> {
         live: ManuallyDrop<A>,
@@ -74,7 +74,7 @@ fn erase_store<'a, W: Workload, K: Stored<W>>(value: K::At<'a>) -> K::At<'static
 /// Run-lifetime allocation frame. Lives for one program run (or one per-call frame). Sub-arenas
 /// store `K::At<'static>` (phantom); each [`alloc`](Self::alloc) re-anchors to the caller's `'a`
 /// on the way out.
-pub struct StorageFrame<W: Workload> {
+pub struct StorageFrame<W: StorageProfile> {
     /// The workload's typed sub-arena bundle. PRIVATE and never exposed by reference: the only
     /// path in is [`alloc`](Self::alloc), which runs the cycle gate, so the gate is unbypassable
     /// by construction.
@@ -90,7 +90,7 @@ pub struct StorageFrame<W: Workload> {
     escape: Option<NonNull<StorageFrame<W>>>,
 }
 
-impl<W: Workload> StorageFrame<W> {
+impl<W: StorageProfile> StorageFrame<W> {
     pub fn new() -> Self {
         Self {
             storage: W::Storage::default(),
@@ -161,7 +161,7 @@ impl<W: Workload> StorageFrame<W> {
     }
 }
 
-impl<W: Workload> Default for StorageFrame<W> {
+impl<W: StorageProfile> Default for StorageFrame<W> {
     fn default() -> Self {
         Self::new()
     }

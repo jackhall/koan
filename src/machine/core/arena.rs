@@ -1,5 +1,5 @@
 //! The Koan instantiation of the generic [`StorageFrame`](super::storage_frame::StorageFrame)
-//! storage substrate: `RuntimeArena = StorageFrame<KoanWorkload>`, the per-family
+//! storage substrate: `RuntimeArena = StorageFrame<KoanStorageProfile>`, the per-family
 //! [`Stored`](super::storage_frame::Stored) impls (which sub-arena a family lands in, its cycle-gate
 //! `anchors_to` answer), the cycle-gate walkers, and the Koan-typed `alloc_*` wrappers. `CallArena`
 //! — the per-call frame that wraps a `RuntimeArena`, holds the child `Scope`, chains `outer_frame`,
@@ -20,7 +20,7 @@ use typed_arena::Arena;
 
 use super::scope::Scope;
 use super::scope_ptr::ScopePtr;
-use super::storage_frame::{StorageFrame, Stored, Workload};
+use super::storage_frame::{StorageFrame, Stored, StorageProfile};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::KType;
@@ -42,16 +42,16 @@ pub struct KoanStorage {
 }
 
 /// The Koan workload: binds the generic [`StorageFrame`] to the Koan family set.
-pub struct KoanWorkload;
+pub struct KoanStorageProfile;
 
-impl Workload for KoanWorkload {
+impl StorageProfile for KoanStorageProfile {
     type Storage = KoanStorage;
 }
 
 /// Run-lifetime allocator. A [`StorageFrame`] carrying the Koan family set; lives for one program
 /// run. The `RuntimeArena` references across the tree and the `Rc<CallArena>` back-edge ride this
 /// alias unchanged.
-pub type RuntimeArena = StorageFrame<KoanWorkload>;
+pub type RuntimeArena = StorageFrame<KoanStorageProfile>;
 
 /// True iff any descendant of `obj` carries an `Rc<CallArena>` whose backing `RuntimeArena`
 /// is `arena_ptr`. Walks the composite shapes mirrored from `KObject::deep_clone`
@@ -96,7 +96,7 @@ fn ktype_anchors_to(t: &KType<'_>, arena_ptr: *const RuntimeArena) -> bool {
 // so the cycle redirect is uniform across the whole allocation surface. `OperatorGroup` is
 // lifetime-free and anchor-free, but routes the same engine for one uniform path.
 
-impl Stored<KoanWorkload> for KObject<'static> {
+impl Stored<KoanStorageProfile> for KObject<'static> {
     type At<'a> = KObject<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<KObject<'static>> {
         &s.objects
@@ -109,7 +109,7 @@ impl Stored<KoanWorkload> for KObject<'static> {
     }
 }
 
-impl Stored<KoanWorkload> for KType<'static> {
+impl Stored<KoanStorageProfile> for KType<'static> {
     type At<'a> = KType<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<KType<'static>> {
         &s.ktypes
@@ -119,7 +119,7 @@ impl Stored<KoanWorkload> for KType<'static> {
     }
 }
 
-impl Stored<KoanWorkload> for KFunction<'static> {
+impl Stored<KoanStorageProfile> for KFunction<'static> {
     type At<'a> = KFunction<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<KFunction<'static>> {
         &s.functions
@@ -129,7 +129,7 @@ impl Stored<KoanWorkload> for KFunction<'static> {
     }
 }
 
-impl Stored<KoanWorkload> for Scope<'static> {
+impl Stored<KoanStorageProfile> for Scope<'static> {
     type At<'a> = Scope<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<Scope<'static>> {
         &s.scopes
@@ -139,7 +139,7 @@ impl Stored<KoanWorkload> for Scope<'static> {
     }
 }
 
-impl Stored<KoanWorkload> for Module<'static> {
+impl Stored<KoanStorageProfile> for Module<'static> {
     type At<'a> = Module<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<Module<'static>> {
         &s.modules
@@ -149,7 +149,7 @@ impl Stored<KoanWorkload> for Module<'static> {
     }
 }
 
-impl Stored<KoanWorkload> for Signature<'static> {
+impl Stored<KoanStorageProfile> for Signature<'static> {
     type At<'a> = Signature<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<Signature<'static>> {
         &s.signatures
@@ -159,7 +159,7 @@ impl Stored<KoanWorkload> for Signature<'static> {
     }
 }
 
-impl Stored<KoanWorkload> for OperatorGroup {
+impl Stored<KoanStorageProfile> for OperatorGroup {
     type At<'a> = OperatorGroup;
     fn sub_arena(s: &KoanStorage) -> &Arena<OperatorGroup> {
         &s.operator_groups
@@ -172,7 +172,7 @@ impl Stored<KoanWorkload> for OperatorGroup {
 /// Koan-typed allocation surface on the run-lifetime arena. Each wrapper routes the single
 /// [`StorageFrame::alloc`] engine, which runs the cycle gate; these named wrappers are the public
 /// entry points.
-impl StorageFrame<KoanWorkload> {
+impl StorageFrame<KoanStorageProfile> {
     /// Store a [`KObject`] into the run-lifetime arena, routing through the cycle gate (a
     /// self-anchoring value redirects to the escape arena).
     pub fn alloc_object<'a>(&'a self, o: KObject<'a>) -> &'a KObject<'a> {
@@ -238,7 +238,7 @@ impl StorageFrame<KoanWorkload> {
 }
 
 #[cfg(test)]
-impl StorageFrame<KoanWorkload> {
+impl StorageFrame<KoanStorageProfile> {
     /// Total number of values stored across all seven sub-arenas (test-only). Each `alloc_*`
     /// writes to exactly one sub-arena, so this is the precise allocation count without
     /// double-counting.
