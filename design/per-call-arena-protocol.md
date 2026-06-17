@@ -363,25 +363,34 @@ two-iteration warmup.
 A scheduler slot stores its scope as a lifetime-free
 [`NodeScope`](../src/machine/execute/nodes.rs), not a raw `&'a Scope<'a>`, so the node it sits on
 pins no `'run` through its scope. The handle rides a grouped `NodePayload` (the scope handle plus the
-node's lexical chain) alongside the slot's frame. The enum has two arms: `Anchored(ScopePtr<'static>)`
-holds an erased pointer to a genuine run-lived scope (a run-root scope, or a sub-scope the active
-frame does not directly back), re-attached at read; `Yoked` carries no payload at all. A
-per-call frame scope rides `Yoked` — single-cart, because the slot's own `Frame::cart`
-`Rc<CallArena>` is the sole liveness witness, so there is no second `Rc` clone and no
-contention with `try_reset_for_tail`'s `strong_count == 1` TCO reuse check.
+node's lexical chain) alongside the slot's frame. Both arms are **cart-witnessed** — re-projected
+from the slot's live frame at read, never re-anchored at a free `'run`:
 
-The funnel `submit::add_with_chain` decides the arm: a pointer test
-(`std::ptr::eq(active_frame.scope(), scope)`) routes a frame's-own-child slot to `Yoked`,
-everything else to `Anchored`, erasing the run-lived borrow through `ScopePtr::erase_static`. The
-tail sink `NodeStore::reinstall_with_frame` always stores `Yoked` — a tail-replace slot's scope is
-always its own frame's child. Storing an erased handle rather than a live `&'run` keeps the borrow
+- `Yoked` carries no payload at all: the slot's scope *is* its own per-call cart's scope, re-read
+  from the frame at the read boundary. Single-cart, because the slot's own `Frame::cart`
+  `Rc<CallArena>` is the sole liveness witness, so there is no second `Rc` clone and no contention
+  with `try_reset_for_tail`'s `strong_count == 1` TCO reuse check.
+- `YokedChild(ScopePtr<'static>)` holds an erased pointer to a block scope a builtin allocated in a
+  cart *ancestor* arena (an `InScope` body — USING / MODULE / SIG / TRY), re-attached at read with a
+  borrow bounded by the slot's frame `Rc`, sound because the cart's `outer_frame` chain pins that
+  ancestor arena for as long as the slot holds the cart. It differs from `Yoked` only in that the
+  child scope differs from the cart's own scope, so it needs a stored pointer.
+
+The funnel [`resolve_node_scope`](../src/machine/execute/runtime/submit.rs) decides the arm in
+order: a pointer test (`std::ptr::eq(active_frame.scope(), scope)`) routes a frame's-own-child slot
+to `Yoked`; a walk of the active cart's scope `outer` chain that reaches `scope`'s arena routes a
+cart-ancestor block scope to `YokedChild`, erasing the borrow through `ScopePtr::erase_static`; the
+frameless top-level run root routes to `Yoked` via the `run_frame` cart that adopts it (the slot's
+cart is that `run_frame`). The two residual fall-throughs are `unreachable!` — an instrumented
+whole-suite spike confirmed every framed submission resolves to `Yoked` / `YokedChild` and every
+frameless one to the run root. Storing an erased handle rather than a live `&'run` keeps the borrow
 honest across a TCO `try_reset_for_tail`: nothing persisted points into the reset arena.
 
 The read boundary hands a slot's scope back on demand, not as a stored free `&'run`:
-[`Scheduler::current_scope`](../src/machine/execute/run_loop.rs) materializes it per use — an
-`Anchored` slot re-attaches its erased `ScopePtr<'static>` through the `unsafe` `reattach_bounded`
-(borrow bounded by the reader, content lifetime free, sound because the pointee is run-lived); a
-`Yoked` slot re-reads from the live
+[`reattach_node_scope`](../src/machine/execute/dispatch/ctx.rs) materializes it per use — a
+`YokedChild` slot re-attaches its erased `ScopePtr<'static>` through the `unsafe` `reattach_bounded`
+(borrow bounded by the frame `Rc`, content lifetime free, sound because the cart pins the ancestor
+arena); a `Yoked` slot re-reads from the live
 `active_frame` cart via [`CallArena::scope_bounded`](../src/machine/core/arena.rs), a
 **witness-bounded** brand whose borrow is capped at the `&Rc<CallArena>` receiver (content `'a`
 free, `'a: 'p`). Because the borrow cannot outlive the frame `Rc` it reads from, storing it past

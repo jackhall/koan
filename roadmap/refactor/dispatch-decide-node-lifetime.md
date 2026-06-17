@@ -33,40 +33,58 @@ never the active cart ([`acquire_tail_frame`](../../src/machine/execute/runtime.
 outlives its own step. So the cart `Rc` the step already holds live is the true witness for
 every cont capture, and `'run` is a strictly wider over-approximation of `'node`.
 
+The decide surface also stores each slot's scope as
+[`NodeScope::Anchored(ScopePtr<'static>)`](../../src/machine/execute/nodes.rs), reattached at the
+read boundary ([`reattach_node_scope`](../../src/machine/execute/dispatch/ctx.rs)) under a contract
+that the pointee lives for all of `'run` — the one decide-surface scope handle that asserts run
+scale. The scopes it covers are the block scopes the `InScope` builtins allocate (USING, MODULE,
+SIG, TRY) and the top-level run root. But each `InScope` child is allocated in
+[`ctx.scope.arena`](../../src/builtins/using_scope.rs) — the call-site arena, a cart ancestor the
+active cart's `outer_frame` chain pins — and the root is adopted by the `run_frame` cart
+([`CallArena::adopting`](../../src/machine/core/arena.rs)). So those scopes are cart-pinned too;
+`Anchored` over-approximates them to `'run` exactly as the value path did.
+
 **Acceptance criteria.**
 
-- The dispatch decide surface is parameterized by a cart-scale `'node` lifetime in place of
-  `'run`: `Outcome`, `decide`, `ResumeFn`, `DepFinish`, `CatchFinish`, `NodeCont`, and the
-  `working_expr` they thread carry `'node`, bounded by the slot's held cart `Rc`.
+- `NodeScope::Anchored` is removed; every slot scope handle is cart-witnessed — `Yoked`
+  re-projecting the cart's own scope, or a `YokedChild(ScopePtr)` re-projecting a cart-reachable
+  child — reattached bounded by the held frame `Rc`, never at a free `'run`. `NodeScope` names no
+  run-lived pointer.
+- The dispatch decide surface is parameterized by a single cart-scale `'node` lifetime in place of
+  the `Outcome<'run, 's>` split: `Outcome`, `decide`, `ResumeFn`, `DepFinish`, `CatchFinish`,
+  `NodeCont`, and the `working_expr` they thread carry `'node`, bounded by the slot's held cart `Rc`.
 - The continuation reattach in `run_step` targets `'node` (the lifetime the held cart `Rc`
-  witnesses), not a fabricated `'run`.
-- `deps_for_builtin` no longer reattaches the pull-lifted dep terminals *up* to `'run` — the
-  values are delivered to the finish at the `'node` scale they already live at.
+  witnesses), not a fabricated `'run`. It remains an `unsafe` erase→reattach — the continuation is
+  stored erased across a park, so no borrow spans its storage — but is witnessed by the held cart.
+- `deps_for_builtin` and `shorten_outcome` are deleted: once `Outcome` and the dep values share the
+  one decide lifetime, the up-reattach (`'s`→`'run`) and down-reattach (`'run`→`'s`) bridges are
+  unnecessary.
 - The only remaining `'run` value-lifetime fabrication on the execution path is
   [`pin_carried_to_run`](../../src/machine/execute/outcome.rs) at the genuine run-root drain
   ([`run_program`](../../src/machine/execute/runtime/interpret.rs)), where a consumer-less
   top-level terminal is re-homed into the run arena.
-- Behavior is unchanged and the Miri audit slate stays green: no `Future` referent outlives
-  the slot's cart, verified by the slate's erase/reattach coverage.
+- Behavior is unchanged and the Miri audit slate stays green: no `Future` referent or scope handle
+  outlives the slot's cart, verified by the slate's erase/reattach coverage.
 
 **Directions.**
 
 - *Scope: the decide side only, not the value-store side — decided.* The terminal-value path
   is already node-scale (`finalize_terminal` is `'o -> 'o`, consumer-pull lifts into the
   consumer arena); this item retypes the AST/continuation path that still rides `'run`.
-- *`'node` bound — open.* `'node` is the lifetime of the slot's cart `Rc`. Whether the
-  reattach becomes a safe borrow of the held cart's arena or stays an `unsafe` reattach to a
-  narrower-but-still-fabricated lifetime depends on whether `'node` can be spelled as a borrow
-  the borrow-checker accepts at the `run_step` call site. Recommended: spike the safe-borrow
-  form first (prefer a compile-enforced borrow over a relabelled unsafe); fall back to the
-  narrowed reattach only if the slot's own-then-rotate cart handling defeats a borrow.
-- *TCO-carry audit — open.* Confirm every re-dispatch that carries already-spliced `Future`
-  parts into a later step keeps the same cart (`FramePlacement::Inherit`) or re-lifts, so no
-  spliced referent is stranded by a cart rotation. This audit gates the retype; if a path
-  strands a referent, that path re-lifts before the retype lands. Recommended: enumerate the
-  `finish_eager_subs` → `Continue` exits ([`dispatch/ctx.rs`](../../src/machine/execute/dispatch/ctx.rs),
-  [`dispatch/keyworded.rs`](../../src/machine/execute/dispatch/keyworded.rs)) and classify each
-  frame placement.
+- *Delete `Anchored` first; it is the prerequisite — decided.* The retype bottoms out at this one
+  genuinely-run-looking handle, so it lands first. A cart-reachable child rides a
+  `YokedChild(ScopePtr)` reattached bounded by the frame `Rc`, classified by walking the active
+  cart's scope `outer` chain for the child's arena; the top-level root rides the `run_frame` cart
+  (which adopts it). Both keep each scope where it already lives — no fresh cart — so transparent
+  `InScope` bind forwarding (`using_scope.rs`: block binds outlive the block) is preserved.
+- *`InScope` body homing — decided: re-project, do not re-cart.* The alternative — give each
+  `InScope` body a fresh `FreshChild` cart so its scope equals the cart scope and yokes trivially —
+  is rejected: a fresh body cart drops the block's forwarded binds at body end, breaking USING /
+  MODULE semantics. The `YokedChild` re-projection keeps the single-cart model.
+- *Continuation reattach: stays `unsafe`, cart-witnessed — decided.* A compile-enforced borrow is
+  not reachable: the continuation is stored erased across a park, so no borrow spans store→restore.
+  The reattach narrows its *target* from `'run` to the cart-witnessed decide lifetime but remains an
+  erase→reattach. (This resolves the earlier prefer-a-borrow question against a borrow.)
 
 ## Dependencies
 

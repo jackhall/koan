@@ -105,23 +105,28 @@ impl ChainOp {
 }
 
 /// Slot-stored scope handle, carrying no lifetime so the node it sits on does not pin `'run`
-/// through its scope. `Anchored` holds an erased [`ScopePtr`] to a genuinely run-lived scope (a
-/// fresh child a binder body allocated in a real arena; NOT the builtins-only
-/// [`ScopeKind::Root`](crate::machine::core::ScopeKind)), re-attached at read with a borrow bounded
-/// by the reader (`reattach_bounded`) and a free content lifetime — sound because the pointee lives
-/// for all of `'run`. A per-call frame scope instead stores `Yoked` — no pointer at all — and is
-/// re-projected from the slot's own [`Node::frame`](crate::scheduler::nodes::Node) cart at read time
-/// (single-cart: the frame `Rc` already on the slot is the sole liveness witness, so there is no
-/// second `Rc` clone and no contention with `try_reset_for_tail`'s uniqueness check). Storing an
-/// erased handle rather than a live `&'run` borrow keeps the borrow honest across a TCO
-/// `try_reset_for_tail` (nothing persisted points into the reset arena; the live frame is re-read
-/// each step) and keeps the slot from naming `'run` in its node-stored scope state.
+/// through its scope. Both arms are **cart-witnessed** — re-projected from the slot's live frame at
+/// read time, never re-anchored at a free `'run`:
+///
+/// - `Yoked` — no pointer at all: the slot's scope *is* its own per-call cart's scope, re-projected
+///   from the [`Node::frame`](crate::scheduler::nodes::Node) cart (`scope_bounded`). Single-cart: the
+///   frame `Rc` already on the slot is the sole liveness witness, so there is no second `Rc` clone
+///   and no contention with `try_reset_for_tail`'s uniqueness check.
+/// - `YokedChild` — an erased [`ScopePtr`] to a block scope a builtin allocated in a cart *ancestor*
+///   arena (an `InScope` body — USING / MODULE / SIG / TRY). Re-attached at read with a borrow
+///   bounded by the slot's frame `Rc` (`reattach_bounded`), sound because the cart's `outer_frame`
+///   chain pins that ancestor arena for as long as the slot holds the cart. Distinct from `Yoked`
+///   only in that the child differs from the cart's own scope, so it needs a stored pointer.
+///
+/// Storing an erased, frame-witnessed handle keeps the borrow honest across a TCO `try_reset_for_tail`
+/// (nothing persisted points into the reset arena; the live frame is re-read each step) and keeps the
+/// slot from naming `'run` in its node-stored scope state.
 ///
 /// `Copy` because both arms are trivially copyable ([`ScopePtr`] is `Copy` / a unit) and submission
 /// threads the handle through `pre_subs` recursion without re-deriving it.
 #[derive(Clone, Copy)]
 pub(super) enum NodeScope {
-    Anchored(ScopePtr<'static>),
+    YokedChild(ScopePtr<'static>),
     Yoked,
 }
 
@@ -143,7 +148,7 @@ pub(super) struct NodePayload {
 
 #[cfg(test)]
 mod tests {
-    //! Miri coverage for the `NodeScope::Anchored` lifetime fabrication: each test pins the
+    //! Miri coverage for the `NodeScope::YokedChild` lifetime fabrication: each test pins the
     //! erase→reattach shape under tree borrows; logical assertions are minimal — these fail when
     //! Miri reports UB, not on values.
 
@@ -153,12 +158,13 @@ mod tests {
     use crate::machine::model::KObject;
     use crate::machine::{BindingIndex, Scope};
 
-    /// A `NodeScope::Anchored` erases a genuinely run-lived scope to a lifetime-free `ScopePtr`
+    /// A `NodeScope::YokedChild` erases a cart-ancestor block scope to a lifetime-free `ScopePtr`
     /// (`erase_static`) and reattaches it (`reattach_bounded`) at read — the fabrication the
-    /// scheduler performs each step for an `Anchored` slot. Mirrors the erase→reattach pair plus a
-    /// subsequent arena mutation through a sibling pointer; fails on UB, not values.
+    /// scheduler performs each step for a `YokedChild` slot, the borrow bounded by the slot's frame.
+    /// Mirrors the erase→reattach pair plus a subsequent arena mutation through a sibling pointer;
+    /// fails on UB, not values.
     #[test]
-    fn node_scope_anchored_erase_reattach_roundtrip() {
+    fn node_scope_yoked_child_erase_reattach_roundtrip() {
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         let v = arena.alloc_object(KObject::Number(7.0));
@@ -166,9 +172,9 @@ mod tests {
             .bind_value("k".to_string(), v, BindingIndex::BUILTIN)
             .unwrap();
 
-        let ns = NodeScope::Anchored(ScopePtr::erase_static(scope));
-        let NodeScope::Anchored(ptr) = &ns else {
-            unreachable!("constructed Anchored")
+        let ns = NodeScope::YokedChild(ScopePtr::erase_static(scope));
+        let NodeScope::YokedChild(ptr) = &ns else {
+            unreachable!("constructed YokedChild")
         };
         // Reattach with a borrow bounded by `&ns`; read a binding back, then mutate the arena
         // through a sibling pointer while the reattached scope is still live.

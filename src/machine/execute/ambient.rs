@@ -237,6 +237,13 @@ impl<'run> KoanRuntime<'run> {
         self.ambient.run_frame.is_some()
     }
 
+    /// Borrow the run frame cart (the non-dying frame adopting the run root scope). A top-level
+    /// submission carries it as the slot's cart, so the root re-projects from it as `Yoked` rather
+    /// than anchoring at `'run` — see [`KoanRuntime::resolve_node_scope`](super::runtime::KoanRuntime).
+    pub(in crate::machine::execute) fn run_frame_ref(&self) -> Option<&Rc<CallArena>> {
+        self.ambient.run_frame.as_ref()
+    }
+
     /// Install the run frame the workload minted by adopting the top-level run scope. Idempotent at
     /// the call site (the workload guards on [`Self::has_run_frame`]).
     pub(in crate::machine::execute) fn set_run_frame(&mut self, frame: Rc<CallArena>) {

@@ -183,30 +183,31 @@ constraint-free constructor, sound because the free content `'a` is reachable on
 scope-walking shapes already in the slate (and `scope_bounded_reanchors_within_witness_borrow`,
 which pins the line-for-line equivalent) cover it; no separate minimal test is added.
 
-**`NodeScope::Anchored` lifetime fabrication** ([src/machine/execute/nodes.rs](../src/machine/execute/nodes.rs))
-— a genuinely run-lived scope evicted off a lifetime-free scheduler node (`NodeScope::Anchored`) is
+**`NodeScope::YokedChild` lifetime fabrication** ([src/machine/execute/nodes.rs](../src/machine/execute/nodes.rs))
+— a cart-ancestor block scope evicted off a lifetime-free scheduler node (`NodeScope::YokedChild`) is
 stored as a `ScopePtr<'static>` through the brand-dropping `ScopePtr::erase_static` (the same raw-ptr
 cast as `erase`, in [src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs)) and re-attached
 at the read boundary through the `unsafe` `ScopePtr::reattach_bounded` — a borrow bounded by the
-reader, a free content lifetime, sound because the pointee lives for all of `'run`. This is the second
-`'static`-storing scope carrier (alongside `CallArena`). This test pins the erase → reattach
-round-trip directly, plus a sibling-pointer arena mutation while the re-attached scope is live.
+reader (the slot's frame `Rc`), a free content lifetime, sound because the cart's `outer_frame` chain
+pins the ancestor arena. This is the second `'static`-storing scope carrier (alongside `CallArena`).
+This test pins the erase → reattach round-trip directly, plus a sibling-pointer arena mutation while
+the re-attached scope is live.
 
-- `node_scope_anchored_erase_reattach_roundtrip`
+- `node_scope_yoked_child_erase_reattach_roundtrip`
 
-**`NodeScope::Anchored` re-attach — workload read boundary** ([src/machine/execute/dispatch/ctx.rs](../src/machine/execute/dispatch/ctx.rs))
+**`NodeScope::YokedChild` re-attach — workload read boundary** ([src/machine/execute/dispatch/ctx.rs](../src/machine/execute/dispatch/ctx.rs))
 — the `unsafe { ptr.reattach_bounded() }` in the `reattach_node_scope` helper materializes the
 executing slot's scope from its raw `NodeScope` handle (the scheduler core hands the handle back but
 no longer interprets it). Both the decide-phase read (`current_scope`, via `SchedulerView`) and the
 Done-boundary post-step read ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs))
 route through it. It runs the transmute defined in the group above and carries none of its own, so
-`node_scope_anchored_erase_reattach_roundtrip` — and end-to-end every scheduler-driving slate test —
+`node_scope_yoked_child_erase_reattach_roundtrip` — and end-to-end every scheduler-driving slate test —
 pins it. No separate minimal test.
 
-**`NodeScope::Anchored` re-attach — own-scope re-dispatch** ([src/machine/execute/runtime/submit.rs](../src/machine/execute/runtime/submit.rs))
+**`NodeScope::YokedChild` re-attach — own-scope re-dispatch** ([src/machine/execute/runtime/submit.rs](../src/machine/execute/runtime/submit.rs))
 — the `unsafe { ptr.reattach_bounded() }` in `KoanRuntime::dispatch_in_own_scope` re-dispatches
-against an `Anchored` slot's own scope, running the same transmute with none of its own; pinned by
-`node_scope_anchored_erase_reattach_roundtrip`. No separate minimal test.
+against a `YokedChild` slot's own scope, running the same transmute with none of its own; pinned by
+`node_scope_yoked_child_erase_reattach_roundtrip`. No separate minimal test.
 
 **`retype` primitive — `Erased<T>` / `Reattachable`** ([src/scheduler/erase.rs](../src/scheduler/erase.rs))
 — the single audited lifetime-retype every carrier family routes: `retype<A, B>` (a

@@ -34,8 +34,8 @@ use crate::scheduler::Scheduler;
 /// scheduler no longer owns. The driver hands back the opaque payload
 /// ([`AmbientContext::active_payload`] / `PostStep::payload`), from which the workload extracts the
 /// scope handle, plus the per-call cart the slot ran against; this workload-side helper reattaches
-/// them. An `Anchored` slot reattaches its erased
-/// run-lived [`ScopePtr`](crate::machine::core::ScopePtr) (`reattach_bounded`); a `Yoked` slot
+/// them. A `YokedChild` slot reattaches its erased
+/// cart-ancestor [`ScopePtr`](crate::machine::core::ScopePtr) (`reattach_bounded`); a `Yoked` slot
 /// re-projects from `frame`. Content lifetime free, borrow bounded by `frame` — so the result
 /// cannot outlive the cart it names.
 pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
@@ -43,10 +43,14 @@ pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
     frame: Option<&'step Rc<CallArena>>,
 ) -> &'step Scope<'b> {
     match node_scope {
-        // SAFETY: the `Anchored` pointer was erased from a genuinely run-lived scope
-        // (`resolve_node_scope`), which outlives `frame`; the returned borrow is bounded by `frame`,
-        // so the free content lifetime cannot be cashed past the run-lived pointee.
-        NodeScope::Anchored(ptr) => unsafe { ptr.reattach_bounded() },
+        // SAFETY: the `YokedChild` pointer was erased from a block scope in a cart-*ancestor* arena
+        // (`resolve_node_scope`'s outer-chain check); the active cart's `outer_frame` chain pins that
+        // arena, and `frame` is that cart. The returned borrow is bounded by `frame` (both args share
+        // `'step`), so it cannot be cashed past the cart that pins the pointee.
+        NodeScope::YokedChild(ptr) => {
+            let _witness = frame.expect("a YokedChild slot keeps its active cart");
+            unsafe { ptr.reattach_bounded() }
+        }
         NodeScope::Yoked => frame
             .expect("a Yoked slot keeps its active cart")
             .scope_bounded(),
@@ -56,7 +60,7 @@ pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
 /// The active slot's scope, re-anchored from the ambient payload's scope handle. The workload-side
 /// form of the read the scheduler core no longer owns: it materializes a `&Scope` so `scheduler/**`
 /// names none. Panics outside a slot step (no ambient payload); within a step the scope is always
-/// present — an `Anchored` slot carries its own pointer, and a `Yoked` slot's active cart is never
+/// present — a `YokedChild` slot carries its own pointer, and a `Yoked` slot's active cart is never
 /// emptied mid-step (an invoke reuses the reserve, not the active cart).
 pub(in crate::machine::execute) fn current_scope<'run>(ambient: &AmbientContext) -> &Scope<'run> {
     let payload = ambient

@@ -15,13 +15,13 @@
 //! Two lifetime-free carriers store a `ScopePtr<'static>` and must fabricate the content lifetime
 //! back, because neither can brand it: `CallArena` (non-generic — it backs `Rc<CallArena>` and
 //! carries no lifetime) shortens to an `&self`-bounded lifetime through the `unsafe`
-//! [`ScopePtr::reattach_unbounded`]; a scheduler node's `NodeScope::Anchored` — a genuinely
-//! run-lived scope evicted off the lifetime-free node — re-attaches a free content lifetime behind
+//! [`ScopePtr::reattach_unbounded`]; a scheduler node's `NodeScope::YokedChild` — a cart-ancestor
+//! block scope evicted off the lifetime-free node — re-attaches a free content lifetime behind
 //! an `&self`-bounded borrow through the `unsafe` [`ScopePtr::reattach_bounded`]. Both reach the
 //! `'static` store through [`ScopePtr::erase_static`], a brand-dropping constructor that is *safe*
 //! to call (forgetting a lifetime cannot fabricate one); the fabrication hazard is deferred to the
-//! `unsafe` re-attach, witnessed by the carrier's pinning (the frame `Rc`) or, for an `Anchored`
-//! node, the scope being run-lived. The carriers that own a real `'a` — `Module`, `Signature`,
+//! `unsafe` re-attach, witnessed by the carrier's pinning — the frame `Rc` (which, for a
+//! `YokedChild`, pins the ancestor arena via its `outer_frame` chain). The carriers that own a real `'a` — `Module`, `Signature`,
 //! `KFunction` — route the safe [`ScopePtr::reattach`] and carry no `unsafe`.
 //!
 //! See [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
@@ -79,7 +79,7 @@ impl<'a> ScopePtr<'a> {
     /// `unsafe` re-attach ([`Self::reattach_unbounded`] / [`Self::reattach_bounded`]). Safe to
     /// *construct*: it only casts a live reference to a `'static` pointer (same cast as
     /// [`Self::erase`]); forgetting the lifetime cannot fabricate one. Used by `CallArena` and by a
-    /// scheduler node's `NodeScope::Anchored`.
+    /// scheduler node's `NodeScope::YokedChild`.
     pub fn erase_static(scope: &Scope<'_>) -> ScopePtr<'static> {
         // Non-null by construction; `cast` retags to `'static` (same store-side erasure as
         // [`Self::erase`]). Safe: forgetting the lifetime for storage cannot fabricate one.

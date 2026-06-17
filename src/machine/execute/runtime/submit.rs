@@ -7,9 +7,29 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::{assemble_body_chain, ScopeId, ScopePtr};
+use crate::machine::core::{assemble_body_chain, RuntimeArena, ScopeId, ScopePtr};
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallArena, LexicalFrame, NodeId, Scope};
+
+/// Pointer equality of two scopes (identity, not structural).
+fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
+    std::ptr::eq(a as *const Scope<'_> as *const (), b as *const Scope<'_> as *const ())
+}
+
+/// Whether `target` arena is reached by walking `cart_scope`'s lexical `outer` chain — i.e. the
+/// scope lives in the cart's own arena or a cart ancestor's. The active cart's `outer_frame` chain
+/// pins every such arena, so a scope found here is cart-witnessed (a `YokedChild`), not run-lived.
+fn cart_chain_reaches_arena(cart_scope: &Scope<'_>, target: &RuntimeArena) -> bool {
+    let target = target as *const RuntimeArena as *const ();
+    let mut cur = Some(cart_scope);
+    while let Some(s) = cur {
+        if std::ptr::eq(s.arena as *const RuntimeArena as *const (), target) {
+            return true;
+        }
+        cur = s.outer();
+    }
+    false
+}
 
 #[cfg(test)]
 use super::super::nodes::NodePayload;
@@ -53,34 +73,46 @@ impl<'run> KoanRuntime<'run> {
         }
     }
 
-    /// Decide a run-scope submission's [`NodeScope`] handle: `Yoked` when this runs inside the
-    /// per-call frame whose own child is `scope` (re-projected from the cart at the read boundary —
-    /// no fabricated `&'run` persisted), else `Anchored` at `'run`. Reads the active frame off the
-    /// scheduler (`active_frame_ref`); the handle is a Koan name-resolution concept, so it is built
-    /// here on the workload, not in the scheduler core.
+    /// Decide a run-scope submission's [`NodeScope`] handle — always cart-witnessed, never anchored
+    /// at a free `'run`. Three cases, in order:
+    ///
+    /// - The active cart's *own* scope is `scope` → [`NodeScope::Yoked`] (re-projected from the cart).
+    /// - The active cart's outer-chain reaches `scope`'s arena → [`NodeScope::YokedChild`]: `scope` is
+    ///   a block scope a builtin allocated in a cart *ancestor* arena (an `InScope` body), which the
+    ///   cart's `outer_frame` chain pins. Stored as an erased pointer, reattached frame-bounded.
+    /// - No active frame but the `run_frame` (which adopts the run root) *is* `scope` → `Yoked`: the
+    ///   slot's cart is the `run_frame` (via [`Self::submission_cart`]'s fallback), so the root
+    ///   re-projects from it at the slot's step.
+    ///
+    /// In production every submission falls into one of these (a body always runs inside a slot step,
+    /// so a frame is present; the sole frameless submission is the top-level root). The handle is a
+    /// Koan name-resolution concept, built here on the workload, not in the scheduler core.
     pub(in crate::machine::execute) fn resolve_node_scope(
         &self,
         scope: &'run Scope<'run>,
     ) -> NodeScope {
-        match self.active_frame_ref() {
-            Some(f)
-                if std::ptr::eq(
-                    f.scope() as *const Scope<'_> as *const (),
-                    scope as *const Scope<'_> as *const (),
-                ) =>
-            {
-                NodeScope::Yoked
+        if let Some(f) = self.active_frame_ref() {
+            if scopes_eq(f.scope(), scope) {
+                return NodeScope::Yoked;
             }
-            // Erase the genuinely run-lived borrow to a lifetime-free pointer; it reattaches
-            // (`reattach_bounded`) at the read boundary, sound because the scope lives for `'run`.
-            _ => NodeScope::Anchored(ScopePtr::erase_static(scope)),
+            if cart_chain_reaches_arena(f.scope(), scope.arena) {
+                return NodeScope::YokedChild(ScopePtr::erase_static(scope));
+            }
+            unreachable!("a framed submission's scope is the cart's own or a cart-ancestor child");
         }
+        if self
+            .run_frame_ref()
+            .is_some_and(|rf| scopes_eq(rf.scope(), scope))
+        {
+            return NodeScope::Yoked;
+        }
+        unreachable!("a frameless submission targets the run root adopted by the run frame");
     }
 
     /// Submit `work` against the executing slot's own [`NodeScope`] handle (read back from the
-    /// ambient payload): `Anchored` re-uses the erased run-lived `ScopePtr` the slot already holds;
-    /// `Yoked` re-projects from the active frame cart at the read boundary. The chain defaults to the
-    /// ambient one (or a detached chain at top level). Backs the `*_here` re-dispatch path.
+    /// ambient payload): `YokedChild` re-uses the erased cart-ancestor `ScopePtr` the slot already
+    /// holds; `Yoked` re-projects from the active frame cart at the read boundary. The chain defaults
+    /// to the ambient one (or a detached chain at top level). Backs the `*_here` re-dispatch path.
     pub(in crate::machine::execute) fn submit_in_own_scope(
         &mut self,
         work: NodeWork<KoanWorkload>,
@@ -166,8 +198,8 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Dispatch `expr` against the executing slot's own scope handle — the honest
-    /// re-dispatch-against-my-own-scope path (the `OwnScope` dep placement). An `Anchored` slot
-    /// reuses its genuine run-lived borrow; a `Yoked` slot routes through
+    /// re-dispatch-against-my-own-scope path (the `OwnScope` dep placement). A `YokedChild` slot
+    /// reuses its erased cart-ancestor pointer; a `Yoked` slot routes through
     /// [`Self::dispatch_in_active_frame`] to re-project from the active frame cart. Either way routes
     /// through [`Self::submit_dispatch`], so a binder spliced here still installs its placeholder.
     pub(in crate::machine::execute) fn dispatch_in_own_scope(
@@ -180,10 +212,10 @@ impl<'run> KoanRuntime<'run> {
             .scope;
         let chain = self.ambient_or_detached_chain();
         match node_scope {
-            NodeScope::Anchored(ptr) => {
-                // SAFETY: the `Anchored` pointer was erased from a genuinely run-lived scope
-                // (`resolve_node_scope`); reattach with a borrow bounded by the local `ptr`, used
-                // only for the transient `submit_dispatch` call below.
+            NodeScope::YokedChild(ptr) => {
+                // SAFETY: the `YokedChild` pointer was erased from a cart-ancestor block scope the
+                // active cart pins (`resolve_node_scope`); reattach with a borrow bounded by the local
+                // `ptr`, used only for the transient `submit_dispatch` call below.
                 let scope: &Scope<'_> = unsafe { ptr.reattach_bounded() };
                 self.submit_dispatch(expr, scope, node_scope, chain)
             }
