@@ -12,7 +12,7 @@ src/machine/execute/finalize.rs: 1
 src/machine/execute/nodes.rs: 1
 src/machine/execute/outcome.rs: 8
 src/machine/execute/run_loop.rs: 1
-src/machine/execute/runtime.rs: 2
+src/machine/execute/runtime.rs: 3
 src/machine/execute/runtime/submit.rs: 1
 src/machine/model/values/carried.rs: 2
 src/machine/model/values/kobject.rs: 1
@@ -266,7 +266,7 @@ ancestor of the cart). Distinct shape from the contract group above: the retype 
 pointer** (data + vtable), not a thin enum, so it carries its own minimal test. The re-attach call
 site in
 [src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs) (the run loop,
-just before `run_wait`) runs the same transmute end-to-end every step. This test pins the
+just before `run_step`) runs the same transmute end-to-end every step. This test pins the
 erase → reattach → invoke round-trip directly, calling the reattached closure so tree borrows checks
 the capture read.
 
@@ -275,7 +275,7 @@ the capture read.
 **`ErasedCont` re-attach — run-loop call site** ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs))
 — the `unsafe { erased_cont.reattach(&cart) }` at the top of the execute loop runs the transmute
 defined in the group above with none of its own, re-anchoring each slot's continuation against its
-cart before `run_wait`; the same `erased_cont_reattach_roundtrip` (and end-to-end every
+cart before `run_step`; the same `erased_cont_reattach_roundtrip` (and end-to-end every
 scheduler-driving slate test) pins it. No separate minimal test.
 
 **`Module` interior mutation under a live `&'a Module`** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — `Module`
@@ -311,9 +311,11 @@ the lifetime-only transmutes bridging a node continuation's per-step `'s` output
 run-lived AST and the frame-pinned slot store: `shorten_outcome` (a decide's `'run` outcome down to
 `'s`), `deps_at_step` (consumer-pull dep terminals down to `'s`), `deps_for_builtin` /
 `obj_for_builtin` (deps back up to `'run` across the concrete builtin boundary), and
-`pin_carried_to_run` (re-anchors the scheduler's `'node` read up to `'run` to feed the consumer-pull
-lift and the Done contract hook, which the generic scheduler cannot type). The `Carried` *storage*
-erase / read re-anchor itself now lives in the scheduler (`node_store.rs`, group below), not here.
+`pin_carried_to_run` (re-anchors a `'node` read up to `'run` for the run-global root drain — its sole
+caller, `interpret.rs`). The Done step and dep-delivery no longer route `'run`: a Done terminal is
+finalized at the step lifetime `'s` within its own step, and the lift / Forward pull re-anchor at a
+node lifetime (group below). The `Carried` *storage* erase / read re-anchor itself lives in the
+scheduler (`node_store.rs`, group below), not here.
 All are exercised by every program; this test pins the hardest shape directly — a tail-chain
 return-type **coarsening**, where the re-tagged terminal must be homed in the contract's scope to
 outlive the reused producer frame, then re-read after the run drains the root into the run arena.
@@ -333,9 +335,12 @@ delivery and top-level read routes a re-anchor — and pinned by
 **`Carried` re-attach — consumer-pull dep lift** ([src/machine/execute/runtime.rs](../src/machine/execute/runtime.rs))
 — `KoanRuntime::read_lifted` re-anchors a producer's scheduler read (`'node`) to the destination
 *node* lifetime `'o` — the consumer scope's arena, bounded by the active frame `Rc` cloned in
-`run_wait` — then the `NodeLift` copy relocates it into that arena. Node-to-node, not a `'run`
+`run_step` — then the `NodeLift` copy relocates it into that arena. Node-to-node, not a `'run`
 fabrication: the held producer-frame `Rc` (framed) / the run arena (frameless) pins the read for the
-copy, and the lift self-anchors the result via the embedded `Rc`. Same `retype` primitive as the
+copy, and the lift self-anchors the result via the embedded `Rc`. The `Outcome::Forward` ready path
+(`apply_outcome`) routes the same primitive: it pulls the producer terminal through `read_lifted`
+into the consumer scope arena, then shortens the node value to the uniform `NodeStep` step lifetime
+`'s` (a node→step reattach, the value frame-pinned for all of `'s`). Same `retype` primitive as the
 `erase.rs` group. Exercised end-to-end by the lift/park slate tests
 (`lift_park_minimal_program_for_miri`, `recursive_tagged_match_no_uaf`, …). No separate minimal test.
 
@@ -365,9 +370,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-17: 609s — 25 tests, 0 leaks, 0 UB
 - 2026-06-17: 602s — 25 tests, 0 leaks, 0 UB
 - 2026-06-17: 620s — 25 tests, 0 leaks, 0 UB
 - 2026-06-17: 614s — 25 tests, 0 leaks, 0 UB
 - 2026-06-17: 653s — 26 tests, 0 leaks, 0 UB
-- 2026-06-17: 646s — 25 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

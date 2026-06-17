@@ -54,7 +54,7 @@ mod submit;
 mod tests;
 
 pub(in crate::machine::execute) use super::outcome::{Continuation, Outcome};
-pub(in crate::machine::execute) use ctx::{current_scope, reattach_node_scope, SchedulerView};
+pub(in crate::machine::execute) use ctx::{reattach_node_scope, SchedulerView};
 pub(crate) use field_list::defer_field_list_action;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
@@ -378,7 +378,7 @@ pub(super) fn stage_all_eager_parts<'run>(
 /// A dispatch slot's decide — the `SchedulerView -> Outcome` closure a dispatch [`NodeWork`](super::nodes::NodeWork) runs.
 /// A birth decide classifies the carried `expr` (+ `pre_subs`) and routes; a park's resume re-runs
 /// the decide its park captured (a bare leaf, an evolving `working_expr`). Boxing keeps the router
-/// blind to which family it is — every `Wait` wakes through `run_wait` uniformly.
+/// blind to which family it is — every `Wait` wakes through `run_step` uniformly.
 pub(in crate::machine::execute) type ResumeFn<'run> =
     Box<dyn for<'v> FnOnce(&SchedulerView<'run, 'v>, usize) -> Outcome<'run, 'run> + 'run>;
 
@@ -413,7 +413,7 @@ pub(in crate::machine::execute) fn decide_with_presubs<'run>(
 /// Classify a freshly-born dispatch expression's shape and route to the matching per-shape decide,
 /// returning the [`Outcome`] for the harness to apply. Fast-lane shapes terminalize or
 /// single-producer-park in one poll; a shape that parks returns a `ParkThenContinue` whose resume
-/// closure re-enters [`run_wait`], never back through here.
+/// closure re-enters [`run_step`], never back through here.
 fn classify_dispatch<'run>(
     view: &SchedulerView<'run, '_>,
     expr: KExpression<'run>,

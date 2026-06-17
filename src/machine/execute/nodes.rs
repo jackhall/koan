@@ -28,8 +28,13 @@ pub(super) use crate::scheduler::nodes::{CallFrame, Node, NodeWork};
 // `KExpression` it indirectly holds. Boxing a short-lived return value's hot tail-call
 // path to balance the variants is the wrong trade — the imbalance is inherent.
 #[allow(clippy::large_enum_variant)]
-pub(super) enum NodeStep<'run> {
-    Done(Result<Carried<'run>, KError>),
+pub(super) enum NodeStep<'run, 's> {
+    /// The terminal value is born at the step lifetime `'s` (the consumer frame the step ran
+    /// against), not `'run`: it is finalized *within* the step that produced it (the run loop's
+    /// `run_step` erases it into the slot store before the step's frame witness drops), so it never
+    /// crosses the step-guard exit as a fabricated `'run`. `Replace` keeps `'run` because its
+    /// contract names run-lived types and feeds the next step's frame.
+    Done(Result<Carried<'s>, KError>),
     Replace {
         work: NodeWork<KoanWorkload>,
         frame: Option<Rc<CallArena>>,

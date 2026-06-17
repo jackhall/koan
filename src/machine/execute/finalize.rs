@@ -19,24 +19,28 @@ use super::runtime::KoanRuntime;
 ///
 /// A Koan-typed workload hook: the generic scheduler ([`crate::scheduler`]) drives the Done
 /// boundary through this trait (alongside `NodeLift`) and names no Koan type itself.
-pub(in crate::machine::execute) trait NodeFinalize<'run> {
+///
+/// Single-lifetime (`'o -> 'o`): the value arrives already at its destination node lifetime `'o`
+/// (the step lifetime the producer ran against), so the hook re-anchors only the contract — never
+/// the value — and the coarsening re-tag homes into the contract's own arena at the same `'o`.
+pub(in crate::machine::execute) trait NodeFinalize {
     /// Re-anchor `contract` against `frame` and enforce the declared return on `output`. A `None`
     /// frame (a frameless slot or the non-dying run frame) passes the value through untouched.
-    fn finalize_terminal(
+    fn finalize_terminal<'o>(
         &self,
-        output: Result<Carried<'run>, KError>,
+        output: Result<Carried<'o>, KError>,
         frame: Option<&Rc<CallArena>>,
         contract: Option<ErasedContract>,
-    ) -> Result<Carried<'run>, KError>;
+    ) -> Result<Carried<'o>, KError>;
 }
 
-impl<'run> NodeFinalize<'run> for KoanRuntime<'run> {
-    fn finalize_terminal(
+impl NodeFinalize for KoanRuntime<'_> {
+    fn finalize_terminal<'o>(
         &self,
-        output: Result<Carried<'run>, KError>,
+        output: Result<Carried<'o>, KError>,
         frame: Option<&Rc<CallArena>>,
         contract: Option<ErasedContract>,
-    ) -> Result<Carried<'run>, KError> {
+    ) -> Result<Carried<'o>, KError> {
         // Re-anchor the erased contract against the step's cart, witnessed by `frame`. The check
         // below consults it only when `frame` is `Some` (a real per-call frame, which is exactly
         // when a contract is set), so a contract on the non-dying run frame is harmlessly skipped.
@@ -59,11 +63,11 @@ impl<'run> NodeFinalize<'run> for KoanRuntime<'run> {
 /// call-site arena, a strict ancestor of the producer frame) so the re-tagged terminal outlives the
 /// reused/freed producer frame. Reads no scope: the home arena rides the contract, witnessed by the
 /// cart `Rc`.
-fn enforce_return_contract<'run>(
-    output: Result<Carried<'run>, KError>,
+fn enforce_return_contract<'o>(
+    output: Result<Carried<'o>, KError>,
     frame: Option<&Rc<CallArena>>,
-    prev_function: Option<ReturnContract<'run>>,
-) -> Result<Carried<'run>, KError> {
+    prev_function: Option<ReturnContract<'o>>,
+) -> Result<Carried<'o>, KError> {
     match (output, frame) {
         (Ok(Carried::Object(v)), Some(_)) => {
             match check_declared_return(prev_function, |d| d.matches_value(v), || v.ktype().name())?
@@ -117,11 +121,11 @@ fn enforce_return_contract<'run>(
 /// non-`Resolved` (a `Deferred` carrier still in its FN-def signature) has no type here —
 /// or `Err` with the labelled `TypeMismatch`. A `PerCall` carries the *resolved* per-call
 /// type and is checked + stamped here, labelled "per-call return type".
-fn check_declared_return<'run>(
-    contract: Option<ReturnContract<'run>>,
-    satisfies: impl FnOnce(&KType<'run>) -> bool,
+fn check_declared_return<'o>(
+    contract: Option<ReturnContract<'o>>,
+    satisfies: impl FnOnce(&KType<'o>) -> bool,
     got_name: impl FnOnce() -> String,
-) -> Result<Option<&'run KType<'run>>, KError> {
+) -> Result<Option<&'o KType<'o>>, KError> {
     let (declared, label, per_call) = match contract {
         Some(ReturnContract::Function(f)) => match &f.signature.return_type {
             crate::machine::model::types::ReturnType::Resolved(d) => (d, f.summarize(), false),

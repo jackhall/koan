@@ -26,10 +26,10 @@ use crate::machine::core::kfunction::body::{split_body_statements, ErasedContrac
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallArena, KError, NodeId, Scope};
 
-use super::dispatch::{current_scope, DepRequest};
+use super::dispatch::{reattach_node_scope, DepRequest};
 use super::lift::NodeLift;
 use super::nodes::{NodePayload, NodeStep, NodeWork};
-use super::outcome::{dep_error_frame, pin_carried_to_run, Continuation, Outcome};
+use super::outcome::{dep_error_frame, Continuation, Outcome};
 use super::{catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedCont};
 use crate::machine::model::values::CarriedFamily;
 use crate::scheduler::{reattach_value, Scheduler, Workload};
@@ -369,12 +369,12 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         outcome: Outcome<'run, 's>,
         idx: usize,
-    ) -> NodeStep<'run> {
+    ) -> NodeStep<'run, 's> {
         match outcome {
-            // The terminal is born at the step lifetime `'s`; re-expose it at `'run` for the slot
-            // table. The Done arm of `execute` pins the producer frame's `Rc` alongside it, so the
-            // stored `'run` view stays backed until the slot frees.
-            Outcome::Done(output) => NodeStep::Done(output.map(pin_carried_to_run)),
+            // The terminal stays at the step lifetime `'s` — the run loop's `run_step` finalizes it
+            // into the slot store (erasing it) before the step's frame witness drops, so it never
+            // needs a fabricated `'run` to cross the step-guard exit.
+            Outcome::Done(output) => NodeStep::Done(output),
             Outcome::Continue {
                 work,
                 frame,
@@ -496,24 +496,23 @@ impl<'run> KoanRuntime<'run> {
                 // then this slot's consumers pull from here. Otherwise splice the slot out: move its
                 // consumers onto `producer`'s notify list and alias the slot to `producer`.
                 if self.sched.is_result_ready(producer) {
-                    let dest = current_scope(&self.ambient).arena;
-                    let pulled = match self.sched.read_result_with_frame(producer) {
-                        // The scheduler hands back the value re-anchored to this `&self` borrow; the
-                        // `'node -> 'run` re-anchor stays here for now (see `read_lifted` /
-                        // node-lifetime-lift-and-contract.md) because `lift` and `NodeStep::Done`
-                        // are `'run`.
-                        Ok((value, frame)) => Ok((pin_carried_to_run(value), frame)),
-                        Err(e) => Err(e.clone_for_propagation()),
-                    };
-                    match pulled {
-                        // A per-call producer's terminal lives in its dying frame: lift it here.
-                        Ok((value, Some(frame))) => {
-                            NodeStep::Done(Ok(self.lift(value, &frame, dest)))
-                        }
-                        // A frameless / run-arena terminal already survives; forward it as-is.
-                        Ok((value, None)) => NodeStep::Done(Ok(value)),
-                        Err(e) => NodeStep::Done(Err(e)),
-                    }
+                    // Pull `producer`'s terminal into this consumer's own scope arena, at a *node*
+                    // lifetime bounded by the active cart — not a fabricated `'run`. `read_lifted`
+                    // does the same node-scale re-anchor the dep path uses: it lifts a framed
+                    // terminal into `dest` and forwards a frameless one as-is, with no `'run` step.
+                    let payload = self
+                        .ambient
+                        .active_payload()
+                        .expect("a slot step installs the ambient payload");
+                    let dest = reattach_node_scope(&payload.scope, self.ambient.active_frame_ref())
+                        .arena;
+                    let pulled = self.read_lifted(producer, dest);
+                    // Shorten the node value to the uniform `NodeStep` step lifetime `'s`: it lives
+                    // in `dest`, which the active cart pins for all of `'s`. A node→step reattach,
+                    // not a `'run` fabrication.
+                    // SAFETY: the value lives in `dest` ⊇ `'s`; lifetime-only reattach of an
+                    // invariant carrier.
+                    NodeStep::Done(pulled.map(|v| unsafe { reattach_value::<CarriedFamily>(v) }))
                 } else {
                     // Not ready: `NodeStep::Alias` drives `splice_forward` (move consumers onto the
                     // producer + alias the slot) in the execute loop.

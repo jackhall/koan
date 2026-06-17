@@ -47,7 +47,7 @@ What's shipped that the open items below build on:
   single owner: per-builtin typed-binder `binder_name` (one shared
   [`type_part_binder_name`](../src/builtins.rs)), the FN and FUNCTOR bodies (one shared
   [`build_fn_like`](../src/builtins/fn_def.rs) keyed on `FnKind`), the `finish.rs` dep-finish/catch handler arms (one shared
-  [`run_wait`](../src/machine/execute/run_loop.rs)), the `dict_literal`
+  [`run_step`](../src/machine/execute/run_loop.rs)), the `dict_literal`
   `accept_colon`/`accept_equals` pair (one `accept_separator`), the slot-extract error
   envelope (one [`require_kexpression`](../src/machine/core/kfunction/action.rs)
   owning the parenthesized-slot error text), and the scheduler `Object`/`Type` finalize
@@ -78,7 +78,7 @@ What's shipped that the open items below build on:
   lifetime `'s` ([`Outcome<'run, 's>`](../src/machine/execute/outcome.rs)), not `'run`. The
   producer keeps its terminal in its own frame (the slot's `Done` co-stores the backing
   `Rc<CallArena>`, so frame death moves Done→free) and does not lift; each consumer
-  pull-lifts its deps into its own arena at read ([`run_wait`](../src/machine/execute/run_loop.rs))
+  pull-lifts its deps into its own arena at read ([`run_step`](../src/machine/execute/run_loop.rs))
   through the single [`NodeLift`](../src/machine/execute/lift.rs) workload hook, so an
   intermediate value dies with its consumer and only a consumer-less root drains to the run
   arena. Return-contract enforcement stays a separate Done-time layer. This output-lifetime
@@ -86,7 +86,13 @@ What's shipped that the open items below build on:
   *workload-independent DAG runtime* that completes it has shipped — the scheduler is a
   crate-root [`mod scheduler`](../src/scheduler.rs) generic over a `Workload`, naming no Koan
   value, scope, memory, or AST type, with the Koan driver in
-  [`execute::run_loop`](../src/machine/execute/run_loop.rs). See
+  [`execute::run_loop`](../src/machine/execute/run_loop.rs). The value-movement re-anchors on this
+  path are now node-scale, not `'run`: `NodeFinalize::finalize_terminal` is single-lifetime
+  (`'o -> 'o`), a `Done` terminal is finalized at its step lifetime `'s` *within* the producing step
+  (`NodeStep<'run, 's>`; `run_step` brackets run + finalize over the cart clone that witnesses `'s`),
+  and the consumer-pull / `Outcome::Forward` lift re-anchors through [`read_lifted`](../src/machine/execute/runtime.rs)
+  into the consumer scope arena — so `pin_carried_to_run` survives only for the genuine run-global
+  root drain. See
   [design/per-call-arena-protocol.md § Consumer-pull node-output lift](../design/per-call-arena-protocol.md#consumer-pull-node-output-lift).
 - *Unified erase/reattach carriers.* The hand-rolled erase-to-`'static` /
   reattach carriers (`ScopePtr`, `ErasedContract`, `ErasedCont`, the scheduler's `Erased<W::Value>`)
@@ -244,7 +250,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Node-lifetime lift and contract re-anchor](refactor/node-lifetime-lift-and-contract.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
@@ -335,6 +340,3 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
-- [Node-lifetime lift and contract re-anchor](refactor/node-lifetime-lift-and-contract.md) —
-  thread distinct input/output node lifetimes through the lift and contract Done-boundary hooks so
-  their re-anchor is node-to-node, retiring the `'run` fabrication `read_lifted` / `pin_carried_to_run` do.

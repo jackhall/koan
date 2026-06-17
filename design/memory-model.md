@@ -163,10 +163,14 @@ cannot outlive the backing arena: the pin-outlives-read fact is a borrow the com
 than a SAFETY comment the driver asserts. The driver's transient reads
 ([`KoanRuntime::read_result`](../src/machine/execute/runtime.rs), the
 [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) forwarder) consume that `'node` value with
-no `unsafe` of their own. The reads that still fabricate a `'run` value — `read_lifted` and
-`pin_carried_to_run`, feeding the consumer-pull lift and the Done contract hook, which are typed at
-one collapsed `'run` — are tracked for a node-lifetime rethread in
-[node-lifetime lift and contract re-anchor](../roadmap/refactor/node-lifetime-lift-and-contract.md).
+no `unsafe` of their own. The consumer-pull lift and the Done contract hook re-anchor their reads at
+a *node* lifetime, not a fabricated `'run`: `read_lifted` lifts each dep (and the `Outcome::Forward`
+ready pull) into the consumer scope's arena bounded by the active cart `Rc`, and a Done terminal is
+finalized at its step lifetime `'s` *within* the step that produced it (the run loop's `run_step`
+erases it into the slot store before the step's frame witness drops). `pin_carried_to_run` survives
+for one genuine `'run` re-home only — the consumer-less root drain in
+[`run_program`](../src/machine/execute/runtime/interpret.rs), which lifts each top-level terminal
+into the run-global root arena.
 
 A sibling primitive in [`reattach.rs`](../src/machine/core/reattach.rs), `pin_deref`, owns the
 *other* unsafe shape — re-borrowing a raw `*const T` whose pointee a heap pin holds fixed (the
@@ -279,7 +283,7 @@ invariant (every forward edge in `notify_list[p]` matched by a backward
 surface rather than by convention.
 
 Transient-node reclamation runs through `Scheduler::reclaim_deps` from the
-unified node handler `KoanRuntime::run_wait`, *after* the finish closure returns
+unified node handler `KoanRuntime::run_step`, *after* the finish closure returns
 its `Outcome` but *before* the harness applies it. So
 when a dispatch splice finish has rewritten `working_expr.parts` to
 `ExpressionPart::Future`, the freed indices are back on the free-list before

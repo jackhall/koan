@@ -65,7 +65,7 @@ pub(in crate::machine::execute) fn initial_type<'run>(
 /// finish classifies it into a [`ResolvedCallable`] and hands off to the shared apply-a-callable
 /// tail — which may itself resolve, park, or error, so the re-park-capable dispatch finish (its
 /// `Outcome` may be a fresh `ParkThenContinue`/`Redispatch`) is required. A dep error short-circuits
-/// frameless in `run_wait`, so the finish only runs on a resolved head.
+/// frameless in `run_step`, so the finish only runs on a resolved head.
 fn park_on_head<'run>(
     expr: KExpression<'run>,
     head: KExpression<'run>,

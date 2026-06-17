@@ -61,10 +61,10 @@ impl<'run> KoanRuntime<'run> {
         // errored terminal needs no lift.
         for &id in &top_level {
             if let Ok((value, Some(frame))) = self.sched.read_result_with_frame(id) {
-                // The scheduler hands back the value re-anchored to this `&self` borrow; the lift's
-                // `'run` re-anchor stays here for now (see `runtime::read_lifted` /
-                // node-lifetime-lift-and-contract.md). The lifted root is handed back live — the
-                // scheduler re-erases it for storage.
+                // The scheduler hands back the value re-anchored to this `&self` borrow. A
+                // consumer-less root has no pull-lift to node-scale it, so this is the one genuine
+                // `'run` re-home: `pin_carried_to_run` re-anchors the read up to the run-global root
+                // arena. The lifted root is handed back live — the scheduler re-erases it for storage.
                 let lifted = self.lift(pin_carried_to_run(value), &frame, root.arena);
                 self.sched.rehome_terminal(id, Ok(lifted));
             }

@@ -91,7 +91,7 @@ relocates it across each dep edge — never the producer.
   ([`src/machine/execute/lift.rs`](../src/machine/execute/lift.rs)) owns the
   `KObject`-invariant copy; the scheduler loop names no `KObject` / `KType`.
 - **Consumers pull-lift at read.** When a consumer runs
-  ([`run_wait`](../src/machine/execute/run_loop.rs)) it lifts each dep
+  ([`run_step`](../src/machine/execute/run_loop.rs)) it lifts each dep
   from the producer's frame into its own call arena, promoting the producer's
   output to the consuming node's lifetime. A value read by N consumers is
   lifted N times — once per consumer — and each copy dies with its consumer's
@@ -118,8 +118,9 @@ of these transitions can be a coercion — each cross-frame move is a genuine
 `NodeLift` copy (or the held-Rc re-exposure at storage). Five audited
 lifetime-reattach primitives in
 [outcome.rs](../src/machine/execute/outcome.rs) bridge `'s`↔`'run` at the
-run_wait / apply / combinator boundaries (`shorten_outcome`, `deps_at_step`,
-`deps_for_builtin`, `obj_for_builtin`, `pin_carried_to_run`); they are pinned
+run_step / apply / combinator boundaries (`shorten_outcome`, `deps_at_step`,
+`deps_for_builtin`, `obj_for_builtin`) plus the run-global root drain
+(`pin_carried_to_run`); they are pinned
 in the Miri slate by `tail_call_stamps_result_against_first_callers_return_contract`.
 
 ### Fast path
