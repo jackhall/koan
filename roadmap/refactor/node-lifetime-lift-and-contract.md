@@ -36,6 +36,9 @@ run global; the `'run` annotation is the only thing that makes them look like th
   feeds the contract hook a node-lifetime terminal.
 - `'run` survives only for the genuine run-global root drain (the consumer-less terminal re-homed
   into the run arena), not as the currency of every dep-delivery and Done step.
+- `NodeStep` and the step terminal it carries are typed at the scheduler-vended `'step` lifetime, not
+  `'run`. The producer terminal is finalized *within* `'step` — it never crosses the step-guard exit
+  as a fabricated `'run`.
 
 **Directions.**
 
@@ -50,6 +53,22 @@ run global; the `'run` annotation is the only thing that makes them look like th
 - *The `KObject`-invariant copy and embedded `Rc` anchor stay a Koan hook detail — decided.* The
   arena→arena `KObject` copy and the escaping-closure anchor decision remain in `lift.rs`; the
   scheduler names no `KObject`, so only the lifetime re-anchor (not the copy) can move scheduler-side.
+- *Scheduler-vended `'step` via a step bracket — decided.* The scheduler gains a **step** concept: it
+  holds the running slot's `cart` (`Rc<W::Frame>`) for the slot run and vends a `'step` lifetime
+  witnessed by it. The per-step terminal is `Carried<'step>` and `NodeStep` is `NodeStep<'step>`, not
+  `'run`. The slot-run bracket carries no Koan semantics; the ambient-frame swap (`enter` /
+  `exit_slot_step`) stays driver-side, layered on top.
+- *Callback step bracket returning `Outcome` — decided.* `run_step` lives on the driver
+  (`KoanRuntime`, `&mut self`): it asks the scheduler to begin the step, runs a pure decide (lift deps
+  + cont) against a shared read context producing `Outcome<'step>`, then applies it with `&mut self`
+  once the decide returns. No `&mut` in the closure, so the borrow inversion never arises — it reuses
+  the existing decide / `Outcome` / `apply_outcome` value-language
+  ([design/execution-model.md § The dispatcher / scheduler boundary](../../design/execution-model.md#the-dispatcher--scheduler-boundary)).
+  `reclaim_deps` folds into the apply rather than needing a new delta variant.
+- *Cont HRTB vs concrete `'step` — open.* `NodeCont` is `for<'s> …` today precisely because there was
+  no nameable step lifetime; once the scheduler vends `'step`, the `for<'s>` may collapse to a
+  concrete `'step`. Recommended: simplify to `'step` if the borrow structure allows, else keep the
+  HRTB.
 
 ## Dependencies
 
