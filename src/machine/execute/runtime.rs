@@ -24,7 +24,7 @@ use crate::machine::core::kfunction::action::{
 };
 use crate::machine::core::kfunction::body::split_body_statements;
 use crate::machine::model::ast::KExpression;
-use crate::machine::{CallArena, KError, NodeId};
+use crate::machine::{CallArena, KError, NodeId, Scope};
 
 use super::dispatch::{current_scope, DepRequest};
 use super::lift::NodeLift;
@@ -293,10 +293,25 @@ impl<'run> KoanRuntime<'run> {
         placement: FramePlacement<'run>,
     ) -> Option<Rc<CallArena>> {
         match placement {
-            FramePlacement::ReuseReserve { outer } => Some(self.sched.acquire_tail_frame(outer)),
+            FramePlacement::ReuseReserve { outer } => Some(self.acquire_tail_frame(outer)),
             FramePlacement::FreshChild { frame } => Some(frame),
             FramePlacement::Inherit => None,
         }
+    }
+
+    /// Reuse the slot's reserve cart (reset in place) when uniquely owned, else mint fresh under
+    /// `outer` — the scope-dependent per-call frame construction the scheduler delegates to the
+    /// workload. The scheduler owns the reserve *slot* (rotation, lifecycle); this owns the
+    /// `CallArena` minting/reset, which names the run-lived `Scope`. `try_reset_for_tail`'s
+    /// `Rc::get_mut` gate is the "no escape" uniqueness check (a cloned `Rc` forecloses reuse).
+    fn acquire_tail_frame(&mut self, outer: &Scope<'_>) -> Rc<CallArena> {
+        if let Some(mut reserve) = self.sched.take_active_reserve() {
+            if reserve.try_reset_for_tail(outer) {
+                self.sched.note_tail_reuse();
+                return reserve;
+            }
+        }
+        CallArena::new(outer, None)
     }
 
     /// Interpret an [`Outcome`] into the scheduler effect it names and return the slot's

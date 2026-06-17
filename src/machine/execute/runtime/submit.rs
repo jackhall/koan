@@ -1,8 +1,9 @@
 //! The AST-aware dispatch-submission wrappers. Each resolves `(scope, node_scope, chain)` — the Koan
 //! name-resolution payload — and forwards to [`KoanRuntime::submit_dispatch`], so these are the only
 //! callers that turn a `KExpression` into scheduler work. Payload construction (`resolve_node_scope`,
-//! `ambient_or_detached_chain`, `submit_in_own_scope`) lives here on the workload; the scheduler core
-//! exposes only the payload-agnostic [`Scheduler::submit_node`] / [`Scheduler::ensure_run_frame`].
+//! `ambient_or_detached_chain`, `submit_in_own_scope`, the frame `ensure_run_frame` / tail-reuse
+//! mint) lives here on the workload; the scheduler core exposes only the payload-agnostic
+//! [`Scheduler::submit_node`] and the frame-lifecycle accessors it manages.
 
 use std::rc::Rc;
 
@@ -24,6 +25,17 @@ impl<'run> KoanRuntime<'run> {
         &self,
     ) -> Option<Rc<LexicalFrame>> {
         (!self.sched.has_active_payload()).then(LexicalFrame::detached)
+    }
+
+    /// Establish the run frame on the first run-lifetime submission (top-level run scope), so every
+    /// top-level slot carries a frame cart and `active_frame` is never `None` during a top-level
+    /// step. Mints a non-dying `CallArena` adopting the run scope (no child) — the scope-dependent
+    /// construction the scheduler delegates to the workload — and hands it to the scheduler, which
+    /// owns the frame's lifecycle. Idempotent (guarded on `has_run_frame`).
+    pub(in crate::machine::execute) fn ensure_run_frame(&mut self, scope: &'run Scope<'run>) {
+        if !self.sched.has_run_frame() {
+            self.sched.set_run_frame(CallArena::adopting(scope));
+        }
     }
 
     /// Decide a run-scope submission's [`NodeScope`] handle: `Yoked` when this runs inside the
@@ -109,7 +121,7 @@ impl<'run> KoanRuntime<'run> {
         scope: &'run Scope<'run>,
         chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
-        self.sched.ensure_run_frame(scope);
+        self.ensure_run_frame(scope);
         let node_scope = self.resolve_node_scope(scope);
         self.submit_dispatch(expr, scope, node_scope, chain)
     }
@@ -242,7 +254,7 @@ impl<'run> KoanRuntime<'run> {
         scope: &'run Scope<'run>,
         explicit_chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
-        self.sched.ensure_run_frame(scope);
+        self.ensure_run_frame(scope);
         let scope_handle = self.resolve_node_scope(scope);
         let chain = explicit_chain
             .or_else(|| self.sched.active_payload().map(|p| p.chain.clone()))

@@ -1,24 +1,15 @@
-use crate::machine::{NodeId, Scope};
+use crate::machine::NodeId;
 
 use super::super::nodes::{work_park_producers, CallFrame, Node, NodeWork};
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
-impl<'run, P, V: Copy> Scheduler<P, V> {
+impl<P, V: Copy> Scheduler<P, V> {
     /// Whether a slot step is currently installed (a non-`None` ambient payload). The workload reads
     /// this to decide whether to default a submission's chain to the ambient one or synthesize a
     /// detached chain (test fixtures / top level).
     pub(in crate::machine::execute) fn has_active_payload(&self) -> bool {
         self.active_payload.is_some()
-    }
-
-    /// Establish the run frame on the first run-lifetime submission (top-level run scope), so every
-    /// top-level slot carries a frame cart and `active_frame` is never `None` during a top-level
-    /// step. Adopts the passed scope without minting a child. Idempotent.
-    pub(in crate::machine::execute) fn ensure_run_frame(&mut self, scope: &'run Scope<'run>) {
-        if self.run_frame.is_none() {
-            self.run_frame = Some(crate::machine::CallArena::adopting(scope));
-        }
     }
 
     /// Node-creation core, shared by the run-lifetime [`KoanRuntime::add_with_chain`] and the framed

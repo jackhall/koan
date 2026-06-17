@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::machine::{CallArena, KError, NodeId, Scope};
+use crate::machine::{CallArena, KError, NodeId};
 
 use dep_graph::DepGraph;
 use node_store::NodeStore;
@@ -303,24 +303,32 @@ impl<P, V: Copy> Scheduler<P, V> {
         std::mem::replace(&mut self.active_frame, frame)
     }
 
-    /// Reuse the slot's reserve cart (reset in place) when uniquely owned, else allocate fresh
-    /// under `outer`. Reuse draws from the *reserve*, never the live `active_frame`, so the
-    /// slot's own cart is never emptied by an invoke — `try_reset_for_tail`'s `Rc::get_mut`
-    /// gate is exactly the "no escape" uniqueness check (a cloned `Rc` would foreclose reuse).
-    /// The just-finished cart is rotated back in as the next reserve by `execute`'s Replace arm.
-    pub(in crate::machine::execute) fn acquire_tail_frame(
-        &mut self,
-        outer: &Scope<'_>,
-    ) -> Rc<CallArena> {
-        if let Some(mut reserve) = self.active_reserve.take() {
-            if reserve.try_reset_for_tail(outer) {
-                #[cfg(test)]
-                {
-                    self.tail_reuse_count += 1;
-                }
-                return reserve;
-            }
+    /// Take the slot's reserve cart for a TCO tail reuse, leaving none. The workload resets it under
+    /// the body's outer scope (or, on a uniqueness-gate miss, drops it and mints fresh) — the
+    /// scope-dependent frame construction the scheduler does not own. The just-finished cart is
+    /// rotated back in as the next reserve by `execute`'s Replace arm. Reuse draws from the
+    /// *reserve*, never the live `active_frame`, so the slot's own cart is never emptied by an invoke.
+    pub(in crate::machine::execute) fn take_active_reserve(&mut self) -> Option<Rc<CallArena>> {
+        self.active_reserve.take()
+    }
+
+    /// Record a TCO reserve reuse (test-only counter). A no-op outside tests.
+    pub(in crate::machine::execute) fn note_tail_reuse(&mut self) {
+        #[cfg(test)]
+        {
+            self.tail_reuse_count += 1;
         }
-        CallArena::new(outer, None)
+    }
+
+    /// Whether the run frame is established. The workload mints it (adopting the run scope) on the
+    /// first run-lifetime submission via [`Self::set_run_frame`].
+    pub(in crate::machine::execute) fn has_run_frame(&self) -> bool {
+        self.run_frame.is_some()
+    }
+
+    /// Install the run frame the workload minted by adopting the top-level run scope. Idempotent at
+    /// the call site (the workload guards on [`Self::has_run_frame`]).
+    pub(in crate::machine::execute) fn set_run_frame(&mut self, frame: Rc<CallArena>) {
+        self.run_frame = Some(frame);
     }
 }
