@@ -1,5 +1,6 @@
 use crate::machine::NodeId;
 
+use super::nodes::Node;
 use dep_graph::DepGraph;
 use node_store::NodeStore;
 use work_queues::WorkQueues;
@@ -51,6 +52,36 @@ impl<W: Workload> Scheduler<W> {
             deps: DepGraph::new(),
             store: NodeStore::new(),
         }
+    }
+
+    /// Pop the next ready slot index — the run loop's iterator (in-flight slots ahead of fresh
+    /// dispatches). `None` when the queue drains.
+    pub(in crate::machine::execute) fn pop_next(&mut self) -> Option<usize> {
+        self.queues.pop_next()
+    }
+
+    /// Take a slot's stored node to run it (`PreRun` → `Running`); the slot sits empty until the
+    /// driver finalizes or [`replace`](Self::replace)s it.
+    pub(in crate::machine::execute) fn take_for_run(&mut self, id: NodeId) -> Node<W> {
+        self.store.take_for_run(id)
+    }
+
+    /// Reinstall a tail-replaced slot's node and re-enqueue it if its deps are already satisfied —
+    /// the whole `NodeStep::Replace` apply in one step.
+    pub(in crate::machine::execute) fn replace(&mut self, id: NodeId, node: Node<W>) {
+        self.store.reinstall(id, node);
+        // Replace return sites install their own edges (or clear the slot's dep edges for tail
+        // rewrites), so the pending count is authoritative here.
+        if self.deps.pending_count(id.index()) == 0 {
+            self.queues.push_after_replace(id.index());
+        }
+    }
+
+    /// Slots still `PreRun` after the queue drained — each is parked on a dependency that can no
+    /// longer fire (a dependency cycle). `(count, sample)` for the deadlock error, or `None` when
+    /// every slot is terminal.
+    pub(in crate::machine::execute) fn unresolved(&self) -> Option<(usize, String)> {
+        self.store.unresolved()
     }
 
     /// The live slot's opaque workload payload, or `None` once it has terminalized — at which point

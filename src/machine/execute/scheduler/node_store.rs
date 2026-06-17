@@ -139,16 +139,11 @@ impl<W: Workload> NodeStore<W> {
         }
     }
 
-    /// Tail-call path: reuse the slot index for a new node payload.
+    /// Tail-call path: reuse the slot index for a new node. The workload built the slot's `payload`
+    /// — for the Koan workload a tail-replace stores a payload-less [`NodeScope::Yoked`] re-projected
+    /// from the co-located `cart` at the read boundary, so no persisted `&'run` dangles across a TCO
+    /// reset. See [per-call-arena-protocol.md § Slot-table scope handle](../../../../design/per-call-arena-protocol.md#slot-table-scope-handle).
     pub(super) fn reinstall(&mut self, id: NodeId, node: Node<W>) {
-        self.slots[id] = SlotState::PreRun(node);
-    }
-
-    /// Replace the slot with a fresh per-call frame. The workload built the slot's `payload` — for
-    /// the Koan workload a payload-less [`NodeScope::Yoked`] re-projected from the co-located `cart`
-    /// at the read boundary, so no persisted `&'run` dangles across a TCO reset. See
-    /// [per-call-arena-protocol.md § Slot-table scope handle](../../../../design/per-call-arena-protocol.md#slot-table-scope-handle).
-    pub(super) fn reinstall_with_frame(&mut self, id: NodeId, node: Node<W>) {
         self.slots[id] = SlotState::PreRun(node);
     }
 

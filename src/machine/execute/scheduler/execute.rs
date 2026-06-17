@@ -16,9 +16,9 @@ impl<'run> KoanRuntime<'run> {
     /// about to drop, so it must be lifted into the captured scope's arena before the
     /// frame is released. See design/memory-model.md.
     pub fn execute(&mut self) -> Result<(), KError> {
-        while let Some(idx) = self.sched.queues.pop_next() {
+        while let Some(idx) = self.sched.pop_next() {
             let id = NodeId(idx);
-            let node = self.sched.store.take_for_run(id);
+            let node = self.sched.take_for_run(id);
             // The step reads its scope on demand (`current_scope`), and the post-step uses below
             // re-acquire it per use, so nothing holds a scope borrow across the step's `&mut self`
             // work or the in-step TCO frame reset.
@@ -116,8 +116,7 @@ impl<'run> KoanRuntime<'run> {
                         Some(f) => {
                             // Rotate the ping-pong reserve: the post-step reserve is
                             // superseded by today's post-step frame (which we park as
-                            // the new reserve). `'run`-anchoring lives in
-                            // `reinstall_with_frame`'s SAFETY.
+                            // the new reserve).
                             drop(post_step_reserve);
                             // The non-dying run frame is not a reusable per-call arena; parking
                             // it as the ping-pong reserve would defer (and mis-time) a real
@@ -129,7 +128,7 @@ impl<'run> KoanRuntime<'run> {
                             // cart at the read boundary — no persisted `&'run` to dangle across a TCO
                             // reset. This Yoked payload is the Koan workload's, built here off the
                             // scheduler.
-                            self.sched.store.reinstall_with_frame(
+                            self.sched.replace(
                                 id,
                                 Node {
                                     work: new_work,
@@ -148,7 +147,7 @@ impl<'run> KoanRuntime<'run> {
                         None => {
                             // A frameless Replace keeps the prior cart — an invoke reuses the
                             // reserve, never the active cart, so the slot's cart is always present.
-                            self.sched.store.reinstall(
+                            self.sched.replace(
                                 id,
                                 Node {
                                     work: new_work,
@@ -165,12 +164,6 @@ impl<'run> KoanRuntime<'run> {
                             );
                         }
                     }
-                    // Replace return sites install their own edges (or clear
-                    // `dep_edges[idx]` for tail rewrites), so `pending_count` is
-                    // authoritative here.
-                    if self.sched.deps.pending_count(idx) == 0 {
-                        self.sched.queues.push_after_replace(idx);
-                    }
                 }
                 NodeStep::Alias(producer) => {
                     // The slot spliced itself out as a bare-name forward: move its consumers onto
@@ -184,7 +177,7 @@ impl<'run> KoanRuntime<'run> {
         // Any slot still `PreRun` after drain is parked on a dependency that can
         // no longer fire — surface the cycle rather than panic on the caller's
         // top-level result read.
-        if let Some((pending, sample)) = self.sched.store.unresolved() {
+        if let Some((pending, sample)) = self.sched.unresolved() {
             return Err(KError::new(KErrorKind::SchedulerDeadlock {
                 pending,
                 sample,
