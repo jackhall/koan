@@ -10,7 +10,8 @@
 
 use super::super::nodes::NodeWork;
 use super::super::outcome::{dep_error_frame, Continuation, Outcome};
-use super::super::{ignore_results, DepFinish};
+use super::super::runtime::KoanWorkload;
+use super::super::{ignore_results, DepFinish, ErasedCont};
 use super::DepRequest;
 use super::SchedulerView;
 use crate::machine::core::kfunction::action::FramePlacement;
@@ -52,12 +53,14 @@ pub(super) fn invoke_continue<'run>(
 fn invoke_work<'run>(
     picked: &'run KFunction<'run>,
     working_expr: KExpression<'run>,
-) -> NodeWork {
+) -> NodeWork<KoanWorkload> {
     let carrier = working_expr.summarize();
     NodeWork::new(
         Vec::new(),
         0,
-        ignore_results(Box::new(move |view, _idx| invoke(view, picked, working_expr))),
+        ErasedCont::erase(ignore_results(Box::new(move |view, _idx| {
+            invoke(view, picked, working_expr)
+        }))),
         Some(carrier),
     )
 }

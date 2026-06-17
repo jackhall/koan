@@ -1,13 +1,12 @@
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
+use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::{ScopeId, ScopePtr};
 use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NodeId};
 
-use super::outcome::dep_error_frame;
+use super::runtime::KoanWorkload;
 use super::scheduler::Workload;
-use super::{short_circuit, DepFinish, ErasedCont, NodeCont};
 
 /// Outcome of a node's run. `Replace` is the tail-call path: rewrite the slot's work and
 /// re-enqueue the same index so it runs again with no fresh slot allocated, giving constant
@@ -29,7 +28,7 @@ use super::{short_circuit, DepFinish, ErasedCont, NodeCont};
 pub(super) enum NodeStep<'run> {
     Done(Result<Carried<'run>, KError>),
     Replace {
-        work: NodeWork,
+        work: NodeWork<KoanWorkload>,
         frame: Option<Rc<CallArena>>,
         function: Option<ReturnContract<'run>>,
         block_entry: Option<ScopeId>,
@@ -55,48 +54,32 @@ pub(super) enum NodeStep<'run> {
 /// [`short_circuit`](super::outcome::short_circuit) / [`catch_cont`](super::outcome::catch_cont) /
 /// [`ignore_results`](super::outcome::ignore_results) combinators, so the node itself never
 /// branches and names no AST.
-pub(super) struct NodeWork {
+pub(super) struct NodeWork<W: Workload> {
     pub(in crate::machine::execute) deps: Vec<NodeId>,
     pub(in crate::machine::execute) park_count: usize,
-    /// The slot's continuation, stored lifetime-erased ([`ErasedCont`]) so the node it sits on pins
-    /// no `'run`. Re-anchored against the slot's cart at run time ([`execute`](super::scheduler)).
-    pub(in crate::machine::execute) cont: ErasedCont,
+    /// The slot's continuation, stored opaquely as `W::Continuation` (the Koan workload erases it to
+    /// a lifetime-free [`ErasedCont`](super::ErasedCont) at the call site) so the node it sits on
+    /// pins no `'run`. Re-anchored against the slot's cart at run time ([`execute`](super::scheduler)).
+    pub(in crate::machine::execute) cont: W::Continuation,
     pub(in crate::machine::execute) carrier: Option<String>,
 }
 
-impl NodeWork {
-    /// Build node work from a live continuation, erasing it for lifetime-free storage. The single
-    /// erase boundary: every `NodeWork` is born here, so the continuation is `'run` only until it is
-    /// stored, then re-anchored against the slot's cart when the step runs.
+impl<W: Workload> NodeWork<W> {
+    /// Build node work from an already-erased continuation. The continuation is stored opaquely and
+    /// handed back to run once; the scheduler never inspects it. The Koan workload erases its live
+    /// `NodeCont` at the call site before handing it here.
     pub(in crate::machine::execute) fn new(
         deps: Vec<NodeId>,
         park_count: usize,
-        cont: NodeCont<'_>,
+        cont: W::Continuation,
         carrier: Option<String>,
     ) -> Self {
         NodeWork {
             deps,
             park_count,
-            cont: ErasedCont::erase(cont),
+            cont,
             carrier,
         }
-    }
-
-    /// A dep-finish node built for direct submission (not via `apply_outcome`): the path shared by
-    /// `submit_dep_finish_in_own_scope` and the test fixture. Waits on `deps` (a `park_count`-long
-    /// park prefix, owned suffix), short-circuits on the first errored dep under the
-    /// [`dep_error_frame`] label, else hands the resolved values to `finish`.
-    pub(in crate::machine::execute) fn awaiting(
-        deps: Vec<NodeId>,
-        park_count: usize,
-        finish: DepFinish<'_>,
-    ) -> Self {
-        NodeWork::new(
-            deps,
-            park_count,
-            short_circuit(Some(dep_error_frame()), finish),
-            None,
-        )
     }
 }
 
@@ -123,7 +106,8 @@ pub(super) enum NodeScope {
 
 /// A node's per-call frame state: the execution cart, its ping-pong reserve, and the erased
 /// return contract. Lifetime-free — the cart `Rc` pins everything its members point at, and the
-/// contract is erased ([`ErasedContract`]) and re-anchored at the Done read boundary witnessed
+/// contract is stored opaquely as `W::Contract` (the Koan workload's erased
+/// [`ErasedContract`](crate::machine::core::kfunction::body::ErasedContract)) and re-anchored at the Done read boundary witnessed
 /// by `cart`. Every node owns a `CallFrame`: the cart is the arena the slot's step runs against,
 /// falling back to the run frame at top level (see `Scheduler::submit_node`), and an invoke
 /// reuses the *reserve* rather than the active cart, so the slot's cart is never taken out from
@@ -152,7 +136,7 @@ pub(super) struct CallFrame<W: Workload> {
     /// declared return, not the tail-most callee's. (The kept contract's pointees stay live without
     /// pinning the first frame — a `Function`/`PerCall` points at the `'run` callee or its
     /// captured scope, an `Arm` is only the first contract at top level.)
-    pub(super) contract: Option<ErasedContract>,
+    pub(super) contract: Option<W::Contract>,
 }
 
 /// The opaque per-node workload payload: the Koan name-resolution state the scheduler stores on a
@@ -172,7 +156,7 @@ pub(super) struct NodePayload {
 }
 
 pub(super) struct Node<W: Workload> {
-    pub(super) work: NodeWork,
+    pub(super) work: NodeWork<W>,
     /// The slot's opaque workload payload, stored and handed back but never inspected by the
     /// scheduler. The Koan instantiation is [`NodePayload`] (scope handle + lexical chain).
     pub(super) payload: W::Payload,
@@ -183,13 +167,13 @@ pub(super) struct Node<W: Workload> {
 
 /// Owned `NodeId`s a node must read before running: the `deps[park_count..]` suffix. The
 /// park-producer prefix is installed separately as `Notify` edges.
-pub(super) fn work_deps(work: &NodeWork) -> Vec<NodeId> {
+pub(super) fn work_deps<W: Workload>(work: &NodeWork<W>) -> Vec<NodeId> {
     work.deps[work.park_count..].to_vec()
 }
 
 /// Park-producer prefix (sibling slots whose values the node reads but does not own). The caller
 /// installs each as a `Notify` edge separately from the Owned path.
-pub(super) fn work_park_producers(work: &NodeWork) -> &[NodeId] {
+pub(super) fn work_park_producers<W: Workload>(work: &NodeWork<W>) -> &[NodeId] {
     &work.deps[..work.park_count]
 }
 

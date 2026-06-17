@@ -22,7 +22,7 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::action::{
     Action, Dep, DepPlacement, FinishCtx, FramePlacement,
 };
-use crate::machine::core::kfunction::body::split_body_statements;
+use crate::machine::core::kfunction::body::{split_body_statements, ErasedContract};
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallArena, KError, NodeId, Scope};
 
@@ -31,7 +31,9 @@ use super::lift::NodeLift;
 use super::nodes::{NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, pin_carried_to_run, Continuation, Outcome};
 use super::scheduler::{Scheduler, Workload};
-use super::{catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedValue};
+use super::{
+    catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedCont, ErasedValue,
+};
 
 mod interpret;
 mod submit;
@@ -48,6 +50,8 @@ impl Workload for KoanWorkload {
     type Value = ErasedValue;
     type Error = KError;
     type Frame = CallArena;
+    type Contract = ErasedContract;
+    type Continuation = ErasedCont;
 }
 
 /// The write harness: the sole holder of `&mut Scheduler` across the execute tree. It owns the
@@ -421,23 +425,29 @@ impl<'run> KoanRuntime<'run> {
                     // label. Both install the same `Wait` over the realized deps (edges already
                     // installed by the loop above), the short-circuit baked into the continuation by
                     // `short_circuit`.
-                    Continuation::Finish(finish) => {
-                        NodeWork::new(dep_ids, park_count, short_circuit(dep_error_frame, finish), None)
-                    }
+                    Continuation::Finish(finish) => NodeWork::new(
+                        dep_ids,
+                        park_count,
+                        ErasedCont::erase(short_circuit(dep_error_frame, finish)),
+                        None,
+                    ),
                     // The action-harness catch carries its single watched dep unrealized (its
                     // placement differs from a dep-finish body's fan-out); realize and own it here.
                     // `catch_cont` runs the finish without short-circuiting on a dep error.
                     Continuation::Catch { watched, finish } => {
                         let from = self.realize_catch_dep(watched);
                         self.sched.add_owned_edge(from, NodeId(idx));
-                        NodeWork::new(vec![from], 0, catch_cont(finish), None)
+                        NodeWork::new(vec![from], 0, ErasedCont::erase(catch_cont(finish)), None)
                     }
                     // The resume closure carries the evolving `working_expr` from here on; the
                     // `carrier` it travels with is only the deadlock-summary sample. A decide takes
                     // no dep values, so `ignore_results` drops the (park-only) results slice.
-                    Continuation::Resume { carrier, resume } => {
-                        NodeWork::new(dep_ids, park_count, ignore_results(resume), carrier)
-                    }
+                    Continuation::Resume { carrier, resume } => NodeWork::new(
+                        dep_ids,
+                        park_count,
+                        ErasedCont::erase(ignore_results(resume)),
+                        carrier,
+                    ),
                 };
                 NodeStep::Replace {
                     work,

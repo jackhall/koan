@@ -14,8 +14,23 @@ use crate::machine::{CallArena, LexicalFrame, NodeId, Scope};
 use super::super::nodes::{NodeScope, NodeWork};
 #[cfg(test)]
 use super::super::nodes::NodePayload;
-use super::super::DepFinish;
-use super::KoanRuntime;
+use super::super::outcome::dep_error_frame;
+use super::super::{short_circuit, DepFinish, ErasedCont};
+use super::{KoanRuntime, KoanWorkload};
+
+/// A dep-finish node built for direct submission (not via `apply_outcome`): the path shared by
+/// [`KoanRuntime::submit_dep_finish_in_own_scope`] and the test fixture. Waits on `deps` (a
+/// `park_count`-long park prefix, owned suffix), short-circuits on the first errored dep under the
+/// [`dep_error_frame`] label, else hands the resolved values to `finish`. Workload-side: it names the
+/// erased continuation, so it lives here rather than on the generic `NodeWork`.
+fn awaiting(deps: Vec<NodeId>, park_count: usize, finish: DepFinish<'_>) -> NodeWork<KoanWorkload> {
+    NodeWork::new(
+        deps,
+        park_count,
+        ErasedCont::erase(short_circuit(Some(dep_error_frame()), finish)),
+        None,
+    )
+}
 
 impl<'run> KoanRuntime<'run> {
     /// The explicit chain a submission passes when there is no slot step installed: a detached chain
@@ -66,7 +81,10 @@ impl<'run> KoanRuntime<'run> {
     /// ambient payload): `Anchored` re-uses the erased run-lived `ScopePtr` the slot already holds;
     /// `Yoked` re-projects from the active frame cart at the read boundary. The chain defaults to the
     /// ambient one (or a detached chain at top level). Backs the `*_here` re-dispatch path.
-    pub(in crate::machine::execute) fn submit_in_own_scope(&mut self, work: NodeWork) -> NodeId {
+    pub(in crate::machine::execute) fn submit_in_own_scope(
+        &mut self,
+        work: NodeWork<KoanWorkload>,
+    ) -> NodeId {
         // The body inherits the slot's own handle and chain (a slot step installs the payload before
         // the body submits), so clone it off the ambient before taking `&mut` for the submit.
         let payload = self
@@ -223,7 +241,7 @@ impl<'run> KoanRuntime<'run> {
         let park_count = park_producers.len();
         let mut deps = park_producers;
         deps.extend(owned_subs);
-        self.submit_in_own_scope(NodeWork::awaiting(deps, park_count, finish))
+        self.submit_in_own_scope(awaiting(deps, park_count, finish))
     }
 }
 
@@ -237,7 +255,7 @@ impl<'run> KoanRuntime<'run> {
     /// "complete".
     pub(in crate::machine::execute) fn add(
         &mut self,
-        work: NodeWork,
+        work: NodeWork<KoanWorkload>,
         scope: &'run Scope<'run>,
     ) -> NodeId {
         let explicit_chain = self.ambient_or_detached_chain();
@@ -250,7 +268,7 @@ impl<'run> KoanRuntime<'run> {
     /// otherwise (inherits the ambient payload's chain).
     pub(in crate::machine::execute) fn add_with_chain(
         &mut self,
-        work: NodeWork,
+        work: NodeWork<KoanWorkload>,
         scope: &'run Scope<'run>,
         explicit_chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
@@ -281,6 +299,6 @@ impl<'run> KoanRuntime<'run> {
         let park_count = park_producers.len();
         let mut deps = park_producers;
         deps.extend(owned_subs);
-        self.add(NodeWork::awaiting(deps, park_count, finish), scope)
+        self.add(awaiting(deps, park_count, finish), scope)
     }
 }

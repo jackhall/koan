@@ -20,4 +20,10 @@ pub(in crate::machine::execute) trait Workload {
     type Error;
     /// The per-node memory frame the scheduler manages by `Rc` (mints via the workload; never calls a method on it).
     type Frame;
+    /// The per-node return contract the scheduler stores on a slot's frame and hands back at the
+    /// Done boundary, never inspecting it (the workload re-anchors it).
+    type Contract: Copy;
+    /// The per-node continuation the scheduler stores and hands back to run once, never inspecting
+    /// it (the workload re-anchors + invokes it). Not `Clone` — a one-shot boxed closure.
+    type Continuation;
 }

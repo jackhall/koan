@@ -20,7 +20,7 @@ impl<W: Workload> Scheduler<W> {
     /// its frame cart.
     pub(in crate::machine::execute) fn submit_node(
         &mut self,
-        work: NodeWork,
+        work: NodeWork<W>,
         payload: W::Payload,
     ) -> NodeId {
         // A binder-shaped Dispatch arrives with its `pre_subs` already populated and its

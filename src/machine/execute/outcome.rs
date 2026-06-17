@@ -27,6 +27,7 @@ use crate::machine::{CallArena, KError, NodeId, TraceFrame};
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
 use super::nodes::NodeWork;
+use super::runtime::KoanWorkload;
 
 /// What a node's step wants the harness to do — the single currency every producer and finish
 /// returns. See the module docs for the taxonomy.
@@ -49,7 +50,7 @@ pub(in crate::machine::execute) enum Outcome<'run, 's> {
     /// leading siblings cascade-free before the tail-replace — restoring frame uniqueness for TCO
     /// reuse. `body_index` already accounts for their count.
     Continue {
-        work: NodeWork,
+        work: NodeWork<KoanWorkload>,
         frame: FramePlacement<'run>,
         contract: Option<ReturnContract<'run>>,
         block_entry: Option<ScopeId>,

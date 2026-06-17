@@ -90,7 +90,7 @@ enum DeadlockSample {
 /// Map a stuck slot's `work` to its deadlock-sample contribution. A `Some`-carrier `Wait` (a
 /// dispatch decide) carries a renderable expression summary (`Preferred`); a carrier-less wait
 /// (combine / catch) carries only a generic tag (`Fallback`).
-fn work_deadlock_sample(work: &NodeWork) -> DeadlockSample {
+fn work_deadlock_sample<W: Workload>(work: &NodeWork<W>) -> DeadlockSample {
     let NodeWork { carrier, .. } = work;
     match carrier {
         Some(carrier) => DeadlockSample::Preferred(carrier.clone()),
@@ -327,12 +327,16 @@ impl<W: Workload> NodeStore<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::machine::execute::runtime::KoanWorkload;
+    use crate::machine::execute::ErasedCont;
 
-    fn sample_wait(carrier: Option<String>) -> NodeWork {
+    fn sample_wait(carrier: Option<String>) -> NodeWork<KoanWorkload> {
         NodeWork::new(
             Vec::new(),
             0,
-            Box::new(|_view, _results, _idx| unreachable!("sample test never runs")),
+            ErasedCont::erase(Box::new(|_view, _results, _idx| {
+                unreachable!("sample test never runs")
+            })),
             carrier,
         )
     }
