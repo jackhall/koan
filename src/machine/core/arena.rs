@@ -18,9 +18,10 @@ use std::rc::Rc;
 
 use typed_arena::Arena;
 
-use super::reattach::{pin_deref, reattach_ref};
+use super::reattach::pin_deref;
 use super::scope::Scope;
 use super::scope_ptr::{ScopeFamily, ScopePtr};
+use crate::scheduler::reattach_ref;
 use super::storage_frame::{StorageFrame, StorageProfile, Stored};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::operators::OperatorGroup;

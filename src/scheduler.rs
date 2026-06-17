@@ -24,6 +24,7 @@ use nodes::Node;
 use work_queues::WorkQueues;
 
 mod dep_graph;
+mod erase;
 mod lifecycle;
 mod node_id;
 mod node_store;
@@ -34,6 +35,7 @@ mod work_queues;
 mod workload;
 
 pub use node_id::NodeId;
+pub(crate) use erase::{reattach_ref, reattach_slice, reattach_value, Erased, Reattachable};
 pub(crate) use workload::{FramedRead, Workload};
 
 /// Re-exported for the driver's white-box reclaim tests (the only cross-module user of the edge

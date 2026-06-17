@@ -21,9 +21,8 @@ use std::marker::PhantomData;
 
 use crate::machine::core::kfunction::action::{Dep, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::{
-    reattach_ref, reattach_slice, reattach_value, Erased, Reattachable, ScopeId,
-};
+use crate::machine::core::ScopeId;
+use crate::scheduler::{reattach_ref, reattach_slice, reattach_value, Erased, Reattachable};
 use crate::machine::model::values::{
     Carried, CarriedFamily, KObject, KObjectFamily, ResultCarriedFamily,
 };

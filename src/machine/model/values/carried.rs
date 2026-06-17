@@ -7,7 +7,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::Reattachable;
+use crate::scheduler::Reattachable;
 use crate::machine::model::types::{KType, Parseable};
 use crate::machine::KError;
 

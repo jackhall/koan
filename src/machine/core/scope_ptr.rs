@@ -30,8 +30,8 @@
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
-use super::reattach::{reattach_ref, Reattachable};
 use super::scope::Scope;
+use crate::scheduler::{reattach_ref, Reattachable};
 
 /// `Reattachable` family for [`Scope`] — the family every scope-pointer re-attach (and the arena's
 /// scope-erasure storage) routes through the single audited lifetime-retype. Layout-invariant: a

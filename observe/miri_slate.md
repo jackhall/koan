@@ -3,7 +3,7 @@
 <!-- slate-fingerprint
 src/machine/core/arena.rs: 12
 src/machine/core/kfunction/body.rs: 1
-src/machine/core/reattach.rs: 19
+src/machine/core/reattach.rs: 2
 src/machine/core/scope_ptr.rs: 5
 src/machine/core/storage_frame.rs: 4
 src/machine/execute/dispatch/ctx.rs: 2
@@ -17,6 +17,7 @@ src/machine/execute/runtime/submit.rs: 1
 src/machine/model/values/carried.rs: 2
 src/machine/model/values/kobject.rs: 1
 src/machine/model/values/module.rs: 1
+src/scheduler/erase.rs: 17
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -206,7 +207,7 @@ pins it. No separate minimal test.
 against an `Anchored` slot's own scope, running the same transmute with none of its own; pinned by
 `node_scope_anchored_erase_reattach_roundtrip`. No separate minimal test.
 
-**`retype` primitive — `Erased<T>` / `Reattachable`** ([src/machine/core/reattach.rs](../src/machine/core/reattach.rs))
+**`retype` primitive — `Erased<T>` / `Reattachable`** ([src/scheduler/erase.rs](../src/scheduler/erase.rs))
 — the single audited lifetime-retype every carrier family routes: `retype<A, B>` (a
 `transmute_copy` behind a `ManuallyDrop`, the one site `transmute`'s GAT size-proof can't cover),
 reached only through `Erased<T>::erase` / `reattach` (stored carriers) and the `reattach_value` /
@@ -217,13 +218,16 @@ primitive: `CarriedFamily` / `ResultCarriedFamily`
 ([src/machine/model/values/kobject.rs](../src/machine/model/values/kobject.rs)), `ContractFamily`,
 `ContFamily`, `ScopeFamily`, and `OutcomeFamily`. The test erases a borrow-carrying family to the
 `'static` store, re-anchors it, and reads through every entry point, re-reading the first borrow
-after the helper calls to catch a tree-borrows regression. The module's sibling `pin_deref` (the one
-audited raw heap-pin deref, materializing a `&'x T` from an `Rc`-pinned `*const T`) carries no
-minimal test of its own: every `CallArena` construction routes it (`CallArena` lifetime erasure /
-`try_reset_for_tail` groups), and the storage engine's escape redirect routes it under
-`runtime_arena_alloc_while_prior_ref_live`.
+after the helper calls to catch a tree-borrows regression.
 
 - `erased_roundtrip_and_helpers`
+
+**`pin_deref` — raw heap-pin deref** ([src/machine/core/reattach.rs](../src/machine/core/reattach.rs))
+— the one audited raw heap-pin deref, materializing a `&'x T` from an `Rc`-pinned `*const T` (the
+self-referential arena-pointer derefs the `Erased` retype can't express). Carries no minimal test of
+its own: every `CallArena` construction routes it (`CallArena` lifetime erasure /
+`try_reset_for_tail` groups), and the storage engine's escape redirect routes it under
+`runtime_arena_alloc_while_prior_ref_live`.
 
 **`Reattachable` families — value channel** ([src/machine/model/values/carried.rs](../src/machine/model/values/carried.rs))
 — `CarriedFamily` / `ResultCarriedFamily` are `unsafe impl Reattachable` layout-invariance

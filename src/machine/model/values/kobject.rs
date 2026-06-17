@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::{CallArena, KFuture, Reattachable};
+use crate::machine::core::{CallArena, KFuture};
+use crate::scheduler::Reattachable;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     KKind, KType, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
