@@ -50,14 +50,12 @@ run global; the `'run` annotation is the only thing that makes them look like th
 
 ## Dependencies
 
-A follow-on to the value-channel slice on the same value-movement seam; update
+On the same value-movement seam as the now-shipped scheduler-owned value erasure (the `'node` read
+surface and `Erased<W::Value>` store this rethread extends to the lift / Done hooks); update
 [design/memory-model.md § Arena lifetime erasure](../../design/memory-model.md#arena-lifetime-erasure)
 and [design/per-call-arena-protocol.md](../../design/per-call-arena-protocol.md) if the lift / Done
 re-anchor it describes changes.
 
-**Requires:**
-- [Scheduler-owned value erasure via a `'node` lifetime](scheduler-owned-value-erasure.md) — the
-  `'node` read surface and `Erased<W::Value>` store are the substrate this rethread extends to the
-  lift and contract hooks.
+**Requires:** none — its prerequisite (scheduler-owned value erasure) shipped.
 
 **Unblocks:** none tracked yet.

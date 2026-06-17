@@ -244,7 +244,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Scheduler-owned value erasure via a `'node` lifetime](refactor/scheduler-owned-value-erasure.md)
+- [Node-lifetime lift and contract re-anchor](refactor/node-lifetime-lift-and-contract.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
@@ -335,9 +335,6 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
-- [Scheduler-owned value erasure via a `'node` lifetime](refactor/scheduler-owned-value-erasure.md) —
-  move `Erased`/`Reattachable` into the scheduler and hand back a `'node`-bounded live value
-  witnessed by the slot's frame `Rc`, retiring the driver's `unsafe` reattach on the value read path.
 - [Node-lifetime lift and contract re-anchor](refactor/node-lifetime-lift-and-contract.md) —
   thread distinct input/output node lifetimes through the lift and contract Done-boundary hooks so
   their re-anchor is node-to-node, retiring the `'run` fabrication `read_lifted` / `pin_carried_to_run` do.
