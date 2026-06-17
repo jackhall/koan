@@ -88,10 +88,10 @@ What's shipped that the open items below build on:
   value, scope, memory, or AST type, with the Koan driver in
   [`execute::run_loop`](../src/machine/execute/run_loop.rs). See
   [design/per-call-arena-protocol.md § Consumer-pull node-output lift](../design/per-call-arena-protocol.md#consumer-pull-node-output-lift).
-- *Unified erase/reattach carriers.* The four hand-rolled erase-to-`'static` /
-  reattach-to-`'run` carriers (`ScopePtr`, `ErasedContract`, `ErasedCont`, `ErasedValue`) and the
-  cluster of one-off `outcome.rs` reference reattaches now share one generic
-  [`Erased<T>`](../src/machine/core/reattach.rs) owner over an `unsafe trait Reattachable { type
+- *Unified erase/reattach carriers.* The hand-rolled erase-to-`'static` /
+  reattach carriers (`ScopePtr`, `ErasedContract`, `ErasedCont`, the scheduler's `Erased<W::Value>`)
+  and the cluster of one-off `outcome.rs` reference reattaches now share one generic
+  [`Erased<T>`](../src/scheduler/erase.rs) owner over an `unsafe trait Reattachable { type
   At<'r>; }` lifetime-family. A single `retype` primitive (a `ManuallyDrop` `transmute_copy`) is the
   only lifetime-retype site; each carrier is a declarative `unsafe impl Reattachable` beside its own
   type (`ContractFamily`, `CarriedFamily`, `ContFamily`, `KObjectFamily`, `ScopeFamily`, …) with no

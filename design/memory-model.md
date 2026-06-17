@@ -133,10 +133,11 @@ fabrication. It carries `Scope<'a>`'s invariance structurally for the same reaso
 Beyond the store-side erasure and the branded scope pointers, a handful of carriers store a
 borrow-carrying *value* on a structure the borrow checker cannot lifetime-track — a scheduler
 node's slot, a per-call `TraceFrame` — and re-anchor it at a caller-chosen lifetime on read,
-witnessed by a held `Rc`. These share one owner in
-[`reattach.rs`](../src/machine/core/reattach.rs): the `unsafe trait Reattachable { type At<'r>; }`
-declares a family whose representation is identical across every choice of its single lifetime, and
-[`Erased<T>`](../src/machine/core/reattach.rs) stores that family's `At<'static>` form. A single
+witnessed by a held `Rc`. Moving a value along a dep edge is the scheduler's job, so the
+erase/reattach discipline that makes the move safe lives in the scheduler:
+[`scheduler/erase.rs`](../src/scheduler/erase.rs) declares `unsafe trait Reattachable { type At<'r>; }` —
+a family whose representation is identical across every choice of its single lifetime — and
+[`Erased<T>`](../src/scheduler/erase.rs) stores that family's `At<'static>` form. A single
 private `retype<A, B>` — a `transmute_copy` through a `ManuallyDrop` (plain `transmute` cannot prove
 two opaque GAT projections share a size), guarded by a `const` size assert that restores the check
 `transmute` would emit, mirroring the sibling `erase_store` — is the only place a
@@ -144,19 +145,36 @@ two opaque GAT projections share a size), guarded by a `const` size assert that 
 transient `reattach_value` / `reattach_ref` / `reattach_slice` helpers all route it. The carrier families live beside their own
 types as declarative `unsafe impl Reattachable` instantiations — `ContractFamily` for the
 node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` / `ContFamily` for
-the scheduler value (`ErasedValue`) and continuation (`ErasedCont`), `KObjectFamily` /
+the scheduler value (`Workload::Value`) and continuation (`ErasedCont`), `KObjectFamily` /
 `ResultCarriedFamily` / `OutcomeFamily` for the transient step-lifetime re-exposures in
 `outcome.rs`, and `ScopeFamily` so the branded `ScopePtr` re-attaches and the arena's
-`&Scope → &Scope<'static>` storage erasures route the same primitive — so the module names no
-concrete Koan type and the `core → execute` layering is not inverted. The liveness witness is not a
+`&Scope → &Scope<'static>` storage erasures route the same primitive — so `erase.rs` names no
+concrete Koan type and the scheduler stays workload-independent (the workload depends on the
+scheduler for the machinery, not the reverse). The liveness witness is not a
 parameter on `reattach`: each call site holds the pinning `Rc` (the frame cart, the run arena)
 across the re-anchored read, and the per-carrier doc names which one.
 
-A sibling primitive in the same module, `pin_deref`, owns the *other* unsafe shape — re-borrowing a
-raw `*const T` whose pointee a heap pin holds fixed (the self-referential `Rc<CallArena>` arena
-pointer, the storage engine's escape frame). Erase/reattach moves a value between lifetimes;
-`pin_deref` recovers a reference from a pointer the borrow checker never tracked, so it is the one
-audited home for the `&*ptr` the arena and storage engine would otherwise each open inline. The
+The value channel itself is borrow-checked end to end: the scheduler stores a finalized terminal as
+`Erased<W::Value>` ([`node_store.rs`](../src/scheduler/node_store.rs)), erasing it inside `finalize`,
+and a read (`read_result` / `read` / `read_result_with_frame`) re-anchors it to the read's own
+`&self` borrow — `Live<'node, W>`. Because `free_one` / `finalize` need `&mut self`, the co-stored
+producer-frame `Rc` cannot drop while a read borrow is live, so the re-anchored `'node` lifetime
+cannot outlive the backing arena: the pin-outlives-read fact is a borrow the compiler checks rather
+than a SAFETY comment the driver asserts. The driver's transient reads
+([`KoanRuntime::read_result`](../src/machine/execute/runtime.rs), the
+[`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) forwarder) consume that `'node` value with
+no `unsafe` of their own. The reads that still fabricate a `'run` value — `read_lifted` and
+`pin_carried_to_run`, feeding the consumer-pull lift and the Done contract hook, which are typed at
+one collapsed `'run` — are tracked for a node-lifetime rethread in
+[node-lifetime lift and contract re-anchor](../roadmap/refactor/node-lifetime-lift-and-contract.md).
+
+A sibling primitive in [`reattach.rs`](../src/machine/core/reattach.rs), `pin_deref`, owns the
+*other* unsafe shape — re-borrowing a raw `*const T` whose pointee a heap pin holds fixed (the
+self-referential `Rc<CallArena>` arena pointer, the storage engine's escape frame). Erase/reattach
+moves a value between lifetimes; `pin_deref` recovers a reference from a pointer the borrow checker
+never tracked, so it stays in `machine::core` (it recovers a pointer an arena pins, not a value
+moving between nodes) as the one audited home for the `&*ptr` the arena and storage engine would
+otherwise each open inline. The
 store side carries no `unsafe` at all: `ScopePtr::erase` builds its stored pointer with the safe
 `NonNull::from(scope).cast()`, deferring every fabrication hazard to the re-attach.
 
