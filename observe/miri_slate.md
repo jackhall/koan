@@ -1,23 +1,23 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
+src/builtins/test_support.rs: 1
 src/machine/core/arena.rs: 12
 src/machine/core/kfunction/body.rs: 1
 src/machine/core/reattach.rs: 2
 src/machine/core/scope_ptr.rs: 5
 src/machine/core/storage_frame.rs: 4
-src/machine/execute/dispatch/ctx.rs: 2
+src/machine/execute/dispatch/ctx.rs: 1
 src/machine/execute/finalize.rs: 1
 src/machine/execute/nodes.rs: 1
 src/machine/execute/outcome.rs: 8
 src/machine/execute/run_loop.rs: 1
-src/machine/execute/runtime.rs: 5
-src/machine/execute/runtime/interpret.rs: 1
 src/machine/execute/runtime/submit.rs: 1
 src/machine/model/values/carried.rs: 2
 src/machine/model/values/kobject.rs: 1
 src/machine/model/values/module.rs: 1
 src/scheduler/erase.rs: 17
+src/scheduler/node_store.rs: 4
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -310,37 +310,30 @@ the lifetime-only transmutes bridging a node continuation's per-step `'s` output
 run-lived AST and the frame-pinned slot store: `shorten_outcome` (a decide's `'run` outcome down to
 `'s`), `deps_at_step` (consumer-pull dep terminals down to `'s`), `deps_for_builtin` /
 `obj_for_builtin` (deps back up to `'run` across the concrete builtin boundary), and
-`pin_carried_to_run` (a Done terminal up to `'run` for the frame-pinned store). The `ErasedValue`
-storage erasure is the same `Carried` lifetime transmute one step earlier: `erase` forgets a
-terminal's `'run` for storage in the now-lifetime-free `Scheduler<V>` slot table (the inter-node
-value type parameter), and `reattach` re-anchors it at the workload read boundary, witnessed by the
-slot's co-stored producer-frame `Rc` (or the run arena for a frameless value) — `pin_carried_to_run`
-generalized to the generic value channel. All are exercised by every program; this test pins the
-hardest shape directly — a tail-chain return-type **coarsening**, where the re-tagged terminal must
-be homed in the contract's scope to outlive the reused producer frame, then re-read after the run
-drains the root into the run arena.
+`pin_carried_to_run` (re-anchors the scheduler's `'node` read up to `'run` to feed the consumer-pull
+lift and the Done contract hook, which the generic scheduler cannot type). The `Carried` *storage*
+erase / read re-anchor itself now lives in the scheduler (`node_store.rs`, group below), not here.
+All are exercised by every program; this test pins the hardest shape directly — a tail-chain
+return-type **coarsening**, where the re-tagged terminal must be homed in the contract's scope to
+outlive the reused producer frame, then re-read after the run drains the root into the run arena.
 
 - `tail_call_stamps_result_against_first_callers_return_contract`
 
-**`ErasedValue` re-attach — workload read boundary** ([src/machine/execute/runtime.rs](../src/machine/execute/runtime.rs), [src/machine/execute/runtime/interpret.rs](../src/machine/execute/runtime/interpret.rs), [src/machine/execute/dispatch/ctx.rs](../src/machine/execute/dispatch/ctx.rs))
-— the `unsafe { value.reattach() }` calls where the workload reads a terminal back out of the
-generic `Scheduler<V>` (the Forward-arm pull, the drain-boundary re-home, the consumer-pull dep lift,
-and `SchedulerView::read_result`) run the `ErasedValue` transmute defined in the group above with
-none of their own. The co-stored frame `Rc` pins the value; the same
-`tail_call_stamps_result_against_first_callers_return_contract` (and end-to-end every program, since
-every value now flows through `ErasedValue`) pins them. No separate minimal test.
+**`Carried` re-attach — scheduler slot read** ([src/scheduler/node_store.rs](../src/scheduler/node_store.rs))
+— the scheduler stores a finalized terminal erased to `'static` (`Erased<W::Value>`) and re-anchors
+it on read (`read_result` / `read` / `read_result_with_frame`) to the read's own `&self` borrow,
+witnessed by the slot's co-stored producer-frame `Rc`: `free_one` / `finalize` need `&mut self`, so
+the frame cannot drop while a read borrow is live, so the re-anchored lifetime cannot outlive the
+backing arena. The generic `retype` primitive (`erase.rs` group above) does the transmute; these are
+its stored-carrier consumers. Exercised end-to-end by every scheduler-driving program — every dep
+delivery and top-level read routes a re-anchor — and pinned by
+`tail_call_stamps_result_against_first_callers_return_contract`. No separate minimal test.
 
-**`ErasedValue` re-attach — drain re-home** ([src/machine/execute/runtime/interpret.rs](../src/machine/execute/runtime/interpret.rs))
-— the drain boundary re-homes a consumer-less root into the run arena, erasing the lifted terminal
-(`ErasedValue::erase`) and reading it back (`reattach`) through the same transmute as the group
-above; pinned by `tail_call_stamps_result_against_first_callers_return_contract` and end-to-end.
-No separate minimal test.
-
-**`ErasedValue` re-attach — consumer-pull dep lift** ([src/machine/execute/runtime.rs](../src/machine/execute/runtime.rs))
-— `KoanRuntime::read_lifted` reads each dep terminal out of the generic store (`reattach`) and the
-consumer-pull `NodeLift` copies a framed one into the consuming frame; `run_wait` collects deps by
-calling it with no `unsafe` of its own. Same transmute as the group above. Pinned by the lift/park
-slate tests end-to-end. No separate minimal test.
+**`Carried` re-attach — test-only terminal extraction** ([src/builtins/test_support.rs](../src/builtins/test_support.rs))
+— `extract_terminal` widens the scheduler's `'node` read to the scope lifetime for test helpers
+(`run_one` / `run_one_type` and peers) that return a top-level result: a frameless terminal living in
+the scope arena, which outlives the local scheduler. Test scaffolding, not runtime; exercised under
+Miri by every `run_one`-based test. No separate minimal test.
 
 ## Adding tests to the slate
 

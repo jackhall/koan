@@ -18,7 +18,7 @@ use super::finalize::NodeFinalize;
 use super::nodes::{CallFrame, Node, NodePayload, NodeScope, NodeStep, NodeWork};
 use super::outcome::deps_at_step;
 use super::runtime::KoanRuntime;
-use super::{ErasedValue, NodeCont};
+use super::NodeCont;
 
 #[cfg(test)]
 mod run_tests;
@@ -97,8 +97,8 @@ impl<'run> KoanRuntime<'run> {
                     // held until the slot is freed (frame death Done->free), keeping the terminal
                     // readable until every consumer has pulled it; a frameless / run-frame producer
                     // pins nothing (its value already lives in the run arena).
-                    self.sched
-                        .finalize(idx, result.map(ErasedValue::erase), frame.cloned());
+                    // Hand the scheduler the live terminal; it erases it for storage internally.
+                    self.sched.finalize(idx, result, frame.cloned());
                 }
                 NodeStep::Replace {
                     work: new_work,

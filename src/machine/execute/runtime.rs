@@ -30,9 +30,8 @@ use super::dispatch::{current_scope, DepRequest};
 use super::lift::NodeLift;
 use super::nodes::{NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, pin_carried_to_run, Continuation, Outcome};
-use super::{
-    catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedCont, ErasedValue,
-};
+use super::{catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedCont};
+use crate::machine::model::values::CarriedFamily;
 use crate::scheduler::{Scheduler, Workload};
 
 mod interpret;
@@ -47,7 +46,7 @@ pub(in crate::machine::execute) struct KoanWorkload;
 
 impl Workload for KoanWorkload {
     type Payload = NodePayload;
-    type Value = ErasedValue;
+    type Value = CarriedFamily;
     type Error = KError;
     type Frame = CallArena;
     type Contract = ErasedContract;
@@ -95,16 +94,16 @@ impl Default for KoanRuntime<'_> {
 /// (terminal reads / slot count) so callers drive the whole run through the harness without ever
 /// borrowing the scheduler — the write methods are the inherent `&mut self` ones above.
 impl<'run> KoanRuntime<'run> {
-    /// Read a slot's terminal. See [`Scheduler::read_result`].
-    pub fn read_result(&self, id: NodeId) -> Result<crate::machine::model::Carried<'run>, &KError> {
-        // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
-        self.sched.read_result(id).map(|v| unsafe { v.reattach() })
+    /// Read a slot's terminal, re-anchored by the scheduler to this `&self` borrow (the slot's frame
+    /// `Rc` pins the value for the borrow), so the driver-side read is safe. See
+    /// [`Scheduler::read_result`].
+    pub fn read_result(&self, id: NodeId) -> Result<crate::machine::model::Carried<'_>, &KError> {
+        self.sched.read_result(id)
     }
 
     /// Read a slot's value terminal, panicking on `Err`. See [`Scheduler::read`].
-    pub fn read(&self, id: NodeId) -> crate::machine::model::Carried<'run> {
-        // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
-        unsafe { self.sched.read(id).reattach() }
+    pub fn read(&self, id: NodeId) -> crate::machine::model::Carried<'_> {
+        self.sched.read(id)
     }
 
     /// Pull a dep's terminal lifted into `dest` (consumer-pull): a framed terminal is copied out of
@@ -117,10 +116,13 @@ impl<'run> KoanRuntime<'run> {
         dest: &'run crate::machine::core::RuntimeArena,
     ) -> Result<crate::machine::model::Carried<'run>, KError> {
         match self.sched.read_result_with_frame(dep) {
-            // SAFETY: the slot's co-stored frame Rc pins the value; the lift copies it into `dest`.
-            Ok((value, Some(frame))) => Ok(self.lift(unsafe { value.reattach() }, &frame, dest)),
-            // SAFETY: as above; a frameless / run-arena terminal already survives, forwarded as-is.
-            Ok((value, None)) => Ok(unsafe { value.reattach() }),
+            // The scheduler hands back the value re-anchored to this `&self` borrow; `lift` needs
+            // `'run` (it forwards `'run` refs and self-anchors via the producer frame `Rc`), so the
+            // `'node -> 'run` re-anchor stays here for now — node-lifetime-lift-and-contract.md
+            // rethreads `lift` to a node output lifetime and retires it.
+            Ok((value, Some(frame))) => Ok(self.lift(pin_carried_to_run(value), &frame, dest)),
+            // A frameless / run-arena terminal already survives; same deferred `'run` re-anchor.
+            Ok((value, None)) => Ok(pin_carried_to_run(value)),
             Err(e) => Err(e.clone()),
         }
     }
@@ -489,8 +491,11 @@ impl<'run> KoanRuntime<'run> {
                 if self.sched.is_result_ready(producer) {
                     let dest = current_scope(&self.ambient).arena;
                     let pulled = match self.sched.read_result_with_frame(producer) {
-                        // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
-                        Ok((value, frame)) => Ok((unsafe { value.reattach() }, frame)),
+                        // The scheduler hands back the value re-anchored to this `&self` borrow; the
+                        // `'node -> 'run` re-anchor stays here for now (see `read_lifted` /
+                        // node-lifetime-lift-and-contract.md) because `lift` and `NodeStep::Done`
+                        // are `'run`.
+                        Ok((value, frame)) => Ok((pin_carried_to_run(value), frame)),
                         Err(e) => Err(e.clone_for_propagation()),
                     };
                     match pulled {

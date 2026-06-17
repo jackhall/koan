@@ -136,9 +136,10 @@ impl<'run, 's> SchedulerView<'run, 's> {
         self.sched.is_result_ready(id)
     }
 
-    pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
-        // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
-        self.sched.read_result(id).map(|v| unsafe { v.reattach() })
+    pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'_>, &KError> {
+        // The scheduler re-anchors the value to this `&self` borrow (the slot's frame `Rc` pins it
+        // for that long); the dispatch decide reads it transiently, so no `'run` fabrication.
+        self.sched.read_result(id)
     }
 
     pub(super) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {

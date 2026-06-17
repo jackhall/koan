@@ -1,7 +1,7 @@
 //! `free` / node-reclamation invariants.
 
 use crate::builtins::default_scope;
-use crate::machine::execute::{ErasedValue, KoanRuntime};
+use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::RuntimeArena;
@@ -23,9 +23,9 @@ fn free_reclaims_owned_subtree() {
     for id in [s0, s1, s2, s3] {
         store.clear_node(id);
     }
-    store.set_result(s1, Ok(ErasedValue::erase(Carried::Object(value))));
-    store.set_result(s2, Ok(ErasedValue::erase(Carried::Object(value))));
-    store.set_result(s3, Ok(ErasedValue::erase(Carried::Object(value))));
+    store.set_result(s1, Ok(Carried::Object(value)));
+    store.set_result(s2, Ok(Carried::Object(value)));
+    store.set_result(s3, Ok(Carried::Object(value)));
     store.set_dep_edges(s0.index(), vec![DepEdge::Owned(s1)]);
     store.set_dep_edges(s1.index(), vec![DepEdge::Owned(s2)]);
     store.set_dep_edges(s2.index(), vec![DepEdge::Owned(s3)]);
@@ -80,7 +80,7 @@ fn free_skips_live_slot_and_is_idempotent() {
     let value: &KObject = arena.alloc_object(KObject::Number(1.0));
     sched
         .scheduler_mut()
-        .set_result(s, Ok(ErasedValue::erase(Carried::Object(value))));
+        .set_result(s, Ok(Carried::Object(value)));
     sched.free(s.index());
     assert_eq!(sched.scheduler().free_list_snapshot(), vec![s]);
     sched.free(s.index());
@@ -107,9 +107,9 @@ fn free_does_not_recurse_through_notify_edges() {
     for id in [s_owner, s_owned, s_sibling] {
         store.clear_node(id);
     }
-    store.set_result(s_owner, Ok(ErasedValue::erase(Carried::Object(value))));
-    store.set_result(s_owned, Ok(ErasedValue::erase(Carried::Object(value))));
-    store.set_result(s_sibling, Ok(ErasedValue::erase(Carried::Object(value))));
+    store.set_result(s_owner, Ok(Carried::Object(value)));
+    store.set_result(s_owned, Ok(Carried::Object(value)));
+    store.set_result(s_sibling, Ok(Carried::Object(value)));
     // Sibling self-loop is synthetic: a real scheduler never installs one, but it
     // gives the bug-shape something to walk into so we can assert the walk stopped.
     store.set_dep_edges(

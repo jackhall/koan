@@ -46,9 +46,14 @@ machinery sits in a third place (`machine::core`).
   the slot's frame `Rc` cannot be dropped (`free_one` needs `&mut self`), so the
   pin-outlives-read fact today carried by a SAFETY comment becomes a borrow the
   compiler checks.
-- No `unsafe` reattach of a scheduler-read value remains on the driver read path: the
-  `KoanRuntime` read forwarders and `outcome.rs::pin_carried_to_run` /
-  `deps_for_builtin` consume the scheduler's safe `'node` value directly.
+- The driver's *transient* reads (`KoanRuntime::read_result` / `read` and the
+  `SchedulerView::read_result` forwarder) perform no `unsafe` reattach — they consume
+  the scheduler's safe `'node` value directly. The `'run`-fabricating reads that feed
+  the lift and contract hooks (`read_lifted`, `pin_carried_to_run`) are out of scope
+  here — they need a node-lifetime rethread of those hooks, tracked separately.
+- The driver no longer erases a terminal before `finalize`: it hands `finalize` the
+  live step value and the scheduler erases it internally (`ErasedValue::erase` at the
+  call site is gone).
 - `pin_deref`, [`ScopePtr`](../../src/machine/core/scope_ptr.rs), and the arena
   self-referential derefs stay in `machine::core` — they recover a pointer whose
   pointee an arena pins, not a value moving between nodes.
@@ -73,16 +78,16 @@ machinery sits in a third place (`machine::core`).
 - *Home module for the moved generic — decided.* A new `scheduler/erase.rs` owns
   `Reattachable` / `Erased` / the transient helpers; `machine::core::reattach` keeps
   only `pin_deref` (the arena-pointer re-borrow, which is not value movement).
-- *Whether `Contract` follows `Value` into scheduler-side reattach — open.* The
-  Done-boundary contract reattach ([`finalize.rs`](../../src/machine/execute/finalize.rs))
-  has its witness on the slot frame too, so it may move under the same `'node` thread;
-  alternatively it stays driver-side with the continuation. Recommended: land the
-  value channel first, then evaluate the contract on the same witness.
-- *Fate of `read_result_with_frame`'s framed/frameless branch — open.* Consumer-pull
-  lift needs to know whether to copy (framed) or forward (frameless run-arena value).
-  Either keep it as a scheduler query returning the `'node` value plus a framed flag,
-  or always hand the `'node` value and let the driver lift unconditionally (a harmless
-  extra copy for run-arena values). Recommended: keep the query — it avoids a copy.
+- *Lift and contract re-anchor — deferred.* `read_lifted` and `pin_carried_to_run`
+  still fabricate `'run` because `NodeLift::lift` and `NodeFinalize::finalize_terminal`
+  are typed at one collapsed `'run`. Threading node lifetimes through those hooks is its
+  own change, tracked in
+  [node-lifetime lift and contract re-anchor](node-lifetime-lift-and-contract.md); this
+  item leaves both reattaches in place and only moves the transient-read and erase
+  ownership.
+- *`read_result_with_frame` keeps its framed/frameless query — decided.* Consumer-pull
+  lift needs to know whether to copy (framed) or forward (frameless run-arena value), so
+  the read returns the `'node` value plus the frame `Rc`; the driver branches on it.
 
 ## Dependencies
 
@@ -94,4 +99,6 @@ workload-independent DAG runtime and the unified `Erased<T>` carriers — have s
 
 **Requires:** none — both prerequisites shipped.
 
-**Unblocks:** none tracked yet.
+**Unblocks:**
+- [Node-lifetime lift and contract re-anchor](node-lifetime-lift-and-contract.md) — the `'node` read
+  surface and `Erased<W::Value>` store are the substrate that rethread extends to the lift / Done hooks.

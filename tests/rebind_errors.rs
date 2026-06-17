@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::{Carried, KObject, KType};
+use koan::machine::model::{KObject, KType};
 use koan::machine::{KError, KErrorKind, KoanRuntime, RuntimeArena, Scope};
 use koan::parse::parse;
 
@@ -27,10 +27,7 @@ fn build_scope<'a>(arena: &'a RuntimeArena) -> &'a Scope<'a> {
     default_scope(arena, Box::new(SharedBuf(captured)))
 }
 
-fn run_collecting_errors<'a>(
-    scope: &'a Scope<'a>,
-    source: &str,
-) -> Vec<Result<Carried<'a>, KError>> {
+fn run_collecting_errors<'a>(scope: &'a Scope<'a>, source: &str) -> Vec<Result<(), KError>> {
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = KoanRuntime::new();
     let mut ids = Vec::new();
@@ -38,11 +35,10 @@ fn run_collecting_errors<'a>(
         ids.push(sched.dispatch_in_scope(e, scope));
     }
     let _ = sched.execute();
-    // Keep the raw carrier (don't narrow to the object arm) — a top-level `MODULE` /
-    // type-declaration statement produces a `Carried::Type`, and the rebind tests assert
-    // only on `Ok`/`Err`, never on the produced value.
+    // These tests assert only on `Ok`/`Err`, never on the produced value, so discard the carrier —
+    // the scheduler re-anchors a read to its own borrow and the value need not escape it.
     ids.into_iter()
-        .map(|id| sched.read_result(id).map_err(|e| e.clone()))
+        .map(|id| sched.read_result(id).map(|_| ()).map_err(|e| e.clone()))
         .collect()
 }
 

@@ -338,3 +338,6 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Scheduler-owned value erasure via a `'node` lifetime](refactor/scheduler-owned-value-erasure.md) —
   move `Erased`/`Reattachable` into the scheduler and hand back a `'node`-bounded live value
   witnessed by the slot's frame `Rc`, retiring the driver's `unsafe` reattach on the value read path.
+- [Node-lifetime lift and contract re-anchor](refactor/node-lifetime-lift-and-contract.md) —
+  thread distinct input/output node lifetimes through the lift and contract Done-boundary hooks so
+  their re-anchor is node-to-node, retiring the `'run` fabrication `read_lifted` / `pin_carried_to_run` do.

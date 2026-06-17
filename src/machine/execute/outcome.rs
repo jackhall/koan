@@ -184,14 +184,6 @@ unsafe impl Reattachable for ContFamily {
 /// takes `self` by value. See [`Erased`].
 pub(in crate::machine::execute) type ErasedCont = Erased<ContFamily>;
 
-/// A [`Carried`] inter-node value with its `'run` erased to `'static` — the scheduler's value type
-/// parameter, instantiated by the Koan workload. The value channel's [`Erased`] carrier: `erase`
-/// forgets the value's lifetime for storage in the scheduler's lifetime-free slot table; `reattach`
-/// recovers a `'run` that the producer-frame `Rc` co-stored in the slot pins (or, for a frameless /
-/// run-arena value, the run arena keeps live). The scheduler stores this opaquely (the `Value` of
-/// `KoanWorkload`) and never inspects it; only the workload erases / re-anchors.
-pub(in crate::machine::execute) type ErasedValue = Erased<CarriedFamily>;
-
 /// Dep-finish continuation: short-circuit on the first errored dep (labelled with `dep_error_frame`),
 /// else hand the resolved [`Carried`] values to a value-only [`DepFinish`]. The short-circuit
 /// the handler used to do is now this combinator's job, so the node stays uniform.

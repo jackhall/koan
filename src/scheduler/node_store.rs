@@ -15,7 +15,7 @@ use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
 use super::nodes::{Node, NodeWork};
-use super::{FramedRead, NodeId, Workload};
+use super::{Erased, FramedRead, Live, NodeId, Workload};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -61,10 +61,12 @@ enum SlotState<W: Workload> {
     /// `reinstall` / `finalize` / `free_one` exits this state.
     Running,
     /// A finalized terminal, plus the producer frame `Rc` that backs it (`None` for a frameless /
-    /// run-arena value). Holding the frame `Rc` here pins the producer's per-call memory until the
-    /// slot is freed, so frame death moves from Done to free. The pin is established now and read by
-    /// the consumer-pull lift, which copies the terminal out of this frame into the consumer's.
-    Done(Result<W::Value, W::Error>, Option<Rc<W::Frame>>),
+    /// run-arena value). The value is stored erased to `'static` — a read re-anchors it to the read
+    /// borrow. Holding the frame `Rc` here pins the producer's per-call memory until the slot is
+    /// freed, so frame death moves from Done to free and a read's re-anchored lifetime cannot
+    /// outlive the backing arena. The pin is established now and read by the consumer-pull lift,
+    /// which copies the terminal out of this frame into the consumer's.
+    Done(Result<Erased<W::Value>, W::Error>, Option<Rc<W::Frame>>),
     /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
     /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
     /// slot's consumers were moved onto `producer`'s notify list at splice time, so `producer`'s
@@ -144,12 +146,12 @@ impl<W: Workload> NodeStore<W> {
     /// Replace a finalized terminal in place, dropping any pinned producer frame. The drain
     /// boundary uses this to re-home a consumer-less root into a surviving arena (`output` already
     /// lifted there), releasing the per-call frame the producer kept it in.
-    pub(super) fn rehome_terminal(&mut self, id: NodeId, output: Result<W::Value, W::Error>) {
+    pub(super) fn rehome_terminal(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {
         debug_assert!(
             matches!(self.slots[id], SlotState::Done(..)),
             "rehome_terminal expects a finalized slot",
         );
-        self.slots[id] = SlotState::Done(output, None);
+        self.slots[id] = SlotState::Done(output.map(Erased::erase), None);
     }
 
     /// Callers must pair this with the dep-graph notify-walk so consumers
@@ -158,10 +160,12 @@ impl<W: Workload> NodeStore<W> {
     pub(super) fn finalize(
         &mut self,
         id: NodeId,
-        output: Result<W::Value, W::Error>,
+        output: Result<Live<'_, W>, W::Error>,
         frame: Option<Rc<W::Frame>>,
     ) {
-        self.slots[id] = SlotState::Done(output, frame);
+        // Erase the live terminal to `'static` for storage; the co-stored frame `Rc` pins its
+        // backing arena until the slot frees, so a later read can re-anchor it soundly.
+        self.slots[id] = SlotState::Done(output.map(Erased::erase), frame);
     }
 
     /// Idempotent on already-`Free` slots when paired with the cascade-free
@@ -189,9 +193,13 @@ impl<W: Workload> NodeStore<W> {
 
     /// Only safe on IDs whose slot has been finalized; internal slots may have been eagerly freed by
     /// their parent. Raw — callers pass an already alias-resolved id.
-    pub(super) fn read_result(&self, id: NodeId) -> Result<W::Value, &W::Error> {
+    pub(super) fn read_result(&self, id: NodeId) -> Result<Live<'_, W>, &W::Error> {
         match &self.slots[id] {
-            &SlotState::Done(Ok(c), _) => Ok(c),
+            // SAFETY: the re-anchored value lives in the slot's co-stored frame `Rc` (or the run
+            // arena for a frameless terminal); `free_one`/`finalize` need `&mut self`, so for the
+            // whole `&self` borrow the frame cannot drop, so the read borrow cannot outlive the
+            // backing arena. The erased carrier is `Copy`, copied out before re-anchoring.
+            &SlotState::Done(Ok(c), _) => Ok(unsafe { c.reattach() }),
             SlotState::Done(Err(e), _) => Err(e),
             _ => panic!("result must be ready by the time it's read"),
         }
@@ -202,18 +210,24 @@ impl<W: Workload> NodeStore<W> {
     /// copies the value out of that frame into the consumer's arena before the producer slot frees.
     pub(super) fn read_result_with_frame(&self, id: NodeId) -> FramedRead<'_, W> {
         match &self.slots[id] {
-            SlotState::Done(Ok(c), frame) => Ok((*c, frame.clone())),
+            // SAFETY: as `read_result` — the value is re-anchored to the `&self` read borrow, over
+            // which the co-stored frame `Rc` (cloned out here for the consumer-pull lift) pins the
+            // backing arena.
+            SlotState::Done(Ok(c), frame) => Ok((unsafe { c.reattach() }, frame.clone())),
             SlotState::Done(Err(e), _) => Err(e),
             _ => panic!("result must be ready by the time it's read"),
         }
     }
 
-    pub(super) fn read(&self, id: NodeId) -> W::Value {
-        match self.read_result(id) {
-            Ok(c) => c,
+    pub(super) fn read(&self, id: NodeId) -> Live<'_, W> {
+        match &self.slots[id] {
+            // SAFETY: as `read_result`. Matched directly (not via `read_result`) so the re-anchored
+            // borrow is this method's own `&self`, sidestepping the invariant-GAT reborrow nest.
+            &SlotState::Done(Ok(c), _) => unsafe { c.reattach() },
             // The scheduler stores the opaque error but never inspects it, so the misuse panic
             // names the node, not the error value.
-            Err(_) => panic!("read called on errored node"),
+            SlotState::Done(Err(_), _) => panic!("read called on errored node"),
+            _ => panic!("result must be ready by the time it's read"),
         }
     }
 
@@ -277,8 +291,8 @@ impl<W: Workload> NodeStore<W> {
     }
 
     #[cfg(test)]
-    pub(super) fn set_result(&mut self, id: NodeId, output: Result<W::Value, W::Error>) {
-        self.slots[id] = SlotState::Done(output, None);
+    pub(super) fn set_result(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {
+        self.slots[id] = SlotState::Done(output.map(Erased::erase), None);
     }
 
     #[cfg(test)]
@@ -316,12 +330,21 @@ impl<W: Workload> NodeStore<W> {
 mod tests {
     use super::*;
 
+    use crate::scheduler::Reattachable;
+
+    /// A lifetime-free `Reattachable` family for the trivial test value.
+    struct U32Value;
+    // SAFETY: `u32` carries no lifetime, so `At<'r>` is the same type for every `'r`.
+    unsafe impl Reattachable for U32Value {
+        type At<'r> = u32;
+    }
+
     /// A minimal workload for the white-box store tests: every associated type is trivial, so the
     /// generic store can be exercised without naming any Koan type.
     struct TestWorkload;
     impl Workload for TestWorkload {
         type Payload = ();
-        type Value = u32;
+        type Value = U32Value;
         type Error = ();
         type Frame = ();
         type Contract = ();
