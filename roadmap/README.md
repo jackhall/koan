@@ -88,6 +88,15 @@ What's shipped that the open items below build on:
   value, scope, memory, or AST type, with the Koan driver in
   [`execute::run_loop`](../src/machine/execute/run_loop.rs). See
   [design/per-call-arena-protocol.md § Consumer-pull node-output lift](../design/per-call-arena-protocol.md#consumer-pull-node-output-lift).
+- *Unified erase/reattach carriers.* The four hand-rolled erase-to-`'static` /
+  reattach-to-`'run` carriers (`ScopePtr`, `ErasedContract`, `ErasedCont`, `ErasedValue`) and the
+  cluster of one-off `outcome.rs` reference reattaches now share one generic
+  [`Erased<T>`](../src/machine/core/reattach.rs) owner over an `unsafe trait Reattachable { type
+  At<'r>; }` lifetime-family. A single `retype` primitive (a `ManuallyDrop` `transmute_copy`) is the
+  only lifetime-retype site; each carrier is a declarative `unsafe impl Reattachable` beside its own
+  type (`ContractFamily`, `CarriedFamily`, `ContFamily`, `KObjectFamily`, `ScopeFamily`, …) with no
+  `transmute` of its own, and the liveness witness moves to the call site. See
+  [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
   visibility carve-out is retired and `visible` is the single `idx < cutoff` rule across both

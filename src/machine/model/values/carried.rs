@@ -7,7 +7,9 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::Reattachable;
 use crate::machine::model::types::{KType, Parseable};
+use crate::machine::KError;
 
 use super::KObject;
 
@@ -17,6 +19,28 @@ use super::KObject;
 pub enum Carried<'a> {
     Object(&'a KObject<'a>),
     Type(&'a KType<'a>),
+}
+
+/// `Reattachable` family for [`Carried`] — the value channel's erase/reattach owner (`ErasedValue`,
+/// `pin_carried_to_run`, `deps_for_builtin`). Layout-invariant: a `Carried<'a>` is two `&'a`
+/// references, whose representation does not depend on `'a`.
+pub struct CarriedFamily;
+
+// SAFETY: `Carried<'r>` is one type generic only in `'r`; its layout (two pointers) is identical
+// for every `'r`.
+unsafe impl Reattachable for CarriedFamily {
+    type At<'r> = Carried<'r>;
+}
+
+/// `Reattachable` family for a dep terminal `Result<Carried, KError>` — the element type the
+/// dep-delivery slice retypes (`deps_at_step`). Layout-invariant for the same reason as
+/// [`CarriedFamily`] (`KError` carries no lifetime).
+pub struct ResultCarriedFamily;
+
+// SAFETY: `Result<Carried<'r>, KError>` is generic only in `'r` (the `KError` arm is lifetime-free);
+// its layout does not depend on `'r`.
+unsafe impl Reattachable for ResultCarriedFamily {
+    type At<'r> = Result<Carried<'r>, KError>;
 }
 
 impl<'a> Carried<'a> {

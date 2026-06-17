@@ -55,8 +55,9 @@ impl<'run> KoanRuntime<'run> {
             // fabricated `'run` cannot outlive the continuation's captures (which live in the run
             // arena or a strict ancestor of the cart). Mirrors the contract re-anchor at the Done
             // boundary — the same erase / reattach discipline, generalized to the whole closure.
-            // SAFETY: `cart` is the witness pinning the captures' home for the whole step.
-            let cont: NodeCont<'run> = unsafe { erased_cont.reattach(&cart) };
+            // SAFETY: `cart` is the witness pinning the captures' home for the whole step; it is
+            // held live below (moved into the step guard) across the continuation's run.
+            let cont: NodeCont<'run> = unsafe { erased_cont.reattach() };
             let guard = self.enter_slot_step(
                 cart,
                 reserve,

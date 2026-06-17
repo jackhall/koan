@@ -2,8 +2,4 @@
 # (the four scoring columns are total cost / fixed denominator D=1000;
 #  root-loc is the absolute subtree LOC, tracked for context only)
 # managed by tools/modgraph.py --baseline; newest first, capped to 5 entries
-2026-06-17 50e7456+ 5749.54 3478.53 1027.63 1243.38 15589
-2026-06-17 b8afe01+ 5756.15 3478.53 1027.63 1249.99 15589
-2026-06-16 5fc9fc0+ 5890.73 3572.54 1065.95 1252.24 15739
-2026-06-16 be3c279+ 5982.44 3664.25 1065.87 1252.32 15738
-2026-06-16 0780d31+ 5977.92 3661.24 1065.07 1251.62 15728
+2026-06-17 4bb6e0c+ 5828.75 3555.09 1029.71 1243.95 15623

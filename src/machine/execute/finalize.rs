@@ -41,10 +41,10 @@ impl<'run> NodeFinalize<'run> for KoanRuntime<'run> {
         // below consults it only when `frame` is `Some` (a real per-call frame, which is exactly
         // when a contract is set), so a contract on the non-dying run frame is harmlessly skipped.
         let prev_function = match (contract, frame) {
-            // SAFETY: `frame` is the cart pinning the contract's home arena for the whole Done
-            // boundary; the re-anchored borrow is consumed within this call, so it cannot dangle.
-            // Mirrors `CallArena::scope`'s unbounded re-attach.
-            (Some(c), Some(witness)) => Some(unsafe { c.reattach(witness) }),
+            // SAFETY: a `Some` frame is the cart pinning the contract's home arena for the whole
+            // Done boundary (held live below); the re-anchored borrow is consumed within this call,
+            // so it cannot dangle. Mirrors `CallArena::scope`'s unbounded re-attach.
+            (Some(c), Some(_witness)) => Some(unsafe { c.reattach() }),
             _ => None,
         };
         enforce_return_contract(output, frame, prev_function)

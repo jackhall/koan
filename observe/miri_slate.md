@@ -2,17 +2,20 @@
 
 <!-- slate-fingerprint
 src/machine/core/arena.rs: 12
-src/machine/core/kfunction/body.rs: 3
-src/machine/core/scope_ptr.rs: 7
+src/machine/core/kfunction/body.rs: 1
+src/machine/core/reattach.rs: 17
+src/machine/core/scope_ptr.rs: 8
 src/machine/core/storage_frame.rs: 4
 src/machine/execute/dispatch/ctx.rs: 2
 src/machine/execute/finalize.rs: 1
 src/machine/execute/nodes.rs: 1
-src/machine/execute/outcome.rs: 10
+src/machine/execute/outcome.rs: 8
 src/machine/execute/run_loop.rs: 3
 src/machine/execute/runtime.rs: 3
 src/machine/execute/runtime/interpret.rs: 1
 src/machine/execute/runtime/submit.rs: 1
+src/machine/model/values/carried.rs: 2
+src/machine/model/values/kobject.rs: 1
 src/machine/model/values/module.rs: 1
 -->
 
@@ -203,30 +206,56 @@ pins it. No separate minimal test.
 against an `Anchored` slot's own scope, running the same transmute with none of its own; pinned by
 `node_scope_anchored_erase_reattach_roundtrip`. No separate minimal test.
 
-**`ErasedContract` re-attach** ([src/machine/core/kfunction/body.rs](../src/machine/core/kfunction/body.rs))
-— the contract-lifetime erasure that mirrors `ScopePtr` for `ReturnContract`: `erase` forgets the
-lifetime for storage on a node's lifetime-free `Frame`, and the `unsafe` `reattach` transmutes
-`ReturnContract<'static>` back to a lifetime witnessed by the cart `Rc` that pins the contract's
-home arena (the cart's frame-outer arena — a strict ancestor). The unbounded re-attach call site
-in [src/machine/execute/finalize.rs](../src/machine/execute/finalize.rs) (the `NodeFinalize`
-Done-boundary return-type check) runs the same transmute; end-to-end, `recursive_tagged_match_no_uaf`
-exercises it through a MATCH arm's `-> :T` carried across tail recursion. This test pins the
-erase → reattach round-trip directly.
+**`retype` primitive — `Erased<T>` / `Reattachable`** ([src/machine/core/reattach.rs](../src/machine/core/reattach.rs))
+— the single audited lifetime-retype every carrier family routes: `retype<A, B>` (a
+`transmute_copy` behind a `ManuallyDrop`, the one site `transmute`'s GAT size-proof can't cover),
+reached only through `Erased<T>::erase` / `reattach` (stored carriers) and the `reattach_value` /
+`reattach_ref` / `reattach_slice` transient helpers. The `unsafe impl Reattachable` families declare
+layout-invariance and carry no runtime `unsafe` of their own — they are exercised through this
+primitive: `CarriedFamily` / `ResultCarriedFamily`
+([src/machine/model/values/carried.rs](../src/machine/model/values/carried.rs)), `KObjectFamily`
+([src/machine/model/values/kobject.rs](../src/machine/model/values/kobject.rs)), `ContractFamily`,
+`ContFamily`, `ScopeFamily`, and `OutcomeFamily`. The test erases a borrow-carrying family to the
+`'static` store, re-anchors it, and reads through every entry point, re-reading the first borrow
+after the helper calls to catch a tree-borrows regression.
 
-- `erased_contract_reattach_roundtrip`
+- `erased_roundtrip_and_helpers`
+
+**`Reattachable` families — value channel** ([src/machine/model/values/carried.rs](../src/machine/model/values/carried.rs))
+— `CarriedFamily` / `ResultCarriedFamily` are `unsafe impl Reattachable` layout-invariance
+declarations with no runtime `unsafe` op; the `retype` primitive that consumes them is exercised by
+`erased_roundtrip_and_helpers` (and, for `Carried` specifically, every scheduler-driving slate test
+through `ErasedValue` / the dep-delivery helpers). No separate minimal test.
+
+**`Reattachable` family — `KObject`** ([src/machine/model/values/kobject.rs](../src/machine/model/values/kobject.rs))
+— `KObjectFamily` is an `unsafe impl Reattachable` layout-invariance declaration with no runtime
+`unsafe` op; consumed through `retype` by `erased_roundtrip_and_helpers` and exercised end-to-end via
+the catch-watched `obj_for_builtin` reattach. No separate minimal test.
+
+**`ErasedContract` re-attach** ([src/machine/core/kfunction/body.rs](../src/machine/core/kfunction/body.rs))
+— the contract-lifetime erasure that mirrors `ScopePtr` for `ReturnContract`, now an
+`Erased<ContractFamily>` routing the shared `retype` primitive: `erase` forgets the lifetime for
+storage on a node's lifetime-free `Frame`, and the `unsafe` `reattach` recovers a lifetime witnessed
+by the cart `Rc` that pins the contract's home arena (the cart's frame-outer arena — a strict
+ancestor). As a thin-value `Erased` carrier its erase → reattach round-trip is the owned path of the
+`retype` primitive, pinned by `erased_roundtrip_and_helpers`; end-to-end, `recursive_tagged_match_no_uaf`
+exercises the full carrier through a MATCH arm's `-> :T` carried across tail recursion. No separate
+minimal test.
 
 **`ErasedContract` re-attach — Done-boundary call site** ([src/machine/execute/finalize.rs](../src/machine/execute/finalize.rs))
-— the `unsafe { contract.reattach(&cart) }` in the `NodeFinalize::finalize_terminal` hook runs the
-transmute defined in the group above; it carries no transmute of its own, so the same `erased_contract_reattach_roundtrip`
-(and end-to-end `recursive_tagged_match_no_uaf`) pins it. No separate minimal test.
+— the `unsafe { contract.reattach() }` in the `NodeFinalize::finalize_terminal` hook routes the
+`retype` primitive with none of its own, re-anchoring the contract against the cart held live for the
+Done boundary; `erased_roundtrip_and_helpers` (and end-to-end `recursive_tagged_match_no_uaf`) pins
+it. No separate minimal test.
 
 **`ErasedCont` continuation erasure** ([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs))
 — the continuation generalizes the `ErasedContract` discipline from a `ReturnContract` enum to the
-whole `NodeCont` (`Box<dyn FnOnce>`): `erase` forgets the captured `'run` for storage on a
-lifetime-free node, and the `unsafe` `reattach` transmutes `NodeCont<'static>` back to a `'run`
-witnessed by the slot's cart `Rc` (which pins the captures' home — the run arena or a strict ancestor
-of the cart). Distinct shape from the contract group above: the transmute is over a **fat pointer**
-(data + vtable), not a thin enum, so it carries its own minimal test. The re-attach call site in
+whole `NodeCont` (`Box<dyn FnOnce>`), as an `Erased<ContFamily>` routing the shared `retype`: `erase`
+forgets the captured `'run` for storage on a lifetime-free node, and the `unsafe` `reattach` recovers
+a `'run` witnessed by the slot's cart `Rc` (which pins the captures' home — the run arena or a strict
+ancestor of the cart). Distinct shape from the contract group above: the retype is over a **fat
+pointer** (data + vtable), not a thin enum, so it carries its own minimal test. The re-attach call
+site in
 [src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs) (the run loop,
 just before `run_wait`) runs the same transmute end-to-end every step. This test pins the
 erase → reattach → invoke round-trip directly, calling the reattached closure so tree borrows checks
@@ -324,9 +353,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-17: 653s — 26 tests, 0 leaks, 0 UB
 - 2026-06-17: 646s — 25 tests, 0 leaks, 0 UB
 - 2026-06-16: 637s — 25 tests, 0 leaks, 0 UB
 - 2026-06-16: 617s — 25 tests, 0 leaks, 0 UB
 - 2026-06-16: 607s — 25 tests, 0 leaks, 0 UB
-- 2026-06-16: 609s — 25 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

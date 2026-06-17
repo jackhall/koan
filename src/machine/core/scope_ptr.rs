@@ -30,7 +30,18 @@
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
+use super::reattach::{reattach_ref, Reattachable};
 use super::scope::Scope;
+
+/// `Reattachable` family for [`Scope`] — the family every scope-pointer re-attach (and the arena's
+/// scope-erasure storage) routes through the single audited lifetime-retype. Layout-invariant: a
+/// `Scope<'r>` is generic only in `'r`.
+pub struct ScopeFamily;
+
+// SAFETY: `Scope<'r>` is one type generic only in `'r`; its representation does not depend on `'r`.
+unsafe impl Reattachable for ScopeFamily {
+    type At<'r> = Scope<'r>;
+}
 
 /// A branded `Scope` pointer: its lifetime is erased to `'static` for storage in a
 /// lifetime-free (`CallArena`) or self-referential (`Module` / `Signature` / `KFunction`)
@@ -102,7 +113,7 @@ impl<'a> ScopePtr<'a> {
     /// the invariant brand cannot supply by safe coercion. The carriers that own a real `'a`
     /// route the safe [`Self::reattach`] instead.
     pub unsafe fn reattach_unbounded<'b>(&self) -> &'b Scope<'b> {
-        std::mem::transmute::<&Scope<'static>, &'b Scope<'b>>(self.ptr.as_ref())
+        reattach_ref::<ScopeFamily>(self.ptr.as_ref())
     }
 
     /// Re-attach with the borrow `'step` *bounded* by the `&'step self` receiver and the scope
@@ -118,7 +129,7 @@ impl<'a> ScopePtr<'a> {
     /// for all of `'step`; the returned borrow is bounded to `'step`, so it cannot escape that pin.
     /// `'step` is driven by the receiver, `'b` by the return-type annotation.
     pub unsafe fn reattach_bounded<'step, 'b: 'step>(&'step self) -> &'step Scope<'b> {
-        std::mem::transmute::<&'step Scope<'static>, &'step Scope<'b>>(self.ptr.as_ref())
+        reattach_ref::<ScopeFamily>(self.ptr.as_ref())
     }
 }
 
@@ -162,6 +173,6 @@ impl<'a> BoundedScopePtr<'a> {
     /// the returned borrow is capped at `'step`, so it cannot escape that pin. `'step` is driven by the
     /// receiver, `'a` by the return-type annotation.
     pub fn get<'step>(&'step self) -> &'step Scope<'a> {
-        unsafe { std::mem::transmute::<&'step Scope<'static>, &'step Scope<'a>>(self.ptr.as_ref()) }
+        unsafe { reattach_ref::<ScopeFamily>(self.ptr.as_ref()) }
     }
 }

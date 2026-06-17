@@ -2,11 +2,9 @@
 //! body-statement splitters, and the `Body` enum (an action `fn` pointer vs a captured
 //! user-defined `KExpression`).
 
-use std::rc::Rc;
-
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use crate::machine::core::{CallArena, RuntimeArena};
+use crate::machine::core::{Erased, Reattachable, RuntimeArena};
 use crate::machine::model::types::UntypedKey;
 use crate::machine::model::KType;
 
@@ -60,51 +58,26 @@ impl<'a> ReturnContract<'a> {
     }
 }
 
-/// A [`ReturnContract`] with its lifetime erased to `'static` for storage on a lifetime-free
-/// node `CallFrame`. The contract's `&KFunction` / `&KType` point into the cart's frame *outer*
-/// arena (a strict ancestor — see `branch_walk::resolve_arm_return_contract` and `invoke`'s
-/// `Outcome::Continue` tail construction), which the co-stored `cart: Rc<CallArena>` keeps live via its
-/// `outer_frame` / escape chain. So the cart is the liveness witness: while it is held, the
-/// contract's home arena cannot drop.
-///
-/// This is the single audited owner of the contract erasure, mirroring
-/// [`ScopePtr`](crate::machine::core::scope_ptr::ScopePtr): the lifetime is forgotten for
-/// storage and re-anchored at the Done read boundary, witnessed by the cart. The `Function` /
-/// `Arm` discriminant is readable without a re-anchor for the chain-shape decision that needs the
-/// tag but not the pointee.
-#[derive(Clone, Copy)]
-pub struct ErasedContract {
-    inner: ReturnContract<'static>,
+/// `Reattachable` family for [`ReturnContract`] — the return-contract erasure carried on a node's
+/// `TraceFrame`. Layout-invariant: the contract's arms are `&'a` references (and a `&'static str`),
+/// whose representation does not depend on `'a`.
+pub struct ContractFamily;
+
+// SAFETY: `ReturnContract<'r>` is one type generic only in `'r`; every arm is a reference whose
+// layout is identical for all `'r`.
+unsafe impl Reattachable for ContractFamily {
+    type At<'r> = ReturnContract<'r>;
 }
 
-impl ErasedContract {
-    /// Erase a live contract to its storable `'static` form. Safe: forgetting a lifetime for
-    /// storage cannot fabricate one — the value is never *used* at `'static`, only stored, and
-    /// [`Self::reattach`] shortens it back to a cart-witnessed lifetime before any use.
-    pub fn erase(contract: ReturnContract<'_>) -> Self {
-        // SAFETY: `ReturnContract<'a>` and `ReturnContract<'static>` share layout (a lifetime
-        // never changes representation); the erased value is stored, not dereferenced, until
-        // `reattach` re-anchors it.
-        ErasedContract {
-            inner: unsafe {
-                std::mem::transmute::<ReturnContract<'_>, ReturnContract<'static>>(contract)
-            },
-        }
-    }
-
-    /// Re-anchor the contract to a caller-chosen `'a`, witnessed by the cart `Rc` co-stored with
-    /// it on the node's `TraceFrame`. The single fabrication for this carrier — mirrors
-    /// [`CallArena::scope`](crate::machine::core::CallArena::scope)'s unbounded re-attach.
-    ///
-    /// SAFETY: `_witness` is the cart that pins the contract's home arena (a strict ancestor of
-    /// the cart's own frame) for as long as it is held. The caller re-anchors only at the Done
-    /// boundary, holding the cart across the use, so the returned `'a` borrow cannot outlive the
-    /// pointee. `'a` is driven by the return-type annotation (late-bound, like
-    /// `reattach_unbounded`), not a turbofish argument.
-    pub unsafe fn reattach<'a>(self, _witness: &Rc<CallArena>) -> ReturnContract<'a> {
-        std::mem::transmute::<ReturnContract<'static>, ReturnContract<'a>>(self.inner)
-    }
-}
+/// A [`ReturnContract`] with its lifetime erased to `'static` for storage on a lifetime-free node
+/// `CallFrame`, and re-anchored at the Done read boundary. The contract's `&KFunction` / `&KType`
+/// point into the cart's frame *outer* arena (a strict ancestor — see
+/// `branch_walk::resolve_arm_return_contract` and `invoke`'s `Outcome::Continue` tail
+/// construction), which the co-stored `cart: Rc<CallArena>` keeps live via its `outer_frame` /
+/// escape chain; the cart is the liveness witness the caller holds across `reattach`. The
+/// `Function` / `Arm` discriminant is readable without a re-anchor for the chain-shape decision
+/// that needs the tag but not the pointee. See [`Erased`].
+pub type ErasedContract = Erased<ContractFamily>;
 
 /// Split an FN / MATCH-arm / TRY-arm body into top-level statements. The single source of
 /// truth for the all-`Expression` multi-statement detection: any non-`Expression` part or
@@ -184,36 +157,6 @@ pub enum Body<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Miri slate (tree borrows): the [`ErasedContract`] erase → reattach round-trip. `erase`
-    /// forgets the contract's lifetime for storage; `reattach` transmutes it back to a lifetime
-    /// witnessed by the cart `Rc` that pins the contract's home arena. Minimal-shape mirror of the
-    /// transmute pair (body.rs) and its unbounded call site (finalize.rs); fails on UB, not values.
-    #[test]
-    fn erased_contract_reattach_roundtrip() {
-        use crate::builtins::default_scope;
-        use crate::machine::core::RuntimeArena;
-
-        let arena = RuntimeArena::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let cart = CallArena::new(scope, None);
-        // Stands in for a MATCH/TRY arm's `-> :T`, allocated in the cart's own arena.
-        let ret: &KType = cart.arena().alloc_ktype(KType::Str);
-        let erased = ErasedContract::erase(ReturnContract::Arm {
-            ret,
-            kind: "MATCH",
-            arena: cart.arena(),
-        });
-        // Reattach witnessed by the cart `Rc`, then read through the re-anchored borrow.
-        let reattached: ReturnContract<'_> = unsafe { erased.reattach(&cart) };
-        match reattached {
-            ReturnContract::Arm { ret, kind, .. } => {
-                assert!(matches!(ret, KType::Str));
-                assert_eq!(kind, "MATCH");
-            }
-            ReturnContract::Function(_) | ReturnContract::PerCall { .. } => panic!("expected Arm"),
-        }
-    }
 
     /// Pins the parser invariant [`split_body_statements`]'s `len() >= 2` guard relies on: a
     /// real, parser-produced body is never a lone `[Expression(_)]`. That shape is the one case

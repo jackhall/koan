@@ -18,8 +18,9 @@ use std::rc::Rc;
 
 use typed_arena::Arena;
 
+use super::reattach::reattach_ref;
 use super::scope::Scope;
-use super::scope_ptr::ScopePtr;
+use super::scope_ptr::{ScopeFamily, ScopePtr};
 use super::storage_frame::{StorageFrame, Stored, StorageProfile};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::operators::OperatorGroup;
@@ -292,8 +293,7 @@ impl CallArena {
         // SAFETY: lexical-scoping invariant — `outer` (the captured definition scope, or a
         // longer-lived ancestor) outlives this frame, so erasing its lifetime to `'static`
         // for the child's `outer` link is sound; the child borrow is re-anchored on read.
-        let outer_static: &Scope<'static> =
-            unsafe { std::mem::transmute::<&Scope<'_>, &Scope<'static>>(outer) };
+        let outer_static: &Scope<'static> = unsafe { reattach_ref::<ScopeFamily>(outer) };
         let mut child = Scope::child_under(outer_static);
         // `child_under` defaults `arena` to `outer.arena`; override to the per-call arena.
         child.arena = arena_ref;
@@ -319,8 +319,7 @@ impl CallArena {
     /// scheduler-owned frame; erasing its borrow to `'static` for storage in `scope_ptr` is the
     /// same re-anchored-on-read erasure every [`ScopePtr`] carries.
     pub fn adopting(scope: &Scope<'_>) -> Rc<CallArena> {
-        let scope_static: &'static Scope<'static> =
-            unsafe { std::mem::transmute::<&Scope<'_>, &Scope<'static>>(scope) };
+        let scope_static: &'static Scope<'static> = unsafe { reattach_ref::<ScopeFamily>(scope) };
         Rc::new(CallArena {
             arena: RuntimeArena::new(),
             scope_ptr: Some(ScopePtr::erase(scope_static)),
@@ -425,8 +424,7 @@ impl CallArena {
         let escape = NonNull::from(new_outer.arena);
         // SAFETY: lexical-scoping invariant — `new_outer.arena` outlives this frame
         // (it is the captured definition scope's arena, or a longer-lived ancestor).
-        let outer_static: &Scope<'static> =
-            unsafe { std::mem::transmute::<&Scope<'_>, &Scope<'static>>(new_outer) };
+        let outer_static: &Scope<'static> = unsafe { reattach_ref::<ScopeFamily>(new_outer) };
         let this = Rc::get_mut(self).expect("just-verified unique above");
         this.scope_ptr = None;
         this.outer_frame = None;

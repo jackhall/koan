@@ -17,13 +17,17 @@
 //!   another outcome.
 //! - [`Outcome::Forward`] — splice the slot out as an alias of an existing producer.
 
-use std::rc::Rc;
+use std::marker::PhantomData;
 
 use crate::machine::core::kfunction::action::{Dep, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::ScopeId;
-use crate::machine::model::values::{Carried, KObject};
-use crate::machine::{CallArena, KError, NodeId, TraceFrame};
+use crate::machine::core::{
+    reattach_ref, reattach_slice, reattach_value, Erased, Reattachable, ScopeId,
+};
+use crate::machine::model::values::{
+    Carried, CarriedFamily, KObject, KObjectFamily, ResultCarriedFamily,
+};
+use crate::machine::{KError, NodeId, TraceFrame};
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
 use super::nodes::NodeWork;
@@ -75,6 +79,17 @@ pub(in crate::machine::execute) enum Outcome<'run, 's> {
     /// the single-producer invariant holds with `producer` as the sole producer — no duplicate
     /// forwarding slot.
     Forward(NodeId),
+}
+
+/// `Reattachable` family for [`Outcome`] with the producer lifetime `'run` fixed, retyping only the
+/// per-step output lifetime `'s` (`shorten_outcome`). `Outcome` is two-lifetime, so the family
+/// pins `'run` as a type parameter and exposes the single lifetime `'s` the retype touches.
+struct OutcomeFamily<'run>(PhantomData<&'run ()>);
+
+// SAFETY: `Outcome<'run, 's>` for a fixed `'run` is one type generic only in `'s`; its layout does
+// not depend on `'s`.
+unsafe impl<'run> Reattachable for OutcomeFamily<'run> {
+    type At<'s> = Outcome<'run, 's>;
 }
 
 /// What a [`Outcome::ParkThenContinue`] runs once its deps resolve. The shapes are the closed set
@@ -150,84 +165,33 @@ pub(in crate::machine::execute) type NodeCont<'a> = Box<
         + 'a,
 >;
 
+/// `Reattachable` family for the [`NodeCont`] continuation. Layout-invariant: `NodeCont<'r>` is a
+/// `Box<dyn …>` fat pointer whose representation never depends on `'r`.
+pub(in crate::machine::execute) struct ContFamily;
+
+// SAFETY: `NodeCont<'r>` is one type generic only in `'r` (a boxed trait object); its fat-pointer
+// layout is identical for every `'r`.
+unsafe impl Reattachable for ContFamily {
+    type At<'r> = NodeCont<'r>;
+}
+
 /// A [`NodeCont`] with its captured `'run` lifetime erased to `'static` for storage on a
-/// lifetime-free node. The continuation captures run-lived data (the parked AST, a finish closure's
-/// captured scope); that data lives in the run arena or a strict ancestor of the slot's per-call
-/// cart, which the node's [`CallFrame`](super::nodes::CallFrame) cart `Rc` keeps live across the
-/// step. So the cart is the liveness witness, exactly as for [`ErasedContract`] — this generalizes
-/// that contract erasure from `ReturnContract` to the whole continuation
-/// ([`ScopePtr`](crate::machine::core::ScopePtr) is the same discipline for a scope pointer).
-///
-/// Unlike `ErasedContract` (a `Copy` enum), the continuation is a `Box<dyn FnOnce>` consumed once,
-/// so this owns its box and [`Self::reattach`] takes `self` by value — mirroring the single-shot run.
-pub(in crate::machine::execute) struct ErasedCont {
-    inner: NodeCont<'static>,
-}
-
-impl ErasedCont {
-    /// Erase a live continuation to its storable `'static` form. Safe: forgetting the captured
-    /// lifetime for storage cannot fabricate one — the boxed closure is never *called* at `'static`,
-    /// only stored, and [`Self::reattach`] shortens it back to a cart-witnessed lifetime before it
-    /// runs.
-    pub(in crate::machine::execute) fn erase(cont: NodeCont<'_>) -> Self {
-        // SAFETY: `NodeCont<'a>` and `NodeCont<'static>` are both `Box<dyn …>` fat pointers of
-        // identical layout — a lifetime parameter never changes representation. The erased box is
-        // stored, not invoked, until `reattach` re-anchors it.
-        ErasedCont {
-            inner: unsafe { std::mem::transmute::<NodeCont<'_>, NodeCont<'static>>(cont) },
-        }
-    }
-
-    /// Re-anchor the continuation to a caller-chosen `'run`, witnessed by the node's cart `Rc`. The
-    /// single fabrication for this carrier — mirrors [`ErasedContract::reattach`] and
-    /// [`CallArena::scope`](crate::machine::core::CallArena::scope).
-    ///
-    /// SAFETY: `_witness` is the cart that pins the captured data's home (the run arena or a strict
-    /// ancestor of the cart's own frame) for as long as it is held. The caller re-anchors only when
-    /// about to run the step, holding the cart (via the slot-step guard) across the run, so the
-    /// returned `'run` closure cannot outlive its captures. `'run` is driven by the return-type
-    /// annotation, not a turbofish argument.
-    pub(in crate::machine::execute) unsafe fn reattach<'run>(
-        self,
-        _witness: &Rc<CallArena>,
-    ) -> NodeCont<'run> {
-        std::mem::transmute::<NodeCont<'static>, NodeCont<'run>>(self.inner)
-    }
-}
+/// lifetime-free node, re-anchored against the node's cart `Rc` before the single-shot run. The
+/// continuation captures run-lived data (the parked AST, a finish closure's captured scope) living
+/// in the run arena or a strict ancestor of the slot's per-call cart, which the node's
+/// [`CallFrame`](super::nodes::CallFrame) cart `Rc` keeps live across the step — the liveness
+/// witness the caller holds across `reattach`. Unlike the `Copy` value/contract carriers the
+/// continuation is a `Box<dyn FnOnce>` consumed once, so the family is not `Copy` and `reattach`
+/// takes `self` by value. See [`Erased`].
+pub(in crate::machine::execute) type ErasedCont = Erased<ContFamily>;
 
 /// A [`Carried`] inter-node value with its `'run` erased to `'static` — the scheduler's value type
-/// parameter, instantiated by the Koan workload. Mirrors [`ErasedCont`] / [`ErasedContract`] for the
-/// value channel: `erase` forgets the value's lifetime for storage in the scheduler's lifetime-free
-/// slot table; `reattach` transmutes it back to a `'run` that the producer-frame `Rc` co-stored in
-/// the slot pins (or, for a frameless / run-arena value, the run arena keeps live). The scheduler
-/// stores this opaquely (the `Value` of `KoanWorkload`) and never inspects it; only the workload erases / re-anchors.
-#[derive(Clone, Copy)]
-pub(in crate::machine::execute) struct ErasedValue {
-    inner: Carried<'static>,
-}
-
-impl ErasedValue {
-    /// Erase a live terminal to its storable `'static` form. Safe: forgetting a lifetime for storage
-    /// cannot fabricate one — the value is re-anchored by [`Self::reattach`] before any use.
-    pub(in crate::machine::execute) fn erase(value: Carried<'_>) -> Self {
-        // SAFETY: `Carried<'a>` and `Carried<'static>` share layout (a lifetime never changes
-        // representation); the erased value is stored, not dereferenced, until `reattach`.
-        ErasedValue {
-            inner: unsafe { std::mem::transmute::<Carried<'_>, Carried<'static>>(value) },
-        }
-    }
-
-    /// Re-anchor the stored terminal to a caller-chosen `'run`. The single fabrication for this
-    /// carrier — the value channel's twin of `pin_carried_to_run`.
-    ///
-    /// SAFETY: the slot's co-stored producer-frame `Rc` (or, for a frameless value, the run arena)
-    /// pins the value's backing arena for as long as the slot is `Done`; the caller re-anchors only
-    /// while the slot is live and reads the value transiently, so the fabricated `'run` cannot
-    /// outlive the pointee. `'run` is driven by the return-type annotation.
-    pub(in crate::machine::execute) unsafe fn reattach<'run>(self) -> Carried<'run> {
-        std::mem::transmute::<Carried<'static>, Carried<'run>>(self.inner)
-    }
-}
+/// parameter, instantiated by the Koan workload. The value channel's [`Erased`] carrier: `erase`
+/// forgets the value's lifetime for storage in the scheduler's lifetime-free slot table; `reattach`
+/// recovers a `'run` that the producer-frame `Rc` co-stored in the slot pins (or, for a frameless /
+/// run-arena value, the run arena keeps live). The scheduler stores this opaquely (the `Value` of
+/// `KoanWorkload`) and never inspects it; only the workload erases / re-anchors.
+pub(in crate::machine::execute) type ErasedValue = Erased<CarriedFamily>;
 
 /// Dep-finish continuation: short-circuit on the first errored dep (labelled with `dep_error_frame`),
 /// else hand the resolved [`Carried`] values to a value-only [`DepFinish`]. The short-circuit
@@ -280,7 +244,7 @@ pub(in crate::machine::execute) fn ignore_results<'a>(resume: ResumeFn<'a>) -> N
 pub(in crate::machine::execute) fn pin_carried_to_run<'run>(value: Carried<'_>) -> Carried<'run> {
     // SAFETY: lifetime-only reattach; the frame `Rc` co-stored in `SlotState::Done` heap-pins the
     // backing arena for as long as the terminal is readable. See the doc comment.
-    unsafe { std::mem::transmute::<Carried<'_>, Carried<'run>>(value) }
+    unsafe { reattach_value::<CarriedFamily>(value) }
 }
 
 /// Reattach the dep terminals delivered at the step lifetime `'s` up to `'run` for the duration of
@@ -294,7 +258,7 @@ pub(in crate::machine::execute) fn deps_for_builtin<'b, 'run, 's>(
 ) -> &'b [Carried<'run>] {
     // SAFETY: `'run: 's`; the values outlive the synchronous finish call (frame-pinned). Lifetime-
     // only reattach of an invariant carrier — see the doc comment.
-    unsafe { std::mem::transmute::<&[Carried<'s>], &[Carried<'run>]>(results) }
+    unsafe { reattach_slice::<CarriedFamily>(results) }
 }
 
 /// Reattach the consumer's pull-lifted dep terminals down to the step lifetime `'s` for delivery to
@@ -306,18 +270,14 @@ pub(in crate::machine::execute) fn deps_at_step<'b, 'run, 's>(
 ) -> &'b [Result<Carried<'s>, KError>] {
     // SAFETY: lifetime-only reattach of an invariant carrier to a shorter lifetime it genuinely
     // outlives (the values die with the consumer frame, i.e. at `'s`). See the doc comment.
-    unsafe {
-        std::mem::transmute::<&'b [Result<Carried<'run>, KError>], &'b [Result<Carried<'s>, KError>]>(
-            results,
-        )
-    }
+    unsafe { reattach_slice::<ResultCarriedFamily>(results) }
 }
 
 /// The single-object dual of [`deps_for_builtin`] for a catch's watched terminal. Same soundness
 /// (frame-pinned across the synchronous finish call); reattach needed only for `KObject`'s invariance.
 pub(in crate::machine::execute) fn obj_for_builtin<'run>(obj: &KObject<'_>) -> &'run KObject<'run> {
     // SAFETY: `'run: 's`; the watched value outlives the synchronous finish call (frame-pinned).
-    unsafe { std::mem::transmute::<&KObject<'_>, &'run KObject<'run>>(obj) }
+    unsafe { reattach_ref::<KObjectFamily>(obj) }
 }
 
 /// Reattach an `Outcome`'s output lifetime from `'run` down to a per-step `'s` (`'run: 's`). A
@@ -332,8 +292,8 @@ pub(in crate::machine::execute) fn shorten_outcome<'run, 's>(
     outcome: Outcome<'run, 'run>,
 ) -> Outcome<'run, 's> {
     // SAFETY: lifetime-only reattach of an invariant carrier whose `'s` payload outlives `'s`; see
-    // the doc comment. Same shape as the arena re-exposure transmutes the per-call protocol uses.
-    unsafe { std::mem::transmute::<Outcome<'run, 'run>, Outcome<'run, 's>>(outcome) }
+    // the doc comment. `OutcomeFamily<'run>` fixes the producer lifetime and retypes only `'s`.
+    unsafe { reattach_value::<OutcomeFamily<'run>>(outcome) }
 }
 
 #[cfg(test)]
@@ -358,7 +318,8 @@ mod erased_cont_tests {
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         // The captured value lives in the run arena — the ancestor the cart's `outer` chain pins.
         let captured: &KObject = arena.alloc_object(KObject::Number(7.0));
-        let cart = CallArena::new(scope, None);
+        // Held live to the end of the test so it witnesses the reattach below.
+        let _cart = CallArena::new(scope, None);
 
         let cont: NodeCont = Box::new(move |_view, _results, _idx| {
             // Read the run-lived capture through the reattached box.
@@ -368,8 +329,8 @@ mod erased_cont_tests {
             ))))
         });
         let erased = ErasedCont::erase(cont);
-        // Reattach witnessed by the cart `Rc`, then run the single-shot continuation.
-        let reattached: NodeCont<'_> = unsafe { erased.reattach(&cart) };
+        // Reattach against the cart `Rc` the test holds live, then run the single-shot continuation.
+        let reattached: NodeCont<'_> = unsafe { erased.reattach() };
         let sched = Scheduler::new();
         let ambient = crate::machine::execute::ambient::AmbientContext::default();
         let view = SchedulerView::new(&sched, &ambient);

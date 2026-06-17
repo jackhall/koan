@@ -130,6 +130,28 @@ reader, so the free content `'a` is never cashed unbounded — no borrow==conten
 needed, and a frame-bounded child can hold a (possibly frame-bounded) parent without
 fabrication. It carries `Scope<'a>`'s invariance structurally for the same reason as `ScopePtr`.
 
+Beyond the store-side erasure and the branded scope pointers, a handful of carriers store a
+borrow-carrying *value* on a structure the borrow checker cannot lifetime-track — a scheduler
+node's slot, a per-call `TraceFrame` — and re-anchor it at a caller-chosen lifetime on read,
+witnessed by a held `Rc`. These share one owner in
+[`reattach.rs`](../src/machine/core/reattach.rs): the `unsafe trait Reattachable { type At<'r>; }`
+declares a family whose representation is identical across every choice of its single lifetime, and
+[`Erased<T>`](../src/machine/core/reattach.rs) stores that family's `At<'static>` form. A single
+private `retype<A, B>` — a `transmute_copy` through a `ManuallyDrop` (plain `transmute` cannot prove
+two opaque GAT projections share a size), guarded by a `const` size assert that restores the check
+`transmute` would emit, mirroring the sibling `erase_store` — is the only place a
+`T::At<'a> → T::At<'b>` lifetime retype is written; `Erased::erase` / `Erased::reattach` and the
+transient `reattach_value` / `reattach_ref` / `reattach_slice` helpers all route it. The carrier families live beside their own
+types as declarative `unsafe impl Reattachable` instantiations — `ContractFamily` for the
+node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` / `ContFamily` for
+the scheduler value (`ErasedValue`) and continuation (`ErasedCont`), `KObjectFamily` /
+`ResultCarriedFamily` / `OutcomeFamily` for the transient step-lifetime re-exposures in
+`outcome.rs`, and `ScopeFamily` so the branded `ScopePtr` re-attaches and the arena's
+`&Scope → &Scope<'static>` storage erasures route the same primitive — so the module names no
+concrete Koan type and the `core → execute` layering is not inverted. The liveness witness is not a
+parameter on `reattach`: each call site holds the pinning `Rc` (the frame cart, the run arena)
+across the re-anchored read, and the per-carrier doc names which one.
+
 Every family implements the `Stored` trait and routes the one gated
 [`alloc`](../src/machine/core/storage_frame.rs) engine. `anchors_to` is a required trait
 method, so each family declares its cycle behavior at its impl site: `KObject` and
