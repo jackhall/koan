@@ -26,7 +26,7 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{Held, KObject, Module, Signature};
-use crate::scheduler::reattach_ref;
+use crate::scheduler::{reattach_ref, Reattachable};
 
 /// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
 /// family's `'static` form (phantom); the [`StorageFrame`] engine re-anchors to the caller's `'a`
@@ -95,13 +95,38 @@ fn ktype_anchors_to(t: &KType<'_>, arena_ptr: *const RuntimeArena) -> bool {
     }
 }
 
+// The lifetime family of each stored type, keyed on its `'static` form — the GAT the
+// `StorageFrame` engine erases to `'static` for storage and re-anchors to the caller's `'a` on read.
+// SAFETY: each family is one type generic only in a single lifetime, so its layout is identical for
+// every choice of that lifetime; `OperatorGroup` is lifetime-free, trivially invariant.
+unsafe impl Reattachable for KObject<'static> {
+    type At<'r> = KObject<'r>;
+}
+unsafe impl Reattachable for KType<'static> {
+    type At<'r> = KType<'r>;
+}
+unsafe impl Reattachable for KFunction<'static> {
+    type At<'r> = KFunction<'r>;
+}
+unsafe impl Reattachable for Scope<'static> {
+    type At<'r> = Scope<'r>;
+}
+unsafe impl Reattachable for Module<'static> {
+    type At<'r> = Module<'r>;
+}
+unsafe impl Reattachable for Signature<'static> {
+    type At<'r> = Signature<'r>;
+}
+unsafe impl Reattachable for OperatorGroup {
+    type At<'r> = OperatorGroup;
+}
+
 // Per-family `Stored` policy. `KObject` and `KType` answer `anchors_to` by walking their composite
 // tree; the families that cannot hold a self-targeting `Rc<FrameStorage>` declare `anchors_to => false`,
 // so the cycle redirect is uniform across the whole allocation surface. `OperatorGroup` is
 // lifetime-free and anchor-free, but routes the same engine for one uniform path.
 
 impl Stored<KoanStorageProfile> for KObject<'static> {
-    type At<'a> = KObject<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<KObject<'static>> {
         &s.objects
     }
@@ -114,7 +139,6 @@ impl Stored<KoanStorageProfile> for KObject<'static> {
 }
 
 impl Stored<KoanStorageProfile> for KType<'static> {
-    type At<'a> = KType<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<KType<'static>> {
         &s.ktypes
     }
@@ -124,7 +148,6 @@ impl Stored<KoanStorageProfile> for KType<'static> {
 }
 
 impl Stored<KoanStorageProfile> for KFunction<'static> {
-    type At<'a> = KFunction<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<KFunction<'static>> {
         &s.functions
     }
@@ -134,7 +157,6 @@ impl Stored<KoanStorageProfile> for KFunction<'static> {
 }
 
 impl Stored<KoanStorageProfile> for Scope<'static> {
-    type At<'a> = Scope<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<Scope<'static>> {
         &s.scopes
     }
@@ -144,7 +166,6 @@ impl Stored<KoanStorageProfile> for Scope<'static> {
 }
 
 impl Stored<KoanStorageProfile> for Module<'static> {
-    type At<'a> = Module<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<Module<'static>> {
         &s.modules
     }
@@ -154,7 +175,6 @@ impl Stored<KoanStorageProfile> for Module<'static> {
 }
 
 impl Stored<KoanStorageProfile> for Signature<'static> {
-    type At<'a> = Signature<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<Signature<'static>> {
         &s.signatures
     }
@@ -164,7 +184,6 @@ impl Stored<KoanStorageProfile> for Signature<'static> {
 }
 
 impl Stored<KoanStorageProfile> for OperatorGroup {
-    type At<'a> = OperatorGroup;
     fn sub_arena(s: &KoanStorage) -> &Arena<OperatorGroup> {
         &s.operator_groups
     }

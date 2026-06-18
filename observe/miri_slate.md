@@ -2,11 +2,11 @@
 
 <!-- slate-fingerprint
 src/builtins/test_support.rs: 1
-src/machine/core/arena.rs: 12
+src/machine/core/arena.rs: 19
 src/machine/core/kfunction/body.rs: 1
 src/machine/core/reattach.rs: 2
 src/machine/core/scope_ptr.rs: 5
-src/machine/core/storage_frame.rs: 4
+src/machine/core/storage_frame.rs: 3
 src/machine/execute/dispatch/ctx.rs: 1
 src/machine/execute/nodes.rs: 1
 src/machine/execute/outcome.rs: 3
@@ -14,7 +14,7 @@ src/machine/execute/runtime.rs: 3
 src/machine/execute/runtime/submit.rs: 1
 src/machine/model/values/carried.rs: 2
 src/machine/model/values/module.rs: 1
-src/scheduler/erase.rs: 18
+src/scheduler/erase.rs: 19
 src/scheduler/node_store.rs: 5
 -->
 

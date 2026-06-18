@@ -52,6 +52,18 @@ unsafe fn retype<A, B>(value: A) -> B {
     unsafe { std::mem::transmute_copy::<A, B>(&value) }
 }
 
+/// Erase a single-lifetime family value to its `'static` storage form — the **safe** half of the
+/// erase/reattach pair, mirroring [`Erased::erase`] for a value stored raw rather than wrapped.
+/// Forgetting a lifetime for storage cannot fabricate one (the value is stored, never used at
+/// `'static`, until a witnessed re-anchor), so this is sound to call without `unsafe`. The
+/// run-lifetime storage substrate routes its arena writes through here instead of carrying its own
+/// transmute, so [`retype`] is the single audited home for value lifetime-erasure.
+pub(crate) fn erase_to_static<T: Reattachable>(value: T::At<'_>) -> T::At<'static> {
+    // SAFETY: lifetime-only retype for storage of a single-lifetime family (the `Reattachable`
+    // layout-invariance contract); the erased value is stored, not used, until a re-anchor.
+    unsafe { retype::<T::At<'_>, T::At<'static>>(value) }
+}
+
 /// Generic owner of an erased carrier: a one-lifetime-family value with its lifetime forgotten to
 /// `'static` for storage on a lifetime-free node slot. [`Self::erase`] stores; [`Self::reattach`]
 /// re-anchors it at a caller-chosen lifetime the held witness keeps live. The single audited home

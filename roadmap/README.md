@@ -55,10 +55,10 @@ What's shipped that the open items below build on:
   parameterized over the lifted carrier's `matches_value`/`matches_type` predicate).
 - *Arena unsafe consolidation.* Every captured/defining-scope re-attach is funnelled behind one
   [`ScopePtr`](../src/machine/core/scope_ptr.rs); `RuntimeArena::escape` is `NonNull`.
-  The store-side erasure lives behind one sealed `ArenaStored` trait: all six
-  arena-stored families route a single audited union-move `erase_store` and one gated
-  `alloc` engine, replacing the six per-type `T<'a> → T<'static>` transmute pairs with
-  one. The branded `ScopePtr<'a>` makes `Module::child_scope` and `Signature::decl_scope`
+  The store-side erasure lives behind one `Stored` trait: all arena-stored
+  families route the scheduler's single audited `erase_to_static` (the safe direction of the
+  one `retype` primitive the read-side re-anchor shares) and one gated `alloc` engine,
+  replacing the per-type `T<'a> → T<'static>` transmute pairs with one. The branded `ScopePtr<'a>` makes `Module::child_scope` and `Signature::decl_scope`
   safe re-attaches, concentrating the irreducible
   `'static → 'a` fabrication at the non-generic `CallArena` boundary.
   Honest slot storage landed for per-call frame scopes: a frame scope rides its slot as a

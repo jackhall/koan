@@ -87,11 +87,13 @@ itself carries no lifetime parameter. The erase-store engine lives generically i
 the [`StorageFrame<W>`](../src/machine/core/storage_frame.rs) substrate (`RuntimeArena`
 is the Koan instantiation `StorageFrame<KoanStorageProfile>`). Each named `alloc*` wrapper
 takes input at the caller's `'a` and routes one `alloc<K: Stored>` engine: the engine
-union-moves the value into its `'static` lifetime family (`At<'static>`) for storage and
-re-anchors the returned `&'a` to the input borrow on the way out. The union move —
-`Erase<At<'a>, At<'static>>` written then read back through the other field, with a
-`const` size assert — is the single erasure every family shares, so there is one
-store-side erasure to reason about. It is sound because:
+erases the value into its `'static` lifetime family (`At<'static>`) for storage and
+re-anchors the returned `&'a` to the input borrow on the way out. The store-side erasure
+routes the scheduler's single audited `erase_to_static` — the safe direction of the one
+`retype` primitive (described below) — so the arena's store-side and the scheduler's
+read-side share one transmute rather than each carrying its own. Each `Stored` family is a
+`Reattachable` family (`At<'static> == Self`), the GAT both directions key on. It is sound
+because:
 
 - Lifetimes are zero-sized, so `T<'a>` and `T<'static>` have identical layout.
 - `alloc*` returns an `&'a` tied to the input borrow; no `'static` reference
@@ -141,9 +143,10 @@ a family whose representation is identical across every choice of its single lif
 [`Erased<T>`](../src/scheduler/erase.rs) stores that family's `At<'static>` form. A single
 private `retype<A, B>` — a `transmute_copy` through a `ManuallyDrop` (plain `transmute` cannot prove
 two opaque GAT projections share a size), guarded by a `const` size assert that restores the check
-`transmute` would emit, mirroring the sibling `erase_store` — is the only place a
-`T::At<'a> → T::At<'b>` lifetime retype is written; `Erased::erase` / `Erased::reattach` and the
-transient `reattach_value` / `reattach_ref` / `reattach_slice` helpers all route it. The carrier families live beside their own
+`transmute` would emit — is the only place a
+`T::At<'a> → T::At<'b>` lifetime retype is written; `Erased::erase` / `Erased::reattach`, the
+transient `reattach_value` / `reattach_ref` / `reattach_slice` helpers, and the arena's store-side
+`erase_to_static` all route it. The carrier families live beside their own
 types as declarative `unsafe impl Reattachable` instantiations — `ContractFamily` for the
 node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` /
 `ContinuationFamily` for the scheduler value (`Workload::Value`) and continuation
