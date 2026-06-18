@@ -37,7 +37,7 @@ use super::{park_on_deps, DepRequest, Outcome};
 /// applied to `parts[1..]` once it resolves.
 pub(in crate::machine::execute) fn initial_expr<'run>(
     expr: KExpression<'run>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     let head = match &expr.parts[0].value {
         ExpressionPart::Expression(boxed) => (**boxed).clone(),
         _ => unreachable!("HeadDeferred shape implies nested Expression head"),
@@ -50,7 +50,7 @@ pub(in crate::machine::execute) fn initial_expr<'run>(
 /// `stage_all_eager_parts`).
 pub(in crate::machine::execute) fn initial_type<'run>(
     expr: KExpression<'run>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     let head = match &expr.parts[0].value {
         ExpressionPart::SigiledTypeExpr(boxed) => KExpression::new(vec![Spanned::bare(
             ExpressionPart::SigiledTypeExpr(boxed.clone()),
@@ -70,7 +70,7 @@ fn park_on_head<'run>(
     expr: KExpression<'run>,
     head: KExpression<'run>,
     type_only: bool,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     let finish: DepFinish<'run> = Box::new(move |ctx, results| {
         let callable = match classify_head(results[0], type_only) {
             Ok(c) => c,

@@ -75,8 +75,8 @@ sharing safe.
 ## Consumer-pull node-output lift
 
 A node continuation produces its value at the node's own per-call frame
-lifetime `'s` ([`Outcome<'run, 's>`](../src/machine/execute/outcome.rs)),
-not `'run`: the value is born in the producer's frame (a builtin allocates
+lifetime `'s` ([`Outcome<'s>`](../src/machine/execute/outcome.rs)), the
+single cart-scale lifetime the decide surface carries: the value is born in the producer's frame (a builtin allocates
 it there) or arrives as a dep already lifted into that frame. The scheduler
 relocates it across each dep edge — never the producer.
 
@@ -115,12 +115,14 @@ relocates it across each dep edge — never the producer.
 
 Because `KObject` / `Carried` / `Scope` are invariant in their lifetime, none
 of these transitions can be a coercion — each cross-frame move is a genuine
-`NodeLift` copy (or the held-Rc re-exposure at storage). Five audited
+`NodeLift` copy (or the held-Rc re-exposure at storage). Two audited
 lifetime-reattach primitives in
-[outcome.rs](../src/machine/execute/outcome.rs) bridge `'s`↔`'run` at the
-run_step / apply / combinator boundaries (`shorten_outcome`, `deps_at_step`,
-`deps_for_builtin`, `obj_for_builtin`) plus the run-global root drain
-(`pin_carried_to_run`); they are pinned
+[outcome.rs](../src/machine/execute/outcome.rs) remain: `deps_at_step`
+re-anchors consumer-pull dep terminals to the cart-witnessed lifetime the
+continuation runs at, and `pin_carried_to_run` re-anchors a node read up to
+`'run` for the run-global root drain. (The single-lifetime `Outcome` makes the
+former up/down decide-surface bridges unnecessary — the splice slot and dep
+value share one lifetime.) They are pinned
 in the Miri slate by `tail_call_stamps_result_against_first_callers_return_contract`.
 
 ### Fast path

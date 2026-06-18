@@ -21,7 +21,7 @@ pub(super) fn initial<'run>(
     expr: KExpression<'run>,
     pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     let bare_outcomes = ctx.build_bare_outcomes(&expr.parts);
     // A bare-name arg whose producer already errored can never resolve.
     for outcome in bare_outcomes.iter().flatten() {
@@ -124,7 +124,7 @@ pub(super) fn finish<'run>(
     ctx: &SchedulerView<'run, '_>,
     working_expr: KExpression<'run>,
     idx: usize,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     match ctx
         .current_scope()
         .resolve_dispatch(&working_expr, ctx.chain_deref(), &[])
@@ -158,7 +158,7 @@ pub(super) fn finish<'run>(
 /// Fold the post-eager-subs re-resolve into a [`Outcome::Continue`]: a dep-free decide that re-runs
 /// [`finish`] against the fully-spliced `working_expr` on the next pop, with no committed function
 /// pick. `Inherit` — a re-resolve runs in the slot's current frame.
-pub(super) fn redispatch_continue<'run>(working_expr: KExpression<'run>) -> Outcome<'run, 'run> {
+pub(super) fn redispatch_continue<'run>(working_expr: KExpression<'run>) -> Outcome<'run> {
     let carrier = working_expr.summarize();
     let work = NodeWork::new(
         Vec::new(),
@@ -187,7 +187,7 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'run>(
     expr: KExpression<'run>,
     pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     let mut to_wait: Vec<NodeId> = Vec::new();
     for p in producers {
         if ctx.is_result_ready(p) {
@@ -220,7 +220,7 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'run>(
 fn install_eager_only<'run>(
     ctx: &SchedulerView<'run, '_>,
     expr: KExpression<'run>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     // Deferred arm: no committed pick yet (resume re-resolves on finish), so no
     // bare-name slots to pre-resolve here.
     let (new_parts, staged_subs) = super::stage_all_eager_parts(expr.parts, &[]);
@@ -240,7 +240,7 @@ fn install_bare_name_park<'run>(
     producers: Vec<NodeId>,
     working_expr: KExpression<'run>,
     pre_subs: Vec<(usize, NodeId)>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     let carrier = working_expr.summarize();
     park_resume(
         producers,
@@ -254,7 +254,7 @@ fn install_eager_subs_track<'run>(
     working_expr: KExpression<'run>,
     staged_subs: Vec<(usize, PendingSub<'run>)>,
     pre_subs: Vec<(usize, NodeId)>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     // The combine carrier owns its deps directly; the Keyworded eager-subs resume state is
     // never re-entered (a re-Dispatch never lands here — the combine finish runs instead),
     // so `pre_subs` is unused on this path.

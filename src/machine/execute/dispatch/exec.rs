@@ -32,7 +32,7 @@ use crate::machine::{KError, KErrorKind};
 pub(super) fn invoke_continue<'run>(
     picked: &'run KFunction<'run>,
     working_expr: KExpression<'run>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     let frame = match &picked.body {
         Body::Builtin(_) => FramePlacement::Inherit,
         _ => FramePlacement::ReuseReserve {
@@ -75,7 +75,7 @@ pub(super) fn invoke<'run>(
     view: &SchedulerView<'run, '_>,
     picked: &'run KFunction<'run>,
     working_expr: KExpression<'run>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     // An action-harness builtin: build a read-only `BodyCtx`, get the `Action`, and lower it
     // through the shared `run_action` interpreter. Builtins run in the current frame, so the
     // builtin call's `Continue` carries `FramePlacement::Inherit` and this reads nothing.
@@ -256,7 +256,7 @@ fn run_action_builtin<'run>(
     view: &SchedulerView<'run, '_>,
     f: crate::machine::core::kfunction::ActionFn,
     args: crate::machine::model::types::Record<crate::machine::model::values::ArgValue<'run>>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     use crate::machine::core::kfunction::action::BodyCtx;
     use crate::machine::model::values::{ArgValue, Held};
     use crate::machine::model::KObject;

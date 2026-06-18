@@ -3,22 +3,12 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, KFuture};
-use crate::scheduler::Reattachable;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     KKind, KType, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
 };
 
 use super::Held;
-
-/// `Reattachable` family for [`KObject`] — the carrier a catch's watched terminal retypes
-/// (`obj_for_builtin`). Layout-invariant: a `KObject<'r>` is generic only in `'r`.
-pub struct KObjectFamily;
-
-// SAFETY: `KObject<'r>` is one type generic only in `'r`; its representation does not depend on `'r`.
-unsafe impl Reattachable for KObjectFamily {
-    type At<'r> = KObject<'r>;
-}
 
 #[cfg(test)]
 mod tests;

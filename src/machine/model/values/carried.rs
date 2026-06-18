@@ -23,7 +23,7 @@ pub enum Carried<'a> {
 
 /// `Reattachable` family for [`Carried`] — the value channel's erase/reattach owner. It is the
 /// `Workload::Value` the scheduler stores erased (`Erased<CarriedFamily>`) and re-anchors on read,
-/// and the family the transient `pin_carried_to_run` / `deps_for_builtin` re-exposures route.
+/// and the family the transient `pin_carried_to_run` / `deps_at_step` re-anchors route.
 /// Layout-invariant: a `Carried<'a>` is two `&'a` references, whose representation does not depend
 /// on `'a`.
 pub struct CarriedFamily;

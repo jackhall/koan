@@ -43,7 +43,7 @@ impl<'run> Slot<'run> {
 
 /// Allocate `obj` in the executing slot's arena and wrap it as a successful combine result — the
 /// shared tail of every aggregate-literal finish.
-fn done_object<'run>(view: &SchedulerView<'run, '_>, obj: KObject<'run>) -> Outcome<'run, 'run> {
+fn done_object<'run>(view: &SchedulerView<'run, '_>, obj: KObject<'run>) -> Outcome<'run> {
     Outcome::Done(Ok(Carried::Object(
         view.current_scope().arena.alloc_object(obj),
     )))
@@ -51,11 +51,11 @@ fn done_object<'run>(view: &SchedulerView<'run, '_>, obj: KObject<'run>) -> Outc
 
 impl<'run> KoanRuntime<'run> {
     /// Schedule a list-literal materialization as a dep-finish over its element producers.
-    pub(in crate::machine::execute) fn schedule_list_literal(
+    pub(in crate::machine::execute) fn schedule_list_literal<'a>(
         &mut self,
-        items: Vec<ExpressionPart<'run>>,
+        items: Vec<ExpressionPart<'a>>,
     ) -> NodeId {
-        let mut layout: Vec<Slot<'run>> = Vec::with_capacity(items.len());
+        let mut layout: Vec<Slot<'a>> = Vec::with_capacity(items.len());
         let mut deps: Vec<NodeId> = Vec::new();
         let mut park_producers: Vec<NodeId> = Vec::new();
         for part in items {
@@ -64,8 +64,8 @@ impl<'run> KoanRuntime<'run> {
             layout.push(slot);
         }
         let park_count = park_producers.len();
-        let finish: DepFinish<'run> = Box::new(move |_sched, results| {
-            let items: Vec<Held<'run>> = layout
+        let finish: DepFinish<'a> = Box::new(move |_sched, results| {
+            let items: Vec<Held<'a>> = layout
                 .into_iter()
                 .map(|slot| slot.materialize(results, park_count))
                 .collect();
@@ -78,11 +78,11 @@ impl<'run> KoanRuntime<'run> {
     /// Bare identifiers on either side are name-resolved (Python-like: keys are
     /// expressions, not symbols). Non-scalar keys produce `KErrorKind::ShapeError` at
     /// finish-time via the `KKey` conversion.
-    pub(in crate::machine::execute) fn schedule_dict_literal(
+    pub(in crate::machine::execute) fn schedule_dict_literal<'a>(
         &mut self,
-        pairs: Vec<(ExpressionPart<'run>, ExpressionPart<'run>)>,
+        pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
     ) -> NodeId {
-        let mut layout: Vec<(Slot<'run>, Slot<'run>)> = Vec::with_capacity(pairs.len());
+        let mut layout: Vec<(Slot<'a>, Slot<'a>)> = Vec::with_capacity(pairs.len());
         let mut deps: Vec<NodeId> = Vec::new();
         let mut park_producers: Vec<NodeId> = Vec::new();
         for (k, v) in pairs {
@@ -92,8 +92,8 @@ impl<'run> KoanRuntime<'run> {
         }
         let frame_label = || TraceFrame::bare("<dict>", "dict literal");
         let park_count = park_producers.len();
-        let finish: DepFinish<'run> = Box::new(move |_sched, results| {
-            let mut map: HashMap<Box<dyn Serializable<'run> + 'run>, Held<'run>> = HashMap::new();
+        let finish: DepFinish<'a> = Box::new(move |_sched, results| {
+            let mut map: HashMap<Box<dyn Serializable<'a> + 'a>, Held<'a>> = HashMap::new();
             for (k_slot, v_slot) in layout {
                 let key_held = k_slot.materialize(results, park_count);
                 let value_held = v_slot.materialize(results, park_count);
@@ -125,12 +125,12 @@ impl<'run> KoanRuntime<'run> {
     /// Schedule a record-literal materialization (`{x = 1, y = "a"}`). Field *names* are literal
     /// schema keys (never resolved); field *values* are name-resolved like dict values. Materializes
     /// a `KObject::Record`, which memoizes the per-field type record at construction.
-    pub(in crate::machine::execute) fn schedule_record_literal(
+    pub(in crate::machine::execute) fn schedule_record_literal<'a>(
         &mut self,
-        fields: Vec<(String, ExpressionPart<'run>)>,
+        fields: Vec<(String, ExpressionPart<'a>)>,
     ) -> NodeId {
         let mut names: Vec<String> = Vec::with_capacity(fields.len());
-        let mut layout: Vec<Slot<'run>> = Vec::with_capacity(fields.len());
+        let mut layout: Vec<Slot<'a>> = Vec::with_capacity(fields.len());
         let mut deps: Vec<NodeId> = Vec::new();
         let mut park_producers: Vec<NodeId> = Vec::new();
         for (name, value) in fields {
@@ -140,8 +140,8 @@ impl<'run> KoanRuntime<'run> {
             layout.push(val_slot);
         }
         let park_count = park_producers.len();
-        let finish: DepFinish<'run> = Box::new(move |_sched, results| {
-            let record: Record<Held<'run>> = names
+        let finish: DepFinish<'a> = Box::new(move |_sched, results| {
+            let record: Record<Held<'a>> = names
                 .into_iter()
                 .zip(layout)
                 .map(|(name, slot)| (name, slot.materialize(results, park_count)))
@@ -154,13 +154,13 @@ impl<'run> KoanRuntime<'run> {
     /// Plan one slot of a list / dict literal. The cycle check in the bare-name path is
     /// suppressed (`consumer = None` to `resolve_name_part`) because the dep-finish slot
     /// does not yet exist; cycles are caught post-submission against the dep-finish ID.
-    fn classify_aggregate_part(
+    fn classify_aggregate_part<'a>(
         &mut self,
-        part: ExpressionPart<'run>,
+        part: ExpressionPart<'a>,
         deps: &mut Vec<NodeId>,
         park_producers: &mut Vec<NodeId>,
         wrap_identifiers: bool,
-    ) -> Slot<'run> {
+    ) -> Slot<'a> {
         match part {
             ExpressionPart::ListLiteral(inner) => {
                 Slot::owned(deps, self.schedule_list_literal(inner))
@@ -195,12 +195,12 @@ impl<'run> KoanRuntime<'run> {
     /// ProducerErrored / Cycle outcomes fall back to a sub-Dispatch so the
     /// `BareIdentifier` fast lane's error path (and the dep-finish's dep-error
     /// short-circuit) handles them uniformly.
-    fn resolve_aggregate_bare_name(
+    fn resolve_aggregate_bare_name<'a>(
         &mut self,
-        part: &ExpressionPart<'run>,
+        part: &ExpressionPart<'a>,
         deps: &mut Vec<NodeId>,
         park_producers: &mut Vec<NodeId>,
-    ) -> Slot<'run> {
+    ) -> Slot<'a> {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         match resolve_name_part(
             current_scope(&self.ambient),

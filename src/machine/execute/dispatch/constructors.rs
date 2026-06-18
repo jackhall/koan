@@ -32,7 +32,7 @@ pub(in crate::machine::execute) mod tagged_union;
 pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
     identity: &'run KType<'run>,
     mut value_parts: Vec<Spanned<ExpressionPart<'run>>>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     if let [Spanned {
         value: ExpressionPart::Expression(inner),
         ..
@@ -64,7 +64,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
 pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'run>(
     identity: &'run KType<'run>,
     record_fields: Vec<(String, ExpressionPart<'run>)>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     let field_names: Vec<String> = record_fields.iter().map(|(n, _)| n.clone()).collect();
     let value_parts: Vec<ExpressionPart<'run>> =
         record_fields.into_iter().map(|(_, p)| p).collect();
@@ -113,7 +113,7 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
     index: usize,
     schema: Rc<HashMap<String, KType<'run>>>,
     args_parts: Vec<Spanned<ExpressionPart<'run>>>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     let (tag, value_part) = match tagged_union::prepare_args(args_parts) {
         Ok(v) => v,
         Err(e) => return Outcome::Done(Err(e)),
@@ -137,7 +137,7 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
 fn launch<'run>(
     value_parts: Vec<ExpressionPart<'run>>,
     kind: CtorKind<'run>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     debug_assert!(
         !value_parts.is_empty(),
         "launch requires at least one value part (arity-zero is rejected upstream)"
@@ -162,7 +162,7 @@ pub(in crate::machine::execute::dispatch) fn finish<'run>(
     scope: &Scope<'run>,
     kind: &CtorKind<'run>,
     values: &[&'run KObject<'run>],
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     let result = match kind {
         CtorKind::Newtype { identity } => {
             debug_assert_eq!(values.len(), 1);

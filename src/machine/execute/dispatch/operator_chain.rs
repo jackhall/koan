@@ -32,7 +32,7 @@ use super::Outcome;
 pub(in crate::machine::execute) fn run<'run>(
     ctx: &SchedulerView<'run, '_>,
     expr: &KExpression<'run>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     let probe = expr
         .operator_probe()
         .expect("OperatorChain shape guarantees a cached operator probe");

@@ -101,9 +101,9 @@ impl<'run> KoanRuntime<'run> {
     /// installs at the same outermost step), allocates the slot via [`Scheduler::submit_node`], then
     /// stamps the binder's placeholder on the scope — before the slot is ever popped, so a later
     /// sibling parks rather than surfacing `UnboundName` / `DispatchFailed`.
-    pub(in crate::machine::execute) fn submit_dispatch<'step>(
+    pub(in crate::machine::execute) fn submit_dispatch<'a, 'step>(
         &mut self,
-        expr: KExpression<'run>,
+        expr: KExpression<'a>,
         scope: &'step Scope<'step>,
         node_scope: NodeScope,
         explicit_chain: Option<std::rc::Rc<LexicalFrame>>,

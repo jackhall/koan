@@ -230,7 +230,7 @@ pub(super) const POSITIONAL_ONLY: &str =
     "positional construction takes `(value)`, not a record literal `{name = value}`";
 
 /// Loud non-match for a call body whose surface shape the resolved carrier doesn't admit.
-pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> Outcome<'run, 'run> {
+pub(super) fn body_shape_err<'run>(expr: &KExpression<'run>, reason: &str) -> Outcome<'run> {
     Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
         expr: expr.summarize(),
         reason: reason.to_string(),
@@ -256,7 +256,7 @@ pub(in crate::machine::execute) fn park_on_deps<'run>(
     deps: Vec<DepRequest<'run>>,
     dep_error_frame: Option<TraceFrame>,
     finish: DepFinish<'run>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     Outcome::ParkThenContinue {
         deps,
         park_count: 0,
@@ -274,7 +274,7 @@ pub(in crate::machine::execute) fn park_resume<'run>(
     producers: Vec<NodeId>,
     carrier: Option<String>,
     resume: ResumeFn<'run>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     Outcome::ParkThenContinue {
         park_count: producers.len(),
         deps: producers.into_iter().map(DepRequest::Existing).collect(),
@@ -285,7 +285,7 @@ pub(in crate::machine::execute) fn park_resume<'run>(
 
 /// A bare-identifier slot whose name binds to `producer`: the slot's result *is* `producer`'s
 /// result, so the harness splices the slot out (no forwarding node) — see [`Outcome::Forward`].
-pub(in crate::machine::execute) fn park_lift<'run>(producer: NodeId) -> Outcome<'run, 'run> {
+pub(in crate::machine::execute) fn park_lift<'run>(producer: NodeId) -> Outcome<'run> {
     Outcome::Forward(producer)
 }
 
@@ -293,7 +293,7 @@ pub(in crate::machine::execute) fn park_lift<'run>(producer: NodeId) -> Outcome<
 /// expression to a nested one to re-classify (`(inner)`, `:(...)` unwrap).
 pub(in crate::machine::execute) fn become_dispatch<'run>(
     inner: KExpression<'run>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     Outcome::Continue {
         work: decide(inner),
         frame: FramePlacement::Inherit,
@@ -380,7 +380,7 @@ pub(super) fn stage_all_eager_parts<'run>(
 /// the decide its park captured (a bare leaf, an evolving `working_expr`). Boxing keeps the router
 /// blind to which family it is — every `Wait` wakes through `run_step` uniformly.
 pub(in crate::machine::execute) type ResumeFn<'run> =
-    Box<dyn for<'v> FnOnce(&SchedulerView<'run, 'v>, usize) -> Outcome<'run, 'run> + 'run>;
+    Box<dyn for<'v> FnOnce(&SchedulerView<'run, 'v>, usize) -> Outcome<'run> + 'run>;
 
 // ---------- Cross-shape driver ----------
 
@@ -419,7 +419,7 @@ fn classify_dispatch<'run>(
     expr: KExpression<'run>,
     pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     match expr.shape() {
         DispatchShape::BareTypeLeaf => {
             debug_assert!(pre_subs.is_empty());

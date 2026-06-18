@@ -177,7 +177,7 @@ impl<'run> KoanRuntime<'run> {
 /// recurses `run_action` on the `AwaitContinue`/`CatchCont` it produces) as a [`Outcome::ParkThenContinue`],
 /// and the harness submits and applies. Every scheduler read the body needs is deferred into the
 /// finish, which sees a read-only [`SchedulerView`](super::dispatch::SchedulerView) at wake.
-pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Outcome<'run, 'run> {
+pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Outcome<'run> {
     match action {
         // Terminal: the value the builtin already computed (scope was mutated in place first).
         Action::Done(Ok(c)) => Outcome::Done(Ok(c)),
@@ -301,10 +301,10 @@ impl<'run> KoanRuntime<'run> {
     /// per-call frame; `InScope` enters a fresh **single-statement** block (so an inner `LET` stays
     /// local). A multi-statement body splits separately — see the `InScope` arm of [`Self::apply_outcome`]
     /// and [`Self::dispatch_body`].
-    fn realize_dispatch(
+    fn realize_dispatch<'a>(
         &mut self,
-        expr: KExpression<'run>,
-        placement: DepPlacement<'run>,
+        expr: KExpression<'a>,
+        placement: DepPlacement<'a>,
     ) -> NodeId {
         match placement {
             DepPlacement::OwnScope => self.dispatch_in_own_scope(expr),
@@ -324,7 +324,7 @@ impl<'run> KoanRuntime<'run> {
     /// `Existing` is already a producer the builtin found in scope; a `Dispatch` realizes as a
     /// single statement (an `InScope` watched expr enters a fresh single-statement block — see
     /// [`Self::realize_dispatch`]).
-    fn realize_catch_dep(&mut self, dep: Dep<'run>) -> NodeId {
+    fn realize_catch_dep<'a>(&mut self, dep: Dep<'a>) -> NodeId {
         match dep {
             Dep::Existing(id) => id,
             Dep::Dispatch { expr, placement } => self.realize_dispatch(expr, placement),
@@ -336,9 +336,9 @@ impl<'run> KoanRuntime<'run> {
     /// keep the current cart (`None`). The one place the placement → cart mapping lives — shared by
     /// the `Continue` body re-run and the folded invoke / re-resolve paths (which reach it through
     /// their own `Continue`).
-    fn resolve_frame_placement(
+    fn resolve_frame_placement<'x>(
         &mut self,
-        placement: FramePlacement<'run>,
+        placement: FramePlacement<'x>,
     ) -> Option<Rc<CallArena>> {
         match placement {
             FramePlacement::ReuseReserve { outer } => Some(self.acquire_tail_frame(outer)),
@@ -367,7 +367,7 @@ impl<'run> KoanRuntime<'run> {
     /// never holds `&mut Scheduler`.
     pub(in crate::machine::execute) fn apply_outcome<'s>(
         &mut self,
-        outcome: Outcome<'run, 's>,
+        outcome: Outcome<'s>,
         idx: usize,
     ) -> NodeStep<'s> {
         match outcome {

@@ -186,7 +186,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
         mut working_expr: KExpression<'run>,
         staged_subs: Vec<(usize, PendingSub<'run>)>,
         picked: Option<&'run KFunction<'run>>,
-    ) -> Outcome<'run, 'run> {
+    ) -> Outcome<'run> {
         use super::super::DepFinish;
         let mut deps: Vec<DepRequest<'run>> = Vec::with_capacity(staged_subs.len());
         let mut part_indices: Vec<usize> = Vec::with_capacity(staged_subs.len());
@@ -243,7 +243,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
 fn finish_eager_subs<'run>(
     working_expr: KExpression<'run>,
     picked: Option<&'run KFunction<'run>>,
-) -> Outcome<'run, 'run> {
+) -> Outcome<'run> {
     match picked {
         Some(f) => super::exec::invoke_continue(f, working_expr),
         None => super::keyworded::redispatch_continue(working_expr),

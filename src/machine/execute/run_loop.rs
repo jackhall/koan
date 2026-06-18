@@ -54,8 +54,8 @@ impl<'run> KoanRuntime<'run> {
     /// exit — lives here, so the [`SlotStepGuard`](super::ambient::SlotStepGuard) is born and consumed
     /// without escaping.
     ///
-    /// The whole step runs at the step lifetime `'s`: the cont re-anchor fabricates a `'run` witnessed
-    /// by the cart `Rc`, which the step guard holds live across the continuation's run — and the body,
+    /// The whole step runs at the step lifetime `'s`: the cont re-anchor fabricates that step lifetime
+    /// witnessed by the cart `Rc`, which the step guard holds live across the continuation's run — and the body,
     /// including the [`NodeStep::Done`] terminal's finalize, runs while `consumer_frame` (the step's
     /// cart `Rc`, cloned into the sole `'s` witness) is live. So the Done value, born at `'s` in the
     /// consumer frame, is finalized into the slot store (where `finalize` erases it) *within* `'s`: it
@@ -82,13 +82,14 @@ impl<'run> KoanRuntime<'run> {
             carrier: _,
         } = node.work;
         // Re-anchor the slot's erased continuation against its own cart before that cart moves into
-        // the step guard. The guard keeps the cart live across the whole step, so the fabricated
-        // `'run` cannot outlive the continuation's captures (which live in the run arena or a strict
-        // ancestor of the cart). Mirrors the contract re-anchor at the Done boundary — the same erase
-        // / reattach discipline, generalized to the whole closure.
+        // the step guard. The reattach targets the step lifetime the held cart `Rc` witnesses — not
+        // the run global: the guard keeps the cart live across the whole step, so the fabricated
+        // lifetime cannot outlive the continuation's captures (cart-scale data in the cart arena or a
+        // strict ancestor the cart's `outer` chain pins). Mirrors the contract re-anchor at the Done
+        // boundary — the same erase / reattach discipline, generalized to the whole closure.
         // SAFETY: `cart` is the witness pinning the captures' home for the whole step; it is held
         // live below (moved into the step guard) across the continuation's run.
-        let cont: NodeCont<'run> = unsafe { erased_cont.reattach() };
+        let cont: NodeCont<'_> = unsafe { erased_cont.reattach() };
         let guard = self.enter_slot_step(
             cart,
             reserve,

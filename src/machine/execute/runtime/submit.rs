@@ -67,7 +67,7 @@ impl<'run> KoanRuntime<'run> {
     /// step. Mints a non-dying `CallArena` adopting the run scope (no child) — the scope-dependent
     /// construction the scheduler delegates to the workload — and hands it to the scheduler, which
     /// owns the frame's lifecycle. Idempotent (guarded on `has_run_frame`).
-    pub(in crate::machine::execute) fn ensure_run_frame(&mut self, scope: &'run Scope<'run>) {
+    pub(in crate::machine::execute) fn ensure_run_frame<'a>(&mut self, scope: &'a Scope<'a>) {
         if !self.has_run_frame() {
             self.set_run_frame(CallArena::adopting(scope));
         }
@@ -87,9 +87,9 @@ impl<'run> KoanRuntime<'run> {
     /// In production every submission falls into one of these (a body always runs inside a slot step,
     /// so a frame is present; the sole frameless submission is the top-level root). The handle is a
     /// Koan name-resolution concept, built here on the workload, not in the scheduler core.
-    pub(in crate::machine::execute) fn resolve_node_scope(
+    pub(in crate::machine::execute) fn resolve_node_scope<'a>(
         &self,
-        scope: &'run Scope<'run>,
+        scope: &'a Scope<'a>,
     ) -> NodeScope {
         if let Some(f) = self.active_frame_ref() {
             if scopes_eq(f.scope(), scope) {
@@ -130,11 +130,11 @@ impl<'run> KoanRuntime<'run> {
     /// Submit each `statement` as a fresh lexical block over `scope`: mint a frame `(scope_id, i+1)`
     /// per statement (parent = the ambient payload's chain) and dispatch each against `scope`. The
     /// program / REPL / test entry point for a block of top-level statements.
-    pub fn enter_block(
+    pub fn enter_block<'a>(
         &mut self,
         scope_id: ScopeId,
-        statements: Vec<KExpression<'run>>,
-        scope: &'run Scope<'run>,
+        statements: Vec<KExpression<'a>>,
+        scope: &'a Scope<'a>,
     ) -> Vec<NodeId> {
         let parent = self.active_payload().map(|p| p.chain.clone());
         // Indices start at 1: visibility is strict less-than and builtins sit at idx 0,
@@ -152,10 +152,10 @@ impl<'run> KoanRuntime<'run> {
     /// Submit an unresolved expression for the scheduler to dispatch + execute against `scope`,
     /// inheriting the ambient (or, at top level, a detached) lexical chain. The only public way to
     /// add work.
-    pub fn dispatch_in_scope(
+    pub fn dispatch_in_scope<'a>(
         &mut self,
-        expr: KExpression<'run>,
-        scope: &'run Scope<'run>,
+        expr: KExpression<'a>,
+        scope: &'a Scope<'a>,
     ) -> NodeId {
         let chain = self.ambient_or_detached_chain();
         self.dispatch_in_scope_with_chain(expr, scope, chain)
@@ -165,10 +165,10 @@ impl<'run> KoanRuntime<'run> {
     /// [`NodeScope`] handle against `scope`, then submit. `chain` is the caller's resolved lexical
     /// chain — ambient for [`Self::dispatch_in_scope`], or the per-statement block chain for
     /// [`Self::enter_block`].
-    fn dispatch_in_scope_with_chain(
+    fn dispatch_in_scope_with_chain<'a>(
         &mut self,
-        expr: KExpression<'run>,
-        scope: &'run Scope<'run>,
+        expr: KExpression<'a>,
+        scope: &'a Scope<'a>,
         chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
         self.ensure_run_frame(scope);
@@ -182,9 +182,9 @@ impl<'run> KoanRuntime<'run> {
     /// per step; [`Self::dispatch_body`] does it transiently). `chain` is the explicit
     /// lexical chain (`Some` for an `enter_block`-routed body statement; the ambient-inheriting
     /// `ActiveFrame` placement passes [`Self::ambient_or_detached_chain`]).
-    pub(in crate::machine::execute) fn dispatch_in_active_frame(
+    pub(in crate::machine::execute) fn dispatch_in_active_frame<'a>(
         &mut self,
-        expr: KExpression<'run>,
+        expr: KExpression<'a>,
         chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
         let frame = self
@@ -202,9 +202,9 @@ impl<'run> KoanRuntime<'run> {
     /// reuses its erased cart-ancestor pointer; a `Yoked` slot routes through
     /// [`Self::dispatch_in_active_frame`] to re-project from the active frame cart. Either way routes
     /// through [`Self::submit_dispatch`], so a binder spliced here still installs its placeholder.
-    pub(in crate::machine::execute) fn dispatch_in_own_scope(
+    pub(in crate::machine::execute) fn dispatch_in_own_scope<'a>(
         &mut self,
-        expr: KExpression<'run>,
+        expr: KExpression<'a>,
     ) -> NodeId {
         let node_scope = self
             .active_payload()
@@ -229,10 +229,10 @@ impl<'run> KoanRuntime<'run> {
     /// "execute a block of expressions" primitive: a multi-statement FN body (`KFunction::invoke`),
     /// a deferred return-type dep, and a MATCH/TRY arm body (the action harness) all use it. The
     /// caller tail-replaces into the body's last statement separately. Returns the sub-slots' ids.
-    pub(in crate::machine::execute) fn dispatch_body(
+    pub(in crate::machine::execute) fn dispatch_body<'a>(
         &mut self,
         frame: &Rc<CallArena>,
-        statements: Vec<KExpression<'run>>,
+        statements: Vec<KExpression<'a>>,
     ) -> Vec<NodeId> {
         let body_scope = frame.scope_for_bind();
         let body_scope_id = body_scope.id;
@@ -261,11 +261,11 @@ impl<'run> KoanRuntime<'run> {
     /// Schedule a `AwaitDeps` against the executing slot's own scope handle. `owned_subs` are
     /// cascade-freed on success; `park_producers` are existing siblings the combine reads but does
     /// not own. The finish sees results as `[park_producers..., owned_subs...]`.
-    pub(in crate::machine::execute) fn submit_dep_finish_in_own_scope(
+    pub(in crate::machine::execute) fn submit_dep_finish_in_own_scope<'a>(
         &mut self,
         owned_subs: Vec<NodeId>,
         park_producers: Vec<NodeId>,
-        finish: DepFinish<'run>,
+        finish: DepFinish<'a>,
     ) -> NodeId {
         let park_count = park_producers.len();
         let mut deps = park_producers;

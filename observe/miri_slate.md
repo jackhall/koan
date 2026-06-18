@@ -10,12 +10,11 @@ src/machine/core/storage_frame.rs: 4
 src/machine/execute/dispatch/ctx.rs: 1
 src/machine/execute/finalize.rs: 1
 src/machine/execute/nodes.rs: 1
-src/machine/execute/outcome.rs: 8
+src/machine/execute/outcome.rs: 4
 src/machine/execute/run_loop.rs: 1
 src/machine/execute/runtime.rs: 3
 src/machine/execute/runtime/submit.rs: 1
 src/machine/model/values/carried.rs: 2
-src/machine/model/values/kobject.rs: 1
 src/machine/model/values/module.rs: 1
 src/scheduler/erase.rs: 17
 src/scheduler/node_store.rs: 4
@@ -216,9 +215,8 @@ reached only through `Erased<T>::erase` / `reattach` (stored carriers) and the `
 `reattach_ref` / `reattach_slice` transient helpers. The `unsafe impl Reattachable` families declare
 layout-invariance and carry no runtime `unsafe` of their own — they are exercised through this
 primitive: `CarriedFamily` / `ResultCarriedFamily`
-([src/machine/model/values/carried.rs](../src/machine/model/values/carried.rs)), `KObjectFamily`
-([src/machine/model/values/kobject.rs](../src/machine/model/values/kobject.rs)), `ContractFamily`,
-`ContFamily`, `ScopeFamily`, and `OutcomeFamily`. The test erases a borrow-carrying family to the
+([src/machine/model/values/carried.rs](../src/machine/model/values/carried.rs)), `ContractFamily`,
+`ContFamily`, and `ScopeFamily`. The test erases a borrow-carrying family to the
 `'static` store, re-anchors it, and reads through every entry point, re-reading the first borrow
 after the helper calls to catch a tree-borrows regression.
 
@@ -236,11 +234,6 @@ its own: every `CallArena` construction routes it (`CallArena` lifetime erasure 
 declarations with no runtime `unsafe` op; the `retype` primitive that consumes them is exercised by
 `erased_roundtrip_and_helpers` (and, for `Carried` specifically, every scheduler-driving slate test
 through `ErasedValue` / the dep-delivery helpers). No separate minimal test.
-
-**`Reattachable` family — `KObject`** ([src/machine/model/values/kobject.rs](../src/machine/model/values/kobject.rs))
-— `KObjectFamily` is an `unsafe impl Reattachable` layout-invariance declaration with no runtime
-`unsafe` op; consumed through `retype` by `erased_roundtrip_and_helpers` and exercised end-to-end via
-the catch-watched `obj_for_builtin` reattach. No separate minimal test.
 
 **`ErasedContract` re-attach** ([src/machine/core/kfunction/body.rs](../src/machine/core/kfunction/body.rs))
 — the contract-lifetime erasure that mirrors `ScopePtr` for `ReturnContract`, now an
@@ -308,14 +301,12 @@ point (and transitively by user-fn TCO; that path is covered by the MATCH-on-
 - `replay_park_minimal_program_for_miri`
 
 **`Outcome` step-lifetime reattach** ([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs)) —
-the lifetime-only transmutes bridging a node continuation's per-step `'s` output against the
-run-lived AST and the frame-pinned slot store: `shorten_outcome` (a decide's `'run` outcome down to
-`'s`), `deps_at_step` (consumer-pull dep terminals down to `'s`), `deps_for_builtin` /
-`obj_for_builtin` (deps back up to `'run` across the concrete builtin boundary), and
-`pin_carried_to_run` (re-anchors a `'node` read up to `'run` for the run-global root drain — its sole
-caller, `interpret.rs`). The Done step and dep-delivery no longer route `'run`: a Done terminal is
-finalized at the step lifetime `'s` within its own step, and the lift / Forward pull re-anchor at a
-node lifetime (group below). The `Carried` *storage* erase / read re-anchor itself lives in the
+the lifetime-only transmutes that remain after the decide surface collapsed to a single cart-scale
+lifetime: `deps_at_step` (re-anchors consumer-pull dep terminals to the cart-witnessed lifetime the
+continuation runs at) and `pin_carried_to_run` (re-anchors a `'node` read up to `'run` for the
+run-global root drain — its sole caller, `interpret.rs`). `Outcome` is single-lifetime, so the
+splice slot and dep value share one lifetime — no up/down decide-surface bridge — and a Done terminal
+is finalized at the step lifetime within its own step. The `Carried` *storage* erase / read re-anchor itself lives in the
 scheduler (`node_store.rs`, group below), not here.
 All are exercised by every program; this test pins the hardest shape directly — a tail-chain
 return-type **coarsening**, where the re-tagged terminal must be homed in the contract's scope to

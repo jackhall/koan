@@ -83,11 +83,11 @@ data, and a single harness method applies them. The three pieces:
   modules (`keyworded`, `fn_value`, `single_poll`) never name scheduler fields
   directly.
 - **The effect** —
-  [`Outcome<'run, 's>`](../src/machine/execute/outcome.rs) is the one currency
+  [`Outcome<'s>`](../src/machine/execute/outcome.rs) is the one currency
   every producer and finish returns (the dispatch-side peer of the builtin
   [`Action`](../src/machine/core/kfunction/action.rs)). It is AST-free — no
-  variant names a `KFunction` or a `KExpression`. Its second lifetime `'s` is the
-  per-step frame lifetime the `Done` value is born at; the consumer pull-lifts it
+  variant names a `KFunction` or a `KExpression`. Its single lifetime `'s` is the
+  per-step cart-scale frame lifetime the `Done` value is born at; the consumer pull-lifts it
   across each dep edge ([per-call-arena-protocol.md § Consumer-pull node-output lift](per-call-arena-protocol.md#consumer-pull-node-output-lift)).
   Four variants: `Done` (the node's terminal value at `'s`, or an
   error), `Continue` (replace this slot's work and frame,

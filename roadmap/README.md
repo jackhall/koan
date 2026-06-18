@@ -75,7 +75,7 @@ What's shipped that the open items below build on:
   (see [design/per-call-arena-protocol.md § Slot-table scope handle](../design/per-call-arena-protocol.md#slot-table-scope-handle)).
   See [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
 - *Per-node output lift.* A node continuation's output is bound to the per-step frame
-  lifetime `'s` ([`Outcome<'run, 's>`](../src/machine/execute/outcome.rs)), not `'run`. The
+  lifetime `'s` ([`Outcome<'s>`](../src/machine/execute/outcome.rs)), not `'run`. The
   producer keeps its terminal in its own frame (the slot's `Done` co-stores the backing
   `Rc<CallArena>`, so frame death moves Done→free) and does not lift; each consumer
   pull-lifts its deps into its own arena at read ([`run_step`](../src/machine/execute/run_loop.rs))
@@ -92,7 +92,12 @@ What's shipped that the open items below build on:
   (`NodeStep<'s>`; `run_step` owns the step start to finish — enter, run, finalize — over the cart clone that witnesses `'s`),
   and the consumer-pull / `Outcome::Forward` lift re-anchors through [`read_lifted`](../src/machine/execute/runtime.rs)
   into the consumer scope arena — so `pin_carried_to_run` survives only for the genuine run-global
-  root drain. See
+  root drain. The dispatch decide surface then collapsed onto that single cart-scale lifetime:
+  `NodeScope::Anchored` is gone (every slot scope is cart-witnessed), `Outcome` is single-lifetime
+  (the `Outcome<'run, 's>` split retired along with the `shorten_outcome` / `deps_for_builtin` /
+  `obj_for_builtin` up/down bridges), and the `run_step` continuation reattach targets the
+  step lifetime the held cart `Rc` witnesses — leaving `deps_at_step` and `pin_carried_to_run`
+  the only `outcome.rs` re-anchors. See
   [design/per-call-arena-protocol.md § Consumer-pull node-output lift](../design/per-call-arena-protocol.md#consumer-pull-node-output-lift).
 - *Unified erase/reattach carriers.* The hand-rolled erase-to-`'static` /
   reattach carriers (`ScopePtr`, `ErasedContract`, `ErasedCont`, the scheduler's `Erased<W::Value>`)
@@ -247,7 +252,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
-- [Narrow the dispatch decide surface from `'run` to `'node`](refactor/dispatch-decide-node-lifetime.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
@@ -341,7 +345,3 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
-- [Narrow the dispatch decide surface from `'run` to `'node`](refactor/dispatch-decide-node-lifetime.md) —
-  retype `Outcome` / `decide` / `ResumeFn` / `DepFinish` / `working_expr` to the cart-scale
-  lifetime their captures actually live at, so the continuation reattach names a locally
-  witnessed `'node` instead of an over-approximated `'run`.

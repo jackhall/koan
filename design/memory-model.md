@@ -145,8 +145,8 @@ two opaque GAT projections share a size), guarded by a `const` size assert that 
 transient `reattach_value` / `reattach_ref` / `reattach_slice` helpers all route it. The carrier families live beside their own
 types as declarative `unsafe impl Reattachable` instantiations — `ContractFamily` for the
 node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` / `ContFamily` for
-the scheduler value (`Workload::Value`) and continuation (`ErasedCont`), `KObjectFamily` /
-`ResultCarriedFamily` / `OutcomeFamily` for the transient step-lifetime re-exposures in
+the scheduler value (`Workload::Value`) and continuation (`ErasedCont`),
+`ResultCarriedFamily` for the transient step-lifetime re-anchor (`deps_at_step`) in
 `outcome.rs`, and `ScopeFamily` so the branded `ScopePtr` re-attaches and the arena's
 `&Scope → &Scope<'static>` storage erasures route the same primitive — so `erase.rs` names no
 concrete Koan type and the scheduler stays workload-independent (the workload depends on the
