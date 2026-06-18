@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use super::{NodeId, Scheduler, Workload};
+use super::{Live, NodeId, Scheduler, Workload};
 
 impl<W: Workload> Scheduler<W> {
     /// Invariant: every consumer drained here is parked with a non-zero counter;
@@ -16,7 +16,7 @@ impl<W: Workload> Scheduler<W> {
     pub(crate) fn finalize(
         &mut self,
         idx: usize,
-        output: Result<W::Value, W::Error>,
+        output: Result<Live<'_, W>, W::Error>,
         frame: Option<Rc<W::Frame>>,
     ) {
         let id = NodeId(idx);

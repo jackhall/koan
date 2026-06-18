@@ -35,9 +35,7 @@ use super::{park_on_deps, DepRequest, Outcome};
 
 /// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly, then
 /// applied to `parts[1..]` once it resolves.
-pub(in crate::machine::execute) fn initial_expr<'run>(
-    expr: KExpression<'run>,
-) -> Outcome<'run, 'run> {
+pub(in crate::machine::execute) fn initial_expr<'step>(expr: KExpression<'step>) -> Outcome<'step> {
     let head = match &expr.parts[0].value {
         ExpressionPart::Expression(boxed) => (**boxed).clone(),
         _ => unreachable!("HeadDeferred shape implies nested Expression head"),
@@ -48,9 +46,7 @@ pub(in crate::machine::execute) fn initial_expr<'run>(
 /// `TypeHeadDeferred` entry: head is a `:(...)` sigil. Wrap it as a one-part
 /// `KExpression` so the type marker survives the sub-dispatch (mirrors
 /// `stage_all_eager_parts`).
-pub(in crate::machine::execute) fn initial_type<'run>(
-    expr: KExpression<'run>,
-) -> Outcome<'run, 'run> {
+pub(in crate::machine::execute) fn initial_type<'step>(expr: KExpression<'step>) -> Outcome<'step> {
     let head = match &expr.parts[0].value {
         ExpressionPart::SigiledTypeExpr(boxed) => KExpression::new(vec![Spanned::bare(
             ExpressionPart::SigiledTypeExpr(boxed.clone()),
@@ -65,13 +61,13 @@ pub(in crate::machine::execute) fn initial_type<'run>(
 /// finish classifies it into a [`ResolvedCallable`] and hands off to the shared apply-a-callable
 /// tail — which may itself resolve, park, or error, so the re-park-capable dispatch finish (its
 /// `Outcome` may be a fresh `ParkThenContinue`/`Redispatch`) is required. A dep error short-circuits
-/// frameless in `run_wait`, so the finish only runs on a resolved head.
-fn park_on_head<'run>(
-    expr: KExpression<'run>,
-    head: KExpression<'run>,
+/// frameless in `run_step`, so the finish only runs on a resolved head.
+fn park_on_head<'step>(
+    expr: KExpression<'step>,
+    head: KExpression<'step>,
     type_only: bool,
-) -> Outcome<'run, 'run> {
-    let finish: DepFinish<'run> = Box::new(move |ctx, results| {
+) -> Outcome<'step> {
+    let finish: DepFinish<'step> = Box::new(move |ctx, results| {
         let callable = match classify_head(results[0], type_only) {
             Ok(c) => c,
             Err(e) => return Outcome::Done(Err(e)),
@@ -94,10 +90,10 @@ fn park_on_head<'run>(
 /// `type_only` arm pruning. Returns the shape-appropriate `KError` for a
 /// non-admitted value (a type-shaped `TypeMismatch` under `type_only`, else a
 /// non-callable `DispatchFailed`).
-fn classify_head<'run>(
-    head: Carried<'run>,
+fn classify_head<'step>(
+    head: Carried<'step>,
     type_only: bool,
-) -> Result<ResolvedCallable<'run>, KError> {
+) -> Result<ResolvedCallable<'step>, KError> {
     match head {
         // A runtime value head. A functor (`KFunction` with `is_functor`) is admitted in
         // both modes — its result is a module, so it is the type-shaped head's only

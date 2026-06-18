@@ -37,7 +37,9 @@ fn sched_read_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().expect("scheduler should succeed");
-    sched.read(id)
+    // The frameless top-level terminal outlives the local `sched`; widen the scheduler's `'node`
+    // read to the scope lifetime (see `test_support::extract_terminal`).
+    crate::builtins::test_support::extract_terminal(&sched, id)
 }
 
 /// Accepts one Number arg and returns it unchanged. The signature is `<n :Number>`

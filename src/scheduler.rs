@@ -24,6 +24,7 @@ use nodes::Node;
 use work_queues::WorkQueues;
 
 mod dep_graph;
+mod erase;
 mod lifecycle;
 mod node_id;
 mod node_store;
@@ -33,8 +34,9 @@ mod submit;
 mod work_queues;
 mod workload;
 
+pub(crate) use erase::{reattach_ref, reattach_slice, reattach_value, Erased, Reattachable};
 pub use node_id::NodeId;
-pub(crate) use workload::{FramedRead, Workload};
+pub(crate) use workload::{FramedRead, Live, Workload};
 
 /// Re-exported for the driver's white-box reclaim tests (the only cross-module user of the edge
 /// kind); production driver code never names it.
@@ -109,13 +111,14 @@ impl<W: Workload> Scheduler<W> {
     }
 
     /// Only safe on IDs returned by `dispatch_in_scope`; internal slots may have been eagerly
-    /// freed by their parent. Follows a bare-name-forward alias to the real producer.
-    pub fn read_result(&self, id: NodeId) -> Result<W::Value, &W::Error> {
+    /// freed by their parent. Follows a bare-name-forward alias to the real producer. The value is
+    /// re-anchored to the `&self` borrow — the slot's frame `Rc` pins it for that long.
+    pub fn read_result(&self, id: NodeId) -> Result<Live<'_, W>, &W::Error> {
         self.store.read_result(self.resolve_alias(id))
     }
 
     /// Panics on `Err`. Follows a bare-name-forward alias to the real producer.
-    pub fn read(&self, id: NodeId) -> W::Value {
+    pub fn read(&self, id: NodeId) -> Live<'_, W> {
         self.store.read(self.resolve_alias(id))
     }
 
@@ -128,7 +131,7 @@ impl<W: Workload> Scheduler<W> {
     /// Re-home a finalized terminal (already lifted into a surviving arena), dropping the pinned
     /// producer frame. The drain boundary uses this for consumer-less roots. Resolves a bare-name
     /// alias so the real producer's frame — not the alias slot — is released.
-    pub(crate) fn rehome_terminal(&mut self, id: NodeId, output: Result<W::Value, W::Error>) {
+    pub(crate) fn rehome_terminal(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {
         let target = self.resolve_alias(id);
         self.store.rehome_terminal(target, output);
     }
@@ -154,7 +157,7 @@ impl<W: Workload> Scheduler<W> {
     pub(crate) fn clear_node(&mut self, id: NodeId) {
         self.store.clear_node(id);
     }
-    pub(crate) fn set_result(&mut self, id: NodeId, output: Result<W::Value, W::Error>) {
+    pub(crate) fn set_result(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {
         self.store.set_result(id, output);
     }
     pub(crate) fn result_is_none(&self, id: NodeId) -> bool {

@@ -18,8 +18,7 @@ mod run_loop;
 mod runtime;
 
 pub(in crate::machine::execute) use outcome::{
-    catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedCont, ErasedValue,
-    NodeCont,
+    catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedCont, NodeCont,
 };
 pub use runtime::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};
 

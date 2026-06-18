@@ -75,8 +75,8 @@ sharing safe.
 ## Consumer-pull node-output lift
 
 A node continuation produces its value at the node's own per-call frame
-lifetime `'s` ([`Outcome<'run, 's>`](../src/machine/execute/outcome.rs)),
-not `'run`: the value is born in the producer's frame (a builtin allocates
+lifetime `'step` ([`Outcome<'step>`](../src/machine/execute/outcome.rs)), the
+single cart-scale lifetime the decide surface carries: the value is born in the producer's frame (a builtin allocates
 it there) or arrives as a dep already lifted into that frame. The scheduler
 relocates it across each dep edge — never the producer.
 
@@ -85,13 +85,13 @@ relocates it across each dep edge — never the producer.
   co-stores the terminal with the backing `Rc<CallArena>`, pinning the
   producer frame until the slot is freed — frame death moves from Done to
   free. The stored `'run` view is re-exposed against that held `Rc` (the same
-  held-Rc seam as [§ Seed-side re-anchor](#seed-side-re-anchor)); honest `'s`
+  held-Rc seam as [§ Seed-side re-anchor](#seed-side-re-anchor)); honest `'step`
   typing rides the continuation in/out and the pull-lift destination, not
   storage. The single workload `NodeLift` hook
   ([`src/machine/execute/lift.rs`](../src/machine/execute/lift.rs)) owns the
   `KObject`-invariant copy; the scheduler loop names no `KObject` / `KType`.
 - **Consumers pull-lift at read.** When a consumer runs
-  ([`run_wait`](../src/machine/execute/run_loop.rs)) it lifts each dep
+  ([`run_step`](../src/machine/execute/run_loop.rs)) it lifts each dep
   from the producer's frame into its own call arena, promoting the producer's
   output to the consuming node's lifetime. A value read by N consumers is
   lifted N times — once per consumer — and each copy dies with its consumer's
@@ -115,11 +115,14 @@ relocates it across each dep edge — never the producer.
 
 Because `KObject` / `Carried` / `Scope` are invariant in their lifetime, none
 of these transitions can be a coercion — each cross-frame move is a genuine
-`NodeLift` copy (or the held-Rc re-exposure at storage). Five audited
+`NodeLift` copy (or the held-Rc re-exposure at storage). Two audited
 lifetime-reattach primitives in
-[outcome.rs](../src/machine/execute/outcome.rs) bridge `'s`↔`'run` at the
-run_wait / apply / combinator boundaries (`shorten_outcome`, `deps_at_step`,
-`deps_for_builtin`, `obj_for_builtin`, `pin_carried_to_run`); they are pinned
+[outcome.rs](../src/machine/execute/outcome.rs) remain: `deps_at_step`
+re-anchors consumer-pull dep terminals to the cart-witnessed lifetime the
+continuation runs at, and `pin_carried_to_run` re-anchors a node read up to
+`'run` for the run-global root drain. (The single-lifetime `Outcome` makes the
+former up/down decide-surface bridges unnecessary — the splice slot and dep
+value share one lifetime.) They are pinned
 in the Miri slate by `tail_call_stamps_result_against_first_callers_return_contract`.
 
 ### Fast path
@@ -192,7 +195,7 @@ state live on `Scheduler`:
   currently being executed. Read through
   [`Scheduler::current_frame`](../src/machine/execute/run_loop.rs);
   written only by `enter_slot_step` / `exit_slot_step` (the RAII
-  bracket around every iteration of `Scheduler::execute`) and the
+  bracket `run_step` wraps each slot step in) and the
   `swap_active_frame` save/restore. An invoke never takes it (tail
   reuse draws from the reserve, below), so within a step it is always
   `Some` — `Node::frame` and `PostStep::prev_frame` are non-optional.
@@ -362,25 +365,34 @@ two-iteration warmup.
 A scheduler slot stores its scope as a lifetime-free
 [`NodeScope`](../src/machine/execute/nodes.rs), not a raw `&'a Scope<'a>`, so the node it sits on
 pins no `'run` through its scope. The handle rides a grouped `NodePayload` (the scope handle plus the
-node's lexical chain) alongside the slot's frame. The enum has two arms: `Anchored(ScopePtr<'static>)`
-holds an erased pointer to a genuine run-lived scope (a run-root scope, or a sub-scope the active
-frame does not directly back), re-attached at read; `Yoked` carries no payload at all. A
-per-call frame scope rides `Yoked` — single-cart, because the slot's own `Frame::cart`
-`Rc<CallArena>` is the sole liveness witness, so there is no second `Rc` clone and no
-contention with `try_reset_for_tail`'s `strong_count == 1` TCO reuse check.
+node's lexical chain) alongside the slot's frame. Both arms are **cart-witnessed** — re-projected
+from the slot's live frame at read, never re-anchored at a free `'run`:
 
-The funnel `submit::add_with_chain` decides the arm: a pointer test
-(`std::ptr::eq(active_frame.scope(), scope)`) routes a frame's-own-child slot to `Yoked`,
-everything else to `Anchored`, erasing the run-lived borrow through `ScopePtr::erase_static`. The
-tail sink `NodeStore::reinstall_with_frame` always stores `Yoked` — a tail-replace slot's scope is
-always its own frame's child. Storing an erased handle rather than a live `&'run` keeps the borrow
+- `Yoked` carries no payload at all: the slot's scope *is* its own per-call cart's scope, re-read
+  from the frame at the read boundary. Single-cart, because the slot's own `Frame::cart`
+  `Rc<CallArena>` is the sole liveness witness, so there is no second `Rc` clone and no contention
+  with `try_reset_for_tail`'s `strong_count == 1` TCO reuse check.
+- `YokedChild(ScopePtr<'static>)` holds an erased pointer to a block scope a builtin allocated in a
+  cart *ancestor* arena (an `InScope` body — USING / MODULE / SIG / TRY), re-attached at read with a
+  borrow bounded by the slot's frame `Rc`, sound because the cart's `outer_frame` chain pins that
+  ancestor arena for as long as the slot holds the cart. It differs from `Yoked` only in that the
+  child scope differs from the cart's own scope, so it needs a stored pointer.
+
+The funnel [`resolve_node_scope`](../src/machine/execute/runtime/submit.rs) decides the arm in
+order: a pointer test (`std::ptr::eq(active_frame.scope(), scope)`) routes a frame's-own-child slot
+to `Yoked`; a walk of the active cart's scope `outer` chain that reaches `scope`'s arena routes a
+cart-ancestor block scope to `YokedChild`, erasing the borrow through `ScopePtr::erase_static`; the
+frameless top-level run root routes to `Yoked` via the `run_frame` cart that adopts it (the slot's
+cart is that `run_frame`). The two residual fall-throughs are `unreachable!` — an instrumented
+whole-suite spike confirmed every framed submission resolves to `Yoked` / `YokedChild` and every
+frameless one to the run root. Storing an erased handle rather than a live `&'run` keeps the borrow
 honest across a TCO `try_reset_for_tail`: nothing persisted points into the reset arena.
 
 The read boundary hands a slot's scope back on demand, not as a stored free `&'run`:
-[`Scheduler::current_scope`](../src/machine/execute/run_loop.rs) materializes it per use — an
-`Anchored` slot re-attaches its erased `ScopePtr<'static>` through the `unsafe` `reattach_bounded`
-(borrow bounded by the reader, content lifetime free, sound because the pointee is run-lived); a
-`Yoked` slot re-reads from the live
+[`reattach_node_scope`](../src/machine/execute/dispatch/ctx.rs) materializes it per use — a
+`YokedChild` slot re-attaches its erased `ScopePtr<'static>` through the `unsafe` `reattach_bounded`
+(borrow bounded by the frame `Rc`, content lifetime free, sound because the cart pins the ancestor
+arena); a `Yoked` slot re-reads from the live
 `active_frame` cart via [`CallArena::scope_bounded`](../src/machine/core/arena.rs), a
 **witness-bounded** brand whose borrow is capped at the `&Rc<CallArena>` receiver (content `'a`
 free, `'a: 'p`). Because the borrow cannot outlive the frame `Rc` it reads from, storing it past
@@ -393,8 +405,8 @@ run-scope methods (`dispatch_in_scope` / `dispatch_in_scope_with_chain` /
 The post-step loop in `Scheduler::execute` reads the just-finished step's scope through a
 `PostStep` token returned by `exit_slot_step`, derived from the slot's *returned* frame
 (`prev_frame`) rather than the ambient `active_frame` — an in-step invoke can swap the ambient
-frame, so the returned value is the authoritative source. A within-step frame lifetime `'s`
-(`'a: 's`) threads `classify_dispatch` → `SchedulerView` → `BuiltinFn` → the scheduler's write
+frame, so the returned value is the authoritative source. A within-step frame lifetime `'step`
+(`'a: 'step`) threads `classify_dispatch` → `SchedulerView` → `BuiltinFn` → the scheduler's write
 primitives, lifting to the run `'a` only at the `lift_kobject` Done boundary.
 
 ## Seed-side re-anchor

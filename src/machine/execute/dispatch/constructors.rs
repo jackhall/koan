@@ -29,10 +29,10 @@ pub(in crate::machine::execute) mod tagged_union;
 /// `(Distance 3.0)` / `Distance (3.0)` construct identically and `Distance ()` is arity-zero.
 /// The parts are launched as one value cell whose finish type-checks against the member's
 /// `repr` and wraps with `identity`.
-pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
-    identity: &'run KType<'run>,
-    mut value_parts: Vec<Spanned<ExpressionPart<'run>>>,
-) -> Outcome<'run, 'run> {
+pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
+    identity: &'step KType<'step>,
+    mut value_parts: Vec<Spanned<ExpressionPart<'step>>>,
+) -> Outcome<'step> {
     if let [Spanned {
         value: ExpressionPart::Expression(inner),
         ..
@@ -61,12 +61,12 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'run>(
 /// value cell per field — a literal field stages in place, so a record over literal fields
 /// binds synchronously (the property the retired struct path relied on, and which a chained
 /// `(Boxed (p))` depends on). The finish builds the `KObject::Record` and wraps it.
-pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'run>(
-    identity: &'run KType<'run>,
-    record_fields: Vec<(String, ExpressionPart<'run>)>,
-) -> Outcome<'run, 'run> {
+pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
+    identity: &'step KType<'step>,
+    record_fields: Vec<(String, ExpressionPart<'step>)>,
+) -> Outcome<'step> {
     let field_names: Vec<String> = record_fields.iter().map(|(n, _)| n.clone()).collect();
-    let value_parts: Vec<ExpressionPart<'run>> =
+    let value_parts: Vec<ExpressionPart<'step>> =
         record_fields.into_iter().map(|(_, p)| p).collect();
     launch(
         value_parts,
@@ -79,10 +79,10 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'run>(
 
 /// Type-check `value` against the newtype member's projected `repr` and wrap it with
 /// `identity`, peeling any `Wrapped` layer (the single-layer collapse invariant).
-fn construct_newtype<'run>(
-    identity: &'run KType<'run>,
-    value: &KObject<'run>,
-) -> Result<KObject<'run>, KError> {
+fn construct_newtype<'step>(
+    identity: &'step KType<'step>,
+    value: &KObject<'step>,
+) -> Result<KObject<'step>, KError> {
     let (set, index) = match identity {
         KType::SetRef { set, index } => (set, *index),
         _ => unreachable!("TypeCall fast lane routed a non-SetRef identity into newtype construct"),
@@ -108,12 +108,12 @@ fn construct_newtype<'run>(
 /// `RecursiveSet` member. Shared by named UNIONs (`Tagged` kind) and the builtin `Result`
 /// constructor (`TypeConstructor` kind) — both reference a sealed member.
 #[allow(clippy::too_many_arguments)]
-pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
-    set: Rc<RecursiveSet<'run>>,
+pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
+    set: Rc<RecursiveSet<'step>>,
     index: usize,
-    schema: Rc<HashMap<String, KType<'run>>>,
-    args_parts: Vec<Spanned<ExpressionPart<'run>>>,
-) -> Outcome<'run, 'run> {
+    schema: Rc<HashMap<String, KType<'step>>>,
+    args_parts: Vec<Spanned<ExpressionPart<'step>>>,
+) -> Outcome<'step> {
     let (tag, value_part) = match tagged_union::prepare_args(args_parts) {
         Ok(v) => v,
         Err(e) => return Outcome::Done(Err(e)),
@@ -134,23 +134,20 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'run>(
 /// terminal in the same step (submission is enqueue-then-drain), so there is no inline-ready case —
 /// the slot always parks as a [`Outcome::ParkThenContinue`]. The finish reads the resolved deps in
 /// declaration order and materializes the value via [`finish`]; dep errors propagate frameless.
-fn launch<'run>(
-    value_parts: Vec<ExpressionPart<'run>>,
-    kind: CtorKind<'run>,
-) -> Outcome<'run, 'run> {
+fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind<'step>) -> Outcome<'step> {
     debug_assert!(
         !value_parts.is_empty(),
         "launch requires at least one value part (arity-zero is rejected upstream)"
     );
-    let deps: Vec<DepRequest<'run>> = value_parts
+    let deps: Vec<DepRequest<'step>> = value_parts
         .into_iter()
         .map(|part| DepRequest::Dispatch {
             expr: KExpression::new(vec![Spanned::bare(part)]),
             placement: DepPlacement::OwnScope,
         })
         .collect();
-    let combine_finish: DepFinish<'run> = Box::new(move |ctx, results| {
-        let values: Vec<&'run KObject<'run>> = results.iter().map(|c| c.object()).collect();
+    let combine_finish: DepFinish<'step> = Box::new(move |ctx, results| {
+        let values: Vec<&'step KObject<'step>> = results.iter().map(|c| c.object()).collect();
         finish(ctx.current_scope(), &kind, &values)
     });
     park_on_deps(deps, None, combine_finish)
@@ -158,11 +155,11 @@ fn launch<'run>(
 
 /// All value subs have completed. Read each, materialize the kind-keyed
 /// payload, and arena-allocate the produced `KObject`.
-pub(in crate::machine::execute::dispatch) fn finish<'run>(
-    scope: &Scope<'run>,
-    kind: &CtorKind<'run>,
-    values: &[&'run KObject<'run>],
-) -> Outcome<'run, 'run> {
+pub(in crate::machine::execute::dispatch) fn finish<'step>(
+    scope: &Scope<'step>,
+    kind: &CtorKind<'step>,
+    values: &[&'step KObject<'step>],
+) -> Outcome<'step> {
     let result = match kind {
         CtorKind::Newtype { identity } => {
             debug_assert_eq!(values.len(), 1);

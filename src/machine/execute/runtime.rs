@@ -26,14 +26,13 @@ use crate::machine::core::kfunction::body::{split_body_statements, ErasedContrac
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallArena, KError, NodeId, Scope};
 
-use super::dispatch::{current_scope, DepRequest};
+use super::dispatch::{reattach_node_scope, DepRequest};
 use super::lift::NodeLift;
-use super::nodes::{NodePayload, NodeStep, NodeWork};
-use super::outcome::{dep_error_frame, pin_carried_to_run, Continuation, Outcome};
-use super::{
-    catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedCont, ErasedValue,
-};
-use crate::scheduler::{Scheduler, Workload};
+use super::nodes::{ChainOp, NodePayload, NodeStep, NodeWork};
+use super::outcome::{dep_error_frame, Continuation, Outcome};
+use super::{catch_cont, ignore_results, short_circuit, CatchFinish, DepFinish, ErasedCont};
+use crate::machine::model::values::CarriedFamily;
+use crate::scheduler::{reattach_value, Scheduler, Workload};
 
 mod interpret;
 mod submit;
@@ -47,7 +46,7 @@ pub(in crate::machine::execute) struct KoanWorkload;
 
 impl Workload for KoanWorkload {
     type Payload = NodePayload;
-    type Value = ErasedValue;
+    type Value = CarriedFamily;
     type Error = KError;
     type Frame = CallArena;
     type Contract = ErasedContract;
@@ -95,32 +94,42 @@ impl Default for KoanRuntime<'_> {
 /// (terminal reads / slot count) so callers drive the whole run through the harness without ever
 /// borrowing the scheduler — the write methods are the inherent `&mut self` ones above.
 impl<'run> KoanRuntime<'run> {
-    /// Read a slot's terminal. See [`Scheduler::read_result`].
-    pub fn read_result(&self, id: NodeId) -> Result<crate::machine::model::Carried<'run>, &KError> {
-        // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
-        self.sched.read_result(id).map(|v| unsafe { v.reattach() })
+    /// Read a slot's terminal, re-anchored by the scheduler to this `&self` borrow (the slot's frame
+    /// `Rc` pins the value for the borrow), so the driver-side read is safe. See
+    /// [`Scheduler::read_result`].
+    pub fn read_result(&self, id: NodeId) -> Result<crate::machine::model::Carried<'_>, &KError> {
+        self.sched.read_result(id)
     }
 
     /// Read a slot's value terminal, panicking on `Err`. See [`Scheduler::read`].
-    pub fn read(&self, id: NodeId) -> crate::machine::model::Carried<'run> {
-        // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
-        unsafe { self.sched.read(id).reattach() }
+    pub fn read(&self, id: NodeId) -> crate::machine::model::Carried<'_> {
+        self.sched.read(id)
     }
 
     /// Pull a dep's terminal lifted into `dest` (consumer-pull): a framed terminal is copied out of
     /// its producer frame, a frameless / run-arena terminal is forwarded as-is. The `unsafe` reattach
     /// is internal — the slot's co-stored frame `Rc` / run arena pins the value for the transient
     /// read, and the lift copies it into `dest` — so the run loop's dep collection stays safe.
-    pub(in crate::machine::execute) fn read_lifted(
+    pub(in crate::machine::execute) fn read_lifted<'o>(
         &self,
         dep: NodeId,
-        dest: &'run crate::machine::core::RuntimeArena,
-    ) -> Result<crate::machine::model::Carried<'run>, KError> {
+        dest: &'o crate::machine::core::RuntimeArena,
+    ) -> Result<crate::machine::model::Carried<'o>, KError> {
         match self.sched.read_result_with_frame(dep) {
-            // SAFETY: the slot's co-stored frame Rc pins the value; the lift copies it into `dest`.
-            Ok((value, Some(frame))) => Ok(self.lift(unsafe { value.reattach() }, &frame, dest)),
-            // SAFETY: as above; a frameless / run-arena terminal already survives, forwarded as-is.
-            Ok((value, None)) => Ok(unsafe { value.reattach() }),
+            // Re-anchor the scheduler's `'node` read to the destination *node* lifetime `'o` (the
+            // consumer scope's arena, bounded by the held consumer-frame `Rc`), then lift it into
+            // `dest`. The held producer frame `Rc` witnesses the framed re-anchor (the lift
+            // self-anchors the copy via the embedded `Rc`); a frameless terminal lives in a run arena
+            // that outlives `'o`. Node-scale — no `'run` fabrication.
+            // SAFETY: `'node` and `'o` are both pinned for the read+lift by the held producer frame
+            // `Rc` (Some) / the run arena (None); the carrier is invariant, so the lifetime-only
+            // re-anchor routes `reattach_value`.
+            Ok((value, Some(frame))) => Ok(self.lift(
+                unsafe { reattach_value::<CarriedFamily>(value) },
+                &frame,
+                dest,
+            )),
+            Ok((value, None)) => Ok(unsafe { reattach_value::<CarriedFamily>(value) }),
             Err(e) => Err(e.clone()),
         }
     }
@@ -168,7 +177,7 @@ impl<'run> KoanRuntime<'run> {
 /// recurses `run_action` on the `AwaitContinue`/`CatchCont` it produces) as a [`Outcome::ParkThenContinue`],
 /// and the harness submits and applies. Every scheduler read the body needs is deferred into the
 /// finish, which sees a read-only [`SchedulerView`](super::dispatch::SchedulerView) at wake.
-pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Outcome<'run, 'run> {
+pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> Outcome<'step> {
     match action {
         // Terminal: the value the builtin already computed (scope was mutated in place first).
         Action::Done(Ok(c)) => Outcome::Done(Ok(c)),
@@ -210,7 +219,7 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
                 ),
             };
             let body_frame = frame.clone();
-            let finish: DepFinish<'run> = Box::new(move |_view, _results| Outcome::Continue {
+            let finish: DepFinish<'step> = Box::new(move |_view, _results| Outcome::Continue {
                 work: super::dispatch::decide(tail),
                 frame: FramePlacement::FreshChild { frame: body_frame },
                 contract,
@@ -233,8 +242,8 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
             // deps are owned sub-slots (an `InScope` body fans out one per statement at apply
             // time). The harness orders the realized deps `[park..., owned...]`; `park_count` is
             // the park prefix length. The wrapped finish recurses `run_action` on the `AwaitContinue`.
-            let mut park: Vec<DepRequest<'run>> = Vec::new();
-            let mut owned: Vec<DepRequest<'run>> = Vec::new();
+            let mut park: Vec<DepRequest<'step>> = Vec::new();
+            let mut owned: Vec<DepRequest<'step>> = Vec::new();
             for dep in deps {
                 match dep {
                     Dep::Existing(id) => park.push(DepRequest::Existing(id)),
@@ -245,7 +254,7 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
             }
             let park_count = park.len();
             park.extend(owned);
-            let wrapped: DepFinish<'run> = Box::new(move |view, results| {
+            let wrapped: DepFinish<'step> = Box::new(move |view, results| {
                 let fctx = FinishCtx {
                     scope: view.current_scope(),
                 };
@@ -262,7 +271,7 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
         Action::Catch { watched, finish } => {
             // `watched` is realized (and owned) at apply time — an `InScope` watched enters a
             // fresh single-statement block, distinct from a dep-finish body's fan-out.
-            let wrapped: CatchFinish<'run> = Box::new(move |view, result| {
+            let wrapped: CatchFinish<'step> = Box::new(move |view, result| {
                 let fctx = FinishCtx {
                     scope: view.current_scope(),
                 };
@@ -292,10 +301,10 @@ impl<'run> KoanRuntime<'run> {
     /// per-call frame; `InScope` enters a fresh **single-statement** block (so an inner `LET` stays
     /// local). A multi-statement body splits separately — see the `InScope` arm of [`Self::apply_outcome`]
     /// and [`Self::dispatch_body`].
-    fn realize_dispatch(
+    fn realize_dispatch<'a>(
         &mut self,
-        expr: KExpression<'run>,
-        placement: DepPlacement<'run>,
+        expr: KExpression<'a>,
+        placement: DepPlacement<'a>,
     ) -> NodeId {
         match placement {
             DepPlacement::OwnScope => self.dispatch_in_own_scope(expr),
@@ -315,7 +324,7 @@ impl<'run> KoanRuntime<'run> {
     /// `Existing` is already a producer the builtin found in scope; a `Dispatch` realizes as a
     /// single statement (an `InScope` watched expr enters a fresh single-statement block — see
     /// [`Self::realize_dispatch`]).
-    fn realize_catch_dep(&mut self, dep: Dep<'run>) -> NodeId {
+    fn realize_catch_dep<'a>(&mut self, dep: Dep<'a>) -> NodeId {
         match dep {
             Dep::Existing(id) => id,
             Dep::Dispatch { expr, placement } => self.realize_dispatch(expr, placement),
@@ -327,9 +336,9 @@ impl<'run> KoanRuntime<'run> {
     /// keep the current cart (`None`). The one place the placement → cart mapping lives — shared by
     /// the `Continue` body re-run and the folded invoke / re-resolve paths (which reach it through
     /// their own `Continue`).
-    fn resolve_frame_placement(
+    fn resolve_frame_placement<'x>(
         &mut self,
-        placement: FramePlacement<'run>,
+        placement: FramePlacement<'x>,
     ) -> Option<Rc<CallArena>> {
         match placement {
             FramePlacement::ReuseReserve { outer } => Some(self.acquire_tail_frame(outer)),
@@ -356,16 +365,16 @@ impl<'run> KoanRuntime<'run> {
     /// Interpret an [`Outcome`] into the scheduler effect it names and return the slot's
     /// [`NodeStep`]. This is the sole graph writer the dispatch side reaches — a decide handler
     /// never holds `&mut Scheduler`.
-    pub(in crate::machine::execute) fn apply_outcome<'s>(
+    pub(in crate::machine::execute) fn apply_outcome<'step>(
         &mut self,
-        outcome: Outcome<'run, 's>,
+        outcome: Outcome<'step>,
         idx: usize,
-    ) -> NodeStep<'run> {
+    ) -> NodeStep<'step> {
         match outcome {
-            // The terminal is born at the step lifetime `'s`; re-expose it at `'run` for the slot
-            // table. The Done arm of `execute` pins the producer frame's `Rc` alongside it, so the
-            // stored `'run` view stays backed until the slot frees.
-            Outcome::Done(output) => NodeStep::Done(output.map(pin_carried_to_run)),
+            // The terminal stays at the step lifetime `'s` — the run loop's `run_step` finalizes it
+            // into the slot store (erasing it) before the step's frame witness drops, so it never
+            // needs a fabricated `'run` to cross the step-guard exit.
+            Outcome::Done(output) => NodeStep::Done(output),
             Outcome::Continue {
                 work,
                 frame,
@@ -377,12 +386,16 @@ impl<'run> KoanRuntime<'run> {
                 // statements parks on them as owned `BodyBlock` deps and emits this `Continue` only
                 // from the resolving finish (see `dispatch/exec.rs` and `run_action`).
                 let frame = self.resolve_frame_placement(frame);
+                // Decide the chain reshape from the still-live contract variant, then erase the
+                // contract — so the `Replace` step carries no `'run` (the variant is frozen into the
+                // lifetime-free [`ChainOp`]). The run loop assembles the chain against the post-step
+                // frame and keeps the slot's prior contract first over `contract`.
+                let chain = ChainOp::decide(block_entry, contract.as_ref(), body_index);
                 NodeStep::Replace {
                     work,
                     frame,
-                    function: contract,
-                    block_entry,
-                    body_index,
+                    contract: contract.map(ErasedContract::erase),
+                    chain,
                 }
             }
             Outcome::ParkThenContinue {
@@ -475,9 +488,8 @@ impl<'run> KoanRuntime<'run> {
                 NodeStep::Replace {
                     work,
                     frame: None,
-                    function: None,
-                    block_entry: None,
-                    body_index: 0,
+                    contract: None,
+                    chain: ChainOp::Unchanged,
                 }
             }
             Outcome::Forward(producer) => {
@@ -487,21 +499,23 @@ impl<'run> KoanRuntime<'run> {
                 // then this slot's consumers pull from here. Otherwise splice the slot out: move its
                 // consumers onto `producer`'s notify list and alias the slot to `producer`.
                 if self.sched.is_result_ready(producer) {
-                    let dest = current_scope(&self.ambient).arena;
-                    let pulled = match self.sched.read_result_with_frame(producer) {
-                        // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
-                        Ok((value, frame)) => Ok((unsafe { value.reattach() }, frame)),
-                        Err(e) => Err(e.clone_for_propagation()),
-                    };
-                    match pulled {
-                        // A per-call producer's terminal lives in its dying frame: lift it here.
-                        Ok((value, Some(frame))) => {
-                            NodeStep::Done(Ok(self.lift(value, &frame, dest)))
-                        }
-                        // A frameless / run-arena terminal already survives; forward it as-is.
-                        Ok((value, None)) => NodeStep::Done(Ok(value)),
-                        Err(e) => NodeStep::Done(Err(e)),
-                    }
+                    // Pull `producer`'s terminal into this consumer's own scope arena, at a *node*
+                    // lifetime bounded by the active cart — not a fabricated `'run`. `read_lifted`
+                    // does the same node-scale re-anchor the dep path uses: it lifts a framed
+                    // terminal into `dest` and forwards a frameless one as-is, with no `'run` step.
+                    let payload = self
+                        .ambient
+                        .active_payload()
+                        .expect("a slot step installs the ambient payload");
+                    let dest =
+                        reattach_node_scope(&payload.scope, self.ambient.active_frame_ref()).arena;
+                    let pulled = self.read_lifted(producer, dest);
+                    // Shorten the node value to the uniform `NodeStep` step lifetime `'s`: it lives
+                    // in `dest`, which the active cart pins for all of `'s`. A node→step reattach,
+                    // not a `'run` fabrication.
+                    // SAFETY: the value lives in `dest` ⊇ `'s`; lifetime-only reattach of an
+                    // invariant carrier.
+                    NodeStep::Done(pulled.map(|v| unsafe { reattach_value::<CarriedFamily>(v) }))
                 } else {
                     // Not ready: `NodeStep::Alias` drives `splice_forward` (move consumers onto the
                     // producer + alias the slot) in the execute loop.

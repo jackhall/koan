@@ -7,7 +7,7 @@
 use super::KoanRuntime;
 use crate::builtins::default_scope;
 use crate::machine::execute::lift::NodeLift;
-use crate::machine::execute::ErasedValue;
+use crate::machine::execute::outcome::pin_carried_to_run;
 use crate::machine::model::ast::KExpression;
 use crate::machine::{KError, KErrorKind, RuntimeArena, Scope};
 use crate::parse::{parse, parse_with_path};
@@ -61,10 +61,12 @@ impl<'run> KoanRuntime<'run> {
         // errored terminal needs no lift.
         for &id in &top_level {
             if let Ok((value, Some(frame))) = self.sched.read_result_with_frame(id) {
-                // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
-                let lifted = self.lift(unsafe { value.reattach() }, &frame, root.arena);
-                self.sched
-                    .rehome_terminal(id, Ok(ErasedValue::erase(lifted)));
+                // The scheduler hands back the value re-anchored to this `&self` borrow. A
+                // consumer-less root has no pull-lift to node-scale it, so this is the one genuine
+                // `'run` re-home: `pin_carried_to_run` re-anchors the read up to the run-global root
+                // arena. The lifted root is handed back live — the scheduler re-erases it for storage.
+                let lifted = self.lift(pin_carried_to_run(value), &frame, root.arena);
+                self.sched.rehome_terminal(id, Ok(lifted));
             }
         }
         // A bare top-level expression is an untyped resolution boundary: an unstamped

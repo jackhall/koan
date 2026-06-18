@@ -46,7 +46,9 @@ fn run_one<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> &'run KOb
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().expect("scheduler should succeed");
-    sched.read(id).object()
+    // The frameless top-level terminal outlives the local `sched`; widen the scheduler's `'node`
+    // read to the scope lifetime (see `test_support::extract_terminal`).
+    crate::builtins::test_support::extract_terminal(&sched, id).object()
 }
 
 fn run_one_err<'run>(

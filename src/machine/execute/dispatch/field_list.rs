@@ -28,19 +28,19 @@ use super::SchedulerView;
 /// Folds the elaborated `(name, KType)` pairs into the caller's carrier on the dep-finish's
 /// `Done` arm. The scheduler-currency variant, returning [`Outcome`] — used by
 /// [`defer_field_list`].
-pub(crate) type FieldListFinalize<'run> = Box<
-    dyn for<'step> FnOnce(&'step Scope<'run>, Vec<(String, KType<'run>)>) -> Outcome<'run, 'run>
-        + 'run,
+pub(crate) type FieldListFinalize<'step> = Box<
+    dyn for<'view> FnOnce(&'view Scope<'step>, Vec<(String, KType<'step>)>) -> Outcome<'step>
+        + 'step,
 >;
 
 /// `Action`-path twin of [`FieldListFinalize`], returning `Result<Carried, KError>` — used by
 /// [`defer_field_list_action`], whose finish wraps the result in `Action::Done`.
-pub(crate) type FieldListFinalizeAction<'run> = Box<
-    dyn for<'step> FnOnce(
-            &'step Scope<'run>,
-            Vec<(String, KType<'run>)>,
-        ) -> Result<Carried<'run>, KError>
-        + 'run,
+pub(crate) type FieldListFinalizeAction<'step> = Box<
+    dyn for<'view> FnOnce(
+            &'view Scope<'step>,
+            Vec<(String, KType<'step>)>,
+        ) -> Result<Carried<'step>, KError>
+        + 'step,
 >;
 
 /// Declare the sigil sub-Dispatches (in DFS order) and the dep-finish that re-walks `expr` once they
@@ -49,20 +49,20 @@ pub(crate) type FieldListFinalizeAction<'run> = Box<
 /// rides into the closure so its Drop fires on every finish arm; `error_frame` is attached to the
 /// user-facing `Err` arm.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn defer_field_list<'run>(
-    expr: KExpression<'run>,
+pub(crate) fn defer_field_list<'step>(
+    expr: KExpression<'step>,
     park_producers: Vec<NodeId>,
-    sub_dispatches: Vec<KExpression<'run>>,
+    sub_dispatches: Vec<KExpression<'step>>,
     context: &'static str,
     name_kind: FieldNameKind,
     threaded: Vec<String>,
     chain: Option<Rc<LexicalFrame>>,
-    pending_guard: Option<PendingBinderGuard<'run>>,
+    pending_guard: Option<PendingBinderGuard<'step>>,
     error_frame: Option<TraceFrame>,
-    finalize: FieldListFinalize<'run>,
-) -> Outcome<'run, 'run> {
+    finalize: FieldListFinalize<'step>,
+) -> Outcome<'step> {
     let park_count = park_producers.len();
-    let finish: DepFinish<'run> = Box::new(move |view, results| {
+    let finish: DepFinish<'step> = Box::new(move |view, results| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
         // `results` = `[park results.. , owned-sub results..]`; the re-walk consumes only
@@ -97,7 +97,7 @@ pub(crate) fn defer_field_list<'run>(
     });
     // Deps `[park_producers (Existing) ..., sigil subs (Dispatch/OwnScope) ...]`; the harness owns
     // the `Dispatch` suffix and parks the `Existing` prefix, feeding results in that order.
-    let mut deps: Vec<DepRequest<'run>> = park_producers
+    let mut deps: Vec<DepRequest<'step>> = park_producers
         .into_iter()
         .map(DepRequest::Existing)
         .collect();
@@ -177,12 +177,12 @@ pub(crate) fn defer_field_list_action<'a>(
 /// value/type position declares no binder, so the elaborator threads no self-reference; a
 /// field naming a forward type parks and a sigil field type sub-dispatches, both deferred
 /// through one dep-finish (the field walker's own re-walk handles nested records).
-pub(crate) fn elaborate_record_value<'run, 's>(
-    view: &SchedulerView<'run, 's>,
-    fields: KExpression<'run>,
+pub(crate) fn elaborate_record_value<'step, 'view>(
+    view: &SchedulerView<'step, 'view>,
+    fields: KExpression<'step>,
     chain: Option<Rc<LexicalFrame>>,
-) -> Outcome<'run, 'run> {
-    fn fold<'run>(scope: &Scope<'run>, pairs: Vec<(String, KType<'run>)>) -> Outcome<'run, 'run> {
+) -> Outcome<'step> {
+    fn fold<'step>(scope: &Scope<'step>, pairs: Vec<(String, KType<'step>)>) -> Outcome<'step> {
         let record = Record::from_pairs(pairs);
         let kt = scope.arena.alloc_ktype(KType::Record(Box::new(record)));
         Outcome::Done(Ok(Carried::Type(kt)))

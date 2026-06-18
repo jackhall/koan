@@ -17,23 +17,26 @@ use super::runtime::KoanRuntime;
 ///
 /// A Koan-typed workload hook: the generic scheduler ([`crate::scheduler`]) drives dep-edge
 /// delivery through this trait and names no Koan type itself.
-pub(in crate::machine::execute) trait NodeLift<'run> {
-    /// Copy `value` (alive in `src`'s arena) into `dst`; the result dies with `dst`.
-    fn lift(
+pub(in crate::machine::execute) trait NodeLift {
+    /// Copy `value` (alive in `src`'s arena, viewed at the destination lifetime `'o`) into `dst`;
+    /// the result dies with `dst`. `'o` is the destination *node* arena's lifetime — the consumer
+    /// scope's arena, or the run arena for the drain — never the run global by construction. The
+    /// caller re-anchors the producer read to `'o` before this, so the copy is single-lifetime.
+    fn lift<'o>(
         &self,
-        value: Carried<'run>,
+        value: Carried<'o>,
         src: &Rc<CallArena>,
-        dst: &'run RuntimeArena,
-    ) -> Carried<'run>;
+        dst: &'o RuntimeArena,
+    ) -> Carried<'o>;
 }
 
-impl<'run> NodeLift<'run> for KoanRuntime<'run> {
-    fn lift(
+impl NodeLift for KoanRuntime<'_> {
+    fn lift<'o>(
         &self,
-        value: Carried<'run>,
+        value: Carried<'o>,
         src: &Rc<CallArena>,
-        dst: &'run RuntimeArena,
-    ) -> Carried<'run> {
+        dst: &'o RuntimeArena,
+    ) -> Carried<'o> {
         match value {
             Carried::Object(v) => Carried::Object(dst.alloc_object(lift_kobject(v, src))),
             Carried::Type(t) => Carried::Type(dst.alloc_ktype(lift_ktype(t, src))),

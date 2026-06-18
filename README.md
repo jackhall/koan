@@ -216,7 +216,7 @@ src/
     │       └── scheduler_handle.rs  NodeId — stable DAG node handle
     ├── execute.rs
     └── execute/
-        ├── scheduler.rs   Scheduler struct — read views + inherent write primitives (the AST-free store the harness drives); dep_graph/, node_store/, submit/, work_queues/, finish/ (run_wait — one node handler), execute/ (the pop loop), splice/ (bare-name forward alias) submodules, tests under it
+        ├── scheduler.rs   Scheduler struct — read views + inherent write primitives (the AST-free store the harness drives); dep_graph/, node_store/, submit/, work_queues/, finish/ (run_step — one node handler), execute/ (the pop loop), splice/ (bare-name forward alias) submodules, tests under it
         ├── nodes.rs       node types (NodeWork struct / NodeStep / Node) + work_deps
         ├── outcome.rs     Outcome — the unified scheduler-step currency (Done / Continue / ParkThenContinue / Invoke / Redispatch / Forward) + Continuation + cont combinators (short_circuit / catch_cont / ignore_results); AST-free (carries DepRequest as an opaque type)
         ├── runtime.rs     KoanRuntime — owns the Scheduler, the sole &mut holder: the execute loop, apply_outcome (sole graph writer), submit_dispatch, literal lowering; plus run_action (lowers a builtin Action to an Outcome, pure); interpret/ (program entry points + run_program) and submit/ (the AST-aware submission wrappers — enter_block / dispatch_in_scope / dispatch_in_own_scope / dispatch_body / submit_dep_finish_in_own_scope) submodules

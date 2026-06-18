@@ -4,9 +4,10 @@
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use crate::machine::core::{Erased, Reattachable, RuntimeArena};
+use crate::machine::core::RuntimeArena;
 use crate::machine::model::types::UntypedKey;
 use crate::machine::model::KType;
+use crate::scheduler::{Erased, Reattachable};
 
 use super::KFunction;
 

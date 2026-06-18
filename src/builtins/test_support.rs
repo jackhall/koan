@@ -12,11 +12,23 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{KError, RuntimeArena, Scope};
 use crate::parse::parse;
+use crate::scheduler::{reattach_value, NodeId};
 
 use super::default_scope;
+
+/// Extract a top-level terminal at the scope lifetime `'a`. The scheduler re-anchors a read to its
+/// own `&self` borrow; a top-level result is a frameless terminal living in the scope arena `'a`,
+/// which outlives the local scheduler, so widening the read to `'a` is sound. Test-only — production
+/// code reads at the scheduler borrow and never widens.
+pub(crate) fn extract_terminal<'a>(sched: &KoanRuntime<'a>, id: NodeId) -> Carried<'a> {
+    // SAFETY: see the doc comment — the frameless top-level terminal lives in the `'a` scope arena,
+    // a strict outliver of the local `sched`, so the conservative `'node` read widens soundly.
+    unsafe { reattach_value::<CarriedFamily>(sched.read(id)) }
+}
 
 /// `Write` adapter that mirrors output into a shared `Vec<u8>` so tests can read it back.
 pub(crate) struct SharedBuf(pub Rc<RefCell<Vec<u8>>>);
@@ -63,7 +75,7 @@ pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KO
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().expect("scheduler should succeed");
-    sched.read(id).object()
+    extract_terminal(&sched, id).object()
 }
 
 /// Like [`run_one`] but for a type-producing expression: narrows the result's carrier to
@@ -72,7 +84,7 @@ pub(crate) fn run_one_type<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().expect("scheduler should succeed");
-    match sched.read(id) {
+    match extract_terminal(&sched, id) {
         Carried::Type(kt) => kt,
         Carried::Object(obj) => panic!("expected a type result, got value {}", obj.summarize()),
     }

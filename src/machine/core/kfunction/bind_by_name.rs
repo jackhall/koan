@@ -61,9 +61,9 @@ pub fn bind_args_by_name<'a>(
 
 /// The signature's parameters in order — `Keyword` elements are the call form's own literals, not
 /// bound values, so they are skipped.
-fn arguments<'s, 'a>(
-    signature: &'s ExpressionSignature<'a>,
-) -> impl Iterator<Item = &'s Argument<'a>> {
+fn arguments<'sig, 'a>(
+    signature: &'sig ExpressionSignature<'a>,
+) -> impl Iterator<Item = &'sig Argument<'a>> {
     signature.elements.iter().filter_map(|el| match el {
         SignatureElement::Argument(arg) => Some(arg),
         SignatureElement::Keyword(_) => None,

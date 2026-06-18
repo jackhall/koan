@@ -29,10 +29,10 @@ use super::Outcome;
 /// This handler issues no scheduler write — every path is a terminal — so it decides
 /// against a read-only [`SchedulerView`] and returns a [`Outcome::Done`]; the
 /// router applies it through [`KoanRuntime::apply_outcome`](super::super::runtime::KoanRuntime).
-pub(in crate::machine::execute) fn run<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    expr: &KExpression<'run>,
-) -> Outcome<'run, 'run> {
+pub(in crate::machine::execute) fn run<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    expr: &KExpression<'step>,
+) -> Outcome<'step> {
     let probe = expr
         .operator_probe()
         .expect("OperatorChain shape guarantees a cached operator probe");

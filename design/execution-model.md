@@ -72,8 +72,8 @@ it decides against a read-only view, *returns* the scheduler mutations it wants 
 data, and a single harness method applies them. The three pieces:
 
 - **The read view** —
-  [`SchedulerView<'run, 's>`](../src/machine/execute/dispatch/ctx.rs) wraps
-  `&'s Scheduler<KoanWorkload>` (never `&mut`) together with the driver's per-step
+  [`SchedulerView<'step, 'view>`](../src/machine/execute/dispatch/ctx.rs) wraps
+  `&'view Scheduler<KoanWorkload>` (never `&mut`) together with the driver's per-step
   ambient context. It exposes only the reads a decide needs: the
   static-over-the-step ones (`current_scope`, `chain_deref`, `in_contract_chain`,
   `build_bare_outcomes`) and the live reads of *pre-existing* producers
@@ -83,13 +83,13 @@ data, and a single harness method applies them. The three pieces:
   modules (`keyworded`, `fn_value`, `single_poll`) never name scheduler fields
   directly.
 - **The effect** —
-  [`Outcome<'run, 's>`](../src/machine/execute/outcome.rs) is the one currency
+  [`Outcome<'step>`](../src/machine/execute/outcome.rs) is the one currency
   every producer and finish returns (the dispatch-side peer of the builtin
   [`Action`](../src/machine/core/kfunction/action.rs)). It is AST-free — no
-  variant names a `KFunction` or a `KExpression`. Its second lifetime `'s` is the
-  per-step frame lifetime the `Done` value is born at; the consumer pull-lifts it
+  variant names a `KFunction` or a `KExpression`. Its single lifetime `'step` is the
+  per-step cart-scale frame lifetime the `Done` value is born at; the consumer pull-lifts it
   across each dep edge ([per-call-arena-protocol.md § Consumer-pull node-output lift](per-call-arena-protocol.md#consumer-pull-node-output-lift)).
-  Four variants: `Done` (the node's terminal value at `'s`, or an
+  Four variants: `Done` (the node's terminal value at `'step`, or an
   error), `Continue` (replace this slot's work and frame,
   re-run, no park), `ParkThenContinue` (park on deps, then run a
   [`Continuation`](../src/machine/execute/outcome.rs) that yields another
@@ -121,7 +121,7 @@ data, and a single harness method applies them. The three pieces:
   `dispatch_body`, `submit_dep_finish_in_own_scope`), `submit_dispatch`, and the
   aggregate-literal lowering are all `&mut self` methods on `KoanRuntime`. The
   unified node handler
-  ([`run_wait`](../src/machine/execute/run_loop.rs)) collects the slot's
+  ([`run_step`](../src/machine/execute/run_loop.rs)) collects the slot's
   resolved dep terminals, builds a `SchedulerView`, runs the `cont` closure,
   reclaims the owned-dep suffix, and hands the outcome to `apply_outcome`.
 
@@ -180,7 +180,7 @@ rather than restated at each call site. Consumers arrive on the run-set
 only when actually ready; there is no poll-and-requeue.
 
 Every consumer wakes the same way: at pop time its `pending_deps` is zero, so
-every dep is terminal, and [`run_wait`](../src/machine/execute/run_loop.rs)
+every dep is terminal, and [`run_step`](../src/machine/execute/run_loop.rs)
 reads each resolved dep off the view by index and hands the `Result` slice to the
 slot's `cont`. There is no per-edge wake-attribution side-channel — a decide that
 re-resolves reads its producers from the rebuilt scope, not a wakes list.
@@ -227,7 +227,7 @@ Inv-B is what makes the eager `clear_dep_edges(idx)` in
 `Scheduler::reclaim_deps` sound at the `[park_count..]` owned-suffix reclaim: the
 suffix a node owns holds only `Owned` edges (the sub-Dispatches the slot spawned).
 `Notify` edges land only in the `[..park_count]` prefix — a dispatch decide's
-park-on-producer and a dep-finish's `Existing` sibling parks — which `run_wait`
+park-on-producer and a dep-finish's `Existing` sibling parks — which `run_step`
 excludes from the reclaim by reading `deps[park_count..]` for the owned indices,
 so clearing the owned tree cannot drop a wake intent on a sibling producer.
 
@@ -339,7 +339,7 @@ a sub-Dispatch that the parent slot parks on as an owned dep. Without
 reclamation those slots accumulate per body iteration, so realistic recursive
 code is O(n) scheduler memory even when its data footprint is O(1).
 
-Reclamation runs in [`run_wait`](../src/machine/execute/run_loop.rs) after
+Reclamation runs in [`run_step`](../src/machine/execute/run_loop.rs) after
 the `cont` closure returns its `Outcome`, before the harness applies it — so a
 dispatch splice finish's freed indices are on the free-list before the harness
 dispatches the spliced body. Once the consumer has read its dep results and either
@@ -1002,7 +1002,7 @@ and a `carrier` deadlock-summary string. The `cont` captures a
 `SchedulerView -> Outcome` closure that reads the view, classifies / re-resolves,
 and returns an `Outcome`; it takes no dep values, so its deps are park-only. Birth
 and resume are the same shape, run through the same handler
-([`run_wait`](../src/machine/execute/run_loop.rs)); the scheduler never
+([`run_step`](../src/machine/execute/run_loop.rs)); the scheduler never
 switches on dispatch-internal state and `NodeWork` names no `KExpression`.
 
 **Birth** closures are built by the dispatch layer
@@ -1022,7 +1022,7 @@ overload producers, a `FunctionValueCall` head still resolving to a
 opaque [`ResumeFn`](../src/machine/execute/dispatch.rs) closure
 (`SchedulerView -> Outcome`, built by `park_resume`). The harness parks the
 slot's edges and installs a fresh **resume** decide carrying that closure. On
-wake, `run_wait` clears the slot's stale dep edges, runs the captured closure
+wake, `run_step` clears the slot's stale dep edges, runs the captured closure
 against a fresh `SchedulerView`, and applies its `Outcome` — **one uniform arm**
 for every shape. Clearing on resume is uniform and safe: a dispatch park installs
 only `Notify` edges (sibling forward references, never children), which drop at
@@ -1153,7 +1153,7 @@ recursive tree-walker can't get cheaply.
 ### What amortizes
 
 - **Slot recycling.** `Scheduler::reclaim_deps` frees sub-slots eagerly
-  during [`run_wait`](../src/machine/execute/run_loop.rs), and `add()`
+  during [`run_step`](../src/machine/execute/run_loop.rs), and `add()`
   pulls
   from the free-list before extending the underlying vectors. A
   steady-state recursive body reuses the same slot indices across

@@ -47,7 +47,7 @@ What's shipped that the open items below build on:
   single owner: per-builtin typed-binder `binder_name` (one shared
   [`type_part_binder_name`](../src/builtins.rs)), the FN and FUNCTOR bodies (one shared
   [`build_fn_like`](../src/builtins/fn_def.rs) keyed on `FnKind`), the `finish.rs` dep-finish/catch handler arms (one shared
-  [`run_wait`](../src/machine/execute/run_loop.rs)), the `dict_literal`
+  [`run_step`](../src/machine/execute/run_loop.rs)), the `dict_literal`
   `accept_colon`/`accept_equals` pair (one `accept_separator`), the slot-extract error
   envelope (one [`require_kexpression`](../src/machine/core/kfunction/action.rs)
   owning the parenthesized-slot error text), and the scheduler `Object`/`Type` finalize
@@ -65,7 +65,7 @@ What's shipped that the open items below build on:
   payload-less [`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the
   slot's own `Node.frame` cart — no fabricated run-length `&'a` persists across a TCO reset.
   The frame re-anchor then landed in full: the free `&'run` scope fabrication at the read
-  boundary is deleted, a within-step frame lifetime `'s` (`'a: 's`) threads
+  boundary is deleted, a within-step frame lifetime `'step` (`'a: 'step`) threads
   `run_dispatch`/`SchedulerView`/`BuiltinFn`, and a slot's scope is now read on demand via
   [`Scheduler::current_scope`](../src/machine/execute/run_loop.rs) through the witness-bounded
   [`CallArena::scope_bounded`](../src/machine/core/arena.rs) brand (the post-step loop reads it
@@ -75,10 +75,10 @@ What's shipped that the open items below build on:
   (see [design/per-call-arena-protocol.md § Slot-table scope handle](../design/per-call-arena-protocol.md#slot-table-scope-handle)).
   See [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
 - *Per-node output lift.* A node continuation's output is bound to the per-step frame
-  lifetime `'s` ([`Outcome<'run, 's>`](../src/machine/execute/outcome.rs)), not `'run`. The
+  lifetime `'step` ([`Outcome<'step>`](../src/machine/execute/outcome.rs)), not `'run`. The
   producer keeps its terminal in its own frame (the slot's `Done` co-stores the backing
   `Rc<CallArena>`, so frame death moves Done→free) and does not lift; each consumer
-  pull-lifts its deps into its own arena at read ([`run_wait`](../src/machine/execute/run_loop.rs))
+  pull-lifts its deps into its own arena at read ([`run_step`](../src/machine/execute/run_loop.rs))
   through the single [`NodeLift`](../src/machine/execute/lift.rs) workload hook, so an
   intermediate value dies with its consumer and only a consumer-less root drains to the run
   arena. Return-contract enforcement stays a separate Done-time layer. This output-lifetime
@@ -86,12 +86,29 @@ What's shipped that the open items below build on:
   *workload-independent DAG runtime* that completes it has shipped — the scheduler is a
   crate-root [`mod scheduler`](../src/scheduler.rs) generic over a `Workload`, naming no Koan
   value, scope, memory, or AST type, with the Koan driver in
-  [`execute::run_loop`](../src/machine/execute/run_loop.rs). See
+  [`execute::run_loop`](../src/machine/execute/run_loop.rs). The value-movement re-anchors on this
+  path are now node-scale, not `'run`: `NodeFinalize::finalize_terminal` is single-lifetime
+  (`'o -> 'o`), a `Done` terminal is finalized at its step lifetime `'step` *within* the producing step
+  (`NodeStep<'step>`; `run_step` owns the step start to finish — enter, run, finalize — over the cart clone that witnesses `'step`),
+  and the consumer-pull / `Outcome::Forward` lift re-anchors through [`read_lifted`](../src/machine/execute/runtime.rs)
+  into the consumer scope arena — so `pin_carried_to_run` survives only for the genuine run-global
+  root drain. The dispatch decide surface then collapsed onto that single cart-scale lifetime:
+  `NodeScope::Anchored` is gone (every slot scope is cart-witnessed), `Outcome` is single-lifetime
+  (the `Outcome<'run, 's>` split retired along with the `shorten_outcome` / `deps_for_builtin` /
+  `obj_for_builtin` up/down bridges), and the `run_step` continuation reattach targets the
+  step lifetime the held cart `Rc` witnesses — leaving `deps_at_step` and `pin_carried_to_run`
+  the only `outcome.rs` re-anchors. The dispatch decide functions then dropped their conflated
+  `'run` for a single cart lifetime `'step`: a decide reads scope and produces `Outcome` at `'step`,
+  the picked `KFunction` is cart-scale (read from the `'step` scope), and the pristine-AST lifetime
+  `'ast` (`'ast: 'step`) is named only at the submission boundary
+  ([`submit_dispatch`](../src/machine/execute/dispatch/submit.rs)), where a borrowed
+  `&KExpression<'ast>` is read against the cart scope — the working expression is re-anchored from
+  its erased node carrier to `'step`, so decide never holds a live `'ast` borrow. See
   [design/per-call-arena-protocol.md § Consumer-pull node-output lift](../design/per-call-arena-protocol.md#consumer-pull-node-output-lift).
-- *Unified erase/reattach carriers.* The four hand-rolled erase-to-`'static` /
-  reattach-to-`'run` carriers (`ScopePtr`, `ErasedContract`, `ErasedCont`, `ErasedValue`) and the
-  cluster of one-off `outcome.rs` reference reattaches now share one generic
-  [`Erased<T>`](../src/machine/core/reattach.rs) owner over an `unsafe trait Reattachable { type
+- *Unified erase/reattach carriers.* The hand-rolled erase-to-`'static` /
+  reattach carriers (`ScopePtr`, `ErasedContract`, `ErasedCont`, the scheduler's `Erased<W::Value>`)
+  and the cluster of one-off `outcome.rs` reference reattaches now share one generic
+  [`Erased<T>`](../src/scheduler/erase.rs) owner over an `unsafe trait Reattachable { type
   At<'r>; }` lifetime-family. A single `retype` primitive (a `ManuallyDrop` `transmute_copy`) is the
   only lifetime-retype site; each carrier is a declarative `unsafe impl Reattachable` beside its own
   type (`ContractFamily`, `CarriedFamily`, `ContFamily`, `KObjectFamily`, `ScopeFamily`, …) with no

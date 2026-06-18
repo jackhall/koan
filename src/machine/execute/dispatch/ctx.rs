@@ -34,8 +34,8 @@ use crate::scheduler::Scheduler;
 /// scheduler no longer owns. The driver hands back the opaque payload
 /// ([`AmbientContext::active_payload`] / `PostStep::payload`), from which the workload extracts the
 /// scope handle, plus the per-call cart the slot ran against; this workload-side helper reattaches
-/// them. An `Anchored` slot reattaches its erased
-/// run-lived [`ScopePtr`](crate::machine::core::ScopePtr) (`reattach_bounded`); a `Yoked` slot
+/// them. A `YokedChild` slot reattaches its erased
+/// cart-ancestor [`ScopePtr`](crate::machine::core::ScopePtr) (`reattach_bounded`); a `Yoked` slot
 /// re-projects from `frame`. Content lifetime free, borrow bounded by `frame` — so the result
 /// cannot outlive the cart it names.
 pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
@@ -43,10 +43,14 @@ pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
     frame: Option<&'step Rc<CallArena>>,
 ) -> &'step Scope<'b> {
     match node_scope {
-        // SAFETY: the `Anchored` pointer was erased from a genuinely run-lived scope
-        // (`resolve_node_scope`), which outlives `frame`; the returned borrow is bounded by `frame`,
-        // so the free content lifetime cannot be cashed past the run-lived pointee.
-        NodeScope::Anchored(ptr) => unsafe { ptr.reattach_bounded() },
+        // SAFETY: the `YokedChild` pointer was erased from a block scope in a cart-*ancestor* arena
+        // (`resolve_node_scope`'s outer-chain check); the active cart's `outer_frame` chain pins that
+        // arena, and `frame` is that cart. The returned borrow is bounded by `frame` (both args share
+        // `'step`), so it cannot be cashed past the cart that pins the pointee.
+        NodeScope::YokedChild(ptr) => {
+            let _witness = frame.expect("a YokedChild slot keeps its active cart");
+            unsafe { ptr.reattach_bounded() }
+        }
         NodeScope::Yoked => frame
             .expect("a Yoked slot keeps its active cart")
             .scope_bounded(),
@@ -56,9 +60,9 @@ pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
 /// The active slot's scope, re-anchored from the ambient payload's scope handle. The workload-side
 /// form of the read the scheduler core no longer owns: it materializes a `&Scope` so `scheduler/**`
 /// names none. Panics outside a slot step (no ambient payload); within a step the scope is always
-/// present — an `Anchored` slot carries its own pointer, and a `Yoked` slot's active cart is never
+/// present — a `YokedChild` slot carries its own pointer, and a `Yoked` slot's active cart is never
 /// emptied mid-step (an invoke reuses the reserve, not the active cart).
-pub(in crate::machine::execute) fn current_scope<'run>(ambient: &AmbientContext) -> &Scope<'run> {
+pub(in crate::machine::execute) fn current_scope<'step>(ambient: &AmbientContext) -> &Scope<'step> {
     let payload = ambient
         .active_payload()
         .expect("a slot step installs the ambient payload (and a Yoked slot keeps its frame)");
@@ -71,26 +75,30 @@ pub(in crate::machine::execute) fn current_scope<'run>(ambient: &AmbientContext)
 /// mutably to apply the writes. The borrow contract: a `SchedulerView` lives only for the decide
 /// call, the handler returns an owned outcome, and the immutable borrow ends before the harness
 /// takes `&mut` — so decide and apply never overlap.
-pub(in crate::machine::execute) struct SchedulerView<'run, 's> {
-    sched: &'s Scheduler<KoanWorkload>,
+pub(in crate::machine::execute) struct SchedulerView<'step, 'view> {
+    sched: &'view Scheduler<KoanWorkload>,
     /// The driver's ambient per-step context: the scope/chain reads (`current_scope`, `chain_deref`,
     /// `active_chain`, `current_frame`, `in_contract_chain`) read it, not the scheduler.
-    ambient: &'s AmbientContext,
-    /// `SchedulerView` re-anchors the value-erased scheduler's reads to `'run` (the AST/scope
-    /// lifetime the decide runs against); the scheduler itself is `Scheduler<KoanWorkload>`, so
-    /// `'run` lives only on this view, kept here by the marker.
-    _run: PhantomData<&'run ()>,
+    ambient: &'view AmbientContext,
+    /// `SchedulerView` re-anchors the value-erased scheduler's reads to `'step` (the cart/scope
+    /// content lifetime the decide runs against); the scheduler itself is `Scheduler<KoanWorkload>`,
+    /// so `'step` lives only on this view, kept here by the marker. Every dispatch decide runs at the
+    /// cart lifetime `'step`: the working expression is re-anchored from its erased node carrier to
+    /// `'step`, so the view's slot is the cart, never the program AST. The pristine-AST lifetime
+    /// `'ast` lives only at the submission boundary, where a borrowed `&KExpression<'ast>` is read
+    /// against the cart scope.
+    _step: PhantomData<&'step ()>,
 }
 
-impl<'run, 's> SchedulerView<'run, 's> {
+impl<'step, 'view> SchedulerView<'step, 'view> {
     pub(in crate::machine::execute) fn new(
-        sched: &'s Scheduler<KoanWorkload>,
-        ambient: &'s AmbientContext,
+        sched: &'view Scheduler<KoanWorkload>,
+        ambient: &'view AmbientContext,
     ) -> Self {
         Self {
             sched,
             ambient,
-            _run: PhantomData,
+            _step: PhantomData,
         }
     }
 
@@ -99,7 +107,7 @@ impl<'run, 's> SchedulerView<'run, 's> {
     // (`is_result_ready`, `would_create_cycle`, `read_result`) all forward to the borrowed
     // scheduler.
 
-    pub(in crate::machine::execute) fn current_scope(&self) -> &Scope<'run> {
+    pub(in crate::machine::execute) fn current_scope(&self) -> &Scope<'step> {
         current_scope(self.ambient)
     }
 
@@ -136,9 +144,10 @@ impl<'run, 's> SchedulerView<'run, 's> {
         self.sched.is_result_ready(id)
     }
 
-    pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'run>, &KError> {
-        // SAFETY: the slot's co-stored frame Rc / run arena pins the value; read is transient.
-        self.sched.read_result(id).map(|v| unsafe { v.reattach() })
+    pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'_>, &KError> {
+        // The scheduler re-anchors the value to this `&self` borrow (the slot's frame `Rc` pins it
+        // for that long); the dispatch decide reads it transiently, so no `'step` fabrication.
+        self.sched.read_result(id)
     }
 
     pub(super) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
@@ -149,8 +158,8 @@ impl<'run, 's> SchedulerView<'run, 's> {
     /// `None` otherwise. `consumer = None` defers cycle detection to the splice walk.
     pub(super) fn build_bare_outcomes(
         &self,
-        parts: &[Spanned<ExpressionPart<'run>>],
-    ) -> Vec<Option<NameOutcome<'run>>> {
+        parts: &[Spanned<ExpressionPart<'step>>],
+    ) -> Vec<Option<NameOutcome<'step>>> {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         parts
             .iter()
@@ -178,12 +187,12 @@ impl<'run, 's> SchedulerView<'run, 's> {
     /// every write the outcome implies is the harness's.
     pub(super) fn install_eager_subs(
         &self,
-        mut working_expr: KExpression<'run>,
-        staged_subs: Vec<(usize, PendingSub<'run>)>,
-        picked: Option<&'run KFunction<'run>>,
-    ) -> Outcome<'run, 'run> {
+        mut working_expr: KExpression<'step>,
+        staged_subs: Vec<(usize, PendingSub<'step>)>,
+        picked: Option<&'step KFunction<'step>>,
+    ) -> Outcome<'step> {
         use super::super::DepFinish;
-        let mut deps: Vec<DepRequest<'run>> = Vec::with_capacity(staged_subs.len());
+        let mut deps: Vec<DepRequest<'step>> = Vec::with_capacity(staged_subs.len());
         let mut part_indices: Vec<usize> = Vec::with_capacity(staged_subs.len());
         for (i, pending) in staged_subs {
             // Every sub is delivered through the single consumer-pull path: a `Reuse` parks on its
@@ -214,11 +223,11 @@ impl<'run, 's> SchedulerView<'run, 's> {
             "<bind>",
             &working_expr,
         ));
-        let finish: DepFinish<'run> = Box::new(move |_ctx, results| {
+        let finish: DepFinish<'step> = Box::new(move |_ctx, results| {
             // The short-circuit already guaranteed every dep resolved; splice each into the slot it
             // was staged from, then route the continuation. `results` are the dep terminals,
-            // pull-lifted into this node's frame and re-exposed at `'run` by the combinator, so they
-            // splice straight into the `'run` working expression that re-dispatches in this frame.
+            // pull-lifted into this node's frame and re-exposed at `'step` by the combinator, so they
+            // splice straight into the `'step` working expression that re-dispatches in this frame.
             for (slot, value) in part_indices.iter().zip(results) {
                 working_expr.parts[*slot].value = ExpressionPart::Future(*value);
             }
@@ -235,10 +244,10 @@ impl<'run, 's> SchedulerView<'run, 's> {
 /// [`redispatch_continue`](super::keyworded::redispatch_continue), which re-runs
 /// [`keyworded::finish`](super::keyworded::finish), where an element-typed `Future(_)` revealed by a
 /// sub surfaces as a slot-terminal `DispatchFailed`). Pure data — no `&mut`.
-fn finish_eager_subs<'run>(
-    working_expr: KExpression<'run>,
-    picked: Option<&'run KFunction<'run>>,
-) -> Outcome<'run, 'run> {
+fn finish_eager_subs<'step>(
+    working_expr: KExpression<'step>,
+    picked: Option<&'step KFunction<'step>>,
+) -> Outcome<'step> {
     match picked {
         Some(f) => super::exec::invoke_continue(f, working_expr),
         None => super::keyworded::redispatch_continue(working_expr),

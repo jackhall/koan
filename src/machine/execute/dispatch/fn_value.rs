@@ -13,10 +13,10 @@ use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
 use super::{park_resume, Outcome};
 
-pub(super) fn initial<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    expr: KExpression<'run>,
-) -> Outcome<'run, 'run> {
+pub(super) fn initial<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    expr: KExpression<'step>,
+) -> Outcome<'step> {
     let head = match &expr.parts[0].value {
         ExpressionPart::Identifier(n) => n.clone(),
         _ => unreachable!("FunctionValueCall shape implies Identifier head"),
@@ -55,11 +55,11 @@ pub(super) fn initial<'run>(
 /// the partition invariant keeps a type out of `bindings.data`, so a
 /// constructor-typed head reaches dispatch through the type channel
 /// (`HeadDeferred`), never here. Anything else is a non-callable `TypeMismatch`.
-fn dispatch_callable_value<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    expr: KExpression<'run>,
-    head_obj: &'run KObject<'run>,
-) -> Outcome<'run, 'run> {
+fn dispatch_callable_value<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    expr: KExpression<'step>,
+    head_obj: &'step KObject<'step>,
+) -> Outcome<'step> {
     let callable = match head_obj {
         KObject::KFunction(f, _) => ResolvedCallable::Function(f),
         other => {
@@ -76,7 +76,7 @@ fn dispatch_callable_value<'run>(
 /// Park the whole call on its still-finalizing head `producer` and re-run the fast lane on
 /// resume. The carrier surfaces the original (unspliced) call expression for the drain-end
 /// deadlock summary.
-fn install_head_park<'run>(producer: NodeId, expr: KExpression<'run>) -> Outcome<'run, 'run> {
+fn install_head_park<'step>(producer: NodeId, expr: KExpression<'step>) -> Outcome<'step> {
     let carrier = expr.summarize();
     park_resume(
         vec![producer],
