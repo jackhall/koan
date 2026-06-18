@@ -66,11 +66,53 @@ def slate_names() -> list[str]:
     return out.split()
 
 
-def run_miri(names: list[str], track: int | None) -> tuple[int, str, float]:
+def list_lib_tests() -> list[str]:
+    """Full `module::path::leaf` names of every lib unit test, via a normal (non-Miri)
+    `cargo test --list`. Cheap (normal profile, already cached) and the name set is
+    identical to the Miri build, so it's a sound source for resolving slate names."""
+    out = subprocess.run(
+        ["cargo", "test", "--lib", "--quiet", "--", "--list"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=_env(),
+    ).stdout
+    # Lines look like `machine::core::arena::tests::foo: test`.
+    return [ln[: -len(": test")] for ln in out.splitlines() if ln.endswith(": test")]
+
+
+def resolve_slate(names: list[str]) -> list[str]:
+    """Map each slate leaf name to its full `module::path::leaf`, requiring an exact
+    leaf match to exactly one test. Catches a renamed/removed slate entry (0 matches)
+    and an ambiguous one (>1) loudly, before the ~25-min Miri run — and the full paths
+    let the run filter with `--exact`, so a slate name that is a prefix of another test
+    (e.g. `…_alloc` vs `…_alloc_via_raw_ptr_roundtrip`) can't silently pull in siblings."""
+    all_tests = list_lib_tests()
+    by_leaf: dict[str, list[str]] = {}
+    for full in all_tests:
+        by_leaf.setdefault(full.rsplit("::", 1)[-1], []).append(full)
+    resolved, problems = [], []
+    for name in names:
+        hits = by_leaf.get(name, [])
+        if len(hits) == 1:
+            resolved.append(hits[0])
+        else:
+            problems.append(f"  {name}: {len(hits)} match(es)" + (f" — {hits}" if hits else ""))
+    if problems:
+        raise SystemExit(
+            "ERROR: slate name(s) did not resolve to exactly one lib test "
+            "(renamed, removed, or ambiguous):\n" + "\n".join(problems)
+        )
+    return resolved
+
+
+def run_miri(names: list[str], track: int | None, exact: bool) -> tuple[int, str, float]:
     miriflags = MIRIFLAGS
     if track is not None:
         miriflags += f" -Zmiri-track-alloc-id={track}"
-    cmd = ["cargo", "+nightly", "miri", "test", "--lib", "--quiet", "--", *names]
+    filt = ["--exact", *names] if exact else list(names)
+    cmd = ["cargo", "+nightly", "miri", "test", "--lib", "--quiet", "--", *filt]
     start = time.monotonic()
     proc = subprocess.run(
         cmd,
@@ -124,14 +166,19 @@ def main() -> int:
 
     is_slate = args.tests is None
     names = slate_names() if is_slate else args.tests
-    expected = len(names)
     if not names:
         print("no tests to run", file=sys.stderr)
         return 2
+    # Slate names are resolved to exact full paths up front so a renamed/removed entry
+    # fails fast (before the long Miri build) rather than as a post-run miscount; triage
+    # keeps substring matching so a partial name still works interactively.
+    if is_slate:
+        names = resolve_slate(names)
+    expected = len(names)
 
     label = "slate" if is_slate else f"triage ({expected} test(s))"
     print(f"running Miri {label} under {MIRIFLAGS} (--lib)…", file=sys.stderr)
-    code, output, seconds = run_miri(names, args.track)
+    code, output, seconds = run_miri(names, args.track, exact=is_slate)
 
     log_path = ROOT / "observe" / "miri-last-run.log"
     log_path.write_text(output)

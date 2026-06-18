@@ -50,7 +50,7 @@ unsafe and fingerprint-drift checks still fire.
 
 ## The slate
 
-26 tests, grouped by the unsafe site each pins down. Names below are the exact
+23 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallArena` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -64,8 +64,8 @@ and a free content lifetime — re-read alongside the unbounded `scope` / `scope
 accessors over the same child scope. `CallArena::adopting` (the scheduler-owned run frame)
 carries the same `&Scope<'_> → &Scope<'static>` erasure as `new`, over the run scope it adopts
 rather than a freshly-minted child; it is built on the first run-lifetime submission, so every
-scheduler-driving slate test below (`module_body_dispatch_does_not_dangle`,
-`recursive_tagged_match_no_uaf`, `lift_park_minimal_program_for_miri`, …) exercises it
+scheduler-driving slate test below (`recursive_tagged_match_no_uaf`,
+`lift_park_minimal_program_for_miri`, …) exercises it
 end-to-end — the run scope outlives the frame, so no separate minimal test.
 
 - `call_arena_scope_survives_subsequent_alloc`
@@ -107,7 +107,7 @@ branded `BoundedScopePtr::get` on the captured definition-scope pointer (the tra
 lives in `scope_ptr.rs`). The escaped-closure test pins that the pointee outlives the
 `KFunction` even when the closure is invoked after its defining frame has returned.
 
-- `closure_escapes_outer_call_and_remains_invocable`
+- `fast_lane_closure_escapes_outer_call_and_remains_invocable`
 
 **`Scope::add` re-entry** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — adding a binding while
 a `data` borrow is live queues onto a pending list and drains on borrow drop,
@@ -160,7 +160,6 @@ witness-bounded `scope_bounded` brand. Witnessed by the `Rc<CallArena>` moved in
 dispatch through a functor-call's per-call scope, and `MODULE_TYPE_OF` lift-out.
 
 - `repeated_user_fn_calls_do_not_grow_run_root_per_call`
-- `type_op_dispatch_does_not_dangle`
 
 **`ScopePtr` re-attach** ([src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs)) — the single
 `transmute::<&Scope<'static>, &'b Scope<'b>>` (and the `erase` cast) that the unbounded carrier
@@ -281,19 +280,19 @@ carry no `unsafe` of their own (the `vend_carrier` signature is safe). No separa
 **`Module` interior mutation under a live `&'a Module`** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — `Module`
 mutates a `RefCell<HashMap>` (`type_members` / `slot_type_tags`) while a `&'a Module<'a>` is
 live — the opaque-ascription shape. (The scope re-attach itself is the `ScopePtr` group above;
-the carriers now store a `ScopePtr`.)
+the carriers now store a `ScopePtr`.) The minimal mirror below pins the `borrow_mut`-under-live-`&Module`
+shape directly; the end-to-end `opaque_ascription_re_binds_do_not_alias_unsoundly` (which only re-pins the
+already-covered `child_scope` re-attach + survives-churn shapes) runs under plain `cargo test`.
 
 - `module_type_members_refcell_mutation_with_held_module_ref`
-- `opaque_ascription_re_binds_do_not_alias_unsoundly`
 
 **MODULE body Combine continuation** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — the
 MODULE body schedules a `Combine` whose `finish` closure captures the child
 scope and runs on the outer scheduler's main loop after every body statement
-terminalizes. Pins the same `ScopePtr` re-attach site as
-`module_child_scope_transmute_does_not_dangle`, exercised end-to-end through
-the scheduler path the binder follows.
-
-- `module_body_dispatch_does_not_dangle`
+terminalizes. Runs the same `ScopePtr` re-attach site as
+`module_child_scope_transmute_does_not_dangle` (the minimal mirror that pins it) with none of its
+own, exercised end-to-end by every scheduler-driving slate test; its `module_body_dispatch_does_not_dangle`
+program runs under plain `cargo test`. No separate minimal test.
 
 **`NodeStore::reinstall_with_frame` slot re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
 the Replace arm stores the slot's scope as a payload-less `NodeScope::Yoked` marker re-projected
@@ -368,9 +367,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-18: 250s — 23 tests, 0 leaks, 0 UB
 - 2026-06-18: 1510s — 26 tests, 0 leaks, 0 UB
 - 2026-06-18: 1485s — 26 tests, 0 leaks, 0 UB
 - 2026-06-17: 1414s — 25 tests, 0 leaks, 0 UB
 - 2026-06-17: 601s — 25 tests, 0 leaks, 0 UB
-- 2026-06-17: 609s — 25 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
