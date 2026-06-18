@@ -29,10 +29,10 @@ use crate::machine::{KError, KErrorKind};
 /// [`FramePlacement::ReuseReserve`] (the harness mints the TCO cart); a builtin's carries
 /// [`FramePlacement::Inherit`] (it runs in the current frame). The decide handler owns `picked`, so
 /// the builtin-vs-user-fn frame decision is made here, not in the harness.
-pub(super) fn invoke_continue<'run>(
-    picked: &'run KFunction<'run>,
-    working_expr: KExpression<'run>,
-) -> Outcome<'run> {
+pub(super) fn invoke_continue<'step>(
+    picked: &'step KFunction<'step>,
+    working_expr: KExpression<'step>,
+) -> Outcome<'step> {
     let frame = match &picked.body {
         Body::Builtin(_) => FramePlacement::Inherit,
         _ => FramePlacement::ReuseReserve {
@@ -50,9 +50,9 @@ pub(super) fn invoke_continue<'run>(
 
 /// A dep-free decide [`NodeWork`] whose closure runs the folded [`invoke`] against the cart the
 /// producer's `Continue` installed. `carrier` is the call's deadlock-summary sample.
-fn invoke_work<'run>(
-    picked: &'run KFunction<'run>,
-    working_expr: KExpression<'run>,
+fn invoke_work<'step>(
+    picked: &'step KFunction<'step>,
+    working_expr: KExpression<'step>,
 ) -> NodeWork<KoanWorkload> {
     let carrier = working_expr.summarize();
     NodeWork::new(
@@ -71,11 +71,11 @@ fn invoke_work<'run>(
 ///
 /// Every call reaches here with its value parts already `Future`/literal-resolved (the eager-subs
 /// and synchronous bind paths splice them first), so there is no fall-through.
-pub(super) fn invoke<'run>(
-    view: &SchedulerView<'run, '_>,
-    picked: &'run KFunction<'run>,
-    working_expr: KExpression<'run>,
-) -> Outcome<'run> {
+pub(super) fn invoke<'step>(
+    view: &SchedulerView<'step, '_>,
+    picked: &'step KFunction<'step>,
+    working_expr: KExpression<'step>,
+) -> Outcome<'step> {
     // An action-harness builtin: build a read-only `BodyCtx`, get the `Action`, and lower it
     // through the shared `run_action` interpreter. Builtins run in the current frame, so the
     // builtin call's `Continue` carries `FramePlacement::Inherit` and this reads nothing.
@@ -166,9 +166,9 @@ pub(super) fn invoke<'run>(
             // uniqueness so the next call's `try_reset_for_tail` reuses (TCO stays flat). The
             // resolving finish — having waited out every leading statement — emits the tail
             // `Continue`, re-entering the already-installed cart with `Inherit`.
-            let statements: Vec<KExpression<'run>> =
+            let statements: Vec<KExpression<'step>> =
                 leading.into_iter().map(|e| (*e).clone()).collect();
-            let finish: DepFinish<'run> = Box::new(move |_view, _results| Outcome::Continue {
+            let finish: DepFinish<'step> = Box::new(move |_view, _results| Outcome::Continue {
                 work: super::decide(tail_expr),
                 frame: FramePlacement::Inherit,
                 contract: Some(contract),
@@ -196,13 +196,13 @@ pub(super) fn invoke<'run>(
             let mut body_and_type = leading;
             body_and_type.push(type_expr);
             let body_index = body_and_type.len() + 1;
-            let statements: Vec<KExpression<'run>> =
+            let statements: Vec<KExpression<'step>> =
                 body_and_type.into_iter().map(|e| (*e).clone()).collect();
             let tail_expr = tail.clone();
             // Capture the body scope id before `frame` moves into the `BodyBlock` dep; the finish
             // re-enters that already-installed cart with `Inherit`.
             let block_entry = frame.scope().id;
-            let finish: DepFinish<'run> = Box::new(move |view, results| {
+            let finish: DepFinish<'step> = Box::new(move |view, results| {
                 // The return-type expression is the last body statement, so its resolved value is
                 // the last result.
                 let kt = match results[results.len() - 1] {
@@ -252,11 +252,11 @@ pub(super) fn invoke<'run>(
 /// Lower an action-harness builtin: convert its resolved `args` record into the `KObject::Record`
 /// the `BodyCtx` exposes, build the read-only `BodyCtx`, call the `ActionFn`, then interpret the
 /// returned `Action` through the shared `run_action`.
-fn run_action_builtin<'run>(
-    view: &SchedulerView<'run, '_>,
+fn run_action_builtin<'step>(
+    view: &SchedulerView<'step, '_>,
     f: crate::machine::core::kfunction::ActionFn,
-    args: crate::machine::model::types::Record<crate::machine::model::values::ArgValue<'run>>,
-) -> Outcome<'run> {
+    args: crate::machine::model::types::Record<crate::machine::model::values::ArgValue<'step>>,
+) -> Outcome<'step> {
     use crate::machine::core::kfunction::action::BodyCtx;
     use crate::machine::model::values::{ArgValue, Held};
     use crate::machine::model::KObject;
@@ -265,7 +265,7 @@ fn run_action_builtin<'run>(
         ArgValue::Object(rc) => Held::Object(rc.deep_clone()),
         ArgValue::Type(t) => Held::Type(t.clone()),
     });
-    let args_obj: &'run KObject<'run> = view
+    let args_obj: &'step KObject<'step> = view
         .current_scope()
         .arena
         .alloc_object(KObject::record_of_held(cells));
@@ -287,17 +287,17 @@ fn run_action_builtin<'run>(
 /// Extract the call's resolved value arguments from `working_expr`'s parts, in order. Returns
 /// `None` if any value part isn't a resolved `Carried` (a `Future`-splice or a literal) — the
 /// signal to fall through to the legacy binder. Keyword parts are the signature's own literals.
-fn extract_carried_args<'run>(
-    view: &SchedulerView<'run, '_>,
-    working_expr: &KExpression<'run>,
-) -> Option<Vec<Carried<'run>>> {
+fn extract_carried_args<'step>(
+    view: &SchedulerView<'step, '_>,
+    working_expr: &KExpression<'step>,
+) -> Option<Vec<Carried<'step>>> {
     let mut args = Vec::new();
     for part in &working_expr.parts {
         match &part.value {
             ExpressionPart::Keyword(_) => {}
             ExpressionPart::Future(carried) => args.push(*carried),
             // A literal value part isn't `Future`-spliced; resolve it into the run arena now
-            // (mirrors `literal_pass_through`) so it joins the args as a `'run` `Carried`.
+            // (mirrors `literal_pass_through`) so it joins the args as a `'step` `Carried`.
             ExpressionPart::Literal(_) => {
                 let object = view
                     .current_scope()

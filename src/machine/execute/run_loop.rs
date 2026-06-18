@@ -243,5 +243,3 @@ impl<'run> KoanRuntime<'run> {
         }
     }
 }
-
-

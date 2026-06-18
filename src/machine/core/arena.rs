@@ -21,12 +21,12 @@ use typed_arena::Arena;
 use super::reattach::pin_deref;
 use super::scope::Scope;
 use super::scope_ptr::{ScopeFamily, ScopePtr};
-use crate::scheduler::reattach_ref;
 use super::storage_frame::{StorageFrame, StorageProfile, Stored};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{Held, KObject, Module, Signature};
+use crate::scheduler::reattach_ref;
 
 /// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
 /// family's `'static` form (phantom); the [`StorageFrame`] engine re-anchors to the caller's `'a`

@@ -82,9 +82,11 @@ pub(in crate::machine::execute) struct SchedulerView<'step, 'view> {
     ambient: &'view AmbientContext,
     /// `SchedulerView` re-anchors the value-erased scheduler's reads to `'step` (the cart/scope
     /// content lifetime the decide runs against); the scheduler itself is `Scheduler<KoanWorkload>`,
-    /// so `'step` lives only on this view, kept here by the marker. Dispatch callers still
-    /// instantiate this slot with their `'run` (the AST lifetime they conflate with the cart);
-    /// splitting AST `'ast` from cart `'step` across dispatch is owed — see the roadmap.
+    /// so `'step` lives only on this view, kept here by the marker. Every dispatch decide runs at the
+    /// cart lifetime `'step`: the working expression is re-anchored from its erased node carrier to
+    /// `'step`, so the view's slot is the cart, never the program AST. The pristine-AST lifetime
+    /// `'ast` lives only at the submission boundary, where a borrowed `&KExpression<'ast>` is read
+    /// against the cart scope.
     _step: PhantomData<&'step ()>,
 }
 

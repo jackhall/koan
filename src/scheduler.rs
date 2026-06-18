@@ -34,8 +34,8 @@ mod submit;
 mod work_queues;
 mod workload;
 
-pub use node_id::NodeId;
 pub(crate) use erase::{reattach_ref, reattach_slice, reattach_value, Erased, Reattachable};
+pub use node_id::NodeId;
 pub(crate) use workload::{FramedRead, Live, Workload};
 
 /// Re-exported for the driver's white-box reclaim tests (the only cross-module user of the edge

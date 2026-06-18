@@ -24,22 +24,22 @@ use super::{become_dispatch, park_lift, park_on_deps, park_resume, DepRequest, O
 /// slot is resolved. `(set, index)` is the sealed-member identity stamped onto the produced
 /// `KObject`; `schema` is the projected (sibling-`SetLocal`-resolved) schema used for
 /// per-value type-checking.
-pub(in crate::machine::execute) enum CtorKind<'run> {
+pub(in crate::machine::execute) enum CtorKind<'step> {
     /// Newtype construction (record-repr or scalar) from a single positional value. One value
     /// cell carrying the whole value expression; the finish type-checks it against the
     /// member's `repr`, peels any `Wrapped` layer, and tags it with `identity`.
-    Newtype { identity: &'run KType<'run> },
+    Newtype { identity: &'step KType<'step> },
     /// Record-repr newtype construction from a named record-literal body (`Point {x = 1, y =
     /// 2}`). One value cell per field, so a literal field stages in place (synchronous bind,
     /// matching the retired struct path) instead of deferring the whole record literal; the
     /// finish builds the `KObject::Record` and wraps it with `identity`.
     RecordNewtype {
-        identity: &'run KType<'run>,
+        identity: &'step KType<'step>,
         field_names: Vec<String>,
     },
     Tagged {
-        schema: Rc<HashMap<String, KType<'run>>>,
-        set: Rc<RecursiveSet<'run>>,
+        schema: Rc<HashMap<String, KType<'step>>>,
+        set: Rc<RecursiveSet<'step>>,
         index: usize,
         tag: String,
     },
@@ -47,10 +47,10 @@ pub(in crate::machine::execute) enum CtorKind<'run> {
 
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
-pub(super) fn bare_identifier<'run>(
-    ctx: &SchedulerView<'run, '_>,
+pub(super) fn bare_identifier<'step>(
+    ctx: &SchedulerView<'step, '_>,
     name: String,
-) -> Outcome<'run> {
+) -> Outcome<'step> {
     match ctx
         .current_scope()
         .resolve_with_chain(&name, ctx.chain_deref())
@@ -61,10 +61,10 @@ pub(super) fn bare_identifier<'run>(
     }
 }
 
-pub(super) fn bare_type_leaf<'run>(
-    ctx: &SchedulerView<'run, '_>,
+pub(super) fn bare_type_leaf<'step>(
+    ctx: &SchedulerView<'step, '_>,
     t: &TypeName,
-) -> Outcome<'run> {
+) -> Outcome<'step> {
     match resolve_type_leaf_carrier(ctx.current_scope(), t, ctx.active_chain()) {
         TypeLeafCarrier::Resolved(kt) => Outcome::Done(Ok(Carried::Type(kt))),
         TypeLeafCarrier::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
@@ -100,7 +100,7 @@ pub(super) fn bare_type_leaf<'run>(
     }
 }
 
-pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> Outcome<'run> {
+pub(super) fn sigiled_type_expr<'step>(expr: KExpression<'step>) -> Outcome<'step> {
     let inner = match expr.parts.into_iter().next() {
         Some(Spanned {
             value: ExpressionPart::SigiledTypeExpr(boxed),
@@ -115,10 +115,10 @@ pub(super) fn sigiled_type_expr<'run>(expr: KExpression<'run>) -> Outcome<'run> 
 /// to `KObject::KTypeValue(KType::Record(_))` via the shared field-list elaborator, deferring
 /// through a dep-finish when a field forward-references or sub-dispatches. No type-constructor
 /// builtin is involved — the record type is structural.
-pub(super) fn record_type<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    expr: KExpression<'run>,
-) -> Outcome<'run> {
+pub(super) fn record_type<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    expr: KExpression<'step>,
+) -> Outcome<'step> {
     let fields = match expr.parts.into_iter().next() {
         Some(Spanned {
             value: ExpressionPart::RecordType(boxed),
@@ -135,10 +135,10 @@ pub(super) fn record_type<'run>(
 /// `(99)`, `("x")`, `([1 2 3])`, `((inner))` etc. — single-part
 /// literal-shaped expressions. Skips the bucket lookup + builtin call
 /// the Keyworded path would otherwise route through.
-pub(super) fn literal_pass_through<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    expr: KExpression<'run>,
-) -> Outcome<'run> {
+pub(super) fn literal_pass_through<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    expr: KExpression<'step>,
+) -> Outcome<'step> {
     let only = expr
         .parts
         .into_iter()
@@ -161,8 +161,8 @@ pub(super) fn literal_pass_through<'run>(
 /// Park the slot on a single literal-producer dep as a [`Outcome::ParkThenContinue`] whose finish
 /// lifts the producer's resolved value straight through. The harness submits the literal and owns
 /// it; a dep error short-circuits frameless before the finish runs.
-fn park_on_literal<'run>(dep: DepRequest<'run>) -> Outcome<'run> {
-    let finish: DepFinish<'run> = Box::new(|_ctx, results| Outcome::Done(Ok(results[0])));
+fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
+    let finish: DepFinish<'step> = Box::new(|_ctx, results| Outcome::Done(Ok(results[0])));
     park_on_deps(vec![dep], None, finish)
 }
 
@@ -185,10 +185,10 @@ fn park_on_literal<'run>(dep: DepRequest<'run>) -> Outcome<'run> {
 ///
 /// A name with no producer and no binding is `UnboundName` (genuine absence only —
 /// pending names are already parked in step 1).
-pub(super) fn type_call<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    expr: KExpression<'run>,
-) -> Outcome<'run> {
+pub(super) fn type_call<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    expr: KExpression<'step>,
+) -> Outcome<'step> {
     let head_t = match &expr.parts[0].value {
         ExpressionPart::Type(t) => t.clone(),
         _ => unreachable!("TypeCall shape implies leaf Type head"),

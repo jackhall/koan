@@ -13,7 +13,10 @@ use crate::machine::{CallArena, LexicalFrame, NodeId, Scope};
 
 /// Pointer equality of two scopes (identity, not structural).
 fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
-    std::ptr::eq(a as *const Scope<'_> as *const (), b as *const Scope<'_> as *const ())
+    std::ptr::eq(
+        a as *const Scope<'_> as *const (),
+        b as *const Scope<'_> as *const (),
+    )
 }
 
 /// Whether `target` arena is reached by walking `cart_scope`'s lexical `outer` chain — i.e. the
@@ -152,11 +155,7 @@ impl<'run> KoanRuntime<'run> {
     /// Submit an unresolved expression for the scheduler to dispatch + execute against `scope`,
     /// inheriting the ambient (or, at top level, a detached) lexical chain. The only public way to
     /// add work.
-    pub fn dispatch_in_scope<'a>(
-        &mut self,
-        expr: KExpression<'a>,
-        scope: &'a Scope<'a>,
-    ) -> NodeId {
+    pub fn dispatch_in_scope<'a>(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
         let chain = self.ambient_or_detached_chain();
         self.dispatch_in_scope_with_chain(expr, scope, chain)
     }

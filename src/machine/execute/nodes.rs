@@ -59,7 +59,10 @@ pub(super) enum ChainOp {
     /// Block entry (MATCH / TRY arm, non-`Function` contract): prepend `(scope_id, body_index)` to
     /// the chain. `body_index` positions the pushed frame for multi-statement tail-into-last (`0` is
     /// the single-statement case).
-    PushBlock { scope_id: ScopeId, body_index: usize },
+    PushBlock {
+        scope_id: ScopeId,
+        body_index: usize,
+    },
 }
 
 impl ChainOp {
@@ -78,7 +81,10 @@ impl ChainOp {
             Some(ReturnContract::Function(_) | ReturnContract::PerCall { .. }) => {
                 ChainOp::AssembleBody { body_index }
             }
-            _ => ChainOp::PushBlock { scope_id, body_index },
+            _ => ChainOp::PushBlock {
+                scope_id,
+                body_index,
+            },
         }
     }
 

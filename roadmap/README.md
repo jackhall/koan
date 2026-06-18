@@ -97,7 +97,13 @@ What's shipped that the open items below build on:
   (the `Outcome<'run, 's>` split retired along with the `shorten_outcome` / `deps_for_builtin` /
   `obj_for_builtin` up/down bridges), and the `run_step` continuation reattach targets the
   step lifetime the held cart `Rc` witnesses — leaving `deps_at_step` and `pin_carried_to_run`
-  the only `outcome.rs` re-anchors. See
+  the only `outcome.rs` re-anchors. The dispatch decide functions then dropped their conflated
+  `'run` for a single cart lifetime `'step`: a decide reads scope and produces `Outcome` at `'step`,
+  the picked `KFunction` is cart-scale (read from the `'step` scope), and the pristine-AST lifetime
+  `'ast` (`'ast: 'step`) is named only at the submission boundary
+  ([`submit_dispatch`](../src/machine/execute/dispatch/submit.rs)), where a borrowed
+  `&KExpression<'ast>` is read against the cart scope — the working expression is re-anchored from
+  its erased node carrier to `'step`, so decide never holds a live `'ast` borrow. See
   [design/per-call-arena-protocol.md § Consumer-pull node-output lift](../design/per-call-arena-protocol.md#consumer-pull-node-output-lift).
 - *Unified erase/reattach carriers.* The hand-rolled erase-to-`'static` /
   reattach carriers (`ScopePtr`, `ErasedContract`, `ErasedCont`, the scheduler's `Erased<W::Value>`)
@@ -252,7 +258,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
-- [Split dispatch's `'run` into AST `'ast` and cart `'step`](refactor/dispatch-ast-step-lifetime-split.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
@@ -334,9 +339,6 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Split dispatch's `'run` into AST `'ast` and cart `'step`](refactor/dispatch-ast-step-lifetime-split.md) —
-  finish the cart-lifetime rename on dispatch call sites: a decide function names `'run` for both the
-  long-lived AST and cart-scale values; split into `'ast: 'step` so the cart-to-run over-approximation goes.
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md) —
   collapse `ElabResult` / `ResolveTypeExprOutcome` / `TypeLeafCarrier` into one generic
   `ResolveOutcome<T>` with a `map_done` lift.

@@ -177,7 +177,7 @@ impl<'run> KoanRuntime<'run> {
 /// recurses `run_action` on the `AwaitContinue`/`CatchCont` it produces) as a [`Outcome::ParkThenContinue`],
 /// and the harness submits and applies. Every scheduler read the body needs is deferred into the
 /// finish, which sees a read-only [`SchedulerView`](super::dispatch::SchedulerView) at wake.
-pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Outcome<'run> {
+pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> Outcome<'step> {
     match action {
         // Terminal: the value the builtin already computed (scope was mutated in place first).
         Action::Done(Ok(c)) => Outcome::Done(Ok(c)),
@@ -219,7 +219,7 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
                 ),
             };
             let body_frame = frame.clone();
-            let finish: DepFinish<'run> = Box::new(move |_view, _results| Outcome::Continue {
+            let finish: DepFinish<'step> = Box::new(move |_view, _results| Outcome::Continue {
                 work: super::dispatch::decide(tail),
                 frame: FramePlacement::FreshChild { frame: body_frame },
                 contract,
@@ -242,8 +242,8 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
             // deps are owned sub-slots (an `InScope` body fans out one per statement at apply
             // time). The harness orders the realized deps `[park..., owned...]`; `park_count` is
             // the park prefix length. The wrapped finish recurses `run_action` on the `AwaitContinue`.
-            let mut park: Vec<DepRequest<'run>> = Vec::new();
-            let mut owned: Vec<DepRequest<'run>> = Vec::new();
+            let mut park: Vec<DepRequest<'step>> = Vec::new();
+            let mut owned: Vec<DepRequest<'step>> = Vec::new();
             for dep in deps {
                 match dep {
                     Dep::Existing(id) => park.push(DepRequest::Existing(id)),
@@ -254,7 +254,7 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
             }
             let park_count = park.len();
             park.extend(owned);
-            let wrapped: DepFinish<'run> = Box::new(move |view, results| {
+            let wrapped: DepFinish<'step> = Box::new(move |view, results| {
                 let fctx = FinishCtx {
                     scope: view.current_scope(),
                 };
@@ -271,7 +271,7 @@ pub(in crate::machine::execute) fn run_action<'run>(action: Action<'run>) -> Out
         Action::Catch { watched, finish } => {
             // `watched` is realized (and owned) at apply time — an `InScope` watched enters a
             // fresh single-statement block, distinct from a dep-finish body's fan-out.
-            let wrapped: CatchFinish<'run> = Box::new(move |view, result| {
+            let wrapped: CatchFinish<'step> = Box::new(move |view, result| {
                 let fctx = FinishCtx {
                     scope: view.current_scope(),
                 };
@@ -507,8 +507,8 @@ impl<'run> KoanRuntime<'run> {
                         .ambient
                         .active_payload()
                         .expect("a slot step installs the ambient payload");
-                    let dest = reattach_node_scope(&payload.scope, self.ambient.active_frame_ref())
-                        .arena;
+                    let dest =
+                        reattach_node_scope(&payload.scope, self.ambient.active_frame_ref()).arena;
                     let pulled = self.read_lifted(producer, dest);
                     // Shorten the node value to the uniform `NodeStep` step lifetime `'s`: it lives
                     // in `dest`, which the active cart pins for all of `'s`. A node→step reattach,

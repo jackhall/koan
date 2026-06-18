@@ -16,12 +16,12 @@ use super::{bare_name_of, park_resume, propagate_dep_error, Outcome, PartWalkRes
 /// Entry from the dispatch router. Resolved-no-parks-no-subs terminates inline; all other
 /// outcomes install a park (an overload / bare-name producer wait, or eager subs) and re-enter
 /// through a [`park_resume`] closure that re-runs this function on wake.
-pub(super) fn initial<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    expr: KExpression<'run>,
+pub(super) fn initial<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    expr: KExpression<'step>,
     pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
-) -> Outcome<'run> {
+) -> Outcome<'step> {
     let bare_outcomes = ctx.build_bare_outcomes(&expr.parts);
     // A bare-name arg whose producer already errored can never resolve.
     for outcome in bare_outcomes.iter().flatten() {
@@ -120,11 +120,11 @@ pub(super) fn initial<'run>(
 
 /// Re-resolve dispatch against the (now fully spliced) `working_expr`
 /// after eager subs complete.
-pub(super) fn finish<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    working_expr: KExpression<'run>,
+pub(super) fn finish<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    working_expr: KExpression<'step>,
     idx: usize,
-) -> Outcome<'run> {
+) -> Outcome<'step> {
     match ctx
         .current_scope()
         .resolve_dispatch(&working_expr, ctx.chain_deref(), &[])
@@ -158,7 +158,7 @@ pub(super) fn finish<'run>(
 /// Fold the post-eager-subs re-resolve into a [`Outcome::Continue`]: a dep-free decide that re-runs
 /// [`finish`] against the fully-spliced `working_expr` on the next pop, with no committed function
 /// pick. `Inherit` — a re-resolve runs in the slot's current frame.
-pub(super) fn redispatch_continue<'run>(working_expr: KExpression<'run>) -> Outcome<'run> {
+pub(super) fn redispatch_continue<'step>(working_expr: KExpression<'step>) -> Outcome<'step> {
     let carrier = working_expr.summarize();
     let work = NodeWork::new(
         Vec::new(),
@@ -181,13 +181,13 @@ pub(super) fn redispatch_continue<'run>(working_expr: KExpression<'run>) -> Outc
 /// already-errored terminals; on wake `resume` re-runs [`initial`] against the original `expr`.
 /// Visibility is widened for `single_poll::type_call`, which reuses this path for
 /// forward-reference type-binder parks.
-pub(in crate::machine::execute::dispatch) fn install_overload_park<'run>(
-    ctx: &SchedulerView<'run, '_>,
+pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
+    ctx: &SchedulerView<'step, '_>,
     producers: Vec<NodeId>,
-    expr: KExpression<'run>,
+    expr: KExpression<'step>,
     pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
-) -> Outcome<'run> {
+) -> Outcome<'step> {
     let mut to_wait: Vec<NodeId> = Vec::new();
     for p in producers {
         if ctx.is_result_ready(p) {
@@ -217,10 +217,10 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'run>(
 
 /// `ResolveOutcome::Deferred` arm: stage every eager part and park
 /// on them, with no speculative function pick captured.
-fn install_eager_only<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    expr: KExpression<'run>,
-) -> Outcome<'run> {
+fn install_eager_only<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    expr: KExpression<'step>,
+) -> Outcome<'step> {
     // Deferred arm: no committed pick yet (resume re-resolves on finish), so no
     // bare-name slots to pre-resolve here.
     let (new_parts, staged_subs) = super::stage_all_eager_parts(expr.parts, &[]);
@@ -236,11 +236,11 @@ fn install_eager_only<'run>(
 /// Park on bare-name forward-reference producers. `working_expr` is partly spliced — Resolved wrap
 /// slots already substituted for `Future(obj)`; Parked wrap and ref-name slots keep their original
 /// bare-name token — so on wake `resume` re-runs [`initial`] against it.
-fn install_bare_name_park<'run>(
+fn install_bare_name_park<'step>(
     producers: Vec<NodeId>,
-    working_expr: KExpression<'run>,
+    working_expr: KExpression<'step>,
     pre_subs: Vec<(usize, NodeId)>,
-) -> Outcome<'run> {
+) -> Outcome<'step> {
     let carrier = working_expr.summarize();
     park_resume(
         producers,
@@ -249,12 +249,12 @@ fn install_bare_name_park<'run>(
     )
 }
 
-fn install_eager_subs_track<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    working_expr: KExpression<'run>,
-    staged_subs: Vec<(usize, PendingSub<'run>)>,
+fn install_eager_subs_track<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    working_expr: KExpression<'step>,
+    staged_subs: Vec<(usize, PendingSub<'step>)>,
     pre_subs: Vec<(usize, NodeId)>,
-) -> Outcome<'run> {
+) -> Outcome<'step> {
     // The combine carrier owns its deps directly; the Keyworded eager-subs resume state is
     // never re-entered (a re-Dispatch never lands here — the combine finish runs instead),
     // so `pre_subs` is unused on this path.
@@ -267,25 +267,25 @@ fn install_eager_subs_track<'run>(
 /// decides whether to install a combined park or submit the staged
 /// subs. `Err(KError)` surfaces a *slot-terminal* error (cycle /
 /// unbound wrap), not a scheduler-level error.
-fn part_walk<'run>(
-    ctx: &SchedulerView<'run, '_>,
+fn part_walk<'step>(
+    ctx: &SchedulerView<'step, '_>,
     parts: Vec<
-        crate::machine::core::source::Spanned<crate::machine::model::ast::ExpressionPart<'run>>,
+        crate::machine::core::source::Spanned<crate::machine::model::ast::ExpressionPart<'step>>,
     >,
     pre_subs: &[(usize, NodeId)],
-    bare_outcomes: &[Option<NameOutcome<'run>>],
+    bare_outcomes: &[Option<NameOutcome<'step>>],
     slots: &crate::machine::core::kfunction::ClassifiedSlots,
     idx: usize,
-) -> Result<PartWalkResult<'run>, KError> {
+) -> Result<PartWalkResult<'step>, KError> {
     use crate::machine::core::source::Spanned;
     use crate::machine::model::ast::ExpressionPart;
 
     let wrap_set = &slots.wrap_indices;
     let ref_name_set = &slots.ref_name_indices;
     let eager_filter = slots.eager_indices.as_deref();
-    let mut new_parts: Vec<Spanned<ExpressionPart<'run>>> = Vec::with_capacity(parts.len());
+    let mut new_parts: Vec<Spanned<ExpressionPart<'step>>> = Vec::with_capacity(parts.len());
     let mut producers_to_wait: Vec<NodeId> = Vec::new();
-    let mut staged_subs: Vec<(usize, PendingSub<'run>)> = Vec::new();
+    let mut staged_subs: Vec<(usize, PendingSub<'step>)> = Vec::new();
     for (i, part) in parts.into_iter().enumerate() {
         let span = part.span;
         if let Some(&(_, sub_id)) = pre_subs.iter().find(|(j, _)| *j == i) {

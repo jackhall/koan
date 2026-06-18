@@ -20,9 +20,9 @@
 use crate::machine::core::kfunction::action::{Dep, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::ScopeId;
-use crate::scheduler::{reattach_slice, reattach_value, Erased, Reattachable};
 use crate::machine::model::values::{Carried, CarriedFamily, KObject, ResultCarriedFamily};
 use crate::machine::{KError, NodeId, TraceFrame};
+use crate::scheduler::{reattach_slice, reattach_value, Erased, Reattachable};
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
 use super::nodes::NodeWork;
@@ -97,15 +97,15 @@ pub(in crate::machine::execute) enum Outcome<'step> {
 ///
 /// (A bare-name forward is not a continuation — it splices the slot out via
 /// [`Outcome::Forward`], never parking on a dep.)
-pub(in crate::machine::execute) enum Continuation<'run> {
-    Finish(DepFinish<'run>),
+pub(in crate::machine::execute) enum Continuation<'step> {
+    Finish(DepFinish<'step>),
     Catch {
-        watched: Dep<'run>,
-        finish: CatchFinish<'run>,
+        watched: Dep<'step>,
+        finish: CatchFinish<'step>,
     },
     Resume {
         carrier: Option<String>,
-        resume: ResumeFn<'run>,
+        resume: ResumeFn<'step>,
     },
 }
 
@@ -141,7 +141,11 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
 /// applies. The per-family behaviors (combine short-circuit, catch recover, dispatch decide) are
 /// built into the closure by the combinators below, so the node itself never branches.
 pub(in crate::machine::execute) type NodeCont<'a> = Box<
-    dyn for<'view> FnOnce(&SchedulerView<'a, 'view>, &[Result<Carried<'a>, KError>], usize) -> Outcome<'a>
+    dyn for<'view> FnOnce(
+            &SchedulerView<'a, 'view>,
+            &[Result<Carried<'a>, KError>],
+            usize,
+        ) -> Outcome<'a>
         + 'a,
 >;
 
@@ -155,7 +159,7 @@ unsafe impl Reattachable for ContFamily {
     type At<'r> = NodeCont<'r>;
 }
 
-/// A [`NodeCont`] with its captured `'run` lifetime erased to `'static` for storage on a
+/// A [`NodeCont`] with its captured `'step` lifetime erased to `'static` for storage on a
 /// lifetime-free node, re-anchored against the node's cart `Rc` before the single-shot run. The
 /// continuation captures run-lived data (the parked AST, a finish closure's captured scope) living
 /// in the run arena or a strict ancestor of the slot's per-call cart, which the node's

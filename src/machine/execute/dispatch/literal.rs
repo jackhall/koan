@@ -14,13 +14,13 @@ use super::resolve_name_part;
 /// One element of a list literal or one side of a dict-literal pair. Indices are into the
 /// the dep-finish's results: `Park(i)` reads position `i` of the park-producer prefix; `Owned(j)`
 /// reads position `park_count + j` of the owned-sub suffix.
-enum Slot<'run> {
-    Static(Held<'run>),
+enum Slot<'step> {
+    Static(Held<'step>),
     Park(usize),
     Owned(usize),
 }
 
-impl<'run> Slot<'run> {
+impl<'step> Slot<'step> {
     /// Append `id` as an owned sub-dependency and return the `Owned` slot that reads its result.
     /// The one place the "push a sub-dispatch, point a slot at it" tail lives.
     fn owned(deps: &mut Vec<NodeId>, id: NodeId) -> Self {
@@ -30,9 +30,9 @@ impl<'run> Slot<'run> {
     }
 
     /// Deep-clones `Park` / `Owned` results because the produced container owns its cells
-    /// and can't borrow a `&'run` carrier into its `Rc<…>`. A literal element may be a runtime
+    /// and can't borrow a `&'step` carrier into its `Rc<…>`. A literal element may be a runtime
     /// value *or* a first-class type, so each carrier widens to a [`Held`] cell.
-    fn materialize(self, results: &[Carried<'run>], park_count: usize) -> Held<'run> {
+    fn materialize(self, results: &[Carried<'step>], park_count: usize) -> Held<'step> {
         match self {
             Slot::Static(held) => held,
             Slot::Park(i) => Held::from_carried(results[i]),
@@ -43,13 +43,13 @@ impl<'run> Slot<'run> {
 
 /// Allocate `obj` in the executing slot's arena and wrap it as a successful combine result — the
 /// shared tail of every aggregate-literal finish.
-fn done_object<'run>(view: &SchedulerView<'run, '_>, obj: KObject<'run>) -> Outcome<'run> {
+fn done_object<'step>(view: &SchedulerView<'step, '_>, obj: KObject<'step>) -> Outcome<'step> {
     Outcome::Done(Ok(Carried::Object(
         view.current_scope().arena.alloc_object(obj),
     )))
 }
 
-impl<'run> KoanRuntime<'run> {
+impl<'step> KoanRuntime<'step> {
     /// Schedule a list-literal materialization as a dep-finish over its element producers.
     pub(in crate::machine::execute) fn schedule_list_literal<'a>(
         &mut self,

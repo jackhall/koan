@@ -36,22 +36,22 @@ use crate::machine::model::Carried;
 
 /// A head resolved to something callable. The lane decides which arm; the tail
 /// branches on the body surface and launches.
-pub(in crate::machine::execute) enum ResolvedCallable<'run> {
+pub(in crate::machine::execute) enum ResolvedCallable<'step> {
     /// Build from a sealed nominal member (`KType::SetRef` — struct / tagged / newtype /
     /// `TypeConstructor`).
-    Constructor(&'run KType<'run>),
+    Constructor(&'step KType<'step>),
     /// Call a `KFunction` by name — functor or not; a functor's result is a module.
-    Function(&'run KFunction<'run>),
+    Function(&'step KFunction<'step>),
 }
 
 /// Body-shape-branch the resolved callable and launch. `expr.parts[1..]` is the
 /// call body; `extract_call_body` admits one `{name = value}` record literal
 /// (`Named`) or one `(value)` paren group (`Positional`).
-pub(in crate::machine::execute) fn apply_callable<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    callable: ResolvedCallable<'run>,
-    expr: &KExpression<'run>,
-) -> Outcome<'run> {
+pub(in crate::machine::execute) fn apply_callable<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    callable: ResolvedCallable<'step>,
+    expr: &KExpression<'step>,
+) -> Outcome<'step> {
     match callable {
         // A constructor branches on the projected schema before deciding what body shape it
         // admits; the newtype arm in particular takes the trailing parts directly (so
@@ -75,11 +75,11 @@ pub(in crate::machine::execute) fn apply_callable<'run>(
 /// a named body is a loud `DispatchFailed`. A non-constructible identity is a `TypeMismatch`.
 /// The schema is projected off the member (sibling `SetLocal`s resolved to external
 /// `SetRef`s); `(set, index)` is stamped onto a tagged value.
-fn apply_constructor<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    identity: &'run KType<'run>,
-    expr: &KExpression<'run>,
-) -> Outcome<'run> {
+fn apply_constructor<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    identity: &'step KType<'step>,
+    expr: &KExpression<'step>,
+) -> Outcome<'step> {
     let KType::SetRef { set, index } = identity else {
         return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
@@ -163,12 +163,12 @@ fn sorted_variant_names(schema: &std::collections::HashMap<String, KType<'_>>) -
 /// Call a `KFunction` by name. Named args reconstruct the exact-arity positional
 /// expression and eager-resolve the value slots before binding; a positional body
 /// is a loud `DispatchFailed` (functions and functors take `{name = value}` only).
-fn apply_function<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    f: &'run KFunction<'run>,
-    expr: &KExpression<'run>,
-    body: CallBody<'run>,
-) -> Outcome<'run> {
+fn apply_function<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    f: &'step KFunction<'step>,
+    expr: &KExpression<'step>,
+    body: CallBody<'step>,
+) -> Outcome<'step> {
     match body {
         CallBody::Named(fields) => match f.reconstruct_positional(fields) {
             Ok(rebuilt) => install_eager_subs_track(ctx, rebuilt, f),
@@ -182,11 +182,11 @@ fn apply_function<'run>(
 /// subs inline, and park the slot on the in-flight ones as a `AwaitDeps` whose finish binds
 /// `picked`. Shared by the `FunctionValueCall` lane and every head-deferred / type-call function
 /// arm.
-pub(in crate::machine::execute) fn install_eager_subs_track<'run>(
-    ctx: &SchedulerView<'run, '_>,
-    expr: KExpression<'run>,
-    picked: &'run KFunction<'run>,
-) -> Outcome<'run> {
+pub(in crate::machine::execute) fn install_eager_subs_track<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    expr: KExpression<'step>,
+    picked: &'step KFunction<'step>,
+) -> Outcome<'step> {
     // `picked` is already committed (the head uniquely resolved to it), so bare-name
     // value slots resolve by sub-Dispatch rather than the keyword path's pre-pick
     // `bare_outcomes` lookup — their resolved carrier then reaches `accepts_part` at bind.

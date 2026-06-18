@@ -12,10 +12,8 @@ pub(crate) type Live<'node, W> = <<W as Workload>::Value as Reattachable>::At<'n
 /// associated-type projection nest stays out of the method signatures. The value is re-anchored to
 /// the `'node` read borrow; the error is borrowed — the scheduler hands back a reference into the
 /// slot, never an owned error.
-pub(crate) type FramedRead<'node, W> = Result<
-    (Live<'node, W>, Option<Rc<<W as Workload>::Frame>>),
-    &'node <W as Workload>::Error,
->;
+pub(crate) type FramedRead<'node, W> =
+    Result<(Live<'node, W>, Option<Rc<<W as Workload>::Frame>>), &'node <W as Workload>::Error>;
 
 /// The Koan-agnostic interface the generic DAG scheduler is parameterized over: the workload types
 /// it stores opaquely and never inspects. The Koan instantiation is `machine::execute::KoanWorkload`.
