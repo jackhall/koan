@@ -14,7 +14,6 @@
 //! arm (per-call `CallArena` for `it`) or re-raising on no-match.
 
 use crate::machine::model::types::KKind;
-use std::rc::Rc;
 
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
@@ -39,7 +38,7 @@ pub fn body<'a>(
     // Body runs in a fresh `child_under` scope so a `LET` inside it stays local and reads still
     // chain out to the call-site scope.
     let body_scope: &'a Scope<'a> = ctx.scope.arena.alloc_scope(Scope::child_under(ctx.scope));
-    let outer_frame = ctx.frame.map(Rc::clone);
+    let outer_frame = ctx.frame.map(|f| f.storage_rc());
     let finish: CatchCont<'a> = Box::new(move |fctx, result| {
         // On `ok`, `it` is the bare success value; on error, the per-variant payload Struct
         // unwrapped from `KError::to_tagged`'s Tagged carrier.

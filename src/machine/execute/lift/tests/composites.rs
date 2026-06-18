@@ -45,10 +45,10 @@ fn list_of_dict_with_kfunction_anchors_via_recursion() {
         KObject::KFunction(kf_ref, None),
     );
     let outer = KObject::list(vec![KObject::dict(inner_map)]);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&outer, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::List(items, _) => match &items[0] {
             Held::Object(KObject::Dict(entries, _, _)) => match entries.values().next().unwrap() {
@@ -80,10 +80,10 @@ fn list_of_tagged_with_kfunction_anchors_via_recursion() {
         type_args: std::rc::Rc::new(vec![]),
     };
     let outer = KObject::list(vec![tagged]);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&outer, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::List(items, _) => match &items[0] {
             Held::Object(KObject::Tagged { value, .. }) => match &**value {
@@ -108,6 +108,9 @@ fn list_with_pre_anchored_variants_skips_them() {
     let dying = CallArena::new(scope, None);
     defeat_fast_path(&dying);
     let other = CallArena::new(scope, None);
+    // Anchors pin the frame's `FrameStorage`, not the shell, so counts track storage.
+    let other_storage = other.storage_rc();
+    let dying_storage = dying.storage_rc();
     let kf_ref = alloc_local_kf(&dying);
     let module = Module::new("M".into(), dying.scope());
     let m_ref: &Module = dying.arena().alloc_module(module);
@@ -118,18 +121,18 @@ fn list_with_pre_anchored_variants_skips_them() {
         args: Record::new(),
     };
     let items = Rc::new(vec![
-        Held::Object(KObject::KFunction(kf_ref, Some(Rc::clone(&other)))),
-        Held::Object(KObject::KFuture(future, Some(Rc::clone(&other)))),
+        Held::Object(KObject::KFunction(kf_ref, Some(Rc::clone(&other_storage)))),
+        Held::Object(KObject::KFuture(future, Some(Rc::clone(&other_storage)))),
         Held::Type(KType::Module {
             module: m_ref,
-            frame: Some(Rc::clone(&other)),
+            frame: Some(Rc::clone(&other_storage)),
         }),
     ]);
     let list = KObject::list_with_type(Rc::clone(&items), KType::Any);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying_storage);
 
     let lifted = lift_kobject(&list, &dying);
-    let dying_after = Rc::strong_count(&dying);
+    let dying_after = Rc::strong_count(&dying_storage);
     match &lifted {
         KObject::List(out, _) => assert!(
             Rc::ptr_eq(out, &items),
@@ -158,10 +161,10 @@ fn list_with_unanchored_kfuture_anchors() {
         args: Record::new(),
     };
     let list = KObject::list(vec![KObject::KFuture(future, None)]);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&list, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::List(out, _) => {
             assert!(matches!(
@@ -189,10 +192,10 @@ fn list_with_unanchored_kmodule_anchors() {
         module: m_ref,
         frame: None,
     })]);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&list, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::List(out, _) => assert!(matches!(
             &out[0],
@@ -273,10 +276,10 @@ fn list_with_local_kfunction_rebuilds_and_anchors() {
     let kf_ref = alloc_local_kf(&dying);
 
     let list = KObject::list(vec![KObject::KFunction(kf_ref, None)]);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&list, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match lifted {
         KObject::List(out, _) => match &out[0] {
             Held::Object(KObject::KFunction(_, frame)) => assert!(
@@ -337,10 +340,10 @@ fn dict_with_local_kfunction_rebuilds_and_anchors() {
         KObject::KFunction(kf_ref, None),
     );
     let dict = KObject::dict(map);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&dict, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match lifted {
         KObject::Dict(out, _, _) => {
             let v = out.values().next().expect("one entry");
@@ -419,10 +422,10 @@ fn tagged_with_local_kfunction_rebuilds_and_anchors() {
         index: 0,
         type_args: std::rc::Rc::new(vec![]),
     };
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&tagged, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match lifted {
         KObject::Tagged {
             tag,

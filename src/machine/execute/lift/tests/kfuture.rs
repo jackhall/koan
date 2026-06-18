@@ -42,7 +42,7 @@ fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
     let future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
     let kf_obj = KObject::KFuture(future, None);
 
-    let strong_before = Rc::strong_count(&dying);
+    let strong_before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&kf_obj, &dying);
 
@@ -50,7 +50,7 @@ fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
         KObject::KFuture(_, frame) => assert!(frame.is_none()),
         other => panic!("expected lifted KFuture, got {:?}", other.ktype()),
     }
-    assert_eq!(Rc::strong_count(&dying), strong_before);
+    assert_eq!(Rc::strong_count(&dying.storage_rc()), strong_before);
 }
 
 /// A KFuture whose parsed parts contain a `Future(Carried::Object(_))` allocated in
@@ -90,13 +90,13 @@ fn unanchored_kfuture_with_arena_borrow_does_anchor() {
         ))));
     let kf_obj = KObject::KFuture(future, None);
 
-    let strong_before = Rc::strong_count(&dying);
+    let strong_before = Rc::strong_count(&dying.storage_rc());
     let lifted = lift_kobject(&kf_obj, &dying);
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
         other => panic!("expected lifted KFuture, got {:?}", other.ktype()),
     }
-    assert_eq!(Rc::strong_count(&dying), strong_before + 1);
+    assert_eq!(Rc::strong_count(&dying.storage_rc()), strong_before + 1);
     // Drop borrowers before `dying` so arena teardown order is well-defined.
     drop(lifted);
     drop(kf_obj);
@@ -125,10 +125,10 @@ fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
         ArgValue::Object(Rc::new(KObject::KFuture(inner_future, None))),
     );
     let obj = KObject::KFuture(outer, None);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&obj, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
         other => panic!("expected KFuture, got {:?}", other.ktype()),
@@ -172,10 +172,10 @@ fn kfuture_bundle_arg_with_wrapped_field_anchors() {
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
     future.args.insert("s".into(), ArgValue::Object(Rc::new(s)));
     let obj = KObject::KFuture(future, None);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&obj, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
         other => panic!("expected KFuture, got {:?}", other.ktype()),
@@ -206,10 +206,10 @@ fn kfuture_parsed_expression_part_with_arena_borrow_anchors() {
         .parts
         .push(Spanned::bare(ExpressionPart::Expression(Box::new(inner))));
     let obj = KObject::KFuture(future, None);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&obj, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
         other => panic!("expected KFuture, got {:?}", other.ktype()),
@@ -240,10 +240,10 @@ fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
         ArgValue::Object(Rc::new(KObject::KExpression(inner))),
     );
     let obj = KObject::KFuture(future, None);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&obj, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
         other => panic!("expected KFuture, got {:?}", other.ktype()),
@@ -261,19 +261,20 @@ fn kfuture_with_existing_anchor_preserves_it() {
     let dying = CallArena::new(scope, None);
     defeat_fast_path(&dying);
     let other = CallArena::new(scope, None);
+    let other_storage = other.storage_rc();
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    let obj = KObject::KFuture(future, Some(Rc::clone(&other)));
-    let other_before = Rc::strong_count(&other);
+    let obj = KObject::KFuture(future, Some(Rc::clone(&other_storage)));
+    let other_before = Rc::strong_count(&other_storage);
 
     let lifted = lift_kobject(&obj, &dying);
-    let other_after = Rc::strong_count(&other);
+    let other_after = Rc::strong_count(&other_storage);
     match lifted {
         KObject::KFuture(_, frame) => {
             let f = frame.expect("pre-anchored frame must persist");
-            assert!(Rc::ptr_eq(&f, &other));
+            assert!(Rc::ptr_eq(&f, &other_storage));
         }
         other => panic!("expected KFuture, got {:?}", other.ktype()),
     }
@@ -297,10 +298,10 @@ fn kfuture_bundle_arg_with_local_kfunction_anchors() {
         ArgValue::Object(Rc::new(KObject::KFunction(kf_ref, None))),
     );
     let obj = KObject::KFuture(future, None);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&obj, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
         other => panic!("expected KFuture, got {:?}", other.ktype()),
@@ -325,10 +326,10 @@ fn kfuture_with_local_function_anchors() {
         args: Record::new(),
     };
     let obj = KObject::KFuture(future, None);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&obj, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
         other => panic!("expected KFuture, got {:?}", other.ktype()),
@@ -355,10 +356,10 @@ fn kfuture_bundle_arg_with_list_of_kfunction_anchors() {
         .args
         .insert("nested".into(), ArgValue::Object(Rc::new(nested)));
     let obj = KObject::KFuture(future, None);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&obj, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
         other => panic!("expected KFuture, got {:?}", other.ktype()),
@@ -392,10 +393,10 @@ fn kfuture_bundle_arg_with_local_kmodule_anchors() {
         }),
     );
     let obj = KObject::KFuture(future, None);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&obj, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
         other => panic!("expected KFuture, got {:?}", other.ktype()),
@@ -425,10 +426,10 @@ fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
             ExpressionPart::Future(Carried::Object(inside)),
         ])));
     let obj = KObject::KFuture(future, None);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&obj, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
         other => panic!("expected KFuture, got {:?}", other.ktype()),
@@ -459,10 +460,10 @@ fn kfuture_parsed_dictliteral_with_arena_borrow_anchors() {
             ExpressionPart::Future(Carried::Object(inside)),
         )])));
     let obj = KObject::KFuture(future, None);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&obj, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
         other => panic!("expected KFuture, got {:?}", other.ktype()),

@@ -20,7 +20,7 @@ fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
 }
 
 /// Whether `target` arena is reached by walking `cart_scope`'s lexical `outer` chain — i.e. the
-/// scope lives in the cart's own arena or a cart ancestor's. The active cart's `outer_frame` chain
+/// scope lives in the cart's own arena or a cart ancestor's. The active cart's `FrameStorage.outer` chain
 /// pins every such arena, so a scope found here is cart-witnessed (a `YokedChild`), not run-lived.
 fn cart_chain_reaches_arena(cart_scope: &Scope<'_>, target: &RuntimeArena) -> bool {
     let target = target as *const RuntimeArena as *const ();
@@ -82,7 +82,7 @@ impl<'run> KoanRuntime<'run> {
     /// - The active cart's *own* scope is `scope` → [`NodeScope::Yoked`] (re-projected from the cart).
     /// - The active cart's outer-chain reaches `scope`'s arena → [`NodeScope::YokedChild`]: `scope` is
     ///   a block scope a builtin allocated in a cart *ancestor* arena (an `InScope` body), which the
-    ///   cart's `outer_frame` chain pins. Stored as an erased pointer, reattached frame-bounded.
+    ///   cart's `FrameStorage.outer` chain pins. Stored as an erased pointer, reattached frame-bounded.
     /// - No active frame but the `run_frame` (which adopts the run root) *is* `scope` → `Yoked`: the
     ///   slot's cart is the `run_frame` (via [`Self::submission_cart`]'s fallback), so the root
     ///   re-projects from it at the slot's step.

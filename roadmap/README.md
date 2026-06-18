@@ -70,10 +70,18 @@ What's shipped that the open items below build on:
   [`Scheduler::current_scope`](../src/machine/execute/run_loop.rs) through the witness-bounded
   [`CallArena::scope_bounded`](../src/machine/core/arena.rs) brand (the post-step loop reads it
   through a `PostStep` token off the slot's returned frame). The sole surviving free re-exposure
-  is the arena half of [`CallArena::with_anchored_child`](../src/machine/core/arena.rs), the
+  is the arena half of [`CallArena::with_frame_interior`](../src/machine/core/arena.rs), the
   C0-irreducible seed bind, and `KFunction::captured` now rides a `BoundedScopePtr`
   (see [design/per-call-arena-protocol.md § Slot-table scope handle](../design/per-call-arena-protocol.md#slot-table-scope-handle)).
   See [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
+- *Shell-over-storage frame reuse.* `CallArena` is now a thin shell over a refcounted
+  [`FrameStorage`](../src/machine/core/arena.rs) (the per-call `RuntimeArena` plus the ancestor
+  `outer` chain). An escaping value (a returned closure, a functor-built module) pins only the
+  storage, leaving the shell uniquely owned so `try_reset_for_tail` reuses it across a tail
+  iteration instead of being foreclosed — only a live shell clone refuses. The four escape
+  shapes and the cycle-gate walkers carry `Rc<FrameStorage>`; cross-reset arena capture is
+  borrow-checker-enforced for safe code (no new unsafe). See
+  [design/per-call-arena-protocol.md § TCO frame reuse](../design/per-call-arena-protocol.md#tco-frame-reuse).
 - *Per-node output lift.* A node continuation's output is bound to the per-step frame
   lifetime `'step` ([`Outcome<'step>`](../src/machine/execute/outcome.rs)), not `'run`. The
   producer keeps its terminal in its own frame (the slot's `Done` co-stores the backing
@@ -261,6 +269,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
+- [Scheduler owns the carrier reattaches](refactor/scheduler-owns-carrier-reattach.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
@@ -351,3 +360,7 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
+- [Scheduler owns the carrier reattaches](refactor/scheduler-owns-carrier-reattach.md) —
+  fold the continuation and contract reattaches into the scheduler beside the value
+  channel, each vended at a `'step` lifetime bounded by a witness `&Rc` (no clone, so
+  TCO is untouched); rename `cont` → `continuation`.

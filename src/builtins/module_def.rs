@@ -25,7 +25,6 @@ pub fn body<'a>(
         require_bare_type_name, require_kexpression, Action, AwaitContinue, Dep, DepPlacement,
     };
     use crate::machine::model::Carried;
-    use std::rc::Rc;
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "MODULE"));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", "body"));
@@ -33,7 +32,7 @@ pub fn body<'a>(
         .scope
         .arena
         .alloc_scope(Scope::child_under_module(ctx.scope, name.clone()));
-    let active_frame = ctx.frame.map(Rc::clone);
+    let active_frame = ctx.frame.map(|f| f.storage_rc());
     let bind_index = ctx.bind_index();
     let name_for_finish = name;
     let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {

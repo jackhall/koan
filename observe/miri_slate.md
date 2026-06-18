@@ -49,7 +49,7 @@ unsafe and fingerprint-drift checks still fire.
 
 ## The slate
 
-25 tests, grouped by the unsafe site each pins down. Names below are the exact
+26 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallArena` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -88,14 +88,17 @@ decision live in [src/machine/core/arena.rs](../src/machine/core/arena.rs).
 - `alloc_object_redirects_self_anchored_value_to_escape_arena`
 
 **`CallArena::try_reset_for_tail`** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — TCO
-frame reuse swaps the inner `RuntimeArena` for a fresh one in place and
-re-allocates the child `Scope`, with two new transmutes: `&Scope<'_> →
+frame reuse installs a fresh refcounted `FrameStorage` (a new `RuntimeArena`) and
+re-allocates the child `Scope`, with two transmutes: `&Scope<'_> →
 &Scope<'static>` for the new outer link and a raw-ptr re-anchor for the new
-inner arena. The `Rc::get_mut` gate keeps reuse semantically equivalent to
-drop-and-alloc by refusing when any other `Rc` to the frame still exists.
+inner arena. The `Rc::get_mut` gate refuses only when another `Rc<CallArena>`
+*shell* holder still exists; an escaped value pins the `FrameStorage`, not the
+shell, so it does not foreclose reuse — the swap drops the shell's reference to the
+old storage while the escapee's clone keeps that snapshot alive and aliased.
 
 - `call_arena_try_reset_for_tail_round_trip`
 - `call_arena_try_reset_for_tail_refuses_when_aliased`
+- `call_arena_try_reset_for_tail_allows_reset_under_escaped_storage`
 
 **`KFunction` captured-scope re-borrow** ([src/machine/core/kfunction.rs](../src/machine/core/kfunction.rs)) — every
 closure invocation reads `KFunction::captured_scope`, a safe call that routes the
@@ -125,16 +128,16 @@ because tree borrows catches a regression in the aliasing or rooting discipline.
 - `using_temporary_functor_result_is_sound`
 
 **MATCH on `Tagged` recursion** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — MATCH
-builds its per-call frame and seeds its `it` bind through `CallArena::with_anchored_child`
+builds its per-call frame and seeds its `it` bind through `CallArena::with_frame_interior`
 (arena re-exposed free, child scope re-handed via the bounded `scope_bounded` brand); the
-`outer_frame` chain keeps the call-site arena alive across
+`FrameStorage` ancestor chain keeps the call-site arena alive across
 TCO replace when a user-fn recurses through a `Tagged` parameter via MATCH.
 
 - `recursive_tagged_match_no_uaf`
 
 **TRY-WITH inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — same
-`CallArena::with_anchored_child` seed bind as MATCH for the per-branch frame; the
-`outer_frame` chain keeps the call-site arena alive when the branch body
+`CallArena::with_frame_interior` seed bind as MATCH for the per-branch frame; the
+`FrameStorage.outer` chain keeps the call-site arena alive when the branch body
 tail-calls back through the enclosing user-fn.
 
 - `try_inside_tco_position_preserves_frame_chain`
@@ -149,7 +152,7 @@ unsafe site, covered under plain `cargo test`).
 - `unanchored_kfuture_with_arena_borrow_does_anchor`
 
 **`KFunction::invoke` per-call frame re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
-seed bind routed through `CallArena::with_anchored_child`: the per-call arena re-exposed at a
+seed bind routed through `CallArena::with_frame_interior`: the per-call arena re-exposed at a
 free `'a` (an `'a`-typed value must land in an `'a`-typed arena) while the child scope rides the
 witness-bounded `scope_bounded` brand. Witnessed by the `Rc<CallArena>` moved into
 `BodyResult::Tail`. Exercised by every user-fn invocation: repeated-call reclamation, type-op
@@ -362,9 +365,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-18: 1485s — 26 tests, 0 leaks, 0 UB
 - 2026-06-17: 1414s — 25 tests, 0 leaks, 0 UB
 - 2026-06-17: 601s — 25 tests, 0 leaks, 0 UB
 - 2026-06-17: 609s — 25 tests, 0 leaks, 0 UB
 - 2026-06-17: 602s — 25 tests, 0 leaks, 0 UB
-- 2026-06-17: 620s — 25 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

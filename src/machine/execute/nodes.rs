@@ -120,7 +120,7 @@ impl ChainOp {
 ///   and no contention with `try_reset_for_tail`'s uniqueness check.
 /// - `YokedChild` — an erased [`ScopePtr`] to a block scope a builtin allocated in a cart *ancestor*
 ///   arena (an `InScope` body — USING / MODULE / SIG / TRY). Re-attached at read with a borrow
-///   bounded by the slot's frame `Rc` (`reattach_bounded`), sound because the cart's `outer_frame`
+///   bounded by the slot's frame `Rc` (`reattach_bounded`), sound because the cart's `FrameStorage.outer`
 ///   chain pins that ancestor arena for as long as the slot holds the cart. Distinct from `Yoked`
 ///   only in that the child differs from the cart's own scope, so it needs a stored pointer.
 ///

@@ -31,7 +31,7 @@ pub fn body<'a>(
     };
     // Chain the call-site frame Rc onto the new frame (keeps the parent arena alive past the
     // new frame's `outer` pointer) — same as the legacy body.
-    let frame: Rc<CallArena> = CallArena::new(ctx.scope, ctx.frame.map(Rc::clone));
+    let frame: Rc<CallArena> = CallArena::new(ctx.scope, ctx.frame.map(|f| f.storage_rc()));
     Action::Tail {
         leading: vec![],
         tail: inner,

@@ -58,7 +58,7 @@ pub fn body<'a>(
     };
     arm_tail(
         ctx.scope,
-        ctx.frame.map(Rc::clone),
+        ctx.frame.map(|f| f.storage_rc()),
         value.deep_clone(),
         branch_body,
         contract,
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn recursive_tagged_match_no_uaf() {
-        // Pins the `outer_frame` chain — per-call-arena-protocol.md
+        // Pins the `FrameStorage.outer` chain — per-call-arena-protocol.md
         // § MATCH frame lifetime under tail recursion.
         let bytes = run_program(
             "UNION Bit = (One :Null Zero :Null)\n\

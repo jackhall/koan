@@ -18,7 +18,7 @@ mod storage_frame;
 #[cfg(test)]
 mod tests;
 
-pub use arena::{CallArena, RuntimeArena};
+pub use arena::{CallArena, FrameStorage, RuntimeArena};
 pub use bindings::{
     ApplyOutcome, BindingIndex, Bindings, FunctionLookup, PendingBinderGuard, PendingTypeEntry,
     Resolution,
