@@ -166,7 +166,7 @@ than a SAFETY comment the driver asserts. The driver's transient reads
 no `unsafe` of their own. The consumer-pull lift and the Done contract hook re-anchor their reads at
 a *node* lifetime, not a fabricated `'run`: `read_lifted` lifts each dep (and the `Outcome::Forward`
 ready pull) into the consumer scope's arena bounded by the active cart `Rc`, and a Done terminal is
-finalized at its step lifetime `'s` *within* the step that produced it (the run loop's `run_step`
+finalized at its step lifetime `'step` *within* the step that produced it (the run loop's `run_step`
 erases it into the slot store before the step's frame witness drops). `pin_carried_to_run` survives
 for one genuine `'run` re-home only — the consumer-less root drain in
 [`run_program`](../src/machine/execute/runtime/interpret.rs), which lifts each top-level terminal

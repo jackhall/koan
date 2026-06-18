@@ -65,7 +65,7 @@ What's shipped that the open items below build on:
   payload-less [`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the
   slot's own `Node.frame` cart — no fabricated run-length `&'a` persists across a TCO reset.
   The frame re-anchor then landed in full: the free `&'run` scope fabrication at the read
-  boundary is deleted, a within-step frame lifetime `'s` (`'a: 's`) threads
+  boundary is deleted, a within-step frame lifetime `'step` (`'a: 'step`) threads
   `run_dispatch`/`SchedulerView`/`BuiltinFn`, and a slot's scope is now read on demand via
   [`Scheduler::current_scope`](../src/machine/execute/run_loop.rs) through the witness-bounded
   [`CallArena::scope_bounded`](../src/machine/core/arena.rs) brand (the post-step loop reads it
@@ -75,7 +75,7 @@ What's shipped that the open items below build on:
   (see [design/per-call-arena-protocol.md § Slot-table scope handle](../design/per-call-arena-protocol.md#slot-table-scope-handle)).
   See [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
 - *Per-node output lift.* A node continuation's output is bound to the per-step frame
-  lifetime `'s` ([`Outcome<'s>`](../src/machine/execute/outcome.rs)), not `'run`. The
+  lifetime `'step` ([`Outcome<'step>`](../src/machine/execute/outcome.rs)), not `'run`. The
   producer keeps its terminal in its own frame (the slot's `Done` co-stores the backing
   `Rc<CallArena>`, so frame death moves Done→free) and does not lift; each consumer
   pull-lifts its deps into its own arena at read ([`run_step`](../src/machine/execute/run_loop.rs))
@@ -88,8 +88,8 @@ What's shipped that the open items below build on:
   value, scope, memory, or AST type, with the Koan driver in
   [`execute::run_loop`](../src/machine/execute/run_loop.rs). The value-movement re-anchors on this
   path are now node-scale, not `'run`: `NodeFinalize::finalize_terminal` is single-lifetime
-  (`'o -> 'o`), a `Done` terminal is finalized at its step lifetime `'s` *within* the producing step
-  (`NodeStep<'s>`; `run_step` owns the step start to finish — enter, run, finalize — over the cart clone that witnesses `'s`),
+  (`'o -> 'o`), a `Done` terminal is finalized at its step lifetime `'step` *within* the producing step
+  (`NodeStep<'step>`; `run_step` owns the step start to finish — enter, run, finalize — over the cart clone that witnesses `'step`),
   and the consumer-pull / `Outcome::Forward` lift re-anchors through [`read_lifted`](../src/machine/execute/runtime.rs)
   into the consumer scope arena — so `pin_carried_to_run` survives only for the genuine run-global
   root drain. The dispatch decide surface then collapsed onto that single cart-scale lifetime:
@@ -252,6 +252,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
+- [Split dispatch's `'run` into AST `'ast` and cart `'step`](refactor/dispatch-ast-step-lifetime-split.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
@@ -333,6 +334,9 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
+- [Split dispatch's `'run` into AST `'ast` and cart `'step`](refactor/dispatch-ast-step-lifetime-split.md) —
+  finish the cart-lifetime rename on dispatch call sites: a decide function names `'run` for both the
+  long-lived AST and cart-scale values; split into `'ast: 'step` so the cart-to-run over-approximation goes.
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md) —
   collapse `ElabResult` / `ResolveTypeExprOutcome` / `TypeLeafCarrier` into one generic
   `ResolveOutcome<T>` with a `map_done` lift.

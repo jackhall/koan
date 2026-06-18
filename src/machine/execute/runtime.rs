@@ -365,11 +365,11 @@ impl<'run> KoanRuntime<'run> {
     /// Interpret an [`Outcome`] into the scheduler effect it names and return the slot's
     /// [`NodeStep`]. This is the sole graph writer the dispatch side reaches — a decide handler
     /// never holds `&mut Scheduler`.
-    pub(in crate::machine::execute) fn apply_outcome<'s>(
+    pub(in crate::machine::execute) fn apply_outcome<'step>(
         &mut self,
-        outcome: Outcome<'s>,
+        outcome: Outcome<'step>,
         idx: usize,
-    ) -> NodeStep<'s> {
+    ) -> NodeStep<'step> {
         match outcome {
             // The terminal stays at the step lifetime `'s` — the run loop's `run_step` finalizes it
             // into the slot store (erasing it) before the step's frame witness drops, so it never

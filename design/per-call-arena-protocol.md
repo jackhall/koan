@@ -75,7 +75,7 @@ sharing safe.
 ## Consumer-pull node-output lift
 
 A node continuation produces its value at the node's own per-call frame
-lifetime `'s` ([`Outcome<'s>`](../src/machine/execute/outcome.rs)), the
+lifetime `'step` ([`Outcome<'step>`](../src/machine/execute/outcome.rs)), the
 single cart-scale lifetime the decide surface carries: the value is born in the producer's frame (a builtin allocates
 it there) or arrives as a dep already lifted into that frame. The scheduler
 relocates it across each dep edge — never the producer.
@@ -85,7 +85,7 @@ relocates it across each dep edge — never the producer.
   co-stores the terminal with the backing `Rc<CallArena>`, pinning the
   producer frame until the slot is freed — frame death moves from Done to
   free. The stored `'run` view is re-exposed against that held `Rc` (the same
-  held-Rc seam as [§ Seed-side re-anchor](#seed-side-re-anchor)); honest `'s`
+  held-Rc seam as [§ Seed-side re-anchor](#seed-side-re-anchor)); honest `'step`
   typing rides the continuation in/out and the pull-lift destination, not
   storage. The single workload `NodeLift` hook
   ([`src/machine/execute/lift.rs`](../src/machine/execute/lift.rs)) owns the
@@ -405,8 +405,8 @@ run-scope methods (`dispatch_in_scope` / `dispatch_in_scope_with_chain` /
 The post-step loop in `Scheduler::execute` reads the just-finished step's scope through a
 `PostStep` token returned by `exit_slot_step`, derived from the slot's *returned* frame
 (`prev_frame`) rather than the ambient `active_frame` — an in-step invoke can swap the ambient
-frame, so the returned value is the authoritative source. A within-step frame lifetime `'s`
-(`'a: 's`) threads `classify_dispatch` → `SchedulerView` → `BuiltinFn` → the scheduler's write
+frame, so the returned value is the authoritative source. A within-step frame lifetime `'step`
+(`'a: 'step`) threads `classify_dispatch` → `SchedulerView` → `BuiltinFn` → the scheduler's write
 primitives, lifting to the run `'a` only at the `lift_kobject` Done boundary.
 
 ## Seed-side re-anchor

@@ -17,7 +17,7 @@
 //!
 //! [`ExecOutcome`] carries two, because the AST and the produced value genuinely differ: the
 //! dispatchable expressions are **borrowed** from the long-lived, immutable AST (`'ast`, which
-//! outlives the run), while a produced value lives in the call frame (`'frame`, which dies with
+//! outlives the run), while a produced value lives in the call frame (`'step`, which dies with
 //! the call). `KExpression`'s invariance blocks collapsing them. `exec` holds no lift handle, so
 //! it cannot move the value out of the frame; the scheduler lifts it at the done boundary.
 
@@ -46,9 +46,9 @@ pub struct ExecFrame {
 /// **exec → scheduler.** What running a body describes next, in `exec`'s native currency. Two
 /// lifetimes, because the AST and the produced value genuinely differ: the dispatchable
 /// expressions are **borrowed** from the long-lived, immutable AST (`'ast`), while a produced
-/// value lives in the call frame (`'frame`) until the scheduler lifts it. `KExpression`'s
+/// value lives in the call frame (`'step`) until the scheduler lifts it. `KExpression`'s
 /// invariance blocks collapsing the two.
-pub enum ExecOutcome<'ast, 'frame> {
+pub enum ExecOutcome<'ast, 'step> {
     /// The body failed; propagate the error.
     Errored(KError),
     /// Run the body as a flat sequence: dispatch each `leading` expression — the non-tail
@@ -59,7 +59,7 @@ pub enum ExecOutcome<'ast, 'frame> {
     Tail {
         leading: Vec<&'ast KExpression<'ast>>,
         tail: &'ast KExpression<'ast>,
-        ret: PerCallReturn<'frame>,
+        ret: PerCallReturn<'step>,
     },
     /// A deferred-`Expression` return on its **first** call: resolve `type_expr` (an async
     /// sub-dispatch — `Er.Carrier`, `sig WITH {…}`) as a single dep-finish dependency, run `leading` as
@@ -78,9 +78,9 @@ pub enum ExecOutcome<'ast, 'frame> {
 /// resolved synchronously carries the resolved `KType` (`Resolved` → `ReturnContract::PerCall`),
 /// so the body tail-replaces and the lift boundary checks + stamps against it — no dep-finish, TCO
 /// preserved.
-pub enum PerCallReturn<'frame> {
+pub enum PerCallReturn<'step> {
     FromSignature,
-    Resolved(KType<'frame>),
+    Resolved(KType<'step>),
 }
 
 /// The new `invoke` for a user-defined function: bind `args` into `ctx`'s scope (a frame/scope
@@ -96,12 +96,12 @@ pub enum PerCallReturn<'frame> {
 /// a first-call deferred `Expression` return, a `DeferredExprTail` (the type needs a sub-dispatch).
 /// `in_contract_chain` true means this is a subsequent tail call whose own contract keep-first would
 /// discard, so it skips resolving its return type. Body statements are **borrowed** (`'ast`).
-pub fn run_user_fn<'ast, 'frame>(
+pub fn run_user_fn<'ast, 'step>(
     func: &'ast KFunction<'ast>,
-    args: Record<Carried<'frame>>,
+    args: Record<Carried<'step>>,
     ctx: &ExecFrame,
     in_contract_chain: bool,
-) -> ExecOutcome<'ast, 'frame> {
+) -> ExecOutcome<'ast, 'step> {
     // Materialize the bound args as a record value **in the frame**, then bind each parameter to a
     // reference into the record's cell — one deep-clone per field (`Carried` → owned `Held`), and
     // the record carries its per-field type record. The record's cells double as the parameter

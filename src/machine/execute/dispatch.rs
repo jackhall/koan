@@ -380,7 +380,7 @@ pub(super) fn stage_all_eager_parts<'run>(
 /// the decide its park captured (a bare leaf, an evolving `working_expr`). Boxing keeps the router
 /// blind to which family it is — every `Wait` wakes through `run_step` uniformly.
 pub(in crate::machine::execute) type ResumeFn<'run> =
-    Box<dyn for<'v> FnOnce(&SchedulerView<'run, 'v>, usize) -> Outcome<'run> + 'run>;
+    Box<dyn for<'view> FnOnce(&SchedulerView<'run, 'view>, usize) -> Outcome<'run> + 'run>;
 
 // ---------- Cross-shape driver ----------
 

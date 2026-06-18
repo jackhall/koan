@@ -34,12 +34,12 @@ use super::runtime::KoanWorkload;
 // frame/contract/chain tail-call payload), mirroring `NodeStep::Replace`; boxing the hot
 // continuation path to balance variants is the wrong trade.
 #[allow(clippy::large_enum_variant)]
-pub(in crate::machine::execute) enum Outcome<'s> {
+pub(in crate::machine::execute) enum Outcome<'step> {
     /// The node dies with a value or an error. The value is bound to the per-step cart lifetime
-    /// `'s` — the decide-surface lifetime — born in the node's own per-call frame (a builtin
+    /// `'step` — the decide-surface lifetime — born in the node's own per-call frame (a builtin
     /// allocates it there, a forwarded dep arrives already lifted into it) and relocated across each
     /// dep edge by the consumer-pull lift into the consuming node's frame.
-    Done(Result<Carried<'s>, KError>),
+    Done(Result<Carried<'step>, KError>),
     /// The node lives: install `work` and run again immediately (no park). `frame` rotates the
     /// per-call cart (`Inherit` keeps it; `ReuseReserve`/`FreshChild` install a new one — the
     /// harness resolves the placement to a cart); `contract` / `block_entry` / `body_index` carry
@@ -50,8 +50,8 @@ pub(in crate::machine::execute) enum Outcome<'s> {
     /// reuse. `body_index` already accounts for their count.
     Continue {
         work: NodeWork<KoanWorkload>,
-        frame: FramePlacement<'s>,
-        contract: Option<ReturnContract<'s>>,
+        frame: FramePlacement<'step>,
+        contract: Option<ReturnContract<'step>>,
         block_entry: Option<ScopeId>,
         body_index: usize,
     },
@@ -62,9 +62,9 @@ pub(in crate::machine::execute) enum Outcome<'s> {
     /// `dep_error_frame` is attached to a dep-error short-circuit (dep-finish-style) before the
     /// finish runs.
     ParkThenContinue {
-        deps: Vec<DepRequest<'s>>,
+        deps: Vec<DepRequest<'step>>,
         park_count: usize,
-        cont: Continuation<'s>,
+        cont: Continuation<'step>,
         dep_error_frame: Option<TraceFrame>,
     },
     /// The slot's result *is* `producer`'s result (a bare name resolving to a binding). Rather than
@@ -117,7 +117,7 @@ pub(in crate::machine::execute) enum Continuation<'run> {
 /// decides against a read-only [`SchedulerView`] and returns an [`Outcome`] the harness applies —
 /// it issues no graph write of its own.
 pub(in crate::machine::execute) type DepFinish<'a> =
-    Box<dyn for<'v> FnOnce(&SchedulerView<'a, 'v>, &[Carried<'a>]) -> Outcome<'a> + 'a>;
+    Box<dyn for<'view> FnOnce(&SchedulerView<'a, 'view>, &[Carried<'a>]) -> Outcome<'a> + 'a>;
 
 /// The error-frame label a dep-finish attaches when a dependency errors — an action-harness combine
 /// (a fanned-out FN arg / arm body) or a literal builder (a list element / dict value). A dispatch
@@ -130,7 +130,7 @@ pub(in crate::machine::execute) fn dep_error_frame() -> TraceFrame {
 /// Host-side closure for a catch [`NodeWork`](super::nodes::NodeWork). Receives the watched slot's terminal as a
 /// `Result` so the closure can branch on either outcome, plus a read-only [`SchedulerView`].
 pub(in crate::machine::execute) type CatchFinish<'a> = Box<
-    dyn for<'v> FnOnce(&SchedulerView<'a, 'v>, Result<&'a KObject<'a>, KError>) -> Outcome<'a>
+    dyn for<'view> FnOnce(&SchedulerView<'a, 'view>, Result<&'a KObject<'a>, KError>) -> Outcome<'a>
         + 'a,
 >;
 
@@ -141,7 +141,7 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
 /// applies. The per-family behaviors (combine short-circuit, catch recover, dispatch decide) are
 /// built into the closure by the combinators below, so the node itself never branches.
 pub(in crate::machine::execute) type NodeCont<'a> = Box<
-    dyn for<'v> FnOnce(&SchedulerView<'a, 'v>, &[Result<Carried<'a>, KError>], usize) -> Outcome<'a>
+    dyn for<'view> FnOnce(&SchedulerView<'a, 'view>, &[Result<Carried<'a>, KError>], usize) -> Outcome<'a>
         + 'a,
 >;
 
@@ -208,7 +208,7 @@ pub(in crate::machine::execute) fn ignore_results<'a>(resume: ResumeFn<'a>) -> N
     Box::new(move |view, _results, idx| resume(view, idx))
 }
 
-/// Reattach a step-bound `'s` terminal up to `'run` for storage in the slot table. The value is
+/// Reattach a step-bound `'step` terminal up to `'run` for storage in the slot table. The value is
 /// born in the producer's per-call frame (or is genuinely `'run`-lived), and the harness pins that
 /// frame's `Rc` alongside the terminal in the scheduler's finalized-slot state until the slot is
 /// freed, so the stored `'run` view cannot outlive its backing arena. The reattach is needed only
@@ -219,13 +219,13 @@ pub(in crate::machine::execute) fn pin_carried_to_run<'run>(value: Carried<'_>) 
     unsafe { reattach_value::<CarriedFamily>(value) }
 }
 
-/// Reattach the consumer's pull-lifted dep terminals to the cart-scale lifetime `'s` the
+/// Reattach the consumer's pull-lifted dep terminals to the cart-scale lifetime `'step` the
 /// continuation runs at. Each value was just copied into this consumer's per-call frame and dies
 /// with it; the reattach is needed only because `Carried` is invariant, so a lifetime-only re-anchor
 /// to the lifetime the cart `Rc` witnesses is sound.
-pub(in crate::machine::execute) fn deps_at_step<'b, 'run, 's>(
+pub(in crate::machine::execute) fn deps_at_step<'b, 'run, 'step>(
     results: &'b [Result<Carried<'run>, KError>],
-) -> &'b [Result<Carried<'s>, KError>] {
+) -> &'b [Result<Carried<'step>, KError>] {
     // SAFETY: lifetime-only reattach of an invariant carrier to the cart-witnessed lifetime the
     // values genuinely live at (they die with the consumer frame). See the doc comment.
     unsafe { reattach_slice::<ResultCarriedFamily>(results) }

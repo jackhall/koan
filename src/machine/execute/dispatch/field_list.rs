@@ -177,8 +177,8 @@ pub(crate) fn defer_field_list_action<'a>(
 /// value/type position declares no binder, so the elaborator threads no self-reference; a
 /// field naming a forward type parks and a sigil field type sub-dispatches, both deferred
 /// through one dep-finish (the field walker's own re-walk handles nested records).
-pub(crate) fn elaborate_record_value<'run, 's>(
-    view: &SchedulerView<'run, 's>,
+pub(crate) fn elaborate_record_value<'run, 'view>(
+    view: &SchedulerView<'run, 'view>,
     fields: KExpression<'run>,
     chain: Option<Rc<LexicalFrame>>,
 ) -> Outcome<'run> {

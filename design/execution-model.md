@@ -72,8 +72,8 @@ it decides against a read-only view, *returns* the scheduler mutations it wants 
 data, and a single harness method applies them. The three pieces:
 
 - **The read view** —
-  [`SchedulerView<'run, 's>`](../src/machine/execute/dispatch/ctx.rs) wraps
-  `&'s Scheduler<KoanWorkload>` (never `&mut`) together with the driver's per-step
+  [`SchedulerView<'step, 'view>`](../src/machine/execute/dispatch/ctx.rs) wraps
+  `&'view Scheduler<KoanWorkload>` (never `&mut`) together with the driver's per-step
   ambient context. It exposes only the reads a decide needs: the
   static-over-the-step ones (`current_scope`, `chain_deref`, `in_contract_chain`,
   `build_bare_outcomes`) and the live reads of *pre-existing* producers
@@ -83,13 +83,13 @@ data, and a single harness method applies them. The three pieces:
   modules (`keyworded`, `fn_value`, `single_poll`) never name scheduler fields
   directly.
 - **The effect** —
-  [`Outcome<'s>`](../src/machine/execute/outcome.rs) is the one currency
+  [`Outcome<'step>`](../src/machine/execute/outcome.rs) is the one currency
   every producer and finish returns (the dispatch-side peer of the builtin
   [`Action`](../src/machine/core/kfunction/action.rs)). It is AST-free — no
-  variant names a `KFunction` or a `KExpression`. Its single lifetime `'s` is the
+  variant names a `KFunction` or a `KExpression`. Its single lifetime `'step` is the
   per-step cart-scale frame lifetime the `Done` value is born at; the consumer pull-lifts it
   across each dep edge ([per-call-arena-protocol.md § Consumer-pull node-output lift](per-call-arena-protocol.md#consumer-pull-node-output-lift)).
-  Four variants: `Done` (the node's terminal value at `'s`, or an
+  Four variants: `Done` (the node's terminal value at `'step`, or an
   error), `Continue` (replace this slot's work and frame,
   re-run, no park), `ParkThenContinue` (park on deps, then run a
   [`Continuation`](../src/machine/execute/outcome.rs) that yields another
