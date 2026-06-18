@@ -21,7 +21,7 @@
 //! `'static` store through [`ScopePtr::erase_static`], a brand-dropping constructor that is *safe*
 //! to call (forgetting a lifetime cannot fabricate one); the fabrication hazard is deferred to the
 //! `unsafe` re-attach, witnessed by the carrier's pinning — the frame `Rc` (which, for a
-//! `YokedChild`, pins the ancestor arena via its `outer_frame` chain). The carriers that own a real `'a` — `Module`, `Signature`,
+//! `YokedChild`, pins the ancestor arena via its `FrameStorage.outer` chain). The carriers that own a real `'a` — `Module`, `Signature`,
 //! `KFunction` — route the safe [`ScopePtr::reattach`] and carry no `unsafe`.
 //!
 //! See [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)

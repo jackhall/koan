@@ -108,7 +108,7 @@ pub(crate) fn defer_field_list<'step>(
     Outcome::ParkThenContinue {
         deps,
         park_count,
-        cont: Continuation::Finish(finish),
+        continuation: Continuation::Finish(finish),
         dep_error_frame: Some(dep_error_frame()),
     }
 }

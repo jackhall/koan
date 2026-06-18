@@ -1,24 +1,25 @@
-//! Generic run-lifetime storage substrate. Owns the erase-store machinery (the irreducible
-//! `unsafe`), the cycle-redirect `escape` pointer, and an address membership side-table — and
-//! names no workload type. A [`StorageProfile`] injects its storage families via [`Stored`]; the single
-//! [`StorageFrame::alloc`] engine runs the cycle gate uniformly. The gate is unbypassable because
-//! [`StorageFrame::storage`] is private and `alloc` is the only path that reaches it — no `&Arena`
-//! ever escapes, so no `Stored` impl can route a value around the redirect.
+//! Generic run-lifetime storage substrate. Owns the cycle-redirect `escape` pointer and an address
+//! membership side-table, and routes its store-side lifetime-erasure through the scheduler's single
+//! audited [`erase_to_static`](crate::scheduler) primitive — it names no workload type. A
+//! [`StorageProfile`] injects its storage families via [`Stored`]; the single [`StorageFrame::alloc`]
+//! engine runs the cycle gate uniformly. The gate is unbypassable because [`StorageFrame::storage`]
+//! is private and `alloc` is the only path that reaches it — no `&Arena` ever escapes, so no `Stored`
+//! impl can route a value around the redirect.
 //!
 //! The Koan instantiation (`RuntimeArena = StorageFrame<KoanStorageProfile>`, the family `Stored` impls,
 //! the cycle-gate walkers) lives in [`super::arena`]. See
 //! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
-//! for the transmute soundness argument and
+//! for the lifetime-erasure soundness argument and
 //! [per-call-arena-protocol.md § Cycle gate](../../../design/per-call-arena-protocol.md#cycle-gate-on-alloc_object)
 //! for the redirect `alloc` enforces.
 
 use std::cell::RefCell;
-use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
 
 use typed_arena::Arena;
 
 use super::reattach::pin_deref;
+use crate::scheduler::{erase_to_static, Reattachable};
 
 /// A workload's declaration of what a [`StorageFrame`] stores for it. `Storage` is the bundle of
 /// typed sub-arenas the frame owns; the workload's [`Stored`] impls project each family out of it.
@@ -26,20 +27,18 @@ pub trait StorageProfile {
     type Storage: Default;
 }
 
-/// Per-family storage policy, implemented by the workload. Keyed on the stored type's `'static`
-/// form (`At<'static> == Self`); a live value enters the engine as `At<'a>`. One trait carries
-/// every storage-safety answer for a family — which sub-arena it lands in, whether it would
-/// self-cycle, and any post-store side effect — so [`StorageFrame::alloc`] reasons about the
-/// gate-erase-store sequence once instead of forking it per type.
+/// Per-family storage policy, implemented by the workload. The lifetime family itself comes from the
+/// [`Reattachable`] supertrait — the same single-lifetime GAT (`At<'static> == Self`) the scheduler's
+/// erase/reattach discipline routes — so the store-side erasure here and the read-side re-anchor in
+/// the scheduler share one audited primitive instead of each carrying its own transmute. A live value
+/// enters the engine as `At<'a>`. One trait carries every storage-safety answer for a family — which
+/// sub-arena it lands in, whether it would self-cycle, and any post-store side effect — so
+/// [`StorageFrame::alloc`] reasons about the gate-erase-store sequence once instead of forking it per type.
 ///
 /// Not sealed: this is the workload's extension point. Unbypassability comes from elsewhere — the
 /// engine is the only path to the private [`StorageFrame::storage`], so an impl can supply policy
 /// but cannot route a value around the cycle gate.
-pub trait Stored<W: StorageProfile>: Sized + 'static {
-    /// The lifetime family of the stored type. `At<'static>` is `Self`. Because the engine keys on
-    /// the `'static` form, the live and stored forms are both projections of this one GAT and
-    /// cannot name different constructors — a wrong binding fails to compile in the safe wrapper.
-    type At<'a>;
+pub trait Stored<W: StorageProfile>: Reattachable + Sized + 'static {
     /// Project this family's sub-arena out of the workload storage bundle. This return type is the
     /// binding chokepoint: storing `At<'static>` into `Arena<Self::At<'static>>` only type-checks
     /// when the family is wired to the matching sub-arena.
@@ -52,25 +51,6 @@ pub trait Stored<W: StorageProfile>: Sized + 'static {
     /// redirect). Default no-op; a family overrides it to record the stored address for
     /// [`StorageFrame::owns_addr`] membership queries.
     fn record_local(_frame: &StorageFrame<W>, _stored: &Self::At<'static>) {}
-}
-
-/// Lifetime-erase a stored value's live form to its `'static` form by moving it through a union. A
-/// generic `mem::transmute::<K::At<'a>, K::At<'static>>` will not compile — the compiler cannot
-/// prove the two GAT projections share a size — so the move-through-union form stands in, with a
-/// `const` assert restoring the size check `transmute` would emit.
-fn erase_store<'a, W: StorageProfile, K: Stored<W>>(value: K::At<'a>) -> K::At<'static> {
-    const { assert!(size_of::<K::At<'a>>() == size_of::<K::At<'static>>()) };
-    union Erase<A, B> {
-        live: ManuallyDrop<A>,
-        stored: ManuallyDrop<B>,
-    }
-    let e = Erase::<K::At<'a>, K::At<'static>> {
-        live: ManuallyDrop::new(value),
-    };
-    // SAFETY: `At<'a>` and `At<'static>` share layout — a lifetime never changes a type's size or
-    // representation. The value is moved into the union once and exactly one `ManuallyDrop` field
-    // is read out, so a single drop runs (no leak, no double-free).
-    ManuallyDrop::into_inner(unsafe { std::ptr::read(&e.stored) })
 }
 
 /// Run-lifetime allocation frame. Lives for one program run (or one per-call frame). Sub-arenas
@@ -145,7 +125,7 @@ impl<W: StorageProfile> StorageFrame<W> {
             }
         }
         let stored: &'a mut K::At<'static> =
-            K::sub_arena(&self.storage).alloc(erase_store::<W, K>(value));
+            K::sub_arena(&self.storage).alloc(erase_to_static::<K>(value));
         let p: *const K::At<'static> = stored;
         // The post-store hook fires on the final storing frame (this one, after any redirect
         // above), so a recorded address tracks its true owner.

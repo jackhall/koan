@@ -105,11 +105,11 @@ pub fn run_user_fn<'ast, 'step>(
     // Materialize the bound args as a record value **in the frame**, then bind each parameter to a
     // reference into the record's cell — one deep-clone per field (`Carried` → owned `Held`), and
     // the record carries its per-field type record. The record's cells double as the parameter
-    // bindings (scope bindings store `&KObject`). Concentrated in `with_anchored_child` so the seed
+    // bindings (scope bindings store `&KObject`). Concentrated in `with_frame_interior` so the seed
     // fabricates no `&'a`.
     let bind = ctx
         .arena
-        .with_anchored_child(|inner_arena, child| -> Result<(), KError> {
+        .with_frame_interior(|inner_arena, child| -> Result<(), KError> {
             let cells: Record<Held> = args.map(|carried| Held::from_carried(*carried));
             let args_record = inner_arena.alloc_object(KObject::record_of_held(cells));
             if let KObject::Record(cells, _types) = args_record {
@@ -167,7 +167,7 @@ pub fn run_user_fn<'ast, 'step>(
                 // `TypeExpr` form (`-> Er`): elaborate it inline against the per-call (param-bound)
                 // child scope and carry the resolved type on the tail-replace.
                 DeferredReturn::TypeExpr(type_expr) => {
-                    let return_type = ctx.arena.with_anchored_child(|_inner_arena, child| {
+                    let return_type = ctx.arena.with_frame_interior(|_inner_arena, child| {
                         let mut elaborator = Elaborator::new(child);
                         match elaborate_type_expr(&mut elaborator, type_expr) {
                             ElabResult::Done(kt) => kt,

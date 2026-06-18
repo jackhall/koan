@@ -16,20 +16,23 @@ fn kfunction_with_existing_anchor_preserves_it() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallArena::new(scope, None);
     let other = CallArena::new(scope, None);
+    // The anchor pins the frame's `FrameStorage`, not the shell, so the counts track storage.
+    let other_storage = other.storage_rc();
+    let dying_storage = dying.storage_rc();
     let kf_ref = alloc_local_kf(&dying);
 
-    let pre_anchored = KObject::KFunction(kf_ref, Some(Rc::clone(&other)));
-    let other_before = Rc::strong_count(&other);
-    let dying_before = Rc::strong_count(&dying);
+    let pre_anchored = KObject::KFunction(kf_ref, Some(Rc::clone(&other_storage)));
+    let other_before = Rc::strong_count(&other_storage);
+    let dying_before = Rc::strong_count(&dying_storage);
 
     let lifted = lift_kobject(&pre_anchored, &dying);
-    let other_after = Rc::strong_count(&other);
-    let dying_after = Rc::strong_count(&dying);
+    let other_after = Rc::strong_count(&other_storage);
+    let dying_after = Rc::strong_count(&dying_storage);
     match lifted {
         KObject::KFunction(_, frame) => {
             let f = frame.expect("pre-anchored frame must persist");
             assert!(
-                Rc::ptr_eq(&f, &other),
+                Rc::ptr_eq(&f, &other_storage),
                 "must reuse existing anchor, not re-derive"
             );
         }
@@ -38,11 +41,11 @@ fn kfunction_with_existing_anchor_preserves_it() {
     assert_eq!(
         other_after,
         other_before + 1,
-        "preserved anchor clones the existing Rc once",
+        "preserved anchor clones the existing storage Rc once",
     );
     assert_eq!(
         dying_after, dying_before,
-        "preserved anchor must not also touch the dying frame's Rc",
+        "preserved anchor must not also touch the dying frame's storage Rc",
     );
 }
 
@@ -72,10 +75,10 @@ fn kfunction_with_foreign_runtime_does_not_anchor() {
     );
     let foreign_ref: &KFunction = arena.alloc_function(foreign);
     let obj = KObject::KFunction(foreign_ref, None);
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_kobject(&obj, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match lifted {
         KObject::KFunction(_, frame) => assert!(
             frame.is_none(),
@@ -102,10 +105,10 @@ fn kmodule_with_local_child_scope_anchors() {
         module: m_ref,
         frame: None,
     };
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_ktype(&obj, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match lifted {
         KType::Module { module: _, frame } => assert!(
             frame.is_some(),
@@ -132,10 +135,10 @@ fn kmodule_with_foreign_child_scope_does_not_anchor() {
         module: m_ref,
         frame: None,
     };
-    let before = Rc::strong_count(&dying);
+    let before = Rc::strong_count(&dying.storage_rc());
 
     let lifted = lift_ktype(&obj, &dying);
-    let count_after = Rc::strong_count(&dying);
+    let count_after = Rc::strong_count(&dying.storage_rc());
     match lifted {
         KType::Module { module: _, frame } => assert!(frame.is_none()),
         other => panic!("expected KModule, got {}", other.name()),
@@ -152,21 +155,22 @@ fn kmodule_with_existing_anchor_preserves_it() {
     let dying = CallArena::new(scope, None);
     defeat_fast_path(&dying);
     let other = CallArena::new(scope, None);
+    let other_storage = other.storage_rc();
 
     let module = Module::new("Pre".into(), dying.scope());
     let m_ref: &Module = dying.arena().alloc_module(module);
     let obj = KType::Module {
         module: m_ref,
-        frame: Some(Rc::clone(&other)),
+        frame: Some(Rc::clone(&other_storage)),
     };
-    let other_before = Rc::strong_count(&other);
+    let other_before = Rc::strong_count(&other_storage);
 
     let lifted = lift_ktype(&obj, &dying);
-    let other_after = Rc::strong_count(&other);
+    let other_after = Rc::strong_count(&other_storage);
     match lifted {
         KType::Module { module: _, frame } => {
             let f = frame.expect("pre-anchored frame persists");
-            assert!(Rc::ptr_eq(&f, &other));
+            assert!(Rc::ptr_eq(&f, &other_storage));
         }
         other => panic!("expected KModule, got {}", other.name()),
     }

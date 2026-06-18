@@ -11,7 +11,7 @@
 use super::super::nodes::NodeWork;
 use super::super::outcome::{dep_error_frame, Continuation, Outcome};
 use super::super::runtime::KoanWorkload;
-use super::super::{ignore_results, DepFinish, ErasedCont};
+use super::super::{ignore_results, DepFinish};
 use super::DepRequest;
 use super::SchedulerView;
 use crate::machine::core::kfunction::action::FramePlacement;
@@ -58,9 +58,9 @@ fn invoke_work<'step>(
     NodeWork::new(
         Vec::new(),
         0,
-        ErasedCont::erase(ignore_results(Box::new(move |view, _idx| {
+        ignore_results(Box::new(move |view, _idx| {
             invoke(view, picked, working_expr)
-        }))),
+        })),
         Some(carrier),
     )
 }
@@ -178,7 +178,7 @@ pub(super) fn invoke<'step>(
             Outcome::ParkThenContinue {
                 deps: vec![DepRequest::BodyBlock { frame, statements }],
                 park_count: 0,
-                cont: Continuation::Finish(finish),
+                continuation: Continuation::Finish(finish),
                 dep_error_frame: Some(dep_error_frame()),
             }
         }
@@ -241,7 +241,7 @@ pub(super) fn invoke<'step>(
             Outcome::ParkThenContinue {
                 deps: vec![DepRequest::BodyBlock { frame, statements }],
                 park_count: 0,
-                cont: Continuation::Finish(finish),
+                continuation: Continuation::Finish(finish),
                 dep_error_frame: Some(dep_error_frame()),
             }
         }

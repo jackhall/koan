@@ -66,7 +66,7 @@ pub(super) fn lift_kobject<'run>(v: &KObject<'run>, dying_frame: &Rc<CallArena>)
                 let dying_runtime: *const RuntimeArena = dying_frame.arena();
                 let captured_runtime: *const RuntimeArena = f.captured_scope().arena;
                 if std::ptr::eq(captured_runtime, dying_runtime) {
-                    Some(Rc::clone(dying_frame))
+                    Some(dying_frame.storage_rc())
                 } else {
                     None
                 }
@@ -77,7 +77,7 @@ pub(super) fn lift_kobject<'run>(v: &KObject<'run>, dying_frame: &Rc<CallArena>)
             let new_frame = if existing.is_some() {
                 existing.clone()
             } else if kfuture_borrows_dying_arena(t, dying_frame.arena()) {
-                Some(Rc::clone(dying_frame))
+                Some(dying_frame.storage_rc())
             } else {
                 None
             };
@@ -151,7 +151,7 @@ pub(super) fn lift_ktype<'run>(t: &KType<'run>, dying_frame: &Rc<CallArena>) -> 
                 let dying_runtime: *const RuntimeArena = dying_frame.arena();
                 let module_runtime: *const RuntimeArena = m.child_scope().arena;
                 if std::ptr::eq(module_runtime, dying_runtime) {
-                    Some(Rc::clone(dying_frame))
+                    Some(dying_frame.storage_rc())
                 } else {
                     None
                 }

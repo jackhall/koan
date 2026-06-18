@@ -55,10 +55,10 @@ What's shipped that the open items below build on:
   parameterized over the lifted carrier's `matches_value`/`matches_type` predicate).
 - *Arena unsafe consolidation.* Every captured/defining-scope re-attach is funnelled behind one
   [`ScopePtr`](../src/machine/core/scope_ptr.rs); `RuntimeArena::escape` is `NonNull`.
-  The store-side erasure lives behind one sealed `ArenaStored` trait: all six
-  arena-stored families route a single audited union-move `erase_store` and one gated
-  `alloc` engine, replacing the six per-type `T<'a> → T<'static>` transmute pairs with
-  one. The branded `ScopePtr<'a>` makes `Module::child_scope` and `Signature::decl_scope`
+  The store-side erasure lives behind one `Stored` trait: all arena-stored
+  families route the scheduler's single audited `erase_to_static` (the safe direction of the
+  one `retype` primitive the read-side re-anchor shares) and one gated `alloc` engine,
+  replacing the per-type `T<'a> → T<'static>` transmute pairs with one. The branded `ScopePtr<'a>` makes `Module::child_scope` and `Signature::decl_scope`
   safe re-attaches, concentrating the irreducible
   `'static → 'a` fabrication at the non-generic `CallArena` boundary.
   Honest slot storage landed for per-call frame scopes: a frame scope rides its slot as a
@@ -70,10 +70,18 @@ What's shipped that the open items below build on:
   [`Scheduler::current_scope`](../src/machine/execute/run_loop.rs) through the witness-bounded
   [`CallArena::scope_bounded`](../src/machine/core/arena.rs) brand (the post-step loop reads it
   through a `PostStep` token off the slot's returned frame). The sole surviving free re-exposure
-  is the arena half of [`CallArena::with_anchored_child`](../src/machine/core/arena.rs), the
+  is the arena half of [`CallArena::with_frame_interior`](../src/machine/core/arena.rs), the
   C0-irreducible seed bind, and `KFunction::captured` now rides a `BoundedScopePtr`
   (see [design/per-call-arena-protocol.md § Slot-table scope handle](../design/per-call-arena-protocol.md#slot-table-scope-handle)).
   See [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
+- *Shell-over-storage frame reuse.* `CallArena` is now a thin shell over a refcounted
+  [`FrameStorage`](../src/machine/core/arena.rs) (the per-call `RuntimeArena` plus the ancestor
+  `outer` chain). An escaping value (a returned closure, a functor-built module) pins only the
+  storage, leaving the shell uniquely owned so `try_reset_for_tail` reuses it across a tail
+  iteration instead of being foreclosed — only a live shell clone refuses. The four escape
+  shapes and the cycle-gate walkers carry `Rc<FrameStorage>`; cross-reset arena capture is
+  borrow-checker-enforced for safe code (no new unsafe). See
+  [design/per-call-arena-protocol.md § TCO frame reuse](../design/per-call-arena-protocol.md#tco-frame-reuse).
 - *Per-node output lift.* A node continuation's output is bound to the per-step frame
   lifetime `'step` ([`Outcome<'step>`](../src/machine/execute/outcome.rs)), not `'run`. The
   producer keeps its terminal in its own frame (the slot's `Done` co-stores the backing
@@ -106,13 +114,18 @@ What's shipped that the open items below build on:
   its erased node carrier to `'step`, so decide never holds a live `'ast` borrow. See
   [design/per-call-arena-protocol.md § Consumer-pull node-output lift](../design/per-call-arena-protocol.md#consumer-pull-node-output-lift).
 - *Unified erase/reattach carriers.* The hand-rolled erase-to-`'static` /
-  reattach carriers (`ScopePtr`, `ErasedContract`, `ErasedCont`, the scheduler's `Erased<W::Value>`)
+  reattach carriers (`ScopePtr`, the contract, the continuation, the scheduler's `Erased<W::Value>`)
   and the cluster of one-off `outcome.rs` reference reattaches now share one generic
   [`Erased<T>`](../src/scheduler/erase.rs) owner over an `unsafe trait Reattachable { type
   At<'r>; }` lifetime-family. A single `retype` primitive (a `ManuallyDrop` `transmute_copy`) is the
   only lifetime-retype site; each carrier is a declarative `unsafe impl Reattachable` beside its own
-  type (`ContractFamily`, `CarriedFamily`, `ContFamily`, `KObjectFamily`, `ScopeFamily`, …) with no
-  `transmute` of its own, and the liveness witness moves to the call site. See
+  type (`ContractFamily`, `CarriedFamily`, `ContinuationFamily`, `KObjectFamily`, `ScopeFamily`, …)
+  with no `transmute` of its own. The scheduler then took sole ownership of all three inter-node
+  carrier reattaches: the continuation and contract — like the value channel before them — are
+  stored `Erased` on the lifetime-free node and re-anchored only through
+  [`vend_carrier`](../src/scheduler/erase.rs), one safe-signature wrapper whose returned `'w` the
+  compiler bounds against a witness borrow `&Rc<W::Frame>` the driver passes, so the `run_loop.rs` /
+  `finalize.rs` call sites carry no `unsafe` of their own. See
   [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -258,6 +271,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
+- [FrameStorage self-reference via ouroboros](refactor/framestorage-ouroboros.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
@@ -351,3 +365,7 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
+- [FrameStorage self-reference via ouroboros](refactor/framestorage-ouroboros.md) — replace the
+  hand-rolled arena↔child-scope `pin_deref` / `ScopePtr::reattach_unbounded` loop with an
+  `ouroboros #[self_referencing]` struct so the self-reference is compiler-generated, not audited
+  `unsafe`.

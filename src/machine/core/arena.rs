@@ -2,14 +2,14 @@
 //! storage substrate: `RuntimeArena = StorageFrame<KoanStorageProfile>`, the per-family
 //! [`Stored`](super::storage_frame::Stored) impls (which sub-arena a family lands in, its cycle-gate
 //! `anchors_to` answer), the cycle-gate walkers, and the Koan-typed `alloc_*` wrappers. `CallArena`
-//! — the per-call frame that wraps a `RuntimeArena`, holds the child `Scope`, chains `outer_frame`,
-//! and resets in place for TCO — also lives here.
+//! — the per-call frame shell over a refcounted `FrameStorage` (the `RuntimeArena` plus the ancestor
+//! chain), holding the child `Scope` and resetting in place for TCO — also lives here.
 //!
 //! The generic erase-store engine and the cycle-redirect plumbing live in
 //! [`super::storage_frame`]; this file supplies the Koan policy it runs.
 //!
 //! See [per-call-arena-protocol.md](../../../design/per-call-arena-protocol.md) for the carrier
-//! set, lift-time anchor decision, cycle gate, `outer_frame` chain, and TCO frame reuse;
+//! set, lift-time anchor decision, cycle gate, ancestor chain, and TCO frame reuse;
 //! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
 
@@ -26,7 +26,7 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{Held, KObject, Module, Signature};
-use crate::scheduler::reattach_ref;
+use crate::scheduler::{reattach_ref, Reattachable};
 
 /// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
 /// family's `'static` form (phantom); the [`StorageFrame`] engine re-anchors to the caller's `'a`
@@ -55,11 +55,13 @@ impl StorageProfile for KoanStorageProfile {
 /// alias unchanged.
 pub type RuntimeArena = StorageFrame<KoanStorageProfile>;
 
-/// True iff any descendant of `obj` carries an `Rc<CallArena>` whose backing `RuntimeArena`
+/// True iff any descendant of `obj` carries an `Rc<FrameStorage>` whose backing `RuntimeArena`
 /// is `arena_ptr`. Walks the composite shapes mirrored from `KObject::deep_clone`
 /// (`List`/`Dict`/`Tagged`/`Struct`) plus `KFunction`/`KFuture` anchors.
-fn rc_targets(rc: &Rc<CallArena>, arena_ptr: *const RuntimeArena) -> bool {
-    std::ptr::eq(rc.arena() as *const RuntimeArena, arena_ptr)
+fn rc_targets(rc: &Rc<FrameStorage>, arena_ptr: *const RuntimeArena) -> bool {
+    // `rc.arena()` coerces `&RuntimeArena → *const` for the address compare — no explicit raw
+    // cast, so the borrow stays lifetime-bounded right up to the comparison.
+    std::ptr::eq(rc.arena(), arena_ptr)
 }
 
 fn obj_anchors_to(obj: &KObject<'_>, arena_ptr: *const RuntimeArena) -> bool {
@@ -93,13 +95,38 @@ fn ktype_anchors_to(t: &KType<'_>, arena_ptr: *const RuntimeArena) -> bool {
     }
 }
 
+// The lifetime family of each stored type, keyed on its `'static` form — the GAT the
+// `StorageFrame` engine erases to `'static` for storage and re-anchors to the caller's `'a` on read.
+// SAFETY: each family is one type generic only in a single lifetime, so its layout is identical for
+// every choice of that lifetime; `OperatorGroup` is lifetime-free, trivially invariant.
+unsafe impl Reattachable for KObject<'static> {
+    type At<'r> = KObject<'r>;
+}
+unsafe impl Reattachable for KType<'static> {
+    type At<'r> = KType<'r>;
+}
+unsafe impl Reattachable for KFunction<'static> {
+    type At<'r> = KFunction<'r>;
+}
+unsafe impl Reattachable for Scope<'static> {
+    type At<'r> = Scope<'r>;
+}
+unsafe impl Reattachable for Module<'static> {
+    type At<'r> = Module<'r>;
+}
+unsafe impl Reattachable for Signature<'static> {
+    type At<'r> = Signature<'r>;
+}
+unsafe impl Reattachable for OperatorGroup {
+    type At<'r> = OperatorGroup;
+}
+
 // Per-family `Stored` policy. `KObject` and `KType` answer `anchors_to` by walking their composite
-// tree; the families that cannot hold a self-targeting `Rc<CallArena>` declare `anchors_to => false`,
+// tree; the families that cannot hold a self-targeting `Rc<FrameStorage>` declare `anchors_to => false`,
 // so the cycle redirect is uniform across the whole allocation surface. `OperatorGroup` is
 // lifetime-free and anchor-free, but routes the same engine for one uniform path.
 
 impl Stored<KoanStorageProfile> for KObject<'static> {
-    type At<'a> = KObject<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<KObject<'static>> {
         &s.objects
     }
@@ -112,7 +139,6 @@ impl Stored<KoanStorageProfile> for KObject<'static> {
 }
 
 impl Stored<KoanStorageProfile> for KType<'static> {
-    type At<'a> = KType<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<KType<'static>> {
         &s.ktypes
     }
@@ -122,7 +148,6 @@ impl Stored<KoanStorageProfile> for KType<'static> {
 }
 
 impl Stored<KoanStorageProfile> for KFunction<'static> {
-    type At<'a> = KFunction<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<KFunction<'static>> {
         &s.functions
     }
@@ -132,7 +157,6 @@ impl Stored<KoanStorageProfile> for KFunction<'static> {
 }
 
 impl Stored<KoanStorageProfile> for Scope<'static> {
-    type At<'a> = Scope<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<Scope<'static>> {
         &s.scopes
     }
@@ -142,7 +166,6 @@ impl Stored<KoanStorageProfile> for Scope<'static> {
 }
 
 impl Stored<KoanStorageProfile> for Module<'static> {
-    type At<'a> = Module<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<Module<'static>> {
         &s.modules
     }
@@ -152,7 +175,6 @@ impl Stored<KoanStorageProfile> for Module<'static> {
 }
 
 impl Stored<KoanStorageProfile> for Signature<'static> {
-    type At<'a> = Signature<'a>;
     fn sub_arena(s: &KoanStorage) -> &Arena<Signature<'static>> {
         &s.signatures
     }
@@ -162,7 +184,6 @@ impl Stored<KoanStorageProfile> for Signature<'static> {
 }
 
 impl Stored<KoanStorageProfile> for OperatorGroup {
-    type At<'a> = OperatorGroup;
     fn sub_arena(s: &KoanStorage) -> &Arena<OperatorGroup> {
         &s.operator_groups
     }
@@ -255,18 +276,41 @@ impl StorageFrame<KoanStorageProfile> {
     }
 }
 
-/// One user-fn call's allocation frame. `Rc`-pinned so an escaping closure can extend
-/// the frame's life past slot finalize. Field order is load-bearing: `arena` drops before
-/// `outer_frame`, so inner pointers die before the outer storage they may reference.
+/// A frame's refcounted storage: the per-call `RuntimeArena` plus the `outer` link that keeps
+/// the lexical-ancestor frames' storage alive. An escaping value (a returned closure, a module
+/// frame) pins *this* — not the [`CallArena`] shell — so the shell stays uniquely owned and the
+/// scheduler can reuse it for the next tail iteration while the escapee's captured environment
+/// rides the old `FrameStorage` it still holds. Field order is load-bearing: `arena` drops
+/// before `outer`, so inner pointers die before the outer storage they may reference.
+pub struct FrameStorage {
+    arena: RuntimeArena,
+    /// Liveness pin only — held so the ancestor frames' storage outlives this child's `outer`
+    /// scope pointer, dropped (never read) when this storage drops. The drop *is* the use.
+    #[allow(dead_code)]
+    outer: Option<Rc<FrameStorage>>,
+}
+
+impl FrameStorage {
+    /// The backing `RuntimeArena`. Used for cycle-gate / lift identity comparisons by holders
+    /// that pin storage but never name a `CallArena`.
+    pub(crate) fn arena(&self) -> &RuntimeArena {
+        &self.arena
+    }
+}
+
+/// One user-fn call's allocation frame: a thin shell over a refcounted [`FrameStorage`]. `Rc`-pinned
+/// so the scheduler manages the frame by `Rc<CallArena>`; an escaping closure extends only the
+/// *storage* (via [`Self::storage_rc`]), not the shell, so tail reuse can reset the shell's storage
+/// without foreclosing on the escapee. Field order is load-bearing: `storage` drops before
+/// `scope_ptr`, so the arena tears down before the now-dangling child pointer.
 ///
 /// See [per-call-arena-protocol.md](../../../design/per-call-arena-protocol.md) for the
-/// carrier set, lift-time anchor decision, cycle gate, `outer_frame` chain, and TCO
+/// carrier set, lift-time anchor decision, cycle gate, ancestor chain, and TCO
 /// frame reuse; [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
 /// for the heap-pinning / drop-order invariants.
 pub struct CallArena {
-    arena: RuntimeArena,
+    storage: Rc<FrameStorage>,
     scope_ptr: Option<ScopePtr<'static>>,
-    outer_frame: Option<Rc<CallArena>>,
     /// True only for the scheduler-owned run frame, which carries the top-level run scope and
     /// never drops mid-run. Its `arena` is empty (top-level values live in the externally-owned
     /// run arena, reached via `scope.arena`), so there is nothing to lift out of it: the Done
@@ -277,18 +321,18 @@ pub struct CallArena {
 
 impl CallArena {
     /// Build a fresh per-call frame whose child `Scope` uses `outer` as its `outer` link.
-    /// `outer_frame` must hold the parent's Rc when the parent is per-call; `None` when
-    /// the parent is run-root.
-    pub fn new(outer: &Scope<'_>, outer_frame: Option<Rc<CallArena>>) -> Rc<CallArena> {
+    /// `outer_frame` must hold the parent frame's `FrameStorage` Rc when the parent is per-call;
+    /// `None` when the parent is run-root.
+    pub fn new(outer: &Scope<'_>, outer_frame: Option<Rc<FrameStorage>>) -> Rc<CallArena> {
         let escape = NonNull::from(outer.arena);
-        let mut rc = Rc::new(CallArena {
+        // The arena is born inside its own `Rc<FrameStorage>`, heap-pinned from this point on, so
+        // the child-scope pointer below stays valid as the storage Rc moves into the shell.
+        let storage = Rc::new(FrameStorage {
             arena: RuntimeArena::with_escape(escape),
-            scope_ptr: None,
-            outer_frame,
-            non_dying: false,
+            outer: outer_frame,
         });
-        let arena_ptr: *const RuntimeArena = &rc.arena;
-        // SAFETY: heap-pinning keeps `arena_ptr` valid for the Rc's lifetime, which exceeds
+        let arena_ptr: *const RuntimeArena = &storage.arena;
+        // SAFETY: heap-pinning keeps `arena_ptr` valid for the storage Rc's lifetime, which exceeds
         // this function's duration; `outer` lives long enough by caller contract.
         let arena_ref: &'static RuntimeArena = unsafe { pin_deref(arena_ptr) };
         // SAFETY: lexical-scoping invariant — `outer` (the captured definition scope, or a
@@ -298,14 +342,15 @@ impl CallArena {
         let mut child = Scope::child_under(outer_static);
         // `child_under` defaults `arena` to `outer.arena`; override to the per-call arena.
         child.arena = arena_ref;
-        // `arena_ref` is `&'static` (the `unsafe { &*arena_ptr }` above is where the `'static`
-        // claim originates), so `alloc_scope` returns `&'static Scope<'static>` and the safe
-        // `erase` yields a `ScopePtr<'static>` — no fabrication here.
+        // `arena_ref` is `&'static` (the `pin_deref` above is where the `'static` claim
+        // originates), so `alloc_scope` returns `&'static Scope<'static>` and the safe `erase`
+        // yields a `ScopePtr<'static>` — no fabrication here.
         let allocated: &'static Scope<'static> = arena_ref.alloc_scope(child);
-        Rc::get_mut(&mut rc)
-            .expect("freshly-constructed Rc has unique ownership")
-            .scope_ptr = Some(ScopePtr::erase(allocated));
-        rc
+        Rc::new(CallArena {
+            storage,
+            scope_ptr: Some(ScopePtr::erase(allocated)),
+            non_dying: false,
+        })
     }
 
     /// The scheduler-owned **run frame**: a frame that *carries an already-built run scope*
@@ -322,9 +367,11 @@ impl CallArena {
     pub fn adopting(scope: &Scope<'_>) -> Rc<CallArena> {
         let scope_static: &'static Scope<'static> = unsafe { reattach_ref::<ScopeFamily>(scope) };
         Rc::new(CallArena {
-            arena: RuntimeArena::new(),
+            storage: Rc::new(FrameStorage {
+                arena: RuntimeArena::new(),
+                outer: None,
+            }),
             scope_ptr: Some(ScopePtr::erase(scope_static)),
-            outer_frame: None,
             non_dying: true,
         })
     }
@@ -368,7 +415,7 @@ impl CallArena {
     /// fabrication. Invariance in `'a` rides structurally on the returned `Scope<'a>` (`Scope` is
     /// invariant), so this ephemeral form needs no separate brand struct. Reached through the
     /// scheduler's workload-side scope re-anchor (`reattach_node_scope`, `Yoked` slots) and
-    /// [`Self::with_anchored_child`] (the seed binds).
+    /// [`Self::with_frame_interior`] (the seed binds).
     ///
     /// SAFETY: delegates to [`ScopePtr::reattach_bounded`]; the `&'step Rc<Self>` receiver pins
     /// the arena and child scope for all of `'step`, so the `'step`-bounded borrow cannot dangle.
@@ -398,25 +445,37 @@ impl CallArena {
     /// the `&Rc` receiver, content `'a` — so it is *not* fabricated free; `bind_value` matches on
     /// the `'a` content.
     ///
-    /// SAFETY (arena transmute): the caller holds this frame's `Rc`, which heap-pins the arena for
+    /// SAFETY (arena re-borrow): the caller holds this frame's `Rc`, which heap-pins the arena for
     /// as long as any value `f` binds into the scope lives.
-    pub fn with_anchored_child<'a, R>(
+    pub fn with_frame_interior<'a, R>(
         self: &Rc<Self>,
         f: impl FnOnce(&'a RuntimeArena, &Scope<'a>) -> R,
     ) -> R {
-        let arena: &'a RuntimeArena =
-            unsafe { std::mem::transmute::<&RuntimeArena, &'a RuntimeArena>(self.arena()) };
+        // SAFETY: the held frame `Rc` heap-pins the arena for all of `'a`, so re-borrowing the
+        // stable arena pointer at `'a` is sound. This is a pointer re-borrow, not a value retype, so
+        // it routes the audited `pin_deref` rather than a bespoke `transmute`. `'a` is driven by the
+        // closure's parameter type, not a turbofish argument.
+        let arena: &'a RuntimeArena = unsafe { pin_deref(self.arena() as *const RuntimeArena) };
         f(arena, self.scope_bounded())
     }
 
     pub fn arena(&self) -> &RuntimeArena {
-        &self.arena
+        &self.storage.arena
     }
 
-    /// Reset this frame in place for a tail-call iteration: drop the old arena storage,
-    /// install a fresh `RuntimeArena` escaping into `new_outer.arena`, re-allocate the
-    /// child `Scope` under `new_outer`. Returns `false` (untouched) when `Rc::get_mut`
-    /// fails — any other live `Rc` foreclosing in-place reuse. See
+    /// Clone this frame's `FrameStorage` Rc — the handle an escaping value (a returned closure, a
+    /// module frame) pins to keep its captured environment alive *without* pinning the shell, so
+    /// tail reuse stays free to reset the shell.
+    pub fn storage_rc(&self) -> Rc<FrameStorage> {
+        Rc::clone(&self.storage)
+    }
+
+    /// Reset this frame for a tail-call iteration: install a fresh `FrameStorage` (a new
+    /// `RuntimeArena` escaping into `new_outer.arena`, no `outer` link) and re-allocate the child
+    /// `Scope` under `new_outer`. The old `FrameStorage` is dropped here — and its arena with it —
+    /// *unless* an escaped value still holds it, in which case that snapshot lives on independently
+    /// while the shell reuses. Returns `false` (untouched) only when `Rc::get_mut` fails — another
+    /// live `Rc<CallArena>` (a shell clone, never an escape) foreclosing in-place reuse. See
     /// [per-call-arena-protocol.md § TCO frame reuse](../../../design/per-call-arena-protocol.md#tco-frame-reuse).
     pub fn try_reset_for_tail(self: &mut Rc<Self>, new_outer: &Scope<'_>) -> bool {
         if Rc::get_mut(self).is_none() {
@@ -426,19 +485,24 @@ impl CallArena {
         // SAFETY: lexical-scoping invariant — `new_outer.arena` outlives this frame
         // (it is the captured definition scope's arena, or a longer-lived ancestor).
         let outer_static: &Scope<'static> = unsafe { reattach_ref::<ScopeFamily>(new_outer) };
-        let this = Rc::get_mut(self).expect("just-verified unique above");
-        this.scope_ptr = None;
-        this.outer_frame = None;
-        this.arena = RuntimeArena::with_escape(escape);
-        let arena_ptr: *const RuntimeArena = &this.arena;
-        // SAFETY: heap-pinned via the `Rc` we hold; pointer is stable for the Rc's lifetime.
+        // Build the fresh storage and its child scope before touching the shell, so the
+        // arena pointer is heap-pinned by the new storage Rc when it lands in the shell.
+        let storage = Rc::new(FrameStorage {
+            arena: RuntimeArena::with_escape(escape),
+            outer: None,
+        });
+        let arena_ptr: *const RuntimeArena = &storage.arena;
+        // SAFETY: heap-pinned via the storage Rc; pointer is stable for its lifetime.
         let arena_ref: &'static RuntimeArena = unsafe { pin_deref(arena_ptr) };
         let mut child = Scope::child_under(outer_static);
         child.arena = arena_ref;
-        // `arena_ref` is `&'static` (the `unsafe { &*arena_ptr }` above is where the `'static`
-        // claim originates), so `alloc_scope` returns `&'static Scope<'static>` and the safe
-        // `erase` yields a `ScopePtr<'static>` — no fabrication here.
+        // `arena_ref` is `&'static` (the `pin_deref` above is where the `'static` claim
+        // originates), so `alloc_scope` returns `&'static Scope<'static>` and the safe `erase`
+        // yields a `ScopePtr<'static>` — no fabrication here.
         let allocated: &'static Scope<'static> = arena_ref.alloc_scope(child);
+        let this = Rc::get_mut(self).expect("just-verified unique above");
+        // Drops the old storage (and its arena) unless an escapee still holds it.
+        this.storage = storage;
         this.scope_ptr = Some(ScopePtr::erase(allocated));
         true
     }
@@ -518,14 +582,14 @@ mod tests {
         assert!(s1.outer().is_some());
     }
 
-    /// Two-deep chain: dropping the local `outer` handle leaves only `inner.outer_frame`
+    /// Two-deep chain: dropping the local `outer` handle leaves only `inner`'s `FrameStorage.outer`
     /// keeping the outer arena alive while we read through `inner.scope().outer`.
     #[test]
     fn call_arena_chained_outer_frame_walkable() {
         let arena = RuntimeArena::new();
         let run_scope = default_scope(&arena, Box::new(std::io::sink()));
         let outer = CallArena::new(run_scope, None);
-        let inner = CallArena::new(outer.scope(), Some(outer.clone()));
+        let inner = CallArena::new(outer.scope(), Some(outer.storage_rc()));
         drop(outer);
         let outer_scope = inner
             .scope()
@@ -605,10 +669,10 @@ mod tests {
         assert!(frame.scope().outer().is_some());
     }
 
-    /// `try_reset_for_tail` must refuse when any other `Rc` to this frame
-    /// exists (closure escape, sub-Dispatch clone, etc.). The escape-detection
-    /// gate keeps reuse semantically equivalent to drop-and-alloc; without it
-    /// a later tail step would mutate the captured arena under a live alias.
+    /// `try_reset_for_tail` refuses when another `Rc<CallArena>` *shell* clone exists — a
+    /// transient holder still naming the frame, for which in-place reset would mutate the shell
+    /// under a live alias. (An escaped value pins `FrameStorage`, not the shell — see
+    /// [`call_arena_try_reset_for_tail_allows_reset_under_escaped_storage`].)
     #[test]
     fn call_arena_try_reset_for_tail_refuses_when_aliased() {
         let outer_arena = RuntimeArena::new();
@@ -616,7 +680,7 @@ mod tests {
         let mut frame: Rc<CallArena> = CallArena::new(outer_scope, None);
         let pre_arena_addr = frame.arena() as *const RuntimeArena as usize;
 
-        // Simulate a closure escape: clone the Rc so strong_count > 1.
+        // A second shell holder (not an escape): clone the `Rc<CallArena>` so strong_count > 1.
         let _alias = Rc::clone(&frame);
 
         let did_reset = frame.try_reset_for_tail(outer_scope);
@@ -629,6 +693,43 @@ mod tests {
         );
     }
 
+    /// An escaped value pins the frame's `FrameStorage`, not its shell, so the shell stays uniquely
+    /// owned and `try_reset_for_tail` *succeeds*: the escapee's snapshot rides the `FrameStorage` it
+    /// still holds while the shell installs fresh storage. A gate keyed on the shell's `Rc` count
+    /// could not distinguish this from a live shell alias and would refuse it.
+    #[test]
+    fn call_arena_try_reset_for_tail_allows_reset_under_escaped_storage() {
+        let outer_arena = RuntimeArena::new();
+        let outer_scope = default_scope(&outer_arena, Box::new(std::io::sink()));
+        let mut frame: Rc<CallArena> = CallArena::new(outer_scope, None);
+        let _escaped = frame.arena().alloc_object(KObject::Number(7.0));
+        let pre_alloc_count = frame.arena().alloc_count();
+        let pre_storage_addr = frame.arena() as *const RuntimeArena as usize;
+
+        // Simulate a closure escape: hold the frame's storage Rc (what an anchored value carries).
+        let escaped_storage = frame.storage_rc();
+
+        let did_reset = frame.try_reset_for_tail(outer_scope);
+        assert!(
+            did_reset,
+            "an escaped *storage* hold must not foreclose reuse"
+        );
+
+        // The shell reset to a fresh arena, distinct from the snapshot the escapee still holds.
+        assert_ne!(
+            frame.arena() as *const RuntimeArena as usize,
+            pre_storage_addr,
+            "reuse installed fresh storage",
+        );
+        // The escaped snapshot is still alive (its retained storage Rc still owns the pre-reset
+        // arena, allocations intact) — the reset dropped only the shell's reference to it.
+        assert!(std::ptr::eq(
+            escaped_storage.arena() as *const RuntimeArena,
+            pre_storage_addr as *const RuntimeArena
+        ));
+        assert_eq!(escaped_storage.arena().alloc_count(), pre_alloc_count);
+    }
+
     /// Cycle gate: alloc'ing a value that anchors back at the receiving arena via an
     /// `Rc<CallArena>` redirects to the escape arena. Without the redirect the per-call
     /// arena's storage would hold an Rc to itself and never drop.
@@ -638,7 +739,7 @@ mod tests {
         let scope = default_scope(&outer, Box::new(std::io::sink()));
         let frame: Rc<CallArena> = CallArena::new(scope, None);
         // Build a List whose only element is a `KFunction` carrying an
-        // `Rc<CallArena>` pointing at `frame.arena()`. The cycle gate only inspects the
+        // `Rc<FrameStorage>` pointing at `frame.arena()`. The cycle gate only inspects the
         // carried `Rc`, so the placeholder `KFunction` body is irrelevant.
         let dummy_fn_obj = outer.alloc_object(KObject::KFunction(
             outer.alloc_function(crate::machine::core::kfunction::KFunction::new(
@@ -667,7 +768,7 @@ mod tests {
             KObject::KFunction(f, _) => *f,
             _ => unreachable!(),
         };
-        let cyclic_kfn = KObject::KFunction(f_ref, Some(Rc::clone(&frame)));
+        let cyclic_kfn = KObject::KFunction(f_ref, Some(frame.storage_rc()));
         let list = KObject::list(vec![cyclic_kfn]);
 
         let stored = frame.arena().alloc_object(list);

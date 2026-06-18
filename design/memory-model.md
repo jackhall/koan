@@ -22,9 +22,9 @@ than ownership trees. The structural edges:
   [`ScopePtr`](../src/machine/core/scope_ptr.rs) — the closure's definition
   scope, lifetime-erased. Multiple `KFunction`s share one captured scope when
   they were defined in the same body.
-- `KObject::KFunction(&'a KFunction<'a>, Option<Rc<CallArena>>)` and
-  `KObject::KFuture(KFuture, Option<Rc<CallArena>>)` carry both a value-side
-  reference to a function-arena slot and an optional `Rc<CallArena>` anchor
+- `KObject::KFunction(&'a KFunction<'a>, Option<Rc<FrameStorage>>)` and
+  `KObject::KFuture(KFuture, Option<Rc<FrameStorage>>)` carry both a value-side
+  reference to a function-arena slot and an optional `Rc<FrameStorage>` anchor
   to the per-call arena that owns the function's captured scope.
 - `Module` and `Signature` cache their declaration scopes as a
   [`ScopePtr`](../src/machine/core/scope_ptr.rs) (heap-pinned by the surrounding
@@ -34,14 +34,14 @@ than ownership trees. The structural edges:
 slots may point at run-root slots, because the run-root arena outlives every
 per-call arena by the lexical-scoping invariant. References that need to
 point *outward* — a lifted value referencing a slot in a dying per-call
-arena — must carry an `Rc<CallArena>` anchor on the value (or its enclosing
+arena — must carry an `Rc<FrameStorage>` anchor on the value (or its enclosing
 variant) so the per-call arena survives. The lift machinery enforces this at
 the arena boundary; see
 [per-call-arena-protocol.md § Lift-time anchor decision](per-call-arena-protocol.md#lift-time-anchor-decision).
 
 **Why graph rather than tree.** Many-to-one captures and bindings, sibling
 scopes sharing an outer, mutual references between a `Scope` and its
-arena's `scopes` sub-arena, and cross-arena `Rc<CallArena>` anchors all
+arena's `scopes` sub-arena, and cross-arena `Rc<FrameStorage>` anchors all
 break tree shape. Slots are added incrementally as the program runs;
 references can be installed before or after the pointee exists (forward
 declarations, replay-park edges). The cycle gate and the frame-chain `Rc`
@@ -68,12 +68,13 @@ the call-site scope and pin every prior frame's bindings alive.
 ## Per-call arena protocol
 
 The per-call arena's lifecycle — which `KObject` variants carry an
-`Option<Rc<CallArena>>` anchor, how
+`Option<Rc<FrameStorage>>` anchor, how
 [`lift_kobject`](../src/machine/execute/lift.rs) decides to attach
 one, how the `alloc_object` cycle gate routes self-referential
 allocations, how the scheduler propagates the active frame, how
-builtin-built frames chain the call-site frame through `outer_frame`,
-and how the TCO step reuses the frame shell — is documented in
+builtin-built frames chain the call-site frame's storage through
+`FrameStorage.outer`, and how the TCO step reuses the frame shell over a
+fresh `FrameStorage` — is documented in
 [per-call-arena-protocol.md](per-call-arena-protocol.md). This file
 keeps the storage-shape, scoping, and lifetime-erasure scaffolding the
 protocol sits on top of.
@@ -86,11 +87,13 @@ itself carries no lifetime parameter. The erase-store engine lives generically i
 the [`StorageFrame<W>`](../src/machine/core/storage_frame.rs) substrate (`RuntimeArena`
 is the Koan instantiation `StorageFrame<KoanStorageProfile>`). Each named `alloc*` wrapper
 takes input at the caller's `'a` and routes one `alloc<K: Stored>` engine: the engine
-union-moves the value into its `'static` lifetime family (`At<'static>`) for storage and
-re-anchors the returned `&'a` to the input borrow on the way out. The union move —
-`Erase<At<'a>, At<'static>>` written then read back through the other field, with a
-`const` size assert — is the single erasure every family shares, so there is one
-store-side erasure to reason about. It is sound because:
+erases the value into its `'static` lifetime family (`At<'static>`) for storage and
+re-anchors the returned `&'a` to the input borrow on the way out. The store-side erasure
+routes the scheduler's single audited `erase_to_static` — the safe direction of the one
+`retype` primitive (described below) — so the arena's store-side and the scheduler's
+read-side share one transmute rather than each carrying its own. Each `Stored` family is a
+`Reattachable` family (`At<'static> == Self`), the GAT both directions key on. It is sound
+because:
 
 - Lifetimes are zero-sized, so `T<'a>` and `T<'static>` have identical layout.
 - `alloc*` returns an `&'a` tied to the input borrow; no `'static` reference
@@ -140,19 +143,26 @@ a family whose representation is identical across every choice of its single lif
 [`Erased<T>`](../src/scheduler/erase.rs) stores that family's `At<'static>` form. A single
 private `retype<A, B>` — a `transmute_copy` through a `ManuallyDrop` (plain `transmute` cannot prove
 two opaque GAT projections share a size), guarded by a `const` size assert that restores the check
-`transmute` would emit, mirroring the sibling `erase_store` — is the only place a
-`T::At<'a> → T::At<'b>` lifetime retype is written; `Erased::erase` / `Erased::reattach` and the
-transient `reattach_value` / `reattach_ref` / `reattach_slice` helpers all route it. The carrier families live beside their own
+`transmute` would emit — is the only place a
+`T::At<'a> → T::At<'b>` lifetime retype is written; `Erased::erase` / `Erased::reattach`, the
+transient `reattach_value` / `reattach_ref` / `reattach_slice` helpers, and the arena's store-side
+`erase_to_static` all route it. The carrier families live beside their own
 types as declarative `unsafe impl Reattachable` instantiations — `ContractFamily` for the
-node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` / `ContFamily` for
-the scheduler value (`Workload::Value`) and continuation (`ErasedCont`),
-`ResultCarriedFamily` for the transient step-lifetime re-anchor (`deps_at_step`) in
-`outcome.rs`, and `ScopeFamily` so the branded `ScopePtr` re-attaches and the arena's
-`&Scope → &Scope<'static>` storage erasures route the same primitive — so `erase.rs` names no
+node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` /
+`ContinuationFamily` for the scheduler value (`Workload::Value`) and continuation
+(`Workload::Continuation`), `ResultCarriedFamily` for the transient step-lifetime re-anchor
+(`deps_at_step`) in `outcome.rs`, and `ScopeFamily` so the branded `ScopePtr` re-attaches and the
+arena's `&Scope → &Scope<'static>` storage erasures route the same primitive — so `erase.rs` names no
 concrete Koan type and the scheduler stays workload-independent (the workload depends on the
-scheduler for the machinery, not the reverse). The liveness witness is not a
-parameter on `reattach`: each call site holds the pinning `Rc` (the frame cart, the run arena)
-across the re-anchored read, and the per-carrier doc names which one.
+scheduler for the machinery, not the reverse). All three inter-node carriers — value, continuation,
+and contract — are scheduler-owned end to end: each is stored `Erased` on the lifetime-free node and
+re-anchored only by the scheduler, the value channel through `read_result` (below) and the
+continuation and contract through [`vend_carrier`](../src/scheduler/erase.rs), the one safe-signature
+wrapper whose returned `'w` is compiler-bounded by a witness borrow `&'w Rc<W::Frame>` the driver
+passes (the slot's cart for the continuation in `run_step`, the producer frame for the contract at
+the Done boundary). The held `Rc` pins the captures' home arena for all of `'w`, so the `unsafe`
+`reattach` confined to `vend_carrier`'s body needs no SAFETY assertion at the call sites — they carry
+no `unsafe` of their own.
 
 The value channel itself is borrow-checked end to end: the scheduler stores a finalized terminal as
 `Erased<W::Value>` ([`node_store.rs`](../src/scheduler/node_store.rs)), erasing it inside `finalize`,
@@ -163,9 +173,11 @@ cannot outlive the backing arena: the pin-outlives-read fact is a borrow the com
 than a SAFETY comment the driver asserts. The driver's transient reads
 ([`KoanRuntime::read_result`](../src/machine/execute/runtime.rs), the
 [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) forwarder) consume that `'node` value with
-no `unsafe` of their own. The consumer-pull lift and the Done contract hook re-anchor their reads at
+no `unsafe` of their own. The consumer-pull lift and the Done contract vend re-anchor their reads at
 a *node* lifetime, not a fabricated `'run`: `read_lifted` lifts each dep (and the `Outcome::Forward`
-ready pull) into the consumer scope's arena bounded by the active cart `Rc`, and a Done terminal is
+ready pull) into the consumer scope's arena bounded by the active cart `Rc`, the Done arm vends the
+slot's contract through `vend_carrier` witnessed by the producer frame before the `NodeFinalize` hook
+(which now only checks the declared return, never reattaches), and a Done terminal is
 finalized at its step lifetime `'step` *within* the step that produced it (the run loop's `run_step`
 erases it into the slot store before the step's frame witness drops). `pin_carried_to_run` survives
 for one genuine `'run` re-home only — the consumer-less root drain in
@@ -174,7 +186,7 @@ into the run-global root arena.
 
 A sibling primitive in [`reattach.rs`](../src/machine/core/reattach.rs), `pin_deref`, owns the
 *other* unsafe shape — re-borrowing a raw `*const T` whose pointee a heap pin holds fixed (the
-self-referential `Rc<CallArena>` arena pointer, the storage engine's escape frame). Erase/reattach
+`Rc<FrameStorage>`-pinned arena pointer, the storage engine's escape frame). Erase/reattach
 moves a value between lifetimes; `pin_deref` recovers a reference from a pointer the borrow checker
 never tracked, so it stays in `machine::core` (it recovers a pointer an arena pins, not a value
 moving between nodes) as the one audited home for the `&*ptr` the arena and storage engine would
@@ -185,7 +197,7 @@ store side carries no `unsafe` at all: `ScopePtr::erase` builds its stored point
 Every family implements the `Stored` trait and routes the one gated
 [`alloc`](../src/machine/core/storage_frame.rs) engine. `anchors_to` is a required trait
 method, so each family declares its cycle behavior at its impl site: `KObject` and
-`KType` walk their composite tree for a self-targeting `Rc<CallArena>`, while the
+`KType` walk their composite tree for a self-targeting `Rc<FrameStorage>`, while the
 families that cannot hold one — `KFunction`, `Scope`, `Module`, `Signature`, and
 `OperatorGroup` — declare `anchors_to => false`. The gate is therefore uniform and
 unbypassable by construction: `Stored` is unsealed (an in-crate extension point), but
@@ -193,20 +205,27 @@ the substrate's `storage` bundle is private and `alloc` is the only path to it, 
 impl can route a value around the redirect. A self-anchoring value redirects to the
 escape arena no matter which wrapper stored it.
 
-A [`CallArena`](../src/machine/core/arena.rs) bundles a `RuntimeArena`, an
-`Option<ScopePtr<'static>>` into it (the child scope; `None` only transiently during
-construction and tail-reset), and an `Option<Rc<CallArena>>` for the
-parent-frame chain. Two invariants make the ownership unit coherent:
+A [`CallArena`](../src/machine/core/arena.rs) is a thin shell over a refcounted
+[`FrameStorage`](../src/machine/core/arena.rs): the shell carries a `Rc<FrameStorage>` and an
+`Option<ScopePtr<'static>>` (the child scope; `None` only transiently during construction), while
+`FrameStorage` bundles the `RuntimeArena` and an `Option<Rc<FrameStorage>>` for the parent-frame
+chain. The shell/storage split lets an escaping value pin only the storage, leaving the shell
+uniquely owned for tail reuse (see
+[per-call-arena-protocol.md § TCO frame reuse](per-call-arena-protocol.md#tco-frame-reuse)). Two
+invariants make the ownership unit coherent:
 
-- **Heap-pinning via `Rc`.** `CallArena::new` only ever exposes the frame
-  as `Rc<CallArena>`, so the inner arena's heap address is stable for the
-  Rc's life and `scope_ptr` (a raw pointer into `arena.scopes`) stays
-  valid alongside it. Accessors re-attach lifetimes anchored to `&self`.
-- **Field declaration order encodes drop order.** `arena` is declared
-  before `outer_frame` so the auto-derived `Drop` tears down this frame's
-  arena *before* releasing the parent Rc. Inner pointers die before the
-  outer storage they may reference, ruling out a dangling `outer` during
-  drop.
+- **Heap-pinning via `Rc`.** `CallArena::new` builds the arena inside its own
+  `Rc<FrameStorage>` and only ever exposes the frame as `Rc<CallArena>`, so the inner
+  arena's heap address is stable for the storage Rc's life and `scope_ptr` (a raw
+  pointer into `arena.scopes`) stays valid alongside it. Accessors re-attach lifetimes
+  anchored to `&self`. A tail reset installs a *fresh* `FrameStorage`, so the arena
+  address changes across a reset — no accessor captures it across one, and the borrow
+  checker forbids safe code from doing so.
+- **Field declaration order encodes drop order.** On `FrameStorage`, `arena` is declared
+  before `outer` so the auto-derived `Drop` tears down this frame's arena *before*
+  releasing the parent storage Rc; on the shell, `storage` is declared before `scope_ptr`.
+  Inner pointers die before the outer storage they may reference, ruling out a dangling
+  `outer` during drop.
 
 A scheduler slot's scope handle is lifetime-free, so the node carries no `'run` through its scope.
 A per-call frame scope is stored as a payload-less
@@ -214,7 +233,7 @@ A per-call frame scope is stored as a payload-less
 `Node.frame` cart; a genuinely run-lived scope (a binder body's decl-scope child) is stored
 as `NodeScope::Anchored`, an erased `ScopePtr<'static>` re-attached at read through `reattach_bounded`.
 Both arms ride a grouped `NodePayload` (scope handle + lexical chain) alongside the slot's frame. The
-slot-storage scope handle and the seed-side `with_anchored_child` re-anchor are documented in
+slot-storage scope handle and the seed-side `with_frame_interior` re-anchor are documented in
 [per-call-arena-protocol.md § Slot-table scope handle](per-call-arena-protocol.md#slot-table-scope-handle).
 
 ## Re-entrant scope writes
@@ -302,9 +321,13 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   holds a `data` borrow, calls `bind_value`, drops the borrow, drains, and
   confirms the queued write applied — exercising the conditional-defer path.
 - Per-call-arena protocol verification (lift anchors, cycle gate, TCO
-  frame reuse, MATCH `outer_frame` chain) is enumerated in
+  frame reuse, MATCH `FrameStorage.outer` chain) is enumerated in
   [per-call-arena-protocol.md § Verification](per-call-arena-protocol.md#verification).
 - The audit slate runs cycle-free across every unsafe site in the runtime
   under `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB and zero process-exit
   leaks, signing off the memory model as it stands today. The canonical
   slate list lives in [observe/miri_slate.md](../observe/miri_slate.md).
+
+## Open work
+
+- *(none currently tracked)*

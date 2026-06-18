@@ -14,6 +14,7 @@
 //! the workload depends on the scheduler for the machinery, not the reverse.
 
 use std::mem::ManuallyDrop;
+use std::rc::Rc;
 
 /// A type generic over exactly one lifetime whose representation is identical across every choice
 /// of that lifetime — a lifetime parameter never changes layout. Implementing it lets the family
@@ -49,6 +50,18 @@ unsafe fn retype<A, B>(value: A) -> B {
     // SAFETY: by the caller's contract `A` and `B` share layout (size asserted above); `ManuallyDrop`
     // keeps the source from being dropped after the bitwise move out.
     unsafe { std::mem::transmute_copy::<A, B>(&value) }
+}
+
+/// Erase a single-lifetime family value to its `'static` storage form — the **safe** half of the
+/// erase/reattach pair, mirroring [`Erased::erase`] for a value stored raw rather than wrapped.
+/// Forgetting a lifetime for storage cannot fabricate one (the value is stored, never used at
+/// `'static`, until a witnessed re-anchor), so this is sound to call without `unsafe`. The
+/// run-lifetime storage substrate routes its arena writes through here instead of carrying its own
+/// transmute, so [`retype`] is the single audited home for value lifetime-erasure.
+pub(crate) fn erase_to_static<T: Reattachable>(value: T::At<'_>) -> T::At<'static> {
+    // SAFETY: lifetime-only retype for storage of a single-lifetime family (the `Reattachable`
+    // layout-invariance contract); the erased value is stored, not used, until a re-anchor.
+    unsafe { retype::<T::At<'_>, T::At<'static>>(value) }
 }
 
 /// Generic owner of an erased carrier: a one-lifetime-family value with its lifetime forgotten to
@@ -132,6 +145,27 @@ pub(crate) unsafe fn reattach_slice<'i, 'o, 'a, 'b, T: Reattachable>(
 ) -> &'o [T::At<'b>] {
     // SAFETY: see the function contract; `&[_]` is a fat pointer, retyped lifetime-only.
     unsafe { retype::<&'i [T::At<'a>], &'o [T::At<'b>]>(slice) }
+}
+
+/// Re-anchor a stored [`Erased`] one-shot inter-node carrier — the slot's continuation (in
+/// `run_step`) or its return contract (at the Done boundary) — to the `'w` a held frame `Rc`
+/// witnesses. The scheduler-side peer of the value channel's [`Erased::reattach`] inside
+/// `read_result`: the carrier reattach for all three inter-node carriers lives here in the scheduler.
+///
+/// The **signature is safe** — `'w` is bounded by the `witness` borrow, so the frame the witness pins
+/// is live for all of `'w`, and the caller cannot pick a `'w` outliving it. The carrier's captures
+/// live in that frame's arena or a strict ancestor its `outer` chain pins, the structural invariant
+/// every node upholds: a node's continuation / contract is built against that node's own frame, and
+/// the driver passes that same held cart as `witness`. So the call sites (`run_loop` / `finalize`)
+/// carry no `unsafe` block of their own.
+pub(crate) fn vend_carrier<'w, T: Reattachable, F>(
+    erased: Erased<T>,
+    _witness: &'w Rc<F>,
+) -> T::At<'w> {
+    // SAFETY: `'w` is pinned by the `witness` borrow (held across the vend's use); the carrier's
+    // captures live in the frame it pins (the structural co-location invariant above). Lifetime-only
+    // retype of a single-lifetime family, per the `Reattachable` contract.
+    unsafe { erased.reattach() }
 }
 
 #[cfg(test)]

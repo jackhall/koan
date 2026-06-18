@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::{CallArena, KFuture};
+use crate::machine::core::{FrameStorage, KFuture};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     KKind, KType, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
@@ -43,7 +43,7 @@ impl<'a> NonWrappedRef<'a> {
 /// mutable-list builtin would need `Rc::make_mut` at the mutation site. `Struct.fields`
 /// uses `IndexMap` so iteration matches declaration order.
 ///
-/// `KFunction` and `KFuture` carry an `Option<Rc<CallArena>>` lifecycle anchor; see
+/// `KFunction` and `KFuture` carry an `Option<Rc<FrameStorage>>` lifecycle anchor; see
 /// [per-call-arena-protocol.md § Carriers](../../../../design/per-call-arena-protocol.md#carriers).
 pub enum KObject<'a> {
     Number(f64),
@@ -65,8 +65,8 @@ pub enum KObject<'a> {
         Box<KType<'a>>,
     ),
     KExpression(KExpression<'a>),
-    KFuture(KFuture<'a>, Option<Rc<CallArena>>),
-    KFunction(&'a KFunction<'a>, Option<Rc<CallArena>>),
+    KFuture(KFuture<'a>, Option<Rc<FrameStorage>>),
+    KFunction(&'a KFunction<'a>, Option<Rc<FrameStorage>>),
     /// Tagged-union value. `(set, index)` references the union's sealed `RecursiveSet`
     /// member; `ktype()` synthesizes `KType::SetRef { set, index }` so dispatch on type
     /// identity sees the declared union, and lift shares the set by `Rc::clone`.
@@ -291,7 +291,7 @@ impl<'a> KObject<'a> {
     }
 
     /// Independent-but-cheap clone: composite payloads `Rc::clone` under the
-    /// immutable-value contract; `KFunction`/`KFuture` preserve their `Rc<CallArena>`
+    /// immutable-value contract; `KFunction`/`KFuture` preserve their `Rc<FrameStorage>`
     /// anchor.
     pub fn deep_clone(&self) -> KObject<'a> {
         match self {

@@ -15,7 +15,7 @@ use super::record::Record;
 use super::recursive_set::RecursiveSet;
 use super::signature::DeferredReturnSurface;
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::{CallArena, ScopeId};
+use crate::machine::core::{FrameStorage, ScopeId};
 use crate::machine::model::ast::TypeName;
 use crate::machine::model::values::{Module, Signature};
 use std::rc::Rc;
@@ -163,11 +163,11 @@ pub enum KType<'a> {
         sig: &'a Signature<'a>,
         pinned_slots: Vec<(String, KType<'a>)>,
     },
-    /// First-class module value's type. `frame` carries the per-call `Rc<CallArena>`
+    /// First-class module value's type. `frame` carries the per-call `Rc<FrameStorage>`
     /// anchor for functor-built modules.
     Module {
         module: &'a Module<'a>,
-        frame: Option<Rc<CallArena>>,
+        frame: Option<Rc<FrameStorage>>,
     },
     /// Abstract type member named by a SIG slot or minted by opaque ascription. `source`
     /// distinguishes the two roots: `Sig(scope_id)` is the SIG-decl-time member (bound when a
@@ -488,7 +488,7 @@ impl<'a> std::hash::Hash for KType<'a> {
     }
 }
 
-/// Manual `Debug` — `derive` is blocked because `Module` / `Signature` / `CallArena`
+/// Manual `Debug` — `derive` is blocked because `Module` / `Signature` / `FrameStorage`
 /// don't implement `Debug` and recursing through module-typed KTypes is unbounded.
 impl<'a> std::fmt::Debug for KType<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

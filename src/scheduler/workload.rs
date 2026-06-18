@@ -29,10 +29,14 @@ pub(crate) trait Workload {
     type Error;
     /// The per-node memory frame the scheduler manages by `Rc` (minted by the workload; never calls a method on it).
     type Frame;
-    /// The per-node return contract the scheduler stores on a slot's frame and hands back at the
-    /// Done boundary, never inspecting it (the workload re-anchors it).
-    type Contract: Copy;
-    /// The per-node continuation the scheduler stores and hands back to run once, never inspecting
-    /// it (the workload re-anchors + invokes it). Not `Clone` — a one-shot boxed closure.
-    type Continuation;
+    /// The per-node return contract: a one-lifetime [`Reattachable`] family the scheduler stores
+    /// erased (`Erased<Self::Contract>`) on a slot's frame and re-anchors at the Done boundary via
+    /// [`vend_carrier`](super::vend_carrier), witnessed by the frame `Rc`. Never inspected.
+    /// `At<'static>: Copy` lets a tail chain keep-first the erased contract by copy.
+    type Contract: Reattachable<At<'static>: Copy>;
+    /// The per-node continuation: a one-lifetime [`Reattachable`] family the scheduler stores erased
+    /// (`Erased<Self::Continuation>`) on the node and re-anchors once at step entry via
+    /// [`vend_carrier`](super::vend_carrier), witnessed by the node's cart `Rc`, then hands back to
+    /// run once. Never inspected. Not `Copy` — a one-shot boxed closure consumed by value.
+    type Continuation: Reattachable;
 }

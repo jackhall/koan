@@ -34,7 +34,10 @@ mod submit;
 mod work_queues;
 mod workload;
 
-pub(crate) use erase::{reattach_ref, reattach_slice, reattach_value, Erased, Reattachable};
+pub(crate) use erase::{
+    erase_to_static, reattach_ref, reattach_slice, reattach_value, vend_carrier, Erased,
+    Reattachable,
+};
 pub use node_id::NodeId;
 pub(crate) use workload::{FramedRead, Live, Workload};
 

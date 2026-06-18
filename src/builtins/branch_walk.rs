@@ -49,7 +49,7 @@ pub(crate) fn resolve_arm_contract<'a>(
 /// as owned deps, running them before the tail continues) carrying `contract`.
 pub(crate) fn arm_tail<'a>(
     root: &Scope<'a>,
-    outer_frame: Option<Rc<crate::machine::CallArena>>,
+    outer_frame: Option<Rc<crate::machine::core::FrameStorage>>,
     it_value: crate::machine::model::KObject<'a>,
     body_expr: KExpression<'a>,
     contract: ReturnContract<'a>,
@@ -58,7 +58,7 @@ pub(crate) fn arm_tail<'a>(
     use crate::machine::core::kfunction::body::split_body_statements;
     use crate::machine::{BindingIndex, CallArena};
     let frame: Rc<CallArena> = CallArena::new(root, outer_frame);
-    frame.with_anchored_child(|arena, child| {
+    frame.with_frame_interior(|arena, child| {
         let it_obj = arena.alloc_object(it_value);
         let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
     });

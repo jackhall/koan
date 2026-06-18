@@ -267,7 +267,7 @@ mod tests {
             frame: None,
         };
 
-        let strong_before = Rc::strong_count(&frame);
+        let strong_before = Rc::strong_count(&frame.storage_rc());
         let lifted = lift_ktype_for_test(&m_type, &frame);
         match &lifted {
             KType::Module { frame: anchor, .. } => assert!(
@@ -277,9 +277,9 @@ mod tests {
             other => panic!("expected lifted Module carrier, got {}", other.name()),
         }
         assert_eq!(
-            Rc::strong_count(&frame),
+            Rc::strong_count(&frame.storage_rc()),
             strong_before + 1,
-            "lifting a per-frame module must clone the dying frame's Rc once",
+            "lifting a per-frame module must clone the dying frame's storage Rc once",
         );
         // Drop borrowers before `frame` so arena teardown order is well-defined.
         drop(lifted);
