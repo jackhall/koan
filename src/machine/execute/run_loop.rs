@@ -7,16 +7,19 @@
 //!
 //! See design/execution-model.md and design/memory-model.md.
 
-use crate::machine::core::kfunction::body::ErasedContract;
+use std::rc::Rc;
+
+use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::model::Carried;
 use crate::machine::{KError, KErrorKind, NodeId, RuntimeArena};
+use crate::scheduler::vend_carrier;
 
 use super::dispatch::{reattach_node_scope, SchedulerView};
 use super::finalize::NodeFinalize;
 use super::nodes::{CallFrame, Node, NodePayload, NodeScope, NodeStep, NodeWork};
 use super::outcome::deps_at_step;
 use super::runtime::{KoanRuntime, KoanWorkload};
-use super::NodeCont;
+use super::NodeContinuation;
 
 #[cfg(test)]
 mod run_tests;
@@ -47,22 +50,22 @@ impl<'run> KoanRuntime<'run> {
 
     /// The unified node handler, owning one slot step start to finish: enter the step's ambient frame
     /// context, collect the resolved dep terminals (as owned `Result`s — an errored dep is handed
-    /// through, the continuation decides), run `cont` against a read-only [`SchedulerView`], reclaim
-    /// the owned-dep suffix, apply the decided [`Outcome`] into a [`NodeStep`], exit the step guard,
-    /// then realize that step. The continuation issues no graph write, so the reclaim lands after it
-    /// and before the apply that installs the continuation's edges. The whole bracket — enter and
-    /// exit — lives here, so the [`SlotStepGuard`](super::ambient::SlotStepGuard) is born and consumed
-    /// without escaping.
+    /// through, the continuation decides), run the slot's continuation against a read-only
+    /// [`SchedulerView`], reclaim the owned-dep suffix, apply the decided [`Outcome`] into a
+    /// [`NodeStep`], exit the step guard, then realize that step. The continuation issues no graph
+    /// write, so the reclaim lands after it and before the apply that installs the continuation's
+    /// edges. The whole bracket — enter and exit — lives here, so the
+    /// [`SlotStepGuard`](super::ambient::SlotStepGuard) is born and consumed without escaping.
     ///
-    /// The whole step runs at the step lifetime `'s`: the cont re-anchor fabricates that step lifetime
-    /// witnessed by the cart `Rc`, which the step guard holds live across the continuation's run — and the body,
-    /// including the [`NodeStep::Done`] terminal's finalize, runs while `consumer_frame` (the step's
-    /// cart `Rc`, cloned into the sole `'s` witness) is live. So the Done value, born at `'s` in the
-    /// consumer frame, is finalized into the slot store (where `finalize` erases it) *within* `'s`: it
-    /// never has to be laundered to `'run` to cross a step-guard exit. The clone is confined to this
-    /// call and dropped at return — before the next iteration's `try_reset_for_tail`, which resets a
-    /// *different* (the prior step's) cart — so it does not contend with the TCO `Rc::get_mut`
-    /// uniqueness gate.
+    /// The whole step runs at the step lifetime `'s`: the scheduler's `vend_carrier` re-anchors the
+    /// erased continuation to `'s` witnessed by the held cart `Rc` (`continuation_witness`), which the
+    /// step guard keeps live across the continuation's run — and the body, including the
+    /// [`NodeStep::Done`] terminal's finalize, runs while `consumer_frame` (also the step's cart `Rc`)
+    /// witnesses the value-channel pull-lift. So the Done value, born at `'s` in the consumer frame, is
+    /// finalized into the slot store (where `finalize` erases it) *within* `'s`: it never has to be
+    /// laundered to `'run` to cross a step-guard exit. Both cart clones are confined to this call and
+    /// dropped at return — before the next iteration's `try_reset_for_tail`, which resets a *different*
+    /// (the prior step's) cart — so they do not contend with the TCO `Rc::get_mut` uniqueness gate.
     fn run_step(&mut self, id: NodeId, node: Node<KoanWorkload>) {
         let idx = id.index();
         // The step reads its scope on demand (`current_scope`), and the post-step uses below
@@ -78,18 +81,15 @@ impl<'run> KoanRuntime<'run> {
         let NodeWork {
             deps,
             park_count,
-            cont: erased_cont,
+            continuation: erased_continuation,
             carrier: _,
         } = node.work;
-        // Re-anchor the slot's erased continuation against its own cart before that cart moves into
-        // the step guard. The reattach targets the step lifetime the held cart `Rc` witnesses — not
-        // the run global: the guard keeps the cart live across the whole step, so the fabricated
-        // lifetime cannot outlive the continuation's captures (cart-scale data in the cart arena or a
-        // strict ancestor the cart's `outer` chain pins). Mirrors the contract re-anchor at the Done
-        // boundary — the same erase / reattach discipline, generalized to the whole closure.
-        // SAFETY: `cart` is the witness pinning the captures' home for the whole step; it is held
-        // live below (moved into the step guard) across the continuation's run.
-        let cont: NodeCont<'_> = unsafe { erased_cont.reattach() };
+        // Hold the cart as the continuation's reattach witness across the whole step: a step-confined
+        // clone, dropped at return — before the next iteration's `try_reset_for_tail`, which resets a
+        // *different* (the prior step's) cart — so it does not contend with the TCO `Rc::get_mut`
+        // gate. `vend_continuation` (below) re-anchors the erased continuation to the step lifetime
+        // this witness pins; the scheduler owns that reattach, so no fabricated free `'_` lives here.
+        let continuation_witness = Rc::clone(&cart);
         let guard = self.enter_slot_step(
             cart,
             reserve,
@@ -122,8 +122,14 @@ impl<'run> KoanRuntime<'run> {
         let results: Vec<Result<Carried<'_>, KError>> =
             deps.iter().map(|d| self.read_lifted(*d, dest)).collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
+        // Vend the slot's continuation re-anchored to the step lifetime the held `continuation_witness`
+        // cart pins (cart-scale data in the cart arena or a strict ancestor its `outer` chain pins).
+        // The scheduler owns the `unsafe` reattach inside `vend_carrier`; its safe signature bounds the
+        // step lifetime to the witness borrow, so no fabricated free `'_` or `unsafe` lives here.
+        let continuation: NodeContinuation<'_> =
+            vend_carrier(erased_continuation, &continuation_witness);
         // The pull-lifted values die with this consumer's frame; deliver them at that `'s`.
-        let outcome = cont(
+        let outcome = continuation(
             &SchedulerView::new(&self.sched, &self.ambient),
             deps_at_step(&results),
             idx,
@@ -141,14 +147,21 @@ impl<'run> KoanRuntime<'run> {
         match step {
             NodeStep::Done(output) => {
                 let frame = (!post.prev_frame.non_dying()).then_some(&post.prev_frame);
-                // Contract layer (the `NodeFinalize` workload hook): re-anchor the slot's erased
-                // contract against `frame`, check the declared return, and — when the declared type
-                // coarsens the value (e.g. `List<Number>` through `:(LIST OF Any)`) — re-tag it into
-                // the contract's own home arena so the terminal survives to every consumer's
-                // pull-lift and the top-level read even when the producer frame is reused/freed. A
-                // non-coarsened terminal stays in the producer's own frame (pinned below); the
-                // producer does **not** lift it at Done. The whole finalize runs at `'s`.
-                let result = self.finalize_terminal(output, frame, prev_contract);
+                // Vend the slot's erased contract re-anchored to the step lifetime the producer cart
+                // `frame` witnesses — the scheduler owns the `unsafe` reattach inside `vend_carrier`.
+                // `zip(frame)` drops the contract for a frameless / run-frame producer (which carries
+                // no per-call return obligation), matching the prior frame-gated reattach.
+                let live_contract: Option<ReturnContract<'_>> = prev_contract
+                    .zip(frame)
+                    .map(|(c, witness)| vend_carrier(c, witness));
+                // Contract layer (the `NodeFinalize` workload hook): check the declared return and —
+                // when the declared type coarsens the value (e.g. `List<Number>` through
+                // `:(LIST OF Any)`) — re-tag it into the contract's own home arena so the terminal
+                // survives to every consumer's pull-lift and the top-level read even when the producer
+                // frame is reused/freed. A non-coarsened terminal stays in the producer's own frame
+                // (pinned below); the producer does **not** lift it at Done. The whole finalize runs
+                // at `'s`.
+                let result = self.finalize_terminal(output, frame, live_contract);
                 if result.is_err() {
                     reattach_node_scope(&post.payload().scope, Some(&post.prev_frame))
                         .clear_placeholders_for_producer(id);

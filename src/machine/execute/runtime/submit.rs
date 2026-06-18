@@ -38,7 +38,7 @@ fn cart_chain_reaches_arena(cart_scope: &Scope<'_>, target: &RuntimeArena) -> bo
 use super::super::nodes::NodePayload;
 use super::super::nodes::{NodeScope, NodeWork};
 use super::super::outcome::dep_error_frame;
-use super::super::{short_circuit, DepFinish, ErasedCont};
+use super::super::{short_circuit, DepFinish};
 use super::{KoanRuntime, KoanWorkload};
 
 /// A dep-finish node built for direct submission (not via `apply_outcome`): the path shared by
@@ -50,7 +50,7 @@ fn awaiting(deps: Vec<NodeId>, park_count: usize, finish: DepFinish<'_>) -> Node
     NodeWork::new(
         deps,
         park_count,
-        ErasedCont::erase(short_circuit(Some(dep_error_frame()), finish)),
+        short_circuit(Some(dep_error_frame()), finish),
         None,
     )
 }

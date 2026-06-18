@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use super::{NodeId, Workload};
+use super::{Erased, NodeId, Reattachable, Workload};
 
 /// What a scheduler node will run: wait on `deps`, then run `cont` over their resolved terminals.
 /// `deps` layout is `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix
@@ -17,25 +17,27 @@ use super::{NodeId, Workload};
 pub(crate) struct NodeWork<W: Workload> {
     pub(crate) deps: Vec<NodeId>,
     pub(crate) park_count: usize,
-    /// The slot's continuation, stored opaquely as `W::Continuation` so the node it sits on pins no
-    /// borrow. Handed back to the workload to run once; the scheduler never inspects it.
-    pub(crate) cont: W::Continuation,
+    /// The slot's continuation, stored erased to `'static` (`Erased<W::Continuation>`) so the node it
+    /// sits on pins no borrow. Re-anchored once at step entry by the scheduler (via
+    /// [`vend_carrier`](super::vend_carrier)) and handed back to run once; never inspected.
+    pub(crate) continuation: Erased<W::Continuation>,
     pub(crate) carrier: Option<String>,
 }
 
 impl<W: Workload> NodeWork<W> {
-    /// Build node work from an already-erased continuation. The continuation is stored opaquely and
-    /// handed back to run once; the scheduler never inspects it.
+    /// Build node work from a **live** continuation, erasing it to `'static` for storage here — the
+    /// scheduler owns the erase (peer of `finalize`'s value erase). The continuation is handed back
+    /// re-anchored to run once; the scheduler never inspects it.
     pub(crate) fn new(
         deps: Vec<NodeId>,
         park_count: usize,
-        cont: W::Continuation,
+        continuation: <W::Continuation as Reattachable>::At<'_>,
         carrier: Option<String>,
     ) -> Self {
         NodeWork {
             deps,
             park_count,
-            cont,
+            continuation: Erased::erase(continuation),
             carrier,
         }
     }
@@ -53,9 +55,10 @@ pub(crate) struct CallFrame<W: Workload> {
     /// Per-slot reserve cart for the ping-pong rotation that lets a stateful resume reuse a frame
     /// across iterations.
     pub(crate) reserve: Option<Rc<W::Frame>>,
-    /// Return contract enforced at the Done boundary, stored opaquely and re-anchored against `cart`
-    /// by the workload. `None` for slots with no declared-return obligation.
-    pub(crate) contract: Option<W::Contract>,
+    /// Return contract enforced at the Done boundary, stored erased to `'static`
+    /// (`Erased<W::Contract>`) and re-anchored against `cart` by the scheduler (via
+    /// [`vend_carrier`](super::vend_carrier)). `None` for slots with no declared-return obligation.
+    pub(crate) contract: Option<Erased<W::Contract>>,
 }
 
 pub(crate) struct Node<W: Workload> {

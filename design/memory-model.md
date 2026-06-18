@@ -145,15 +145,21 @@ two opaque GAT projections share a size), guarded by a `const` size assert that 
 `T::At<'a> → T::At<'b>` lifetime retype is written; `Erased::erase` / `Erased::reattach` and the
 transient `reattach_value` / `reattach_ref` / `reattach_slice` helpers all route it. The carrier families live beside their own
 types as declarative `unsafe impl Reattachable` instantiations — `ContractFamily` for the
-node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` / `ContFamily` for
-the scheduler value (`Workload::Value`) and continuation (`ErasedCont`),
-`ResultCarriedFamily` for the transient step-lifetime re-anchor (`deps_at_step`) in
-`outcome.rs`, and `ScopeFamily` so the branded `ScopePtr` re-attaches and the arena's
-`&Scope → &Scope<'static>` storage erasures route the same primitive — so `erase.rs` names no
+node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` /
+`ContinuationFamily` for the scheduler value (`Workload::Value`) and continuation
+(`Workload::Continuation`), `ResultCarriedFamily` for the transient step-lifetime re-anchor
+(`deps_at_step`) in `outcome.rs`, and `ScopeFamily` so the branded `ScopePtr` re-attaches and the
+arena's `&Scope → &Scope<'static>` storage erasures route the same primitive — so `erase.rs` names no
 concrete Koan type and the scheduler stays workload-independent (the workload depends on the
-scheduler for the machinery, not the reverse). The liveness witness is not a
-parameter on `reattach`: each call site holds the pinning `Rc` (the frame cart, the run arena)
-across the re-anchored read, and the per-carrier doc names which one.
+scheduler for the machinery, not the reverse). All three inter-node carriers — value, continuation,
+and contract — are scheduler-owned end to end: each is stored `Erased` on the lifetime-free node and
+re-anchored only by the scheduler, the value channel through `read_result` (below) and the
+continuation and contract through [`vend_carrier`](../src/scheduler/erase.rs), the one safe-signature
+wrapper whose returned `'w` is compiler-bounded by a witness borrow `&'w Rc<W::Frame>` the driver
+passes (the slot's cart for the continuation in `run_step`, the producer frame for the contract at
+the Done boundary). The held `Rc` pins the captures' home arena for all of `'w`, so the `unsafe`
+`reattach` confined to `vend_carrier`'s body needs no SAFETY assertion at the call sites — they carry
+no `unsafe` of their own.
 
 The value channel itself is borrow-checked end to end: the scheduler stores a finalized terminal as
 `Erased<W::Value>` ([`node_store.rs`](../src/scheduler/node_store.rs)), erasing it inside `finalize`,
@@ -164,9 +170,11 @@ cannot outlive the backing arena: the pin-outlives-read fact is a borrow the com
 than a SAFETY comment the driver asserts. The driver's transient reads
 ([`KoanRuntime::read_result`](../src/machine/execute/runtime.rs), the
 [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) forwarder) consume that `'node` value with
-no `unsafe` of their own. The consumer-pull lift and the Done contract hook re-anchor their reads at
+no `unsafe` of their own. The consumer-pull lift and the Done contract vend re-anchor their reads at
 a *node* lifetime, not a fabricated `'run`: `read_lifted` lifts each dep (and the `Outcome::Forward`
-ready pull) into the consumer scope's arena bounded by the active cart `Rc`, and a Done terminal is
+ready pull) into the consumer scope's arena bounded by the active cart `Rc`, the Done arm vends the
+slot's contract through `vend_carrier` witnessed by the producer frame before the `NodeFinalize` hook
+(which now only checks the declared return, never reattaches), and a Done terminal is
 finalized at its step lifetime `'step` *within* the step that produced it (the run loop's `run_step`
 erases it into the slot store before the step's frame witness drops). `pin_carried_to_run` survives
 for one genuine `'run` re-home only — the consumer-less root drain in
@@ -319,12 +327,4 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
 
 ## Open work
 
-- **Scheduler owns every carrier reattach**
-  ([refactor/scheduler-owns-carrier-reattach.md](../roadmap/refactor/scheduler-owns-carrier-reattach.md)).
-  The value channel is already borrow-checked end to end in the scheduler; the
-  continuation ([`run_loop.rs`](../src/machine/execute/run_loop.rs)) and contract
-  ([`finalize.rs`](../src/machine/execute/finalize.rs)) reattaches still live in the
-  driver against a free / prose-guarded lifetime. Fold both behind scheduler
-  accessors that vend at a `'step` lifetime bounded by a witness `&Rc<W::Frame>` the
-  caller already holds — no new `Rc` clone, so TCO's uniqueness gate is untouched —
-  and rename `cont` → `continuation`.
+- *(none currently tracked)*

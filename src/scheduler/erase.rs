@@ -14,6 +14,7 @@
 //! the workload depends on the scheduler for the machinery, not the reverse.
 
 use std::mem::ManuallyDrop;
+use std::rc::Rc;
 
 /// A type generic over exactly one lifetime whose representation is identical across every choice
 /// of that lifetime — a lifetime parameter never changes layout. Implementing it lets the family
@@ -132,6 +133,27 @@ pub(crate) unsafe fn reattach_slice<'i, 'o, 'a, 'b, T: Reattachable>(
 ) -> &'o [T::At<'b>] {
     // SAFETY: see the function contract; `&[_]` is a fat pointer, retyped lifetime-only.
     unsafe { retype::<&'i [T::At<'a>], &'o [T::At<'b>]>(slice) }
+}
+
+/// Re-anchor a stored [`Erased`] one-shot inter-node carrier — the slot's continuation (in
+/// `run_step`) or its return contract (at the Done boundary) — to the `'w` a held frame `Rc`
+/// witnesses. The scheduler-side peer of the value channel's [`Erased::reattach`] inside
+/// `read_result`: the carrier reattach for all three inter-node carriers lives here in the scheduler.
+///
+/// The **signature is safe** — `'w` is bounded by the `witness` borrow, so the frame the witness pins
+/// is live for all of `'w`, and the caller cannot pick a `'w` outliving it. The carrier's captures
+/// live in that frame's arena or a strict ancestor its `outer` chain pins, the structural invariant
+/// every node upholds: a node's continuation / contract is built against that node's own frame, and
+/// the driver passes that same held cart as `witness`. So the call sites (`run_loop` / `finalize`)
+/// carry no `unsafe` block of their own.
+pub(crate) fn vend_carrier<'w, T: Reattachable, F>(
+    erased: Erased<T>,
+    _witness: &'w Rc<F>,
+) -> T::At<'w> {
+    // SAFETY: `'w` is pinned by the `witness` borrow (held across the vend's use); the carrier's
+    // captures live in the frame it pins (the structural co-location invariant above). Lifetime-only
+    // retype of a single-lifetime family, per the `Reattachable` contract.
+    unsafe { erased.reattach() }
 }
 
 #[cfg(test)]

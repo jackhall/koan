@@ -1,16 +1,16 @@
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
+use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::model::{Carried, KType};
 use crate::machine::{CallArena, KError, KErrorKind};
 
 use super::runtime::KoanRuntime;
 
 /// The workload's Done-boundary contract hook: enforce a finished node's declared return contract,
-/// returning the slot's final terminal. The scheduler's Done arm hands over the raw step output, the
-/// (optional) per-call frame, and the slot's *erased* contract; this hook re-anchors the contract
-/// against the frame (the cart `Rc` witnesses the contract's home arena) and runs the declared-return
-/// check. The scheduler decides *when* (the Done boundary); this hook owns the `ReturnContract`-/
+/// returning the slot's final terminal. The driver vends the slot's contract already re-anchored
+/// (the scheduler owns that reattach in `vend_carrier`) and hands this hook the live
+/// [`ReturnContract`] plus the (optional) per-call frame; the hook runs the declared-return check.
+/// The scheduler decides *when* (the Done boundary); this hook owns the `ReturnContract`-/
 /// `KType`-naming *how*, so the scheduler core names neither.
 ///
 /// Peer of [`NodeLift`](super::lift::NodeLift): both are workload hooks the Done boundary calls. Lift
@@ -24,13 +24,14 @@ use super::runtime::KoanRuntime;
 /// (the step lifetime the producer ran against), so the hook re-anchors only the contract — never
 /// the value — and the coarsening re-tag homes into the contract's own arena at the same `'o`.
 pub(in crate::machine::execute) trait NodeFinalize {
-    /// Re-anchor `contract` against `frame` and enforce the declared return on `output`. A `None`
-    /// frame (a frameless slot or the non-dying run frame) passes the value through untouched.
+    /// Enforce the declared return on `output` against the already-vended live `contract`. A `None`
+    /// frame (a frameless slot or the non-dying run frame) passes the value through untouched — and
+    /// the driver vends no contract for such a producer, so `contract` is `None` there too.
     fn finalize_terminal<'o>(
         &self,
         output: Result<Carried<'o>, KError>,
         frame: Option<&Rc<CallArena>>,
-        contract: Option<ErasedContract>,
+        contract: Option<ReturnContract<'o>>,
     ) -> Result<Carried<'o>, KError>;
 }
 
@@ -39,19 +40,9 @@ impl NodeFinalize for KoanRuntime<'_> {
         &self,
         output: Result<Carried<'o>, KError>,
         frame: Option<&Rc<CallArena>>,
-        contract: Option<ErasedContract>,
+        contract: Option<ReturnContract<'o>>,
     ) -> Result<Carried<'o>, KError> {
-        // Re-anchor the erased contract against the step's cart, witnessed by `frame`. The check
-        // below consults it only when `frame` is `Some` (a real per-call frame, which is exactly
-        // when a contract is set), so a contract on the non-dying run frame is harmlessly skipped.
-        let prev_function = match (contract, frame) {
-            // SAFETY: a `Some` frame is the cart pinning the contract's home arena for the whole
-            // Done boundary (held live below); the re-anchored borrow is consumed within this call,
-            // so it cannot dangle. Mirrors `CallArena::scope`'s unbounded re-attach.
-            (Some(c), Some(_witness)) => Some(unsafe { c.reattach() }),
-            _ => None,
-        };
-        enforce_return_contract(output, frame, prev_function)
+        enforce_return_contract(output, frame, contract)
     }
 }
 

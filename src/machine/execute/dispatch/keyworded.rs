@@ -8,8 +8,8 @@ use crate::machine::{
     BindingIndex, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, TraceFrame,
 };
 
+use super::super::ignore_results;
 use super::super::nodes::NodeWork;
-use super::super::{ignore_results, ErasedCont};
 use super::ctx::SchedulerView;
 use super::{bare_name_of, park_resume, propagate_dep_error, Outcome, PartWalkResult, PendingSub};
 
@@ -163,9 +163,7 @@ pub(super) fn redispatch_continue<'step>(working_expr: KExpression<'step>) -> Ou
     let work = NodeWork::new(
         Vec::new(),
         0,
-        ErasedCont::erase(ignore_results(Box::new(move |ctx, idx| {
-            finish(ctx, working_expr, idx)
-        }))),
+        ignore_results(Box::new(move |ctx, idx| finish(ctx, working_expr, idx))),
         Some(carrier),
     );
     Outcome::Continue {

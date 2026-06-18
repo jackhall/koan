@@ -22,7 +22,7 @@ use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::ScopeId;
 use crate::machine::model::values::{Carried, CarriedFamily, KObject, ResultCarriedFamily};
 use crate::machine::{KError, NodeId, TraceFrame};
-use crate::scheduler::{reattach_slice, reattach_value, Erased, Reattachable};
+use crate::scheduler::{reattach_slice, reattach_value, Reattachable};
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
 use super::nodes::NodeWork;
@@ -64,7 +64,7 @@ pub(in crate::machine::execute) enum Outcome<'step> {
     ParkThenContinue {
         deps: Vec<DepRequest<'step>>,
         park_count: usize,
-        cont: Continuation<'step>,
+        continuation: Continuation<'step>,
         dep_error_frame: Option<TraceFrame>,
     },
     /// The slot's result *is* `producer`'s result (a bare name resolving to a binding). Rather than
@@ -140,7 +140,7 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
 /// a read-only [`SchedulerView`], and the slot's own index, and returns an [`Outcome`] the harness
 /// applies. The per-family behaviors (combine short-circuit, catch recover, dispatch decide) are
 /// built into the closure by the combinators below, so the node itself never branches.
-pub(in crate::machine::execute) type NodeCont<'a> = Box<
+pub(in crate::machine::execute) type NodeContinuation<'a> = Box<
     dyn for<'view> FnOnce(
             &SchedulerView<'a, 'view>,
             &[Result<Carried<'a>, KError>],
@@ -149,25 +149,23 @@ pub(in crate::machine::execute) type NodeCont<'a> = Box<
         + 'a,
 >;
 
-/// `Reattachable` family for the [`NodeCont`] continuation. Layout-invariant: `NodeCont<'r>` is a
-/// `Box<dyn …>` fat pointer whose representation never depends on `'r`.
-pub(in crate::machine::execute) struct ContFamily;
+/// `Reattachable` family for the [`NodeContinuation`] continuation — the scheduler stores it erased
+/// (`Erased<ContinuationFamily>`) on a lifetime-free node and re-anchors it once at step entry via
+/// [`vend_carrier`](crate::scheduler::vend_carrier) before the single-shot run. The continuation
+/// captures run-lived data (the parked AST, a finish closure's captured scope) living in the run
+/// arena or a strict ancestor of the slot's per-call cart, which the node's
+/// [`CallFrame`](super::nodes::CallFrame) cart `Rc` keeps live across the step — the liveness witness
+/// the scheduler's reattach is bounded by. Unlike the `Copy` value / contract carriers the
+/// continuation is a `Box<dyn FnOnce>` consumed once, so the family is not `Copy` and the vend takes
+/// the erased carrier by value. Layout-invariant: `NodeContinuation<'r>` is a `Box<dyn …>` fat pointer whose
+/// representation never depends on `'r`.
+pub(in crate::machine::execute) struct ContinuationFamily;
 
-// SAFETY: `NodeCont<'r>` is one type generic only in `'r` (a boxed trait object); its fat-pointer
+// SAFETY: `NodeContinuation<'r>` is one type generic only in `'r` (a boxed trait object); its fat-pointer
 // layout is identical for every `'r`.
-unsafe impl Reattachable for ContFamily {
-    type At<'r> = NodeCont<'r>;
+unsafe impl Reattachable for ContinuationFamily {
+    type At<'r> = NodeContinuation<'r>;
 }
-
-/// A [`NodeCont`] with its captured `'step` lifetime erased to `'static` for storage on a
-/// lifetime-free node, re-anchored against the node's cart `Rc` before the single-shot run. The
-/// continuation captures run-lived data (the parked AST, a finish closure's captured scope) living
-/// in the run arena or a strict ancestor of the slot's per-call cart, which the node's
-/// [`CallFrame`](super::nodes::CallFrame) cart `Rc` keeps live across the step — the liveness
-/// witness the caller holds across `reattach`. Unlike the `Copy` value/contract carriers the
-/// continuation is a `Box<dyn FnOnce>` consumed once, so the family is not `Copy` and `reattach`
-/// takes `self` by value. See [`Erased`].
-pub(in crate::machine::execute) type ErasedCont = Erased<ContFamily>;
 
 /// Dep-finish continuation: short-circuit on the first errored dep (labelled with `dep_error_frame`),
 /// else hand the resolved [`Carried`] values to a value-only [`DepFinish`]. The short-circuit
@@ -175,7 +173,7 @@ pub(in crate::machine::execute) type ErasedCont = Erased<ContFamily>;
 pub(in crate::machine::execute) fn short_circuit<'a>(
     dep_error_frame: Option<TraceFrame>,
     finish: DepFinish<'a>,
-) -> NodeCont<'a> {
+) -> NodeContinuation<'a> {
     Box::new(move |view, results, _idx| {
         let mut values: Vec<Carried<'_>> = Vec::with_capacity(results.len());
         for r in results {
@@ -194,7 +192,9 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
 
 /// Catch continuation: hand the single watched dep's terminal (Value or Err) to a [`CatchFinish`]
 /// without short-circuiting, so the closure can recover or re-raise.
-pub(in crate::machine::execute) fn catch_cont<'a>(finish: CatchFinish<'a>) -> NodeCont<'a> {
+pub(in crate::machine::execute) fn catch_continuation<'a>(
+    finish: CatchFinish<'a>,
+) -> NodeContinuation<'a> {
     Box::new(move |view, results, _idx| {
         let result = match &results[0] {
             // The watched terminal shares the cart-scale `'a` lifetime the finish runs at.
@@ -208,7 +208,9 @@ pub(in crate::machine::execute) fn catch_cont<'a>(finish: CatchFinish<'a>) -> No
 
 /// Dispatch-decide continuation: a [`ResumeFn`] takes no dep values (it reads the view and spawns /
 /// re-resolves), so its deps are park-only and the results slice is ignored.
-pub(in crate::machine::execute) fn ignore_results<'a>(resume: ResumeFn<'a>) -> NodeCont<'a> {
+pub(in crate::machine::execute) fn ignore_results<'a>(
+    resume: ResumeFn<'a>,
+) -> NodeContinuation<'a> {
     Box::new(move |view, _results, idx| resume(view, idx))
 }
 
@@ -236,15 +238,16 @@ pub(in crate::machine::execute) fn deps_at_step<'b, 'run, 'step>(
 }
 
 #[cfg(test)]
-mod erased_cont_tests {
-    //! Miri coverage for the [`ErasedCont`] continuation erasure: the test pins the
-    //! erase → reattach → invoke round-trip under tree borrows; logical assertions are minimal —
-    //! it fails when Miri reports UB, not on values.
+mod erased_continuation_tests {
+    //! Miri coverage for the [`ContinuationFamily`] continuation erasure: the test pins the
+    //! erase → reattach → invoke round-trip (`Erased::erase` + the scheduler's `vend_carrier`) under
+    //! tree borrows; logical assertions are minimal — it fails when Miri reports UB, not on values.
 
     use super::*;
     use crate::builtins::default_scope;
     use crate::machine::core::{CallArena, RuntimeArena};
-    use crate::scheduler::Scheduler;
+    use crate::scheduler::{vend_carrier, Erased, Scheduler};
+    use std::rc::Rc;
 
     /// A continuation capturing cart-ancestor data (a `&KObject` in the run arena — a strict
     /// ancestor of the cart) is erased to `'static`, reattached against the cart `Rc` for one step,
@@ -253,24 +256,25 @@ mod erased_cont_tests {
     /// honest. Mirrors the erase → reattach transmute pair plus the single-shot call site
     /// (`run_step`); fails on UB, not values.
     #[test]
-    fn erased_cont_reattach_roundtrip() {
+    fn erased_continuation_reattach_roundtrip() {
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         // The captured value lives in the run arena — the ancestor the cart's `outer` chain pins.
         let captured: &KObject = arena.alloc_object(KObject::Number(7.0));
-        // Held live to the end of the test so it witnesses the reattach below.
-        let _cart = CallArena::new(scope, None);
+        // The cart `Rc` held live to the end of the test witnesses the reattach below.
+        let cart = Rc::new(CallArena::new(scope, None));
 
-        let cont: NodeCont = Box::new(move |_view, _results, _idx| {
+        let continuation: NodeContinuation = Box::new(move |_view, _results, _idx| {
             // Read the run-lived capture through the reattached box.
             assert!(matches!(captured, KObject::Number(n) if *n == 7.0));
             Outcome::Done(Err(KError::new(crate::machine::KErrorKind::ShapeError(
                 "ran".to_string(),
             ))))
         });
-        let erased = ErasedCont::erase(cont);
-        // Reattach against the cart `Rc` the test holds live, then run the single-shot continuation.
-        let reattached: NodeCont<'_> = unsafe { erased.reattach() };
+        let erased: Erased<ContinuationFamily> = Erased::erase(continuation);
+        // Vend the continuation reattached against the held cart `Rc`, then run the single shot — the
+        // same scheduler-side reattach (`vend_carrier`) the driver uses in `run_step`.
+        let reattached: NodeContinuation<'_> = vend_carrier(erased, &cart);
         let sched = Scheduler::new();
         let ambient = crate::machine::execute::ambient::AmbientContext::default();
         let view = SchedulerView::new(&sched, &ambient);

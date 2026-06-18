@@ -31,7 +31,7 @@ use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
 
 use super::nodes::NodeWork;
 use super::runtime::KoanWorkload;
-use super::{ignore_results, DepFinish, ErasedCont};
+use super::{ignore_results, DepFinish};
 use crate::machine::core::kfunction::action::{DepPlacement, FramePlacement};
 use crate::scheduler::Scheduler;
 
@@ -262,7 +262,7 @@ pub(in crate::machine::execute) fn park_on_deps<'step>(
     Outcome::ParkThenContinue {
         deps,
         park_count: 0,
-        cont: Continuation::Finish(finish),
+        continuation: Continuation::Finish(finish),
         dep_error_frame,
     }
 }
@@ -280,7 +280,7 @@ pub(in crate::machine::execute) fn park_resume<'step>(
     Outcome::ParkThenContinue {
         park_count: producers.len(),
         deps: producers.into_iter().map(DepRequest::Existing).collect(),
-        cont: Continuation::Resume { carrier, resume },
+        continuation: Continuation::Resume { carrier, resume },
         dep_error_frame: None,
     }
 }
@@ -403,13 +403,13 @@ pub(in crate::machine::execute) fn decide_with_presubs<'step>(
 ) -> NodeWork<KoanWorkload> {
     let carrier = expr.summarize();
     // A birth decide waits on no deps and ignores the (empty) results slice; it runs on first poll,
-    // classifies, and routes. `ignore_results` adapts the decide closure to the unified `NodeCont`.
+    // classifies, and routes. `ignore_results` adapts the decide closure to the unified `NodeContinuation`.
     NodeWork::new(
         Vec::new(),
         0,
-        ErasedCont::erase(ignore_results(Box::new(move |view, idx| {
+        ignore_results(Box::new(move |view, idx| {
             classify_dispatch(view, expr, pre_subs, idx)
-        }))),
+        })),
         Some(carrier),
     )
 }

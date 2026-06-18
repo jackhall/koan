@@ -114,13 +114,18 @@ What's shipped that the open items below build on:
   its erased node carrier to `'step`, so decide never holds a live `'ast` borrow. See
   [design/per-call-arena-protocol.md § Consumer-pull node-output lift](../design/per-call-arena-protocol.md#consumer-pull-node-output-lift).
 - *Unified erase/reattach carriers.* The hand-rolled erase-to-`'static` /
-  reattach carriers (`ScopePtr`, `ErasedContract`, `ErasedCont`, the scheduler's `Erased<W::Value>`)
+  reattach carriers (`ScopePtr`, the contract, the continuation, the scheduler's `Erased<W::Value>`)
   and the cluster of one-off `outcome.rs` reference reattaches now share one generic
   [`Erased<T>`](../src/scheduler/erase.rs) owner over an `unsafe trait Reattachable { type
   At<'r>; }` lifetime-family. A single `retype` primitive (a `ManuallyDrop` `transmute_copy`) is the
   only lifetime-retype site; each carrier is a declarative `unsafe impl Reattachable` beside its own
-  type (`ContractFamily`, `CarriedFamily`, `ContFamily`, `KObjectFamily`, `ScopeFamily`, …) with no
-  `transmute` of its own, and the liveness witness moves to the call site. See
+  type (`ContractFamily`, `CarriedFamily`, `ContinuationFamily`, `KObjectFamily`, `ScopeFamily`, …)
+  with no `transmute` of its own. The scheduler then took sole ownership of all three inter-node
+  carrier reattaches: the continuation and contract — like the value channel before them — are
+  stored `Erased` on the lifetime-free node and re-anchored only through
+  [`vend_carrier`](../src/scheduler/erase.rs), one safe-signature wrapper whose returned `'w` the
+  compiler bounds against a witness borrow `&Rc<W::Frame>` the driver passes, so the `run_loop.rs` /
+  `finalize.rs` call sites carry no `unsafe` of their own. See
   [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -269,7 +274,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Scheduler owns the carrier reattaches](refactor/scheduler-owns-carrier-reattach.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
@@ -360,7 +364,3 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
-- [Scheduler owns the carrier reattaches](refactor/scheduler-owns-carrier-reattach.md) —
-  fold the continuation and contract reattaches into the scheduler beside the value
-  channel, each vended at a `'step` lifetime bounded by a witness `&Rc` (no clone, so
-  TCO is untouched); rename `cont` → `continuation`.

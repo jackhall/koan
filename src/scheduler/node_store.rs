@@ -339,6 +339,13 @@ mod tests {
         type At<'r> = u32;
     }
 
+    /// A lifetime-free `Reattachable` family standing in for the contract / continuation carriers.
+    struct UnitCarrier;
+    // SAFETY: `()` carries no lifetime, so `At<'r>` is the same type for every `'r`.
+    unsafe impl Reattachable for UnitCarrier {
+        type At<'r> = ();
+    }
+
     /// A minimal workload for the white-box store tests: every associated type is trivial, so the
     /// generic store can be exercised without naming any Koan type.
     struct TestWorkload;
@@ -347,8 +354,8 @@ mod tests {
         type Value = U32Value;
         type Error = ();
         type Frame = ();
-        type Contract = ();
-        type Continuation = ();
+        type Contract = UnitCarrier;
+        type Continuation = UnitCarrier;
     }
 
     fn sample_wait(carrier: Option<String>) -> NodeWork<TestWorkload> {

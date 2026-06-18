@@ -8,16 +8,14 @@ src/machine/core/reattach.rs: 2
 src/machine/core/scope_ptr.rs: 5
 src/machine/core/storage_frame.rs: 4
 src/machine/execute/dispatch/ctx.rs: 1
-src/machine/execute/finalize.rs: 1
 src/machine/execute/nodes.rs: 1
-src/machine/execute/outcome.rs: 4
-src/machine/execute/run_loop.rs: 1
+src/machine/execute/outcome.rs: 3
 src/machine/execute/runtime.rs: 3
 src/machine/execute/runtime/submit.rs: 1
 src/machine/model/values/carried.rs: 2
 src/machine/model/values/module.rs: 1
-src/scheduler/erase.rs: 17
-src/scheduler/node_store.rs: 4
+src/scheduler/erase.rs: 18
+src/scheduler/node_store.rs: 5
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -248,32 +246,34 @@ ancestor). As a thin-value `Erased` carrier its erase → reattach round-trip is
 exercises the full carrier through a MATCH arm's `-> :T` carried across tail recursion. No separate
 minimal test.
 
-**`ErasedContract` re-attach — Done-boundary call site** ([src/machine/execute/finalize.rs](../src/machine/execute/finalize.rs))
-— the `unsafe { contract.reattach() }` in the `NodeFinalize::finalize_terminal` hook routes the
-`retype` primitive with none of its own, re-anchoring the contract against the cart held live for the
-Done boundary; `erased_roundtrip_and_helpers` (and end-to-end `recursive_tagged_match_no_uaf`) pins
-it. No separate minimal test.
+**`ReturnContract` re-attach — Done-boundary vend** ([src/scheduler/erase.rs](../src/scheduler/erase.rs))
+— the contract reattach now routes the scheduler's `vend_carrier` (the safe-signature wrapper over
+`Erased::reattach`), called from the run loop's Done arm; the `unsafe` lives in `vend_carrier`, not in
+`finalize.rs`. It re-anchors the contract against the producer cart `frame` witnesses;
+`erased_roundtrip_and_helpers` (and end-to-end `recursive_tagged_match_no_uaf`) pins it. No separate
+minimal test.
 
-**`ErasedCont` continuation erasure** ([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs))
-— the continuation generalizes the `ErasedContract` discipline from a `ReturnContract` enum to the
-whole `NodeCont` (`Box<dyn FnOnce>`), as an `Erased<ContFamily>` routing the shared `retype`: `erase`
-forgets the captured `'run` for storage on a lifetime-free node, and the `unsafe` `reattach` recovers
-a `'run` witnessed by the slot's cart `Rc` (which pins the captures' home — the run arena or a strict
-ancestor of the cart). Distinct shape from the contract group above: the retype is over a **fat
-pointer** (data + vtable), not a thin enum, so it carries its own minimal test. The re-attach call
-site in
-[src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs) (the run loop,
-just before `run_step`) runs the same transmute end-to-end every step. This test pins the
-erase → reattach → invoke round-trip directly, calling the reattached closure so tree borrows checks
-the capture read.
+**`ContinuationFamily` continuation erasure** ([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs))
+— the continuation generalizes the contract discipline from a `ReturnContract` enum to the whole
+`NodeContinuation` (`Box<dyn FnOnce>`), as an `Erased<ContinuationFamily>` routing the shared `retype`:
+`erase` forgets the captured `'run` for storage on a lifetime-free node, and the scheduler's
+`vend_carrier` recovers a step lifetime witnessed by the slot's cart `Rc` (which pins the captures'
+home — the run arena or a strict ancestor of the cart). Distinct shape from the contract group above:
+the retype is over a **fat pointer** (data + vtable), not a thin enum, so it carries its own minimal
+test. The vend call site in
+[src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs) (`run_step`) runs the same
+transmute end-to-end every step. This test pins the erase → reattach → invoke round-trip directly via
+`Erased::erase` + `vend_carrier`, calling the reattached closure so tree borrows checks the capture
+read.
 
-- `erased_cont_reattach_roundtrip`
+- `erased_continuation_reattach_roundtrip`
 
-**`ErasedCont` re-attach — run-loop call site** ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs))
-— the `unsafe { erased_cont.reattach(&cart) }` at the top of the execute loop runs the transmute
-defined in the group above with none of its own, re-anchoring each slot's continuation against its
-cart before `run_step`; the same `erased_cont_reattach_roundtrip` (and end-to-end every
-scheduler-driving slate test) pins it. No separate minimal test.
+**Carrier re-attach — `vend_carrier` scheduler vend** ([src/scheduler/erase.rs](../src/scheduler/erase.rs))
+— the `unsafe { erased.reattach() }` inside `vend_carrier` runs the transmute defined in the group
+above with none of its own, re-anchoring each slot's continuation (in `run_step`) and contract (at the
+Done boundary) against the held cart witness; the same `erased_continuation_reattach_roundtrip` (and
+end-to-end every scheduler-driving slate test) pins it. The `run_loop.rs` / `finalize.rs` call sites
+carry no `unsafe` of their own (the `vend_carrier` signature is safe). No separate minimal test.
 
 **`Module` interior mutation under a live `&'a Module`** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — `Module`
 mutates a `RefCell<HashMap>` (`type_members` / `slot_type_tags`) while a `&'a Module<'a>` is
@@ -365,9 +365,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-18: 1510s — 26 tests, 0 leaks, 0 UB
 - 2026-06-18: 1485s — 26 tests, 0 leaks, 0 UB
 - 2026-06-17: 1414s — 25 tests, 0 leaks, 0 UB
 - 2026-06-17: 601s — 25 tests, 0 leaks, 0 UB
 - 2026-06-17: 609s — 25 tests, 0 leaks, 0 UB
-- 2026-06-17: 602s — 25 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
