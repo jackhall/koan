@@ -445,14 +445,17 @@ impl CallArena {
     /// the `&Rc` receiver, content `'a` — so it is *not* fabricated free; `bind_value` matches on
     /// the `'a` content.
     ///
-    /// SAFETY (arena transmute): the caller holds this frame's `Rc`, which heap-pins the arena for
+    /// SAFETY (arena re-borrow): the caller holds this frame's `Rc`, which heap-pins the arena for
     /// as long as any value `f` binds into the scope lives.
     pub fn with_frame_interior<'a, R>(
         self: &Rc<Self>,
         f: impl FnOnce(&'a RuntimeArena, &Scope<'a>) -> R,
     ) -> R {
-        let arena: &'a RuntimeArena =
-            unsafe { std::mem::transmute::<&RuntimeArena, &'a RuntimeArena>(self.arena()) };
+        // SAFETY: the held frame `Rc` heap-pins the arena for all of `'a`, so re-borrowing the
+        // stable arena pointer at `'a` is sound. This is a pointer re-borrow, not a value retype, so
+        // it routes the audited `pin_deref` rather than a bespoke `transmute`. `'a` is driven by the
+        // closure's parameter type, not a turbofish argument.
+        let arena: &'a RuntimeArena = unsafe { pin_deref(self.arena() as *const RuntimeArena) };
         f(arena, self.scope_bounded())
     }
 
