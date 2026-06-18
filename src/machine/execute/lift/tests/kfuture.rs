@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::builtins::default_scope;
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 use crate::machine::model::types::Record;
 use crate::machine::model::values::ArgValue;
 use crate::machine::model::Carried;

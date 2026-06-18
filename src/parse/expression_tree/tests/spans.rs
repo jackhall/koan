@@ -1,7 +1,7 @@
 //! Span-population tests. Spans are inclusive-start / exclusive-end byte offsets
 //! into the original source.
 
-use crate::machine::core::source::{self, SourceFile, Span, Spanned};
+use crate::source::{self, SourceFile, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::parse::expression_tree::{parse, parse_with_path};
 

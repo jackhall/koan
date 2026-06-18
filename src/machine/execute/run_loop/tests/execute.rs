@@ -1,7 +1,7 @@
 //! Basic dispatch ordering and inter-expression lookup.
 
 use crate::builtins::default_scope;
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::KObject;

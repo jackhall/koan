@@ -19,7 +19,7 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope};

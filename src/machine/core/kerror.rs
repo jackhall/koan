@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::scope_id::ScopeId;
-use crate::machine::core::source::{self, FileId, SourceLoc, Span};
+use crate::source::{self, FileId, SourceLoc, Span};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     KKind, KType, NominalMember, NominalSchema, Parseable, Record, RecursiveSet,

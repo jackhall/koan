@@ -23,7 +23,7 @@
 //! scheduler primitive.
 
 use crate::machine::core::kfunction::action::DepPlacement;
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::KType;
 use crate::machine::model::{Carried, KObject, Parseable};

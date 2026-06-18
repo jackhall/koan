@@ -67,7 +67,7 @@ another. This item closes that gap.
   and forcing source order on multi-file projects is gratuitous.
 - *Source registry per imported file — open, follow-on to source-spans.*
   Each loaded file registers a `SourceFile` via
-  [`crate::machine::core::source`](../../src/machine/core/source.rs) so
+  [`crate::source`](../../src/source.rs) so
   error frames render real `path:line:col` locations across file
   boundaries. `parse_with_path` already takes the filename; the loader
   threads it. Separately, any builtin that synthesizes AST from a literal

@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use std::rc::Rc;
 
-use crate::machine::core::source::{self, CurrentFileGuard, FileId, SourceFile, Span, Spanned};
+use crate::source::{self, CurrentFileGuard, FileId, SourceFile, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::KError;
 use crate::parse::quotes::{mask_quotes, JUMP_MARK, LEN_SEP, LITERAL_MARK};

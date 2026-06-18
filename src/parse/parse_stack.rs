@@ -4,7 +4,7 @@
 //! `close_collection` helpers live here since they bind `ParseStack` and the
 //! token-buffer flush.
 
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::KError;
 use crate::parse::tokens::classify_token;

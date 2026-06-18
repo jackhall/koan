@@ -9,7 +9,7 @@
 //!
 //! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
 
-use crate::machine::core::source::Span;
+use crate::source::Span;
 use crate::machine::KError;
 use crate::parse::quotes::{JUMP_MARK, LEN_SEP, LITERAL_MARK};
 

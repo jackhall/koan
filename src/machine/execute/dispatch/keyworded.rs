@@ -268,14 +268,14 @@ fn install_eager_subs_track<'step>(
 fn part_walk<'step>(
     ctx: &SchedulerView<'step, '_>,
     parts: Vec<
-        crate::machine::core::source::Spanned<crate::machine::model::ast::ExpressionPart<'step>>,
+        crate::source::Spanned<crate::machine::model::ast::ExpressionPart<'step>>,
     >,
     pre_subs: &[(usize, NodeId)],
     bare_outcomes: &[Option<NameOutcome<'step>>],
     slots: &crate::machine::core::kfunction::ClassifiedSlots,
     idx: usize,
 ) -> Result<PartWalkResult<'step>, KError> {
-    use crate::machine::core::source::Spanned;
+    use crate::source::Spanned;
     use crate::machine::model::ast::ExpressionPart;
 
     let wrap_set = &slots.wrap_indices;

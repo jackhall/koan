@@ -21,7 +21,7 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::{KError, KErrorKind};

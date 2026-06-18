@@ -4,7 +4,7 @@
 
 use super::ktype::KType;
 use super::resolver::{elaborate_type_expr, ElabResult, Elaborator};
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::Carried;
 use crate::machine::model::Parseable;

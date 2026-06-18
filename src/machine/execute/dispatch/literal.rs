@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
 use crate::machine::{KError, KErrorKind, NameOutcome, NodeId, TraceFrame};

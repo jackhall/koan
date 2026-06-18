@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
 use crate::machine::{KError, KErrorKind, Resolution};

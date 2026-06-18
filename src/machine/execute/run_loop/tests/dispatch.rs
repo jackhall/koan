@@ -5,7 +5,7 @@
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 use crate::machine::core::BindingIndex;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};

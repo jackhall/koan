@@ -19,7 +19,7 @@ mod nested_binder_submission;
 mod reclaim;
 mod unified_walk;
 
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 
 pub(super) fn let_expr<'run>(name: &str, value: f64) -> KExpression<'run> {

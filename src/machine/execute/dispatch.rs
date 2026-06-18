@@ -23,7 +23,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 use crate::machine::core::CallArena;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};

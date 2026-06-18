@@ -6,7 +6,7 @@
 //! variant additionally carries `sigil_cursor` so the outer `#(...)` / `$(...)`
 //! wrapper covers the sigil byte plus the body.
 
-use crate::machine::core::source::{self, Span, Spanned};
+use crate::source::{self, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::KError;
 

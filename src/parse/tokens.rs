@@ -19,7 +19,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::machine::core::source::{Span, Spanned};
+use crate::source::{Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeName};
 use crate::machine::model::is_keyword_token;
 use crate::machine::KError;

@@ -6,7 +6,7 @@
 //! synthetic `Keyword("ATTR"|"NOT"|"TRY")` carries the 1-codepoint trigger
 //! span so diagnostics can point at the exact operator character.
 
-use crate::machine::core::source::{self, Span, Spanned};
+use crate::source::{self, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 pub type UnaryBuild = for<'a> fn(Spanned<ExpressionPart<'a>>, Span) -> Spanned<ExpressionPart<'a>>;

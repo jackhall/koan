@@ -1,5 +1,5 @@
 use super::*;
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 
 fn one_slot<'a>(kt: KType<'a>) -> ExpressionSignature<'a> {
     ExpressionSignature {

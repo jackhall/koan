@@ -12,7 +12,6 @@ mod reattach;
 mod scope;
 mod scope_id;
 mod scope_ptr;
-pub mod source;
 mod storage_frame;
 
 #[cfg(test)]

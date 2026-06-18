@@ -78,7 +78,7 @@ pub fn parse_pair_list<'a, T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::core::source::Spanned;
+    use crate::source::Spanned;
     use crate::machine::model::ast::TypeName;
 
     /// `[name, slot]` parts where the name rides as a `Type` token (e.g. a capitalized

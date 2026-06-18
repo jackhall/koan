@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{KType, RecursiveSet};

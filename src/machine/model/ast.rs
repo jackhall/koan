@@ -3,7 +3,7 @@
 use crate::machine::model::types::KKind;
 use std::collections::HashMap;
 
-use crate::machine::core::source::{FileId, Span, Spanned};
+use crate::source::{FileId, Span, Spanned};
 use std::rc::Rc;
 
 use crate::machine::model::{

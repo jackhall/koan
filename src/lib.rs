@@ -6,3 +6,4 @@ pub mod builtins;
 pub mod machine;
 pub mod parse;
 pub mod scheduler;
+pub mod source;

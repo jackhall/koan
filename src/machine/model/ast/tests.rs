@@ -1,4 +1,4 @@
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 use crate::machine::model::ast::{
     classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, TypeName,
 };

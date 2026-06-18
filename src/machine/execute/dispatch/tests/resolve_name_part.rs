@@ -1,5 +1,5 @@
 use crate::builtins::default_scope;
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 use crate::machine::execute::dispatch::resolve_name_part;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
