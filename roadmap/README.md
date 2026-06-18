@@ -271,6 +271,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
+- [FrameStorage self-reference via ouroboros](refactor/framestorage-ouroboros.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
@@ -364,3 +365,7 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
+- [FrameStorage self-reference via ouroboros](refactor/framestorage-ouroboros.md) — replace the
+  hand-rolled arena↔child-scope `pin_deref` / `ScopePtr::reattach_unbounded` loop with an
+  `ouroboros #[self_referencing]` struct so the self-reference is compiler-generated, not audited
+  `unsafe`.
