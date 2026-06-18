@@ -301,9 +301,17 @@ FINGERPRINT_RE = re.compile(
 
 
 def count_unsafe(src_root: Path):
-    """Return {path-str: count} for every src file whose code carries `unsafe`."""
+    """Return {path-str: count} for every src file whose code carries `unsafe`.
+
+    Test files are skipped: the slate pins production unsafe sites under Miri,
+    and `unsafe` inside test scaffolding (raw-pointer roundtrips that defeat the
+    borrow checker for a test setup) is not a site the audit tracks. Tests live
+    in `tests.rs` / `tests/` per the repo's test-layout convention.
+    """
     counts = {}
     for path in sorted(src_root.rglob("*.rs")):
+        if path.name == "tests.rs" or "tests" in path.parts:
+            continue
         text = path.read_text()
         blanked = blank_strings_and_comments(text)
         n = len(UNSAFE_RE.findall(blanked))

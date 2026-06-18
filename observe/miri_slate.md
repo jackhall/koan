@@ -2,7 +2,7 @@
 
 <!-- slate-fingerprint
 src/builtins/test_support.rs: 1
-src/machine/core/arena.rs: 19
+src/machine/core/arena.rs: 16
 src/machine/core/kfunction/body.rs: 1
 src/machine/core/reattach.rs: 2
 src/machine/core/scope_ptr.rs: 5
@@ -13,7 +13,6 @@ src/machine/execute/outcome.rs: 3
 src/machine/execute/runtime.rs: 3
 src/machine/execute/runtime/submit.rs: 1
 src/machine/model/values/carried.rs: 2
-src/machine/model/values/module.rs: 1
 src/scheduler/erase.rs: 19
 src/scheduler/node_store.rs: 5
 -->
@@ -43,6 +42,10 @@ unsafe and fingerprint-drift checks still fire.
   captured scope through the branded `ScopePtr::reattach`, a safe call; the one
   transmute it routes lives in `scope_ptr.rs`, so kfunction.rs carries no `unsafe`
   of its own. The group pins that safe accessor under the closure-escape shape.
+- `src/machine/model/values/module.rs` — the `Module` groups pin a safe `RefCell`
+  discipline (interior mutation under a live `&'a Module`) and the MODULE-body
+  Combine continuation; the `ScopePtr` re-attach they reference lives in
+  `scope_ptr.rs`, so module.rs carries no `unsafe` of its own.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
