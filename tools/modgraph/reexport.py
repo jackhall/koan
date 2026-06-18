@@ -147,16 +147,18 @@ def written_module(abs_segs: list[str], known: set[str]) -> str | None:
     return None
 
 
-def correct(
-    known: set[str], src_root: Path, package: str = "koan"
-) -> set[tuple[str, str]]:
-    """Rebuild the `uses` edge set from the `use` statements under `src_root`.
+def iter_use_edges(known: set[str], src_root: Path, package: str = "koan"):
+    """Yield (consumer_module, written_module, item_name) per resolved use-leaf.
 
-    `known` is the module node set (from the cargo-modules graph). Each source
-    module's `use` statements are resolved and attributed to the deepest known
-    module they name; edges to the module's own self are dropped.
+    The single source of truth for re-export attribution: each source module's
+    `use` statements are resolved and attributed to the deepest known module they
+    name (`written_module`), retaining the leaf's trailing item segment. Self-edges
+    and external/unresolvable paths are dropped. `correct()` folds this to the edge
+    set the scorer wants; `attributions()` keeps the per-item detail the item
+    rewriter needs.
+
+    `known` is the module node set (from the cargo-modules graph).
     """
-    uses: set[tuple[str, str]] = set()
     for rs in sorted(src_root.rglob("*.rs")):
         rel = "src/" + str(rs.relative_to(src_root)).replace("\\", "/")
         mod = relpath_to_module(rel, package)
@@ -181,5 +183,33 @@ def correct(
                     continue
                 dst = written_module(abs_segs, known)
                 if dst and dst != mod:
-                    uses.add((mod, dst))
-    return uses
+                    yield mod, dst, abs_segs[-1]
+
+
+def correct(
+    known: set[str], src_root: Path, package: str = "koan"
+) -> set[tuple[str, str]]:
+    """Rebuild the `uses` edge set from the `use` statements under `src_root`.
+
+    Each source module's `use` statements are resolved and attributed to the
+    deepest known module they name; edges to the module's own self are dropped.
+    """
+    return {
+        (mod, dst) for mod, dst, _name in iter_use_edges(known, src_root, package)
+    }
+
+
+def attributions(
+    known: set[str], src_root: Path, package: str = "koan"
+) -> dict[str, list[tuple[str, str]]]:
+    """Per consumer module, the (written_module, item_name) of each use-leaf.
+
+    The item-granular companion to `correct()`: where `correct()` collapses to an
+    edge set, this retains which item each facade edge carries, so a what-if item
+    move can map a moved item back to the facade module its consumers import it
+    through and drop that facade edge only when nothing else still enters it.
+    """
+    out: dict[str, list[tuple[str, str]]] = {}
+    for mod, dst, name in iter_use_edges(known, src_root, package):
+        out.setdefault(mod, []).append((dst, name))
+    return out

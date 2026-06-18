@@ -17,6 +17,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+import reexport
+from graph import parse_dot
 from modules import module_to_file, relpath_to_module
 from scip import parse_scip, scip_symbol_to_path
 
@@ -201,47 +203,63 @@ def resolve_moves(moves: list[MoveSpec],
 
 
 def diff_edges(docs: dict[str, dict],
-               moves: list[MoveSpec]) -> tuple[set[tuple[str, str]],
-                                               set[tuple[str, str]]]:
-    """Return (edges_to_add, edges_to_remove) for the proposed moves,
-    relative to the original cargo-modules DOT.
+               moves: list[MoveSpec],
+               attribution: dict[str, list[tuple[str, str]]],
+               ) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+    """Return (edges_to_add, edges_to_remove) for the proposed moves, relative
+    to the re-export-corrected canonical DOT.
 
-    Add: for each module M that references a moved item, M -> NEW_MOD.
-    Remove: M -> OLD_MOD only when M referenced *only* moved items from OLD_MOD
-            (i.e. nothing left in OLD_MOD that M still touches)."""
+    Add: for each consumer M that references a moved item, M -> NEW_MOD (SCIP
+         refs say *whether* M uses the item; this is precise).
+    Remove: the canonical DOT attributes M's import to the *facade* module M
+         literally named (`reexport.correct`), not the item's def-site. So a
+         removal must target that facade. `attribution[M]` is the per-leaf
+         (written_module, item_name) list; we drop M -> FACADE only when, after
+         the move, no item M imports still enters FACADE — i.e. every leaf at
+         FACADE is a moved item redirected away from it.
+
+    This subsumes the plain deep-import case (where the written facade equals the
+    def-site, so the dropped edge matches today's behavior) and the re-exported
+    case (facade != def-site) that a def-site removal silently missed."""
     moved_syms = {mv.symbol: mv for mv in moves if mv.symbol}
 
     mod_refs: dict[str, set[str]] = defaultdict(set)
-    sym_owner: dict[str, str] = {}
     for relpath, doc in docs.items():
         src_mod = relpath_to_module(relpath)
         if src_mod is None:
             continue
         for sym, _ in doc["refs"]:
             mod_refs[src_mod].add(sym)
-        for sym, _ in doc["defs"]:
-            sym_owner[sym] = src_mod
 
     add: set[tuple[str, str]] = set()
     remove: set[tuple[str, str]] = set()
     for mod, syms in mod_refs.items():
-        moved_seen: set[str] = set()
-        for sym in syms:
-            mv = moved_syms.get(sym)
-            if mv is None:
-                continue
+        referenced = [moved_syms[s] for s in syms if s in moved_syms]
+        if not referenced:
+            continue
+        # Map each moved item this consumer references by its simple name — the
+        # segment a `use` leaf ends in, which is how `attribution` keys it.
+        moved_names: dict[str, MoveSpec] = {
+            mv.old_path.rsplit("::", 1)[-1]: mv for mv in referenced
+        }
+        for mv in referenced:
             if not mv.is_delete and mv.new_module != mod:
                 add.add((mod, mv.new_module))
-            moved_seen.add(sym_owner.get(sym, ""))
-        for old_mod in moved_seen:
-            if old_mod == mod or not old_mod:
+
+        facade_items: dict[str, list[str]] = defaultdict(list)
+        for facade, name in attribution.get(mod, []):
+            facade_items[facade].append(name)
+        for facade, names in facade_items.items():
+            if facade == mod:
                 continue
-            still_uses_old = any(
-                s in syms and s not in moved_syms and sym_owner.get(s) == old_mod
-                for s in syms
-            )
-            if not still_uses_old:
-                remove.add((mod, old_mod))
+            loses = any(name in moved_names and moved_names[name].new_module != facade
+                        for name in names)
+            if not loses:
+                continue
+            stays = any(name not in moved_names or moved_names[name].new_module == facade
+                        for name in names)
+            if not stays:
+                remove.add((mod, facade))
     return add, remove
 
 
@@ -454,7 +472,13 @@ def cmd_item(args: argparse.Namespace) -> int:
             print(f"error: {e}", file=sys.stderr)
         return 1
 
-    add, remove = diff_edges(docs, args.move)
+    # The canonical DOT is re-export-corrected, so removals must target the
+    # facade module each consumer literally imports through, not the def-site.
+    # `attribution` carries that mapping; `known` is the DOT's module node set
+    # (item mode is koan-specific throughout, matching resolve_moves' default).
+    known = parse_dot(args.edges).nodes
+    attribution = reexport.attributions(known, args.src_root, "koan")
+    add, remove = diff_edges(docs, args.move, attribution)
     original_dot = args.edges.read_text(encoding="utf-8")
     new_modules = {mv.new_module for mv in args.move if not mv.is_delete}
 
