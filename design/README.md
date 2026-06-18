@@ -103,7 +103,7 @@ Type and module system ([typing/](typing/README.md)):
 
 Two patterns produce different doc-citation shapes and need different
 responses. The [doclinks signals](../tools/doclinks.py) audit and
-[modgraph](../tools/modgraph.py) score together can tell them apart
+[modgraph](../tools/modgraph/) score together can tell them apart
 mechanically; the heuristic below names what each is testing for, so
 future refactor analysis starts from the right question.
 
@@ -168,15 +168,18 @@ proposed structural change:
   co-citation and shared-phrase signals point at concepts the docs see
   but the code-graph may not. Pair with `doclinks gap` for the
   doc-vs-code-graph delta.
-- [`tools/modgraph.py`](../tools/modgraph.py) — scores the module
+- [`tools/modgraph score`](../tools/modgraph/) — scores the module
   tree against a cargo-modules DOT export with a fractal complexity
   metric (coupling + nesting + comprehension-aware per-file size +
-  owner credit for documented protocols). The bottom-line score is
+  owner credit for documented protocols). The DOT is built by
+  `tools/modgraph regen`, which re-attributes `uses` edges to the
+  written import surface (re-export correction) so facade-routed
+  imports aren't charged as deep coupling. The bottom-line score is
   the total cost over a fixed denominator (`--denominator`, default
   1000) — a constant scale, not the tree's LOC, so deleting code
   always lowers the score; use `--baseline FILE` to record runs to a
   tracked trend log.
-- [`tools/modgraph_rewrite.py item`](../tools/modgraph_rewrite.py) —
+- [`tools/modgraph rewrite item`](../tools/modgraph/rewrite.py) —
   SCIP-driven item-level what-if. Given an item (function, method,
   type) and a target module, produces a rewritten DOT + mirrored
   `src/` tree that can be scored against the baseline. Supports
@@ -190,12 +193,14 @@ current baseline (the `--move` / `--prose-redirect` targets below are
 placeholders — substitute the item and destination module under test):
 
 ```sh
-tools/modgraph.py observe/modules.dot --baseline observe/baseline.txt
-tools/modgraph_rewrite.py item \
-  --move 'koan::machine::core::scope::Scope::SOME_ITEM=koan::machine::core::TARGET' \
-  --prose-redirect 'src/machine/core/scope.rs=src/machine/core/TARGET.rs' \
-  observe/modules.dot observe/candidate.dot
-tools/modgraph.py observe/candidate.dot --baseline observe/baseline.txt
+python3 tools/modgraph regen --root koan --baseline observe/complexity.txt
+python3 tools/modgraph rewrite item \
+  --scip /tmp/koan.scip --edges observe/modules.dot --src-root src \
+  --output-edges /tmp/candidate.dot --output-src /tmp/candidate_src \
+  --move 'koan::machine::core::scope::Scope::SOME_ITEM=koan::machine::core::TARGET'
+# --prose-redirect (a score-time flag) models paired doc consolidation:
+python3 tools/modgraph score --edges /tmp/candidate.dot --src-root /tmp/candidate_src --root koan \
+  --prose-redirect 'src/machine/core/scope.rs=src/machine/core/TARGET.rs'
 ```
 
 The decision-log methodology — what counts as a measured win, when to

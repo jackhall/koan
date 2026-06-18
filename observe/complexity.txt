@@ -1,7 +1,9 @@
 # columns: date  short-sha  score  coupling  nesting  size  root-loc
 # (the four scoring columns are total cost / fixed denominator D=1000;
 #  root-loc is the absolute subtree LOC, tracked for context only)
-# managed by tools/modgraph.py --baseline; newest first, capped to 5 entries
+# managed by `tools/modgraph score|regen --baseline`; newest first, capped to 5 entries
+2026-06-18 0a9f8b44+ 3762.67 1585.24 1019.51 1157.92 15662
+2026-06-18 0a9f8b44+ 3762.67 1585.24 1019.51 1157.92 15662
+2026-06-18 0a9f8b44 5742.25 3550.31 1033.87 1158.07 15697
 2026-06-18 25c4e343+ 5742.25 3550.31 1033.87 1158.07 15697
 2026-06-18 b06ff66a+ 5742.25 3550.31 1033.87 1158.07 15697
-2026-06-18 e887de66+ 5838.54 3543.25 1032.16 1263.13 15668

@@ -23,7 +23,7 @@ Find refactor candidates by reading prose, not source structure. A concept descr
 ## Workflow
 
 1. Run `python3 tools/doclinks.py signals` for the mechanical pass — co-cited src triples, backref density, comment-density spikes, recurring n-gram phrases, reference chains, unowned concepts, doc hubs. JSON to stdout.
-   - Pair with `python3 tools/doclinks.py gap` to rank src-file *pairs* by `(docs_co_citing + shared_phrases) / (1 + structural_edges)` — concepts the docs see that the cargo-modules graph doesn't. High gap = candidate seam (hunt only); confirm with `modgraph_rewrite.py item` before refactoring, since a high-gap pair can still be net-negative under structural scoring.
+   - Pair with `python3 tools/doclinks.py gap` to rank src-file *pairs* by `(docs_co_citing + shared_phrases) / (1 + structural_edges)` — concepts the docs see that the cargo-modules graph doesn't. High gap = candidate seam (hunt only); confirm with `modgraph rewrite item` before refactoring, since a high-gap pair can still be net-negative under structural scoring.
 2. Filter the digest for semantic relevance (the tool can't): does each signal name a real concept, or is it incidental co-citation?
 3. Scan the full doc tree (not just doclinks's hits) for what the tool can't see: prescriptive "every X must Y" rules with participants, implicit references ("the dispatch model" with no link), owner-doc claims in intros. Skip any signal that doclinks already covers.
 4. Cross the two: do step 3's findings name the same concepts doclinks flagged, or surface new ones? Decide which (if any) doc *owns* each.

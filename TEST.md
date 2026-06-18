@@ -45,7 +45,7 @@ first, capped to five entries. A refactor should either reduce the score
 by more than rounding noise, reduce code duplication, or enforce some
 invariant using the type system.
 
-`tools/modgraph.py --baseline observe/complexity.txt` manages the file end-to-end:
+`tools/modgraph regen --baseline observe/complexity.txt` manages the file end-to-end:
 it prunes entries whose commit isn't reachable from HEAD (covers `git
 checkout`, `git reset --hard`, rebase drops) and every prior dirty-snapshot
 (`+`-suffixed) entry, then prepends today's measurement and prints a one-

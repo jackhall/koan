@@ -40,8 +40,7 @@ python3 tools/coverage.py --lcov "$LCOV" \
     ${REBASELINE:+--baseline observe/coverage.txt}
 
 step "5/5 modgraph score (DOT: $DOT)"
-cargo modules dependencies --package koan --lib \
-    --no-externs --no-sysroot --no-traits --no-fns --no-types \
-    > "$DOT"
-python3 tools/modgraph.py --edges "$DOT" --root koan \
+# `regen` runs cargo-modules, re-attributes uses edges to the written import
+# surface (re-export correction), refreshes observe/doc_graph.dot, then scores.
+python3 tools/modgraph regen --root koan --edges "$DOT" \
     ${REBASELINE:+--baseline observe/complexity.txt}
