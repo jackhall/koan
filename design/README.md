@@ -9,21 +9,21 @@ runtime (execution, memory, parsing, error handling, functional
 programming, monadic effects). The [typing/](typing/README.md)
 subdirectory carries the type-and-module system as one topic because
 both share the scheduler-driven elaborator and the nominal-identity
-carrier — see [typing/README.md](typing/README.md) for its own index.
+carrier — see [typing/](typing/README.md) for its own index.
 
 ## Doc index
 
 Root concerns:
 
-- [execution-model.md](execution-model.md) — the three-stage
+- [execution/](execution/README.md) — the three-stage
   parse → dispatch → execute pipeline, the deferred-dispatch
   scheduler with `pending_deps` / notify-list wakeups, tail-call
-  rewriting, and the per-call `RuntimeArena` lifecycle.
+  rewriting, and the per-call `KoanRegion` lifecycle.
 - [memory-model.md](memory-model.md) — value ownership through
-  `RuntimeArena` / `CallArena`, the storage shape, lexical scoping,
-  arena lifetime erasure, and the re-entrant-scope-write protocol.
-- [per-call-arena-protocol.md](per-call-arena-protocol.md) — the
-  single owner of the `Rc<CallArena>` contract: anchor carriers,
+  `KoanRegion` / `CallFrame`, the storage shape, lexical scoping,
+  region lifetime erasure, and the re-entrant-scope-write protocol.
+- [per-call-region/](per-call-region/README.md) — the
+  single owner of the `Rc<CallFrame>` contract: anchor carriers,
   lift-time anchor decision, the `alloc_object` cycle gate, active-frame
   propagation, the `outer_frame` chain for builtin-built frames, TCO
   frame reuse, and the ping-pong reserve rotation.
@@ -48,14 +48,14 @@ Root concerns:
 
 Type and module system ([typing/](typing/README.md)):
 
-- [typing/README.md](typing/README.md) — the typing subdirectory's
+- [typing/](typing/README.md) — the typing subdirectory's
   own index and the properties of the design (multi-abstract-type
   implicit resolution, higher-kinded abstraction, scoped coherence,
   versioning by import).
 - [typing/tokens.md](typing/tokens.md) — the parser-level
   Keyword / Type / Identifier split that lets type names occupy a
   syntactic slot without quoting.
-- [typing/ktype.md](typing/ktype.md) — `KType` variants, container
+- [typing/ktype/](typing/ktype/README.md) — `KType` variants, container
   parameterization, variance, type-position slot kinds, function
   signatures, and dispatch / slot-specificity.
 - [typing/elaboration.md](typing/elaboration.md) — how a type name
@@ -66,7 +66,7 @@ Type and module system ([typing/](typing/README.md)):
   recursion.
 - [typing/user-types.md](typing/user-types.md) — the `RecursiveSet`
   nominal model: a `KType::SetRef` member is the per-declaration identity
-  for STRUCT, named UNION, MODULE, opaque ascription, and NEWTYPE; the
+  for named UNION, MODULE, opaque ascription, and NEWTYPE; the
   schema filled in the set member; the `OfKind(KKind)` family-kind slot; the
   type-only finalize install through `Scope::register_type_upsert`; the
   `RECURSIVE TYPES` block for mutually recursive nominals.
@@ -126,21 +126,21 @@ this on `core/lookup/` (rejected, +0.4) and `core/scope/` (rejected,
 refused to wrap.
 
 A **seam** is a *contract* restated across docs because no source file
-owns it. The per-call arena protocol (which carriers anchor a
-`Rc<CallArena>`, how lift attaches an anchor, where the alloc cycle gate
+owns it. The per-call region protocol (which carriers anchor a
+`Rc<CallFrame>`, how lift attaches an anchor, where the alloc cycle gate
 fires) spans five design docs and ~10 source files: the docs restate the
 rule because no single source file holds the contract — the participants
 implement the protocol independently. Two fixes are available: a
 code-level seam (concentrate the participants in one module, scored by
 `modgraph`) or a doc-level seam (a single canonical page the participating
-docs cross-link to, with the code staying distributed). The per-call arena
+docs cross-link to, with the code staying distributed). The per-call region
 protocol took the latter shape — it stays code-distributed and gets a
 single owner doc.
 
 A third, stronger resolution is to *dissolve* the seam: fold the
 duplicated state into a single carrier so the protocol stops being a
 contract-by-convention at all. The nominal types take this path — a
-`STRUCT` / `UNION` / `MODULE` / `Result` / `SIG` declaration carries its
+`NEWTYPE` / `UNION` / `MODULE` / `Result` / `SIG` declaration carries its
 schema (or signature) in its `KType` identity and writes only
 `bindings.types`, so a reader finds the rule in one place (the identity owns
 the schema) rather than as a dual-write contract restated across the typing

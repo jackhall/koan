@@ -65,7 +65,7 @@ impl Workload for KoanWorkload {
 /// [`Outcome`]; only the harness reborrows the scheduler mutably to apply it. So "everything outside
 /// the harness is read-only" is structurally enforced, not a naming convention.
 ///
-/// See design/execution-model.md § the dispatcher / scheduler boundary.
+/// See design/execution/README.md § the dispatcher / scheduler boundary.
 pub struct KoanRuntime<'run> {
     pub(in crate::machine::execute) sched: Scheduler<KoanWorkload>,
     /// The ambient per-step context — the active per-call frame, slot reserve, run frame, the

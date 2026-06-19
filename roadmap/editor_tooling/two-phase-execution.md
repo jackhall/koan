@@ -1,7 +1,7 @@
 # Two-phase execution: build-time with pegged inputs, run-time resume
 
 **Problem.** The design model
-([execution-model.md § Pegged and free execution](../../design/execution-model.md#pegged-and-free-execution),
+([execution/scheduler.md § Pegged and free execution](../../design/execution/scheduler.md#pegged-and-free-execution),
 [typing/scheduler.md](../../design/typing/scheduler.md)) is that build-time and
 run-time are the **same scheduler engine**, differing only in which nodes
 are pegged (held without execution until external data or effects arrive).
@@ -45,27 +45,27 @@ to build first and "JIT phase" to build second.
 
 - *Peg-set scope — open.* Which categories of node count as pegged at
   build time is enumerated in
-  [execution-model.md § Pegged and free execution](../../design/execution-model.md#pegged-and-free-execution)
+  [execution/scheduler.md § Pegged and free execution](../../design/execution/scheduler.md#pegged-and-free-execution)
   in principle — user-supplied input, plugin source files, syscalls,
   network calls. Which concrete builtins / `KObject` shapes carry the peg
   marker, and whether the marker is intrinsic to the builtin or attached
   by the build-time driver, remains to be worked out.
 - *Snapshot format — decided.* The artifact is a serialized
   scheduler-plus-ownership-state snapshot: `NodeStore`, `DepGraph`, the
-  arena heap-pinning chain, plus the identifiers of pegged nodes. Not a
+  region heap-pinning chain, plus the identifiers of pegged nodes. Not a
   separate bytecode IR; not a native object file; not an inline-cache
   sidecar. Run-time consumes the snapshot directly, supplies the pegged
   inputs and effects, and the scheduler resumes.
 - *Permissive vs strict build-time errors — open.* The user-facing choice
   is whether the build-time phase permits unresolved type bindings — the
-  [dispatch-time name placeholder](../../design/execution-model.md#dispatch-time-name-placeholders)
+  [dispatch-time name placeholder](../../design/execution/name-placeholders.md#dispatch-time-name-placeholders)
   mechanism reaching across into build-time — or insists every type
   identifier resolves before the snapshot is taken. Permissive matches the
   dynamic-dispatch ergonomics today's runtime exhibits and gives a soft-
   rejection mode for programs that work but can't be fully resolved at
   build time; strict matches what a conventional separate-from-runtime
   type system would enforce. Likely a per-build switch.
-- *Closure interaction — decided.* The leak fix's per-call arena + lexical
+- *Closure interaction — decided.* The leak fix's per-call region + lexical
   closure model is the load-bearing memory shape. Snapshot format and
   resume path both have to honor it. Work through a closure-heavy test
   program before committing to a snapshot format.

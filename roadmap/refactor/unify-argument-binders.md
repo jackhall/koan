@@ -50,7 +50,7 @@ waste is the arg-binding round-trip, not the future type.
 ## Dependencies
 
 An engine-internal dispatch-path hygiene item; update
-[design/execution-model.md](../../design/execution-model.md) if the argument-binding
+[design/execution/README.md](../../design/execution/README.md) if the argument-binding
 vocabulary it names changes.
 
 **Requires:** none — engine-internal.

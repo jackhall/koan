@@ -72,7 +72,7 @@ in one sub-case only, breaking the "slot-only marker" invariant.
 ## Dependencies
 
 An engine-internal `KType` hygiene item on the type-language substrate; update
-[design/typing/ktype.md](../../design/typing/ktype.md) if the variant vocabulary it names
+[design/typing/ktype/README.md](../../design/typing/ktype/README.md) if the variant vocabulary it names
 changes.
 
 **Requires:** none — engine-internal.

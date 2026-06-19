@@ -16,7 +16,7 @@
 //! inspects none. The Koan interpreter ([`crate::machine`]) is the sole workload; it instantiates
 //! the scheduler and drives it through the inherent-method contract.
 //!
-//! See design/execution-model.md and design/memory-model.md.
+//! See design/execution/README.md and design/memory-model.md.
 
 use dep_graph::DepGraph;
 use node_store::NodeStore;

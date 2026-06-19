@@ -111,7 +111,7 @@ fn fn_with_forward_user_bound_return_type_works() {
 }
 
 /// Pins the surface-form-survives-bind guarantee on `KObject::TypeNameRef` —
-/// see [ktype.md § TypeNameRef](../../../../design/typing/ktype.md#typenameref--surface-form-survives-bind).
+/// see [ktype/slots-and-signatures.md § TypeNameRef](../../../../design/typing/ktype/slots-and-signatures.md#ktypeunresolved--surface-form-survives-bind).
 #[test]
 fn fn_return_type_surface_name_preserved_in_error() {
     let region = KoanRegion::new();

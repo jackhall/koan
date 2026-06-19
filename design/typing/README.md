@@ -15,7 +15,7 @@ Type-system mechanics:
 
 - [tokens.md](tokens.md) — the parser-level Keyword / Type / Identifier
   split that lets type names occupy a syntactic slot without quoting.
-- [ktype.md](ktype.md) — `KType` variants, container parameterization,
+- [ktype/](ktype/README.md) — `KType` variants, container parameterization,
   variance, type-position slot kinds, function signatures, dispatch and
   slot-specificity, and the limitations the static-typing work will close.
 - [elaboration.md](elaboration.md) — how a type name resolves to a
@@ -25,7 +25,7 @@ Type-system mechanics:
   `KType::Unresolved` bare-leaf transient, and the two-layer
   resolution memo that amortizes elaboration cost.
 - [user-types.md](user-types.md) — the `RecursiveSet` nominal model: a
-  member's `KType::SetRef` is the per-declaration identity for STRUCT, named
+  member's `KType::SetRef` is the per-declaration identity for NEWTYPE, named
   UNION, MODULE, opaque ascription, and NEWTYPE, with `SetLocal` siblings and
   the `RecursiveGroup` handle. Covers specificity stratification with the
   `OfKind(KKind)` family-kind slot, finalize-time type-only install through

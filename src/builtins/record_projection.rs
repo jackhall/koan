@@ -9,7 +9,7 @@
 //! This closes record subtyping's projection direction: it can break an
 //! `AmbiguousDispatch` tie between two width-incomparable record arms by
 //! re-tagging the carrier so only one arm admits. See
-//! [design/typing/ktype.md § Variance](../../design/typing/ktype.md#variance).
+//! [design/typing/ktype/parameterization-and-variance.md § Variance](../../design/typing/ktype/parameterization-and-variance.md#variance).
 
 use std::rc::Rc;
 

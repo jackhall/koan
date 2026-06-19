@@ -5,7 +5,7 @@
 //! all Koan semantics — the per-call region lift, the return-contract enforcement, the lexical-chain
 //! assembly — live here.
 //!
-//! See design/execution-model.md and design/memory-model.md.
+//! See design/execution/README.md and design/memory-model.md.
 
 use std::rc::Rc;
 

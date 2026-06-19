@@ -8,7 +8,7 @@
 //! types. The scheduler stores only `queues`/`deps`/`store`; the driver installs the ambient context
 //! per step and reads it back through the methods below.
 //!
-//! See design/per-call-arena-protocol.md and design/execution-model.md.
+//! See design/per-call-region/README.md and design/execution/README.md.
 
 use std::rc::Rc;
 
@@ -25,10 +25,10 @@ use super::runtime::KoanRuntime;
 #[derive(Default)]
 pub(in crate::machine::execute) struct AmbientContext {
     /// Active per-call cart (`Rc<CallFrame>`) of the slot currently being executed. See
-    /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
+    /// [per-call-region/frames.md § Active-frame propagation](../../../design/per-call-region/frames.md#active-frame-propagation).
     active_frame: Option<Rc<CallFrame>>,
     /// Per-slot reserve frame for the running step. `None` between slot steps. See
-    /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
+    /// [per-call-region/frames.md § Ping-pong reserve frame](../../../design/per-call-region/frames.md#ping-pong-reserve-frame).
     active_reserve: Option<Rc<CallFrame>>,
     /// The run frame: a non-dying frame adopting the top-level run scope, lazily built on the first
     /// run-lifetime submission. Top-level slots carry it as their `frame` cart, so `active_frame` is
@@ -53,7 +53,7 @@ pub(in crate::machine::execute) struct AmbientContext {
 /// RAII-shaped save/restore wrapper around the per-step `active_frame`, `active_payload`,
 /// and `active_reserve` swap that brackets each iteration of [`KoanRuntime::execute`](super::runtime::KoanRuntime::execute).
 /// Bookkeeping spine for the ping-pong reserve-frame rotation; see
-/// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
+/// [per-call-region/frames.md § Ping-pong reserve frame](../../../design/per-call-region/frames.md#ping-pong-reserve-frame).
 pub(in crate::machine::execute) struct SlotStepGuard {
     prev_frame: Option<Rc<CallFrame>>,
     prev_payload: Option<NodePayload>,
@@ -171,7 +171,7 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Active slot's frame `Rc`. See
-    /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
+    /// [per-call-region/frames.md § Active-frame propagation](../../../design/per-call-region/frames.md#active-frame-propagation).
     pub(in crate::machine::execute) fn current_frame(&self) -> Option<Rc<CallFrame>> {
         self.ambient.active_frame.clone()
     }

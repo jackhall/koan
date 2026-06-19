@@ -130,7 +130,7 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
 
 /// Recursive tail-call through a `MATCH` arm. Pins the refcount-driven reuse
 /// refusal one step out, resume one step later; see
-/// [per-call-arena-protocol.md § MATCH frame lifetime under tail recursion](../../../../design/per-call-arena-protocol.md#match-frame-lifetime-under-tail-recursion).
+/// [per-call-region/frames.md § MATCH frame lifetime under tail recursion](../../../../design/per-call-region/frames.md#match-frame-lifetime-under-tail-recursion).
 #[test]
 fn match_driven_tail_recursion_completes() {
     let region = KoanRegion::new();

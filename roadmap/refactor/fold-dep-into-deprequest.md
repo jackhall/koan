@@ -55,7 +55,7 @@ currency vs dispatcher currency), not by AST-freeness — leaving the shared
 ## Dependencies
 
 An engine-internal dispatch-path hygiene item; update
-[design/execution-model.md](../../design/execution-model.md) (the dispatcher /
+[design/execution/README.md](../../design/execution/README.md) (the dispatcher /
 scheduler boundary) if the dep-request vocabulary it names changes.
 
 **Requires:** none — engine-internal.

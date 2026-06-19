@@ -94,7 +94,7 @@ pub enum KType<'a> {
     /// value's `ktype()` returns it, and it admits nothing on its own
     /// (`accepts_part` is `false`). Admission against a precise slot is syntactic
     /// equality of the surface shadow — see
-    /// [ktype.md § Variance](../../../../design/typing/ktype.md#variance).
+    /// [ktype/parameterization-and-variance.md § Variance](../../../../design/typing/ktype/parameterization-and-variance.md#variance).
     DeferredReturn(DeferredReturnSurface),
     Identifier,
     /// Lazy slot: accepts an unevaluated `ExpressionPart::Expression` so the builtin chooses

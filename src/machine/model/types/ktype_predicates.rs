@@ -1,6 +1,6 @@
 //! Per-`ExpressionPart` admissibility, per-value type-tag checks, and specificity
 //! ordering for dispatch tie-breaking on `KType`. See
-//! [design/typing/ktype.md](../../../../design/typing/ktype.md).
+//! [design/typing/ktype/README.md](../../../../design/typing/ktype/README.md).
 
 use std::rc::Rc;
 
@@ -592,7 +592,7 @@ pub fn result_field_param_index(carrier_name: &str, tag: &str) -> Option<usize> 
 ///   iff its surface shadow equals the candidate's; every other slot rejects, because a
 ///   deferred return is opaque until per-call elaboration and so refines nothing more
 ///   precise than its own shadow. See
-///   [ktype.md § Variance](../../../../design/typing/ktype.md#variance).
+///   [ktype/parameterization-and-variance.md § Variance](../../../../design/typing/ktype/parameterization-and-variance.md#variance).
 /// - Params contravariant with width-drop: every `Argument` the value declares must
 ///   appear in `params` (a value-required param the slot doesn't promise is a width
 ///   violation → `false`); for a shared name, the slot's param must be equal-or-more-

@@ -82,7 +82,7 @@ module. Two application surfaces reach it:
   type-shaped value and admits only a constructible type or a functor.
 
 The classification machinery for these lanes is owned by
-[execution-model.md § Dispatch-time name placeholders](../execution-model.md#dispatch-time-name-placeholders);
+[execution/name-placeholders.md § Dispatch-time name placeholders](../execution/name-placeholders.md#dispatch-time-name-placeholders);
 the functor/function distinction survives only at classification (for the
 `KFunctor` typing and the `TypeHeadDeferred` diagnostic gate), never at
 execution.
@@ -112,7 +112,7 @@ dispatch.
 ## Type identity and the one-way wall
 
 `KType::KFunctor { params, ret }` is a distinct structural variant.
-`params` is a name-keyed [parameter `Record<KType>`](ktype.md#record-fields-and-ktype-hashing) —
+`params` is a name-keyed [parameter `Record<KType>`](ktype/records-and-limits.md#record-fields-and-ktype-hashing) —
 the same substrate `KFunction` uses — so a functor's parameter names (including
 capitalized `Type`-token names like `Ty` / `Er`) are part of its identity and
 round-trip through `KType::name()`. Identity is the record's order-blind
@@ -121,7 +121,7 @@ declared in either order. The admissibility helper at
 [`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
 matches `KFunctor → KFunctor` on the same function-subtyping rules used for
 `KFunction → KFunction` — contravariant params with width-drop, covariant
-return (see [ktype.md § Variance](ktype.md#variance)) — but refuses both
+return (see [ktype/parameterization-and-variance.md § Variance](ktype/parameterization-and-variance.md#variance)) — but refuses both
 directions of the `KFunctor`/`KFunction` cross — a functor cannot be passed
 where a function is expected, and vice versa. The wall lives entirely at the type-admission
 layer; the underlying `KFunctionValue` is shared. `KType::join` mirrors the
@@ -250,7 +250,7 @@ pure decide that lowers that `Suspend` into an `Outcome::ParkThenContinue` over
 a single body-block [`DepRequest::BodyBlock`](../../src/machine/execute/dispatch.rs) — the
 body statements plus the return-type expression as deps in the harness-acquired
 per-call frame (see
-[per-call-arena-protocol.md § Active-frame propagation](../per-call-arena-protocol.md#active-frame-propagation))
+[per-call-region/frames.md § Active-frame propagation](../per-call-region/frames.md#active-frame-propagation))
 — whose dep-finish runs `resume`. The `resume` closure
 runs `per_call_ret.matches_value(body_value)` and surfaces mismatches with
 `(per-call return type)` wording — a passing value is returned as-is (no
@@ -274,7 +274,7 @@ admission helper at
 [`function_compat`](../../src/machine/model/types/ktype_predicates.rs) then admits
 a deferred return by syntactic shadow equality — an `Any` slot admits any deferred
 return, a `KType::DeferredReturn` slot admits iff the shadows match
-([ktype.md § Variance](ktype.md#variance)). The deferred-*parameter* half of this
+([ktype/parameterization-and-variance.md § Variance](ktype/parameterization-and-variance.md#variance)). The deferred-*parameter* half of this
 precision — a per-call parameter type that reads as `Any` — is folded into
 [modular implicits (stage 5)](../../roadmap/predicate_typing/modular-implicits.md),
 where implicit search dispatches on parameter types.
@@ -363,7 +363,7 @@ is the path the test suite pins.
 
 The `:(...)` type-expression sigil parameterizes `:(LIST OF T)`, `:(MAP K -> V)`,
 and `:(FN (args) -> R)`
-([ktype.md § Container type parameterization](ktype.md#container-type-parameterization))
+([ktype/parameterization-and-variance.md § Container type parameterization](ktype/parameterization-and-variance.md#container-type-parameterization))
 for positional structural types. Sharing constraints,
 modular-implicit signature constraints, and witness-typed
 instantiations ride on the **infix `WITH` builtin**, which keys its

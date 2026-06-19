@@ -682,8 +682,8 @@ mod tests {
     }
 
     /// Pins the "any sub-expression in the value position" path. Koan has no
-    /// arithmetic operators today (per TUTORIAL.md § "No arithmetic, comparison, or
-    /// logical operators"), so a user-fn call stands in for non-trivial dispatch.
+    /// arithmetic operators today (per tutorial/README.md § "What isn't in the
+    /// language yet"), so a user-fn call stands in for non-trivial dispatch.
     #[test]
     fn construct_with_operator_value() {
         let region = KoanRegion::new();

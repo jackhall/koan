@@ -137,7 +137,7 @@ check fires:
   break ties. Concrete carrier types outrank `KType::Any`; a user-type
   identity outranks the `OfKind(KKind)` family kind of its own family. The full ranking
   rules and variance behavior live at
-  [ktype.md § Variance](ktype.md#variance) and
+  [ktype/parameterization-and-variance.md § Variance](ktype/parameterization-and-variance.md#variance) and
   [user-types.md § Specificity stratification](user-types.md#specificity-stratification).
 - [`KType::matches_value`](../../src/machine/model/types/ktype_predicates.rs)
   — runtime content check. Walks a runtime value's contents against a
@@ -173,7 +173,7 @@ visibility exemption.
 **Builtins are immutable and unshadowable.** A user binding that collides with a builtin is
 a `Rebind` at any scope depth — never a shadow, never a merge:
 
-- A user *type* (nominal `STRUCT` / `UNION` / `MODULE` / `SIG` / `NEWTYPE` / `RECURSIVE`
+- A user *type* (nominal `UNION` / `MODULE` / `SIG` / `NEWTYPE` / `RECURSIVE`
   declaration, or a `LET <TypeName> = …` / `VAL` abstract member) naming a builtin type is
   rejected — [`register_type_upsert`](../../src/machine/core/scope.rs) and
   [`register_user_type`](../../src/machine/core/scope.rs) consult
@@ -201,7 +201,7 @@ through unchanged, so the short-circuit never overrides an inner scope.
 ## Why this is a foundation, not a seam
 
 A *seam* is a contract restated across docs because no source file
-owns it — the per-call arena protocol was a seam that got a single
+owns it — the per-call region protocol was a seam that got a single
 canonical doc owner, while the nominal dual-write was a seam *dissolved*
 outright by folding each binder's two entries into one `KType` identity. A
 *foundation* is a source file every operation in some concern *has*
@@ -227,7 +227,7 @@ What each topic doc adds beyond this protocol:
   elaborator → bare-leaf coercion → surface-name carrier) and the
   per-scope binding-map partition that separates type-name lookups
   from value-name lookups.
-- [ktype.md](ktype.md) — `KType` variants, variance under the three
+- [ktype/README.md](ktype/README.md) — `KType` variants, variance under the three
   predicates, container parameterization, and the overload-bucket
   visibility filter as it interacts with slot-specificity.
 - [user-types.md](user-types.md) — the `RecursiveSet` nominal model
@@ -235,7 +235,7 @@ What each topic doc adds beyond this protocol:
   through `Scope::register_type_upsert`, the specificity stratification
   for a concrete `SetRef` vs `OfKind(KKind)` vs `Any`, and the
   `RECURSIVE TYPES` block for mutually recursive nominals.
-- [execution-model.md § Dispatch-time name placeholders](../execution-model.md#dispatch-time-name-placeholders)
+- [execution/name-placeholders.md § Dispatch-time name placeholders](../execution/name-placeholders.md#dispatch-time-name-placeholders)
   — how forward references park through the `placeholders` /
   `pending_overloads` tables and resume on producer finalize, plus
   the submission-time binder install that prevents `UnboundName` /

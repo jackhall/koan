@@ -10,7 +10,7 @@
 //! the cycle-gate walkers) lives in [`super::arena`]. See
 //! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the lifetime-erasure soundness argument and
-//! [per-call-arena-protocol.md § Cycle gate](../../../design/per-call-arena-protocol.md#cycle-gate-on-alloc_object)
+//! [per-call-region/lifecycle.md § Cycle gate](../../../design/per-call-region/lifecycle.md#cycle-gate-on-alloc_object)
 //! for the redirect `alloc` enforces.
 
 use std::cell::RefCell;

@@ -1,7 +1,7 @@
 # Type elaboration
 
 Type elaboration runs in the same scheduler that runs value evaluation.
-A type-binding site (`LET Ty = ...`, `STRUCT Ty = ...`, `UNION Ty = ...`)
+A type-binding site (`LET Ty = ...`, `NEWTYPE Ty = ...`, `UNION Ty = ...`)
 registers a placeholder in the
 [`Bindings`](../../src/machine/core/scope.rs) façade on `Scope` — the
 same `placeholders` table value bindings use, sitting alongside `data` and
@@ -22,10 +22,10 @@ arm parks only on an *earlier still-finalizing* type (a binder visible at the
 consumer's position whose body has not finished); `pending_types` survives only
 to mark which binders are in flight. This composes with value-name forward
 references uniformly — both are lexically gated
-([execution-model.md § Dispatch-time name placeholders](../execution-model.md#dispatch-time-name-placeholders)).
+([execution/name-placeholders.md § Dispatch-time name placeholders](../execution/name-placeholders.md#dispatch-time-name-placeholders)).
 
 **Self-recursion threads the declaring name.** A binder threads its own name into
-its body, so a self-reference (`STRUCT Tree = (left :Tree)`) lowers to a transient
+its body, so a self-reference (`NEWTYPE Tree = :{left :Tree}`) lowers to a transient
 [`KType::RecursiveRef(name)`](../../src/machine/model/types/ktype.rs) rather than
 forward-referencing a not-yet-visible binding. At the member's finalize,
 `seal_recursive_refs` seals every `RecursiveRef` whose name is a set member to a
@@ -44,7 +44,7 @@ block boundary, so no unresolved forward reference escapes.
 
 **One canonical runtime type representation.** A type flows raw as a `&KType` in the
 value channel's `Type` arm ([`Carried::Type`](../../src/machine/model/values/carried.rs)),
-and a type binding finalizes to the arena `&KType` in `bindings.types`. Consumers read the
+and a type binding finalizes to the region `&KType` in `bindings.types`. Consumers read the
 elaborated type directly; there is no surface/elaborated split, no per-lookup
 re-elaboration, no parallel surface-name representation flowing through
 dispatch. A recursive group's identity is its `RecursiveSet` pointer, so
@@ -76,7 +76,7 @@ binds normally and writes through `Scope::register_type` to land in
 ## Every definition-time site is gated to its binder's position
 
 A definition-time type resolution is gated to the lexical position of the binder
-that owns it: STRUCT / UNION / NEWTYPE field types, FN and FUNCTOR parameter
+that owns it: NEWTYPE / UNION field types, FN and FUNCTOR parameter
 slots, and FN / MATCH / TRY return types all resolve against the chain at their
 binder's cutoff (`classify_return_type` / `resolve_arm_return_contract` thread the
 chain for the return-type sites). A field or parameter naming a type declared
@@ -131,9 +131,9 @@ cross-link this section rather than restating its slice.
   error, and a builtin name falls back to `KType::from_name`. Parameterized shapes
   (`:(LIST OF X)`, `:(MAP K -> V)`) sub-Dispatch through the standalone dispatcher
   rather than recursing here, so the only recursion is the sibling-result reduce.
-  FN-signature, STRUCT/UNION field-type, and FUNCTOR per-call return-type dep-finishes
+  FN-signature, NEWTYPE/UNION field-type, and FUNCTOR per-call return-type dep-finishes
   reduce to this leaf walk; see
-  [execution-model.md § Dispatch-time name placeholders](../execution-model.md#dispatch-time-name-placeholders)
+  [execution/name-placeholders.md § Dispatch-time name placeholders](../execution/name-placeholders.md#dispatch-time-name-placeholders)
   for the parking integration.
 - **Layer 4 — bare-leaf dispatch ingress** in
   [`resolve_type_identifier.rs`](../../src/machine/execute/dispatch/resolve_type_identifier.rs).
@@ -164,16 +164,16 @@ slice of the [lookup → admit protocol](lookup-protocol.md)'s Layer 2.
 The [`Bindings`](../../src/machine/core/bindings.rs) façade owns four
 maps: `data` for values, `functions` for registered overloads,
 `placeholders` for in-flight dispatch tasks, and `types` for type-name →
-`&KType` arena pointers. Token-class-driven lookup at the resolver
+`&KType` region pointers. Token-class-driven lookup at the resolver
 decides which map to consult — Type-class tokens consult `types`,
 identifier tokens consult `data`. Builtin type names *and* `LET Ty =
-Number`-style aliases live in `bindings.types` as arena-allocated
-`&KType` ([`RuntimeArena::alloc_ktype`](../../src/machine/core/arena.rs)),
+Number`-style aliases live in `bindings.types` as region-allocated
+`&KType` ([`KoanRegion::alloc_ktype`](../../src/machine/core/arena.rs)),
 reachable through
 [`Scope::resolve_type`](../../src/machine/core/scope.rs) on the same
 pointer as the builtin.
 
-STRUCT / UNION / MODULE / Result / SIG declarations are all single
+NEWTYPE / UNION / MODULE / Result / SIG declarations are all single
 type-namespace writes: each installs only its identity-bearing `&KType` into
 `bindings.types` (see
 [type-only nominal install](user-types.md#type-only-nominal-install)), so
@@ -186,8 +186,8 @@ role and its value role, so it installs one type-side identity like every other
 nominal binder — no binder dual-writes `(bindings.types, bindings.data)`.
 
 [LET routing in `let_binding`](../../src/builtins/let_binding.rs) detects
-Type-class LHS and dispatches through `register_type` for `TypeExprRef`-LHS
-RHSes (type-valued aliases). A bind-time
+Type-class LHS and dispatches through `register_type` for type-valued-alias
+RHSes. A bind-time
 `KErrorKind::TypeClassBindingExpectsType` diagnostic gates the RHS via an
 **allowlist**, `is_admissible_type_class_rhs`: a Type-class LET admits an RHS
 only if it carries type-language identity — any value-channel `Type` arm
@@ -309,8 +309,8 @@ admission rule per cache entry on a bare-name part:
 | `None` (non-bare part)   | Fall back to shape-only `arg.matches(part)`.                                     |
 
 **Binder declaration slots bypass the cache.** A slot typed `KType::Identifier`
-or `KType::TypeExprRef` owns the name (`x` in `LET x = …`, `Ty` in
-`STRUCT Ty = …`), so admission must be shape-only regardless of whether
+or `KType::OfKind(KKind::ProperType)` owns the name (`x` in `LET x = …`, `Ty` in
+`NEWTYPE Ty = …`), so admission must be shape-only regardless of whether
 the name happens to be bound elsewhere. A `SigiledTypeExpr` or `RecordType`
 part still admits speculatively in such a slot — it sub-dispatches to a
 type-side carrier downstream. The same shape-only-on-binder-slot rule covers

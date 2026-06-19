@@ -7,8 +7,8 @@
 //!
 //! Binders can appear as arbitrary nested subexpressions, so this runs on *every* dispatch
 //! submission, not just block statements. See
-//! [design/execution-model.md § Submission-time binder install and recursive
-//! sub-Dispatch](../../../../design/execution-model.md#submission-time-binder-install-and-recursive-sub-dispatch).
+//! [design/execution/README.md § Submission-time binder install and recursive
+//! sub-Dispatch](../../../../design/execution/name-placeholders.md#submission-time-binder-install-and-recursive-sub-dispatch).
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::UntypedKey;

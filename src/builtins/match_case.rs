@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn recursive_tagged_match_no_uaf() {
-        // Pins the `FrameStorage.outer` chain — per-call-arena-protocol.md
+        // Pins the `FrameStorage.outer` chain — per-call-region/README.md
         // § MATCH frame lifetime under tail recursion.
         let bytes = run_program(
             "UNION Bit = (One :Null Zero :Null)\n\

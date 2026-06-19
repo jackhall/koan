@@ -55,7 +55,7 @@ exhaustive test that the recursion installs every nested binder form.
 
 An engine-internal parse/dispatch-path hygiene item. Update
 [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md) (the
-structural parse cache) and [design/execution-model.md](../../design/execution-model.md)
+structural parse cache) and [design/execution/README.md](../../design/execution/README.md)
 (submission-time binder install) if the vocabulary they name changes.
 
 **Requires:** none — engine-internal.

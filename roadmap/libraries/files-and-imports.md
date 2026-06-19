@@ -61,7 +61,7 @@ another. This item closes that gap.
 - *Circular imports — decided.* Resolved via the existing dispatch-as-node
   scheduler by treating cross-file references as another deferred
   dependency, consistent with the
-  [dispatch-time name placeholder](../../design/execution-model.md#dispatch-time-name-placeholders)
+  [dispatch-time name placeholder](../../design/execution/name-placeholders.md#dispatch-time-name-placeholders)
   mechanism. Disallowing or requiring forward-declaration discipline is
   rejected — the scheduler already handles deferred resolution generically
   and forcing source order on multi-file projects is gratuitous.

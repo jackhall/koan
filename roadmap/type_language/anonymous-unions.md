@@ -21,7 +21,7 @@ construct a tagged value in every arm, or coarsen the slot to `Any`.
 - A slot typed `:(A | B)` admits any value whose type is `A` or `B`, and each
   member is a subtype of the union.
 - The agreed `T` of an FN or a
-  [MATCH / TRY arm](../../design/execution-model.md#arms-as-own-blocks) can be
+  [MATCH / TRY arm](../../design/execution/calls-and-values.md#arms-as-own-blocks) can be
   `:(A | B)` with no nominal declaration.
 - A union value passed to a type-dispatched function selects the arm matching
   the value's runtime type.
@@ -42,7 +42,7 @@ construct a tagged value in every arm, or coarsen the slot to `Any`.
 - *Construction — decided.* A dedicated union-value constructor builtin.
   MATCH is not modified to auto-wrap arm results — its arms agree on a declared
   return type instead (see
-  [execution-model.md § Arms as own blocks](../../design/execution-model.md#arms-as-own-blocks)).
+  [execution/calls-and-values.md § Arms as own blocks](../../design/execution/calls-and-values.md#arms-as-own-blocks)).
 - *Surface `|` — open; rides n-ary operators.* The `:(A | B | C)` infix
   surface rides the dispatched-operator machinery from
   [user-definable n-ary operators](../operator_chaining/n-ary-operators.md): `|`

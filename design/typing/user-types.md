@@ -1,6 +1,6 @@
 # User-declared nominal types
 
-A `STRUCT`, named `UNION`, or `NEWTYPE` declaration is a *nominal* type: its
+A `NEWTYPE` or named `UNION` declaration is a *nominal* type: its
 identity is its declaration, not its shape. Nominal identity lives in the
 [`RecursiveSet`](../../src/machine/model/types/recursive_set.rs) — one
 `Rc`-owned strongly-connected component of mutually-recursive nominals. A
@@ -57,7 +57,7 @@ for abstract-type members (SIG-declared or minted by opaque ascription) — with
 A member's identity is `(Rc::as_ptr(set), index)` — never its schema, which may
 be cyclic. `SetRef` equality and hashing key on the pointer and index only
 ([ktype.rs](../../src/machine/model/types/ktype.rs)); the member's `name` and
-`scope_id` are diagnostics, never identity. Two distinct STRUCTs sit in distinct
+`scope_id` are diagnostics, never identity. Two distinct nominals sit in distinct
 sets (or distinct indices within one set), so they carry distinct identities —
 the per-declaration-distinctness dispatch keys on. Because the identity is a
 pointer, identity comparison never descends the (possibly cyclic) schema.
@@ -67,7 +67,7 @@ pointer, identity comparison never descends the (possibly cyclic) schema.
 Lifting any `SetRef` out of a dying frame is `Rc::clone` of the whole set
 ([lift.rs](../../src/machine/execute/lift.rs)). The recursive group travels as a
 single unit, inherently cycle-aware — no copy, no visited-map traversal, no
-`Rc<CallArena>` anchor, because the set is `Rc`-owned rather than arena-owned.
+`Rc<CallFrame>` anchor, because the set is `Rc`-owned rather than region-owned.
 The `SetLocal` siblings inside a member's schema ride along unchanged; they
 resolve against the cloned set's pointer.
 
@@ -89,11 +89,12 @@ every dispatch admit pass runs.
 
 ## Value carriers and the type / value partition
 
-Instance carriers — [`KObject::Struct`](../../src/machine/model/values/kobject.rs)
-and [`KObject::Tagged`](../../src/machine/model/values/kobject.rs) — carry
-`(set, index)` directly, populated at finalize time. `ktype()` on either
+The tagged-union instance carrier [`KObject::Tagged`](../../src/machine/model/values/kobject.rs)
+carries `(set, index)` directly, populated at finalize time. `ktype()`
 synthesizes `KType::SetRef { set, index }` by `Rc::clone`ing the carried set — the
-dispatch identity is the set pointer and index, not the schema. Module and
+dispatch identity is the set pointer and index, not the schema. Record-repr and
+other newtype instances instead ride [`KObject::Wrapped`](../../src/machine/model/values/kobject.rs),
+which carries a `type_id: &KType`. Module and
 signature values ride the value channel's `Type` arm as
 [`KType::Module { .. }`](../../src/machine/model/types/ktype.rs) /
 `KType::Signature { .. }` ([`Carried::Type`](../../src/machine/model/values/carried.rs)); the
@@ -103,7 +104,7 @@ identity is the carried `&KType` itself rather than a synthesized shadow.
 nominal type token (passing `Outcome` to a constructor or ATTR call) surfaces the
 [`bindings.types` identity in the `Type` arm](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
 on demand via `resolve_type_leaf_carrier` — no
-value-side schema carrier exists for struct / union / module / Result.
+value-side schema carrier exists for newtype / union / module / Result.
 
 ## Tagged-union variants
 
@@ -155,7 +156,7 @@ tracked under
 
 ## Type-only nominal install
 
-STRUCT / UNION-named / MODULE / Result finalize write **only** `bindings.types`:
+NEWTYPE / UNION-named / MODULE / Result finalize write **only** `bindings.types`:
 each builds its identity (a `KType::SetRef` into its sealed set, or
 `KType::Module { module, frame }`) and installs it through
 [`Scope::register_type_upsert`](../../src/machine/core/scope.rs), which inserts if
@@ -190,8 +191,8 @@ valid surface — every tagged value carries a real per-declaration identity.
 Each set member carries its schema in a two-phase
 [`RefCell`](../../src/machine/model/types/recursive_set.rs) cell: the set is sealed
 with its membership and each member's `kind` known eagerly, but the
-[`NominalSchema`](../../src/machine/model/types/recursive_set.rs) (`Struct` record,
-`Tagged` tag→type map, `Newtype` repr, or `TypeConstructor` schema + param names)
+[`NominalSchema`](../../src/machine/model/types/recursive_set.rs) (`Tagged` tag→type map,
+`NewType` repr, or `TypeConstructor` schema + param names)
 is filled at the member's own finalize. A member's schema names its siblings as
 `SetLocal` indices.
 
@@ -217,16 +218,16 @@ so a back-edge (a field naming the declaring type) lowers to a transient
 `RecursiveRef` and seals to a `SetLocal` against the declaring member's own
 singleton set. Mutual recursion of two or more types *does* need a construct,
 because type names obey strict source order (see
-[elaboration.md](elaboration.md)): in a bare `STRUCT A = (b :B)` / `STRUCT B =
-(a :A)` pair, whichever is written first forward-references the other, a position
+[elaboration.md](elaboration.md)): in a bare `NEWTYPE A = :{b :B}` / `NEWTYPE B = :{a :A}`
+pair, whichever is written first forward-references the other, a position
 error.
 
 `RECURSIVE TYPES` co-declares the group as one shared set:
 
 ```
 RECURSIVE TYPES Pair = (
-    STRUCT A = (b :B)
-    STRUCT B = (a :A)
+    NEWTYPE A = :{b :B}
+    NEWTYPE B = :{a :A}
 )
 ```
 
@@ -257,7 +258,7 @@ placeholder that survives into a sealed type.
 `NEWTYPE Distance = Number` declares a fresh nominal identity over a transparent
 representation. Declaration seals a singleton set whose one member is a
 [`NominalSchema::Newtype { repr }`](../../src/machine/model/types/recursive_set.rs)
-and writes only `bindings.types` — the same type-only shape STRUCT / UNION / MODULE
+and writes only `bindings.types` — the same type-only shape NEWTYPE / UNION / MODULE
 / Result use. The `repr` is not part of identity. A record repr
 (`NEWTYPE Point = :{x :Number, y :Number}`) is a `NominalSchema::Newtype` over a
 `KType::Record` — the product-side nominal form; `.x` reads the field through ATTR's
@@ -266,15 +267,15 @@ and writes only `bindings.types` — the same type-only shape STRUCT / UNION / M
 The [`NEWTYPE`](../../src/builtins/newtype_def.rs) declarator carries three overloads
 selected by the repr part-kind:
 
-- A **scalar / bare-leaf** repr (`= Number`, `= Foo`) rides the `:TypeExprRef` slot
+- A **scalar / bare-leaf** repr (`= Number`, `= Foo`) rides the `OfKind(ProperType)` slot
   and resolves eagerly to a `KType`, sealing a plain singleton Newtype over it.
-- A **non-record sigil** repr (`= :(LIST OF T)`) rides a `:SigiledTypeExpr` slot that
-  captures the sigil *raw* — more specific than `:TypeExprRef`, so it wins with no
+- A **non-record sigil** repr (`= :(LIST OF Elem)`) rides a `:SigiledTypeExpr` slot that
+  captures the sigil *raw* — more specific than `OfKind(ProperType)`, so it wins with no
   admission-rule change. There is no self-reference to thread, so the shared `body`
   sub-dispatches the captured sigil to a resolved `KType` and seals a plain Newtype
   over it.
 - A **record** repr (`= :{…}`) rides a distinct `:RecordType` slot — the sibling of
-  `:SigiledTypeExpr`, also more specific than `:TypeExprRef` — routed to its own
+  `:SigiledTypeExpr`, also more specific than `OfKind(ProperType)` — routed to its own
   `body_record_repr` overload. Capturing the field list raw lets the declarator own its
   elaboration: it threads the binder name
   ([`Elaborator::with_threaded`](../../src/machine/model/types/resolver.rs)) through
@@ -308,7 +309,7 @@ rather than a caller-discipline contract.
 
 The construction path is driven from the `type_call` fast lane (which resolves the
 verb through `scope.resolve_type_with_chain` first and branches on the resolved
-member's `kind`) rather than a registered builtin sharing the `[TypeExprRef, …]`
+member's `kind`) rather than a registered builtin sharing the `[OfKind(ProperType), …]`
 signature bucket — a sibling primitive on that bucket would re-dispatch infinitely.
 
 The `Wrapped` carrier also backs **opaque VAL-slot re-tags**: an ATTR read of a

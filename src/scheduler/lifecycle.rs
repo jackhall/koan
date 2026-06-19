@@ -1,6 +1,6 @@
 //! Slot terminalization and reclamation: the generic `finalize` / `free` / `reclaim_deps` the
 //! workload's driver calls at a step's Done boundary. See
-//! [design/execution-model.md § Dependency graph invariants](../../design/execution-model.md#dependency-graph-invariants).
+//! [design/execution/scheduler.md § Dependency graph invariants](../../design/execution/scheduler.md#dependency-graph-invariants).
 
 use std::rc::Rc;
 
@@ -58,7 +58,7 @@ impl<W: Workload> Scheduler<W> {
     /// Success-path eager free; the error path leaves deps for chain-free
     /// at slot drop. Inv-B is what makes `dep_edges[idx].clear()` sound
     /// here — see
-    /// [design/execution-model.md § Dependency graph invariants](../../design/execution-model.md#dependency-graph-invariants).
+    /// [design/execution/scheduler.md § Dependency graph invariants](../../design/execution/scheduler.md#dependency-graph-invariants).
     pub(crate) fn reclaim_deps(&mut self, idx: usize, dep_indices: Vec<usize>) {
         self.deps.clear_dep_edges(idx);
         for d in dep_indices {

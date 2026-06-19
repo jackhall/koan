@@ -8,7 +8,7 @@
 //! The generic erase-store engine and the cycle-redirect plumbing live in
 //! [`super::region`]; this file supplies the Koan policy it runs.
 //!
-//! See [per-call-arena-protocol.md](../../../design/per-call-arena-protocol.md) for the carrier
+//! See [per-call-region/README.md](../../../design/per-call-region/README.md) for the carrier
 //! set, lift-time anchor decision, cycle gate, ancestor chain, and TCO frame reuse;
 //! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
@@ -304,7 +304,7 @@ impl FrameStorage {
 /// without foreclosing on the escapee. Field order is load-bearing: `storage` drops before
 /// `scope_ptr`, so the region tears down before the now-dangling child pointer.
 ///
-/// See [per-call-arena-protocol.md](../../../design/per-call-arena-protocol.md) for the
+/// See [per-call-region/README.md](../../../design/per-call-region/README.md) for the
 /// carrier set, lift-time anchor decision, cycle gate, ancestor chain, and TCO
 /// frame reuse; [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 /// for the heap-pinning / drop-order invariants.
@@ -476,7 +476,7 @@ impl CallFrame {
     /// *unless* an escaped value still holds it, in which case that snapshot lives on independently
     /// while the shell reuses. Returns `false` (untouched) only when `Rc::get_mut` fails — another
     /// live `Rc<CallFrame>` (a shell clone, never an escape) foreclosing in-place reuse. See
-    /// [per-call-arena-protocol.md § TCO frame reuse](../../../design/per-call-arena-protocol.md#tco-frame-reuse).
+    /// [per-call-region/frames.md § TCO frame reuse](../../../design/per-call-region/frames.md#tco-frame-reuse).
     pub fn try_reset_for_tail(self: &mut Rc<Self>, new_outer: &Scope<'_>) -> bool {
         if Rc::get_mut(self).is_none() {
             return false;

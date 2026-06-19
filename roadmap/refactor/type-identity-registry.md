@@ -12,7 +12,7 @@ and [`KObject::Tagged.set`](../../src/machine/model/values/kobject.rs) carry
 costs follow. `KType` equality and hashing recurse the type (the manual `PartialEq` /
 `Hash` in `ktype.rs`), an O(size) walk on every dispatch compare. And raw-pointer identity
 is fragile: it is unstable if a set is ever relocated, and it carries an ABA hole — a freed
-arena address can be reused by a later allocation and alias a different type.
+region address can be reused by a later allocation and alias a different type.
 
 **Acceptance criteria.**
 
@@ -50,10 +50,10 @@ arena address can be reused by a later allocation and alias a different type.
   structurally compares; equal → same type, distinct → a collision, disambiguated at intern
   before any result carries the digest.
 - *Per-frame table, merged on lift — decided.* The `digest → type` table lives per call
-  frame, like the call arena; on return, the types carried by lifted results merge into the
+  frame, like the call region; on return, the types carried by lifted results merge into the
   parent frame's table (a digest-keyed union that carries any `Collided` marks), reaching the
   run-frame table only by escaping every frame — so a frame's transient types are reclaimed
-  with it. Identity stays the content-hash digest (`Copy`, no `Rc`, no arena pointer); this is
+  with it. Identity stays the content-hash digest (`Copy`, no `Rc`, no region pointer); this is
   the table's lifecycle, not the identity. The same digest-keyed union is the primitive a
   future thread-join reuses.
 - *Collision handling via a `Collided` tag, not a rewrite — decided.* A `KType`'s identity is
@@ -62,20 +62,20 @@ arena address can be reused by a later allocation and alias a different type.
   *same* hash (the lift walk bringing it in flips the tag). A comparison falls back to a
   structural walk whenever either operand is `Collided`, and is a `u128` equality otherwise.
   Re-keying the hash is rejected: it would diverge from a fresh computation of the same type
-  elsewhere and need a persistent rewrite record plus an arena-wide rewrite; tagging touches
+  elsewhere and need a persistent rewrite record plus an region-wide rewrite; tagging touches
   only the lifted type and keeps the hash content-derived.
 - *Cross-thread collision reconciliation — deferred.* Per-frame `Collided` marks merge up on
   lift; joining independent run-frame tables under future parallelization (so a hash contested
   in one thread is `Collided` in the join) generalizes this and is deferred.
 - *`Box<KType>` interning — deferred.* `KType` is built by value at hundreds of sites with no
-  arena in scope; out of scope here.
+  region in scope; out of scope here.
 
 ## Dependencies
 
-Builds on the shipped arena / lift substrate
-([design/per-call-arena-protocol.md](../../design/per-call-arena-protocol.md),
+Builds on the shipped region / lift substrate
+([design/per-call-region/README.md](../../design/per-call-region/README.md),
 [design/memory-model.md](../../design/memory-model.md)); the identity rules it changes are
-described in [design/typing/ktype.md](../../design/typing/ktype.md), which should be updated
+described in [design/typing/ktype/README.md](../../design/typing/ktype/README.md), which should be updated
 when it ships.
 
 **Requires:** none — builds on shipped substrate.

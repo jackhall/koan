@@ -44,7 +44,7 @@ impl<'a> NonWrappedRef<'a> {
 /// uses `IndexMap` so iteration matches declaration order.
 ///
 /// `KFunction` and `KFuture` carry an `Option<Rc<FrameStorage>>` lifecycle anchor; see
-/// [per-call-arena-protocol.md § Carriers](../../../../design/per-call-arena-protocol.md#carriers).
+/// [per-call-region/lifecycle.md § Carriers](../../../../design/per-call-region/lifecycle.md#carriers).
 pub enum KObject<'a> {
     Number(f64),
     KString(String),
@@ -220,7 +220,7 @@ impl<'a> KObject<'a> {
     /// an empty `List` whose memoized element type is `Any`, or an empty `Dict` whose
     /// key and value types are both `Any`. Reaching an *untyped* resolution boundary
     /// (untyped `LET` binding, bare top-level expression result) with this shape is an
-    /// error (see [ktype.md § Runtime type-parameter carriers](../../../../design/typing/ktype.md#runtime-type-parameter-carriers)).
+    /// error (see [ktype/parameterization-and-variance.md § Runtime type-parameter carriers](../../../../design/typing/ktype/parameterization-and-variance.md#runtime-type-parameter-carriers)).
     ///
     /// A stamped empty container is not flagged (its carrier carries a non-`Any`
     /// element type), nor is a non-empty heterogeneous literal `List<Any>` (it carries
@@ -361,7 +361,7 @@ fn function_value_ktype<'a>(f: &'a KFunction<'a>) -> KType<'a> {
     // carrier, holding the hashable surface shadow of the deferred form. Equality,
     // hashing, and specificity over the structural `KType` then read the deferred shape
     // directly instead of seeing it coarsened to `Any`. See
-    // [ktype.md § Record fields](../../../../design/typing/ktype.md#record-fields-and-ktype-hashing).
+    // [ktype/records-and-limits.md § Record fields](../../../../design/typing/ktype/records-and-limits.md#record-fields-and-ktype-hashing).
     let ret = match &f.signature.return_type {
         ReturnType::Resolved(kt) => Box::new(kt.clone()),
         ReturnType::Deferred(d) => Box::new(KType::DeferredReturn(

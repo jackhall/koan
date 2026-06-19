@@ -12,19 +12,19 @@ separate three-arm enums, each `success | Park(Vec<NodeId>) | Unbound(String)`:
 - [`ElabResult<'a>`](../../src/machine/model/types/resolver.rs) — `Done(KType<'a>)`
   (an **owned** type), the model-layer elaboration result.
 - [`TypeIdentifierResolution<'a>`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
-  — `Done(&'a KType<'a>)` (an **arena reference**), the scope-bound memoized result.
+  — `Done(&'a KType<'a>)` (an **region reference**), the scope-bound memoized result.
 - [`TypeLeafCarrier<'a>`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
   — `Resolved(&'a KType<'a>)`, the type-channel carrier for the three bare-leaf call
   sites.
 
 The `Park` and `Unbound` arms are byte-identical across all three. The only real
 distinction is the success payload — owned `KType<'a>` (model produces it) versus
-arena `&'a KType<'a>` (execute memoizes it). `TypeIdentifierResolution` and
-`TypeLeafCarrier` carry the *same* arena reference and differ only in the success
+region `&'a KType<'a>` (execute memoizes it). `TypeIdentifierResolution` and
+`TypeLeafCarrier` carry the *same* region reference and differ only in the success
 variant's name (`Done` versus `Resolved`); each layer re-wraps the previous with a
 hand-written three-arm `match` (`resolve_type_identifier.rs:50-63`, `93-99`). The
 `TypeLeafCarrier` adapter additionally re-clones and re-allocates an
-already-arena-allocated reference (`scope.region.alloc_ktype(kt.clone())`,
+already-region-allocated reference (`scope.region.alloc_ktype(kt.clone())`,
 `resolve_type_identifier.rs:95`), a redundant allocation on every resolved leaf.
 
 *The resolver layers.* Resolving a `TypeIdentifier` to a `KType` is spread across
@@ -53,10 +53,10 @@ scopeless shortcut for the one bind-time caller that runs before a scope exists.
   `TypeIdentifierResolution<'a>` are type aliases over it
   (`ResolveOutcome<KType<'a>>` and `ResolveOutcome<&'a KType<'a>>`), and
   `TypeLeafCarrier` no longer exists as a distinct type.
-- The owned-to-arena lift is expressed by one `map_done` combinator on
+- The owned-to-region lift is expressed by one `map_done` combinator on
   `ResolveOutcome`, not by hand-written per-layer `match` re-wraps; the `Park` and
   `Unbound` arms forward unchanged.
-- No resolved-leaf path clones-and-re-allocates an already-arena-allocated `&KType`;
+- No resolved-leaf path clones-and-re-allocates an already-region-allocated `&KType`;
   the carrier holds the memo's reference directly.
 - The three former `TypeLeafCarrier` match sites
   ([`attr.rs`](../../src/builtins/attr.rs),
@@ -80,7 +80,7 @@ scopeless shortcut for the one bind-time caller that runs before a scope exists.
   so the enum is `ResolveOutcome<T>`, not `ResolveOutcome<'a, T>`; the `Park`/`Unbound`
   arms stay lifetime-free.
 - *Owned→ref lift via `map_done` — decided.* `Scope::resolve_type_identifier` lifts the
-  elaborator's owned `Done(KType)` to an arena `Done(&KType)` through
+  elaborator's owned `Done(KType)` to an region `Done(&KType)` through
   `ResolveOutcome::map_done`, replacing the hand-written re-wrap and consuming the memo
   reference without a re-clone.
 - *Home module for the generic — open.* `ElabResult` lives in the model layer

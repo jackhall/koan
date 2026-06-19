@@ -41,7 +41,7 @@ With a plan in hand and implementation about to start, verify the git working tr
 
 ```bash
 git status --porcelain \
-  | grep -vE ' (README\.md|TUTORIAL\.md|design/[^ ]+\.md|roadmap/[^ ]+\.md)$'
+  | grep -vE ' (README\.md|tutorial/[^ ]+\.md|design/[^ ]+\.md|roadmap/[^ ]+\.md)$'
 ```
 
 `scratch/` is .gitignored.
@@ -64,7 +64,7 @@ Then implement the plan directly against the codebase:
 - If you discover the plan is wrong mid-implementation, **surface it and stop** — don't silently re-design. The user may ask to return to planning.
 - Use the `rust-refactor` skill for structural work (renames, file moves, batch rewrites). Don't reinvent its tooling.
 - Use the `miri` skill whenever the work touches memory safety.
-- Update top-of-file and inline source comments as you go, per Claude.md. **Don't** touch `design/`, `roadmap/` (including its `README.md` index), `README.md`, or `TUTORIAL.md` — those are for planning in step 1 or the shepherd in step 3.
+- Update top-of-file and inline source comments as you go, per Claude.md. **Don't** touch `design/`, `roadmap/` (including its `README.md` index), `README.md`, or `tutorial/` — those are for planning in step 1 or the shepherd in step 3.
 - When code-complete, run the `verify-koan` skill so tests + clippy are green and a modgraph baseline is recorded before you hand off to the shepherd (which runs the authoritative final slate after its doc edits).
 
 Your implementation is visible inline as you work, so there is no formal **approval gate** here. If you hit a fork that's genuinely the user's call, raise it conversationally in the moment — don't batch it into a gate.

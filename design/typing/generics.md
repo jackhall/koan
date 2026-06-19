@@ -63,7 +63,7 @@ in whether the selected module carries operations.
 A functor's **type** argument is read off the call's carried argument type
 (`List(Number)` yields `Number`), a projection rather than a search — list
 literals and other parameterized values carry their type arguments
-([ktype.md § Runtime type-parameter carriers](ktype.md#runtime-type-parameter-carriers)).
+([ktype/parameterization-and-variance.md § Runtime type-parameter carriers](ktype/parameterization-and-variance.md#runtime-type-parameter-carriers)).
 A functor's **module** (witness) argument is found by implicit search.
 
 The rule: type arguments come from carried types; module arguments come from

@@ -3,7 +3,7 @@
 //! flowing raw in the type channel (the `Type` arm), so a type-operator returns a `&KType`
 //! without boxing it into a `KObject`.
 //!
-//! See [execution-model.md § `KObject` and the model/core boundary](../../../../design/execution-model.md#kobject-and-the-modelcore-boundary).
+//! See [execution/calls-and-values.md § `KObject` and the model/core boundary](../../../../design/execution/calls-and-values.md#kobject-and-the-modelcore-boundary).
 
 use std::rc::Rc;
 

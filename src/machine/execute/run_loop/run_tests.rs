@@ -1,6 +1,6 @@
 //! End-to-end coverage for the bare-name short-circuit, auto-wrap pass, and
 //! replay-park routing in `classify_dispatch` (see
-//! [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders)).
+//! [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders)).
 use crate::builtins::default_scope;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType};
@@ -31,8 +31,8 @@ fn single_identifier_short_circuit_returns_value_when_bound() {
     assert!(matches!(sched.read(id).object(), KObject::Number(n) if *n == 42.0));
 }
 
-/// Index-gated LET visibility — see [design/execution-model.md § Dispatch-time
-/// name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders).
+/// Index-gated LET visibility — see [design/execution/README.md § Dispatch-time
+/// name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
 #[test]
 fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
     let region = KoanRegion::new();
@@ -119,8 +119,8 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 3.0));
 }
 
-/// FN is value-style gated — see [design/execution-model.md § Dispatch-time
-/// name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders).
+/// FN is value-style gated — see [design/execution/README.md § Dispatch-time
+/// name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
 #[test]
 fn forward_keyword_function_reference_is_unbound() {
     let region = KoanRegion::new();
@@ -168,8 +168,8 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
 }
 
 /// Miri audit-slate: bare-name forward-splice lifetime contract — see
-/// [design/execution-model.md § Miri forward-splice and replay-park lifetime
-/// contract](../../../../design/execution-model.md#miri-forward-splice-and-replay-park-lifetime-contract).
+/// [design/execution/README.md § Miri forward-splice and replay-park lifetime
+/// contract](../../../../design/execution/name-placeholders.md#miri-forward-splice-and-replay-park-lifetime-contract).
 #[test]
 fn lift_park_minimal_program_for_miri() {
     let region = KoanRegion::new();
@@ -234,7 +234,7 @@ fn replay_park_propagates_producer_error() {
 
 /// Bare Type-tokens in `ProperType` slots of non-binders ride the same
 /// replay-park rails as bare Identifiers — see
-/// [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders).
+/// [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
 #[test]
 fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     let region = KoanRegion::new();

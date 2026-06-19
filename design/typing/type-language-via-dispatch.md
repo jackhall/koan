@@ -62,7 +62,7 @@ sigil surface, symmetric with the FN declaration form and the
 value-side rule that function-value calls are named (no positional
 `f 1 2` shape). The names round-trip into identity:
 `KType::KFunction { params, ret }` carries `params` as a
-[parameter `Record<KType>`](ktype.md#record-fields-and-ktype-hashing),
+[parameter `Record<KType>`](ktype/records-and-limits.md#record-fields-and-ktype-hashing),
 so `:(FN (a :Number) -> Bool)` and `:(FN (b :Number) -> Bool)` are
 distinct types, and the function/return surface re-parses from
 `KType::name()` back to the same `KType` — `:(FN () -> Any)`,
@@ -70,11 +70,11 @@ distinct types, and the function/return surface re-parses from
 record substrate's order-blind equality (same parameters by name and
 type regardless of declaration order). Admission (`function_compat`) is
 sound function subtyping — contravariant params with width-drop,
-covariant return (see [ktype.md § Variance](ktype.md#variance)) — so a
+covariant return (see [ktype/parameterization-and-variance.md § Variance](ktype/parameterization-and-variance.md#variance)) — so a
 value requiring a param the slot doesn't promise is a non-match, while
 extra slot params arrive unbound under call-by-name.
 
-The parameter list parses through the shared field-list parser STRUCT /
+The parameter list parses through the shared field-list parser NEWTYPE /
 UNION use (`parse_typed_field_list_via_elaborator`), so nested
 parameterized param types sub-Dispatch — `:(FN (xs :(LIST OF Number))
 -> Bool)` elaborates its element type rather than failing on the bare
@@ -109,7 +109,7 @@ is reachable only through its union. See
 ## Record-type sigil
 
 `:{x :Number, y :Str}` is the structural record type — an identifier-keyed field
-schema lowering to [`KType::Record(Record<KType>)`](ktype.md#record-fields-and-ktype-hashing),
+schema lowering to [`KType::Record(Record<KType>)`](ktype/records-and-limits.md#record-fields-and-ktype-hashing),
 distinct from any nominal struct. The `:` type-sigil anchors to `{` (not only `(`),
 and the parser emits a first-class `ExpressionPart::RecordType(<field list>)` part
 ([frame.rs](../../src/parse/frame.rs)) whose boxed `KExpression` is the bare
@@ -118,9 +118,9 @@ dispatcher to route), `:{...}` is matched *structurally*: the `DispatchShape::Re
 handler folds the field list straight to `KType::Record` via the shared field-list parser
 (`elaborate_record_value` in
 [dispatch/field_list.rs](../../src/machine/execute/dispatch/field_list.rs),
-`FieldNameKind::Identifier`, like STRUCT), with no internal type-constructor builtin
+`FieldNameKind::Identifier`, like NEWTYPE), with no internal type-constructor builtin
 behind it. The field list parses through the same `parse_typed_field_list_via_elaborator`
-path STRUCT / FN use, so nested parameterized field types sub-Dispatch
+path NEWTYPE / FN use, so nested parameterized field types sub-Dispatch
 (`:{xs :(LIST OF Number)}`), while a nested record type `:{inner :{…}}` elaborates
 *inline* through the same walker — sharing the elaborator so the outer binder name
 threads into the inner record (`NEWTYPE Outer = :{inner :{owner :Outer}}` seals the
@@ -136,14 +136,14 @@ the overloads stay disjoint.
 The record *value* surface is `{x = 1, y = "a"}` (`=` pairs); the brace frame routes
 on the first pairing operator, so `:` pairs (`{k: v}`) stay a dict and `=` pairs a
 record, mixing the two is a parse error, and an empty `{}` is the empty record. Subtyping over
-record values is width/depth — see [ktype.md § Variance](ktype.md#variance).
+record values is width/depth — see [ktype/parameterization-and-variance.md § Variance](ktype/parameterization-and-variance.md#variance).
 
 `(x y) FROM r` projects a record value to the named fields
 ([record_projection.rs](../../src/builtins/record_projection.rs)). Unlike the
 type-returning `_OF` dispatcher ops, `FROM` is a plain value builtin: it returns a
 `Done` value, `Rc`-sharing the backing record whole and narrowing the carried
 field-type record to the named fields — it derives its result type from the literal
-field list off the value's own carrier, never routing as a scheduled `TypeExprRef`.
+field list off the value's own carrier, never routing as a scheduled `OfKind(ProperType)` op.
 The field list arrives unevaluated through a `KExpression` slot (bare names only), so
 it re-tags a carrier to break an incomparable-arm dispatch tie without name-resolving
 the fields.
@@ -212,20 +212,20 @@ no extra check; the slot-type rails are the single source of truth.
 Every parameterized type rides one surface: the keyworded sigil
 (`:(LIST OF Number)`, `:(MAP K -> V)`, `:(FN … -> R)`), served by the
 type-constructor overloads. The field-walker inside `typed_field_list`
-handles the sigil embedded in `STRUCT` / `UNION` field schemas through a
+handles the sigil embedded in `NEWTYPE` / `UNION` field schemas through a
 single path. Keyworded shapes (`:(LIST OF Tree)`, `:(MAP Tree -> _)`)
 sub-Dispatch through the standalone dispatcher, which carries no threaded
 binder set, so `rewrite_threaded_self_refs` first rewrites every threaded
 self / group-sibling reference to a `Future(Carried::Type(RecursiveRef(name)))`
 carrier — the same `Type`-arm transport `:(LIST OF Number)` rides — before the
-sub-Dispatch. This lowers `STRUCT Tree = (children :(LIST OF Tree))`'s
+sub-Dispatch. This lowers `NEWTYPE Tree = :{children :(LIST OF Tree)}`'s
 field to `List(RecursiveRef("Tree"))`, which seals to `List(SetLocal(_))` at
 the member's finalize, rather than parking on `Tree`'s own placeholder and
 deadlocking the scheduler.
 
 ## Binder install: name-keyed vs bucket-keyed
 
-`LET`, `STRUCT`, `UNION`, `SIG`, and `MODULE` register a single name
+`LET`, `NEWTYPE`, `UNION`, `SIG`, and `MODULE` register a single name
 binding via a `binder_name` extractor and ride the name-keyed
 placeholder channel. `FN` and `FUNCTOR` register an *overload* in a
 function bucket via a `binder_bucket` extractor — and crucially,
@@ -245,8 +245,8 @@ each producer's finalize, only its own entry is removed; if a parked
 consumer's first wake doesn't deliver an admitting overload, the
 consumer re-dispatches and either picks from the now-live
 `functions[bucket]` or re-parks on the next-earliest pending sibling
-(see [execution-model.md § Dispatch-time name
-placeholders](../execution-model.md#dispatch-time-name-placeholders)).
+(see [execution/README.md § Dispatch-time name
+placeholders](../execution/name-placeholders.md#dispatch-time-name-placeholders)).
 A name-keyed install would collide on the second sibling — both
 `PICK` binders trying to claim `placeholders[PICK]` — which is why
 FN / FUNCTOR do not install on the name channel.

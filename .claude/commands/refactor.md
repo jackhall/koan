@@ -49,7 +49,7 @@ If the users says the refactor is a bad idea, delete the concept file and exit c
 
 ## Constraints
 
-- **Read-only** outside `scratch/`. No edits to `src/`, `roadmap/`, `design/`, `README.md`, `TUTORIAL.md`, or `.claude/`.
+- **Read-only** outside `scratch/`. No edits to `src/`, `roadmap/`, `design/`, `README.md`, `tutorial/`, or `.claude/`.
 - **No** `cargo` commands. **No** commits.
 - Emit the explorer's output verbatim before discussing it, per the `feedback_subagent_output_verbatim` memory.
 - **Do not do your own exploration**; that is the explorer's job.

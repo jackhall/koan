@@ -1,6 +1,6 @@
 ---
 name: documentation
-description: Use this skill for any work touching README.md, TUTORIAL.md, design/*.md, or roadmap/*.md (including the roadmap/README.md index) — including editing, adding, deleting, renaming, or auditing docs. Reach for it before deleting or renaming a doc, after editing one, when adding a roadmap item, when finishing a PR (to delete the now-shipped roadmap item), or when the user asks to "audit", "verify", or "fix" doc links / cross-references / roadmap dependencies. Pairs with the `tools/doclinks.py` CLI for cross-reference validation.
+description: Use this skill for any work touching README.md, tutorial/, design/*.md, or roadmap/*.md (including the roadmap/README.md index) — including editing, adding, deleting, renaming, or auditing docs. Reach for it before deleting or renaming a doc, after editing one, when adding a roadmap item, when finishing a PR (to delete the now-shipped roadmap item), or when the user asks to "audit", "verify", or "fix" doc links / cross-references / roadmap dependencies. Pairs with the `tools/doclinks.py` CLI for cross-reference validation.
 ---
 
 # documentation
@@ -16,7 +16,7 @@ Rules and tools for the koan repo's documentation tree. Three things live here:
 Each tier has a job. Keeping them disjoint is what lets a reader pick the right one without grep.
 
 - **`README.md`**. Introduces a new user or developer to the project. Links other docs. Explains the directory structure. Aim for "what is this and where do I go next."
-- **`TUTORIAL.md`**. Walks a user through writing koan code. From the user's perspective, not the implementer's.
+- **`tutorial/`**. Walks a user through writing koan code. From the user's perspective, not the implementer's.
 - **`TEST.md`**. Testing and linting reference: `cargo test` conventions, clippy/fmt commands, and the canonical Miri audit-slate test list. Updated whenever a slate test is added or removed.
 - **`design/*.md`**. Describes shipped behavior — architecture, cross-cutting concerns, design rationale for what's already in the language. Update after a PR is code-complete and tested, but only if a design decision was made. If a file is being deleted or downsized, update inbound references.
 - **`roadmap/*.md`**. **Future work only.** Each work-item file is one item with a `## Dependencies` section. Items can reference prerequisites and unblockers. The lone exception is `roadmap/README.md`, the index — described next.

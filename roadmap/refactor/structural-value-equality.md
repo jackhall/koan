@@ -59,7 +59,7 @@ An engine-internal value-semantics item. It is the comparison side of
 [Constructing circular values](../type_language/circular-value-construction.md) (a
 cyclic value must not hang equality) and is simplified by
 [Content-addressed type identity](type-identity-registry.md) (a `Copy` nominal
-identity). Update [design/execution-model.md](../../design/execution-model.md) if a
+identity). Update [design/execution/README.md](../../design/execution/README.md) if a
 documented value-equality semantics lands.
 
 **Requires:** none — engine-internal.

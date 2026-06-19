@@ -46,7 +46,7 @@ impl NodeLift for KoanRuntime<'_> {
 
 /// Lift a KObject out of `dying_frame`'s region into the destination region, attaching
 /// an `Rc<CallFrame>` to anchor any descendant that borrows into the dying region.
-/// See [per-call-arena-protocol.md § Lift-time anchor decision](../../../design/per-call-arena-protocol.md#lift-time-anchor-decision).
+/// See [per-call-region/lifecycle.md § Lift-time anchor decision](../../../design/per-call-region/lifecycle.md#lift-time-anchor-decision).
 /// Test seam for the type-channel lift: a first-class type (e.g. a per-call `Module`
 /// carrier) lifts via [`lift_ktype`], re-anchoring its frame onto the dying region.
 #[cfg(test)]

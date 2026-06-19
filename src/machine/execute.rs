@@ -3,7 +3,7 @@
 //! producer/consumer slots park on each other via `pending_deps` and wake on terminal
 //! writes.
 //!
-//! See [design/execution-model.md](../../design/execution-model.md) and
+//! See [design/execution/README.md](../../design/execution/README.md) and
 //! [design/memory-model.md](../../design/memory-model.md).
 
 mod ambient;
