@@ -149,6 +149,9 @@ class MoveSpec:
         self.source_file: str = ""
         self.def_line: int = -1
         self.symbol: str = ""
+        # filled in by compute_body_ends() (line after the item's last line);
+        # delimits the body span whose refs are the item's outbound edges.
+        self.body_end: int = -1
 
 
 def parse_move(s: str) -> MoveSpec:
@@ -202,33 +205,93 @@ def resolve_moves(moves: list[MoveSpec],
     return errors
 
 
+def _resolve_dep(sym: str,
+                 moved_syms: dict[str, "MoveSpec"],
+                 source_facade: dict[str, str],
+                 known: set[str],
+                 *, redirect_moved: bool) -> str | None:
+    """Resolve a body-ref SCIP symbol to the module its outbound edge targets,
+    seen from the source module that currently holds the referencing item.
+
+    `redirect_moved` selects the granularity:
+      * True (add side) — a ref to a moved sibling targets its *new* module, so a
+        reference between two members of one group becomes a self-edge the caller
+        drops.
+      * False (canonical side) — every symbol resolves to its pre-move module, so
+        a removal names the edge actually present in the canonical DOT.
+
+    A name the source module imports through a re-export facade
+    (`source_facade`, from `reexport.attributions`) resolves to that facade,
+    matching the canonical DOT; otherwise the symbol's def-site path collapses to
+    its deepest known module. Returns None for locals, external-crate refs, and
+    paths under no known module."""
+    if redirect_moved:
+        mv = moved_syms.get(sym)
+        if mv is not None and not mv.is_delete:
+            return mv.new_module
+    path = scip_symbol_to_path(sym)
+    if path is None:
+        return None
+    name = path.rsplit("::", 1)[-1]
+    if name in source_facade:
+        return source_facade[name]
+    return reexport.written_module(path.split("::"), known)
+
+
 def diff_edges(docs: dict[str, dict],
                moves: list[MoveSpec],
                attribution: dict[str, list[tuple[str, str]]],
+               known: set[str],
                ) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
     """Return (edges_to_add, edges_to_remove) for the proposed moves, relative
-    to the re-export-corrected canonical DOT.
+    to the re-export-corrected canonical DOT. Models both sides of a move:
 
-    Add: for each consumer M that references a moved item, M -> NEW_MOD (SCIP
-         refs say *whether* M uses the item; this is precise).
-    Remove: the canonical DOT attributes M's import to the *facade* module M
-         literally named (`reexport.correct`), not the item's def-site. So a
-         removal must target that facade. `attribution[M]` is the per-leaf
-         (written_module, item_name) list; we drop M -> FACADE only when, after
-         the move, no item M imports still enters FACADE — i.e. every leaf at
-         FACADE is a moved item redirected away from it.
+    Inbound — the edges a moved item's *consumers* carry.
+      Add: for each consumer M that references a moved item, M -> NEW_MOD (SCIP
+           refs say *whether* M uses the item; this is precise).
+      Remove: the canonical DOT attributes M's import to the *facade* module M
+           literally named (`reexport.correct`), not the item's def-site. So a
+           removal must target that facade. `attribution[M]` is the per-leaf
+           (written_module, item_name) list; we drop M -> FACADE only when, after
+           the move, no item M imports still enters FACADE — i.e. every leaf at
+           FACADE is a moved item redirected away from it.
 
-    This subsumes the plain deep-import case (where the written facade equals the
-    def-site, so the dropped edge matches today's behavior) and the re-exported
-    case (facade != def-site) that a def-site removal silently missed."""
+      This subsumes the plain deep-import case (where the written facade equals
+      the def-site, so the dropped edge matches today's behavior) and the
+      re-exported case (facade != def-site) that a def-site removal silently
+      missed.
+
+    Outbound — the edges a moved item's *own body* carries (the symmetric case,
+      with the source module standing in for the consumer). The refs inside the
+      item's body span [def_line, body_end) become NEW_MOD -> dep edges, facade-
+      corrected from the source module's imports; a source_module -> dep edge is
+      dropped only when no item still in source_module references dep. This is
+      what makes a relocated dependency-bearing item score its reconstituting
+      back-edges instead of looking strictly cheaper than reality.
+
+    `known` is the canonical DOT's module node set, used to collapse a def-site
+    path to the deepest module that is actually a graph node."""
     moved_syms = {mv.symbol: mv for mv in moves if mv.symbol}
+
+    # A moving item's own body refs leave the source module with it, so they are
+    # the outbound side's concern; excluding them here keeps the inbound pass from
+    # charging the source module an edge to a sibling's new module (the intra-group
+    # case). Spans are only known once compute_body_ends has run; an unset body_end
+    # (e.g. a unit test driving diff_edges directly) leaves the inbound pass intact.
+    spans_by_file: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    for mv in moves:
+        if mv.symbol and not mv.is_delete and mv.body_end >= 0:
+            spans_by_file[mv.source_file].append((mv.def_line, mv.body_end))
 
     mod_refs: dict[str, set[str]] = defaultdict(set)
     for relpath, doc in docs.items():
         src_mod = relpath_to_module(relpath)
         if src_mod is None:
             continue
-        for sym, _ in doc["refs"]:
+        spans = spans_by_file.get(relpath, [])
+        for sym, line in doc["refs"]:
+            if any(start <= line < end for start, end in spans):
+                continue
             mod_refs[src_mod].add(sym)
 
     add: set[tuple[str, str]] = set()
@@ -260,6 +323,47 @@ def diff_edges(docs: dict[str, dict],
                         for name in names)
             if not stays:
                 remove.add((mod, facade))
+
+    # ---- outbound: the dependency edges each moved item carries with it ----
+    real_moves = [mv for mv in moves
+                  if mv.symbol and not mv.is_delete and mv.body_end >= 0]
+    by_source: dict[str, list[MoveSpec]] = defaultdict(list)
+    for mv in real_moves:
+        by_source[mv.source_file].append(mv)
+
+    for source_file, group in by_source.items():
+        source_module = group[0].source_module
+        source_facade = {name: facade
+                         for facade, name in attribution.get(source_module, [])}
+        all_refs = docs.get(source_file, {}).get("refs", [])
+
+        # The moved items' body refs reconstitute as new_module -> dep edges;
+        # their canonical (pre-move) deps are the source_module edges at risk.
+        moved_canonical_deps: set[str] = set()
+        surviving_deps: set[str] = set()
+        for sym, line in all_refs:
+            owner = next((mv for mv in group
+                          if mv.def_line <= line < mv.body_end), None)
+            if owner is None:
+                dep = _resolve_dep(sym, moved_syms, source_facade, known,
+                                   redirect_moved=False)
+                if dep is not None:
+                    surviving_deps.add(dep)
+                continue
+            dep_add = _resolve_dep(sym, moved_syms, source_facade, known,
+                                   redirect_moved=True)
+            if dep_add is not None and dep_add != owner.new_module:
+                add.add((owner.new_module, dep_add))
+            dep_canon = _resolve_dep(sym, moved_syms, source_facade, known,
+                                     redirect_moved=False)
+            if dep_canon is not None and dep_canon != source_module:
+                moved_canonical_deps.add(dep_canon)
+
+        # A source edge survives iff some item still in source_module justifies
+        # it; one no surviving item references is dropped.
+        for dep in moved_canonical_deps - surviving_deps:
+            remove.add((source_module, dep))
+
     return add, remove
 
 
@@ -413,6 +517,25 @@ def _strip_for_brace_scan(line: str, in_block_comment: bool = False,
     return "".join(out)
 
 
+def compute_body_ends(moves: list[MoveSpec], src_root: Path) -> None:
+    """Fill `mv.body_end` (the line index after each item's last line) by
+    brace-scanning its source file. Done once here so `find_item_end` runs a
+    single time per move and the same span feeds both the outbound edge diff
+    (`diff_edges`) and the body transplant (`write_item_mirror`)."""
+    by_file: dict[str, list[MoveSpec]] = defaultdict(list)
+    for mv in moves:
+        if mv.source_file and mv.def_line >= 0:
+            by_file[mv.source_file].append(mv)
+    for source_rel, group in by_file.items():
+        rel_under_src = source_rel[len("src/"):]
+        path = src_root / rel_under_src
+        lines = (path.read_text(encoding="utf-8").splitlines()
+                 if path.exists() else [])
+        for mv in group:
+            mv.body_end = (find_item_end(lines, mv.def_line)
+                           if mv.def_line < len(lines) else mv.def_line + 1)
+
+
 def write_item_mirror(src_root: Path, mirror_root: Path,
                       moves: list[MoveSpec]) -> None:
     """Copy `src_root` to `mirror_root`, then transplant each moved item's
@@ -436,7 +559,7 @@ def write_item_mirror(src_root: Path, mirror_root: Path,
         for mv in group:
             if mv.def_line >= len(lines):
                 continue
-            end = find_item_end(lines, mv.def_line)
+            end = mv.body_end if mv.body_end >= 0 else find_item_end(lines, mv.def_line)
             extracted.append((mv, mv.def_line, end, lines[mv.def_line:end]))
 
         for mv, start, end, _blob in sorted(extracted, key=lambda x: -x[1]):
@@ -471,6 +594,7 @@ def cmd_item(args: argparse.Namespace) -> int:
         for e in errors:
             print(f"error: {e}", file=sys.stderr)
         return 1
+    compute_body_ends(args.move, args.src_root)
 
     # The canonical DOT is re-export-corrected, so removals must target the
     # facade module each consumer literally imports through, not the def-site.
@@ -478,7 +602,7 @@ def cmd_item(args: argparse.Namespace) -> int:
     # (item mode is koan-specific throughout, matching resolve_moves' default).
     known = parse_dot(args.edges).nodes
     attribution = reexport.attributions(known, args.src_root, "koan")
-    add, remove = diff_edges(docs, args.move, attribution)
+    add, remove = diff_edges(docs, args.move, attribution, known)
     original_dot = args.edges.read_text(encoding="utf-8")
     new_modules = {mv.new_module for mv in args.move if not mv.is_delete}
 

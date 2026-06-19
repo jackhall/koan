@@ -129,9 +129,16 @@ _IMPL_RE = re.compile(r"^impl#\[`?([A-Za-z_][A-Za-z0-9_]*)[^`]*`?\](.+)$")
 
 
 def scip_symbol_to_path(sym: str, package: str = "koan") -> str | None:
-    """Convert a SCIP symbol to `koan::a::b::name`, or None for locals."""
+    """Convert a SCIP symbol to `koan::a::b::name`, or None for locals or for a
+    symbol defined in a different crate.
+
+    The 3rd space-separated token is the defining package; only symbols from
+    `package` map to a `koan::` path. Refs into other crates (`std`, `serde`, …)
+    return None, so a body-ref scan that resolves a dep module never mistakes an
+    external symbol for a koan path — which, since the crate root `koan` is a
+    graph node, would otherwise attach every external ref to it."""
     parts = sym.split(" ", 4)
-    if len(parts) < 5 or parts[0] == "local":
+    if len(parts) < 5 or parts[0] == "local" or parts[2] != package:
         return None
     descriptors = parts[4]
     segments: list[str] = []
