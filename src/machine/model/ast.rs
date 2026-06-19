@@ -21,26 +21,27 @@ pub enum KLiteral {
     Null,
 }
 
-/// Surface representation of a bare type-name leaf (`Number`, `Point`, `T`, `Mo.Ty`).
+/// A bare type identifier as written in source (`Number`, `Point`, `T`, `Mo.Ty`) — a single
+/// name token, never compound syntax.
 ///
-/// A thin newtype over the source name: `Deref`s to `str`, derives eq/hash by string.
-/// Compound shapes (`:(LIST OF X)`, `:(FN … -> …)`) are dispatch expressions, not
-/// `TypeName` structure, so this carries no information the name string wouldn't. The
-/// position tag rides on the carrier variant (`ExpressionPart::Type`,
-/// `KObject::TypeNameRef`), not on this struct.
+/// A thin newtype over the source name: `Deref`s to `str`, derives eq/hash by string. The
+/// identifier stays a flat name even when it *denotes* a compound type (a `NEWTYPE` / `UNION`
+/// name resolves to a record / tagged type); compound *syntax* (`:(LIST OF X)`,
+/// `:(FN … -> …)`) is a dispatch expression (`SigiledTypeExpr`), not a `TypeIdentifier`. The
+/// position tag rides on the carrier variant (`ExpressionPart::Type`), not on this struct.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TypeName(String);
+pub struct TypeIdentifier(String);
 
-impl std::ops::Deref for TypeName {
+impl std::ops::Deref for TypeIdentifier {
     type Target = str;
     fn deref(&self) -> &str {
         &self.0
     }
 }
 
-impl TypeName {
-    pub fn leaf(name: String) -> TypeName {
-        TypeName(name)
+impl TypeIdentifier {
+    pub fn leaf(name: String) -> TypeIdentifier {
+        TypeIdentifier(name)
     }
 
     pub fn as_str(&self) -> &str {
@@ -58,7 +59,7 @@ impl TypeName {
 pub enum ExpressionPart<'a> {
     Keyword(String),
     Identifier(String),
-    Type(TypeName),
+    Type(TypeIdentifier),
     Expression(Box<KExpression<'a>>),
     /// Parse-context marker for a `:(...)` group: the wrapped `KExpression` must dispatch
     /// in type-context, returning a type-side carrier. Shape recognition is the
@@ -160,9 +161,9 @@ impl<'a> ExpressionPart<'a> {
     ///
     /// - A `Spliced(Carried::Type(_))` sub-result threads its type straight into the `Type` arm.
     /// - A parser `Type`-name token into a proper-type slot lowers to a concrete `KType` via
-    ///   [`KType::from_type_expr`], or to the [`KType::Unresolved`] transient for a bare user
+    ///   [`KType::from_type_identifier`], or to the [`KType::Unresolved`] transient for a bare user
     ///   name (a name not in the builtin table) — scope-aware elaboration defers to
-    ///   [`Scope::resolve_type_expr`](crate::machine::core::Scope::resolve_type_expr).
+    ///   [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier).
     /// - Lazy `:(...)` / `:{…}` slots capture the inner expression raw in the `Object` arm.
     pub fn resolve_for(&self, slot: &crate::machine::model::KType<'a>) -> ArgValue<'a> {
         use crate::machine::model::types::KType;
@@ -171,7 +172,7 @@ impl<'a> ExpressionPart<'a> {
         }
         if let (ExpressionPart::Type(t), KType::OfKind(KKind::Proper)) = (self, slot) {
             let kt =
-                KType::<'a>::from_type_expr(t).unwrap_or_else(|_| KType::Unresolved(t.clone()));
+                KType::<'a>::from_type_identifier(t).unwrap_or_else(|_| KType::Unresolved(t.clone()));
             return ArgValue::Type(kt);
         }
         if let (ExpressionPart::SigiledTypeExpr(inner), KType::SigiledTypeExpr) = (self, slot) {

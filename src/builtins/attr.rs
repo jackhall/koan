@@ -91,7 +91,7 @@ pub fn body_identifier<'a>(
     Action::Done(Err(KError::new(KErrorKind::UnboundName(s_name))))
 }
 
-/// `ATTR <s:TypeExprRef> <field:_>` — entry for a Type-classed lhs. Module names are Type-classed
+/// `ATTR <s:ProperType> <field:_>` — entry for a Type-classed lhs. Module names are Type-classed
 /// tokens (see [token classes](../../design/typing/tokens.md)), so `Foo.x` parses as
 /// `[ATTR Type(Foo) Identifier(x)]` instead of the `Identifier`-lhs the struct path uses. The
 /// Type-Type overload shares this body so chained module access (`Outer.Inner.x`) works regardless
@@ -107,7 +107,7 @@ pub fn body_type_lhs<'a>(
             return Action::Done(Err(match arg_object(ctx.args, "s") {
                 Some(other) => KError::new(KErrorKind::TypeMismatch {
                     arg: "s".to_string(),
-                    expected: "TypeExprRef".to_string(),
+                    expected: "ProperType".to_string(),
                     got: other.ktype().name(),
                 }),
                 None => KError::new(KErrorKind::MissingArg("s".to_string())),

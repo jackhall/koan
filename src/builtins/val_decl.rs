@@ -1,9 +1,9 @@
-//! `VAL <name:Identifier> : <ty:TypeExprRef>` — SIG-body-only declarator for value
+//! `VAL <name:Identifier> : <ty:ProperType>` — SIG-body-only declarator for value
 //! slots whose declared type is recorded explicitly. See
 //! [design/typing/modules.md § Structures and signatures](../../design/typing/modules.md#structures-and-signatures).
 //!
 //! A VAL slot records "value member whose declared type is `kt`" into the SIG decl_scope's
-//! `bindings.types[name]` — the same type table the SIG-local `LET <TypeName> = …` abstract
+//! `bindings.types[name]` — the same type table the SIG-local `LET <TypeIdentifier> = …` abstract
 //! members live in. A value-class slot name keeps it distinguishable from an abstract-type
 //! member (Type-class name) when ascription enumerates the table.
 //!
@@ -11,7 +11,7 @@
 //! builtin leaf re-dispatch against decl_scope so a SIG-local `LET <name> = ...` shadow wins
 //! over the builtin table; structural carriers (`KFunction`, `List`, ...) are taken directly.
 
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::KKind;
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::{BindingIndex, KError, KErrorKind, Scope};
@@ -32,7 +32,7 @@ fn typeexpr_from_carrier<'a>(kt: &KType<'a>) -> CarrierForm<'a> {
         | KType::Any
         | KType::Identifier
         | KType::KExpression
-        | KType::OfKind(KKind::Proper) => CarrierForm::Leaf(TypeName::leaf(kt.name())),
+        | KType::OfKind(KKind::Proper) => CarrierForm::Leaf(TypeIdentifier::leaf(kt.name())),
         _ => CarrierForm::Direct(kt.clone()),
     }
 }
@@ -40,8 +40,8 @@ fn typeexpr_from_carrier<'a>(kt: &KType<'a>) -> CarrierForm<'a> {
 enum CarrierForm<'a> {
     /// Builtin leaf synthesized from `kt.name()`; re-elaborated against decl_scope
     /// so a SIG-local shadow wins over the builtin table.
-    Leaf(TypeName),
-    Raw(TypeName),
+    Leaf(TypeIdentifier),
+    Raw(TypeIdentifier),
     /// Structural carrier accepted as-is; inner names are not re-bound.
     Direct(KType<'a>),
 }
@@ -93,7 +93,7 @@ pub fn body<'a>(
             return done_err(match arg_object(ctx.args, "ty") {
                 Some(other) => KError::new(KErrorKind::TypeMismatch {
                     arg: "ty".to_string(),
-                    expected: "TypeExprRef".to_string(),
+                    expected: "ProperType".to_string(),
                     got: other.ktype().name(),
                 }),
                 None => KError::new(KErrorKind::MissingArg("ty".to_string())),
@@ -109,7 +109,7 @@ pub fn body<'a>(
         }
         // Both leaf and raw carriers re-dispatch the leaf against decl_scope so a SIG-local
         // `LET <name> = ...` shadow wins over the builtin table. A `TypeNameRef` carrier always
-        // holds a bare-leaf `TypeName` (parameterized surface forms sub-Dispatch earlier).
+        // holds a bare-leaf `TypeIdentifier` (parameterized surface forms sub-Dispatch earlier).
         CarrierForm::Leaf(te) => (te, ()),
         CarrierForm::Raw(te) => (te, ()),
     };
@@ -144,7 +144,7 @@ pub fn body<'a>(
 /// Records the value slot's declared type in `bindings.types` and returns the slot's carrier as
 /// `Action::Done`. A VAL is a *value* member whose *declared type* we keep; storing the `KType`
 /// directly (not a boxed carrier) keeps the type table the single home for everything ascription
-/// enumerates. Uses the same infallible `register_type` path as a SIG-local `LET <TypeName> = …`
+/// enumerates. Uses the same infallible `register_type` path as a SIG-local `LET <TypeIdentifier> = …`
 /// abstract member.
 fn finalize_val<'a>(
     scope: &Scope<'a>,

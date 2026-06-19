@@ -8,9 +8,9 @@ three-arm enums, each `success | Park(Vec<NodeId>) | Unbound(String)`:
 
 - [`ElabResult<'a>`](../../src/machine/model/types/resolver.rs) — `Done(KType<'a>)`
   (an **owned** type), the model-layer elaboration result.
-- [`ResolveTypeExprOutcome<'a>`](../../src/machine/execute/dispatch/resolve_type_expr.rs)
+- [`ResolveTypeExprOutcome<'a>`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
   — `Done(&'a KType<'a>)` (an **arena reference**), the scope-bound memoized result.
-- [`TypeLeafCarrier<'a>`](../../src/machine/execute/dispatch/resolve_type_expr.rs)
+- [`TypeLeafCarrier<'a>`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
   — `Resolved(&'a KType<'a>)`, the type-channel carrier for the three bare-leaf call
   sites.
 
@@ -19,10 +19,10 @@ distinction is the success payload — owned `KType<'a>` (model produces it) ver
 arena `&'a KType<'a>` (execute memoizes it). `ResolveTypeExprOutcome` and
 `TypeLeafCarrier` carry the *same* arena reference and differ only in the success
 variant's name (`Done` versus `Resolved`); each layer re-wraps the previous with a
-hand-written three-arm `match` (`resolve_type_expr.rs:50-63`, `93-99`). The
+hand-written three-arm `match` (`resolve_type_identifier.rs:50-63`, `93-99`). The
 `TypeLeafCarrier` adapter additionally re-clones and re-allocates an
 already-arena-allocated reference (`scope.arena.alloc_ktype(kt.clone())`,
-`resolve_type_expr.rs:95`), a redundant allocation on every resolved leaf.
+`resolve_type_identifier.rs:95`), a redundant allocation on every resolved leaf.
 
 **Acceptance criteria.**
 
@@ -51,13 +51,13 @@ already-arena-allocated reference (`scope.arena.alloc_ktype(kt.clone())`,
 - *No lifetime parameter on the bare enum — decided.* `'a` rides entirely inside `T`,
   so the enum is `ResolveOutcome<T>`, not `ResolveOutcome<'a, T>`; the `Park`/`Unbound`
   arms stay lifetime-free.
-- *Owned→ref lift via `map_done` — decided.* `Scope::resolve_type_expr` lifts the
+- *Owned→ref lift via `map_done` — decided.* `Scope::resolve_type_identifier` lifts the
   elaborator's owned `Done(KType)` to an arena `Done(&KType)` through
   `ResolveOutcome::map_done`, replacing the hand-written re-wrap and consuming the memo
   reference without a re-clone.
 - *Home module for the generic — open.* `ElabResult` lives in the model layer
   (`model/types/resolver.rs`) and `ResolveTypeExprOutcome` in execute
-  (`execute/dispatch/resolve_type_expr.rs`); the shared generic must live in the model
+  (`execute/dispatch/resolve_type_identifier.rs`); the shared generic must live in the model
   layer so execute can alias it. Recommended: define `ResolveOutcome<T>` beside
   `ElabResult` in `resolver.rs` and re-export from the types module.
 

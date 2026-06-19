@@ -3,7 +3,7 @@
 //! positional construction).
 
 use super::ktype::KType;
-use super::resolver::{elaborate_type_expr, ElabResult, Elaborator};
+use super::resolver::{elaborate_type_identifier, ElabResult, Elaborator};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::Carried;
 use crate::machine::model::Parseable;
@@ -53,7 +53,7 @@ impl<'b, 'a> ResultFeed<'b, 'a> {
 }
 
 /// Entry point used by STRUCT / UNION / FN / FUNCTOR. Routes each field type through the
-/// scheduler-aware [`elaborate_type_expr`], accumulating parking producers and
+/// scheduler-aware [`elaborate_type_identifier`], accumulating parking producers and
 /// pending sub-Dispatches across the whole walk so the caller can install one
 /// dep-finish for the merged set. `name_kind` selects which token shapes are valid as a
 /// field/parameter name (STRUCT / UNION pass `Identifier`; FN / FUNCTOR pass
@@ -76,7 +76,7 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
     let mut sub_dispatches: Vec<KExpression<'a>> = Vec::new();
     let parsed = parse_pair_list(expr, context, name_kind, |part, name| {
         match part {
-            ExpressionPart::Type(t) => match elaborate_type_expr(elaborator, t) {
+            ExpressionPart::Type(t) => match elaborate_type_identifier(elaborator, t) {
                 ElabResult::Done(kt) => Ok(kt),
                 ElabResult::Park(producers) => {
                     parks.extend(producers);

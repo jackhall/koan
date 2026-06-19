@@ -1,4 +1,4 @@
-//! `RECURSIVE TYPES <name:TypeExprRef> = (<body>)` — co-declare a group of
+//! `RECURSIVE TYPES <name:ProperType> = (<body>)` — co-declare a group of
 //! mutually-recursive nominal types as one [`RecursiveSet`].
 //!
 //! The block is the one cross-order type-name resolution that survives strict lexical
@@ -58,7 +58,7 @@ fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, KKind)>, KErr
     for decl in decls {
         let kind = match leading_keyword(decl) {
             Some("UNION") => KKind::Tagged,
-            Some("NEWTYPE") => KKind::Newtype,
+            Some("NEWTYPE") => KKind::NewType,
             other => {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "RECURSIVE TYPES body admits only UNION / NEWTYPE declarations, \

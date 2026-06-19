@@ -1,7 +1,7 @@
 use crate::builtins::default_scope;
 use crate::machine::execute::dispatch::resolve_name_part;
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::NameOutcome;
 use crate::machine::{BindingIndex, RuntimeArena};
@@ -27,7 +27,7 @@ fn resolve_name_part_identifier_resolved() {
 fn resolve_name_part_type_resolved() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let part = ExpressionPart::Type(TypeName::leaf("Number".to_string()));
+    let part = ExpressionPart::Type(TypeIdentifier::leaf("Number".to_string()));
     let sched = KoanRuntime::new();
     match resolve_name_part(scope, &part, sched.scheduler(), None, None) {
         NameOutcome::Resolved(Carried::Type(KType::Number)) => {}

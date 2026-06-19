@@ -8,7 +8,7 @@ use super::{arg, kw, sig};
 
 /// `LET <name> = <value:Any>` — deep-clones the bound value into the arena and inserts it
 /// under `name`. Two overloads share this body, differing only in the `name` slot's `KType`:
-/// `Identifier` and `TypeExprRef`. Same partition logic across both: reads its args from the
+/// `Identifier` and `ProperType`. Same partition logic across both: reads its args from the
 /// `BodyCtx::args` record, writes the binding directly on `ctx.scope` (interior-mutable), and
 /// returns the bound carrier as `Action::Done`.
 pub fn body<'a>(
@@ -77,7 +77,7 @@ pub fn body<'a>(
         (Some(other), None) => {
             return done_err(KError::new(KErrorKind::TypeMismatch {
                 arg: "name".to_string(),
-                expected: "Identifier or TypeExprRef".to_string(),
+                expected: "Identifier or ProperType".to_string(),
                 got: other.ktype().name(),
             }));
         }

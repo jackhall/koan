@@ -10,13 +10,13 @@
 /// form one subsumption lattice:
 ///
 /// ```text
-/// Any > { Module, Signature, Proper > { Tagged, Newtype, TypeConstructor } }
+/// Any > { Module, Signature, Proper > { Tagged, NewType, TypeConstructor } }
 /// ```
 ///
 /// `kind_of` (the value-classification direction) descends a nominal to its family —
 /// [`Proper`](KKind::Proper) only for a non-nominal, non-module, non-signature type;
 /// [`Module`](KKind::Module) / [`Signature`](KKind::Signature) for those carriers; and
-/// [`Tagged`](KKind::Tagged) / [`Newtype`](KKind::Newtype) /
+/// [`Tagged`](KKind::Tagged) / [`NewType`](KKind::NewType) /
 /// [`TypeConstructor`](KKind::TypeConstructor) for a user-declared nominal. [`Any`](KKind::Any)
 /// is a *slot* expectation only ("accepts any proper type value"), never a classification.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -45,7 +45,7 @@ pub enum KKind {
     Tagged,
     /// A newtype (record-repr or scalar) — the family a `NEWTYPE` declares. Strictly below
     /// `Proper`.
-    Newtype,
+    NewType,
     /// A higher-kinded type constructor (`Result`). Strictly below `Proper`.
     TypeConstructor,
     // Constructor(arity) — the `* -> *` arity tower for higher-kinded type constructors —
@@ -62,11 +62,11 @@ impl KKind {
     pub fn admits(self, other: KKind) -> bool {
         use KKind::*;
         match self {
-            Proper | Any => matches!(other, Proper | Tagged | Newtype | TypeConstructor),
+            Proper | Any => matches!(other, Proper | Tagged | NewType | TypeConstructor),
             Module => other == Module,
             Signature => other == Signature,
             Tagged => other == Tagged,
-            Newtype => other == Newtype,
+            NewType => other == NewType,
             TypeConstructor => other == TypeConstructor,
         }
     }
@@ -76,18 +76,18 @@ impl KKind {
     /// `OfKind(Tagged)` slot out-specifies an `OfKind(Proper)` sibling.
     pub fn strictly_below(self, other: KKind) -> bool {
         use KKind::*;
-        matches!((self, other), (Tagged | Newtype | TypeConstructor, Proper))
+        matches!((self, other), (Tagged | NewType | TypeConstructor, Proper))
     }
 
     /// Surface keyword rendered in diagnostics and type-name printing.
     pub fn surface_keyword(self) -> &'static str {
         match self {
-            KKind::Proper => "TypeExprRef",
+            KKind::Proper => "ProperType",
             KKind::Module => "Module",
             KKind::Signature => "Signature",
             KKind::Any => "Type",
             KKind::Tagged => "Tagged",
-            KKind::Newtype => "Newtype",
+            KKind::NewType => "NewType",
             KKind::TypeConstructor => "TypeConstructor",
         }
     }

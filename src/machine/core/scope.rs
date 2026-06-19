@@ -253,32 +253,32 @@ impl<'a> Scope<'a> {
         self.bindings.get()
     }
 
-    /// Scope-bound `TypeName → &KType` memo read. A transparent `USING` window returns
+    /// Scope-bound `TypeIdentifier → &KType` memo read. A transparent `USING` window returns
     /// `None`: its resolutions depend on the call-site chain, so caching them into the
     /// module's shared memo would poison the module's own def-site resolution.
-    pub(crate) fn type_expr_memo_get(
+    pub(crate) fn type_identifier_memo_get(
         &self,
-        te: &crate::machine::model::ast::TypeName,
+        te: &crate::machine::model::ast::TypeIdentifier,
         cutoff: Option<usize>,
     ) -> Option<&'a crate::machine::model::types::KType<'a>> {
         if self.bindings.is_borrowed() {
             return None;
         }
-        self.bindings.get().type_expr_memo_get(te, cutoff)
+        self.bindings.get().type_identifier_memo_get(te, cutoff)
     }
 
     /// Memo write — no-op on a transparent `USING` window (see
-    /// [`Self::type_expr_memo_get`]).
-    pub(crate) fn type_expr_memo_insert(
+    /// [`Self::type_identifier_memo_get`]).
+    pub(crate) fn type_identifier_memo_insert(
         &self,
-        te: crate::machine::model::ast::TypeName,
+        te: crate::machine::model::ast::TypeIdentifier,
         cutoff: Option<usize>,
         kt: &'a crate::machine::model::types::KType<'a>,
     ) {
         if self.bindings.is_borrowed() {
             return;
         }
-        self.bindings.get().type_expr_memo_insert(te, cutoff, kt);
+        self.bindings.get().type_identifier_memo_insert(te, cutoff, kt);
     }
 
     /// Call-site scope a `Borrowed` window forwards writes to. Panics if `Borrowed`
@@ -448,7 +448,7 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// User-facing type registration (`LET <TypeName> = …`, `VAL`): rejects a collision
+    /// User-facing type registration (`LET <TypeIdentifier> = …`, `VAL`): rejects a collision
     /// with a builtin type before delegating to the infallible [`Self::register_type`].
     /// Builtins are immutable and unshadowable, so a user type that names one is a
     /// `Rebind` at any depth — including a SIG/MODULE-local abstract member — and the

@@ -5,7 +5,7 @@
 //! (newtype-over-newtype collapses to a single layer).
 //!
 //! Three registered overloads selected by the repr part-kind. A scalar / bare-leaf repr
-//! (`= Number`, `= Foo`) resolves eagerly through the `:TypeExprRef` slot. A non-record
+//! (`= Number`, `= Foo`) resolves eagerly through the `:ProperType` slot. A non-record
 //! sigil repr (`= :(LIST OF T)`) is captured *raw* through the `:SigiledTypeExpr` slot and
 //! sub-dispatched to a resolved `KType` by the shared [`body`]. A record repr (`= :{…}`) is
 //! captured *raw* through its own `:RecordType` slot and routed to [`body_record_repr`], so
@@ -34,7 +34,7 @@ use super::{arg, kw, sig};
 
 /// Seal a resolved `repr` into the NEWTYPE's identity and register it. A NEWTYPE is
 /// non-recursive (its `repr` is already resolved), so it seals into a singleton set of one
-/// member whose `kind` (`Newtype`) is what `kind_of` reports for the sealed `SetRef`;
+/// member whose `kind` (`NewType`) is what `kind_of` reports for the sealed `SetRef`;
 /// identity never descends `repr`.
 fn finalize_newtype<'a>(
     scope: &Scope<'a>,
@@ -43,8 +43,8 @@ fn finalize_newtype<'a>(
     bind_index: BindingIndex,
 ) -> Result<Carried<'a>, KError> {
     let scope_id = scope.id;
-    let member = NominalMember::pending(name.clone(), scope_id, KKind::Newtype);
-    member.fill(NominalSchema::Newtype(Box::new(repr)));
+    let member = NominalMember::pending(name.clone(), scope_id, KKind::NewType);
+    member.fill(NominalSchema::NewType(Box::new(repr)));
     let set = Rc::new(RecursiveSet::new(vec![member]));
     let identity = KType::SetRef { set, index: 0 };
     let kt_ref: &'a KType = scope.arena.alloc_ktype(identity);
@@ -64,7 +64,7 @@ fn finalize_newtype<'a>(
 }
 
 /// Seal the elaborated record fields into the NEWTYPE's [`RecursiveSet`] member as
-/// `NominalSchema::Newtype(KType::Record(sealed))`. Transient `RecursiveRef(name)` field leaves
+/// `NominalSchema::NewType(KType::Record(sealed))`. Transient `RecursiveRef(name)` field leaves
 /// seal to `SetLocal(index)` against the member's set — the block's shared set when present (a
 /// `RECURSIVE TYPES` member), else a fresh singleton (standalone self-recursion). Shared by the
 /// synchronous and dep-finish paths.
@@ -84,7 +84,7 @@ fn finalize_record_newtype<'a>(
         scope,
         &name,
         scope_id,
-        KKind::Newtype,
+        KKind::NewType,
         |set| {
             let missing = RefCell::new(Vec::new());
             let sealed_pairs: Vec<(String, KType<'a>)> = fields
@@ -94,7 +94,7 @@ fn finalize_record_newtype<'a>(
             let sealed = Record::from_pairs(sealed_pairs);
             match missing.into_inner().into_iter().next() {
                 Some(m) => SchemaSealResult::Dangling(m),
-                None => SchemaSealResult::Ok(NominalSchema::Newtype(Box::new(KType::Record(
+                None => SchemaSealResult::Ok(NominalSchema::NewType(Box::new(KType::Record(
                     Box::new(sealed),
                 )))),
             }
@@ -178,7 +178,7 @@ pub fn body<'a>(
 }
 
 /// A non-record sigil repr (`NEWTYPE Stream = :(LIST OF Number)`): re-wrap the captured sigil,
-/// sub-dispatch it, and seal a plain Newtype over the resolved `KType` at dep-finish.
+/// sub-dispatch it, and seal a plain NewType over the resolved `KType` at dep-finish.
 fn defer_resolved_sigil<'a>(
     name: String,
     inner: KExpression<'a>,
@@ -229,7 +229,7 @@ pub fn body_record_repr<'a>(
         ctx,
         name,
         fields,
-        KKind::Newtype,
+        KKind::NewType,
         "NEWTYPE record repr",
         FieldNameKind::Identifier,
         error_frame,
@@ -327,7 +327,7 @@ mod tests {
                 let member = set.member(*index);
                 let borrow = member.schema();
                 match borrow.as_ref() {
-                    Some(NominalSchema::Newtype(repr)) => match repr.as_ref() {
+                    Some(NominalSchema::NewType(repr)) => match repr.as_ref() {
                         KType::Record(record) => {
                             let fields =
                                 record.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -335,7 +335,7 @@ mod tests {
                         }
                         other => panic!("expected {name} to carry a record repr, got {other:?}"),
                     },
-                    other => panic!("expected {name} to carry a Newtype schema, got {other:?}"),
+                    other => panic!("expected {name} to carry a NewType schema, got {other:?}"),
                 }
             }
             other => panic!("expected {name} to be a SetRef identity, got {other:?}"),
@@ -356,13 +356,13 @@ mod tests {
         match **kt {
             KType::SetRef { ref set, index } => {
                 assert_eq!(set.member(index).name, "Distance");
-                assert_eq!(set.member(index).kind, KKind::Newtype);
+                assert_eq!(set.member(index).kind, KKind::NewType);
                 match RecursiveSet::projected_schema(set, index) {
-                    ProjectedSchema::Newtype(repr) => assert_eq!(repr, KType::Number),
-                    _ => panic!("expected a Newtype schema"),
+                    ProjectedSchema::NewType(repr) => assert_eq!(repr, KType::Number),
+                    _ => panic!("expected a NewType schema"),
                 }
             }
-            ref other => panic!("expected Newtype SetRef identity, got {other:?}"),
+            ref other => panic!("expected NewType SetRef identity, got {other:?}"),
         }
         drop(types);
         let data = scope.bindings().data();
@@ -385,9 +385,9 @@ mod tests {
                 match **type_id {
                     KType::SetRef { ref set, index } => {
                         assert_eq!(set.member(index).name, "Distance");
-                        assert_eq!(set.member(index).kind, KKind::Newtype);
+                        assert_eq!(set.member(index).kind, KKind::NewType);
                     }
-                    ref other => panic!("expected Newtype SetRef type_id, got {other:?}"),
+                    ref other => panic!("expected NewType SetRef type_id, got {other:?}"),
                 }
                 assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
             }
@@ -535,8 +535,8 @@ mod tests {
 
     /// A non-record sigil repr (`= :(LIST OF Number)`) routes through the same
     /// `:SigiledTypeExpr` overload but has no self-reference to thread: it sub-dispatches the
-    /// sigil to a resolved `KType` and seals a plain Newtype over it. Regression guard for the
-    /// overload split — this used to ride the `:TypeExprRef` overload's speculative sub-dispatch.
+    /// sigil to a resolved `KType` and seals a plain NewType over it. Regression guard for the
+    /// overload split — this used to ride the `:ProperType` overload's speculative sub-dispatch.
     #[test]
     fn sigil_repr_non_record_seals_newtype_over_resolved_type() {
         let arena = RuntimeArena::new();

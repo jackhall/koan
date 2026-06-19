@@ -1,4 +1,4 @@
-//! Scheduler-aware type-name elaboration. Walks a [`TypeName`] against a [`Scope`], gating
+//! Scheduler-aware type-name elaboration. Walks a [`TypeIdentifier`] against a [`Scope`], gating
 //! each bare leaf against a [`LexicalFrame`] so a type declared lexically later is invisible
 //! — a forward type reference is a position error, not a silent success. A self-reference
 //! short-circuits to the transient [`KType::RecursiveRef`] via the threaded binder name, and
@@ -7,14 +7,14 @@
 //! returns [`ElabResult::Park`] so the caller re-runs the elaboration on wake.
 //!
 //! Type-name bindings live in [`Scope::bindings`]'s `types` map; consumers go through
-//! [`elaborate_type_expr`] when scope-aware lookup is needed or [`KType::from_type_expr`]
+//! [`elaborate_type_identifier`] when scope-aware lookup is needed or [`KType::from_type_identifier`]
 //! when only the builtin table matters.
 
 use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::machine::core::{LexicalFrame, Resolution, Scope, ScopeId};
-use crate::machine::model::ast::TypeName;
+use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::NodeId;
 
 use super::kkind::KKind;
@@ -24,7 +24,7 @@ use super::recursive_set::{NominalMember, RecursiveSet};
 #[cfg(test)]
 mod tests;
 
-/// Outcome of one elaboration walk over a `TypeName`.
+/// Outcome of one elaboration walk over a `TypeIdentifier`.
 #[derive(Debug)]
 pub enum ElabResult<'a> {
     /// Fully elaborated. Self / forward-sibling references appear as transient
@@ -74,13 +74,13 @@ impl<'b, 'a> Elaborator<'b, 'a> {
     }
 }
 
-/// Walk a `TypeName` against the elaborator's scope. Bare leaves route through the
+/// Walk a `TypeIdentifier` against the elaborator's scope. Bare leaves route through the
 /// threaded set first (recursive back-edge), then `Scope::resolve_type`, then
 /// `Scope::resolve` for the placeholder path, and finally `KType::from_name` so
 /// fixture scopes that skip builtin registration still resolve builtin names.
 /// Parameterized shapes (`:(LIST OF X)`, `:(MAP K -> V)`) no longer reach this
 /// walk — they sub-Dispatch through the standalone dispatcher.
-pub fn elaborate_type_expr<'a>(el: &mut Elaborator<'_, 'a>, t: &TypeName) -> ElabResult<'a> {
+pub fn elaborate_type_identifier<'a>(el: &mut Elaborator<'_, 'a>, t: &TypeIdentifier) -> ElabResult<'a> {
     let name = t.as_str();
     if el.threaded.contains(name) {
         // Self / forward-sibling reference inside a type-definition body: a transient

@@ -205,10 +205,10 @@ fn newtype_record_field_accepts_keyworded_list_of_sigil() {
     // NEWTYPE is type-only — its record repr rides the sealed `SetRef` member in `types`.
     let fields = match scope.resolve_type("Foo") {
         Some(KType::SetRef { set, index }) => match RecursiveSet::projected_schema(set, *index) {
-            ProjectedSchema::Newtype(KType::Record(fields)) => fields,
-            _ => panic!("Foo must project a record-repr Newtype schema"),
+            ProjectedSchema::NewType(KType::Record(fields)) => fields,
+            _ => panic!("Foo must project a record-repr NewType schema"),
         },
-        other => panic!("Foo must be a Newtype SetRef in types, got {other:?}"),
+        other => panic!("Foo must be a NewType SetRef in types, got {other:?}"),
     };
     assert_eq!(fields.len(), 1);
     let (xs_name, xs_type) = fields.iter().next().expect("one field");

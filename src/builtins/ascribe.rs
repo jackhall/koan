@@ -230,7 +230,7 @@ fn shape_check<'a>(
 
 /// Collect every name in `scope`'s `Bindings` that classifies as an abstract Type member.
 /// Every SIG-body declaration lives in `bindings.types`: abstract-type members
-/// (`LET <TypeName> = …`) under Type-class names and value slots (`VAL …`) under value-class
+/// (`LET <TypeIdentifier> = …`) under Type-class names and value slots (`VAL …`) under value-class
 /// names. An abstract type member is exactly a Type-class-named type-table entry, so the
 /// value slots filter out by name class.
 pub(super) fn abstract_type_names_of<'a>(scope: &crate::machine::Scope<'a>) -> Vec<String> {

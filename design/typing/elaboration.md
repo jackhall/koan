@@ -15,7 +15,7 @@ against the consumer's lexical position by `idx < cutoff` — exactly the value
 language's rule. A type binding declared lexically later than its consumer is
 invisible, so a forward type reference is a *position error*, not a silent
 success or a park.
-[`Scope::resolve_type_expr`](../../src/machine/core/scope.rs) takes the chain and
+[`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs) takes the chain and
 the `type_expr_memo` re-keys by `(TypeName, cutoff)`, so a forward and a backward
 consumer at the same scope never share a cached verdict. The `Resolution::Placeholder`
 arm parks only on an *earlier still-finalizing* type (a binder visible at the
@@ -107,7 +107,7 @@ cross-link this section rather than restating its slice.
   `&KType` in the value channel's `Type` arm; a miss — a user-bound leaf — defers to the
   [`KType::Unresolved(TypeName)`](../../src/machine/model/types/ktype.rs) transient, which
   preserves the parser-side name verbatim until the park-capable
-  `Scope::resolve_type_expr` consumes it. Runs at `KFunction::bind` time, which has no
+  `Scope::resolve_type_identifier` consumes it. Runs at `KFunction::bind` time, which has no
   `Scope` in hand, so it is builtin-only and scope-independent.
 - **Layer 2 — scope-bound elaboration memo (the sole cache tier)** in
   [`bindings.rs`](../../src/machine/core/bindings.rs). A
@@ -116,7 +116,7 @@ cross-link this section rather than restating its slice.
   gated by a finalize check on every embedded user-type. Keying by `cutoff` keeps
   a forward consumer (which sees a name as unresolved) and a backward consumer
   (which sees it bound) from sharing a verdict. Reached through
-  [`Scope::resolve_type_expr`](../../src/machine/core/scope.rs), which takes the
+  [`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs), which takes the
   chain and returns the three-outcome
   `ResolveTypeExprOutcome::{Done, Park, Unbound}`. See
   [Strict admission rules](#strict-admission-rules) for the gate and
@@ -136,12 +136,12 @@ cross-link this section rather than restating its slice.
   [execution-model.md § Dispatch-time name placeholders](../execution-model.md#dispatch-time-name-placeholders)
   for the parking integration.
 - **Layer 4 — bare-leaf dispatch ingress** in
-  [`resolve_type_expr.rs`](../../src/machine/execute/dispatch/resolve_type_expr.rs).
-  [`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_expr.rs)
+  [`resolve_type_identifier.rs`](../../src/machine/execute/dispatch/resolve_type_identifier.rs).
+  [`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
   is the shared seam from a bare-`Type` token to a dispatch-time carrier,
   called from the dispatcher's `BareTypeLeaf` fast lane and the keyworded
   splice walk's eager name-resolve pass. It wraps the same memoized,
-  park-capable `Scope::resolve_type_expr` bridge (Layer 2) every compound type
+  park-capable `Scope::resolve_type_identifier` bridge (Layer 2) every compound type
   form uses, returning `TypeLeafCarrier::{Resolved, Park, Unbound}`: `Resolved`
   carries the bridge's cached `&KType` raw in the value channel's `Type` arm, and `Park`
   lets a leaf naming an earlier still-finalizing binder park on its producer and
@@ -154,7 +154,7 @@ cross-link this section rather than restating its slice.
   parser-side `TypeName` verbatim for bare-leaf type names not in the builtin table — so
   diagnostics quote the user's identifier exactly as written rather than the elaborated
   canonical form. A transient sibling to `RecursiveRef`, it never reaches the dispatch
-  predicates: `Scope::resolve_type_expr` consumes and replaces it. See
+  predicates: `Scope::resolve_type_identifier` consumes and replaces it. See
   [Bare-leaf type-name carrier](#bare-leaf-type-name-carrier) for the consumers.
 
 ## Binding-map partition
@@ -265,11 +265,11 @@ The single-part bare-`Type` lookup that those consumers' siblings need is
 folded into the dispatcher's `BareTypeLeaf` fast lane
 ([`dispatch/single_poll.rs`](../../src/machine/execute/dispatch/single_poll.rs)),
 which calls
-[`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_expr.rs)
+[`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
 — the shared seam also called from the keyworded splice walk's eager
 name-resolve pass
 ([`dispatch.rs`](../../src/machine/execute/dispatch.rs)).
-The seam wraps the memoized, park-capable `Scope::resolve_type_expr` bridge: on
+The seam wraps the memoized, park-capable `Scope::resolve_type_identifier` bridge: on
 a resolved leaf it surfaces the bridge's cached `&KType` in the value channel's `Type` arm
 for every type-only nominal — struct / union / module / Result *and* signature; on an
 earlier still-finalizing binder it parks; on a miss it surfaces `Unbound`.
@@ -285,7 +285,7 @@ already finalized every parameter-name identity; type-denoting parameters themse
 `register_type` from an already-resolved type argument, so there is no transient identity
 elaboration at the bind site. The sole bare-leaf resolution site for dispatch transport
 lives in
-[`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_expr.rs),
+[`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs),
 which surfaces the bridge's resolved `&KType`. Bare leaves resolve through the same
 memo and parking discipline as compound type forms — there is no separate
 synchronous bare-leaf path.
@@ -326,7 +326,7 @@ it hot. The scope-bound resolution memo is therefore the only cache:
 - A `RefCell<HashMap<TypeName, &'a KType>>` lives on
   [`Bindings`](../../src/machine/core/bindings.rs) (`type_expr_memo`).
   Reached through
-  [`Scope::resolve_type_expr`](../../src/machine/core/scope.rs), which
+  [`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs), which
   returns the three-outcome
   `ResolveTypeExprOutcome::{Done(&'a KType), Park(Vec<NodeId>),
   Unbound(String)}`. Cache miss runs the elaborator against `self`, then
@@ -346,7 +346,7 @@ Consumers that need the scope-resolved identity —
 [`val_decl::body`](../../src/builtins/val_decl.rs)'s structural
 carrier path and its post-dep-finish, and
 [`fn_def::body`](../../src/builtins/fn_def.rs)'s return-type
-elaboration — go through `Scope::resolve_type_expr`. NEWTYPE's bare-leaf
+elaboration — go through `Scope::resolve_type_identifier`. NEWTYPE's bare-leaf
 user-bound repr path keeps the simpler `Scope::resolve_type` lookup (it's
 intentionally non-park-aware: an unresolvable repr is a hard error, not a
 forward reference). A type-denoting FN parameter binds its already-resolved type

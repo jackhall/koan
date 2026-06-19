@@ -15,7 +15,7 @@ impl<'a> KType<'a> {
     /// True iff a parameter declared with this `KType` carries a value whose nominal
     /// identity is meaningful as a *type* binding (not just a value binding), so the
     /// per-call binding must be dual-written into the types-side scope. Only the
-    /// *type-value* `OfKind` kinds qualify — a nominal-family kind (`Tagged` / `Newtype` /
+    /// *type-value* `OfKind` kinds qualify — a nominal-family kind (`Tagged` / `NewType` /
     /// `TypeConstructor`) classifies a type value but is not itself used as a binding-side
     /// slot, so it stays out (an `OfKind` is type-channel-only and never binds a runtime
     /// instance).
@@ -44,8 +44,8 @@ impl<'a> KType<'a> {
     }
 
     /// Strict specificity ordering. Concrete types outrank `Any` and the
-    /// unconstrained-name slot types (`Identifier`, `TypeExprRef`), so an overload
-    /// like `ATTR <s:Newtype>` beats its `ATTR <s:Identifier>` sibling when both admit.
+    /// unconstrained-name slot types (`Identifier`, `ProperType`), so an overload
+    /// like `ATTR <s:NewType>` beats its `ATTR <s:Identifier>` sibling when both admit.
     /// A nominal-family kind out-specifies `OfKind(Proper)` (`OfKind(Tagged) ≺
     /// OfKind(Proper)`), and a sealed `SetRef` / `Variant` member out-specifies the
     /// `OfKind(kind)` of its own family. Parameterized containers are covariant in their
@@ -250,7 +250,7 @@ impl<'a> KType<'a> {
                 KKind::Module
                 | KKind::Signature
                 | KKind::Tagged
-                | KKind::Newtype
+                | KKind::NewType
                 | KKind::TypeConstructor => false,
             },
             // A stamped `type_args` carrier (from ascription) takes precedence and is
@@ -309,7 +309,7 @@ impl<'a> KType<'a> {
     /// slot — the type-channel analog of [`matches_value`]. A `Signature` slot is satisfied by
     /// a module satisfying it (sig membership + pinned-slot agreement); an `OfKind` slot when
     /// its kind subsumes `t.kind_of()` (so `OfKind(Proper)` admits any proper type — including
-    /// a now-`Tagged`/`Newtype`-classified nominal — while the module/sig wall keeps `Proper`
+    /// a now-`Tagged`/`NewType`-classified nominal — while the module/sig wall keeps `Proper`
     /// from admitting a module); `Any` by anything; a module/signature *value* slot by
     /// structural identity. Other concrete slots compare against the `OfKind(Proper)` dispatch
     /// identity a non-module/sig type carrier reports, so they admit no bare type value.
@@ -425,7 +425,7 @@ impl<'a> KType<'a> {
             // subsumption. A raw parser type token is a proper type name, admitted only for
             // `Proper` / `Any`. A first-class type value is admitted iff the slot kind
             // subsumes the value's `kind_of` — so `Proper` / `Any` take any non-module /
-            // non-signature type (incl. a `Tagged` / `Newtype` / `TypeConstructor` nominal),
+            // non-signature type (incl. a `Tagged` / `NewType` / `TypeConstructor` nominal),
             // `Module` / `Signature` take only their own carriers, and a nominal-kind slot
             // takes only its own family. `kind_of(Module) == Module` keeps the module/sig wall
             // automatic — `OfKind(Proper)` never admits a module, so a chained `[ATTR <m>
@@ -485,7 +485,7 @@ impl<'a> KType<'a> {
             // Transient / intra-set leaves never reach a real argument slot: `RecursiveRef`
             // is sealed away before dispatch, and `SetLocal` only appears inside a member's
             // schema (reached by navigation, which carries the ambient set).
-            // Transient: consumed by `Scope::resolve_type_expr` before reaching a real slot.
+            // Transient: consumed by `Scope::resolve_type_identifier` before reaching a real slot.
             KType::RecursiveRef(_) | KType::Unresolved(_) => true,
             KType::SetLocal(_) => false,
             // A whole-set handle names a group of types, not a value type — it admits no

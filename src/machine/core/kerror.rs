@@ -196,7 +196,7 @@ impl KError {
         pairs.push(("frames".to_string(), frames_list));
         let record = KObject::record(Record::from_pairs(pairs));
         let type_id: &'a KType<'a> = arena.alloc_ktype(KType::SetRef {
-            set: synthetic_singleton(name.clone(), KKind::Newtype),
+            set: synthetic_singleton(name.clone(), KKind::NewType),
             index: 0,
         });
         let payload = KObject::Wrapped {
@@ -220,7 +220,7 @@ impl KError {
 fn synthetic_singleton<'a>(name: String, kind: KKind) -> Rc<RecursiveSet<'a>> {
     let member = NominalMember::pending(name, ScopeId::SENTINEL, kind);
     member.fill(match kind {
-        KKind::Newtype => NominalSchema::Newtype(Box::new(KType::Any)),
+        KKind::NewType => NominalSchema::NewType(Box::new(KType::Any)),
         _ => NominalSchema::Tagged(std::collections::HashMap::new()),
     });
     Rc::new(RecursiveSet::new(vec![member]))

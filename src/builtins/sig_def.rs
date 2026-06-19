@@ -1,4 +1,4 @@
-//! `SIG <name:TypeExprRef> = <body:KExpression>` — declare a module signature (an
+//! `SIG <name:ProperType> = <body:KExpression>` — declare a module signature (an
 //! interface a module can be ascribed to). See
 //! [design/typing/modules.md](../../design/typing/modules.md).
 //!
@@ -7,7 +7,7 @@
 //! captures the populated scope into a [`ModuleSignature`] value, allocates it in the
 //! parent's arena, and binds it under the signature's name. Body declarations are
 //! `LET name = (FN <signature> -> <return> = ...)` for operations and
-//! `LET Carrier = TypeName` for abstract type declarations. The ascription operators
+//! `LET Carrier = TypeIdentifier` for abstract type declarations. The ascription operators
 //! (`:|` / `:!`) iterate the stored scope at ascription time.
 
 use crate::machine::model::types::KKind;

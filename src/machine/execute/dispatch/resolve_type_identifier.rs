@@ -1,4 +1,4 @@
-//! Scope-bound resolution of a surface [`TypeName`] into an arena-allocated `&KType`.
+//! Scope-bound resolution of a surface [`TypeIdentifier`] into an arena-allocated `&KType`.
 //!
 //! Read-only consumer of the bindings façade: never touches `data`, `functions`,
 //! `placeholders`, `pending`, `out`, or `kind` — the read-only dependency is what
@@ -6,7 +6,7 @@
 //!
 //! ## Invariant pinned here
 //!
-//! **The `type_expr_memo` is monotonic and never caches a not-yet-sealed type.**
+//! **The `type_identifier_memo` is monotonic and never caches a not-yet-sealed type.**
 //! An entry is written only on the `Done` arm AND only when every user-type the
 //! elaborated result references is finalized (absent from its owning scope's
 //! `pending_types`). The `Park` arm — a referenced type still in flight — never writes the
@@ -16,56 +16,56 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::NodeId;
 use crate::machine::core::{LexicalFrame, Scope, ScopeId};
-use crate::machine::model::ast::TypeName;
+use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::types::KType;
 
-/// Outcome of [`Scope::resolve_type_expr`]. Mirrors
+/// Outcome of [`Scope::resolve_type_identifier`]. Mirrors
 /// [`crate::machine::model::types::ElabResult`] but `Done` carries an
 /// arena-allocated cache reference and `Park` carries scheduler `NodeId`s.
-pub enum ResolveTypeExprOutcome<'step> {
+pub enum TypeIdentifierResolution<'step> {
     Done(&'step KType<'step>),
     Park(Vec<NodeId>),
     Unbound(String),
 }
 
 impl<'step> Scope<'step> {
-    /// Layer-2 scope-bound TypeName resolution memo. On miss, runs
-    /// [`crate::machine::model::types::elaborate_type_expr`] against `self`, asks a
+    /// Layer-2 scope-bound TypeIdentifier resolution memo. On miss, runs
+    /// [`crate::machine::model::types::elaborate_type_identifier`] against `self`, asks a
     /// [`FinalizeGate`] whether the result is safe to share, and writes the cache
     /// only when the gate admits. The Park arm — elaborator-parked or gate-rejected —
     /// never writes the cache: caching mid-SCC would observe pre-close opaque identity.
-    pub fn resolve_type_expr(
+    pub fn resolve_type_identifier(
         &self,
-        te: &TypeName,
+        te: &TypeIdentifier,
         chain: Option<std::rc::Rc<LexicalFrame>>,
-    ) -> ResolveTypeExprOutcome<'step> {
-        use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+    ) -> TypeIdentifierResolution<'step> {
+        use crate::machine::model::types::{elaborate_type_identifier, ElabResult, Elaborator};
         // The cutoff this scope's bindings are gated against — also the memo key, so a
         // forward and a backward consumer never share a cached verdict.
         let cutoff = chain.as_ref().and_then(|c| c.index_for(self.id));
-        if let Some(kt) = self.type_expr_memo_get(te, cutoff) {
-            return ResolveTypeExprOutcome::Done(kt);
+        if let Some(kt) = self.type_identifier_memo_get(te, cutoff) {
+            return TypeIdentifierResolution::Done(kt);
         }
         let mut elaborator = Elaborator::new(self).with_chain(chain);
-        match elaborate_type_expr(&mut elaborator, te) {
+        match elaborate_type_identifier(&mut elaborator, te) {
             ElabResult::Done(kt) => {
                 let pending = FinalizeGate { scope: self }.pending_producers(&kt);
                 if pending.is_empty() {
                     let kt_ref: &'step KType<'step> = self.arena.alloc_ktype(kt);
-                    self.type_expr_memo_insert(te.clone(), cutoff, kt_ref);
-                    ResolveTypeExprOutcome::Done(kt_ref)
+                    self.type_identifier_memo_insert(te.clone(), cutoff, kt_ref);
+                    TypeIdentifierResolution::Done(kt_ref)
                 } else {
-                    ResolveTypeExprOutcome::Park(pending)
+                    TypeIdentifierResolution::Park(pending)
                 }
             }
-            ElabResult::Park(producers) => ResolveTypeExprOutcome::Park(producers),
-            ElabResult::Unbound(msg) => ResolveTypeExprOutcome::Unbound(msg),
+            ElabResult::Park(producers) => TypeIdentifierResolution::Park(producers),
+            ElabResult::Unbound(msg) => TypeIdentifierResolution::Unbound(msg),
         }
     }
 }
 
 /// Outcome of [`resolve_type_leaf_carrier`] — the type-channel adaptation of
-/// [`ResolveTypeExprOutcome`] for the three bare-leaf token call sites.
+/// [`TypeIdentifierResolution`] for the three bare-leaf token call sites.
 pub(crate) enum TypeLeafCarrier<'step> {
     /// The memoized `&KType`, ready to ride the type channel (`Carried::Type`) the same
     /// dispatch transport every other body consumes.
@@ -77,8 +77,8 @@ pub(crate) enum TypeLeafCarrier<'step> {
     Unbound(String),
 }
 
-/// Resolve a bare leaf [`TypeName`] through the memoized, park-capable
-/// [`Scope::resolve_type_expr`] bridge and adapt the result into a type-channel carrier.
+/// Resolve a bare leaf [`TypeIdentifier`] through the memoized, park-capable
+/// [`Scope::resolve_type_identifier`] bridge and adapt the result into a type-channel carrier.
 ///
 /// A resolved leaf yields the memoized `&KType` so a struct / union / module / Result /
 /// signature type token reaches a constructor or ATTR call site through the same transport
@@ -87,19 +87,19 @@ pub(crate) enum TypeLeafCarrier<'step> {
 /// surfaces `Unbound(name)`.
 pub(crate) fn resolve_type_leaf_carrier<'step>(
     scope: &Scope<'step>,
-    t: &TypeName,
+    t: &TypeIdentifier,
     chain: Option<Rc<LexicalFrame>>,
 ) -> TypeLeafCarrier<'step> {
-    match scope.resolve_type_expr(t, chain) {
-        ResolveTypeExprOutcome::Done(kt) => {
+    match scope.resolve_type_identifier(t, chain) {
+        TypeIdentifierResolution::Done(kt) => {
             TypeLeafCarrier::Resolved(scope.arena.alloc_ktype(kt.clone()))
         }
-        ResolveTypeExprOutcome::Park(producers) => TypeLeafCarrier::Park(producers),
-        ResolveTypeExprOutcome::Unbound(message) => TypeLeafCarrier::Unbound(message),
+        TypeIdentifierResolution::Park(producers) => TypeLeafCarrier::Park(producers),
+        TypeIdentifierResolution::Unbound(message) => TypeLeafCarrier::Unbound(message),
     }
 }
 
-/// Precondition value for the `type_expr_memo` cache, naming the load-bearing
+/// Precondition value for the `type_identifier_memo` cache, naming the load-bearing
 /// invariant *"no not-yet-sealed type may enter the memo"* as a type.
 ///
 /// Admits a `KType` iff every top-level user-type it references is finalized in

@@ -1,11 +1,11 @@
 use super::*;
 use crate::builtins::test_support::run_root_silent;
-use crate::machine::model::ast::TypeName;
+use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::BindingIndex;
 use crate::machine::RuntimeArena;
 
-fn leaf(n: &str) -> TypeName {
-    TypeName::leaf(n.into())
+fn leaf(n: &str) -> TypeIdentifier {
+    TypeIdentifier::leaf(n.into())
 }
 
 /// A Type-class leaf bound only in the value language reports the layering
@@ -24,7 +24,7 @@ fn value_language_leaf_names_layering() {
         )
         .expect("bind_value");
     let mut el = Elaborator::new(scope);
-    match elaborate_type_expr(&mut el, &leaf("Gee")) {
+    match elaborate_type_identifier(&mut el, &leaf("Gee")) {
         ElabResult::Unbound(msg) => assert!(
             msg.contains("value-language only") && msg.contains("Gee"),
             "expected a value-language layering message naming `Gee`, got: {msg}",
@@ -38,7 +38,7 @@ fn unbound_leaf_names_unknown_type() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let mut el = Elaborator::new(scope);
-    match elaborate_type_expr(&mut el, &leaf("NopeType")) {
+    match elaborate_type_identifier(&mut el, &leaf("NopeType")) {
         ElabResult::Unbound(msg) => assert!(
             msg.contains("unknown type name") && msg.contains("NopeType"),
             "expected an unknown-type-name message naming `NopeType`, got: {msg}",
@@ -55,19 +55,19 @@ fn recursive_group_member_lowers_to_recursive_ref() {
     let arena = RuntimeArena::new();
     let parent = run_root_silent(&arena);
     let set = std::rc::Rc::new(RecursiveSet::new(vec![
-        NominalMember::pending("A".into(), parent.id, KKind::Newtype),
-        NominalMember::pending("B".into(), parent.id, KKind::Newtype),
+        NominalMember::pending("A".into(), parent.id, KKind::NewType),
+        NominalMember::pending("B".into(), parent.id, KKind::NewType),
     ]));
     let child = arena.alloc_scope(Scope::child_recursive_group(parent, set));
     let mut el = Elaborator::new(child);
-    match elaborate_type_expr(&mut el, &leaf("B")) {
+    match elaborate_type_identifier(&mut el, &leaf("B")) {
         ElabResult::Done(KType::RecursiveRef(name)) => assert_eq!(name, "B"),
         other => panic!("expected a RecursiveRef back-edge for a group member, got {other:?}"),
     }
     let mut el2 = Elaborator::new(child);
     assert!(
         matches!(
-            elaborate_type_expr(&mut el2, &leaf("Nope")),
+            elaborate_type_identifier(&mut el2, &leaf("Nope")),
             ElabResult::Unbound(_)
         ),
         "a non-member must fall through to ordinary resolution",

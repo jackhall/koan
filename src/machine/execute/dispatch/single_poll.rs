@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
 use crate::machine::{KError, KErrorKind, Resolution};
 use crate::source::Spanned;
@@ -25,15 +25,15 @@ use super::{become_dispatch, forward_to_producer, park_on_deps, park_resume, Dep
 /// `KObject`; `schema` is the projected (sibling-`SetLocal`-resolved) schema used for
 /// per-value type-checking.
 pub(in crate::machine::execute) enum CtorKind<'step> {
-    /// Newtype construction (record-repr or scalar) from a single positional value. One value
+    /// NewType construction (record-repr or scalar) from a single positional value. One value
     /// cell carrying the whole value expression; the finish type-checks it against the
     /// member's `repr`, peels any `Wrapped` layer, and tags it with `identity`.
-    Newtype { identity: &'step KType<'step> },
+    NewType { identity: &'step KType<'step> },
     /// Record-repr newtype construction from a named record-literal body (`Point {x = 1, y =
     /// 2}`). One value cell per field, so a literal field stages in place (synchronous bind,
     /// matching the retired struct path) instead of deferring the whole record literal; the
     /// finish builds the `KObject::Record` and wraps it with `identity`.
-    RecordNewtype {
+    RecordNewType {
         identity: &'step KType<'step>,
         field_names: Vec<String>,
     },
@@ -63,7 +63,7 @@ pub(super) fn bare_identifier<'step>(
 
 pub(super) fn bare_type_leaf<'step>(
     ctx: &SchedulerView<'step, '_>,
-    t: &TypeName,
+    t: &TypeIdentifier,
 ) -> Outcome<'step> {
     match resolve_type_leaf_carrier(ctx.current_scope(), t, ctx.active_chain()) {
         TypeLeafCarrier::Resolved(kt) => Outcome::Done(Ok(Carried::Type(kt))),

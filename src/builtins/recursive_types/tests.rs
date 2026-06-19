@@ -18,14 +18,14 @@ fn struct_set_and_fields<'a>(
             let member = set.member(*index);
             let borrow = member.schema();
             match borrow.as_ref() {
-                Some(NominalSchema::Newtype(repr)) => match repr.as_ref() {
+                Some(NominalSchema::NewType(repr)) => match repr.as_ref() {
                     KType::Record(record) => {
                         let fields = record.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                         (std::rc::Rc::clone(set), fields)
                     }
                     other => panic!("expected {name} to carry a record repr, got {other:?}"),
                 },
-                other => panic!("expected {name} to carry a Newtype schema, got {other:?}"),
+                other => panic!("expected {name} to carry a NewType schema, got {other:?}"),
             }
         }
         other => panic!("expected {name} to be a SetRef identity in types, got {other:?}"),

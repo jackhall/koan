@@ -232,7 +232,7 @@ fn replay_park_propagates_producer_error() {
     );
 }
 
-/// Bare Type-tokens in `TypeExprRef` slots of non-binders ride the same
+/// Bare Type-tokens in `ProperType` slots of non-binders ride the same
 /// replay-park rails as bare Identifiers — see
 /// [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders).
 #[test]

@@ -58,13 +58,13 @@ pub fn arg_held<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c Held<'a
 }
 
 /// Read a builtin argument's `KType` (a type-cell arg), or the canonical diagnostic —
-/// `TypeMismatch{expected: "TypeExprRef"}` for an object cell, `MissingArg` when absent.
+/// `TypeMismatch{expected: "ProperType"}` for an object cell, `MissingArg` when absent.
 pub fn require_ktype<'a>(args: &KObject<'a>, name: &str) -> Result<KType<'a>, KError> {
     match arg_held(args, name) {
         Some(Held::Type(kt)) => Ok(kt.clone()),
         Some(Held::Object(o)) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: name.to_string(),
-            expected: "TypeExprRef".to_string(),
+            expected: "ProperType".to_string(),
             got: o.ktype().name(),
         })),
         None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
@@ -156,7 +156,7 @@ pub struct BodyCtx<'a, 'c> {
     pub scope: &'c Scope<'a>,
     pub frame: Option<&'c Rc<CallArena>>,
     /// The ambient lexical chain (an `Rc`, as `current_lexical_chain` hands it out — binders read
-    /// its `index` for `BindingIndex`, MATCH passes it to `resolve_type_expr`). `None` at top level.
+    /// its `index` for `BindingIndex`, MATCH passes it to `resolve_type_identifier`). `None` at top level.
     pub chain: Option<Rc<LexicalFrame>>,
     pub args: &'c KObject<'a>,
 }

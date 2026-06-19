@@ -126,7 +126,7 @@ pub(super) fn invoke<'step>(
     match run_user_fn(picked, bound, &exec_frame, in_chain) {
         ExecOutcome::Tail { leading, tail, ret } => {
             // The return contract carried on the tail-replace. A resolved return reads its type off
-            // the signature; a deferred `TypeExpr` return carries the resolved per-call type as a
+            // the signature; a deferred `Type` return carries the resolved per-call type as a
             // `PerCall` contract — checked + stamped at the lift boundary like any FN return, so the
             // body is a proper tail call and a recursive deferred body stays TCO-flat.
             let contract = match ret {
@@ -215,7 +215,7 @@ pub(super) fn invoke<'step>(
                     }
                 };
                 // The per-call type rides the captured-scope (frame-outer) arena, a strict ancestor
-                // the cart keeps live — same home as the `TypeExpr` form's `PerCall.ret`. `kt` was
+                // the cart keeps live — same home as the `Type` form's `PerCall.ret`. `kt` was
                 // pull-lifted into this node's call frame, which the captured scope outlives, so
                 // relocate it with `lift_ktype` (re-anchoring any per-call `Module` frame onto the
                 // call frame) rather than a bare clone that would dangle once the frame frees.

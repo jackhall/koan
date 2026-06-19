@@ -4,7 +4,7 @@ use crate::machine::model::types::{KKind, NominalMember, NominalSchema, Recursiv
 use crate::machine::model::KType;
 use crate::machine::ScopeId;
 
-/// `TEMPLATE <param:TypeExprRef>` → `TypeExprRef` carrying a template singleton
+/// `TEMPLATE <param:ProperType>` → `ProperType` carrying a template singleton
 /// [`RecursiveSet`] of one [`KKind::TypeConstructor`] member with `ScopeId::SENTINEL`
 /// and a placeholder `name` (`"_typeconstructor"`). The surrounding opaque ascription
 /// (`ascribe.rs:body_opaque`) re-mints a fresh per-call singleton with the binding's slot
@@ -25,7 +25,7 @@ pub fn body<'a>(
             let error = match arg_held(ctx.args, "param") {
                 Some(Held::Object(object)) => KError::new(KErrorKind::TypeMismatch {
                     arg: "param".to_string(),
-                    expected: "TypeExprRef".to_string(),
+                    expected: "ProperType".to_string(),
                     got: object.ktype().name(),
                 }),
                 _ => KError::new(KErrorKind::MissingArg("param".to_string())),

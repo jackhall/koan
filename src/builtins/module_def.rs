@@ -1,4 +1,4 @@
-//! `MODULE <name:TypeExprRef> = <body:KExpression>` — declare a structure (a bundle of
+//! `MODULE <name:ProperType> = <body:KExpression>` — declare a structure (a bundle of
 //! type definitions, values, and functions). See
 //! [design/typing/modules.md](../../design/typing/modules.md) for the surface design.
 //!

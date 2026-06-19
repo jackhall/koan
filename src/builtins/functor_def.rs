@@ -36,7 +36,7 @@ pub fn body<'a>(
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    // Two overloads mirror FN: `TypeExprRef` for a bare `-> Number` / `-> Er`, and
+    // Two overloads mirror FN: `ProperType` for a bare `-> Number` / `-> Er`, and
     // `SigiledTypeExpr` for a `:(…)` / dotted carrier like `-> Er.Type` /
     // `-> :(Set WITH {…})`. `binder_bucket` lets a sibling bare-arg call park on
     // a still-finalizing overload; sibling overloads sharing a bucket key all

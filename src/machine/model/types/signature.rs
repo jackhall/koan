@@ -9,7 +9,7 @@
 //! that reference a per-call parameter (`-> Er`, `-> Er.Type`) survive
 //! FN-definition without sub-dispatching against the outer scope.
 
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 
 use super::ktraits::Parseable;
 use super::ktype::KType;
@@ -68,39 +68,39 @@ pub enum ReturnType<'a> {
 /// Surface form preserved for per-call re-elaboration. Two carriers mirror the two FN
 /// return-type slot kinds:
 ///
-/// - `TypeExpr` — parser-preserved structured form (`Er`, `List<Er>`). Re-elaborated per
-///   call via `elaborate_type_expr`. Owns its strings, so no arena lifetime.
+/// - `Type` — parser-preserved structured form (`Er`, `List<Er>`). Re-elaborated per
+///   call via `elaborate_type_identifier`. Owns its strings, so no arena lifetime.
 /// - `Expression` — captured `:(…)` / dotted return expression (`Er.Type`,
 ///   `Set WITH {…}`). Re-runs as a sub-Dispatch under the per-call scope; the resulting
 ///   `KTypeValue`'s inner `KType` is the per-call return type.
 pub enum DeferredReturn<'a> {
-    TypeExpr(TypeName),
+    Type(TypeIdentifier),
     Expression(KExpression<'a>),
 }
 
 /// Hashable type-language shadow of a [`DeferredReturn`], stored inside
 /// `KType::DeferredReturn`. The `Expression` carrier holds the canonical `summarize()`
 /// render — NOT the live `KExpression`, which impls neither `Eq` nor `Hash`. Identity is
-/// syntactic, matching `DeferredReturn`'s own `PartialEq` (`TypeExpr` by name, `Expression`
+/// syntactic, matching `DeferredReturn`'s own `PartialEq` (`Type` by name, `Expression`
 /// by canonical render), so a synthesized `KType::DeferredReturn` ret slot compares,
 /// hashes, and ranks by the same surface form `ExpressionSignature::exact_equal` uses.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum DeferredReturnSurface {
-    TypeExpr(TypeName),
+    Type(TypeIdentifier),
     Expression(String),
 }
 
 impl DeferredReturnSurface {
     pub fn from_deferred(d: &DeferredReturn<'_>) -> Self {
         match d {
-            DeferredReturn::TypeExpr(t) => Self::TypeExpr(t.clone()),
+            DeferredReturn::Type(t) => Self::Type(t.clone()),
             DeferredReturn::Expression(e) => Self::Expression(e.summarize()),
         }
     }
 
     pub fn render(&self) -> String {
         match self {
-            Self::TypeExpr(t) => t.render(),
+            Self::Type(t) => t.render(),
             Self::Expression(s) => s.clone(),
         }
     }
@@ -118,7 +118,7 @@ impl<'a> Clone for ReturnType<'a> {
 impl<'a> Clone for DeferredReturn<'a> {
     fn clone(&self) -> Self {
         match self {
-            DeferredReturn::TypeExpr(t) => DeferredReturn::TypeExpr(t.clone()),
+            DeferredReturn::Type(t) => DeferredReturn::Type(t.clone()),
             DeferredReturn::Expression(e) => DeferredReturn::Expression(e.clone()),
         }
     }
@@ -139,7 +139,7 @@ impl<'a> Eq for ReturnType<'a> {}
 impl<'a> PartialEq for DeferredReturn<'a> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (DeferredReturn::TypeExpr(a), DeferredReturn::TypeExpr(b)) => a == b,
+            (DeferredReturn::Type(a), DeferredReturn::Type(b)) => a == b,
             (DeferredReturn::Expression(a), DeferredReturn::Expression(b)) => {
                 // `KExpression` doesn't impl `Eq` (parts carry `&'a KObject` futures);
                 // canonical render is sufficient for duplicate-overload detection.
@@ -162,7 +162,7 @@ impl<'a> std::fmt::Debug for ReturnType<'a> {
 impl<'a> std::fmt::Debug for DeferredReturn<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DeferredReturn::TypeExpr(t) => f.debug_tuple("TypeExpr").field(t).finish(),
+            DeferredReturn::Type(t) => f.debug_tuple("Type").field(t).finish(),
             DeferredReturn::Expression(e) => {
                 f.debug_tuple("Expression").field(&e.summarize()).finish()
             }
@@ -175,7 +175,7 @@ impl<'a> ReturnType<'a> {
     pub fn name(&self) -> String {
         match self {
             ReturnType::Resolved(kt) => kt.name(),
-            ReturnType::Deferred(DeferredReturn::TypeExpr(t)) => t.render(),
+            ReturnType::Deferred(DeferredReturn::Type(t)) => t.render(),
             ReturnType::Deferred(DeferredReturn::Expression(e)) => e.summarize(),
         }
     }

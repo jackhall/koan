@@ -4,8 +4,8 @@ use super::*;
 /// A singleton `Rc<RecursiveSet>` over a record-repr newtype member named `name`, schema
 /// filled.
 fn record_newtype_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
-    let member = NominalMember::pending(name.into(), scope_id, KKind::Newtype);
-    member.fill(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
+    let member = NominalMember::pending(name.into(), scope_id, KKind::NewType);
+    member.fill(NominalSchema::NewType(Box::new(KType::Record(Box::new(
         Record::new(),
     )))));
     Rc::new(RecursiveSet::new(vec![member]))
@@ -153,13 +153,13 @@ fn name_renders_recursive_ref_as_name() {
 #[test]
 fn nominal_kind_surface_keywords() {
     assert_eq!(KKind::Tagged.surface_keyword(), "Tagged");
-    assert_eq!(KKind::Newtype.surface_keyword(), "Newtype");
+    assert_eq!(KKind::NewType.surface_keyword(), "NewType");
     assert_eq!(KKind::TypeConstructor.surface_keyword(), "TypeConstructor",);
 }
 
 #[test]
 fn nominal_of_kind_name_renders_family_keyword() {
-    assert_eq!(KType::OfKind(KKind::Newtype).name(), "Newtype");
+    assert_eq!(KType::OfKind(KKind::NewType).name(), "NewType");
     assert_eq!(KType::OfKind(KKind::Tagged).name(), "Tagged");
     assert_eq!(
         KType::OfKind(KKind::TypeConstructor).name(),

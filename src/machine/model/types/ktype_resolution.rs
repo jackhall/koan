@@ -1,10 +1,10 @@
-//! Surface-name and `TypeName` → `KType` elaboration, plus join (LUB) for inferring
+//! Surface-name and `TypeIdentifier` → `KType` elaboration, plus join (LUB) for inferring
 //! container element types from heterogeneous values.
 
 use super::kkind::KKind;
 use super::ktype::KType;
 use super::record::Record;
-use crate::machine::model::ast::TypeName;
+use crate::machine::model::ast::TypeIdentifier;
 
 impl<'a> KType<'a> {
     /// Look up a `KType` by the textual name a user can write in source (e.g. `Number`,
@@ -30,12 +30,12 @@ impl<'a> KType<'a> {
         }
     }
 
-    /// Lower a parser `TypeName` into a `KType` against the builtin table only — no
+    /// Lower a parser `TypeIdentifier` into a `KType` against the builtin table only — no
     /// scope-aware resolver. The leaf name goes through [`KType::from_name`]; unknown
     /// names surface as `Err(_)`, and the caller either falls back to a `TypeNameRef`
     /// carrier or routes through the scheduler-aware
-    /// [`crate::machine::model::types::elaborate_type_expr`].
-    pub fn from_type_expr(t: &TypeName) -> Result<KType<'a>, String> {
+    /// [`crate::machine::model::types::elaborate_type_identifier`].
+    pub fn from_type_identifier(t: &TypeIdentifier) -> Result<KType<'a>, String> {
         KType::from_name(t.as_str()).ok_or_else(|| format!("unknown type name `{}`", t.as_str()))
     }
 

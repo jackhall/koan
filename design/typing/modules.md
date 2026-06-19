@@ -151,7 +151,7 @@ module named as an ATTR receiver, a signature introspected by `:|` or `WITH`,
 or either surfaced by `USING … SCOPE` — surface the
 `KType::Module { .. } | KType::Signature { .. }` identity in the value channel's `Type` arm on
 demand from the type entry via
-[`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_expr.rs);
+[`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs);
 ATTR's `body_type_lhs` routes its Type-classed receiver through that seam rather
 than a raw `bindings.data` lookup.
 

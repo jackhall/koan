@@ -145,8 +145,8 @@ What's shipped that the open items below build on:
   gone. See [design/typing/functors.md](../design/typing/functors.md) and
   [design/typing/ktype.md](../design/typing/ktype.md).
 - *One bare-leaf type resolver.* The synchronous `coerce_type_token_value` is folded into
-  [`resolve_type_leaf_carrier`](../src/machine/execute/dispatch/resolve_type_expr.rs) over the
-  memoized, park-capable `Scope::resolve_type_expr` bridge, so a bare type-name leaf resolves
+  [`resolve_type_leaf_carrier`](../src/machine/execute/dispatch/resolve_type_identifier.rs) over the
+  memoized, park-capable `Scope::resolve_type_identifier` bridge, so a bare type-name leaf resolves
   through one cache and parks on an earlier still-finalizing binder like every compound type
   form; the dead paired-carrier-recovery branch is gone. The type/value binding partition is
   now total at the LET boundary — a type binds only under a Type-classified name, so
@@ -181,7 +181,7 @@ What's shipped that the open items below build on:
   box/unbox round-trip at the binding seam. The bundle dual is `ArgValue` and an aggregate
   cell is `Held` (a list/dict/record element may be a first-class type). A deferred bare
   user-name leaf is now the `KType::Unresolved(TypeName)` transient (sibling to
-  `RecursiveRef`), consumed by `Scope::resolve_type_expr`. Modules and signatures travel in
+  `RecursiveRef`), consumed by `Scope::resolve_type_identifier`. Modules and signatures travel in
   the `Type` arm (projected by `require_module` / `require_signature`), and a shallow
   [`KKind` `{ Proper, Module, Signature, Any }`](../src/machine/model/types/kkind.rs) carried
   as `KType::OfKind` classifies a type at dispatch — absorbing the former `TypeExprRef` /

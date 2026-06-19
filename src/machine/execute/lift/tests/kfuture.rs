@@ -158,7 +158,7 @@ fn kfuture_bundle_arg_with_wrapped_field_anchors() {
         set: RecursiveSet::singleton(
             "S".into(),
             ScopeId::next(),
-            NominalSchema::Newtype(Box::new(KType::Record(Box::new(Record::new())))),
+            NominalSchema::NewType(Box::new(KType::Record(Box::new(Record::new())))),
         ),
         index: 0,
     });

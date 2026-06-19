@@ -4,10 +4,10 @@
 use std::collections::HashMap;
 
 use crate::machine::core::LexicalFrame;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::{DeferredReturn, ReturnType};
 use crate::machine::model::{Carried, KObject, KType};
-use crate::machine::ResolveTypeExprOutcome;
+use crate::machine::TypeIdentifierResolution;
 use crate::machine::{KError, KErrorKind, NodeId, Scope};
 use std::rc::Rc;
 
@@ -19,7 +19,7 @@ use super::param_refs::{kexpression_references_any, type_expr_references_any};
 /// sigil to its inner `KObject::KExpression`.
 pub(crate) enum ReturnTypeRaw<'a> {
     Resolved(KType<'a>),
-    TypeExprCarrier(TypeName),
+    TypeExprCarrier(TypeIdentifier),
     ExprCarrier(KExpression<'a>),
 }
 
@@ -29,7 +29,7 @@ pub(crate) enum ReturnTypeRaw<'a> {
 pub(crate) enum ReturnTypeState<'a> {
     Done(KType<'a>),
     Pending {
-        te: TypeName,
+        te: TypeIdentifier,
         producers: Vec<NodeId>,
     },
     Deferred(DeferredReturn<'a>),
@@ -109,19 +109,19 @@ pub(crate) fn classify_return_type<'a>(
                     None => AdmissibleVerdict::Admissible,
                 };
                 return Ok((
-                    ReturnTypeState::Deferred(DeferredReturn::TypeExpr(te)),
+                    ReturnTypeState::Deferred(DeferredReturn::Type(te)),
                     verdict,
                 ));
             }
             let name = te.render();
             // Gated to the FN's lexical position — a return type naming a later type is a
             // position error, like any other forward reference.
-            let state = match scope.resolve_type_expr(&te, chain) {
-                ResolveTypeExprOutcome::Done(kt) => ReturnTypeState::Done(kt.clone()),
-                ResolveTypeExprOutcome::Park(producers) => {
+            let state = match scope.resolve_type_identifier(&te, chain) {
+                TypeIdentifierResolution::Done(kt) => ReturnTypeState::Done(kt.clone()),
+                TypeIdentifierResolution::Park(producers) => {
                     ReturnTypeState::Pending { te, producers }
                 }
-                ResolveTypeExprOutcome::Unbound(msg) => match KType::from_name(&name) {
+                TypeIdentifierResolution::Unbound(msg) => match KType::from_name(&name) {
                     Some(kt) => ReturnTypeState::Done(kt),
                     None => {
                         return Err(KError::new(KErrorKind::ShapeError(format!(
@@ -175,7 +175,7 @@ fn verdict_for_resolved<'a>(kt: &KType<'a>, is_functor: bool) -> AdmissibleVerdi
 /// parameterized form admits via the type-position sigil; other shapes are rejected
 /// so the diagnostic surfaces at the FUNCTOR site.
 fn verdict_for_deferred_type_expr<'a>(
-    te: &TypeName,
+    te: &TypeIdentifier,
     param_type_map: &HashMap<String, KType<'a>>,
 ) -> AdmissibleVerdict {
     // Map miss means the param-type slot didn't elaborate eagerly; admit
@@ -225,11 +225,11 @@ fn verdict_for_deferred_expression(e: &KExpression<'_>) -> AdmissibleVerdict {
     }
 }
 
-pub(super) fn make_capture<'a>(te: TypeName) -> ReturnTypeCapture<'a> {
+pub(super) fn make_capture<'a>(te: TypeIdentifier) -> ReturnTypeCapture<'a> {
     ReturnTypeCapture::Unresolved(te.render())
 }
 
-/// Park-arm outcomes from `Scope::resolve_type_expr` are protocol errors here: every
+/// Park-arm outcomes from `Scope::resolve_type_identifier` are protocol errors here: every
 /// parked producer is terminal by the dep-finish invariant, so a second park would
 /// loop forever and is surfaced as a structured error.
 pub(super) fn resolve_capture_at_finish<'a>(
@@ -240,13 +240,13 @@ pub(super) fn resolve_capture_at_finish<'a>(
     match capture {
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),
         ReturnTypeCapture::Unresolved(name) => {
-            let te = TypeName::leaf(name.clone());
-            match scope.resolve_type_expr(&te, None) {
-                ResolveTypeExprOutcome::Done(kt) => Ok(ReturnType::Resolved(kt.clone())),
-                ResolveTypeExprOutcome::Park(_) => Err(KError::new(KErrorKind::ShapeError(
+            let te = TypeIdentifier::leaf(name.clone());
+            match scope.resolve_type_identifier(&te, None) {
+                TypeIdentifierResolution::Done(kt) => Ok(ReturnType::Resolved(kt.clone())),
+                TypeIdentifierResolution::Park(_) => Err(KError::new(KErrorKind::ShapeError(
                     "FN return type parked after dep-finish wake".to_string(),
                 ))),
-                ResolveTypeExprOutcome::Unbound(msg) => match KType::from_name(&name) {
+                TypeIdentifierResolution::Unbound(msg) => match KType::from_name(&name) {
                     Some(kt) => Ok(ReturnType::Resolved(kt)),
                     None => Err(KError::new(KErrorKind::ShapeError(format!(
                         "FN return-type slot: {msg}"

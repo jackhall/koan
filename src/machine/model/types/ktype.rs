@@ -16,7 +16,7 @@ use super::recursive_set::RecursiveSet;
 use super::signature::DeferredReturnSurface;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{FrameStorage, ScopeId};
-use crate::machine::model::ast::TypeName;
+use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::values::{Module, ModuleSignature};
 use std::rc::Rc;
 
@@ -50,7 +50,7 @@ pub enum KType<'a> {
     /// Bare `Dict` lowers to `Dict<Any, Any>`.
     Dict(Box<KType<'a>>, Box<KType<'a>>),
     /// Structural record type (`:{x :Number, y :Str}`) — an identifier-keyed field
-    /// schema with width/depth subtyping. Anonymous: a record-repr `Newtype` `SetRef`
+    /// schema with width/depth subtyping. Anonymous: a record-repr `NewType` `SetRef`
     /// (an ex-struct) wraps this with a nominal identity, but the bare record type is
     /// structural and order-blind.
     /// The inner `Record<KType>` is declaration-ordered for
@@ -197,9 +197,9 @@ pub enum KType<'a> {
     /// seam — a name not in [`KType::from_name`]'s builtin table (`Point`, `IntOrd`, `MyList`).
     /// Sibling to [`RecursiveRef`](KType::RecursiveRef): it rides the value channel's `Type`
     /// arm, never reaches the dispatch predicates, and is consumed + replaced by the
-    /// park-capable [`Scope::resolve_type_expr`](crate::machine::core::Scope::resolve_type_expr).
-    /// Carries the structured `TypeName` so the surface form survives the bind.
-    Unresolved(TypeName),
+    /// park-capable [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier).
+    /// Carries the structured `TypeIdentifier` so the surface form survives the bind.
+    Unresolved(TypeIdentifier),
     Any,
 }
 
@@ -278,7 +278,7 @@ impl<'a> KType<'a> {
 
     /// Classify a *type* into its shallow dispatch [`KKind`] — the value-side direction of
     /// `OfKind`. A module is `Module`, a signature is `Signature`, a user-declared nominal is
-    /// its family (`Tagged` / `Newtype` / `TypeConstructor`, read off the set member it
+    /// its family (`Tagged` / `NewType` / `TypeConstructor`, read off the set member it
     /// references), and every other type is `Proper`. Never returns `KKind::Any` (a slot-only
     /// expectation). Applied to the type a type value carries — or a runtime value's
     /// `ktype()` — to match it against an `OfKind` slot.

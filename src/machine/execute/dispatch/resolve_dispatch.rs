@@ -415,7 +415,7 @@ fn slot_admits_strict<'step>(
             // Binder declaration slot: the slot owns the name, so admission
             // is shape-only. SigiledTypeExpr / RecordType still admit speculatively
             // (they sub-dispatch to a type-side carrier — e.g. the FN record-schema
-            // overload's `TypeExprRef` signature slot taking a `:{…}`).
+            // overload's `ProperType` signature slot taking a `:{…}`).
             if matches!(arg.ktype, KType::Identifier | KType::OfKind(KKind::Proper)) {
                 if matches!(
                     part_value,

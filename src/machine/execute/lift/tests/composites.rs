@@ -24,7 +24,7 @@ fn record_newtype_set<'run>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'r
     RecursiveSet::singleton(
         name.into(),
         scope_id,
-        NominalSchema::Newtype(Box::new(KType::Record(Box::new(Record::new())))),
+        NominalSchema::NewType(Box::new(KType::Record(Box::new(Record::new())))),
     )
 }
 
@@ -462,8 +462,8 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
 
     // A self-recursive `Tree` whose `children` field is `List(SetLocal(0))` — the shape a
     // `NEWTYPE Tree = :{children :(LIST OF Tree)}` seals into.
-    let member = NominalMember::pending("Tree".into(), ScopeId::next(), KKind::Newtype);
-    member.fill(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
+    let member = NominalMember::pending("Tree".into(), ScopeId::next(), KKind::NewType);
+    member.fill(NominalSchema::NewType(Box::new(KType::Record(Box::new(
         Record::from_pairs(vec![(
             "children".into(),
             KType::List(Box::new(KType::SetLocal(0))),
@@ -493,14 +493,14 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
             // Navigable: the member's self-edge `SetLocal(0)` survives the lift.
             let borrow = lifted_set.member(*index).schema();
             match borrow.as_ref() {
-                Some(NominalSchema::Newtype(repr)) => match repr.as_ref() {
+                Some(NominalSchema::NewType(repr)) => match repr.as_ref() {
                     KType::Record(fields) => assert_eq!(
                         fields.get("children"),
                         Some(&KType::List(Box::new(KType::SetLocal(0))))
                     ),
                     other => panic!("expected a record repr after lift, got {other:?}"),
                 },
-                other => panic!("expected a navigable Newtype schema after lift, got {other:?}"),
+                other => panic!("expected a navigable NewType schema after lift, got {other:?}"),
             }
         }
         other => panic!("expected a SetRef type after lift, got {other:?}"),
@@ -525,8 +525,8 @@ fn recursive_newtype_value_lifts_and_navigates() {
     let dying = CallArena::new(scope, None);
     defeat_fast_path(&dying);
 
-    let member = NominalMember::pending("Tree".into(), ScopeId::next(), KKind::Newtype);
-    member.fill(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
+    let member = NominalMember::pending("Tree".into(), ScopeId::next(), KKind::NewType);
+    member.fill(NominalSchema::NewType(Box::new(KType::Record(Box::new(
         Record::from_pairs(vec![(
             "children".into(),
             KType::List(Box::new(KType::SetLocal(0))),
@@ -563,7 +563,7 @@ fn recursive_newtype_value_lifts_and_navigates() {
                 );
                 let borrow = lifted_set.member(*index).schema();
                 match borrow.as_ref() {
-                    Some(NominalSchema::Newtype(repr)) => match repr.as_ref() {
+                    Some(NominalSchema::NewType(repr)) => match repr.as_ref() {
                         KType::Record(fields) => assert_eq!(
                             fields.get("children"),
                             Some(&KType::List(Box::new(KType::SetLocal(0)))),
@@ -571,7 +571,7 @@ fn recursive_newtype_value_lifts_and_navigates() {
                         ),
                         other => panic!("expected a record repr, got {other:?}"),
                     },
-                    other => panic!("expected a navigable Newtype schema, got {other:?}"),
+                    other => panic!("expected a navigable NewType schema, got {other:?}"),
                 }
             }
             other => panic!("expected a SetRef type_id, got {other:?}"),

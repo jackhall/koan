@@ -1,26 +1,26 @@
 use super::*;
 
-fn leaf(n: &str) -> TypeName {
-    TypeName::leaf(n.into())
+fn leaf(n: &str) -> TypeIdentifier {
+    TypeIdentifier::leaf(n.into())
 }
 
 #[test]
 fn from_type_expr_leaf_number() {
     assert_eq!(
-        KType::from_type_expr(&leaf("Number")).unwrap(),
+        KType::from_type_identifier(&leaf("Number")).unwrap(),
         KType::Number
     );
 }
 
 #[test]
 fn from_type_expr_unknown_paramless_name_errors() {
-    assert!(KType::from_type_expr(&leaf("Banana")).is_err());
+    assert!(KType::from_type_identifier(&leaf("Banana")).is_err());
 }
 
 #[test]
 fn from_type_expr_leaf_falls_through_to_builtin() {
     assert_eq!(
-        KType::from_type_expr(&leaf("Number")).unwrap(),
+        KType::from_type_identifier(&leaf("Number")).unwrap(),
         KType::Number,
     );
 }

@@ -726,7 +726,7 @@ The rails the dispatch driver feeds:
     produces the structured error.
   - `BareTypeLeaf` (`(Number)`, `(IntOrd)`) — `bare_type_leaf`
     routes through `resolve_type_leaf_carrier` over the memoized,
-    park-capable `Scope::resolve_type_expr` bridge: a leaf naming an
+    park-capable `Scope::resolve_type_identifier` bridge: a leaf naming an
     earlier still-finalizing binder parks on its producer and re-resolves
     on wake, like every compound type form, and other failures surface
     directly. There is no candidate-machinery alternative for a bare leaf

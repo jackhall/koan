@@ -18,24 +18,24 @@ fn list_of_let_binding_is_ktype_value() {
     assert_eq!(*kt, KType::List(Box::new(KType::Number)));
 }
 
-/// `elaborate_type_expr` lowers a leaf naming a type-side LET binding back to its
+/// `elaborate_type_identifier` lowers a leaf naming a type-side LET binding back to its
 /// stored `KType` (`LET MyList = :(LIST OF Number)` -> `KType::List(Number)`).
 #[test]
 fn elaborator_lowers_ktype_value_binding() {
-    use crate::machine::model::ast::TypeName;
-    use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+    use crate::machine::model::ast::TypeIdentifier;
+    use crate::machine::model::types::{elaborate_type_identifier, ElabResult, Elaborator};
     use crate::machine::model::KType;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET MyList = :(LIST OF Number)");
     let mut el = Elaborator::new(scope);
-    match elaborate_type_expr(&mut el, &TypeName::leaf("MyList".into())) {
+    match elaborate_type_identifier(&mut el, &TypeIdentifier::leaf("MyList".into())) {
         ElabResult::Done(kt) => assert_eq!(kt, KType::List(Box::new(KType::Number))),
         other => panic!("expected Done(:(List Number)), got {:?}", other),
     }
 }
 
-/// A parameter typed `Er :OrderedSig` lowers via `elaborate_type_expr` into
+/// A parameter typed `Er :OrderedSig` lowers via `elaborate_type_identifier` into
 /// `KType::Signature { sig, pinned_slots: [] }` with `sig.sig_id()` matching the
 /// declaring `ModuleSignature::sig_id()`. Also pins that the SIG and FN can land in the
 /// same batch — the FN's signature elaboration parks on the SIG placeholder.

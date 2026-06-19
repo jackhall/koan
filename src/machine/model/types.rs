@@ -21,7 +21,7 @@ pub use recursive_set::{
     seal_recursive_refs, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet,
 };
 pub use resolver::{
-    elaborate_type_expr, finalize_nominal_member, ElabResult, Elaborator, SchemaSealResult,
+    elaborate_type_identifier, finalize_nominal_member, ElabResult, Elaborator, SchemaSealResult,
     SealOutcome,
 };
 #[allow(unused_imports)]

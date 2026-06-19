@@ -12,7 +12,7 @@ fn record_newtype_setref<'a>(name: &str, scope_id: ScopeId) -> KType<'a> {
     let set = RecursiveSet::singleton(
         name.into(),
         scope_id,
-        NominalSchema::Newtype(Box::new(KType::Record(Box::new(Record::new())))),
+        NominalSchema::NewType(Box::new(KType::Record(Box::new(Record::new())))),
     );
     KType::SetRef { set, index: 0 }
 }
@@ -22,7 +22,7 @@ fn newtype_setref<'a>(name: &str, scope_id: ScopeId, repr: KType<'a>) -> KType<'
     let set = RecursiveSet::singleton(
         name.into(),
         scope_id,
-        NominalSchema::Newtype(Box::new(repr)),
+        NominalSchema::NewType(Box::new(repr)),
     );
     KType::SetRef { set, index: 0 }
 }
@@ -193,7 +193,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_str))));
     assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_bool))));
     assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_null))));
-    // Newtype / union type tokens flow as `SetRef { .. }` in the type channel — a `:Type`
+    // NewType / union type tokens flow as `SetRef { .. }` in the type channel — a `:Type`
     // slot admits them via the generic `Spliced(Carried::Type(_))` arm.
     let tagged_set = RecursiveSet::singleton(
         "Maybe".into(),
@@ -232,15 +232,15 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
 
 /// `OfKind` is type-channel-only: a nominal-kind slot classifies a *type value* by its
 /// `kind_of`, and never matches a runtime instance (a value is matched by a type, not a kind).
-/// `OfKind(Newtype)` admits a Newtype *type* value, declines a Tagged type value, and declines
-/// the runtime `Wrapped` *instance* entirely; `OfKind(Proper)` subsumes the Newtype type.
+/// `OfKind(NewType)` admits a NewType *type* value, declines a Tagged type value, and declines
+/// the runtime `Wrapped` *instance* entirely; `OfKind(Proper)` subsumes the NewType type.
 #[test]
 fn of_kind_nominal_is_type_channel_only() {
     use crate::machine::core::RuntimeArena;
     let arena = RuntimeArena::new();
-    let newtype_ty = KType::OfKind(KKind::Newtype);
+    let newtype_ty = KType::OfKind(KKind::NewType);
 
-    // The Newtype *type value* — admitted in the type channel.
+    // The NewType *type value* — admitted in the type channel.
     let newtype_tv = newtype_setref("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
     assert!(newtype_ty.accepts_part(&ExpressionPart::Spliced(Carried::Type(&newtype_tv))));
     assert!(KType::OfKind(KKind::Proper)
@@ -268,11 +268,11 @@ fn of_kind_nominal_is_type_channel_only() {
     assert!(!newtype_ty.matches_value(w));
 }
 
-/// Pins the kind refinement: a `Newtype`-kind `SetRef` is strictly more specific than
-/// `OfKind(Newtype)`, and incomparable with `OfKind(Tagged)` (a sibling family).
+/// Pins the kind refinement: a `NewType`-kind `SetRef` is strictly more specific than
+/// `OfKind(NewType)`, and incomparable with `OfKind(Tagged)` (a sibling family).
 #[test]
 fn user_type_newtype_specificity_lattice() {
-    let newtype_kind = KType::OfKind(KKind::Newtype);
+    let newtype_kind = KType::OfKind(KKind::NewType);
     let tagged_kind = KType::OfKind(KKind::Tagged);
     let dist = newtype_setref("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
     assert!(dist.is_more_specific_than(&newtype_kind));
@@ -287,7 +287,7 @@ fn user_type_newtype_specificity_lattice() {
 /// - a `SetRef` of one kind and `OfKind` of a different kind are incomparable.
 #[test]
 fn user_type_specificity_lattice() {
-    let newtype_kind = KType::OfKind(KKind::Newtype);
+    let newtype_kind = KType::OfKind(KKind::NewType);
     let tagged_kind = KType::OfKind(KKind::Tagged);
     let point = record_newtype_setref("Point", ScopeId::from_raw(0, 0xAA));
     // A nominal kind strictly under `Any` and under `OfKind(Proper)`.
@@ -295,7 +295,7 @@ fn user_type_specificity_lattice() {
     assert!(!KType::Any.is_more_specific_than(&newtype_kind));
     assert!(newtype_kind.is_more_specific_than(&KType::OfKind(KKind::Proper)));
     assert!(!KType::OfKind(KKind::Proper).is_more_specific_than(&newtype_kind));
-    // A `Newtype`-kind `SetRef` strictly under `OfKind(Newtype)`.
+    // A `NewType`-kind `SetRef` strictly under `OfKind(NewType)`.
     assert!(point.is_more_specific_than(&newtype_kind));
     assert!(!newtype_kind.is_more_specific_than(&point));
     // Different-kind pairs incomparable.
@@ -329,7 +329,7 @@ fn is_type_denoting_table() {
     assert!(KType::OfKind(KKind::Module).is_type_denoting());
     // Nominal-family `OfKind` slots are type-channel-only but never name a type binder —
     // the value carries no nominal identity the caller hasn't already named.
-    assert!(!KType::OfKind(KKind::Newtype).is_type_denoting());
+    assert!(!KType::OfKind(KKind::NewType).is_type_denoting());
     assert!(!KType::OfKind(KKind::Tagged).is_type_denoting());
     assert!(!KType::OfKind(KKind::TypeConstructor).is_type_denoting());
     // Per-declaration `SetRef`: nominal identity already lives in the declaring
@@ -621,7 +621,7 @@ fn constructor_apply_stamped_type_args_checked_structurally() {
     assert!(!slot_bad.matches_value(&stamped));
 }
 
-use crate::machine::model::ast::TypeName;
+use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::types::{DeferredReturn, DeferredReturnSurface, ReturnType};
 
 /// A function whose `ret` slot is a `DeferredReturn` carrier is strictly more specific
@@ -631,8 +631,8 @@ use crate::machine::model::types::{DeferredReturn, DeferredReturnSurface, Return
 fn deferred_return_more_specific_than_any() {
     let deferred = KType::KFunction {
         params: Record::new(),
-        ret: Box::new(KType::DeferredReturn(DeferredReturnSurface::TypeExpr(
-            TypeName::leaf("Er".into()),
+        ret: Box::new(KType::DeferredReturn(DeferredReturnSurface::Type(
+            TypeIdentifier::leaf("Er".into()),
         ))),
     };
     let any = KType::KFunction {
@@ -650,15 +650,15 @@ fn two_functors_differ_only_in_deferred_return_are_distinct() {
     use std::hash::{Hash, Hasher};
     let er = KType::KFunctor {
         params: Record::new(),
-        ret: Box::new(KType::DeferredReturn(DeferredReturnSurface::TypeExpr(
-            TypeName::leaf("Er".into()),
+        ret: Box::new(KType::DeferredReturn(DeferredReturnSurface::Type(
+            TypeIdentifier::leaf("Er".into()),
         ))),
         body: None,
     };
     let ar = KType::KFunctor {
         params: Record::new(),
-        ret: Box::new(KType::DeferredReturn(DeferredReturnSurface::TypeExpr(
-            TypeName::leaf("Ar".into()),
+        ret: Box::new(KType::DeferredReturn(DeferredReturnSurface::Type(
+            TypeIdentifier::leaf("Ar".into()),
         ))),
         body: None,
     };
@@ -683,19 +683,19 @@ fn two_functors_differ_only_in_deferred_return_are_distinct() {
 #[test]
 fn deferred_return_admission_via_function_compat() {
     let candidate = ExpressionSignature {
-        return_type: ReturnType::Deferred(DeferredReturn::TypeExpr(TypeName::leaf("Er".into()))),
+        return_type: ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Er".into()))),
         elements: vec![],
     };
     let no_params = Record::new();
 
     // Matching shadow → admit.
     let slot_er =
-        KType::DeferredReturn(DeferredReturnSurface::TypeExpr(TypeName::leaf("Er".into())));
+        KType::DeferredReturn(DeferredReturnSurface::Type(TypeIdentifier::leaf("Er".into())));
     assert!(function_compat(&candidate, &no_params, &slot_er, false));
 
     // Differing shadow → reject.
     let slot_ar =
-        KType::DeferredReturn(DeferredReturnSurface::TypeExpr(TypeName::leaf("Ar".into())));
+        KType::DeferredReturn(DeferredReturnSurface::Type(TypeIdentifier::leaf("Ar".into())));
     assert!(!function_compat(&candidate, &no_params, &slot_ar, false));
 
     // Resolved slot → reject (opaque until elaboration).

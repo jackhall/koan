@@ -46,7 +46,7 @@ pub(in crate::machine::execute) mod keyworded;
 mod literal;
 pub(in crate::machine::execute) mod operator_chain;
 pub(in crate::machine) mod resolve_dispatch;
-pub(in crate::machine) mod resolve_type_expr;
+pub(in crate::machine) mod resolve_type_identifier;
 pub(in crate::machine::execute) mod single_poll;
 mod submit;
 
@@ -59,8 +59,8 @@ pub(crate) use field_list::defer_field_list_action;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
-pub use resolve_type_expr::ResolveTypeExprOutcome;
-pub(crate) use resolve_type_expr::{resolve_type_leaf_carrier, TypeLeafCarrier};
+pub use resolve_type_identifier::TypeIdentifierResolution;
+pub(crate) use resolve_type_identifier::{resolve_type_leaf_carrier, TypeLeafCarrier};
 
 /// The shape classification and classifier live in
 /// [`crate::machine::model::ast`] (pure-structural, cached on the node at parse

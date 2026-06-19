@@ -88,10 +88,10 @@ fn apply_constructor<'step>(
         })));
     };
     match RecursiveSet::projected_schema(set, *index) {
-        // Newtype construction. A named record-literal body (`Point {x = 1, y = 2}`) builds a
+        // NewType construction. A named record-literal body (`Point {x = 1, y = 2}`) builds a
         // record per-field (so literal fields bind synchronously); any other trailing
         // expression (`(Point r)`, `(Distance 3.0)`) is wrapped as a single positional value.
-        ProjectedSchema::Newtype(_) => match expr.parts.get(1..) {
+        ProjectedSchema::NewType(_) => match expr.parts.get(1..) {
             Some(
                 [Spanned {
                     value: ExpressionPart::RecordLiteral(fields),

@@ -6,14 +6,14 @@ use crate::machine::core::RuntimeArena;
 fn resolve_type_expr_builtin_leaf_caches() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let te = TypeName::leaf("Number".into());
-    let first = match scope.resolve_type_expr(&te, None) {
-        ResolveTypeExprOutcome::Done(kt) => kt,
+    let te = TypeIdentifier::leaf("Number".into());
+    let first = match scope.resolve_type_identifier(&te, None) {
+        TypeIdentifierResolution::Done(kt) => kt,
         _ => panic!("expected Done"),
     };
     assert_eq!(*first, KType::Number);
-    let second = match scope.resolve_type_expr(&te, None) {
-        ResolveTypeExprOutcome::Done(kt) => kt,
+    let second = match scope.resolve_type_identifier(&te, None) {
+        TypeIdentifierResolution::Done(kt) => kt,
         _ => panic!("expected Done on second call"),
     };
     assert!(
@@ -26,9 +26,9 @@ fn resolve_type_expr_builtin_leaf_caches() {
 fn resolve_type_expr_unbound_returns_unbound() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let te = TypeName::leaf("NotABuiltin".into());
-    match scope.resolve_type_expr(&te, None) {
-        ResolveTypeExprOutcome::Unbound(_) => {}
+    let te = TypeIdentifier::leaf("NotABuiltin".into());
+    match scope.resolve_type_identifier(&te, None) {
+        TypeIdentifierResolution::Unbound(_) => {}
         _ => panic!("expected Unbound for unknown leaf"),
     }
 }
@@ -41,17 +41,17 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
-    let te = TypeName::leaf("Point".into());
-    let kt = match scope.resolve_type_expr(&te, None) {
-        ResolveTypeExprOutcome::Done(kt) => kt,
+    let te = TypeIdentifier::leaf("Point".into());
+    let kt = match scope.resolve_type_identifier(&te, None) {
+        TypeIdentifierResolution::Done(kt) => kt,
         _ => panic!("expected Done after STRUCT declaration"),
     };
     match kt {
         KType::SetRef { set, index } => assert_eq!(set.member(*index).name, "Point"),
         _ => panic!("expected SetRef for Point"),
     }
-    let kt2 = match scope.resolve_type_expr(&te, None) {
-        ResolveTypeExprOutcome::Done(kt) => kt,
+    let kt2 = match scope.resolve_type_identifier(&te, None) {
+        TypeIdentifierResolution::Done(kt) => kt,
         _ => panic!("expected Done on memo hit"),
     };
     assert!(std::ptr::eq(kt, kt2));
@@ -64,7 +64,7 @@ fn struct_setref<'step>(name: &str, scope_id: ScopeId) -> KType<'step> {
     let set = RecursiveSet::singleton(
         name.into(),
         scope_id,
-        NominalSchema::Newtype(Box::new(KType::Record(Box::new(Record::new())))),
+        NominalSchema::NewType(Box::new(KType::Record(Box::new(Record::new())))),
     );
     KType::SetRef { set, index: 0 }
 }
@@ -96,7 +96,7 @@ fn ktype_user_refs_does_not_recurse_into_user_type_payload() {
         let set = RecursiveSet::singleton(
             "Outer".into(),
             outer_id,
-            NominalSchema::Newtype(Box::new(inner)),
+            NominalSchema::NewType(Box::new(inner)),
         );
         KType::SetRef { set, index: 0 }
     };
@@ -117,7 +117,7 @@ mod resolve_type_leaf_carrier {
     use super::super::{resolve_type_leaf_carrier, TypeLeafCarrier};
     use crate::builtins::test_support::run_root_bare;
     use crate::machine::core::BindingIndex;
-    use crate::machine::model::ast::TypeName;
+    use crate::machine::model::ast::TypeIdentifier;
     use crate::machine::model::KType;
     use crate::machine::RuntimeArena;
 
@@ -126,7 +126,7 @@ mod resolve_type_leaf_carrier {
         let arena = RuntimeArena::new();
         let scope = run_root_bare(&arena);
         scope.register_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
-        let leaf = TypeName::leaf("Number".to_string());
+        let leaf = TypeIdentifier::leaf("Number".to_string());
         match resolve_type_leaf_carrier(scope, &leaf, None) {
             TypeLeafCarrier::Resolved(KType::Number) => {}
             other => panic!("expected Resolved(Number), got {:?}", carrier_tag(&other)),
@@ -137,7 +137,7 @@ mod resolve_type_leaf_carrier {
     fn unbound_returns_unbound() {
         let arena = RuntimeArena::new();
         let scope = run_root_bare(&arena);
-        let leaf = TypeName::leaf("Missing".to_string());
+        let leaf = TypeIdentifier::leaf("Missing".to_string());
         match resolve_type_leaf_carrier(scope, &leaf, None) {
             // The bridge surfaces the elaborator's `unknown type name` diagnostic, which
             // names the leaf rather than carrying the bare name.
@@ -169,7 +169,7 @@ mod resolve_type_leaf_carrier {
         // Pre-install a singleton set whose one member is still `pending` (schema
         // unfilled) and bind its external `SetRef` into `bindings.types`, mirroring the
         // `RECURSIVE TYPES` pre-install window.
-        let member = NominalMember::pending("Node".into(), scope.id, KKind::Newtype);
+        let member = NominalMember::pending("Node".into(), scope.id, KKind::NewType);
         let set = std::rc::Rc::new(RecursiveSet::new(vec![member]));
         scope.preinstall_identity(
             "Node".into(),
@@ -185,7 +185,7 @@ mod resolve_type_leaf_carrier {
         let pending_guard = bindings.insert_pending_type(
             "Node".into(),
             PendingTypeEntry {
-                kind: KKind::Newtype,
+                kind: KKind::NewType,
                 scope_id: scope.id,
                 schema_expr: KExpression::new(Vec::new()),
             },
@@ -194,7 +194,7 @@ mod resolve_type_leaf_carrier {
             .install_placeholder("Node".into(), NodeId(7), BindingIndex::value(0))
             .expect("placeholder install");
 
-        let leaf = TypeName::leaf("Node".to_string());
+        let leaf = TypeIdentifier::leaf("Node".to_string());
         match resolve_type_leaf_carrier(scope, &leaf, None) {
             TypeLeafCarrier::Park(producers) => {
                 assert_eq!(producers, vec![NodeId(7)], "parks on the single producer");
@@ -205,7 +205,7 @@ mod resolve_type_leaf_carrier {
         // Seal: fill the member, drop the in-flight guard. The re-resolve now admits
         // (the name is no longer in `pending_types`) and hands back the sealed carrier.
         set.member(0)
-            .fill(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
+            .fill(NominalSchema::NewType(Box::new(KType::Record(Box::new(
                 Record::from_pairs([("x".to_string(), KType::Number)]),
             )))));
         drop(pending_guard);

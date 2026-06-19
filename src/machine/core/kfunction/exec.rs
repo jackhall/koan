@@ -26,7 +26,7 @@ use std::rc::Rc;
 use crate::machine::core::{BindingIndex, CallArena, KError};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
-    elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, Record, ReturnType,
+    elaborate_type_identifier, DeferredReturn, ElabResult, Elaborator, KType, Record, ReturnType,
 };
 use crate::machine::model::values::{Carried, Held, KObject};
 
@@ -91,7 +91,7 @@ pub enum PerCallReturn<'step> {
 /// [`super::bind_by_name`] (a `Record<Carried>`, resolved values keyed by parameter name).
 ///
 /// Pure wrt the scheduler: it mutates only `ctx`'s own scope (param binds) and, for a deferred
-/// `TypeExpr` return, elaborates the return type inline against that scope; then describes the body
+/// `Type` return, elaborates the return type inline against that scope; then describes the body
 /// as a `Tail` (the lift boundary checks + stamps against the carried `PerCall` contract) — or, for
 /// a first-call deferred `Expression` return, a `DeferredExprTail` (the type needs a sub-dispatch).
 /// `in_contract_chain` true means this is a subsequent tail call whose own contract keep-first would
@@ -164,12 +164,12 @@ pub fn run_user_fn<'ast, 'step>(
                 };
             }
             match deferred {
-                // `TypeExpr` form (`-> Er`): elaborate it inline against the per-call (param-bound)
+                // `Type` form (`-> Er`): elaborate it inline against the per-call (param-bound)
                 // child scope and carry the resolved type on the tail-replace.
-                DeferredReturn::TypeExpr(type_expr) => {
+                DeferredReturn::Type(type_expr) => {
                     let return_type = ctx.arena.with_frame_interior(|_inner_arena, child| {
                         let mut elaborator = Elaborator::new(child);
-                        match elaborate_type_expr(&mut elaborator, type_expr) {
+                        match elaborate_type_identifier(&mut elaborator, type_expr) {
                             ElabResult::Done(kt) => kt,
                             // The param install + fn_def carrier scan jointly guarantee resolution;
                             // fall back to Any so the body's own dispatch surfaces any real error.

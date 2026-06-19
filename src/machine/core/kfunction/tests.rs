@@ -2,7 +2,7 @@ use super::*;
 use crate::builtins::test_support::{marker, run_root_bare};
 use crate::builtins::{default_scope, register_builtin};
 use crate::machine::core::{RuntimeArena, Scope};
-use crate::machine::model::ast::{KLiteral, TypeName};
+use crate::machine::model::ast::{KLiteral, TypeIdentifier};
 use crate::machine::model::types::{Argument, ExpressionSignature, KType, ReturnType};
 use crate::machine::model::{KKind, KObject};
 
@@ -123,7 +123,7 @@ fn classify_skips_ref_name_indices_for_binder_function() {
     );
 }
 
-/// A bare leaf Type-token in a `TypeExprRef` slot lands in `ref_name_indices` the
+/// A bare leaf Type-token in a `ProperType` slot lands in `ref_name_indices` the
 /// same way an Identifier in an Identifier slot does. Symmetry pinned by
 /// [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders).
 #[test]
@@ -143,9 +143,9 @@ fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
     register_builtin(scope, "OP", sig, body_any);
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("OP".into())),
-        Spanned::bare(ExpressionPart::Type(TypeName::leaf("IntOrd".into()))),
+        Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("IntOrd".into()))),
     ]);
-    let f = find_match(scope, &expr).expect("OP <TypeExprRef> should match");
+    let f = find_match(scope, &expr).expect("OP <ProperType> should match");
     let pick = f.classify_for_pick(&expr);
     assert_eq!(pick.ref_name_indices, vec![1]);
     assert!(pick.wrap_indices.is_empty());
@@ -281,7 +281,7 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
     register_builtin(scope, "OP", sig, body_any);
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("OP".into())),
-        Spanned::bare(ExpressionPart::Type(TypeName::leaf("Number".into()))),
+        Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Number".into()))),
     ]);
     let f = find_match(scope, &expr).expect("OP <Any> should match");
     let pick = f.classify_for_pick(&expr);

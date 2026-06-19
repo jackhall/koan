@@ -1,7 +1,7 @@
 //! Signature parsing for the `FN` builtin.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+use crate::machine::model::types::{elaborate_type_identifier, ElabResult, Elaborator};
 use crate::machine::model::Carried;
 use crate::machine::model::{Argument, SignatureElement};
 use crate::machine::NodeId;
@@ -55,7 +55,7 @@ pub(crate) enum ParamListOutcome<'a> {
     Err(String),
 }
 
-/// Type-name resolution rides on [`elaborate_type_expr`], which returns
+/// Type-name resolution rides on [`elaborate_type_identifier`], which returns
 /// `ElabResult::Park(producers)` for type-binding names that have dispatched but not
 /// finalized. Parking producers and sub-Dispatches accumulate across the whole signature
 /// walk so the caller can register every blocker in one dep-finish.
@@ -86,7 +86,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                 let ty = parts.get(i + 1).map(|p| &p.value);
                 match ty {
                     Some(ExpressionPart::Type(t)) => {
-                        match elaborate_type_expr(elaborator, t) {
+                        match elaborate_type_identifier(elaborator, t) {
                             ElabResult::Done(kt) => {
                                 elements.push(SignatureElement::Argument(Argument {
                                     name: name.clone(),

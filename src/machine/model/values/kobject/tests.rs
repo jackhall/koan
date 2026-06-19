@@ -18,7 +18,7 @@ fn newtype_singleton<'a>(
     RecursiveSet::singleton(
         name.into(),
         scope_id,
-        NominalSchema::Newtype(Box::new(repr)),
+        NominalSchema::NewType(Box::new(repr)),
     )
 }
 
@@ -213,7 +213,7 @@ fn wrapped_ktype_reports_clone_of_type_id() {
             assert_eq!(set.member(index).name, "Distance");
             assert_eq!(set.member(index).scope_id, ScopeId::from_raw(0, 0xAA));
         }
-        other => panic!("expected Newtype SetRef identity, got {other:?}"),
+        other => panic!("expected NewType SetRef identity, got {other:?}"),
     }
 }
 
