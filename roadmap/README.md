@@ -271,13 +271,16 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
+- [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md)
 - [FrameStorage self-reference via ouroboros](refactor/framestorage-ouroboros.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
-- [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
+- [Unify the two argument binders](refactor/unify-argument-binders.md)
+- [Unify the value-name lookup outcomes](refactor/unify-name-lookup-outcome.md)
+- [Unify the type-name resolution path](refactor/unify-resolution-outcome.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
@@ -358,9 +361,10 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   co-locate the value↔scope↔closure strongly-connected component that straddles the
   model/core boundary into one module, turning its cross-boundary cycle edges (the
   `α·feedback` charge) into free intra-module edges.
-- [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md) —
-  collapse `ElabResult` / `ResolveTypeExprOutcome` / `TypeLeafCarrier` into one generic
-  `ResolveOutcome<T>` with a `map_done` lift.
+- [Unify the type-name resolution path](refactor/unify-resolution-outcome.md) —
+  collapse `ElabResult` / `TypeIdentifierResolution` / `TypeLeafCarrier` into one generic
+  `ResolveOutcome<T>` with a `map_done` lift, and stop repeating the `from_name`
+  builtin-table fallback across the `from_type_identifier` / `elaborate` resolver layers.
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md) —
   collapse the slot-only `KType::SigiledTypeExpr` / `RecordType` markers into one
   `RawTypePart(TypePartKind)`; `KExpression` stays distinct.
@@ -374,3 +378,12 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   hand-rolled arena↔child-scope `pin_deref` / `ScopePtr::reattach_unbounded` loop with an
   `ouroboros #[self_referencing]` struct so the self-reference is compiler-generated, not audited
   `unsafe`.
+- [Unify the two argument binders](refactor/unify-argument-binders.md) — stop the builtin
+  dispatch path building a whole `KFuture` just to gut `future.args`; one arg-binding path
+  instead of `bind` (`Record<ArgValue>`) beside `bind_by_name` (`Record<Carried>`).
+- [Unify the value-name lookup outcomes](refactor/unify-name-lookup-outcome.md) — name the
+  bound/parked/unbound disposition shared by core `Resolution` and execute `NameOutcome` once,
+  without minting a third `ResolveOutcome`.
+- [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md) — the two dep enums
+  carry an identical `Dispatch`/`Existing` core (and already share `DepPlacement`); give them a
+  shared core or a visibly-related pair.
