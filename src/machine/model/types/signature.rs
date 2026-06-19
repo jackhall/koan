@@ -3,7 +3,7 @@
 //! `UntypedKey` groups overloads by shape; `Specificity` ranks candidates within a bucket.
 //!
 //! Not to be confused with the **module-signature** type (`SIG`-declared) at
-//! [`crate::machine::model::values::module::Signature`].
+//! [`crate::machine::model::values::module::ModuleSignature`].
 //!
 //! `return_type` is a [`ReturnType`] rather than a bare [`KType`] so functor return types
 //! that reference a per-call parameter (`-> Er`, `-> Er.Type`) survive
@@ -303,7 +303,7 @@ pub enum SignatureElement<'a> {
 
 /// `name` keys the slot in the bound argument record; `ktype` gates what `ExpressionPart`s it
 /// accepts. `'a` because the declared `KType` may reference arena-pinned `Module` /
-/// `Signature` carriers.
+/// `ModuleSignature` carriers.
 pub struct Argument<'a> {
     pub name: String,
     pub ktype: KType<'a>,

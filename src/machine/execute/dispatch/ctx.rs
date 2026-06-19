@@ -19,10 +19,10 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::core::kfunction::KFunction;
-use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
 use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope};
+use crate::source::Spanned;
 
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
@@ -229,7 +229,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             // pull-lifted into this node's frame and re-exposed at `'step` by the combinator, so they
             // splice straight into the `'step` working expression that re-dispatches in this frame.
             for (slot, value) in part_indices.iter().zip(results) {
-                working_expr.parts[*slot].value = ExpressionPart::Future(*value);
+                working_expr.parts[*slot].value = ExpressionPart::Spliced(*value);
             }
             finish_eager_subs(working_expr, picked)
         });
@@ -242,7 +242,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
 /// frame-installing [`Outcome::Continue`] (via [`invoke_continue`](super::exec::invoke_continue));
 /// `None` defers to a re-resolve `Continue` (via
 /// [`redispatch_continue`](super::keyworded::redispatch_continue), which re-runs
-/// [`keyworded::finish`](super::keyworded::finish), where an element-typed `Future(_)` revealed by a
+/// [`keyworded::finish`](super::keyworded::finish), where an element-typed `Spliced(_)` revealed by a
 /// sub surfaces as a slot-terminal `DispatchFailed`). Pure data — no `&mut`.
 fn finish_eager_subs<'step>(
     working_expr: KExpression<'step>,

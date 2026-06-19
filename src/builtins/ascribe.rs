@@ -157,7 +157,7 @@ fn resolve_module_and_signature<'a>(
 ) -> Result<
     (
         &'a crate::machine::model::values::Module<'a>,
-        &'a crate::machine::model::values::Signature<'a>,
+        &'a crate::machine::model::values::ModuleSignature<'a>,
     ),
     KError,
 > {
@@ -191,7 +191,7 @@ fn resolve_module_and_signature<'a>(
 
 /// Verify every non-abstract-type name in `sig` has a binding in `src_scope`.
 fn shape_check<'a>(
-    sig: &crate::machine::model::values::Signature<'a>,
+    sig: &crate::machine::model::values::ModuleSignature<'a>,
     src_scope: &Scope<'a>,
 ) -> Result<(), KError> {
     let abstract_names: std::collections::HashSet<String> =

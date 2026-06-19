@@ -19,7 +19,6 @@ use crate::machine::model::types::KKind;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::source::Spanned;
 use crate::machine::core::ApplyOutcome;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
@@ -29,6 +28,7 @@ use crate::machine::model::types::{
 use crate::machine::model::values::{Carried, KObject};
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, KError, KErrorKind, Resolution, Scope, TraceFrame};
+use crate::source::Spanned;
 
 use super::{arg, kw, sig};
 

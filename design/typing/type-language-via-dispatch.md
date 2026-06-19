@@ -173,7 +173,7 @@ inner expression's parts decide its shape:
   `:(MAP Str -> Number)`, `:(FN (x :Number) -> Bool)`,
   `:(FUNCTOR (T :S) -> M)`) served by the registered `LIST OF` /
   `MAP _ -> _` / `FN` / `FUNCTOR` overloads in
-  [`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs).
+  [`builtins/parameterized_types.rs`](../../src/builtins/parameterized_types.rs).
 - `BareTypeLeaf` / `BareIdentifier` for single-name sigils
   (`:(Number)`, `:(MyType)`). The `BareTypeLeaf` fast lane is the
   primary caller of `resolve_type_leaf_carrier` — see

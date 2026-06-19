@@ -232,7 +232,7 @@ fn install_eager_only<'step>(
 }
 
 /// Park on bare-name forward-reference producers. `working_expr` is partly spliced — Resolved wrap
-/// slots already substituted for `Future(obj)`; Parked wrap and ref-name slots keep their original
+/// slots already substituted for `Spliced(obj)`; Parked wrap and ref-name slots keep their original
 /// bare-name token — so on wake `resume` re-runs [`initial`] against it.
 fn install_bare_name_park<'step>(
     producers: Vec<NodeId>,
@@ -267,16 +267,14 @@ fn install_eager_subs_track<'step>(
 /// unbound wrap), not a scheduler-level error.
 fn part_walk<'step>(
     ctx: &SchedulerView<'step, '_>,
-    parts: Vec<
-        crate::source::Spanned<crate::machine::model::ast::ExpressionPart<'step>>,
-    >,
+    parts: Vec<crate::source::Spanned<crate::machine::model::ast::ExpressionPart<'step>>>,
     pre_subs: &[(usize, NodeId)],
     bare_outcomes: &[Option<NameOutcome<'step>>],
     slots: &crate::machine::core::kfunction::ClassifiedSlots,
     idx: usize,
 ) -> Result<PartWalkResult<'step>, KError> {
-    use crate::source::Spanned;
     use crate::machine::model::ast::ExpressionPart;
+    use crate::source::Spanned;
 
     let wrap_set = &slots.wrap_indices;
     let ref_name_set = &slots.ref_name_indices;
@@ -295,7 +293,7 @@ fn part_walk<'step>(
             match &bare_outcomes[i] {
                 Some(NameOutcome::Resolved(c)) => {
                     new_parts.push(Spanned {
-                        value: ExpressionPart::Future(*c),
+                        value: ExpressionPart::Spliced(*c),
                         span,
                     });
                 }

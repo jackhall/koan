@@ -4,7 +4,6 @@
 
 use super::ktype::KType;
 use super::resolver::{elaborate_type_expr, ElabResult, Elaborator};
-use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::Carried;
 use crate::machine::model::Parseable;
@@ -12,6 +11,7 @@ use crate::machine::model::Record;
 use crate::machine::{NodeId, Scope};
 use crate::parse::parse_pair_list;
 pub use crate::parse::FieldNameKind;
+use crate::source::Spanned;
 use std::collections::HashSet;
 
 pub enum FieldListOutcome<'a> {
@@ -144,8 +144,8 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
                     }
                 }
             }
-            ExpressionPart::Future(Carried::Type(kt)) => Ok((**kt).clone()),
-            ExpressionPart::Future(Carried::Object(other)) => Err(format!(
+            ExpressionPart::Spliced(Carried::Type(kt)) => Ok((**kt).clone()),
+            ExpressionPart::Spliced(Carried::Object(other)) => Err(format!(
                 "{context} type for `{}` resolved to non-type value `{}`",
                 name,
                 other.summarize(),
@@ -174,7 +174,7 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
 
 /// Pre-resolve self-references inside a keyworded sigil body before it sub-Dispatches
 /// into the standalone dispatcher, which carries no SCC threading context. Every bare
-/// `Type(name)` leaf whose `name` is in `threaded` becomes a `Future(KTypeValue(
+/// `Type(name)` leaf whose `name` is in `threaded` becomes a `Spliced(KTypeValue(
 /// RecursiveRef(name)))` carrier — the same type-side transport `:(LIST OF Number)`
 /// rides — so `STRUCT Tree = (children :(LIST OF Tree))` lowers `Tree` to
 /// `RecursiveRef("Tree")` instead of parking on its own placeholder and closing a
@@ -192,7 +192,7 @@ fn rewrite_threaded_self_refs<'a>(
             let value = match &p.value {
                 ExpressionPart::Type(t) if threaded.contains(t.as_str()) => {
                     let obj = scope.arena.alloc_ktype(KType::RecursiveRef(t.render()));
-                    ExpressionPart::Future(Carried::Type(obj))
+                    ExpressionPart::Spliced(Carried::Type(obj))
                 }
                 ExpressionPart::SigiledTypeExpr(b) => ExpressionPart::SigiledTypeExpr(Box::new(
                     rewrite_threaded_self_refs(b, threaded, scope),

@@ -188,7 +188,7 @@ fn decide_scope<'step>(
             ScopeDecision::Terminal(ResolveOutcome::Resolved(build_resolved(f, expr)))
         }
         // Tie with an unevaluated eager part may break once it evaluates: a
-        // typed `Future(List …)` re-dispatch is element-aware where the bare
+        // typed `Spliced(List …)` re-dispatch is element-aware where the bare
         // literal is shape-only. Defer; a genuine tie resurfaces as `Ambiguous`
         // on the post-eager-subs pass.
         PickPass::Tie(n) if expr_has_eager_part(expr) => {
@@ -458,7 +458,7 @@ fn slot_admits_strict<'step>(
             }
             match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
                 Some(NameOutcome::Resolved(c)) => {
-                    arg.ktype.accepts_part(&ExpressionPart::Future(*c))
+                    arg.ktype.accepts_part(&ExpressionPart::Spliced(*c))
                 }
                 // Speculative admit so the splice/park walk can surface the
                 // precise per-slot diagnostic.

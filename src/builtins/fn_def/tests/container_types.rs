@@ -283,7 +283,7 @@ fn dispatch_disambiguates_element_only_overloads_on_literal() {
 }
 
 /// An already-evaluated container forced through parens arrives at re-dispatch as a
-/// typed `Future` whose carried element type selects the overload — no literal-defer
+/// typed `Spliced` whose carried element type selects the overload — no literal-defer
 /// needed.
 #[test]
 fn dispatch_disambiguates_element_only_overloads_on_evaluated_arg() {
@@ -425,7 +425,7 @@ fn fn_with_nested_parens_wrapped_type_param_dispatches() {
     assert_eq!(bytes, b"1\n");
 }
 
-/// Two-type-arg shape of `parse_fn_param_list`'s `Future(_)` re-walk arm.
+/// Two-type-arg shape of `parse_fn_param_list`'s `Spliced(_)` re-walk arm.
 #[test]
 fn fn_with_parens_wrapped_dict_of_param_accepts_matching_dict() {
     let bytes = capture_program_output(

@@ -7,7 +7,7 @@
 //! Predicates live in `ktype_predicates.rs`; elaboration lives in `ktype_resolution.rs`.
 //!
 //! Lifetime parameter `'a`: the module/signature variants (`Module`, `Signature`,
-//! `AbstractType`) hold `&'a Module<'a>` / `&'a Signature<'a>` arena pointers; every other
+//! `AbstractType`) hold `&'a Module<'a>` / `&'a ModuleSignature<'a>` arena pointers; every other
 //! variant is owned data and ignores the parameter.
 
 use super::kkind::KKind;
@@ -17,7 +17,7 @@ use super::signature::DeferredReturnSurface;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{FrameStorage, ScopeId};
 use crate::machine::model::ast::TypeName;
-use crate::machine::model::values::{Module, Signature};
+use crate::machine::model::values::{Module, ModuleSignature};
 use std::rc::Rc;
 
 /// Root of a [`KType::AbstractType`] identity. `Sig` carries the SIG decl_scope's id for a
@@ -160,7 +160,7 @@ pub enum KType<'a> {
     /// order-preserving (rather than a `HashMap`) so structural equality is deterministic.
     /// Identity is `sig.sig_id()` + `pinned_slots`; `sig.path` is diagnostic-only.
     Signature {
-        sig: &'a Signature<'a>,
+        sig: &'a ModuleSignature<'a>,
         pinned_slots: Vec<(String, KType<'a>)>,
     },
     /// First-class module value's type. `frame` carries the per-call `Rc<FrameStorage>`
@@ -488,7 +488,7 @@ impl<'a> std::hash::Hash for KType<'a> {
     }
 }
 
-/// Manual `Debug` — `derive` is blocked because `Module` / `Signature` / `FrameStorage`
+/// Manual `Debug` — `derive` is blocked because `Module` / `ModuleSignature` / `FrameStorage`
 /// don't implement `Debug` and recursing through module-typed KTypes is unbounded.
 impl<'a> std::fmt::Debug for KType<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

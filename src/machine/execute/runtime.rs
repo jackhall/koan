@@ -52,7 +52,7 @@ impl Workload for KoanWorkload {
     type Payload = NodePayload;
     type Value = CarriedFamily;
     type Error = KError;
-    type Frame = CallArena;
+    type Cart = CallArena;
     type Contract = ContractFamily;
     type Continuation = ContinuationFamily;
 }
@@ -178,7 +178,7 @@ impl<'run> KoanRuntime<'run> {
 
 /// Lower an [`Action`] into the scheduler's [`Outcome`] currency — a pure `Action -> Outcome`
 /// transform that reads nothing: a `AwaitDeps`/`Catch` declares its deps (and a wrapped finish that
-/// recurses `run_action` on the `AwaitContinue`/`CatchCont` it produces) as a [`Outcome::ParkThenContinue`],
+/// recurses `run_action` on the `AwaitContinue`/`CatchContinue` it produces) as a [`Outcome::ParkThenContinue`],
 /// and the harness submits and applies. Every scheduler read the body needs is deferred into the
 /// finish, which sees a read-only [`SchedulerView`](super::dispatch::SchedulerView) at wake.
 pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> Outcome<'step> {

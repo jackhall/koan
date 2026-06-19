@@ -22,14 +22,14 @@ fn module_child_scope_transmute_does_not_dangle() {
     assert!(ptr::eq(recovered2, scope));
 }
 
-/// Covered independently of the module path because `Signature` lives on a different
+/// Covered independently of the module path because `ModuleSignature` lives on a different
 /// sub-arena (`signatures`) — a regression in `alloc_signature` or `decl_scope` must
 /// surface without the module path masking it.
 #[test]
 fn signature_decl_scope_transmute_does_not_dangle() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(sink()));
-    let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
+    let sig = arena.alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
     let recovered = sig.decl_scope();
     assert!(ptr::eq(recovered, scope));
     let _other = arena.alloc_object(crate::machine::model::values::KObject::Number(1.0));

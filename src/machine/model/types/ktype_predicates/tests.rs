@@ -157,15 +157,15 @@ fn record_value_admission_and_matches() {
     ])));
 
     let narrow = record_ty(vec![("x", KType::Number)]);
-    assert!(narrow.accepts_part(&ExpressionPart::Future(Carried::Object(value))));
+    assert!(narrow.accepts_part(&ExpressionPart::Spliced(Carried::Object(value))));
     assert!(narrow.matches_value(value));
 
     let mismatch = record_ty(vec![("x", KType::Str)]);
-    assert!(!mismatch.accepts_part(&ExpressionPart::Future(Carried::Object(value))));
+    assert!(!mismatch.accepts_part(&ExpressionPart::Spliced(Carried::Object(value))));
     assert!(!mismatch.matches_value(value));
 
     let extra = record_ty(vec![("x", KType::Number), ("q", KType::Bool)]);
-    assert!(!extra.accepts_part(&ExpressionPart::Future(Carried::Object(value))));
+    assert!(!extra.accepts_part(&ExpressionPart::Spliced(Carried::Object(value))));
     assert!(!extra.matches_value(value));
 
     // Unevaluated literal admits shape-only (defer-then-reevaluate on the typed value).
@@ -180,7 +180,7 @@ fn record_value_admission_and_matches() {
 fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     use crate::builtins::default_scope;
     use crate::machine::core::RuntimeArena;
-    use crate::machine::model::values::{Module, Signature};
+    use crate::machine::model::values::{Module, ModuleSignature};
     use std::collections::HashMap;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
@@ -189,12 +189,12 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let kt_str: &KType<'_> = arena.alloc_ktype(KType::Str);
     let kt_bool: &KType<'_> = arena.alloc_ktype(KType::Bool);
     let kt_null: &KType<'_> = arena.alloc_ktype(KType::Null);
-    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Type(kt_number))));
-    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Type(kt_str))));
-    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Type(kt_bool))));
-    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Type(kt_null))));
+    assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_number))));
+    assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_str))));
+    assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_bool))));
+    assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_null))));
     // Newtype / union type tokens flow as `SetRef { .. }` in the type channel — a `:Type`
-    // slot admits them via the generic `Future(Carried::Type(_))` arm.
+    // slot admits them via the generic `Spliced(Carried::Type(_))` arm.
     let tagged_set = RecursiveSet::singleton(
         "Maybe".into(),
         ScopeId::SENTINEL,
@@ -206,8 +206,8 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     });
     let struct_token: &KType<'_> =
         arena.alloc_ktype(record_newtype_setref("Point", ScopeId::SENTINEL));
-    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Type(tagged_token))));
-    assert!(t.accepts_part(&ExpressionPart::Future(Carried::Type(struct_token))));
+    assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(tagged_token))));
+    assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(struct_token))));
     let child = arena.alloc_scope(crate::machine::Scope::child_under_module(
         scope,
         "IntMod".into(),
@@ -217,17 +217,17 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         module,
         frame: None,
     });
-    assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Type(kt_module))));
-    let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
+    assert!(!t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_module))));
+    let sig = arena.alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
     let kt_sig: &KType<'_> = arena.alloc_ktype(KType::Signature {
         sig,
         pinned_slots: Vec::new(),
     });
-    assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Type(kt_sig))));
+    assert!(!t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_sig))));
     let n: &KObject<'_> = arena.alloc_object(KObject::Number(7.0));
     let s: &KObject<'_> = arena.alloc_object(KObject::KString("hi".into()));
-    assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Object(n))));
-    assert!(!t.accepts_part(&ExpressionPart::Future(Carried::Object(s))));
+    assert!(!t.accepts_part(&ExpressionPart::Spliced(Carried::Object(n))));
+    assert!(!t.accepts_part(&ExpressionPart::Spliced(Carried::Object(s))));
 }
 
 /// `OfKind` is type-channel-only: a nominal-kind slot classifies a *type value* by its
@@ -242,9 +242,9 @@ fn of_kind_nominal_is_type_channel_only() {
 
     // The Newtype *type value* — admitted in the type channel.
     let newtype_tv = newtype_setref("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
-    assert!(newtype_ty.accepts_part(&ExpressionPart::Future(Carried::Type(&newtype_tv))));
+    assert!(newtype_ty.accepts_part(&ExpressionPart::Spliced(Carried::Type(&newtype_tv))));
     assert!(KType::OfKind(KKind::Proper)
-        .accepts_part(&ExpressionPart::Future(Carried::Type(&newtype_tv))));
+        .accepts_part(&ExpressionPart::Spliced(Carried::Type(&newtype_tv))));
 
     // A Tagged type value is the wrong family — declined.
     let tagged_tv = KType::SetRef {
@@ -255,7 +255,7 @@ fn of_kind_nominal_is_type_channel_only() {
         ),
         index: 0,
     };
-    assert!(!newtype_ty.accepts_part(&ExpressionPart::Future(Carried::Type(&tagged_tv))));
+    assert!(!newtype_ty.accepts_part(&ExpressionPart::Spliced(Carried::Type(&tagged_tv))));
 
     // The runtime `Wrapped` *instance* is never matched by a kind slot.
     let inner: &KObject<'_> = arena.alloc_object(KObject::Number(3.0));
@@ -264,7 +264,7 @@ fn of_kind_nominal_is_type_channel_only() {
         inner: crate::machine::model::values::NonWrappedRef::peel(inner),
         type_id,
     });
-    assert!(!newtype_ty.accepts_part(&ExpressionPart::Future(Carried::Object(w))));
+    assert!(!newtype_ty.accepts_part(&ExpressionPart::Spliced(Carried::Object(w))));
     assert!(!newtype_ty.matches_value(w));
 }
 
@@ -309,10 +309,10 @@ fn user_type_specificity_lattice() {
 fn is_type_denoting_table() {
     use crate::builtins::default_scope;
     use crate::machine::core::RuntimeArena;
-    use crate::machine::model::values::Signature;
+    use crate::machine::model::values::ModuleSignature;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
+    let sig = arena.alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
     let sb = KType::Signature {
         sig,
         pinned_slots: Vec::new(),
@@ -363,7 +363,7 @@ fn is_type_denoting_table() {
 fn is_more_specific_for_pinned_signature_bound() {
     use crate::builtins::default_scope;
     use crate::machine::core::RuntimeArena;
-    use crate::machine::model::values::Signature;
+    use crate::machine::model::values::ModuleSignature;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     // Two distinct decl_scopes → two distinct `sig_id`s.
@@ -375,8 +375,8 @@ fn is_more_specific_for_pinned_signature_bound() {
         scope,
         "HashedSig".into(),
     ));
-    let ordered = arena.alloc_signature(Signature::new("OrderedSig".into(), ordered_scope));
-    let hashed = arena.alloc_signature(Signature::new("HashedSig".into(), hashed_scope));
+    let ordered = arena.alloc_signature(ModuleSignature::new("OrderedSig".into(), ordered_scope));
+    let hashed = arena.alloc_signature(ModuleSignature::new("HashedSig".into(), hashed_scope));
 
     let bare = KType::Signature {
         sig: ordered,

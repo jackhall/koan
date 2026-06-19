@@ -2,7 +2,7 @@
 //! tree-build` pipeline and returns a `KExpression`. Parse-stack and frame
 //! abstractions live in sibling modules ([`super::parse_stack`], [`super::frame`]);
 //! dict-pair state lives on [`super::dict_literal::DictFrame`]. The `:(...)`
-//! type-expression frame ([`Frame::TypeExpr`](super::frame::Frame)) collects its
+//! type-expression frame ([`BracketFrame::SigiledTypeExpr`](super::frame::BracketFrame)) collects its
 //! inner expression verbatim — shape recognition is the dispatcher's job.
 //!
 //! `Reader` tracks an original-source `cursor: u32` alongside its byte position
@@ -16,14 +16,14 @@ use std::collections::HashMap;
 
 use std::rc::Rc;
 
-use crate::source::{self, CurrentFileGuard, FileId, SourceFile, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::KError;
 use crate::parse::quotes::{mask_quotes, JUMP_MARK, LEN_SEP, LITERAL_MARK};
 use crate::parse::whitespace::collapse_whitespace;
+use crate::source::{self, CurrentFileGuard, FileId, SourceFile, Span, Spanned};
 
 use super::dict_literal::DictFrame;
-use super::frame::{close_paren_to_part, Frame};
+use super::frame::{close_paren_to_part, BracketFrame};
 use super::parse_stack::{close_collection, flush_token, open_collection, ParseStack};
 
 /// Width of the UTF-8 codepoint whose leading byte is `b`. Defaults to 1 on a
@@ -259,7 +259,7 @@ pub fn build_tree<'a>(
                 let span_start = reader.cursor;
                 reader.advance_byte();
                 if let Some(type_start) = pending_type_paren_cursor.take() {
-                    stack.push_frame(Frame::TypeExpr {
+                    stack.push_frame(BracketFrame::SigiledTypeExpr {
                         expr: KExpression::new(Vec::new()),
                         span_start: type_start,
                     });
@@ -269,7 +269,7 @@ pub fn build_tree<'a>(
                         Some(('$', sc)) => (Some("EVAL"), Some(sc)),
                         _ => (None, None),
                     };
-                    stack.push_frame(Frame::Expression {
+                    stack.push_frame(BracketFrame::Expression {
                         expr: KExpression::new(Vec::new()),
                         head,
                         span_start,
@@ -293,7 +293,7 @@ pub fn build_tree<'a>(
                     &mut buf,
                     '[',
                     prev,
-                    Frame::List {
+                    BracketFrame::List {
                         items: Vec::new(),
                         span_start,
                     },
@@ -321,7 +321,7 @@ pub fn build_tree<'a>(
                     // `:{...}` record-type sigil — push directly (the `:`-glued opener
                     // bypasses the collection adjacency check, mirroring `:(`).
                     flush_token(&mut stack, &mut buf, &mut token_start)?;
-                    stack.push_frame(Frame::RecordTypeExpr {
+                    stack.push_frame(BracketFrame::RecordTypeExpr {
                         expr: KExpression::new(Vec::new()),
                         span_start: type_start,
                     });
@@ -331,7 +331,7 @@ pub fn build_tree<'a>(
                         &mut buf,
                         '{',
                         prev,
-                        Frame::Dict {
+                        BracketFrame::Dict {
                             dict: DictFrame::new(),
                             span_start,
                         },
@@ -396,7 +396,7 @@ pub fn build_tree<'a>(
                         Some(b'(') => {
                             // Leave the '(' for the next iteration; the '(' arm
                             // sees `pending_type_paren_cursor` and opens a
-                            // TypeExpr frame.
+                            // SigiledTypeExpr frame.
                             pending_type_paren_cursor = Some(colon_cursor);
                         }
                         Some(b'{') => {

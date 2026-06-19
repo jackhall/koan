@@ -10,15 +10,15 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
-use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
 use crate::machine::{KError, KErrorKind, Resolution};
+use crate::source::Spanned;
 
 use super::super::DepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
-use super::{become_dispatch, park_lift, park_on_deps, park_resume, DepRequest, Outcome};
+use super::{become_dispatch, forward_to_producer, park_on_deps, park_resume, DepRequest, Outcome};
 
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
 /// slot is resolved. `(set, index)` is the sealed-member identity stamped onto the produced
@@ -56,7 +56,7 @@ pub(super) fn bare_identifier<'step>(
         .resolve_with_chain(&name, ctx.chain_deref())
     {
         Resolution::Value(obj) => Outcome::Done(Ok(Carried::Object(obj))),
-        Resolution::Placeholder(producer) => park_lift(producer),
+        Resolution::Placeholder(producer) => forward_to_producer(producer),
         Resolution::UnboundName => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name)))),
     }
 }
@@ -149,12 +149,12 @@ pub(super) fn literal_pass_through<'step>(
             let allocated = ctx.current_scope().arena.alloc_object(only.value.resolve());
             Outcome::Done(Ok(Carried::Object(allocated)))
         }
-        ExpressionPart::Future(c) => Outcome::Done(Ok(c)),
+        ExpressionPart::Spliced(c) => Outcome::Done(Ok(c)),
         ExpressionPart::Expression(boxed) => become_dispatch(*boxed),
         ExpressionPart::ListLiteral(items) => park_on_literal(DepRequest::ListLit(items)),
         ExpressionPart::DictLiteral(pairs) => park_on_literal(DepRequest::DictLit(pairs)),
         ExpressionPart::RecordLiteral(fields) => park_on_literal(DepRequest::RecordLit(fields)),
-        _ => unreachable!("LiteralPassThrough classifier only routes Literal/Future/Expression/ListLiteral/DictLiteral/RecordLiteral"),
+        _ => unreachable!("LiteralPassThrough classifier only routes Literal/Spliced/Expression/ListLiteral/DictLiteral/RecordLiteral"),
     }
 }
 

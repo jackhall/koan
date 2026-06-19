@@ -57,19 +57,18 @@ impl NodeFinalize for KoanRuntime<'_> {
 fn enforce_return_contract<'o>(
     output: Result<Carried<'o>, KError>,
     frame: Option<&Rc<CallArena>>,
-    prev_function: Option<ReturnContract<'o>>,
+    contract: Option<ReturnContract<'o>>,
 ) -> Result<Carried<'o>, KError> {
     match (output, frame) {
         (Ok(Carried::Object(v)), Some(_)) => {
-            match check_declared_return(prev_function, |d| d.matches_value(v), || v.ktype().name())?
-            {
+            match check_declared_return(contract, |d| d.matches_value(v), || v.ktype().name())? {
                 // Re-tag to the declared return type so downstream dispatch sees the contract
                 // (may coarsen, e.g. `List<Number>` through `:(LIST OF Any)` -> `List<Any>`). The
                 // re-tag is a shallow rebuild homed in the contract's own home arena, since the
                 // producer frame it was born in may be reused or freed before consumers read it.
                 Some(declared) => {
                     let stamped = v.deep_clone().stamp_type(declared);
-                    let home = prev_function
+                    let home = contract
                         .expect("a declared return type implies a contract")
                         .home_arena();
                     Ok(Carried::Object(home.alloc_object(stamped)))
@@ -81,11 +80,11 @@ fn enforce_return_contract<'o>(
         // The type channel ignores the returned declared type — unlike the `Object` arm, it does
         // not re-tag — so the in-frame value passes through unchanged.
         (Ok(Carried::Type(t)), Some(_)) => {
-            check_declared_return(prev_function, |d| d.matches_type(t), || t.name())?;
+            check_declared_return(contract, |d| d.matches_type(t), || t.name())?;
             Ok(Carried::Type(t))
         }
         (Err(e), Some(_frame)) => {
-            let with_frame = match prev_function {
+            let with_frame = match contract {
                 Some(contract) => {
                     let label = match contract {
                         ReturnContract::Function(f) => f.summarize(),

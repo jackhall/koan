@@ -89,7 +89,7 @@ pub fn require_bare_type_name<'a>(
 
 /// Resolve a resolved `KType` to its bare type name, for the binders that read their name from a
 /// `KObject::Record` type cell. A simple / nominal leaf yields its `name()`; a structural type
-/// (List, Record, FN, …) is a `ShapeError`. `surface` is the keyword (`"STRUCT"`, `"UNION"`, …)
+/// (List, Record, FN, …) is a `ShapeError`. `surface` is the keyword (`"NEWTYPE"`, `"UNION"`, …)
 /// embedded in the message.
 fn bare_type_name<'a>(t: &KType<'a>, name: &str, surface: &str) -> Result<String, KError> {
     match t {
@@ -184,7 +184,7 @@ pub struct FinishCtx<'a, 'c> {
 pub type AwaitContinue<'a> = Box<dyn FnOnce(&FinishCtx<'a, '_>, &[Carried<'a>]) -> Action<'a> + 'a>;
 
 /// A `Catch` finish: re-entered with the watched slot's `Result`, yielding a `Action`.
-pub type CatchCont<'a> =
+pub type CatchContinue<'a> =
     Box<dyn FnOnce(&FinishCtx<'a, '_>, Result<&'a KObject<'a>, KError>) -> Action<'a> + 'a>;
 
 /// What happens next for a slot — the four shapes the builtin survey reduced everything to.
@@ -213,7 +213,7 @@ pub enum Action<'a> {
     /// Watch `watched`, recover via `finish`.
     Catch {
         watched: Dep<'a>,
-        finish: CatchCont<'a>,
+        finish: CatchContinue<'a>,
     },
 }
 

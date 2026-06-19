@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use crate::source::Spanned;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
 use crate::machine::{KError, KErrorKind, NameOutcome, NodeId, TraceFrame};
+use crate::source::Spanned;
 
 use super::super::outcome::Outcome;
 use super::super::runtime::KoanRuntime;

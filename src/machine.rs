@@ -3,7 +3,7 @@
 //!
 //! - `core` — `Scope`, `RuntimeArena`, `KError`, `KFuture`, scheduler glue, and the
 //!   `kfunction` submodule (`KFunction`, `Body`).
-//! - `model` — `KType`, `KObject`, `Module`, `Signature`, signature traits.
+//! - `model` — `KType`, `KObject`, `Module`, `ModuleSignature`, signature traits.
 //! - `execute` — top-level interpret loop and scheduler driver.
 
 pub(crate) mod core;

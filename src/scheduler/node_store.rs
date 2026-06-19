@@ -66,7 +66,7 @@ enum SlotState<W: Workload> {
     /// freed, so frame death moves from Done to free and a read's re-anchored lifetime cannot
     /// outlive the backing arena. The pin is established now and read by the consumer-pull lift,
     /// which copies the terminal out of this frame into the consumer's.
-    Done(Result<Erased<W::Value>, W::Error>, Option<Rc<W::Frame>>),
+    Done(Result<Erased<W::Value>, W::Error>, Option<Rc<W::Cart>>),
     /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
     /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
     /// slot's consumers were moved onto `producer`'s notify list at splice time, so `producer`'s
@@ -161,7 +161,7 @@ impl<W: Workload> NodeStore<W> {
         &mut self,
         id: NodeId,
         output: Result<Live<'_, W>, W::Error>,
-        frame: Option<Rc<W::Frame>>,
+        frame: Option<Rc<W::Cart>>,
     ) {
         // Erase the live terminal to `'static` for storage; the co-stored frame `Rc` pins its
         // backing arena until the slot frees, so a later read can re-anchor it soundly.
@@ -353,7 +353,7 @@ mod tests {
         type Payload = ();
         type Value = U32Value;
         type Error = ();
-        type Frame = ();
+        type Cart = ();
         type Contract = UnitCarrier;
         type Continuation = UnitCarrier;
     }

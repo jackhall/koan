@@ -5,7 +5,6 @@
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
-use crate::source::Spanned;
 use crate::machine::core::BindingIndex;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
@@ -15,6 +14,7 @@ use crate::machine::model::types::{
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::RuntimeArena;
+use crate::source::Spanned;
 
 fn body_identifier<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
     Action::Done(Ok(Carried::Object(marker(ctx.scope, "identifier"))))

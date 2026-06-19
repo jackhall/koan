@@ -176,7 +176,7 @@ sigil-and-dispatch contract.
 **Keyworded surface overloads** for the four builtin parameterized
 constructors — `LIST OF`, `MAP _ -> _`, `FN <sig> -> _`, and
 `FUNCTOR <sig> -> _` — register in
-[`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs)
+[`builtins/parameterized_types.rs`](../../src/builtins/parameterized_types.rs)
 and produce `KType::...` results in the value channel's `Type` arm; they are the canonical
 type-language surface, dispatched and assembled as ordinary sub-expressions
 through the type-language path. (A module type-member is named by the dotted
@@ -565,7 +565,7 @@ declaration-ordered `(name, KType)` pairs into a `Record` once, at the
 The same `Record<KType>` substrate backs `KFunction` / `KFunctor` parameter
 identity: both variants store their parameters as `params: Record<KType>`
 (`(name → type)`), built by `finalize_carrier` in
-[`type_constructors.rs`](../../src/builtins/type_constructors.rs) from the
+[`parameterized_types.rs`](../../src/builtins/parameterized_types.rs) from the
 shared field-list parser STRUCT / UNION use. A function-typed slot is thus
 identified by its parameter names and types order-blind — `:(FN (x :Number,
 y :Str) -> Bool)` equals `:(FN (y :Str, x :Number) -> Bool)`. Function

@@ -3,13 +3,13 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::scope_id::ScopeId;
-use crate::source::{self, FileId, SourceLoc, Span};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     KKind, KType, NominalMember, NominalSchema, Parseable, Record, RecursiveSet,
 };
 use crate::machine::model::values::{KObject, NonWrappedRef};
 use crate::machine::RuntimeArena;
+use crate::source::{self, FileId, SourceLoc, Span};
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.

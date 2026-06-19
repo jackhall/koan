@@ -1,11 +1,11 @@
 use crate::builtins::default_scope;
-use crate::source::Spanned;
 use crate::machine::execute::dispatch::resolve_name_part;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::NameOutcome;
 use crate::machine::{BindingIndex, RuntimeArena};
+use crate::source::Spanned;
 
 #[test]
 fn resolve_name_part_identifier_resolved() {

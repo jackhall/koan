@@ -17,6 +17,8 @@ digraph {
     "koan::builtins::module_def" [label="koan::builtins::module_def"];
     "koan::builtins::newtype_def" [label="koan::builtins::newtype_def"];
     "koan::builtins::nominal_schema" [label="koan::builtins::nominal_schema"];
+    "koan::builtins::parameterized_types" [label="koan::builtins::parameterized_types"];
+    "koan::builtins::parameterized_types::action_bodies" [label="koan::builtins::parameterized_types::action_bodies"];
     "koan::builtins::print" [label="koan::builtins::print"];
     "koan::builtins::quote" [label="koan::builtins::quote"];
     "koan::builtins::record_projection" [label="koan::builtins::record_projection"];
@@ -24,8 +26,6 @@ digraph {
     "koan::builtins::result" [label="koan::builtins::result"];
     "koan::builtins::sig_def" [label="koan::builtins::sig_def"];
     "koan::builtins::try_with" [label="koan::builtins::try_with"];
-    "koan::builtins::type_constructors" [label="koan::builtins::type_constructors"];
-    "koan::builtins::type_constructors::action_bodies" [label="koan::builtins::type_constructors::action_bodies"];
     "koan::builtins::type_ops" [label="koan::builtins::type_ops"];
     "koan::builtins::type_ops::type_constructor" [label="koan::builtins::type_ops::type_constructor"];
     "koan::builtins::type_ops::with" [label="koan::builtins::type_ops::with"];
@@ -136,6 +136,7 @@ digraph {
     "koan::builtins" -> "koan::builtins::module_def" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::newtype_def" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::nominal_schema" [label="owns", style="solid"];
+    "koan::builtins" -> "koan::builtins::parameterized_types" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::print" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::quote" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::record_projection" [label="owns", style="solid"];
@@ -143,7 +144,6 @@ digraph {
     "koan::builtins" -> "koan::builtins::result" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::sig_def" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::try_with" [label="owns", style="solid"];
-    "koan::builtins" -> "koan::builtins::type_constructors" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::type_ops" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::union" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::using_scope" [label="owns", style="solid"];
@@ -152,7 +152,7 @@ digraph {
     "koan::builtins::fn_def" -> "koan::builtins::fn_def::param_refs" [label="owns", style="solid"];
     "koan::builtins::fn_def" -> "koan::builtins::fn_def::return_type" [label="owns", style="solid"];
     "koan::builtins::fn_def" -> "koan::builtins::fn_def::signature" [label="owns", style="solid"];
-    "koan::builtins::type_constructors" -> "koan::builtins::type_constructors::action_bodies" [label="owns", style="solid"];
+    "koan::builtins::parameterized_types" -> "koan::builtins::parameterized_types::action_bodies" [label="owns", style="solid"];
     "koan::builtins::type_ops" -> "koan::builtins::type_ops::type_constructor" [label="owns", style="solid"];
     "koan::builtins::type_ops" -> "koan::builtins::type_ops::with" [label="owns", style="solid"];
     "koan::machine" -> "koan::machine::core" [label="owns", style="solid"];
@@ -354,6 +354,13 @@ digraph {
     "koan::builtins::nominal_schema" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::nominal_schema" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::nominal_schema" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::builtins::parameterized_types" -> "koan::builtins" [label="uses", style="dashed"];
+    "koan::builtins::parameterized_types" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::parameterized_types" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
+    "koan::builtins::parameterized_types" -> "koan::machine::execute" [label="uses", style="dashed"];
+    "koan::builtins::parameterized_types" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::parameterized_types" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::builtins::parameterized_types" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::print" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::print" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::print" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
@@ -394,13 +401,6 @@ digraph {
     "koan::builtins::try_with" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::builtins::try_with" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::try_with" -> "koan::machine::model::types" [label="uses", style="dashed"];
-    "koan::builtins::type_constructors" -> "koan::builtins" [label="uses", style="dashed"];
-    "koan::builtins::type_constructors" -> "koan::machine" [label="uses", style="dashed"];
-    "koan::builtins::type_constructors" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
-    "koan::builtins::type_constructors" -> "koan::machine::execute" [label="uses", style="dashed"];
-    "koan::builtins::type_constructors" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins::type_constructors" -> "koan::machine::model::types" [label="uses", style="dashed"];
-    "koan::builtins::type_constructors" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::type_ops" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::type_ops" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::type_ops" -> "koan::machine::model" [label="uses", style="dashed"];

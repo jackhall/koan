@@ -23,11 +23,11 @@
 
 use std::rc::Rc;
 
-use crate::source::Spanned;
 use crate::machine::core::CallArena;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
+use crate::source::Spanned;
 
 use super::nodes::NodeWork;
 use super::runtime::KoanWorkload;
@@ -287,7 +287,7 @@ pub(in crate::machine::execute) fn park_resume<'step>(
 
 /// A bare-identifier slot whose name binds to `producer`: the slot's result *is* `producer`'s
 /// result, so the harness splices the slot out (no forwarding node) — see [`Outcome::Forward`].
-pub(in crate::machine::execute) fn park_lift<'step>(producer: NodeId) -> Outcome<'step> {
+pub(in crate::machine::execute) fn forward_to_producer<'step>(producer: NodeId) -> Outcome<'step> {
     Outcome::Forward(producer)
 }
 
@@ -331,7 +331,7 @@ pub(super) fn stage_all_eager_parts<'step>(
         if wrap_indices.contains(&i) {
             // Bare-name value slot: resolve the name through a single-part
             // sub-Dispatch (the `BareIdentifier` / `BareTypeLeaf` fast lane), so
-            // the resolved `Future` carrier reaches `accepts_part` at bind.
+            // the resolved `Spliced` carrier reaches `accepts_part` at bind.
             let wrapped = KExpression::new(vec![Spanned {
                 value: part.value,
                 span,

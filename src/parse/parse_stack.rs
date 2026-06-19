@@ -4,17 +4,17 @@
 //! `close_collection` helpers live here since they bind `ParseStack` and the
 //! token-buffer flush.
 
-use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::KError;
 use crate::parse::tokens::classify_token;
+use crate::source::Spanned;
 
 use super::dict_literal::DictFrame;
-use super::frame::Frame;
+use super::frame::BracketFrame;
 
 pub(super) struct ParseStack<'a> {
     root: KExpression<'a>,
-    rest: Vec<Frame<'a>>,
+    rest: Vec<BracketFrame<'a>>,
 }
 
 impl<'a> ParseStack<'a> {
@@ -25,13 +25,13 @@ impl<'a> ParseStack<'a> {
         }
     }
 
-    pub(super) fn push_frame(&mut self, f: Frame<'a>) {
+    pub(super) fn push_frame(&mut self, f: BracketFrame<'a>) {
         self.rest.push(f);
     }
 
     /// Push a span-carrying part into the current top frame (root if none
     /// open). The span is preserved when the destination's storage is
-    /// `Vec<Spanned<…>>`; List/Dict/TypeExpr frames discard it.
+    /// `Vec<Spanned<…>>`; List/Dict/SigiledTypeExpr frames discard it.
     pub(super) fn push_part(&mut self, part: Spanned<ExpressionPart<'a>>) {
         match self.rest.last_mut() {
             Some(f) => f.push(part),
@@ -39,7 +39,7 @@ impl<'a> ParseStack<'a> {
         }
     }
 
-    pub(super) fn peek_top(&self) -> Option<&Frame<'a>> {
+    pub(super) fn peek_top(&self) -> Option<&BracketFrame<'a>> {
         self.rest.last()
     }
 
@@ -47,14 +47,14 @@ impl<'a> ParseStack<'a> {
     /// when the top is any other variant or no frame is nested.
     pub(super) fn top_dict_mut(&mut self) -> Option<&mut DictFrame<'a>> {
         match self.rest.last_mut()? {
-            Frame::Dict { dict, .. } => Some(dict),
+            BracketFrame::Dict { dict, .. } => Some(dict),
             _ => None,
         }
     }
 
     /// Unconditional pop of the topmost nested frame. Used by `)` which
     /// destructures all variants for distinct diagnostics.
-    pub(super) fn pop_top(&mut self) -> Option<Frame<'a>> {
+    pub(super) fn pop_top(&mut self) -> Option<BracketFrame<'a>> {
         self.rest.pop()
     }
 
@@ -94,7 +94,7 @@ pub(super) fn open_collection<'a>(
     buf: &mut String,
     opener: char,
     prev: Option<char>,
-    frame: Frame<'a>,
+    frame: BracketFrame<'a>,
     token_start: &mut Option<u32>,
 ) -> Result<(), KError> {
     check_open_adjacency(opener, prev)?;

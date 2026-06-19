@@ -4,22 +4,22 @@
 //!
 //! Construction mirrors [`module_def`](super::module_def): body statements dispatch
 //! against a fresh child scope on the outer scheduler; a `AwaitDeps` over those slots
-//! captures the populated scope into a [`Signature`] value, allocates it in the
+//! captures the populated scope into a [`ModuleSignature`] value, allocates it in the
 //! parent's arena, and binds it under the signature's name. Body declarations are
 //! `LET name = (FN <signature> -> <return> = ...)` for operations and
 //! `LET Carrier = TypeName` for abstract type declarations. The ascription operators
 //! (`:|` / `:!`) iterate the stored scope at ascription time.
 
 use crate::machine::model::types::KKind;
-use crate::machine::model::values::Signature;
+use crate::machine::model::values::ModuleSignature;
 use crate::machine::model::KType;
 use crate::machine::{Scope, TraceFrame};
 
 use super::{arg, kw, sig};
 
-/// `Action`-harness twin of the legacy body: mints the declaration scope, dispatches the SIG body
+/// The SIG body: mints the declaration scope, dispatches the SIG body
 /// block against it (an `InScope` dep-finish dependency), and the finish captures that scope into a
-/// [`Signature`] and installs the `KType::Signature` identity into the parent scope.
+/// [`ModuleSignature`] and installs the `KType::Signature` identity into the parent scope.
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -39,10 +39,10 @@ pub fn body<'a>(
     let bind_index = ctx.bind_index();
     let name_for_finish = name;
     let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
-        let sig: &'a Signature<'a> = fctx
+        let sig: &'a ModuleSignature<'a> = fctx
             .scope
             .arena
-            .alloc_signature(Signature::new(name_for_finish.clone(), decl_scope));
+            .alloc_signature(ModuleSignature::new(name_for_finish.clone(), decl_scope));
         let identity = KType::Signature {
             sig,
             pinned_slots: Vec::new(),

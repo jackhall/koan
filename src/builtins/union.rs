@@ -14,7 +14,7 @@ use super::{arg, kw, sig};
 /// Seal the elaborated variant schema into the UNION's [`RecursiveSet`] member and install
 /// the `SetRef` identity into `bindings.types` — type-only, no value-side carrier.
 /// Transient `RecursiveRef(name)` variant leaves seal to `SetLocal(index)`. Mirror of
-/// [`super::struct_def::finalize_struct`].
+/// [`super::newtype_def::finalize_record_newtype`].
 fn finalize_union<'a>(
     scope: &Scope<'a>,
     name: String,

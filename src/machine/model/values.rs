@@ -1,5 +1,5 @@
 //! Runtime values: the universal [`KObject`] enum, dict-key wrapper [`KKey`],
-//! the [`Module`] / [`Signature`] carriers, and the shared `<name>: <value>`
+//! the [`Module`] / [`ModuleSignature`] carriers, and the shared `<name>: <value>`
 //! parser [`NamedPairs`] used by struct construction and first-class calls.
 //!
 //! Construction dispatch for `Struct` and `Tagged` lives in
@@ -14,5 +14,5 @@ mod named_pairs;
 pub use carried::{ArgValue, Carried, CarriedFamily, Held, ResultCarriedFamily};
 pub use kkey::KKey;
 pub use kobject::{KObject, NonWrappedRef};
-pub use module::{Module, Signature};
+pub use module::{Module, ModuleSignature};
 pub use named_pairs::NamedPairs;

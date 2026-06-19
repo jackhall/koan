@@ -21,10 +21,10 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::{KError, KErrorKind};
+use crate::source::Spanned;
 
 use super::ctx::SchedulerView;
 use super::Outcome;

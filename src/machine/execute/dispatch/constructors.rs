@@ -11,12 +11,12 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::DepPlacement;
-use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::NonWrappedRef;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::{KError, KErrorKind, Scope};
+use crate::source::Spanned;
 
 use super::super::DepFinish;
 use super::single_poll::CtorKind;

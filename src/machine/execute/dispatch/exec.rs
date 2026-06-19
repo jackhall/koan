@@ -69,7 +69,7 @@ fn invoke_work<'step>(
 /// - **builtin** → the action harness (`BodyCtx` → `Action` → `run_action`);
 /// - **user-defined** → the `exec` executor (`run_user_fn` + the `ExecOutcome` lowering).
 ///
-/// Every call reaches here with its value parts already `Future`/literal-resolved (the eager-subs
+/// Every call reaches here with its value parts already `Spliced`/literal-resolved (the eager-subs
 /// and synchronous bind paths splice them first), so there is no fall-through.
 pub(super) fn invoke<'step>(
     view: &SchedulerView<'step, '_>,
@@ -97,7 +97,7 @@ pub(super) fn invoke<'step>(
 
     let args = match extract_carried_args(view, &working_expr) {
         Some(args) => args,
-        // Unreachable by construction (the bind sites resolve value parts to `Future`/literal
+        // Unreachable by construction (the bind sites resolve value parts to `Spliced`/literal
         // first); surface a diagnostic rather than silently mis-bind if that ever breaks.
         None => {
             return Outcome::Done(Err(KError::new(KErrorKind::User(
@@ -285,7 +285,7 @@ fn run_action_builtin<'step>(
 }
 
 /// Extract the call's resolved value arguments from `working_expr`'s parts, in order. Returns
-/// `None` if any value part isn't a resolved `Carried` (a `Future`-splice or a literal) — the
+/// `None` if any value part isn't a resolved `Carried` (a `Spliced`-splice or a literal) — the
 /// signal to fall through to the legacy binder. Keyword parts are the signature's own literals.
 fn extract_carried_args<'step>(
     view: &SchedulerView<'step, '_>,
@@ -295,8 +295,8 @@ fn extract_carried_args<'step>(
     for part in &working_expr.parts {
         match &part.value {
             ExpressionPart::Keyword(_) => {}
-            ExpressionPart::Future(carried) => args.push(*carried),
-            // A literal value part isn't `Future`-spliced; resolve it into the run arena now
+            ExpressionPart::Spliced(carried) => args.push(*carried),
+            // A literal value part isn't `Spliced`-spliced; resolve it into the run arena now
             // (mirrors `literal_pass_through`) so it joins the args as a `'step` `Carried`.
             ExpressionPart::Literal(_) => {
                 let object = view

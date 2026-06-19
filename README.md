@@ -150,7 +150,7 @@ src/
 │   ├── catch.rs              CATCH — error-handling primitive
 │   ├── branch_walk.rs        shared <tag> -> <body> walker for MATCH and TRY
 │   ├── result.rs             Result tagged-union builtin
-│   ├── type_constructors.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
+│   ├── parameterized_types.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
 │   ├── type_ops.rs           TEMPLATE / WITH
 │   ├── type_ops/type_constructor.rs   TEMPLATE — parameterized type constructor
 │   ├── type_ops/with.rs               WITH — type-constructor application

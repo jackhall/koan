@@ -1,5 +1,5 @@
 //! `Result` — a builtin two-variant tagged union (`ok :T`, `error :E`),
-//! registered once at prelude build like `List`/`Dict`, not via `UNION`/`STRUCT`.
+//! registered once at prelude build like `List`/`Dict`, not via `UNION`/`NEWTYPE`.
 //!
 //! Type-only: `bindings.types["Result"]` holds a `KType::SetRef` into a singleton
 //! [`RecursiveSet`] whose one [`KKind::TypeConstructor`] member carries the variant

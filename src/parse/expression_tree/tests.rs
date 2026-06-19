@@ -61,7 +61,7 @@ pub(super) fn describe(e: &KExpression<'_>) -> String {
             ExpressionPart::Literal(KLiteral::Number(n)) => format!("n({})", n),
             ExpressionPart::Literal(KLiteral::Boolean(b)) => format!("b({})", b),
             ExpressionPart::Literal(KLiteral::Null) => "null".to_string(),
-            ExpressionPart::Future(_) => "future".to_string(),
+            ExpressionPart::Spliced(_) => "future".to_string(),
         }
     }
     let parts: Vec<String> = e.parts.iter().map(|p| describe_part(&p.value)).collect();

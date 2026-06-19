@@ -1,4 +1,3 @@
-use crate::source::Spanned;
 use crate::machine::model::ast::{
     classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, TypeName,
 };
@@ -6,6 +5,7 @@ use crate::machine::model::types::KKind;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::ArgValue;
 use crate::machine::model::Parseable;
+use crate::source::Spanned;
 
 fn kw(s: &str) -> ExpressionPart<'static> {
     ExpressionPart::Keyword(s.into())
@@ -297,7 +297,7 @@ fn cache_survives_clone() {
 
 #[test]
 fn key_and_shape_invariant_across_eager_slot_variants() {
-    // The dispatch-time splice replaces an eager `Slot` part with `Future` (also a
+    // The dispatch-time splice replaces an eager `Slot` part with `Spliced` (also a
     // `Slot`), so shape / key / probe are invariant under it. Every eager-part
     // variant contributes `Slot`, so the classification of an `a + <slot> + c` chain
     // must be identical regardless of which eager variant fills the middle slot.

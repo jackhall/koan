@@ -18,6 +18,7 @@ mod match_case;
 mod module_def;
 pub(crate) mod newtype_def;
 mod nominal_schema;
+mod parameterized_types;
 mod print;
 mod quote;
 mod record_projection;
@@ -25,7 +26,6 @@ mod recursive_types;
 mod result;
 mod sig_def;
 mod try_with;
-mod type_constructors;
 mod type_ops;
 mod union;
 mod using_scope;
@@ -205,7 +205,7 @@ pub fn default_scope<'a>(
     ascribe::register(scope);
     record_projection::register(scope);
     type_ops::register(scope);
-    type_constructors::register(scope);
+    parameterized_types::register(scope);
 
     arena.alloc_scope(Scope::run_child(scope))
 }

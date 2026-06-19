@@ -1,7 +1,7 @@
-//! `Module` and `Signature` — first-class module values produced by the `MODULE` and `SIG`
+//! `Module` and `ModuleSignature` — first-class module values produced by the `MODULE` and `SIG`
 //! builtins. See [design/typing/modules.md](../../../../design/typing/modules.md).
 //!
-//! **Terminology — "module-signature" vs "expression-signature".** `Signature` here is the
+//! **Terminology — "module-signature" vs "expression-signature".** `ModuleSignature` here is the
 //! **module-signature** type (`SIG`-declared) — an interface a module can be ascribed to
 //! via `:|` / `:!`. The **expression-signature** machinery (`ExpressionSignature`,
 //! `Argument`, `SignatureElement`) lives in [`crate::machine::model::types::signature`]. The two
@@ -86,15 +86,15 @@ impl<'a> Module<'a> {
 /// First-class signature (module type) value. Holds the raw declaration scope so
 /// `:|` / `:!` can iterate the declared abstract types and operation signatures at
 /// ascription time.
-pub struct Signature<'a> {
+pub struct ModuleSignature<'a> {
     pub path: String,
     /// Branded [`ScopePtr<'a>`]: `Scope<'a>` is invariant in `'a`, and the brand's
     /// `PhantomData<&'a Scope<'a>>` carries that invariance structurally, so it is what pins
-    /// `Signature<'a>` invariant in `'a` — no separate marker field is needed.
+    /// `ModuleSignature<'a>` invariant in `'a` — no separate marker field is needed.
     decl_scope_ptr: ScopePtr<'a>,
 }
 
-impl<'a> Signature<'a> {
+impl<'a> ModuleSignature<'a> {
     pub fn new(path: String, decl_scope: &'a Scope<'a>) -> Self {
         Self {
             path,
@@ -103,7 +103,7 @@ impl<'a> Signature<'a> {
     }
 
     /// Re-attach `'a` to the stored scope. The branded `decl_scope_ptr` makes this a safe
-    /// re-attach: the decl scope is arena-allocated and outlives every `&Signature<'a>` by
+    /// re-attach: the decl scope is arena-allocated and outlives every `&ModuleSignature<'a>` by
     /// construction.
     pub fn decl_scope(&self) -> &'a Scope<'a> {
         self.decl_scope_ptr.reattach()
@@ -112,7 +112,7 @@ impl<'a> Signature<'a> {
     /// Stable identity for `KType::Signature { sig, .. }` (its dispatch identity is
     /// `sig.sig_id()` + `pinned_slots`). Each `SIG` declares its own decl_scope and thus a
     /// fresh `ScopeId`; two `SIG Foo = (...)` in the same lexical scope already error
-    /// (`Rebind`), so distinct `Signature`s always have distinct ids.
+    /// (`Rebind`), so distinct `ModuleSignature`s always have distinct ids.
     pub fn sig_id(&self) -> ScopeId {
         self.decl_scope().id
     }

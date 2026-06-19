@@ -25,7 +25,7 @@ use super::storage_frame::{StorageFrame, StorageProfile, Stored};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::KType;
-use crate::machine::model::values::{Held, KObject, Module, Signature};
+use crate::machine::model::values::{Held, KObject, Module, ModuleSignature};
 use crate::scheduler::{reattach_ref, Reattachable};
 
 /// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
@@ -38,7 +38,7 @@ pub struct KoanStorage {
     functions: Arena<KFunction<'static>>,
     scopes: Arena<Scope<'static>>,
     modules: Arena<Module<'static>>,
-    signatures: Arena<Signature<'static>>,
+    signatures: Arena<ModuleSignature<'static>>,
     ktypes: Arena<KType<'static>>,
     operator_groups: Arena<OperatorGroup>,
 }
@@ -114,8 +114,8 @@ unsafe impl Reattachable for Scope<'static> {
 unsafe impl Reattachable for Module<'static> {
     type At<'r> = Module<'r>;
 }
-unsafe impl Reattachable for Signature<'static> {
-    type At<'r> = Signature<'r>;
+unsafe impl Reattachable for ModuleSignature<'static> {
+    type At<'r> = ModuleSignature<'r>;
 }
 unsafe impl Reattachable for OperatorGroup {
     type At<'r> = OperatorGroup;
@@ -174,11 +174,11 @@ impl Stored<KoanStorageProfile> for Module<'static> {
     }
 }
 
-impl Stored<KoanStorageProfile> for Signature<'static> {
-    fn sub_arena(s: &KoanStorage) -> &Arena<Signature<'static>> {
+impl Stored<KoanStorageProfile> for ModuleSignature<'static> {
+    fn sub_arena(s: &KoanStorage) -> &Arena<ModuleSignature<'static>> {
         &s.signatures
     }
-    fn anchors_to(_value: &Signature<'_>, _arena_ptr: *const RuntimeArena) -> bool {
+    fn anchors_to(_value: &ModuleSignature<'_>, _arena_ptr: *const RuntimeArena) -> bool {
         false
     }
 }
@@ -234,8 +234,8 @@ impl StorageFrame<KoanStorageProfile> {
         self.alloc::<Module<'static>>(m)
     }
 
-    pub fn alloc_signature<'a>(&'a self, s: Signature<'a>) -> &'a Signature<'a> {
-        self.alloc::<Signature<'static>>(s)
+    pub fn alloc_signature<'a>(&'a self, s: ModuleSignature<'a>) -> &'a ModuleSignature<'a> {
+        self.alloc::<ModuleSignature<'static>>(s)
     }
 
     /// Allocate an [`OperatorGroup`]. Lifetime-free and anchor-free, so the gate is a no-op, but it
@@ -270,7 +270,7 @@ impl StorageFrame<KoanStorageProfile> {
             + self.family_len::<KFunction<'static>>()
             + self.family_len::<Scope<'static>>()
             + self.family_len::<Module<'static>>()
-            + self.family_len::<Signature<'static>>()
+            + self.family_len::<ModuleSignature<'static>>()
             + self.family_len::<KType<'static>>()
             + self.family_len::<OperatorGroup>()
     }

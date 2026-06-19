@@ -51,10 +51,10 @@ impl<W: Workload> NodeWork<W> {
 pub(crate) struct CallFrame<W: Workload> {
     /// The cart this slot's step runs against. The workload mints it and the `Rc` pins it for the
     /// step; the scheduler stores and hands it back but calls no method on it.
-    pub(crate) cart: Rc<W::Frame>,
+    pub(crate) cart: Rc<W::Cart>,
     /// Per-slot reserve cart for the ping-pong rotation that lets a stateful resume reuse a frame
     /// across iterations.
-    pub(crate) reserve: Option<Rc<W::Frame>>,
+    pub(crate) reserve: Option<Rc<W::Cart>>,
     /// Return contract enforced at the Done boundary, stored erased to `'static`
     /// (`Erased<W::Contract>`) and re-anchored against `cart` by the scheduler (via
     /// [`vend_carrier`](super::vend_carrier)). `None` for slots with no declared-return obligation.

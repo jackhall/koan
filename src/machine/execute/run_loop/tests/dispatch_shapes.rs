@@ -696,7 +696,7 @@ fn keyworded_unchanged_with_keyword_in_body() {
 ///
 /// Program: `LET y = (FIRST [1 2 3])`. LET picks at initial resolve; the RHS
 /// is an eager sub-Dispatch. After the sub resolves to `1`, the resume handler
-/// splices `Future(1)` into the LET expression and re-resolves.
+/// splices `Spliced(1)` into the LET expression and re-resolves.
 #[test]
 fn stateful_keyworded_eager_subs_resumes_through_state() {
     let arena = RuntimeArena::new();
@@ -719,7 +719,7 @@ fn stateful_keyworded_eager_subs_resumes_through_state() {
 /// A `Deferred` outcome at initial resolve installs the eager-subs track with
 /// no captured function; the resume handler's re-resolve picks the overload
 /// after the spliced sub supplies the discriminating type. Two overloads tie
-/// on the bare-arg shape; the typed `Future(List<Number>)` lands the
+/// on the bare-arg shape; the typed `Spliced(List<Number>)` lands the
 /// `:(LIST OF Number)` arm.
 #[test]
 fn stateful_keyworded_deferred_resolves_after_eager_subs() {

@@ -2,7 +2,7 @@
 //! mutually-recursive nominal types as one [`RecursiveSet`].
 //!
 //! The block is the one cross-order type-name resolution that survives strict lexical
-//! lookup. Its body is a newline-separated sequence of ordinary `STRUCT` / `UNION` /
+//! lookup. Its body is a newline-separated sequence of ordinary `UNION` /
 //! `NEWTYPE` declarations; every member name is in scope for every body inside the block,
 //! so a cross-reference lowers to a transient `RecursiveRef` and seals to a `SetLocal`
 //! index into the shared set. See
@@ -30,7 +30,7 @@ use super::{arg, kw, sig};
 
 /// Discover each member declaration's `(name, kind)` from the block body, using the same
 /// multi-statement split `split_body_statements` applies. Rejects a body with no declarations, a
-/// non-`STRUCT`/`UNION`/`NEWTYPE` statement, or a duplicate member name.
+/// non-`UNION`/`NEWTYPE` statement, or a duplicate member name.
 fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, KKind)>, KError> {
     let is_multi = !body.parts.is_empty()
         && body
@@ -82,7 +82,7 @@ fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, KKind)>, KErr
     Ok(members)
 }
 
-/// The first keyword token of a declaration expression (`STRUCT` / `UNION` / `NEWTYPE`).
+/// The first keyword token of a declaration expression (`UNION` / `NEWTYPE`).
 fn leading_keyword<'b>(decl: &'b KExpression<'_>) -> Option<&'b str> {
     decl.parts.iter().find_map(|p| match &p.value {
         ExpressionPart::Keyword(s) => Some(s.as_str()),
@@ -90,7 +90,7 @@ fn leading_keyword<'b>(decl: &'b KExpression<'_>) -> Option<&'b str> {
     })
 }
 
-/// `Action`-harness twin of the legacy body: discovers the members, mints the set + carrying child
+/// The RECURSIVE TYPES body: discovers the members, mints the set + carrying child
 /// scope, pre-installs each member's `SetRef`, dispatches the body block (an `InScope` dep-finish dependency
 /// that fans out per declaration), and the finish mirrors the sealed members + binds the group
 /// handle into the enclosing scope.

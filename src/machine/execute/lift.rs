@@ -130,7 +130,7 @@ pub(super) fn lift_kobject<'run>(v: &KObject<'run>, dying_frame: &Rc<CallArena>)
         }
         // A `Struct` / `Wrapped` carrying a `SetRef` shares its set by `Rc::clone` (via
         // `deep_clone`); the recursive group travels as one unit with no anchor. A schema's
-        // `&'run Module` / `Signature` refs ride their own existing anchors.
+        // `&'run Module` / `ModuleSignature` refs ride their own existing anchors.
         other => other.deep_clone(),
     }
 }
@@ -181,7 +181,7 @@ where
     match v {
         // Only the `Object` arm of an aggregate cell is a `KObject` descendant; a `Type`
         // cell's module rides its own frame anchor (see `lift_held`), so it bottoms out here
-        // just like a type-arm `Future` in `part_borrows_arena`.
+        // just like a type-arm `Spliced` in `part_borrows_arena`.
         KObject::List(items, _) => items
             .iter()
             .filter_map(|x| x.as_object())
@@ -200,10 +200,10 @@ where
             .filter_map(|(_, x)| x.as_object())
             .any(|o| any_descendant(o, predicate)),
         KObject::KExpression(e) => e.parts.iter().any(|p| match &p.value {
-            ExpressionPart::Future(Carried::Object(obj)) => any_descendant(obj, predicate),
+            ExpressionPart::Spliced(Carried::Object(obj)) => any_descendant(obj, predicate),
             ExpressionPart::Expression(inner) | ExpressionPart::SigiledTypeExpr(inner) => {
                 inner.parts.iter().any(|p2| match &p2.value {
-                    ExpressionPart::Future(Carried::Object(obj)) => any_descendant(obj, predicate),
+                    ExpressionPart::Spliced(Carried::Object(obj)) => any_descendant(obj, predicate),
                     _ => false,
                 })
             }
@@ -261,7 +261,7 @@ fn held_needs_lift<'run>(cell: &Held<'run>, dying_frame: &Rc<CallArena>) -> bool
 
 /// True iff any descendant of an unanchored `KFuture` borrows into `arena`. Three
 /// borrow sites: the function ref's captured arena, the parsed expression's
-/// `Future(Carried)` parts, and the bundle args.
+/// `Spliced(Carried)` parts, and the bundle args.
 fn kfuture_borrows_dying_arena<'run>(t: &KFuture<'run>, arena: &RuntimeArena) -> bool {
     if std::ptr::eq(
         t.function.captured_scope().arena,
@@ -299,13 +299,13 @@ fn expression_borrows_arena<'run>(expr: &KExpression<'run>, arena: &RuntimeArena
 
 fn part_borrows_arena<'run>(part: &ExpressionPart<'run>, arena: &RuntimeArena) -> bool {
     match part {
-        // Only a value-arm Future borrows an arena `KObject`; a type arm's `Module` rides
+        // Only a value-arm Spliced borrows an arena `KObject`; a type arm's `Module` rides
         // its own frame anchor, not an arena `KObject`.
-        ExpressionPart::Future(Carried::Object(obj)) => {
+        ExpressionPart::Spliced(Carried::Object(obj)) => {
             arena.owns_object(*obj as *const KObject<'run>)
         }
         ExpressionPart::Expression(e) => expression_borrows_arena(e, arena),
-        // Dispatch-time splicing can introduce `Future` parts inside a SigiledTypeExpr;
+        // Dispatch-time splicing can introduce `Spliced` parts inside a SigiledTypeExpr;
         // recurse through the type-context marker.
         ExpressionPart::SigiledTypeExpr(e) => expression_borrows_arena(e, arena),
         ExpressionPart::ListLiteral(items) => items.iter().any(|p| part_borrows_arena(p, arena)),

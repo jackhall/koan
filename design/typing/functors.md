@@ -324,7 +324,7 @@ structural identity by `(ctor, args)`, mirror of `List(_)` / `Dict(_, _)`.
 The constructor rides in as the `AS` right-hand `:Type` argument, not as a
 dispatch verb, so the call routes through the ordinary keyworded path the
 same way `:(LIST OF Number)` does; the
-[`AS` builtin](../../src/builtins/type_constructors.rs) checks the right-hand
+[`AS` builtin](../../src/builtins/parameterized_types.rs) checks the right-hand
 side is a `TypeConstructor`-kind member and arity-checks against its
 `param_names.len()`. A forward reference to an in-flight `LET` constructor
 name parks on its producer through the same bare-name arg resolution every

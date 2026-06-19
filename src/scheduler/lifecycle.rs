@@ -17,7 +17,7 @@ impl<W: Workload> Scheduler<W> {
         &mut self,
         idx: usize,
         output: Result<Live<'_, W>, W::Error>,
-        frame: Option<Rc<W::Frame>>,
+        frame: Option<Rc<W::Cart>>,
     ) {
         let id = NodeId(idx);
         self.store.finalize(id, output, frame);

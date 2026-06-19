@@ -13,7 +13,7 @@ pub(crate) type Live<'node, W> = <<W as Workload>::Value as Reattachable>::At<'n
 /// the `'node` read borrow; the error is borrowed — the scheduler hands back a reference into the
 /// slot, never an owned error.
 pub(crate) type FramedRead<'node, W> =
-    Result<(Live<'node, W>, Option<Rc<<W as Workload>::Frame>>), &'node <W as Workload>::Error>;
+    Result<(Live<'node, W>, Option<Rc<<W as Workload>::Cart>>), &'node <W as Workload>::Error>;
 
 /// The Koan-agnostic interface the generic DAG scheduler is parameterized over: the workload types
 /// it stores opaquely and never inspects. The Koan instantiation is `machine::execute::KoanWorkload`.
@@ -28,7 +28,7 @@ pub(crate) trait Workload {
     /// The terminal error type (stored in a finalized terminal; the scheduler only stores/borrows it).
     type Error;
     /// The per-node memory frame the scheduler manages by `Rc` (minted by the workload; never calls a method on it).
-    type Frame;
+    type Cart;
     /// The per-node return contract: a one-lifetime [`Reattachable`] family the scheduler stores
     /// erased (`Erased<Self::Contract>`) on a slot's frame and re-anchors at the Done boundary via
     /// [`vend_carrier`](super::vend_carrier), witnessed by the frame `Rc`. Never inspected.

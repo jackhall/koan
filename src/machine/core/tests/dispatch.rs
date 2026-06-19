@@ -4,13 +4,13 @@ use super::super::{RuntimeArena, Scope};
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
-use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
 use crate::machine::model::Carried;
 use crate::machine::{BindingIndex, LexicalFrame, ResolveOutcome};
+use crate::source::Spanned;
 
 fn body_a<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     Action::Done(Ok(Carried::Object(marker(ctx.scope, "a"))))
@@ -180,7 +180,7 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
 
 /// `((deep_call) + 1)` returns `Deferred` rather than `Unmatched`: the typed
 /// overload can't match the nested `Expression` strictly or tentatively, but
-/// eager evaluation of `(deep_call)` may produce a `Future(Number)` that a
+/// eager evaluation of `(deep_call)` may produce a `Spliced(Number)` that a
 /// post-Bind re-dispatch picks. The scheduler routes `Deferred` into its
 /// eager-sub loop instead of erroring.
 #[test]

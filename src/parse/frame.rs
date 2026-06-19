@@ -6,13 +6,13 @@
 //! variant additionally carries `sigil_cursor` so the outer `#(...)` / `$(...)`
 //! wrapper covers the sigil byte plus the body.
 
-use crate::source::{self, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::KError;
+use crate::source::{self, Span, Spanned};
 
 use super::dict_literal::{BraceContents, DictFrame};
 
-pub(super) enum Frame<'a> {
+pub(super) enum BracketFrame<'a> {
     /// `head: Some(_)` flags a `#(...)` / `$(...)` sigil; on close such a frame yields
     /// the `(QUOTE <body>)` / `(EVAL <body>)` AST shape rather than a bare Expression
     /// part, and `sigil_cursor` (set iff `head` is) anchors the outer span at the sigil.
@@ -33,7 +33,7 @@ pub(super) enum Frame<'a> {
     /// Opened by a glued `:(` sigil. The inner expression is stored verbatim and folded
     /// into [`ExpressionPart::SigiledTypeExpr`] — shape recognition is the dispatcher's
     /// job. `span_start` is the cursor of the leading `:`.
-    TypeExpr {
+    SigiledTypeExpr {
         expr: KExpression<'a>,
         span_start: u32,
     },
@@ -46,16 +46,16 @@ pub(super) enum Frame<'a> {
     },
 }
 
-impl<'a> Frame<'a> {
-    /// Spans are preserved on Expression and TypeExpr (whose payload is a
+impl<'a> BracketFrame<'a> {
+    /// Spans are preserved on Expression and SigiledTypeExpr (whose payload is a
     /// `Vec<Spanned<…>>`); List and Dict store bare parts so the span is dropped here.
     pub(super) fn push(&mut self, part: Spanned<ExpressionPart<'a>>) {
         match self {
-            Frame::Expression { expr, .. } => expr.parts.push(part),
-            Frame::List { items, .. } => items.push(part.value),
-            Frame::Dict { dict, .. } => dict.push(part.value),
-            Frame::TypeExpr { expr, .. } => expr.parts.push(part),
-            Frame::RecordTypeExpr { expr, .. } => expr.parts.push(part),
+            BracketFrame::Expression { expr, .. } => expr.parts.push(part),
+            BracketFrame::List { items, .. } => items.push(part.value),
+            BracketFrame::Dict { dict, .. } => dict.push(part.value),
+            BracketFrame::SigiledTypeExpr { expr, .. } => expr.parts.push(part),
+            BracketFrame::RecordTypeExpr { expr, .. } => expr.parts.push(part),
         }
     }
 
@@ -65,7 +65,7 @@ impl<'a> Frame<'a> {
     pub(super) fn into_part(self, end: u32) -> Result<Spanned<ExpressionPart<'a>>, KError> {
         let file = source::current();
         match self {
-            Frame::Expression {
+            BracketFrame::Expression {
                 mut expr,
                 head: None,
                 span_start,
@@ -85,7 +85,7 @@ impl<'a> Frame<'a> {
                     span,
                 ))
             }
-            Frame::Expression {
+            BracketFrame::Expression {
                 mut expr,
                 head: Some(head),
                 span_start,
@@ -118,14 +118,14 @@ impl<'a> Frame<'a> {
                     outer_span,
                 ))
             }
-            Frame::List { items, span_start } => {
+            BracketFrame::List { items, span_start } => {
                 let span = Span {
                     start: span_start,
                     end,
                 };
                 Ok(Spanned::at(ExpressionPart::ListLiteral(items), span))
             }
-            Frame::Dict { dict, span_start } => {
+            BracketFrame::Dict { dict, span_start } => {
                 let span = Span {
                     start: span_start,
                     end,
@@ -136,7 +136,7 @@ impl<'a> Frame<'a> {
                 };
                 Ok(Spanned::at(part, span))
             }
-            Frame::TypeExpr {
+            BracketFrame::SigiledTypeExpr {
                 mut expr,
                 span_start,
             } => {
@@ -155,7 +155,7 @@ impl<'a> Frame<'a> {
             // `:{x :Number}` → `RecordType(<field list>)` — a first-class part the
             // elaborator folds straight to `KType::Record`. The inner `KExpression` is the
             // bare `(x :Number, …)` field list; `span_start` is the leading `:`.
-            Frame::RecordTypeExpr {
+            BracketFrame::RecordTypeExpr {
                 mut expr,
                 span_start,
             } => {
@@ -174,16 +174,16 @@ impl<'a> Frame<'a> {
         }
     }
 
-    /// Expression and TypeExpr both close on `)`; the variant determines which
+    /// Expression and SigiledTypeExpr both close on `)`; the variant determines which
     /// builder runs in `into_part`.
     pub(super) fn matches_closer(&self, closer: char) -> bool {
         matches!(
             (self, closer),
-            (Frame::Expression { .. }, ')')
-                | (Frame::List { .. }, ']')
-                | (Frame::Dict { .. }, '}')
-                | (Frame::TypeExpr { .. }, ')')
-                | (Frame::RecordTypeExpr { .. }, '}')
+            (BracketFrame::Expression { .. }, ')')
+                | (BracketFrame::List { .. }, ']')
+                | (BracketFrame::Dict { .. }, '}')
+                | (BracketFrame::SigiledTypeExpr { .. }, ')')
+                | (BracketFrame::RecordTypeExpr { .. }, '}')
         )
     }
 }
@@ -191,27 +191,27 @@ impl<'a> Frame<'a> {
 /// A `)` reaching a List/Dict frame means the `[`/`{` was never closed; report it as
 /// an unclosed bracket pointing at the opener rather than a paren mismatch.
 pub(super) fn close_paren_to_part<'a>(
-    frame: Frame<'a>,
+    frame: BracketFrame<'a>,
     end: u32,
 ) -> Result<Spanned<ExpressionPart<'a>>, KError> {
     match frame {
-        Frame::Expression { .. } => frame.into_part(end),
-        Frame::TypeExpr { .. } => frame.into_part(end),
-        Frame::RecordTypeExpr { span_start, .. } => Err(KError::parse(
+        BracketFrame::Expression { .. } => frame.into_part(end),
+        BracketFrame::SigiledTypeExpr { .. } => frame.into_part(end),
+        BracketFrame::RecordTypeExpr { span_start, .. } => Err(KError::parse(
             "unclosed ':{': this record type was never closed with a matching '}'",
             Some(Span {
                 start: span_start,
                 end: span_start + 1,
             }),
         )),
-        Frame::List { span_start, .. } => Err(KError::parse(
+        BracketFrame::List { span_start, .. } => Err(KError::parse(
             "unclosed '[': this list literal was never closed with a matching ']'",
             Some(Span {
                 start: span_start,
                 end: span_start + 1,
             }),
         )),
-        Frame::Dict { span_start, .. } => Err(KError::parse(
+        BracketFrame::Dict { span_start, .. } => Err(KError::parse(
             "unclosed '{': this dict literal was never closed with a matching '}'",
             Some(Span {
                 start: span_start,

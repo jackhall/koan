@@ -1,4 +1,4 @@
-//! Keyworded type-constructor builtins reached through the `:(...)` sigil.
+//! Keyworded parameterized-type constructor builtins reached through the `:(...)` sigil.
 //! See [type-language-via-dispatch](../../design/typing/type-language-via-dispatch.md).
 //!
 //! - `LIST OF :Type` → `KTypeValue(KType::List(_))`
@@ -145,7 +145,7 @@ mod action_bodies {
     }
 }
 
-/// Walk the parameter list through the shared field-list parser (the same one STRUCT / UNION use),
+/// Walk the parameter list through the shared field-list parser (the same one UNION / NEWTYPE use),
 /// so nested parameterized param types like `xs :(LIST OF Number)` sub-Dispatch and capitalized
 /// FUNCTOR param names like `Ty` are accepted. Folds synchronously or defers via
 /// [`defer_field_list_action`] (no self-reference binder, no pending guard).

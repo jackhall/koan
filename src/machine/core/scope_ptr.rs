@@ -1,5 +1,5 @@
 //! `ScopePtr` — the single audited owner of the `Scope` lifetime-erasure that
-//! arena-stored carriers rely on. `CallArena`, `Module`, `Signature`, and `KFunction`
+//! arena-stored carriers rely on. `CallArena`, `Module`, `ModuleSignature`, and `KFunction`
 //! each hold a captured/defining scope whose real lifetime the borrow checker can't
 //! track across the arena's `'static` storage; they store a `ScopePtr<'a>` and re-attach
 //! the scope on access, so the transmute and the cast that erases it live in one place
@@ -9,7 +9,7 @@
 //! real `&'a Scope<'a>` and records that `'a` in `_brand`, so [`ScopePtr::reattach`] re-hands
 //! the same `'a` back as a **safe** method — the brand bounds every use of the pointer (and
 //! of the carrier holding it) to a lifetime the original borrow already proved live. The
-//! three carriers that own a real `'a` — `Module`, `Signature`, `KFunction` — re-attach
+//! three carriers that own a real `'a` — `Module`, `ModuleSignature`, `KFunction` — re-attach
 //! through `reattach` and carry no `unsafe`.
 //!
 //! Two lifetime-free carriers store a `ScopePtr<'static>` and must fabricate the content lifetime
@@ -21,7 +21,7 @@
 //! `'static` store through [`ScopePtr::erase_static`], a brand-dropping constructor that is *safe*
 //! to call (forgetting a lifetime cannot fabricate one); the fabrication hazard is deferred to the
 //! `unsafe` re-attach, witnessed by the carrier's pinning — the frame `Rc` (which, for a
-//! `YokedChild`, pins the ancestor arena via its `FrameStorage.outer` chain). The carriers that own a real `'a` — `Module`, `Signature`,
+//! `YokedChild`, pins the ancestor arena via its `FrameStorage.outer` chain). The carriers that own a real `'a` — `Module`, `ModuleSignature`,
 //! `KFunction` — route the safe [`ScopePtr::reattach`] and carry no `unsafe`.
 //!
 //! See [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
@@ -44,7 +44,7 @@ unsafe impl Reattachable for ScopeFamily {
 }
 
 /// A branded `Scope` pointer: its lifetime is erased to `'static` for storage in a
-/// lifetime-free (`CallArena`) or self-referential (`Module` / `Signature` / `KFunction`)
+/// lifetime-free (`CallArena`) or self-referential (`Module` / `ModuleSignature` / `KFunction`)
 /// carrier, while `_brand` records the `'a` the live borrow proved.
 ///
 /// The `PhantomData<&'a Scope<'a>>` brand does two jobs. It bounds every use of the

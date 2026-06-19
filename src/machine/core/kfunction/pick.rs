@@ -72,7 +72,7 @@ impl<'a> KFunction<'a> {
                     | (_, ExpressionPart::RecordType(_)) => {
                         // Speculative: assume the eager-evaluated result will type-match
                         // at late dispatch. SigiledTypeExpr / RecordType ride the Expression
-                        // path — sub-dispatch produces a type-side Future the slot validates.
+                        // path — sub-dispatch produces a type-side Spliced the slot validates.
                         eager_indices.push(i);
                     }
                     (_, other) => {

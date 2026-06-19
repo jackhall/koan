@@ -2,8 +2,8 @@
 //! a `Body` (an action `fn` pointer or captured user-defined `KExpression`), and the
 //! lexical scope captured at definition time.
 
-use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::source::Spanned;
 
 use crate::machine::core::scope_ptr::BoundedScopePtr;
 use crate::machine::core::{KError, KErrorKind, KFuture, Scope};

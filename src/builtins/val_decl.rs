@@ -11,11 +11,11 @@
 //! builtin leaf re-dispatch against decl_scope so a SIG-local `LET <name> = ...` shadow wins
 //! over the builtin table; structural carriers (`KFunction`, `List`, ...) are taken directly.
 
-use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::types::KKind;
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::{BindingIndex, KError, KErrorKind, Scope};
+use crate::source::Spanned;
 
 use super::{arg, kw, sig};
 

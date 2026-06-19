@@ -15,7 +15,7 @@ use crate::machine::{Scope, TraceFrame};
 
 use super::{arg, kw, sig};
 
-/// `Action`-harness twin of the legacy body: mints the child scope, dispatches the body block
+/// The MODULE body: mints the child scope, dispatches the body block
 /// against it (an `InScope` dep-finish dependency), and the finish installs the `KType::Module` identity into
 /// the parent scope.
 pub fn body<'a>(

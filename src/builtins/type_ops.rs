@@ -1,7 +1,7 @@
 //! Residual type-operation builtins — `TEMPLATE` (a higher-kinded type-constructor
 //! parameter) and the infix `WITH` signature specialization. The container and module
 //! type operations read as their plain-English surfaces instead: `:(LIST OF T)` /
-//! `:(MAP K -> V)` (see [`super::type_constructors`]) and the dotted `M.T` access (see
+//! `:(MAP K -> V)` (see [`super::parameterized_types`]) and the dotted `M.T` access (see
 //! [`super::attr`]). See [design/typing/scheduler.md](../../design/typing/scheduler.md).
 
 mod type_constructor;

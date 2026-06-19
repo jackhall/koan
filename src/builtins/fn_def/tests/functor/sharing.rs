@@ -10,7 +10,7 @@ use crate::machine::RuntimeArena;
 #[test]
 fn sharing_constraint_rejects_mismatched_module_type() {
     use crate::machine::model::ast::ExpressionPart;
-    use crate::machine::model::values::{Module, Signature};
+    use crate::machine::model::values::{Module, ModuleSignature};
     use crate::machine::model::KType;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
@@ -19,7 +19,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         scope,
         "OrderedSig".into(),
     ));
-    let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), sig_scope));
+    let sig = arena.alloc_signature(ModuleSignature::new("OrderedSig".into(), sig_scope));
     let sig_id = sig.sig_id();
 
     let child_a = arena.alloc_scope(crate::machine::Scope::child_under_module(
@@ -71,9 +71,9 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     // A module rides the type channel, so its satisfaction of a `Signature` slot is the
     // `accepts_part(Carried::Type(Module))` path; `matches_value` is value-only and rejects
     // modules outright.
-    assert!(slot.accepts_part(&ExpressionPart::Future(Carried::Type(m_num_obj))));
-    assert!(!slot.accepts_part(&ExpressionPart::Future(Carried::Type(m_str_obj))));
-    assert!(!slot.accepts_part(&ExpressionPart::Future(Carried::Type(m_none_obj))));
+    assert!(slot.accepts_part(&ExpressionPart::Spliced(Carried::Type(m_num_obj))));
+    assert!(!slot.accepts_part(&ExpressionPart::Spliced(Carried::Type(m_str_obj))));
+    assert!(!slot.accepts_part(&ExpressionPart::Spliced(Carried::Type(m_none_obj))));
 
     let child_d = arena.alloc_scope(crate::machine::Scope::child_under_module(
         scope,
@@ -90,7 +90,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         module: m_unascribed,
         frame: None,
     });
-    assert!(!slot.accepts_part(&ExpressionPart::Future(Carried::Type(m_unascribed_obj))));
+    assert!(!slot.accepts_part(&ExpressionPart::Spliced(Carried::Type(m_unascribed_obj))));
 }
 
 /// Pure-type pinned slots (no parameter references) resolve synchronously at

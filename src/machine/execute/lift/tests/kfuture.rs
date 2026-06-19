@@ -2,13 +2,13 @@
 
 use super::*;
 use crate::builtins::default_scope;
-use crate::source::Spanned;
 use crate::machine::model::types::Record;
 use crate::machine::model::values::ArgValue;
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::CallArena;
 use crate::parse::parse;
+use crate::source::Spanned;
 
 use super::{alloc_local_kf, defeat_fast_path, dispatch_for_test};
 
@@ -53,7 +53,7 @@ fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
     assert_eq!(Rc::strong_count(&dying.storage_rc()), strong_before);
 }
 
-/// A KFuture whose parsed parts contain a `Future(Carried::Object(_))` allocated in
+/// A KFuture whose parsed parts contain a `Spliced(Carried::Object(_))` allocated in
 /// the dying arena must lift with `frame: Some(rc)`.
 #[test]
 fn unanchored_kfuture_with_arena_borrow_does_anchor() {
@@ -85,7 +85,7 @@ fn unanchored_kfuture_with_arena_borrow_does_anchor() {
     future
         .parsed
         .parts
-        .push(Spanned::bare(ExpressionPart::Future(Carried::Object(
+        .push(Spanned::bare(ExpressionPart::Spliced(Carried::Object(
             inside,
         ))));
     let kf_obj = KObject::KFuture(future, None);
@@ -198,7 +198,7 @@ fn kfuture_parsed_expression_part_with_arena_borrow_anchors() {
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
     let inside: &KObject = dying.arena().alloc_object(KObject::Number(17.0));
-    let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Future(
+    let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Spliced(
         Carried::Object(inside),
     ))]);
     future
@@ -232,7 +232,7 @@ fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
     let inside: &KObject = dying.arena().alloc_object(KObject::Number(19.0));
-    let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Future(
+    let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Spliced(
         Carried::Object(inside),
     ))]);
     future.args.insert(
@@ -406,7 +406,7 @@ fn kfuture_bundle_arg_with_local_kmodule_anchors() {
     drop(obj);
 }
 
-/// A `parsed.parts` `ListLiteral` whose inner `Future` part points into
+/// A `parsed.parts` `ListLiteral` whose inner `Spliced` part points into
 /// the dying arena must drive anchor.
 #[test]
 fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
@@ -423,7 +423,7 @@ fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
         .parsed
         .parts
         .push(Spanned::bare(ExpressionPart::ListLiteral(vec![
-            ExpressionPart::Future(Carried::Object(inside)),
+            ExpressionPart::Spliced(Carried::Object(inside)),
         ])));
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying.storage_rc());
@@ -440,7 +440,7 @@ fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
 }
 
 /// A `parsed.parts` `DictLiteral` whose value side carries a borrowing
-/// `Future` part must drive anchor.
+/// `Spliced` part must drive anchor.
 #[test]
 fn kfuture_parsed_dictliteral_with_arena_borrow_anchors() {
     let arena = RuntimeArena::new();
@@ -457,7 +457,7 @@ fn kfuture_parsed_dictliteral_with_arena_borrow_anchors() {
         .parts
         .push(Spanned::bare(ExpressionPart::DictLiteral(vec![(
             ExpressionPart::Keyword("k".into()),
-            ExpressionPart::Future(Carried::Object(inside)),
+            ExpressionPart::Spliced(Carried::Object(inside)),
         )])));
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying.storage_rc());

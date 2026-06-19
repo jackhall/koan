@@ -16,7 +16,7 @@ impl<W: Workload> Scheduler<W> {
         &mut self,
         work: NodeWork<W>,
         payload: W::Payload,
-        cart: Rc<W::Frame>,
+        cart: Rc<W::Cart>,
         framed: bool,
     ) -> NodeId {
         let owned_edges = work_owned_edges(&work);

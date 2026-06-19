@@ -138,9 +138,9 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
 
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(
-        KExpression::new(vec![crate::source::Spanned::bare(
-            ExpressionPart::Keyword("DEFERTEST".into()),
-        )]),
+        KExpression::new(vec![crate::source::Spanned::bare(ExpressionPart::Keyword(
+            "DEFERTEST".into(),
+        ))]),
         scope,
     );
     sched.execute().unwrap();

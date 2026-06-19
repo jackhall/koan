@@ -29,7 +29,7 @@ pub fn body<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use super::branch_walk::{arm_tail, resolve_arm_contract};
     use crate::machine::core::kfunction::action::{
-        require_kexpression, Action, CatchCont, Dep, DepPlacement,
+        require_kexpression, Action, CatchContinue, Dep, DepPlacement,
     };
 
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "TRY", "expr"));
@@ -39,7 +39,7 @@ pub fn body<'a>(
     // chain out to the call-site scope.
     let body_scope: &'a Scope<'a> = ctx.scope.arena.alloc_scope(Scope::child_under(ctx.scope));
     let outer_frame = ctx.frame.map(|f| f.storage_rc());
-    let finish: CatchCont<'a> = Box::new(move |fctx, result| {
+    let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
         // On `ok`, `it` is the bare success value; on error, the per-variant payload Struct
         // unwrapped from `KError::to_tagged`'s Tagged carrier.
         let (tag, it_value, original_err): (String, KObject<'a>, Option<KError>) = match result {

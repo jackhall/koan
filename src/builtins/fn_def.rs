@@ -209,7 +209,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     //
     // Two keyworded overloads cover the return-type carrier — `TypeExprRef` for a bare
     // `Type(_)` (`-> Number`) and `SigiledTypeExpr` for a `:(…)` / dotted form
-    // (`-> Er.Type`, `-> :(Set WITH {…})`). `Future(KTypeValue(_))` post-dep-finish wakes
+    // (`-> Er.Type`, `-> :(Set WITH {…})`). `Spliced(KTypeValue(_))` post-dep-finish wakes
     // admit only against `TypeExprRef`. A third overload (below) carries the
     // anonymous `:{…}` record-schema signature.
     //

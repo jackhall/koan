@@ -37,7 +37,7 @@ fn elaborator_lowers_ktype_value_binding() {
 
 /// A parameter typed `Er :OrderedSig` lowers via `elaborate_type_expr` into
 /// `KType::Signature { sig, pinned_slots: [] }` with `sig.sig_id()` matching the
-/// declaring `Signature::sig_id()`. Also pins that the SIG and FN can land in the
+/// declaring `ModuleSignature::sig_id()`. Also pins that the SIG and FN can land in the
 /// same batch — the FN's signature elaboration parks on the SIG placeholder.
 #[test]
 fn fn_with_signature_bound_param_records_signature_bound_ktype() {
@@ -64,7 +64,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
                     assert_eq!(
                         sig.sig_id(),
                         sig_id,
-                        "sig_id must match Signature::sig_id()"
+                        "sig_id must match ModuleSignature::sig_id()"
                     );
                     assert_eq!(sig.path, "OrderedSig");
                     assert!(

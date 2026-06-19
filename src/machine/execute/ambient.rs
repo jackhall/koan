@@ -24,7 +24,7 @@ use super::runtime::KoanRuntime;
 /// driver is the workload, so the erasure the scheduler core needs is unnecessary here.
 #[derive(Default)]
 pub(in crate::machine::execute) struct AmbientContext {
-    /// TraceFrame `Rc` of the slot currently being executed. See
+    /// Active per-call cart (`Rc<CallArena>`) of the slot currently being executed. See
     /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
     active_frame: Option<Rc<CallArena>>,
     /// Per-slot reserve frame for the running step. `None` between slot steps. See
@@ -160,7 +160,7 @@ impl<'run> KoanRuntime<'run> {
     /// per step by [`Self::enter_slot_step`]. The single accessor the workload reads its
     /// name-resolution state back through. `None` between slot steps.
     pub(in crate::machine::execute) fn active_payload(&self) -> Option<&NodePayload> {
-        self.ambient.active_payload.as_ref()
+        self.ambient.active_payload()
     }
 
     /// Whether a slot step is currently installed (a non-`None` ambient payload). The workload reads
@@ -180,7 +180,7 @@ impl<'run> KoanRuntime<'run> {
     /// re-anchored scope borrow to. Mirrors [`Self::current_frame`] but hands back a borrow, not a
     /// clone.
     pub(in crate::machine::execute) fn active_frame_ref(&self) -> Option<&Rc<CallArena>> {
-        self.ambient.active_frame.as_ref()
+        self.ambient.active_frame_ref()
     }
 
     /// Install `frame` as the ambient cart and return the previous one — the transient save/restore

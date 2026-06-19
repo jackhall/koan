@@ -11,7 +11,7 @@
 //!
 //! Generic over a single [`Workload`] `W`: an opaque per-node payload `W::Payload` (persisted across
 //! a slot's steps), an inter-node value `W::Value` passed along dep edges, a terminal error
-//! `W::Error`, a per-node memory frame `W::Frame` managed by `Rc`, a per-node return `W::Contract`,
+//! `W::Error`, a per-node memory cart `W::Cart` managed by `Rc`, a per-node return `W::Contract`,
 //! and a one-shot `W::Continuation`. The scheduler stores all of these and hands them back but
 //! inspects none. The Koan interpreter ([`crate::machine`]) is the sole workload; it instantiates
 //! the scheduler and drives it through the inherent-method contract.

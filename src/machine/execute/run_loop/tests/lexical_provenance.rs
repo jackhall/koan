@@ -6,9 +6,9 @@ use std::rc::Rc;
 
 use crate::builtins::default_scope;
 use crate::builtins::test_support::parse_one;
-use crate::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::RuntimeArena;
+use crate::source::Spanned;
 
 use super::let_expr;
 use crate::machine::execute::KoanRuntime;

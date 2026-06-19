@@ -275,7 +275,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 ///
 /// Splice protocol: each entry in `inputs.sub_dispatches` becomes a `Dep::Dispatch`;
 /// the finish closure splices each result into `signature_expr.parts[slot_idx]` as
-/// `Future(obj)` before re-running `parse_fn_param_list` against the now-final scope.
+/// `Spliced(obj)` before re-running `parse_fn_param_list` against the now-final scope.
 pub(crate) fn defer<'a>(
     signature_expr: KExpression<'a>,
     inputs: DeferredInputs<'a>,
@@ -321,7 +321,7 @@ pub(crate) fn defer<'a>(
                     carrier.ktype().name(),
                 )))));
             }
-            spliced_parts[slot_idx].value = ExpressionPart::Future(carrier);
+            spliced_parts[slot_idx].value = ExpressionPart::Spliced(carrier);
         }
         let spliced_signature = KExpression::new(spliced_parts);
         let return_type: ReturnType<'a> =
