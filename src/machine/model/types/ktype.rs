@@ -104,7 +104,7 @@ pub enum KType<'a> {
     /// `SigiledTypeExpr` part. Captures it raw (via `resolve_for`, as the inner
     /// `KObject::KExpression`) instead of eager-sub-dispatching, so a builtin can defer a
     /// param-referencing dotted/sigil return (`-> Er.Type`) to per-call elaboration. More
-    /// specific than [`KType::OfKind(KKind::Proper)`], so it wins the overload when both admit.
+    /// specific than [`KType::OfKind(KKind::ProperType)`], so it wins the overload when both admit.
     SigiledTypeExpr,
     /// Lazy slot for a `:{…}` record type — the sibling of [`KType::SigiledTypeExpr`] for a
     /// [`ExpressionPart::RecordType`](crate::machine::model::ast::ExpressionPart::RecordType)
@@ -279,7 +279,7 @@ impl<'a> KType<'a> {
     /// Classify a *type* into its shallow dispatch [`KKind`] — the value-side direction of
     /// `OfKind`. A module is `Module`, a signature is `Signature`, a user-declared nominal is
     /// its family (`Tagged` / `NewType` / `TypeConstructor`, read off the set member it
-    /// references), and every other type is `Proper`. Never returns `KKind::Any` (a slot-only
+    /// references), and every other type is `Proper`. Never returns `KKind::AnyType` (a slot-only
     /// expectation). Applied to the type a type value carries — or a runtime value's
     /// `ktype()` — to match it against an `OfKind` slot.
     pub fn kind_of(&self) -> KKind {
@@ -292,7 +292,7 @@ impl<'a> KType<'a> {
             KType::SetRef { set, index } => set.member(*index).kind,
             KType::Variant { set, index, .. } => set.member(*index).kind,
             KType::ConstructorApply { ctor, .. } => ctor.kind_of(),
-            _ => KKind::Proper,
+            _ => KKind::ProperType,
         }
     }
 }

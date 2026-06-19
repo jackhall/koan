@@ -209,7 +209,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     //
     // Two keyworded overloads cover the return-type carrier — `ProperType` for a bare
     // `Type(_)` (`-> Number`) and `SigiledTypeExpr` for a `:(…)` / dotted form
-    // (`-> Er.Type`, `-> :(Set WITH {…})`). `Spliced(KTypeValue(_))` post-dep-finish wakes
+    // (`-> Er.Type`, `-> :(Set WITH {…})`). `Spliced(Carried::Type(_))` post-dep-finish wakes
     // admit only against `ProperType`. A third overload (below) carries the
     // anonymous `:{…}` record-schema signature.
     //
@@ -232,7 +232,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("FN"),
                 arg("signature", KType::KExpression),
                 kw("->"),
-                arg("return_type", KType::OfKind(KKind::Proper)),
+                arg("return_type", KType::OfKind(KKind::ProperType)),
                 kw("="),
                 arg("body", KType::KExpression),
             ],
@@ -264,9 +264,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("FN"),
-                arg("signature", KType::OfKind(KKind::Proper)),
+                arg("signature", KType::OfKind(KKind::ProperType)),
                 kw("->"),
-                arg("return_type", KType::OfKind(KKind::Proper)),
+                arg("return_type", KType::OfKind(KKind::ProperType)),
                 kw("="),
                 arg("body", KType::KExpression),
             ],

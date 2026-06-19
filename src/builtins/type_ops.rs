@@ -17,17 +17,17 @@ use super::{arg, kw, sig};
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let template_sig = || {
         sig(
-            KType::OfKind(KKind::Proper),
-            vec![kw("TEMPLATE"), arg("param", KType::OfKind(KKind::Proper))],
+            KType::OfKind(KKind::ProperType),
+            vec![kw("TEMPLATE"), arg("param", KType::OfKind(KKind::ProperType))],
         )
     };
     // Infix `<sig> WITH {Slot = Type, …}`. A lone binary
     // keyword classifies as `Keyworded` (leading-slot signature like `FROM` / `:|`), and
-    // the record-literal `bindings` operand eager-evaluates so its `(name, KTypeValue)`
+    // the record-literal `bindings` operand eager-evaluates so its `(name, Held::Type)`
     // fields read directly — see [`with::body`].
     let with_sig = || {
         sig(
-            KType::OfKind(KKind::Proper),
+            KType::OfKind(KKind::ProperType),
             vec![
                 arg("sig", KType::OfKind(KKind::Signature)),
                 kw("WITH"),

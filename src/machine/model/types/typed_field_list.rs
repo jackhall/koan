@@ -18,7 +18,7 @@ pub enum FieldListOutcome<'a> {
     Done(Vec<(String, KType<'a>)>),
     /// `sub_dispatches` carries each sigil field's wrapped expression in DFS walk
     /// order. The caller schedules them in that order and, on the dep-finish re-walk,
-    /// feeds the resolved `KObject::KTypeValue`s back through a [`ResultFeed`] — the walk
+    /// feeds the resolved `Carried::Type`s back through a [`ResultFeed`] — the walk
     /// re-descends in the same order, so no slot index is needed.
     Pending {
         park_producers: Vec<NodeId>,
@@ -61,7 +61,7 @@ impl<'b, 'a> ResultFeed<'b, 'a> {
 ///
 /// `results` is `None` on the first walk (each sigil field schedules a sub-Dispatch,
 /// collected into `Pending.sub_dispatches`) and `Some(iter)` on the dep-finish re-walk
-/// (each sigil field consumes the next resolved `KObject::KTypeValue` from `iter` in DFS
+/// (each sigil field consumes the next resolved `Carried::Type` from `iter` in DFS
 /// walk order instead of re-scheduling). Because the re-walk re-descends the field list
 /// in the same deterministic order the first walk produced the subs, positional
 /// consumption needs no slot index — and nested field-lists fall out for free.
@@ -174,7 +174,7 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
 
 /// Pre-resolve self-references inside a keyworded sigil body before it sub-Dispatches
 /// into the standalone dispatcher, which carries no SCC threading context. Every bare
-/// `Type(name)` leaf whose `name` is in `threaded` becomes a `Spliced(KTypeValue(
+/// `Type(name)` leaf whose `name` is in `threaded` becomes a `Spliced(Carried::Type(
 /// RecursiveRef(name)))` carrier — the same type-side transport `:(LIST OF Number)`
 /// rides — so `STRUCT Tree = (children :(LIST OF Tree))` lowers `Tree` to
 /// `RecursiveRef("Tree")` instead of parking on its own placeholder and closing a

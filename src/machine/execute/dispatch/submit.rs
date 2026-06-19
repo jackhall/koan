@@ -2,7 +2,7 @@
 //! dispatch slot. It owns the AST-shaped work the scheduler must not — binder-install (which
 //! name/overload a binder-shaped call declares), the recursive pre-submission of eager argument
 //! slots, and the submission-time placeholder install that makes forward references park. The
-//! scheduler exposes only [`Scheduler::submit_node`] (a generic slot allocator) and the
+//! scheduler exposes only [`Scheduler::alloc_node`] (a generic slot allocator) and the
 //! `Scope::install_*` primitives; this function orchestrates them.
 //!
 //! Binders can appear as arbitrary nested subexpressions, so this runs on *every* dispatch
@@ -98,10 +98,10 @@ impl<'run> KoanRuntime<'run> {
     /// Submit `expr` as a dispatch slot against `scope` (with handle `node_scope` and
     /// `explicit_chain`, resolved by the calling submission wrapper). Computes binder-install,
     /// pre-submits the eager argument slots as sub-dispatches (so a nested binder's placeholder
-    /// installs at the same outermost step), allocates the slot via [`Scheduler::submit_node`], then
+    /// installs at the same outermost step), allocates the slot via [`Scheduler::alloc_node`], then
     /// stamps the binder's placeholder on the scope — before the slot is ever popped, so a later
     /// sibling parks rather than surfacing `UnboundName` / `DispatchFailed`.
-    pub(in crate::machine::execute) fn submit_dispatch<'ast: 'step, 'step>(
+    pub(in crate::machine::execute) fn submit_expression<'ast: 'step, 'step>(
         &mut self,
         expr: KExpression<'ast>,
         scope: &'step Scope<'step>,
@@ -109,7 +109,7 @@ impl<'run> KoanRuntime<'run> {
         explicit_chain: Option<std::rc::Rc<LexicalFrame>>,
     ) -> NodeId {
         // Resolve the chain once so the recursive pre-subs inherit the parent's lexical chain (and
-        // therefore its visibility index); pass it back to `submit_node` explicitly so it does not
+        // therefore its visibility index); pass it back to `alloc_node` explicitly so it does not
         // re-derive a detached one.
         let chain = explicit_chain
         .or_else(|| self.active_payload().map(|p| p.chain.clone()))
@@ -127,7 +127,7 @@ impl<'run> KoanRuntime<'run> {
                     };
                     let sub_expr = (**boxed).clone();
                     let sub_id =
-                        self.submit_dispatch(sub_expr, scope, node_scope, Some(chain.clone()));
+                        self.submit_expression(sub_expr, scope, node_scope, Some(chain.clone()));
                     subs.push((i, sub_id));
                 }
                 subs
@@ -135,7 +135,7 @@ impl<'run> KoanRuntime<'run> {
             None => Vec::new(),
         };
         let (cart, framed) = self.submission_cart();
-        let id = self.sched.submit_node(
+        let id = self.sched.alloc_node(
             super::decide_with_presubs(expr, pre_subs),
             NodePayload {
                 scope: node_scope,

@@ -22,7 +22,7 @@ impl<'a> KType<'a> {
             "List" => Some(KType::List(Box::new(KType::Any))),
             "Dict" => Some(KType::Dict(Box::new(KType::Any), Box::new(KType::Any))),
             "KExpression" => Some(KType::KExpression),
-            "Type" => Some(KType::OfKind(KKind::Any)),
+            "Type" => Some(KType::OfKind(KKind::AnyType)),
             "Module" => Some(KType::OfKind(KKind::Module)),
             "Signature" => Some(KType::OfKind(KKind::Signature)),
             "Any" => Some(KType::Any),
@@ -32,7 +32,7 @@ impl<'a> KType<'a> {
 
     /// Lower a parser `TypeIdentifier` into a `KType` against the builtin table only — no
     /// scope-aware resolver. The leaf name goes through [`KType::from_name`]; unknown
-    /// names surface as `Err(_)`, and the caller either falls back to a `TypeNameRef`
+    /// names surface as `Err(_)`, and the caller either falls back to a `KType::Unresolved`
     /// carrier or routes through the scheduler-aware
     /// [`crate::machine::model::types::elaborate_type_identifier`].
     pub fn from_type_identifier(t: &TypeIdentifier) -> Result<KType<'a>, String> {

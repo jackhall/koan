@@ -85,7 +85,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             kw("TRY"),
             arg("expr", KType::KExpression),
             kw("->"),
-            arg("return_type", KType::OfKind(KKind::Proper)),
+            arg("return_type", KType::OfKind(KKind::ProperType)),
             kw("WITH"),
             arg("branches", KType::KExpression),
         ],

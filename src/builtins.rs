@@ -169,7 +169,7 @@ pub fn default_scope<'a>(
     );
     scope.register_type(
         "Type".into(),
-        KType::OfKind(KKind::Any),
+        KType::OfKind(KKind::AnyType),
         BindingIndex::BUILTIN,
     );
     scope.register_type(

@@ -242,21 +242,21 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // fast lane via `constructors::dispatch_construct_newtype`.
     let scalar_sig = || {
         sig(
-            KType::OfKind(KKind::Any),
+            KType::OfKind(KKind::AnyType),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::OfKind(KKind::Proper)),
+                arg("name", KType::OfKind(KKind::ProperType)),
                 kw("="),
-                arg("repr", KType::OfKind(KKind::Proper)),
+                arg("repr", KType::OfKind(KKind::ProperType)),
             ],
         )
     };
     let sigil_sig = || {
         sig(
-            KType::OfKind(KKind::Any),
+            KType::OfKind(KKind::AnyType),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::OfKind(KKind::Proper)),
+                arg("name", KType::OfKind(KKind::ProperType)),
                 kw("="),
                 arg("repr", KType::SigiledTypeExpr),
             ],
@@ -264,10 +264,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     };
     let record_sig = || {
         sig(
-            KType::OfKind(KKind::Any),
+            KType::OfKind(KKind::AnyType),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::OfKind(KKind::Proper)),
+                arg("name", KType::OfKind(KKind::ProperType)),
                 kw("="),
                 arg("repr", KType::RecordType),
             ],

@@ -176,7 +176,7 @@ impl<'step> KoanRuntime<'step> {
             }
             ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
                 // A `:(...)` / `:{…}` type value is a type-context sub-Dispatch to a
-                // `KTypeValue`, like the keyworded eager-subs path — it cannot `resolve()`.
+                // `Carried::Type`, like the keyworded eager-subs path — it cannot `resolve()`.
                 let wrapped =
                     crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part)]);
                 Slot::owned(deps, self.dispatch_in_own_scope(wrapped))

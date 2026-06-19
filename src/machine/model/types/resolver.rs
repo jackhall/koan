@@ -131,7 +131,7 @@ pub fn elaborate_type_identifier<'a>(el: &mut Elaborator<'_, 'a>, t: &TypeIdenti
 /// Outcome of [`finalize_nominal_member`].
 pub enum SealOutcome<'a> {
     /// The member sealed (or was already sealed); the arena reference is its `SetRef`
-    /// identity, ready to wrap in a `KObject::KTypeValue`.
+    /// identity, ready to wrap in a `Carried::Type`.
     Sealed(&'a KType<'a>),
     /// A transient `RecursiveRef(name)` named no set member — a sealing bug surfaced as a
     /// shape error rather than a dangling reference.

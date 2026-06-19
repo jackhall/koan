@@ -396,7 +396,7 @@ pub(in crate::machine::execute) fn decide<'step>(
 }
 
 /// Birth dispatch [`NodeWork`](super::nodes::NodeWork) carrying the dispatch layer's pre-submitted nested sub-Dispatches
-/// (computed by [`submit_dispatch`]).
+/// (computed by [`submit_expression`]).
 pub(in crate::machine::execute) fn decide_with_presubs<'step>(
     expr: KExpression<'step>,
     pre_subs: Vec<(usize, NodeId)>,

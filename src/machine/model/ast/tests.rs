@@ -26,7 +26,7 @@ fn parts_of(items: Vec<ExpressionPart<'static>>) -> Vec<Spanned<ExpressionPart<'
 #[test]
 fn resolve_for_lowers_builtin_leaf_to_type_arm() {
     let part: ExpressionPart<'static> = ExpressionPart::Type(TypeIdentifier::leaf("Number".into()));
-    let slot = KType::OfKind(KKind::Proper);
+    let slot = KType::OfKind(KKind::ProperType);
     match part.resolve_for(&slot) {
         ArgValue::Type(kt) => assert_eq!(kt, KType::Number),
         _ => panic!("expected a Type-arm carrier"),
@@ -36,7 +36,7 @@ fn resolve_for_lowers_builtin_leaf_to_type_arm() {
 #[test]
 fn resolve_for_defers_user_bound_leaf_to_unresolved() {
     let part: ExpressionPart<'static> = ExpressionPart::Type(TypeIdentifier::leaf("MyType".into()));
-    let slot = KType::OfKind(KKind::Proper);
+    let slot = KType::OfKind(KKind::ProperType);
     let r = part.resolve_for(&slot);
     assert!(matches!(r, ArgValue::Type(KType::Unresolved(_))));
 }

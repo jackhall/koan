@@ -44,7 +44,7 @@ pub(crate) enum ParamListOutcome<'a> {
     Done(Vec<SignatureElement<'a>>),
     /// One or more parameter slots couldn't elaborate synchronously. The caller schedules
     /// a `AwaitDeps` over `park_producers` and any sub-Dispatches; the closure splices each
-    /// sub-Dispatch's `KObject::KTypeValue` result into the corresponding slot of
+    /// sub-Dispatch's `Carried::Type` result into the corresponding slot of
     /// `signature_expr.parts` (replacing `Expression(_)` with `Spliced(obj)`) and re-runs
     /// `parse_fn_param_list`.
     Pending {

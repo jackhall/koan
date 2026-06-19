@@ -489,7 +489,7 @@ overloads under one head keyword (e.g. two `FN (PICK xs :A) ...` /
 `placeholders[name]` slot. The two channels are mutually exclusive per
 binder: each binder uses exactly one. The submission walk reifies the
 choice as a
-[`BinderKey`](../src/scheduler/submit.rs) enum
+[`BinderKey`](../src/scheduler/alloc.rs) enum
 (`Name(String)` vs. `Bucket(UntypedKey)`) so the dichotomy rides in
 the type rather than as a two-Option convention.
 
@@ -602,7 +602,7 @@ Statement indices are per-`enter_block` call: each call to
 [`KoanRuntime::enter_block`](../src/machine/execute/runtime/submit.rs) mints
 chain frames at indices `1..N` for the N statements it submits. A REPL
 or test fixture that submits without an ambient chain (the
-[`Scheduler::add`](../src/scheduler/submit.rs) auto-root
+[`Scheduler::add`](../src/scheduler/alloc.rs) auto-root
 branch) gets [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs)
 — a chain that mentions no real scope, so the visibility predicate's
 `index_for → None ⇒ complete` arm makes every binding in the target
@@ -830,7 +830,7 @@ The rails the dispatch driver feeds:
   extractor, the driver appends a `(NodeId(idx), BindingIndex)` entry
   into `pending_overloads[bucket]` on the same scope. Each binder uses
   exactly one of the two channels — the `BinderKey` enum in
-  [`submit.rs`](../src/scheduler/submit.rs) makes the
+  [`submit.rs`](../src/scheduler/alloc.rs) makes the
   dichotomy a type-level fact. Both installs are lenient against the
   matching submission-time install (see [Submission-time binder install
   and recursive sub-Dispatch](#submission-time-binder-install-and-recursive-sub-dispatch)
@@ -1252,7 +1252,7 @@ statements as dispatch nodes:
   lexical chain).
 
 The "every dispatched node has a chain" invariant is an `expect` in
-[`Scheduler::submit_node`](../src/scheduler/submit.rs); the
+[`Scheduler::submit_node`](../src/scheduler/alloc.rs); the
 public `dispatch_in_scope` entry auto-roots a chain when no ambient one is present
 via [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs) (so
 REPL-style submissions outside `enter_block` see every prior bind in the target

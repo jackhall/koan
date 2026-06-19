@@ -170,7 +170,7 @@ impl<'a> ExpressionPart<'a> {
         if let ExpressionPart::Spliced(Carried::Type(kt)) = self {
             return ArgValue::Type((*kt).clone());
         }
-        if let (ExpressionPart::Type(t), KType::OfKind(KKind::Proper)) = (self, slot) {
+        if let (ExpressionPart::Type(t), KType::OfKind(KKind::ProperType)) = (self, slot) {
             let kt =
                 KType::<'a>::from_type_identifier(t).unwrap_or_else(|_| KType::Unresolved(t.clone()));
             return ArgValue::Type(kt);

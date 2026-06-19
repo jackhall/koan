@@ -108,6 +108,7 @@ digraph {
     "koan::parse::triple_list" [label="koan::parse::triple_list"];
     "koan::parse::whitespace" [label="koan::parse::whitespace"];
     "koan::scheduler" [label="koan::scheduler"];
+    "koan::scheduler::alloc" [label="koan::scheduler::alloc"];
     "koan::scheduler::dep_graph" [label="koan::scheduler::dep_graph"];
     "koan::scheduler::erase" [label="koan::scheduler::erase"];
     "koan::scheduler::lifecycle" [label="koan::scheduler::lifecycle"];
@@ -115,7 +116,6 @@ digraph {
     "koan::scheduler::node_store" [label="koan::scheduler::node_store"];
     "koan::scheduler::nodes" [label="koan::scheduler::nodes"];
     "koan::scheduler::splice" [label="koan::scheduler::splice"];
-    "koan::scheduler::submit" [label="koan::scheduler::submit"];
     "koan::scheduler::work_queues" [label="koan::scheduler::work_queues"];
     "koan::scheduler::workload" [label="koan::scheduler::workload"];
     "koan::source" [label="koan::source"];
@@ -228,6 +228,7 @@ digraph {
     "koan::parse" -> "koan::parse::tokens" [label="owns", style="solid"];
     "koan::parse" -> "koan::parse::triple_list" [label="owns", style="solid"];
     "koan::parse" -> "koan::parse::whitespace" [label="owns", style="solid"];
+    "koan::scheduler" -> "koan::scheduler::alloc" [label="owns", style="solid"];
     "koan::scheduler" -> "koan::scheduler::dep_graph" [label="owns", style="solid"];
     "koan::scheduler" -> "koan::scheduler::erase" [label="owns", style="solid"];
     "koan::scheduler" -> "koan::scheduler::lifecycle" [label="owns", style="solid"];
@@ -235,7 +236,6 @@ digraph {
     "koan::scheduler" -> "koan::scheduler::node_store" [label="owns", style="solid"];
     "koan::scheduler" -> "koan::scheduler::nodes" [label="owns", style="solid"];
     "koan::scheduler" -> "koan::scheduler::splice" [label="owns", style="solid"];
-    "koan::scheduler" -> "koan::scheduler::submit" [label="owns", style="solid"];
     "koan::scheduler" -> "koan::scheduler::work_queues" [label="owns", style="solid"];
     "koan::scheduler" -> "koan::scheduler::workload" [label="owns", style="solid"];
     "koan::builtins" -> "koan" [label="uses", style="dashed"];
@@ -889,6 +889,9 @@ digraph {
     "koan::parse::whitespace" -> "koan::parse" [label="uses", style="dashed"];
     "koan::parse::whitespace" -> "koan::parse::quotes" [label="uses", style="dashed"];
     "koan::parse::whitespace" -> "koan::source" [label="uses", style="dashed"];
+    "koan::scheduler::alloc" -> "koan::scheduler" [label="uses", style="dashed"];
+    "koan::scheduler::alloc" -> "koan::scheduler::dep_graph" [label="uses", style="dashed"];
+    "koan::scheduler::alloc" -> "koan::scheduler::nodes" [label="uses", style="dashed"];
     "koan::scheduler::dep_graph" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::scheduler::dep_graph" -> "koan::scheduler::nodes" [label="uses", style="dashed"];
     "koan::scheduler::erase" -> "koan::scheduler" [label="uses", style="dashed"];
@@ -897,9 +900,6 @@ digraph {
     "koan::scheduler::node_store" -> "koan::scheduler::nodes" [label="uses", style="dashed"];
     "koan::scheduler::nodes" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::scheduler::splice" -> "koan::scheduler" [label="uses", style="dashed"];
-    "koan::scheduler::submit" -> "koan::scheduler" [label="uses", style="dashed"];
-    "koan::scheduler::submit" -> "koan::scheduler::dep_graph" [label="uses", style="dashed"];
-    "koan::scheduler::submit" -> "koan::scheduler::nodes" [label="uses", style="dashed"];
     "koan::scheduler::workload" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::source" -> "koan" [label="uses", style="dashed"];
 }

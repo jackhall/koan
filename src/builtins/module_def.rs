@@ -88,7 +88,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         KType::OfKind(KKind::Module),
         vec![
             kw("MODULE"),
-            arg("name", KType::OfKind(KKind::Proper)),
+            arg("name", KType::OfKind(KKind::ProperType)),
             kw("="),
             arg("body", KType::KExpression),
         ],

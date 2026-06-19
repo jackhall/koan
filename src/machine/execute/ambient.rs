@@ -219,7 +219,7 @@ impl<'run> KoanRuntime<'run> {
     /// submissions (no active frame) fall back to the run frame, so every slot carries a cart and
     /// the active frame is `Some` during its step. `run_frame` is established by `ensure_run_frame`
     /// before the first submission, so the fallback is always `Some`. The `framed` flag (the active
-    /// frame was present) drives `submit_node`'s fresh-vs-in-flight queue split.
+    /// frame was present) drives `alloc_node`'s fresh-vs-in-flight queue split.
     pub(in crate::machine::execute) fn submission_cart(&self) -> (Rc<CallArena>, bool) {
         let framed = self.ambient.active_frame.is_some();
         let cart = self.ambient.active_frame.clone().unwrap_or_else(|| {

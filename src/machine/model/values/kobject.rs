@@ -17,8 +17,8 @@ mod tests;
 /// The sole constructor [`Self::peel`] collapses any `Wrapped` layer; by induction peeling
 /// one level suffices. Encodes the newtype-over-newtype collapse invariant in the type
 /// rather than caller discipline. The payload rides an `Rc` (not an arena `&'a` reference)
-/// so a `Wrapped` carrier lifts across a dying frame by `Rc::clone` — the lift-stability the
-/// retired `KObject::Struct`'s `Rc<IndexMap>` fields had.
+/// so a `Wrapped` carrier lifts across a dying frame by `Rc::clone` — the lift-stability a
+/// carrier needs to outlive the frame it was born in.
 #[derive(Clone)]
 pub struct NonWrappedRef<'a>(Rc<KObject<'a>>);
 

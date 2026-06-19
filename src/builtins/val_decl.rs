@@ -26,13 +26,13 @@ fn typeexpr_from_carrier<'a>(kt: &KType<'a>) -> CarrierForm<'a> {
         | KType::Str
         | KType::Bool
         | KType::Null
-        | KType::OfKind(KKind::Any)
+        | KType::OfKind(KKind::AnyType)
         | KType::OfKind(KKind::Signature)
         | KType::OfKind(KKind::Module)
         | KType::Any
         | KType::Identifier
         | KType::KExpression
-        | KType::OfKind(KKind::Proper) => CarrierForm::Leaf(TypeIdentifier::leaf(kt.name())),
+        | KType::OfKind(KKind::ProperType) => CarrierForm::Leaf(TypeIdentifier::leaf(kt.name())),
         _ => CarrierForm::Direct(kt.clone()),
     }
 }
@@ -108,7 +108,7 @@ pub fn body<'a>(
             return finalize_val(ctx.scope, name, kt, bind_index);
         }
         // Both leaf and raw carriers re-dispatch the leaf against decl_scope so a SIG-local
-        // `LET <name> = ...` shadow wins over the builtin table. A `TypeNameRef` carrier always
+        // `LET <name> = ...` shadow wins over the builtin table. A `KType::Unresolved` carrier always
         // holds a bare-leaf `TypeIdentifier` (parameterized surface forms sub-Dispatch earlier).
         CarrierForm::Leaf(te) => (te, ()),
         CarrierForm::Raw(te) => (te, ()),
@@ -174,7 +174,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         vec![
             kw("VAL"),
             arg("name", KType::Identifier),
-            arg("ty", KType::OfKind(KKind::Proper)),
+            arg("ty", KType::OfKind(KKind::ProperType)),
         ],
     );
     crate::builtins::register_builtin_full(

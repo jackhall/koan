@@ -49,7 +49,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("FUNCTOR"),
                 arg("signature", KType::KExpression),
                 kw("->"),
-                arg("return_type", KType::OfKind(KKind::Proper)),
+                arg("return_type", KType::OfKind(KKind::ProperType)),
                 kw("="),
                 arg("body", KType::KExpression),
             ],

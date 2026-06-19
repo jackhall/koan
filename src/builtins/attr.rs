@@ -337,7 +337,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("ATTR"),
-                arg("s", KType::OfKind(KKind::Proper)),
+                arg("s", KType::OfKind(KKind::ProperType)),
                 arg("field", KType::Identifier),
             ],
         )
@@ -347,8 +347,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("ATTR"),
-                arg("s", KType::OfKind(KKind::Proper)),
-                arg("field", KType::OfKind(KKind::Proper)),
+                arg("s", KType::OfKind(KKind::ProperType)),
+                arg("field", KType::OfKind(KKind::ProperType)),
             ],
         )
     };
@@ -359,7 +359,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             vec![
                 kw("ATTR"),
                 arg("s", KType::OfKind(KKind::Module)),
-                arg("field", KType::OfKind(KKind::Proper)),
+                arg("field", KType::OfKind(KKind::ProperType)),
             ],
         )
     };

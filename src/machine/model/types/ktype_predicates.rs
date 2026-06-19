@@ -23,13 +23,13 @@ impl<'a> KType<'a> {
         matches!(
             self,
             KType::Signature { .. }
-                | KType::OfKind(KKind::Proper | KKind::Any | KKind::Module | KKind::Signature)
+                | KType::OfKind(KKind::ProperType | KKind::AnyType | KKind::Module | KKind::Signature)
         )
     }
 
     /// Admissibility predicate for the FUNCTOR return-type slot. See
     /// [design/typing/functors.md](../../../../design/typing/functors.md).
-    /// `KType::OfKind(KKind::Any)` is intentionally excluded — bare `Type` denotes "any type
+    /// `KType::OfKind(KKind::AnyType)` is intentionally excluded — bare `Type` denotes "any type
     /// value" rather than "a module or signature value", and the design pins
     /// the seam to the narrower set.
     pub fn is_admissible_functor_return(&self) -> bool {
@@ -55,8 +55,8 @@ impl<'a> KType<'a> {
         if matches!(other, Any) && !matches!(self, Any) {
             return true;
         }
-        if matches!(other, Identifier | OfKind(KKind::Proper))
-            && !matches!(self, Identifier | OfKind(KKind::Proper) | Any)
+        if matches!(other, Identifier | OfKind(KKind::ProperType))
+            && !matches!(self, Identifier | OfKind(KKind::ProperType) | Any)
         {
             return true;
         }
@@ -246,7 +246,7 @@ impl<'a> KType<'a> {
             // (`OfKind(Proper) == ktype()`); every other kind — modules / signatures (which
             // ride the type channel) and the nominal families — admits no runtime instance.
             KType::OfKind(k) => match k {
-                KKind::Proper | KKind::Any => *self == obj.ktype(),
+                KKind::ProperType | KKind::AnyType => *self == obj.ktype(),
                 KKind::Module
                 | KKind::Signature
                 | KKind::Tagged
@@ -318,7 +318,7 @@ impl<'a> KType<'a> {
         // carries its identity directly; every other type fills the `OfKind(Proper)` marker.
         let carrier_ktype = match t {
             KType::Module { .. } | KType::Signature { .. } => t.clone(),
-            _ => KType::OfKind(KKind::Proper),
+            _ => KType::OfKind(KKind::ProperType),
         };
         match self {
             KType::Any => true,
@@ -431,7 +431,7 @@ impl<'a> KType<'a> {
             // automatic — `OfKind(Proper)` never admits a module, so a chained `[ATTR <m>
             // <field>]` call cannot tie between `body_module` and `body_type_lhs`.
             KType::OfKind(k) => match part {
-                ExpressionPart::Type(_) => matches!(k, KKind::Proper | KKind::Any),
+                ExpressionPart::Type(_) => matches!(k, KKind::ProperType | KKind::AnyType),
                 ExpressionPart::Spliced(Carried::Type(ty)) => k.admits(ty.kind_of()),
                 _ => false,
             },

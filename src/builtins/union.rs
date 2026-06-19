@@ -90,10 +90,10 @@ pub fn body<'a>(
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let signature = sig(
-        KType::OfKind(KKind::Any),
+        KType::OfKind(KKind::AnyType),
         vec![
             kw("UNION"),
-            arg("name", KType::OfKind(KKind::Proper)),
+            arg("name", KType::OfKind(KKind::ProperType)),
             kw("="),
             arg("schema", KType::KExpression),
         ],

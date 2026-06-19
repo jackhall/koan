@@ -60,7 +60,7 @@ impl Workload for KoanWorkload {
 /// The write harness: the sole holder of `&mut Scheduler` across the execute tree. It owns the
 /// [`Scheduler`] by composition (a `sched` field, not a `&mut` borrow) and carries every AST-aware
 /// and graph-mutating step — the execute loop, [`Self::apply_outcome`], the dispatch-submission
-/// wrappers, `submit_dispatch`, and the literal lowering. A dispatch *decide* runs against a
+/// wrappers, `submit_expression`, and the literal lowering. A dispatch *decide* runs against a
 /// read-only [`SchedulerView`](super::dispatch::SchedulerView) over `&self.sched` and returns an
 /// [`Outcome`]; only the harness reborrows the scheduler mutably to apply it. So "everything outside
 /// the harness is read-only" is structurally enforced, not a naming convention.

@@ -1,9 +1,9 @@
 //! The AST-aware dispatch-submission wrappers. Each resolves `(scope, node_scope, chain)` — the Koan
-//! name-resolution payload — and forwards to [`KoanRuntime::submit_dispatch`], so these are the only
+//! name-resolution payload — and forwards to [`KoanRuntime::submit_expression`], so these are the only
 //! callers that turn a `KExpression` into scheduler work. Payload construction (`resolve_node_scope`,
 //! `ambient_or_detached_chain`, `submit_in_own_scope`, the frame `ensure_run_frame` / tail-reuse
 //! mint) lives here on the workload; the scheduler core exposes only the payload-agnostic
-//! [`Scheduler::submit_node`] and the frame-lifecycle accessors it manages.
+//! [`Scheduler::alloc_node`] and the frame-lifecycle accessors it manages.
 
 use std::rc::Rc;
 
@@ -127,7 +127,7 @@ impl<'run> KoanRuntime<'run> {
             .expect("a slot step installs the ambient payload before the body submits")
             .clone();
         let (cart, framed) = self.submission_cart();
-        self.sched.submit_node(work, payload, cart, framed)
+        self.sched.alloc_node(work, payload, cart, framed)
     }
 
     /// Submit each `statement` as a fresh lexical block over `scope`: mint a frame `(scope_id, i+1)`
@@ -172,7 +172,7 @@ impl<'run> KoanRuntime<'run> {
     ) -> NodeId {
         self.ensure_run_frame(scope);
         let node_scope = self.resolve_node_scope(scope);
-        self.submit_dispatch(expr, scope, node_scope, chain)
+        self.submit_expression(expr, scope, node_scope, chain)
     }
 
     /// Dispatch `expr` as a sub-slot of the currently-active per-call frame, storing the slot's
@@ -191,16 +191,16 @@ impl<'run> KoanRuntime<'run> {
             .expect("in-frame dispatch requires an active frame");
         // `scope_for_bind` is `Rc`-bounded — not a free `'run`-fabrication. The slot stores `Yoked`
         // and re-projects the scope from the frame cart at the read boundary, so this short borrow
-        // only needs to outlive the `submit_dispatch` call.
+        // only needs to outlive the `submit_expression` call.
         let scope = frame.scope_for_bind();
-        self.submit_dispatch(expr, scope, NodeScope::Yoked, chain)
+        self.submit_expression(expr, scope, NodeScope::Yoked, chain)
     }
 
     /// Dispatch `expr` against the executing slot's own scope handle — the honest
     /// re-dispatch-against-my-own-scope path (the `OwnScope` dep placement). A `YokedChild` slot
     /// reuses its erased cart-ancestor pointer; a `Yoked` slot routes through
     /// [`Self::dispatch_in_active_frame`] to re-project from the active frame cart. Either way routes
-    /// through [`Self::submit_dispatch`], so a binder spliced here still installs its placeholder.
+    /// through [`Self::submit_expression`], so a binder spliced here still installs its placeholder.
     pub(in crate::machine::execute) fn dispatch_in_own_scope<'a>(
         &mut self,
         expr: KExpression<'a>,
@@ -214,9 +214,9 @@ impl<'run> KoanRuntime<'run> {
             NodeScope::YokedChild(ptr) => {
                 // SAFETY: the `YokedChild` pointer was erased from a cart-ancestor block scope the
                 // active cart pins (`resolve_node_scope`); reattach with a borrow bounded by the local
-                // `ptr`, used only for the transient `submit_dispatch` call below.
+                // `ptr`, used only for the transient `submit_expression` call below.
                 let scope: &Scope<'_> = unsafe { ptr.reattach_bounded() };
-                self.submit_dispatch(expr, scope, node_scope, chain)
+                self.submit_expression(expr, scope, node_scope, chain)
             }
             NodeScope::Yoked => self.dispatch_in_active_frame(expr, chain),
         }
@@ -275,7 +275,7 @@ impl<'run> KoanRuntime<'run> {
 
 /// Test-fixture submission prims that build a run-lifetime [`NodePayload`] from a raw `scope` and
 /// the ambient chain, so scheduler tests stand up raw `NodeWork` slots through the harness. The run
-/// path routes a `Dispatch` through [`KoanRuntime::submit_dispatch`] (binder-aware) instead.
+/// path routes a `Dispatch` through [`KoanRuntime::submit_expression`] (binder-aware) instead.
 #[cfg(test)]
 impl<'run> KoanRuntime<'run> {
     /// Generic ambient-chain submission for any `NodeWork`. With no slot step installed (test
@@ -306,7 +306,7 @@ impl<'run> KoanRuntime<'run> {
             .or_else(|| self.active_payload().map(|p| p.chain.clone()))
             .expect("every dispatched node has a chain — submission outside enter_block / ambient payload is a bug");
         let (cart, framed) = self.submission_cart();
-        self.sched.submit_node(
+        self.sched.alloc_node(
             work,
             NodePayload {
                 scope: scope_handle,

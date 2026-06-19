@@ -7,13 +7,13 @@
 //!
 //! - `HeadDeferred` (head is a nested `Expression`, `type_only = false`): the
 //!   resumed value may be a `KFunction` (functor or not — the `Function` arm), a
-//!   bound functor reached through the type table (`KTypeValue(KFunctor { body:
-//!   Some })` — also the `Function` arm), or a `KTypeValue(SetRef)` (the
+//!   bound functor reached through the type table (`Carried::Type(KFunctor { body:
+//!   Some })` — also the `Function` arm), or a `Carried::Type(SetRef)` (the
 //!   `Constructor` arm); any other value is a non-callable `DispatchFailed`.
 //! - `TypeHeadDeferred` (head is a `:(...)` sigil, `type_only = true`): the
 //!   resumed value is admitted only when it is type-shaped — a constructible type
 //!   (`Constructor`), a functor value (`KFunction` with `is_functor`), or a
-//!   type-bound functor (`KTypeValue(KFunctor { body: Some })`), all via the
+//!   type-bound functor (`Carried::Type(KFunctor { body: Some })`), all via the
 //!   `Function` arm. A bare functor *annotation* (`KFunctor { body: None }`) is
 //!   type-shaped but not invocable and a plain function or non-type value surface
 //!   a type-shaped `TypeMismatch`.

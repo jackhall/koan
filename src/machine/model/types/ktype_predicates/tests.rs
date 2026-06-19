@@ -184,7 +184,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     use std::collections::HashMap;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let t = KType::OfKind(KKind::Any);
+    let t = KType::OfKind(KKind::AnyType);
     let kt_number: &KType<'_> = arena.alloc_ktype(KType::Number);
     let kt_str: &KType<'_> = arena.alloc_ktype(KType::Str);
     let kt_bool: &KType<'_> = arena.alloc_ktype(KType::Bool);
@@ -243,7 +243,7 @@ fn of_kind_nominal_is_type_channel_only() {
     // The NewType *type value* — admitted in the type channel.
     let newtype_tv = newtype_setref("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
     assert!(newtype_ty.accepts_part(&ExpressionPart::Spliced(Carried::Type(&newtype_tv))));
-    assert!(KType::OfKind(KKind::Proper)
+    assert!(KType::OfKind(KKind::ProperType)
         .accepts_part(&ExpressionPart::Spliced(Carried::Type(&newtype_tv))));
 
     // A Tagged type value is the wrong family — declined.
@@ -293,8 +293,8 @@ fn user_type_specificity_lattice() {
     // A nominal kind strictly under `Any` and under `OfKind(Proper)`.
     assert!(newtype_kind.is_more_specific_than(&KType::Any));
     assert!(!KType::Any.is_more_specific_than(&newtype_kind));
-    assert!(newtype_kind.is_more_specific_than(&KType::OfKind(KKind::Proper)));
-    assert!(!KType::OfKind(KKind::Proper).is_more_specific_than(&newtype_kind));
+    assert!(newtype_kind.is_more_specific_than(&KType::OfKind(KKind::ProperType)));
+    assert!(!KType::OfKind(KKind::ProperType).is_more_specific_than(&newtype_kind));
     // A `NewType`-kind `SetRef` strictly under `OfKind(NewType)`.
     assert!(point.is_more_specific_than(&newtype_kind));
     assert!(!newtype_kind.is_more_specific_than(&point));
@@ -324,8 +324,8 @@ fn is_type_denoting_table() {
     };
     assert!(sb_pinned.is_type_denoting());
     assert!(KType::OfKind(KKind::Signature).is_type_denoting());
-    assert!(KType::OfKind(KKind::Any).is_type_denoting());
-    assert!(KType::OfKind(KKind::Proper).is_type_denoting());
+    assert!(KType::OfKind(KKind::AnyType).is_type_denoting());
+    assert!(KType::OfKind(KKind::ProperType).is_type_denoting());
     assert!(KType::OfKind(KKind::Module).is_type_denoting());
     // Nominal-family `OfKind` slots are type-channel-only but never name a type binder —
     // the value carries no nominal identity the caller hasn't already named.

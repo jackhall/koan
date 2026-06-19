@@ -30,7 +30,7 @@ mod node_id;
 mod node_store;
 pub mod nodes;
 mod splice;
-mod submit;
+mod alloc;
 mod work_queues;
 mod workload;
 

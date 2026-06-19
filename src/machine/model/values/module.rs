@@ -25,7 +25,7 @@ use super::super::types::KType;
 /// `"Outer.Inner"`); `type_members` maps the module's abstract type names to the `KType`
 /// they currently expose. Opaque-ascription members mint `KType::AbstractType { source:
 /// Module(self), name }`; the module value itself rides `KType::Module { module, frame }`
-/// in the surrounding `KObject::KTypeValue` (the two are distinguished by `KType` variant —
+/// in the surrounding `Carried::Type` (the two are distinguished by `KType` variant —
 /// `AbstractType` vs `Module`).
 pub struct Module<'a> {
     pub path: String,
@@ -43,7 +43,7 @@ pub struct Module<'a> {
     /// Sigs this module shape-checks against. `accepts_part` for a
     /// `KType::Signature { sig, .. }` slot is an O(1) `sig.sig_id()` membership check
     /// against this set. `RefCell` for the same reason as `type_members` — ascription
-    /// writes after the surrounding `KObject::KModule` is already alloc'd.
+    /// writes after the surrounding `Module` value is already alloc'd.
     pub compatible_sigs: RefCell<Vec<ScopeId>>,
 }
 

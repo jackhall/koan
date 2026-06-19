@@ -471,7 +471,7 @@ impl<'a> Scope<'a> {
     /// MODULE). Writes the sealed `SetRef` identity into [`Bindings::types`], overwriting
     /// a `PartialEq`-equal `SetRef` a `RECURSIVE TYPES` block pre-installed (same set + index).
     /// Returns the arena-allocated `&KType` so the caller can yield it as a
-    /// `KObject::KTypeValue`. Same conditional-defer shape as [`Self::register_type`];
+    /// `Carried::Type`. Same conditional-defer shape as [`Self::register_type`];
     /// `Err(Rebind)` on a genuine non-equal collision.
     ///
     /// Finalize runs post-dep-finish, past the re-entrant queue point — a `Conflict` here

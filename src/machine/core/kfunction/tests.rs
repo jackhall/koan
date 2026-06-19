@@ -136,7 +136,7 @@ fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
             SignatureElement::Keyword("OP".into()),
             SignatureElement::Argument(Argument {
                 name: "v".into(),
-                ktype: KType::OfKind(KKind::Proper),
+                ktype: KType::OfKind(KKind::ProperType),
             }),
         ],
     };

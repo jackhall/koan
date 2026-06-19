@@ -181,7 +181,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("LET"),
-                arg("name", KType::OfKind(KKind::Proper)),
+                arg("name", KType::OfKind(KKind::ProperType)),
                 kw("="),
                 arg("value", KType::Any),
             ],

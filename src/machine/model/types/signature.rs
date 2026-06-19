@@ -72,7 +72,7 @@ pub enum ReturnType<'a> {
 ///   call via `elaborate_type_identifier`. Owns its strings, so no arena lifetime.
 /// - `Expression` — captured `:(…)` / dotted return expression (`Er.Type`,
 ///   `Set WITH {…}`). Re-runs as a sub-Dispatch under the per-call scope; the resulting
-///   `KTypeValue`'s inner `KType` is the per-call return type.
+///   `Carried::Type`'s inner `KType` is the per-call return type.
 pub enum DeferredReturn<'a> {
     Type(TypeIdentifier),
     Expression(KExpression<'a>),

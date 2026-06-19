@@ -10,14 +10,14 @@
 /// form one subsumption lattice:
 ///
 /// ```text
-/// Any > { Module, Signature, Proper > { Tagged, NewType, TypeConstructor } }
+/// AnyType > { Module, Signature, ProperType > { Tagged, NewType, TypeConstructor } }
 /// ```
 ///
 /// `kind_of` (the value-classification direction) descends a nominal to its family —
-/// [`Proper`](KKind::Proper) only for a non-nominal, non-module, non-signature type;
+/// [`ProperType`](KKind::ProperType) only for a non-nominal, non-module, non-signature type;
 /// [`Module`](KKind::Module) / [`Signature`](KKind::Signature) for those carriers; and
 /// [`Tagged`](KKind::Tagged) / [`NewType`](KKind::NewType) /
-/// [`TypeConstructor`](KKind::TypeConstructor) for a user-declared nominal. [`Any`](KKind::Any)
+/// [`TypeConstructor`](KKind::TypeConstructor) for a user-declared nominal. [`AnyType`](KKind::AnyType)
 /// is a *slot* expectation only ("accepts any proper type value"), never a classification.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum KKind {
@@ -25,7 +25,7 @@ pub enum KKind {
     /// `List`, `Record`, `KFunction`, a bare resolved leaf, etc. As a slot it is the
     /// lowest-specificity proper-type slot (ties with `Identifier` in
     /// `is_more_specific_than`); it subsumes the three nominal families below it.
-    Proper,
+    ProperType,
     /// A first-class module value's kind, and the `:Module` wildcard slot.
     ///
     /// The module-satisfies-a-signature *constraint* role lives on the separate
@@ -36,17 +36,17 @@ pub enum KKind {
     /// A first-class signature value's kind, and the `:Signature` wildcard slot. The
     /// sig-as-constraint role is the separate [`KType::Signature`](super::ktype::KType::Signature).
     Signature,
-    /// A slot accepting any (proper) type value (the `:Type` surface). Like `Proper` it does
+    /// A slot accepting any (proper) type value (the `:Type` surface). Like `ProperType` it does
     /// not admit module / signature values — bare `Type` denotes "any type value", and the
     /// design pins the module/sig seam to the narrower `:Module` / `:Signature` slots. More
-    /// specific than `Proper` for tie-breaking; subsumes the proper subtree.
-    Any,
-    /// A tagged-union type — the family a user-`UNION` declares. Strictly below `Proper`.
+    /// specific than `ProperType` for tie-breaking; subsumes the proper subtree.
+    AnyType,
+    /// A tagged-union type — the family a user-`UNION` declares. Strictly below `ProperType`.
     Tagged,
     /// A newtype (record-repr or scalar) — the family a `NEWTYPE` declares. Strictly below
-    /// `Proper`.
+    /// `ProperType`.
     NewType,
-    /// A higher-kinded type constructor (`Result`). Strictly below `Proper`.
+    /// A higher-kinded type constructor (`Result`). Strictly below `ProperType`.
     TypeConstructor,
     // Constructor(arity) — the `* -> *` arity tower for higher-kinded type constructors —
     // is the deferred extension point for higher-kinded type-constructor work. This enum
@@ -55,14 +55,14 @@ pub enum KKind {
 
 impl KKind {
     /// Reflexive subsumption: does a slot of kind `self` admit a type value classified as
-    /// `other`? `Proper` / `Any` admit the proper subtree (`Proper` itself and the three
+    /// `other`? `ProperType` / `AnyType` admit the proper subtree (`ProperType` itself and the three
     /// nominal families); every other kind admits only itself — the module / signature wall
     /// keeps `:Type` from admitting a module, and a nominal-family slot admits only its own
     /// family.
     pub fn admits(self, other: KKind) -> bool {
         use KKind::*;
         match self {
-            Proper | Any => matches!(other, Proper | Tagged | NewType | TypeConstructor),
+            ProperType | AnyType => matches!(other, ProperType | Tagged | NewType | TypeConstructor),
             Module => other == Module,
             Signature => other == Signature,
             Tagged => other == Tagged,
@@ -72,20 +72,20 @@ impl KKind {
     }
 
     /// Strict subsumption for specificity: `self` is a strictly-narrower kind than `other` in
-    /// the lattice. The three nominal families sit strictly below `Proper`, so an
-    /// `OfKind(Tagged)` slot out-specifies an `OfKind(Proper)` sibling.
+    /// the lattice. The three nominal families sit strictly below `ProperType`, so an
+    /// `OfKind(Tagged)` slot out-specifies an `OfKind(ProperType)` sibling.
     pub fn strictly_below(self, other: KKind) -> bool {
         use KKind::*;
-        matches!((self, other), (Tagged | NewType | TypeConstructor, Proper))
+        matches!((self, other), (Tagged | NewType | TypeConstructor, ProperType))
     }
 
     /// Surface keyword rendered in diagnostics and type-name printing.
     pub fn surface_keyword(self) -> &'static str {
         match self {
-            KKind::Proper => "ProperType",
+            KKind::ProperType => "ProperType",
             KKind::Module => "Module",
             KKind::Signature => "Signature",
-            KKind::Any => "Type",
+            KKind::AnyType => "Type",
             KKind::Tagged => "Tagged",
             KKind::NewType => "NewType",
             KKind::TypeConstructor => "TypeConstructor",

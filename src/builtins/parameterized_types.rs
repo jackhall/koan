@@ -1,10 +1,10 @@
 //! Keyworded parameterized-type constructor builtins reached through the `:(...)` sigil.
 //! See [type-language-via-dispatch](../../design/typing/type-language-via-dispatch.md).
 //!
-//! - `LIST OF :Type` → `KTypeValue(KType::List(_))`
-//! - `MAP :Type -> :Type` → `KTypeValue(KType::Dict(_, _))`
-//! - `FN <sig> -> :Type` → `KTypeValue(KType::KFunction { .. })`
-//! - `FUNCTOR <sig> -> :Type` → `KTypeValue(KType::KFunctor { .. })`
+//! - `LIST OF :Type` → `Carried::Type(KType::List(_))`
+//! - `MAP :Type -> :Type` → `Carried::Type(KType::Dict(_, _))`
+//! - `FN <sig> -> :Type` → `Carried::Type(KType::KFunction { .. })`
+//! - `FUNCTOR <sig> -> :Type` → `Carried::Type(KType::KFunctor { .. })`
 //!
 //! Fully-uppercase head keywords keep parameterized-type construction in
 //! narrow candidate buckets so user-defined functors overloading short
@@ -49,7 +49,7 @@ impl CarrierKind {
 }
 
 /// Fold the elaborated `(name, type)` pairs into the parameter record and wrap the
-/// `KFunction` / `KFunctor` identity in a `KTypeValue`. Shared by the synchronous and
+/// `KFunction` / `KFunctor` identity in a `Carried::Type`. Shared by the synchronous and
 /// dep-finish paths.
 fn finalize_carrier<'a>(
     scope: &Scope<'a>,
@@ -197,8 +197,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "LIST",
         sig(
-            KType::OfKind(KKind::Any),
-            vec![kw("LIST"), kw("OF"), arg("elem", KType::OfKind(KKind::Any))],
+            KType::OfKind(KKind::AnyType),
+            vec![kw("LIST"), kw("OF"), arg("elem", KType::OfKind(KKind::AnyType))],
         ),
         action_bodies::body_list_of,
     );
@@ -206,12 +206,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "MAP",
         sig(
-            KType::OfKind(KKind::Any),
+            KType::OfKind(KKind::AnyType),
             vec![
                 kw("MAP"),
-                arg("k", KType::OfKind(KKind::Any)),
+                arg("k", KType::OfKind(KKind::AnyType)),
                 kw("->"),
-                arg("v", KType::OfKind(KKind::Any)),
+                arg("v", KType::OfKind(KKind::AnyType)),
             ],
         ),
         action_bodies::body_map,
@@ -220,11 +220,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "AS",
         sig(
-            KType::OfKind(KKind::Any),
+            KType::OfKind(KKind::AnyType),
             vec![
-                arg("applied", KType::OfKind(KKind::Any)),
+                arg("applied", KType::OfKind(KKind::AnyType)),
                 kw("AS"),
-                arg("ctor", KType::OfKind(KKind::Any)),
+                arg("ctor", KType::OfKind(KKind::AnyType)),
             ],
         ),
         action_bodies::body_apply_as,
@@ -233,12 +233,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "FN",
         sig(
-            KType::OfKind(KKind::Any),
+            KType::OfKind(KKind::AnyType),
             vec![
                 kw("FN"),
                 arg("sig", KType::KExpression),
                 kw("->"),
-                arg("ret", KType::OfKind(KKind::Any)),
+                arg("ret", KType::OfKind(KKind::AnyType)),
             ],
         ),
         action_bodies::body_fn,
@@ -247,12 +247,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "FUNCTOR",
         sig(
-            KType::OfKind(KKind::Any),
+            KType::OfKind(KKind::AnyType),
             vec![
                 kw("FUNCTOR"),
                 arg("sig", KType::KExpression),
                 kw("->"),
-                arg("ret", KType::OfKind(KKind::Any)),
+                arg("ret", KType::OfKind(KKind::AnyType)),
             ],
         ),
         action_bodies::body_functor,

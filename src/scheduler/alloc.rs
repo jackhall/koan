@@ -12,7 +12,7 @@ impl<W: Workload> Scheduler<W> {
     /// workload had an active frame (`false` selects the fresh-top-level queue for a dep-free /
     /// park-free slot, matching the in-flight-vs-fresh split). This allocator never names a workload
     /// type — it only wires the slot's deps and its frame cart.
-    pub(crate) fn submit_node(
+    pub(crate) fn alloc_node(
         &mut self,
         work: NodeWork<W>,
         payload: W::Payload,
