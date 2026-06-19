@@ -272,6 +272,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [FrameStorage self-reference via ouroboros](refactor/framestorage-ouroboros.md)
+- [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
@@ -353,6 +354,10 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
+- [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md) —
+  co-locate the value↔scope↔closure strongly-connected component that straddles the
+  model/core boundary into one module, turning its cross-boundary cycle edges (the
+  `α·feedback` charge) into free intra-module edges.
 - [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md) —
   collapse `ElabResult` / `ResolveTypeExprOutcome` / `TypeLeafCarrier` into one generic
   `ResolveOutcome<T>` with a `map_done` lift.

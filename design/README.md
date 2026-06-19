@@ -148,6 +148,20 @@ docs. SIG folds its constraint and value forms into one
 `KType::Signature { sig, pinned_slots }` variant the same way, so no nominal
 binder dual-writes — the seam is dissolved rather than merely documented.
 
+A **straddle** is a strongly-connected component split across a module
+boundary. Unlike a seam (a contract with no owner) or a foundation (genuine
+through-traffic), a straddle is a *cycle* the cut bisects:
+[`model::values::KObject`](../src/machine/model/values.rs) holds `core`
+closure/scope types while [`core::scope::Scope`](../src/machine/core/scope.rs)
+imports `KObject` back. The scorer charges its cross-boundary edges as
+`α·feedback` — the weight of the edges you would cut to make the module graph a
+DAG. You cannot layer a cycle, so a single-item move leaves the component
+straddling and a module rename realigns nothing; only co-locating the whole
+component into one module turns its cycle edges into free intra-module edges.
+Expose one item from that module and `λ_facade` stays minimal too. If a member
+genuinely cannot move, the fallback is to thin to a single facade item in
+place — the cross edges then pay `λ` once, though the cycle cost remains.
+
 The operational test: if pulling the items into a new module reduces
 the metric (especially under paired doc consolidation), it's a seam.
 If the metric goes up even after consolidation, it's a foundation —
@@ -187,6 +201,17 @@ proposed structural change:
   model paired doc consolidation alongside the code move. The
   item-level granularity is essential: whole-module renames usually
   drown the seam by dragging unrelated peers along.
+- [`tools/modgraph propose`](../tools/modgraph/propose.py) — SCIP-driven
+  co-location candidate generation. Builds the item-level directed
+  graph and surfaces two kinds of group: **cycle** candidates
+  (cross-module strongly-connected components, the `α·feedback`
+  carriers) and **density** candidates (dense clusters from a
+  modularity pass over the undirected projection, the `cross`
+  carriers). Each candidate is scored by the co-locate what-if (its
+  members into one synthetic module, via the same `rewrite item`
+  pipeline) and the triage list is ranked by Δscore, most-negative
+  first — a Δ>0 candidate is a foundation co-location would regress.
+  `propose` only ranks; the human picks the cut.
 
 Canonical command pattern for scoring a candidate against the
 current baseline (the `--move` / `--prose-redirect` targets below are
@@ -208,3 +233,11 @@ re-baseline after tooling fixes, how to tell a structural metric
 "silence" from a real verdict — is the rubric every refactor-analysis
 pass applies, with each pass building on the prior one rather than
 restarting from scratch.
+
+## Open work
+
+- `modgraph propose` (above) now surfaces SCC (cycle) and modularity
+  (density) co-location candidates, scored and ranked by the existing
+  what-if. Its first intended target is the machine
+  [model/core straddle](../roadmap/refactor/machine-straddle-colocation.md),
+  still open.

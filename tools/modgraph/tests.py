@@ -25,6 +25,7 @@ import unittest
 from pathlib import Path
 
 import reexport
+import propose
 from graph import parse_dot, write_dot
 from rewrite import MoveSpec, diff_edges, render_dot_diff
 
@@ -279,6 +280,107 @@ class OutboundAwareItemMove(unittest.TestCase):
         # stays.
         self.assertIn((OB_CORE, OB_INTERNAL), remove)
         self.assertNotIn((OB_CORE, OB_MODEL), remove)
+
+
+# ---------------------------------------------------------------------------
+# propose: candidate generation (graph algorithms, no scoring — fast)
+# ---------------------------------------------------------------------------
+
+def _items(spec: dict[str, str]) -> dict[str, propose.Item]:
+    """Build an item map from {path: module}; only path (key) and module matter
+    for candidate generation."""
+    return {
+        path: propose.Item(path=path, symbol=path, module=module,
+                           source_file="src/x.rs", def_line=0, body_end=1)
+        for path, module in spec.items()
+    }
+
+
+def _adj(edges: list[tuple[str, str]]) -> dict[str, set[str]]:
+    out: dict[str, set[str]] = {}
+    for a, b in edges:
+        out.setdefault(a, set()).add(b)
+    return out
+
+
+class TarjanScc(unittest.TestCase):
+    def test_finds_components(self):
+        # a->b->c->a is one SCC; d->e is two singletons; f isolated.
+        adj = _adj([("a", "b"), ("b", "c"), ("c", "a"), ("d", "e")])
+        comps = propose.tarjan_scc({"a", "b", "c", "d", "e", "f"}, adj)
+        sets = {frozenset(c) for c in comps}
+        self.assertIn(frozenset({"a", "b", "c"}), sets)
+        self.assertIn(frozenset({"d"}), sets)
+        self.assertIn(frozenset({"e"}), sets)
+        self.assertIn(frozenset({"f"}), sets)
+
+    def test_deep_chain_no_recursion_error(self):
+        # A long linear chain would blow a recursive Tarjan's stack; the explicit
+        # stack must handle it. Each node is its own SCC.
+        n = 5000
+        adj = _adj([(str(i), str(i + 1)) for i in range(n)])
+        comps = propose.tarjan_scc({str(i) for i in range(n + 1)}, adj)
+        self.assertEqual(len(comps), n + 1)
+        self.assertTrue(all(len(c) == 1 for c in comps))
+
+
+class ProposeCandidates(unittest.TestCase):
+    def test_cycle_straddling_two_modules(self):
+        items = _items({"A": "koan::m::x", "B": "koan::m::x", "C": "koan::m::y"})
+        adj = _adj([("A", "B"), ("B", "C"), ("C", "A")])
+        cands = propose.generate_candidates(items, adj, min_group_size=2)
+        cyc = [c for c in cands if c.kind == "CYCLE"]
+        self.assertEqual(len(cyc), 1)
+        self.assertEqual(set(cyc[0].members), {"A", "B", "C"})
+        self.assertEqual(cyc[0].modules, {"koan::m::x", "koan::m::y"})
+        # The SCC is also one dense community: dedup keeps the CYCLE label only.
+        self.assertNotIn("DENSITY", {c.kind for c in cands})
+
+    def test_single_module_scc_not_surfaced(self):
+        items = _items({"D": "koan::m::x", "E": "koan::m::x"})
+        adj = _adj([("D", "E"), ("E", "D")])
+        cands = propose.generate_candidates(items, adj, min_group_size=2)
+        self.assertEqual(cands, [])  # an SCC, but it straddles no boundary
+
+    def test_density_cluster_straddling_two_modules(self):
+        # A dense but acyclic cluster (transitive tournament = undirected K4):
+        # no SCC, so it can only surface as DENSITY.
+        items = _items({"F": "koan::m::x", "G": "koan::m::x",
+                        "H": "koan::m::y", "I": "koan::m::y"})
+        adj = _adj([("F", "G"), ("F", "H"), ("F", "I"),
+                    ("G", "H"), ("G", "I"), ("H", "I")])
+        cands = propose.generate_candidates(items, adj, min_group_size=2)
+        self.assertEqual([c.kind for c in cands], ["DENSITY"])
+        self.assertEqual(set(cands[0].members), {"F", "G", "H", "I"})
+        self.assertEqual(cands[0].modules, {"koan::m::x", "koan::m::y"})
+
+    def test_min_group_size_filters(self):
+        items = _items({"A": "koan::m::x", "B": "koan::m::y"})
+        adj = _adj([("A", "B"), ("B", "A")])
+        # the 2-item straddling SCC is dropped when min_group_size is 3
+        self.assertEqual(propose.generate_candidates(items, adj, 3), [])
+        self.assertEqual(len(propose.generate_candidates(items, adj, 2)), 1)
+
+
+class ProposeNaming(unittest.TestCase):
+    def test_common_ancestor(self):
+        self.assertEqual(
+            propose.common_ancestor({"koan::m::x", "koan::m::y"}), "koan::m")
+        self.assertEqual(
+            propose.common_ancestor({"koan::a", "koan::b"}), "koan")
+
+    def test_colocate_module(self):
+        items = _items({"A": "koan::m::x::T", "B": "koan::m::y::U"})
+        # module of each item drives the destination, not the item path
+        items["A"].module, items["B"].module = "koan::m::x", "koan::m::y"
+        self.assertEqual(
+            propose.colocate_module(["A", "B"], items), "koan::m::colocated")
+
+    def test_is_test_excludes_tests_segment(self):
+        self.assertTrue(propose._is_test("koan::m::foo::tests::case"))
+        self.assertTrue(propose._is_test("koan::m::foo::tests"))
+        self.assertFalse(propose._is_test("koan::m::foo::Bar"))
+        self.assertFalse(propose._is_test("koan::m::testing::Bar"))  # not a segment
 
 
 if __name__ == "__main__":

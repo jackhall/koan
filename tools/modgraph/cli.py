@@ -7,6 +7,8 @@ Verbs:
   rewrite  what-if structural rewrites for scoring a proposed refactor:
              rewrite module  — rename whole modules
              rewrite item    — SCIP-driven item extraction
+  propose  SCIP-driven co-location candidates (cycle + density), each scored
+           by the co-locate what-if and ranked by Δscore
 """
 from __future__ import annotations
 
@@ -123,6 +125,33 @@ def _cmd_regen(args: argparse.Namespace) -> int:
     return _run_score(args)
 
 
+def _cmd_propose(args: argparse.Namespace) -> int:
+    import propose
+    import reexport
+    from graph import parse_dot
+    from scip import parse_scip
+
+    package = args.root.split("::")[0]
+    known = parse_dot(args.edges).nodes
+    attribution = reexport.attributions(known, args.src_root, package)
+    docs = parse_scip(args.scip)
+    score_params = {
+        "alpha": args.alpha, "beta": args.beta,
+        "beta_children_pivot": args.beta_children_pivot,
+        "gamma": args.gamma, "pivot": args.size_pivot,
+        "exact_threshold": args.exact_threshold,
+        "delta": args.delta, "kappa": args.kappa,
+        "epsilon": args.epsilon, "owner_pivot": args.owner_pivot,
+        "lambda_facade": args.lambda_facade, "denominator": args.denominator,
+    }
+    return propose.run(
+        docs, root=args.root, src_root=args.src_root, edges_path=args.edges,
+        known=known, attribution=attribution, score_params=score_params,
+        min_group_size=args.min_group_size, max_group_size=args.max_group_size,
+        top_n=args.top_n, min_delta=args.min_delta,
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         prog="modgraph",
@@ -177,6 +206,28 @@ def main() -> int:
                     metavar="PATH",
                     help="delete the entire file at PATH (repo-relative, under src/).")
     pi.set_defaults(func=rewrite.cmd_item)
+
+    pp = sub.add_parser("propose", help="propose co-location groups (cycle + "
+                                        "density), scored and ranked by Δscore",
+                        formatter_class=argparse.RawDescriptionHelpFormatter)
+    _add_score_args(pp)
+    pp.add_argument("--scip", required=True, type=Path,
+                    help="SCIP index (from `rust-analyzer scip <repo> --output ...`)")
+    pp.add_argument("--min-group-size", type=int, default=2,
+                    help="ignore candidate groups smaller than this (default 2)")
+    pp.add_argument("--max-group-size", type=int, default=30,
+                    help="ignore candidate groups larger than this — keeps a "
+                         "co-location to an actionable cut (default 30)")
+    pp.add_argument("--top-n", type=int, default=25,
+                    help="score at most this many candidates, smallest groups "
+                         "first (cheapest to score and likeliest to improve); "
+                         "default 25")
+    pp.add_argument("--min-delta", type=float, default=0.0, metavar="MIN",
+                    help="minimum |Δscore| to display — drops candidates whose "
+                         "predicted change is below MIN in magnitude (default 0: "
+                         "show all scored). The ranked list keeps both "
+                         "improvements (Δ<0) and foundations (Δ>0).")
+    pp.set_defaults(func=_cmd_propose)
 
     args = ap.parse_args()
     return args.func(args)
