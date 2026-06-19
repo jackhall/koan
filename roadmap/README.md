@@ -271,16 +271,21 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
+- [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
+- [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
 - [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md)
 - [FrameStorage self-reference via ouroboros](refactor/framestorage-ouroboros.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
+- [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md)
+- [Structural value equality](refactor/structural-value-equality.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the two argument binders](refactor/unify-argument-binders.md)
 - [Unify the value-name lookup outcomes](refactor/unify-name-lookup-outcome.md)
 - [Unify the type-name resolution path](refactor/unify-resolution-outcome.md)
+- [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
@@ -340,6 +345,7 @@ build on:
 - [Anonymous structural unions](type_language/anonymous-unions.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
+- [Constructing circular values](type_language/circular-value-construction.md)
 
 ### Editor tooling — [editor_tooling/](editor_tooling/)
 
@@ -387,3 +393,18 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md) — the two dep enums
   carry an identical `Dispatch`/`Existing` core (and already share `DepPlacement`); give them a
   shared core or a visibly-related pair.
+- [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md) — verify the
+  AST recursion that finds a submission's binders, then cache its parse-static portion on
+  `KExpression` (beside `DispatchShape`) instead of re-deriving it at every submission.
+- [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md) —
+  the committed `types`/`data` maps are partitioned, but the split is held by per-callsite
+  convention and the in-flight `placeholders` map carries no type/value discriminant; make the
+  distinction structural in the `Bindings` API.
+- [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md) — hold
+  a record's `Box<Record<KType>>` field-type memo and an already-region-allocated `KType` by
+  region reference, killing the `alloc_ktype(kt.clone())` and `.ktype()` deep clones on the
+  resolve/bind/lift paths.
+- [Structural value equality](refactor/structural-value-equality.md) — replace the
+  `summarize() == summarize()` string comparison (`Parseable::equal`, and the dict-key
+  `Hash`/`Eq`) with a per-variant structural compare that gets NaN, nominal identity, record
+  field order, and type parameters right.
