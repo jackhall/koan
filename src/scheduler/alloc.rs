@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use super::dep_graph::work_owned_edges;
-use super::nodes::{work_park_producers, CallFrame, Node, NodeWork};
+use super::nodes::{work_park_producers, NodeFrame, Node, NodeWork};
 use super::{NodeId, Scheduler, Workload};
 
 impl<W: Workload> Scheduler<W> {
@@ -12,11 +12,11 @@ impl<W: Workload> Scheduler<W> {
     /// workload had an active frame (`false` selects the fresh-top-level queue for a dep-free /
     /// park-free slot, matching the in-flight-vs-fresh split). This allocator never names a workload
     /// type — it only wires the slot's deps and its frame cart.
-    pub(crate) fn submit_node(
+    pub(crate) fn alloc_node(
         &mut self,
         work: NodeWork<W>,
         payload: W::Payload,
-        cart: Rc<W::Frame>,
+        cart: Rc<W::Cart>,
         framed: bool,
     ) -> NodeId {
         let owned_edges = work_owned_edges(&work);
@@ -35,7 +35,7 @@ impl<W: Workload> Scheduler<W> {
         let id = self.store.alloc_slot(Node {
             work,
             payload,
-            frame: CallFrame {
+            frame: NodeFrame {
                 cart,
                 reserve: None,
                 contract: None,

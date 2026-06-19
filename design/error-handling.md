@@ -3,7 +3,7 @@
 Errors in Koan are values that propagate implicitly through the scheduler.
 The runtime substrate handles structured propagation along the dependency
 edges — when a slot writes an `Err`, the notify-walk wakes its dependents,
-which short-circuit and propagate (appending a `Frame` per step) — and
+which short-circuit and propagate (appending a `TraceFrame` per step) — and
 surfaces errors at the top level. The in-language surface for *handling*
 errors has two parts: [`Result`](#result) values that user code returns and
 destructures, and [`TRY-WITH`](#try-with) / [`CATCH`](#catch) for recovering
@@ -14,14 +14,14 @@ REPL continue-on-error — is tracked under [Open work](#open-work).
 
 A builtin body's result lowers to an `Outcome`: a final value or an error
 both ride `Done`, a tail rides `Continue` (see
-[execution-model.md](execution-model.md)). A failure is `Done(Err(KError))`.
+[execution/README.md](execution/README.md)). A failure is `Done(Err(KError))`.
 
 [`KError`](../src/machine/core/kerror.rs) is a struct:
 
 ```rust
 struct KError {
     kind: KErrorKind,
-    frames: Vec<Frame>,
+    frames: Vec<TraceFrame>,
 }
 ```
 
@@ -37,13 +37,16 @@ with these `KErrorKind` variants:
 - `ParseError` — produced by the parser, propagated through the same channel.
 - `TypeClassBindingExpectsType` — `LET <Type-class> = <non-type>` rejected at
   bind time rather than at downstream elaboration.
+- `Rebind` — a second `LET` of a name already bound in the same scope.
+- `DuplicateOverload` — an `FN` whose signature exactly matches a registered overload.
+- `SchedulerDeadlock` — the scheduler reached a fixed point with work still outstanding.
 - `User` — landing pad for user-side error construction; see open work.
 
 ## Propagation
 
 The scheduler walks errors along the dependency edges: a slot's terminal
 `Err` write triggers the notify-walk, which wakes each waiting consumer; a dep-finish
-short-circuits, appends a `Frame`, and writes the error into its own slot (a
+short-circuits, appends a `TraceFrame`, and writes the error into its own slot (a
 catch instead recovers or re-raises). Errors flow to the top level; the CLI
 formats them to stderr with the frame chain via `KError`'s `Display` impl.
 
@@ -71,8 +74,8 @@ for an out-of-bounds index, or a `MissingArg` with a hand-crafted message).
 
 A user-fn whose body tail-calls another user-fn ends up with only the inner
 function in the trace, because the slot's `function` field is replaced at TCO
-time (see [execution-model.md](execution-model.md) and
-[per-call-arena-protocol.md § TCO frame reuse](per-call-arena-protocol.md#tco-frame-reuse)).
+time (see [execution/README.md](execution/README.md) and
+[per-call-region/frames.md § TCO frame reuse](per-call-region/frames.md#tco-frame-reuse)).
 Non-tail-call positions — e.g., a sub-`Dispatch` inside a parens-wrapped
 sub-expression — preserve the outer frame: the consuming slot parks on the
 sub-`Dispatch` as a dependency, and the dep-finish short-circuit retains the call
@@ -83,10 +86,10 @@ outer function's frame. This matches how other languages with TCO behave.
 
 A user-written function that can fail returns `Result<Ty, Er>` for a
 user-defined error type `Er` — `Result` is a builtin parameterized type
-(like `List` / `Dict`) with `ok :T` and `error :E` variants (see
+(like `List` / `Dict`) with `Ok :T` and `Error :E` variants (see
 [`Result`](#result)).
-Callers destructure the `Result` with a match-form and handle the `ok`
-and `error` arms locally. This is the primary error-handling idiom in
+Callers destructure the `Result` with a match-form and handle the `Ok`
+and `Error` arms locally. This is the primary error-handling idiom in
 user code: errors flow through the type system, signatures name what
 can go wrong, and there is no implicit catch.
 
@@ -145,7 +148,7 @@ A `Result` value's type arguments are erased at construction — both `CATCH`
 and a `Result (Ok v)` / `Result (Error e)` constructor leave the carrier's
 `type_args` empty. A `:(Result T E)` slot is nonetheless runtime-checkable: the
 `matches_value(ConstructorApply, Tagged)` arm (see
-[ktype.md § Runtime type-parameter carriers](typing/ktype.md#runtime-type-parameter-carriers))
+[ktype/parameterization-and-variance.md § Runtime type-parameter carriers](typing/ktype/parameterization-and-variance.md#runtime-type-parameter-carriers))
 confirms the constructor identity and then checks the *inhabited* tag's payload
 against the type argument that field maps to (`Ok`→`T`, `Error`→`E`). So a caught
 `Result<_, KError>` is rejected where a `Result<_, MyErr>` is declared, because
@@ -168,7 +171,7 @@ user-error and reraises.
 The catch surface is the [`TRY`](../src/builtins/try_with.rs) builtin:
 
 ```
-TRY (<expr>) WITH (
+TRY (<expr>) -> :<Type> WITH (
   Ok           -> <body>
   TypeMismatch -> <body>
   ...
@@ -176,7 +179,9 @@ TRY (<expr>) WITH (
 )
 ```
 
-Arm heads are capitalized variant tags (`Type` tokens) — `Ok` and the
+Like `MATCH`, `TRY` declares a result type with `-> :<Type>` between the
+expression and `WITH`; every arm body must produce that type. Arm heads are
+capitalized variant tags (`Type` tokens) — `Ok` and the
 capitalized `KErrorKind` names. Both slots are lazy `KExpression`s. `<expr>`
 is evaluated in a catching sub-context: on success the `Ok` arm runs with `it`
 bound to the bare success value; on failure the arm matching the `KErrorKind`
@@ -187,7 +192,7 @@ synthetic `ShapeError("TRY missing Ok arm")`.
 The TRY body and each WITH arm are independent lexical blocks: any
 `LET` introduced inside the body or an arm binds into that arm's own
 scope and does not survive past the `TRY` (see the arm-as-block
-treatment in [execution-model.md § Lexical provenance chain](execution-model.md#lexical-provenance-chain)).
+treatment in [execution/calls-and-values.md § Lexical provenance chain](execution/calls-and-values.md#lexical-provenance-chain)).
 This is the structural reason a `LET x` inside a TRY body is not a
 `Rebind` of an enclosing `x`, and equally the reason a fresh `LET y`
 inside the body is not visible to code following the `TRY`.
@@ -196,7 +201,7 @@ The branch walker is shared with `MATCH`
 ([`branch_walk::find_branch_body`](../src/builtins/branch_walk.rs));
 TRY opts into `_` wildcard support, MATCH does not. The catching wiring is the
 action-harness catch (`Action::Catch`, lowered to a `Continuation::Catch`; see
-[execution-model.md](execution-model.md)): it waits on a watched slot and hands
+[execution/README.md](execution/README.md)): it waits on a watched slot and hands
 its `Result<&KObject, KError>` to a host closure that decides whether to recover
 or re-raise. Unlike a dep-finish, an errored dep does not short-circuit — TRY's
 finish always runs (`catch_cont`).
@@ -224,7 +229,7 @@ success value (no wrapper). Tags are the capitalized `KErrorKind` names — a
 `frames` is a `List<Str>`, each entry rendered `"in <expression> (<function>)"`.
 
 The four dispatcher-internal kinds (`Rebind`, `DuplicateOverload`,
-`TypeClassBindingExpectsType`, `TypeIdentityPendingAtDispatch`)
+`TypeClassBindingExpectsType`, `SchedulerDeadlock`)
 are only catchable via `_`; `it` is then bound to a minimal
 `{kind :Str, message :Str, frames :List<Str>}` struct.
 

@@ -1,6 +1,6 @@
 //! The generic per-node state the scheduler stores: a node's [`work`](self::NodeWork) (its deps and
 //! the one-shot continuation that runs over them), its opaque workload [`payload`](self::Node), and
-//! its [`frame`](self::CallFrame) (the per-call memory cart it runs against). All three are
+//! its [`frame`](self::NodeFrame) (the per-call memory cart it runs against). All three are
 //! parametric over the [`Workload`](super::Workload) — the scheduler stores and hands them back but
 //! inspects no field beyond the dep wiring.
 
@@ -46,15 +46,15 @@ impl<W: Workload> NodeWork<W> {
 /// A node's per-call frame state: the execution cart, its ping-pong reserve, and the opaque return
 /// contract. Lifetime-free — the cart `Rc` pins everything its members point at, and the contract is
 /// stored opaquely as `W::Contract` (the workload re-anchors it at the Done boundary witnessed by
-/// `cart`). Every node owns a `CallFrame`: the cart is the per-node memory the slot's step runs
+/// `cart`). Every node owns a `NodeFrame`: the cart is the per-node memory the slot's step runs
 /// against. `reserve` and `contract` are sparse.
-pub(crate) struct CallFrame<W: Workload> {
+pub(crate) struct NodeFrame<W: Workload> {
     /// The cart this slot's step runs against. The workload mints it and the `Rc` pins it for the
     /// step; the scheduler stores and hands it back but calls no method on it.
-    pub(crate) cart: Rc<W::Frame>,
+    pub(crate) cart: Rc<W::Cart>,
     /// Per-slot reserve cart for the ping-pong rotation that lets a stateful resume reuse a frame
     /// across iterations.
-    pub(crate) reserve: Option<Rc<W::Frame>>,
+    pub(crate) reserve: Option<Rc<W::Cart>>,
     /// Return contract enforced at the Done boundary, stored erased to `'static`
     /// (`Erased<W::Contract>`) and re-anchored against `cart` by the scheduler (via
     /// [`vend_carrier`](super::vend_carrier)). `None` for slots with no declared-return obligation.
@@ -67,8 +67,8 @@ pub(crate) struct Node<W: Workload> {
     /// scheduler.
     pub(crate) payload: W::Payload,
     /// The slot's per-call frame state (cart + reserve + opaque contract) — never absent, see
-    /// [`CallFrame`].
-    pub(crate) frame: CallFrame<W>,
+    /// [`NodeFrame`].
+    pub(crate) frame: NodeFrame<W>,
 }
 
 /// Owned `NodeId`s a node must read before running: the `deps[park_count..]` suffix. The

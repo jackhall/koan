@@ -23,25 +23,27 @@ REBASELINE="${KOAN_REBASELINE:-}"
 
 step() { printf '\n=== %s ===\n' "$*"; }
 
-step "1/5 cargo llvm-cov (instrumented tests → $LCOV)"
+step "1/6 cargo llvm-cov (instrumented tests → $LCOV)"
 cargo llvm-cov --quiet --lcov --output-path "$LCOV"
 
-step "2/5 cargo clippy"
+step "2/6 cargo clippy"
 if ! cargo clippy --all-targets -- -D warnings; then
     cargo clippy --fix --allow-dirty --allow-staged --all-targets
     cargo clippy --all-targets -- -D warnings
 fi
 
-step "3/5 doclinks check"
+step "3/6 doclinks check"
 python3 tools/doclinks.py check
 
-step "4/5 coverage delta (lcov: $LCOV)"
+step "4/6 coverage delta (lcov: $LCOV)"
 python3 tools/coverage.py --lcov "$LCOV" \
     ${REBASELINE:+--baseline observe/coverage.txt}
 
-step "5/5 modgraph score (DOT: $DOT)"
-cargo modules dependencies --package koan --lib \
-    --no-externs --no-sysroot --no-traits --no-fns --no-types \
-    > "$DOT"
-python3 tools/modgraph.py --edges "$DOT" --root koan \
+step "5/6 modgraph tooling tests"
+python3 tools/modgraph/tests.py
+
+step "6/6 modgraph score (DOT: $DOT)"
+# `regen` runs cargo-modules, re-attributes uses edges to the written import
+# surface (re-export correction), refreshes observe/doc_graph.dot, then scores.
+python3 tools/modgraph regen --root koan --edges "$DOT" \
     ${REBASELINE:+--baseline observe/complexity.txt}

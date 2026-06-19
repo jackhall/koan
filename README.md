@@ -22,9 +22,9 @@ cargo run -- path/to/program.koan
 echo 'PRINT "hello"' | cargo run
 ```
 
-The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, `MATCH <value> WITH (<branches>)`, `TRY (<expr>) WITH (<branches>)`, and `FN <signature> -> <ReturnType> = <body>` — one file per builtin under [src/builtins/](src/builtins), pulled together by [default_scope](src/builtins.rs). See [TUTORIAL.md](TUTORIAL.md) for the full builtin reference.
+The builtins wired into the default scope include `LET`, `PRINT`, and `FN`; the nominal-type declarators `UNION`, `NEWTYPE`, and `RECURSIVE TYPES`; the control forms `MATCH <value> -> :<Type> WITH (<branches>)`, `TRY (<expr>) -> :<Type> WITH (<branches>)`, and `CATCH`; the module forms `MODULE`, `SIG`, `FUNCTOR`, `USING`, and the `:!` / `:|` ascription operators; and the `#` / `$` quote and eval sigils — one file per builtin under [src/builtins/](src/builtins), pulled together by [default_scope](src/builtins.rs). See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
 
-User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF T)`, `:(MAP K -> V)`, `:(FN (args) -> R)`, `Type`, `Module`, `Signature`, `KExpression`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
+User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF Elem)`, `:(MAP Key -> Val)`, `:(FN (args) -> Out)`, `Type`, `Module`, `Signature`, `KExpression`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
 
 Example:
 
@@ -35,9 +35,9 @@ FN (ECHO x :Number) -> Number = (x)
 LET y = (ECHO 21)
 ```
 
-Indentation forms blocks (2-space increments, no tabs); `(` `)` group sub-expressions; `'…'` and `"…"` are string literals; numbers, `true`/`false`/`null` are literals. The lexer distinguishes three token classes for non-literal atoms: **all-caps tokens** (`LET`, `THEN`, `=`, `->`) are dispatch keywords; **capitalized names with at least one lowercase letter** (`Number`, `Str`, `KExpression`, `MyType`) are type references; everything else (lowercase / snake_case) is an identifier.
+Indentation forms blocks (2-space increments, no tabs); `(` `)` group sub-expressions; `'…'` and `"…"` are string literals; numbers, `true`/`false`/`null` are literals. The lexer sorts non-literal atoms into three classes: **keywords** — pure-symbol tokens (`=`, `->`) or alphabetic tokens with ≥2 uppercase letters and no lowercase (`LET`, `THEN`) — are dispatch markers; **type references** are uppercase-leading with at least one lowercase letter (`Number`, `Str`, `KExpression`, `MyType`); everything else (lowercase / snake_case) is an identifier. An uppercase-leading token that fits neither shape (a lone capital, or all-caps-with-digits) is a parse error.
 
-For a walk-through of the language surface with runnable snippets, see [TUTORIAL.md](TUTORIAL.md).
+For a walk-through of the language surface with runnable snippets, see the [tutorial](tutorial/README.md).
 
 ## Test
 
@@ -81,9 +81,9 @@ Errors are first-class via [`KError`](src/machine/core/kerror.rs) — a `Done(Er
 
 ### execute — run the DAG
 
-[`Scheduler`](src/machine/execute/run_loop.rs) holds a slot table of in-flight work plus a push/notify dependency graph; [`KoanRuntime`](src/machine/execute/runtime.rs) owns it and is the sole holder of `&mut Scheduler`. Callers submit a top-level block via the harness's `enter_block` (and nested parts via `dispatch_in_scope`); each slot's decide spawns sub-Dispatches for the expression's nested parts and parks the parent as a dep-finish until its deps terminalize. When a producer writes its terminal, a single `finalize` step drains the producer's notify-list and wakes any consumer whose `pending_deps` counter hits zero — no polling, no result-table sweep. Tail returns (an `Action::Tail` lowered to `Outcome::Continue`) rewrite the slot's own work in place rather than allocating a new slot. See [design/execution-model.md](design/execution-model.md).
+[`Scheduler`](src/machine/execute/run_loop.rs) holds a slot table of in-flight work plus a push/notify dependency graph; [`KoanRuntime`](src/machine/execute/runtime.rs) owns it and is the sole holder of `&mut Scheduler`. Callers submit a top-level block via the harness's `enter_block` (and nested parts via `dispatch_in_scope`); each slot's decide spawns sub-Dispatches for the expression's nested parts and parks the parent as a dep-finish until its deps terminalize. When a producer writes its terminal, a single `finalize` step drains the producer's notify-list and wakes any consumer whose `pending_deps` counter hits zero — no polling, no result-table sweep. Tail returns (an `Action::Tail` lowered to `Outcome::Continue`) rewrite the slot's own work in place rather than allocating a new slot. See [the execution model](design/execution/README.md).
 
-[`interpret`](src/machine/execute/runtime/interpret.rs) is the glue: parse the source, hand the top-level block to `enter_block` against a root `default_scope`, drain the scheduler, then `read_result` each top-level node. `PRINT` output flows through the scope's pluggable writer (default stdout; tests swap in a shared `Vec<u8>` buffer to read it back), and every value the program allocated dies with the per-run `RuntimeArena` when `interpret` returns.
+[`interpret`](src/machine/execute/runtime/interpret.rs) is the glue: parse the source, hand the top-level block to `enter_block` against a root `default_scope`, drain the scheduler, then `read_result` each top-level node. `PRINT` output flows through the scope's pluggable writer (default stdout; tests swap in a shared `Vec<u8>` buffer to read it back), and every value the program allocated dies with the per-run `KoanRegion` when `interpret` returns.
 
 ## Source layout
 
@@ -95,7 +95,7 @@ splits into [model/](src/machine/model) (the value/type vocabulary —
 [ast.rs](src/machine/model/ast.rs) for the parsed-expression types,
 [types/](src/machine/model/types) for `KType`/`KKind`/signatures/traits, and
 [values/](src/machine/model/values) for `KObject`/`Carried`/`KKey`/`Module`),
-[core/](src/machine/core) (arenas, `Scope`, `KError`, plus the
+[core/](src/machine/core) (allocation, `Scope`, `KError`, plus the
 `kfunction` submodule that owns `KFunction`/`Body` and the body executor), and
 [execute/](src/machine/execute) (the scheduler, the `dispatch` shape router —
 where overload resolution lives as `resolve_dispatch` returning a
@@ -150,7 +150,7 @@ src/
 │   ├── catch.rs              CATCH — error-handling primitive
 │   ├── branch_walk.rs        shared <tag> -> <body> walker for MATCH and TRY
 │   ├── result.rs             Result tagged-union builtin
-│   ├── type_constructors.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
+│   ├── parameterized_types.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
 │   ├── type_ops.rs           TEMPLATE / WITH
 │   ├── type_ops/type_constructor.rs   TEMPLATE — parameterized type constructor
 │   ├── type_ops/with.rs               WITH — type-constructor application
@@ -178,7 +178,7 @@ src/
     │   ├── types/
     │   │   ├── ktype.rs           KType — type tag for slots, return types, and runtime values
     │   │   ├── kkind.rs           KKind — the shallow dispatch *kind* of a type (the OfKind expectation)
-    │   │   ├── record.rs          Record<V> — ordered identifier-keyed map backing struct schemas and FN/FUNCTOR parameter identity
+    │   │   ├── record.rs          Record<V> — ordered identifier-keyed map backing record-type schemas and FN/FUNCTOR parameter identity
     │   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
     │   │   ├── ktype_resolution.rs   surface-name and TypeName elaboration (from_name, from_type_expr, join)
     │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking and per-scope resolution memo
@@ -195,14 +195,14 @@ src/
     │       └── module.rs          Module / Signature — first-class module values
     ├── core.rs            module surface for core/
     ├── core/
-    │   ├── arena.rs       RuntimeArena (= StorageFrame<KoanWorkload>), CallArena — the Koan instantiation of the storage substrate plus per-call allocation
-    │   ├── storage_frame.rs  StorageFrame<W> — generic run-lifetime erase-store substrate (the irreducible unsafe + cycle gate), names no Koan type
+    │   ├── arena.rs       KoanRegion (= Region<KoanStorageProfile>), FrameStorage, CallFrame — the Koan instantiation of the storage substrate plus the per-call frame
+    │   ├── region.rs  Region<W> — generic run-lifetime erase-store substrate (the irreducible unsafe + cycle gate), names no Koan type
     │   ├── bindings.rs    Bindings façade — five-map (data/functions/placeholders/types/pending_overloads) with the validated try_apply write path, try_register_type for nominal type identity, and the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)])
     │   ├── bindings/pending.rs   per-binding pending-overload state
-    │   ├── kerror.rs      KError, KErrorKind, Frame — structured runtime errors
+    │   ├── kerror.rs      KError, KErrorKind, TraceFrame — structured runtime errors
     │   ├── pending.rs     PendingQueue — deferred re-entrant writes, drained between dispatch nodes
     │   ├── scope.rs       Scope, KFuture — lexical environment and dispatch-result handle
-    │   ├── scope_ptr.rs   ScopePtr — the single audited owner of Scope lifetime-erasure for arena-stored carriers
+    │   ├── scope_ptr.rs   ScopePtr — the single audited owner of Scope lifetime-erasure for region-stored carriers
     │   ├── source.rs      source-span and provenance carrier for errors
     │   ├── scope_id.rs    ScopeId — counter-minted nominal scope identity for per-declaration types
     │   ├── lexical_frame.rs  LexicalFrame — immutable cactus-chain (scope_id, index, parent) attached to every dispatched node
@@ -220,26 +220,30 @@ src/
         ├── nodes.rs       node types (NodeWork struct / NodeStep / Node) + work_deps
         ├── outcome.rs     Outcome — the unified scheduler-step currency (Done / Continue / ParkThenContinue / Invoke / Redispatch / Forward) + Continuation + cont combinators (short_circuit / catch_cont / ignore_results); AST-free (carries DepRequest as an opaque type)
         ├── runtime.rs     KoanRuntime — owns the Scheduler, the sole &mut holder: the execute loop, apply_outcome (sole graph writer), submit_dispatch, literal lowering; plus run_action (lowers a builtin Action to an Outcome, pure); interpret/ (program entry points + run_program) and submit/ (the AST-aware submission wrappers — enter_block / dispatch_in_scope / dispatch_in_own_scope / dispatch_body / submit_dep_finish_in_own_scope) submodules
-        ├── dispatch.rs    classify_dispatch (the decide) + decide/decide_with_presubs + classify_dispatch_shape; submit/ (binder-aware submit_dispatch chokepoint), literal/ (aggregate-literal lowering), ctx/ (SchedulerView read view), exec/ (dispatch-side invoke), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/, operator_chain/, field_list/, constructors/, resolve_dispatch/, resolve_type_expr/ submodules
-        └── lift.rs        lift_kobject — rebuild values across per-call arena boundaries
+        ├── dispatch.rs    classify_dispatch (the decide) + decide/decide_with_presubs + classify_dispatch_shape; submit/ (binder-aware submit_dispatch chokepoint), literal/ (aggregate-literal lowering), ctx/ (SchedulerView read view), exec/ (dispatch-side invoke), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/, operator_chain/, field_list/, constructors/, resolve_dispatch/, resolve_type_identifier/ submodules
+        └── lift.rs        lift_kobject — rebuild values across per-call region boundaries
 ```
 
 ## Design and roadmap
 
-Design rationale — one topical doc each. Mostly shipped behavior, but
-sections may be aspirational where a decision has landed ahead of code.
-[design/README.md](design/README.md) is the design-tree index — what
-each doc owns, the foundation-vs-seam heuristic the refactor analysis
-uses, and pointers to the analysis tooling.
+Design rationale lives under [design/](design/README.md) — one topical doc per
+concern, describing shipped behavior, with sections that run ahead of code where
+a decision has landed early. [design/](design/README.md) is the index:
+what each doc owns, the foundation-vs-seam heuristic the refactor analysis uses,
+and pointers to the analysis tooling.
 
-- [design/execution-model.md](design/execution-model.md) — scheduler, deferred dispatch, per-call arenas.
-- [design/memory-model.md](design/memory-model.md) — value ownership, lifting, lexical closures.
-- [design/typing/](design/typing/README.md) — `KType`, dispatch by signature, structs and tagged
-  unions, plus the module language (`MODULE`/`SIG`, ascription, functors, modular implicits,
-  axiom-checked signatures, equivalence-checked coherence). Subdirectory because the type and
-  module systems share the same scheduler-driven elaborator and nominal-identity carrier; the
-  module language and `KType` runtime are shipped, with the implicit-search and axiom stages
-  tracked under `roadmap/module-system-*.md`.
+- [design/execution/](design/execution/README.md) — the dispatch-vs-execute
+  split, the deferred-dispatch scheduler, tail-call rewriting, and the per-call
+  region lifecycle.
+- [design/memory-model.md](design/memory-model.md) — value ownership, region
+  lifetime erasure, lifting, and lexical closures.
+- [design/per-call-region/](design/per-call-region/README.md) — the
+  single-owner contract for the per-call region anchor.
+- [design/typing/](design/typing/README.md) — `KType`, dispatch by signature,
+  records and tagged unions, plus the module language (`MODULE` / `SIG`,
+  ascription, functors, and the roadmapped implicit-search and axiom stages). A
+  subdirectory because the type and module systems share one scheduler-driven
+  elaborator and nominal-identity carrier.
 - [design/functional-programming.md](design/functional-programming.md) — function values, tail calls, signature-driven evaluation.
 - [design/expressions-and-parsing.md](design/expressions-and-parsing.md) — the parse pipeline and `KExpression` shape.
 - [design/error-handling.md](design/error-handling.md) — `KError`, propagation, and frame attribution.
@@ -247,7 +251,7 @@ uses, and pointers to the analysis tooling.
 [design/effects.md](design/effects.md) captures one further cross-cutting design ahead of
 implementation: in-language monadic side effects — a `Monad` signature in Koan with concrete
 effect modules (`Random`, `IO`, `Time`) ascribing it. Implementation is tracked in
-[roadmap/monadic-side-effects.md](roadmap/libraries/monadic-side-effects.md).
+[roadmap/libraries/monadic-side-effects.md](roadmap/libraries/monadic-side-effects.md).
 
 Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
 `Unblocks:` cross-links. Its [README](roadmap/README.md) curates the open items by project

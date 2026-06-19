@@ -3,8 +3,8 @@
 //! `KType::Signature { sig, pinned_slots }`. The infix signature-specialization builtin.
 //!
 //! The `{Slot = Type}` record literal eager-evaluates to a `KObject::Record` whose field
-//! values are resolved `KTypeValue`s — a dotted `Er.Type` value sub-dispatches in value
-//! context for free — so the body reads `(name, KTypeValue)` entries directly: no lazy
+//! values are resolved `Held::Type`s — a dotted `Er.Type` value sub-dispatches in value
+//! context for free — so the body reads `(name, Held::Type)` entries directly: no lazy
 //! binding slot, no `AwaitDeps`.
 
 use std::collections::HashSet;
@@ -71,7 +71,7 @@ pub fn body<'a>(
             }
         }
     }
-    let kt = ctx.scope.arena.alloc_ktype(KType::Signature {
+    let kt = ctx.scope.region.alloc_ktype(KType::Signature {
         sig: s,
         pinned_slots: pinned,
     });
@@ -83,12 +83,12 @@ mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
     use crate::machine::execute::KoanRuntime;
     use crate::machine::model::KType;
-    use crate::machine::RuntimeArena;
+    use crate::machine::KoanRegion;
 
     #[test]
     fn with_one_slot_pins_the_named_slot() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
@@ -113,8 +113,8 @@ mod tests {
     /// Pins land in record-literal order — `pinned_slots` is an ordered `Vec`.
     #[test]
     fn with_two_slots_preserve_order() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "SIG Set = ((LET Elt = Number) (LET Ord = Number) (VAL tag :Number))",
@@ -137,8 +137,8 @@ mod tests {
     /// handler could not take (was `#[ignore]`d there).
     #[test]
     fn with_inner_module_attr_path_pins_abstract_type() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "MODULE IntOrd = ((LET Carrier = Number) (LET compare = 0))\n\
@@ -165,8 +165,8 @@ mod tests {
 
     #[test]
     fn with_rejects_unknown_slot() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
@@ -187,8 +187,8 @@ mod tests {
 
     #[test]
     fn with_rejects_lowercase_slot_name() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",

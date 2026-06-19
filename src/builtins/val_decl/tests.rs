@@ -1,13 +1,13 @@
 use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
 use crate::machine::model::KType;
-use crate::machine::{KErrorKind, RuntimeArena};
+use crate::machine::{KErrorKind, KoanRegion};
 
 /// Smoke: the VAL slot lives in `bindings.types` under its value-class name so
 /// `ascribe::shape_check` will require it of an ascribed module.
 #[test]
 fn val_inside_sig_binds_typeexpr_carrier() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "SIG OrderedSig = ((VAL zero :Number))");
     let s = match scope.resolve_type("OrderedSig") {
         Some(KType::Signature { sig, .. }) => *sig,
@@ -25,8 +25,8 @@ fn val_inside_sig_binds_typeexpr_carrier() {
 #[test]
 fn val_resolves_sig_local_type_shadow() {
     use crate::machine::model::types::AbstractSource;
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))",
@@ -51,8 +51,8 @@ fn val_resolves_sig_local_type_shadow() {
 /// Gate fires on the immediate-enclosing labeled scope.
 #[test]
 fn val_outside_sig_errors() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let err = run_one_err(scope, parse_one("VAL x :Number"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
@@ -69,8 +69,8 @@ fn val_outside_sig_errors() {
 /// `"MODULE ..."`, not `"SIG ..."`, so the same diagnostic must fire.
 #[test]
 fn val_inside_module_errors() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let err = run_one_err(scope, parse_one("MODULE Foo = ((VAL x :Number))"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
@@ -87,8 +87,8 @@ fn val_inside_module_errors() {
 /// shadow to honor, so the body skips the re-dispatch path.
 #[test]
 fn val_function_typed_slot() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = ((VAL compare :(FN (x :Number, y :Number) -> Number)))",
@@ -113,8 +113,8 @@ fn val_function_typed_slot() {
 /// surfaces as a ShapeError naming both the member and the SIG.
 #[test]
 fn val_slot_required_by_shape_check() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG WithCompare = ((VAL compare :Number))\n\
@@ -137,8 +137,8 @@ fn val_slot_required_by_shape_check() {
 /// `Number` — that's modular implicits' job, not shape_check's.
 #[test]
 fn val_slot_satisfied_by_module_let_member() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG WithCompare = ((VAL compare :Number))\n\
@@ -164,8 +164,8 @@ fn val_slot_satisfied_by_module_let_member() {
 #[test]
 fn val_with_abstract_type_member_declaration() {
     use crate::machine::model::types::AbstractSource;
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))",

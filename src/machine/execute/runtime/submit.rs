@@ -1,15 +1,15 @@
 //! The AST-aware dispatch-submission wrappers. Each resolves `(scope, node_scope, chain)` — the Koan
-//! name-resolution payload — and forwards to [`KoanRuntime::submit_dispatch`], so these are the only
+//! name-resolution payload — and forwards to [`KoanRuntime::submit_expression`], so these are the only
 //! callers that turn a `KExpression` into scheduler work. Payload construction (`resolve_node_scope`,
 //! `ambient_or_detached_chain`, `submit_in_own_scope`, the frame `ensure_run_frame` / tail-reuse
 //! mint) lives here on the workload; the scheduler core exposes only the payload-agnostic
-//! [`Scheduler::submit_node`] and the frame-lifecycle accessors it manages.
+//! [`Scheduler::alloc_node`] and the frame-lifecycle accessors it manages.
 
 use std::rc::Rc;
 
-use crate::machine::core::{assemble_body_chain, RuntimeArena, ScopeId, ScopePtr};
+use crate::machine::core::{assemble_body_chain, KoanRegion, ScopeId, ScopePtr};
 use crate::machine::model::ast::KExpression;
-use crate::machine::{CallArena, LexicalFrame, NodeId, Scope};
+use crate::machine::{CallFrame, LexicalFrame, NodeId, Scope};
 
 /// Pointer equality of two scopes (identity, not structural).
 fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
@@ -19,14 +19,14 @@ fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
     )
 }
 
-/// Whether `target` arena is reached by walking `cart_scope`'s lexical `outer` chain — i.e. the
-/// scope lives in the cart's own arena or a cart ancestor's. The active cart's `FrameStorage.outer` chain
-/// pins every such arena, so a scope found here is cart-witnessed (a `YokedChild`), not run-lived.
-fn cart_chain_reaches_arena(cart_scope: &Scope<'_>, target: &RuntimeArena) -> bool {
-    let target = target as *const RuntimeArena as *const ();
+/// Whether `target` region is reached by walking `cart_scope`'s lexical `outer` chain — i.e. the
+/// scope lives in the cart's own region or a cart ancestor's. The active cart's `FrameStorage.outer` chain
+/// pins every such region, so a scope found here is cart-witnessed (a `YokedChild`), not run-lived.
+fn cart_chain_reaches_region(cart_scope: &Scope<'_>, target: &KoanRegion) -> bool {
+    let target = target as *const KoanRegion as *const ();
     let mut cur = Some(cart_scope);
     while let Some(s) = cur {
-        if std::ptr::eq(s.arena as *const RuntimeArena as *const (), target) {
+        if std::ptr::eq(s.region as *const KoanRegion as *const (), target) {
             return true;
         }
         cur = s.outer();
@@ -67,12 +67,12 @@ impl<'run> KoanRuntime<'run> {
 
     /// Establish the run frame on the first run-lifetime submission (top-level run scope), so every
     /// top-level slot carries a frame cart and `active_frame` is never `None` during a top-level
-    /// step. Mints a non-dying `CallArena` adopting the run scope (no child) — the scope-dependent
+    /// step. Mints a non-dying `CallFrame` adopting the run scope (no child) — the scope-dependent
     /// construction the scheduler delegates to the workload — and hands it to the scheduler, which
     /// owns the frame's lifecycle. Idempotent (guarded on `has_run_frame`).
     pub(in crate::machine::execute) fn ensure_run_frame<'a>(&mut self, scope: &'a Scope<'a>) {
         if !self.has_run_frame() {
-            self.set_run_frame(CallArena::adopting(scope));
+            self.set_run_frame(CallFrame::adopting(scope));
         }
     }
 
@@ -80,8 +80,8 @@ impl<'run> KoanRuntime<'run> {
     /// at a free `'run`. Three cases, in order:
     ///
     /// - The active cart's *own* scope is `scope` → [`NodeScope::Yoked`] (re-projected from the cart).
-    /// - The active cart's outer-chain reaches `scope`'s arena → [`NodeScope::YokedChild`]: `scope` is
-    ///   a block scope a builtin allocated in a cart *ancestor* arena (an `InScope` body), which the
+    /// - The active cart's outer-chain reaches `scope`'s region → [`NodeScope::YokedChild`]: `scope` is
+    ///   a block scope a builtin allocated in a cart *ancestor* region (an `InScope` body), which the
     ///   cart's `FrameStorage.outer` chain pins. Stored as an erased pointer, reattached frame-bounded.
     /// - No active frame but the `run_frame` (which adopts the run root) *is* `scope` → `Yoked`: the
     ///   slot's cart is the `run_frame` (via [`Self::submission_cart`]'s fallback), so the root
@@ -98,7 +98,7 @@ impl<'run> KoanRuntime<'run> {
             if scopes_eq(f.scope(), scope) {
                 return NodeScope::Yoked;
             }
-            if cart_chain_reaches_arena(f.scope(), scope.arena) {
+            if cart_chain_reaches_region(f.scope(), scope.region) {
                 return NodeScope::YokedChild(ScopePtr::erase_static(scope));
             }
             unreachable!("a framed submission's scope is the cart's own or a cart-ancestor child");
@@ -127,7 +127,7 @@ impl<'run> KoanRuntime<'run> {
             .expect("a slot step installs the ambient payload before the body submits")
             .clone();
         let (cart, framed) = self.submission_cart();
-        self.sched.submit_node(work, payload, cart, framed)
+        self.sched.alloc_node(work, payload, cart, framed)
     }
 
     /// Submit each `statement` as a fresh lexical block over `scope`: mint a frame `(scope_id, i+1)`
@@ -172,7 +172,7 @@ impl<'run> KoanRuntime<'run> {
     ) -> NodeId {
         self.ensure_run_frame(scope);
         let node_scope = self.resolve_node_scope(scope);
-        self.submit_dispatch(expr, scope, node_scope, chain)
+        self.submit_expression(expr, scope, node_scope, chain)
     }
 
     /// Dispatch `expr` as a sub-slot of the currently-active per-call frame, storing the slot's
@@ -191,16 +191,16 @@ impl<'run> KoanRuntime<'run> {
             .expect("in-frame dispatch requires an active frame");
         // `scope_for_bind` is `Rc`-bounded — not a free `'run`-fabrication. The slot stores `Yoked`
         // and re-projects the scope from the frame cart at the read boundary, so this short borrow
-        // only needs to outlive the `submit_dispatch` call.
+        // only needs to outlive the `submit_expression` call.
         let scope = frame.scope_for_bind();
-        self.submit_dispatch(expr, scope, NodeScope::Yoked, chain)
+        self.submit_expression(expr, scope, NodeScope::Yoked, chain)
     }
 
     /// Dispatch `expr` against the executing slot's own scope handle — the honest
     /// re-dispatch-against-my-own-scope path (the `OwnScope` dep placement). A `YokedChild` slot
     /// reuses its erased cart-ancestor pointer; a `Yoked` slot routes through
     /// [`Self::dispatch_in_active_frame`] to re-project from the active frame cart. Either way routes
-    /// through [`Self::submit_dispatch`], so a binder spliced here still installs its placeholder.
+    /// through [`Self::submit_expression`], so a binder spliced here still installs its placeholder.
     pub(in crate::machine::execute) fn dispatch_in_own_scope<'a>(
         &mut self,
         expr: KExpression<'a>,
@@ -214,9 +214,9 @@ impl<'run> KoanRuntime<'run> {
             NodeScope::YokedChild(ptr) => {
                 // SAFETY: the `YokedChild` pointer was erased from a cart-ancestor block scope the
                 // active cart pins (`resolve_node_scope`); reattach with a borrow bounded by the local
-                // `ptr`, used only for the transient `submit_dispatch` call below.
+                // `ptr`, used only for the transient `submit_expression` call below.
                 let scope: &Scope<'_> = unsafe { ptr.reattach_bounded() };
-                self.submit_dispatch(expr, scope, node_scope, chain)
+                self.submit_expression(expr, scope, node_scope, chain)
             }
             NodeScope::Yoked => self.dispatch_in_active_frame(expr, chain),
         }
@@ -230,7 +230,7 @@ impl<'run> KoanRuntime<'run> {
     /// caller tail-replaces into the body's last statement separately. Returns the sub-slots' ids.
     pub(in crate::machine::execute) fn dispatch_body<'a>(
         &mut self,
-        frame: &Rc<CallArena>,
+        frame: &Rc<CallFrame>,
         statements: Vec<KExpression<'a>>,
     ) -> Vec<NodeId> {
         let body_scope = frame.scope_for_bind();
@@ -275,7 +275,7 @@ impl<'run> KoanRuntime<'run> {
 
 /// Test-fixture submission prims that build a run-lifetime [`NodePayload`] from a raw `scope` and
 /// the ambient chain, so scheduler tests stand up raw `NodeWork` slots through the harness. The run
-/// path routes a `Dispatch` through [`KoanRuntime::submit_dispatch`] (binder-aware) instead.
+/// path routes a `Dispatch` through [`KoanRuntime::submit_expression`] (binder-aware) instead.
 #[cfg(test)]
 impl<'run> KoanRuntime<'run> {
     /// Generic ambient-chain submission for any `NodeWork`. With no slot step installed (test
@@ -306,7 +306,7 @@ impl<'run> KoanRuntime<'run> {
             .or_else(|| self.active_payload().map(|p| p.chain.clone()))
             .expect("every dispatched node has a chain — submission outside enter_block / ambient payload is a bug");
         let (cart, framed) = self.submission_cart();
-        self.sched.submit_node(
+        self.sched.alloc_node(
             work,
             NodePayload {
                 scope: scope_handle,

@@ -7,12 +7,12 @@
 use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::KObject;
-use crate::machine::{KErrorKind, RuntimeArena};
+use crate::machine::{KErrorKind, KoanRegion};
 
 #[test]
 fn using_surfaces_module_value_as_bare_name() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "MODULE Mod = (LET val = 42)");
     let result = run_one(scope, parse_one("USING Mod SCOPE (val)"));
     assert!(matches!(result, KObject::Number(n) if *n == 42.0));
@@ -20,8 +20,8 @@ fn using_surfaces_module_value_as_bare_name() {
 
 #[test]
 fn using_surfaces_module_function_for_bare_dispatch() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "MODULE Mod = (LET dbl = (FN (DBL x :Number) -> Number = (x)))",
@@ -32,8 +32,8 @@ fn using_surfaces_module_function_for_bare_dispatch() {
 
 #[test]
 fn using_block_bind_persists_at_call_site() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "MODULE Mod = (LET val = 1)");
     run(scope, "USING Mod SCOPE (LET local = 5)");
     let result = run_one(scope, parse_one("local"));
@@ -44,8 +44,8 @@ fn using_block_bind_persists_at_call_site() {
 /// member would silently shadow the bind.
 #[test]
 fn using_block_bind_colliding_with_member_errors() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "MODULE Mod = (LET x = 1)");
     let err = run_one_err(scope, parse_one("USING Mod SCOPE (LET x = 2)"));
     assert!(
@@ -59,8 +59,8 @@ fn using_block_bind_colliding_with_member_errors() {
 /// scope, not the call site — opening the module must not change that.
 #[test]
 fn using_module_function_resolves_its_own_internals() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "MODULE Mod = ((LET secret = 99) \
@@ -75,8 +75,8 @@ fn using_module_function_resolves_its_own_internals() {
 /// (not the first statement's). Pins block semantics through the transparent window.
 #[test]
 fn using_multi_statement_body_sequences_and_returns_last() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "MODULE Mod = (LET base = 7)");
     let result = run_one(
         scope,
@@ -93,8 +93,8 @@ fn using_multi_statement_body_sequences_and_returns_last() {
 /// call-site binding inside the block.
 #[test]
 fn using_window_shadows_call_site_binding() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "LET val = 1");
     run(scope, "MODULE Mod = (LET val = 7)");
     let result = run_one(scope, parse_one("USING Mod SCOPE (val)"));
@@ -102,24 +102,24 @@ fn using_window_shadows_call_site_binding() {
 }
 
 /// SAFETY-anchor: closure escape for a functor-result module. `MAKE` returns
-/// a module living in its per-call `CallArena`; opening it with `USING` and
+/// a module living in its per-call `CallFrame`; opening it with `USING` and
 /// returning a closure that reads a surfaced member must keep both the
-/// closure's transparent scope and the module's arena alive past the block.
+/// closure's transparent scope and the module's region alive past the block.
 /// Run-root churn after the escape exercises drop discipline; under Miri this
 /// pins the `Scope::child_transparent` / `alloc_scope` transmute sites
 /// against use-after-free.
 #[test]
 fn using_functor_result_closure_escapes_soundly() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "FN (MAKE) -> Module = (MODULE Res = (LET val = 7))\n\
          LET Inst = (MAKE)",
     );
     run(scope, "USING Inst SCOPE (FN (GETV) -> Number = (val))");
-    // Churn the run-root arena so a dangling reference into the dropped
-    // USING/functor arenas would surface under Miri.
+    // Churn the run-root region so a dangling reference into the dropped
+    // USING/functor regions would surface under Miri.
     run(scope, "FN (NOOP) -> Number = (1)");
     for _ in 0..10 {
         run_one(scope, parse_one("NOOP"));
@@ -132,15 +132,15 @@ fn using_functor_result_closure_escapes_soundly() {
 }
 
 /// SAFETY-anchor: `USING (MAKE) SCOPE …` opens an unbound module, so its
-/// child-scope arena's frame `Rc` lives only on the eager `m` arg, which
+/// child-scope region's frame `Rc` lives only on the eager `m` arg, which
 /// drops when the builtin body returns. The builtin roots that `Rc` in the
-/// call-site arena so the borrowed window stays valid for the deferred
+/// call-site region so the borrowed window stays valid for the deferred
 /// sub-dispatch and any escaping closure. Without the rooting this is an
 /// immediate use-after-free; under Miri this pins the rooting path.
 #[test]
 fn using_temporary_functor_result_is_sound() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (MAKE) -> Module = (MODULE Res = (LET val = 9))");
     run(scope, "USING (MAKE) SCOPE (FN (GETW) -> Number = (val))");
     run(scope, "FN (NOOP) -> Number = (1)");
@@ -159,8 +159,8 @@ fn using_temporary_functor_result_is_sound() {
 /// surfaces `DispatchFailed`.
 #[test]
 fn using_on_non_module_fails_dispatch() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "LET n = 5");
     let mut sched = KoanRuntime::new();
     let root = sched.dispatch_in_scope(parse_one("USING n SCOPE (1)"), scope);

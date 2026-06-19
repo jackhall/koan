@@ -2,9 +2,9 @@
 //!
 //! A strongly-connected component of mutually-recursive types (a self-recursive type, an
 //! `A ↔ B` pair, a longer cycle) is sealed into one [`RecursiveSet`]. A non-recursive type
-//! is a set of one. The set is `Rc`-owned (never arena-owned): lifting any reference to a
+//! is a set of one. The set is `Rc`-owned (never region-owned): lifting any reference to a
 //! member is just `Rc::clone` of the set, so the whole group travels as a unit — no copy,
-//! no visited-map cycle-walk, no `Rc<CallArena>` anchor.
+//! no visited-map cycle-walk, no `Rc<CallFrame>` anchor.
 //!
 //! References:
 //! - *Intra-set* (a member's schema naming a sibling) is [`KType::SetLocal`] — a bare index
@@ -37,7 +37,7 @@ pub enum NominalSchema<'a> {
     /// Tagged-union schema keyed by tag.
     Tagged(HashMap<String, KType<'a>>),
     /// Fresh nominal over a transparent representation; `repr` is not part of identity.
-    Newtype(Box<KType<'a>>),
+    NewType(Box<KType<'a>>),
     /// Higher-kinded constructor: erased-parameter variant schema plus parameter names.
     TypeConstructor {
         schema: HashMap<String, KType<'a>>,
@@ -52,7 +52,7 @@ pub struct NominalMember<'a> {
     pub name: String,
     /// Origin scope, diagnostics only — never identity.
     pub scope_id: ScopeId,
-    /// Always one of the three nominal families `Tagged` / `Newtype` / `TypeConstructor`;
+    /// Always one of the three nominal families `Tagged` / `NewType` / `TypeConstructor`;
     /// `kind_of` reads it off a `SetRef` / `Variant` to classify a nominal type value.
     pub kind: KKind,
     schema: RefCell<Option<NominalSchema<'a>>>,
@@ -235,7 +235,7 @@ impl<'a> NominalSchema<'a> {
     pub fn kind(&self) -> KKind {
         match self {
             NominalSchema::Tagged(_) => KKind::Tagged,
-            NominalSchema::Newtype(_) => KKind::Newtype,
+            NominalSchema::NewType(_) => KKind::NewType,
             NominalSchema::TypeConstructor { .. } => KKind::TypeConstructor,
         }
     }
@@ -246,7 +246,7 @@ impl<'a> NominalSchema<'a> {
 /// navigates directly. Produced by [`RecursiveSet::projected_schema`].
 pub enum ProjectedSchema<'a> {
     Tagged(HashMap<String, KType<'a>>),
-    Newtype(KType<'a>),
+    NewType(KType<'a>),
     TypeConstructor {
         schema: HashMap<String, KType<'a>>,
         param_names: Vec<String>,
@@ -269,7 +269,7 @@ impl<'a> RecursiveSet<'a> {
                     .map(|(k, v)| (k.clone(), resolve_set_locals(set, v)))
                     .collect(),
             ),
-            NominalSchema::Newtype(repr) => ProjectedSchema::Newtype(resolve_set_locals(set, repr)),
+            NominalSchema::NewType(repr) => ProjectedSchema::NewType(resolve_set_locals(set, repr)),
             NominalSchema::TypeConstructor {
                 schema,
                 param_names,

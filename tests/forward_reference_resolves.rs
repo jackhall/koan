@@ -12,13 +12,13 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{KObject, KType};
-use koan::machine::{KoanRuntime, RuntimeArena, Scope};
+use koan::machine::{KoanRuntime, KoanRegion, Scope};
 use koan::parse::parse;
 
-/// Scaffolding: spin up a fresh arena + default scope, run `source` end-to-end through
+/// Scaffolding: spin up a fresh region + default scope, run `source` end-to-end through
 /// the scheduler, and return both the captured PRINT output and the root scope so tests
 /// can assert on bindings post-run.
-fn run<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>, source: &str) -> &'a Scope<'a> {
+fn run<'a>(region: &'a KoanRegion, captured: Rc<RefCell<Vec<u8>>>, source: &str) -> &'a Scope<'a> {
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);
     impl std::io::Write for SharedBuf {
         fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
@@ -29,7 +29,7 @@ fn run<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>, source: &str
             Ok(())
         }
     }
-    let scope = default_scope(arena, Box::new(SharedBuf(captured)));
+    let scope = default_scope(region, Box::new(SharedBuf(captured)));
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = KoanRuntime::new();
     sched.enter_block(scope.id, exprs, scope);
@@ -40,7 +40,7 @@ fn run<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>, source: &str
 /// Run `source`, returning the first errored top-level slot's error (or `None` if every
 /// slot succeeded). Pairs with the new `UnboundName`-surfacing tests below.
 fn run_collecting_first_err(source: &str) -> Option<koan::machine::KError> {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     struct Sink;
     impl std::io::Write for Sink {
         fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
@@ -50,7 +50,7 @@ fn run_collecting_first_err(source: &str) -> Option<koan::machine::KError> {
             Ok(())
         }
     }
-    let scope = default_scope(&arena, Box::new(Sink));
+    let scope = default_scope(&region, Box::new(Sink));
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = KoanRuntime::new();
     let ids: Vec<_> = sched.enter_block(scope.id, exprs, scope);
@@ -86,9 +86,9 @@ fn forward_value_let_at_same_level_is_unbound() {
 /// directly or parks on the live placeholder, and the slot wakes when `LET z` finalizes.
 #[test]
 fn backward_value_let_at_same_level_resolves() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(&arena, captured, "LET z = 1\nLET y = z");
+    let scope = run(&region, captured, "LET z = 1\nLET y = z");
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 1.0));
 }
 
@@ -110,9 +110,9 @@ fn module_body_forward_value_reference_is_unbound() {
 /// resolution succeeds normally.
 #[test]
 fn module_body_backward_value_reference_resolves() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(&arena, captured, "MODULE Mod = ((LET x = 1) (LET y = x))");
+    let scope = run(&region, captured, "MODULE Mod = ((LET x = 1) (LET y = x))");
     // MODULE is type-only — the `&Module` rides the identity in `types`.
     let m = match scope.resolve_type("Mod") {
         Some(KType::Module {
@@ -152,10 +152,10 @@ fn multi_name_forward_reference_is_unbound() {
 /// references visible under the gate and the call resolves normally.
 #[test]
 fn multi_name_backward_reference_resolves() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
-        &arena,
+        &region,
         captured,
         "FN (ADD a :Number BY b :Number) -> Number = (b)\n\
          LET aa = 1\n\
@@ -215,10 +215,10 @@ fn forward_attr_lookup_through_value_let_is_unbound() {
 /// earlier index than `v`, so both references resolve.
 #[test]
 fn backward_attr_lookup_resolves_after_struct_binding() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
-        &arena,
+        &region,
         captured,
         "NEWTYPE Pt = :{x :Number, y :Number}\n\
          LET p = (Pt {x = 7, y = 9})\n\
@@ -250,9 +250,9 @@ fn forward_let_type_alias_is_unbound() {
 #[test]
 fn backward_let_type_alias_resolves_to_number() {
     use koan::machine::model::KType;
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(&arena, captured, "LET Un = Number\nLET Ty = Un");
+    let scope = run(&region, captured, "LET Un = Number\nLET Ty = Un");
     assert!(
         matches!(scope.resolve_type("Ty"), Some(KType::Number)),
         "expected Ty to resolve to Number, got {:?}",
@@ -269,10 +269,10 @@ fn backward_let_type_alias_resolves_to_number() {
 #[test]
 fn let_alias_via_module_qualified_type_resolves() {
     use koan::machine::model::KType;
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
-        &arena,
+        &region,
         captured,
         "MODULE Mo = ((LET Ty = Number))\nLET MyT = Mo.Ty",
     );
@@ -288,10 +288,10 @@ fn let_alias_via_module_qualified_type_resolves() {
 /// carve-out so it's visible to the sibling `LET MyList`.
 #[test]
 fn type_frame_with_module_qualified_element_resolves() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
-        &arena,
+        &region,
         captured,
         "MODULE Mo = ((LET Ty = Number))\n\
          LET MyList = :(LIST OF Mo.Ty)",
@@ -307,10 +307,10 @@ fn type_frame_with_module_qualified_element_resolves() {
 #[test]
 fn chained_module_qualified_type_resolves() {
     use koan::machine::model::KType;
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
-        &arena,
+        &region,
         captured,
         "MODULE Outer = ((MODULE Inner = ((LET Ty = Number))))\n\
          LET MyT = Outer.Inner.Ty",
@@ -330,7 +330,7 @@ fn chained_module_qualified_type_resolves() {
 #[test]
 fn producer_error_propagates_to_parked_consumer() {
     use koan::machine::KErrorKind;
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);
     impl std::io::Write for SharedBuf {
@@ -342,7 +342,7 @@ fn producer_error_propagates_to_parked_consumer() {
             Ok(())
         }
     }
-    let scope = default_scope(&arena, Box::new(SharedBuf(captured.clone())));
+    let scope = default_scope(&region, Box::new(SharedBuf(captured.clone())));
     let exprs = parse(
         "LET x = (UNDEFINED_FN)\n\
          LET y = (x)",

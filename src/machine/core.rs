@@ -1,4 +1,4 @@
-//! Execution machinery: arenas that own per-run and per-call allocations, the `Scope` that
+//! Execution machinery: regions that own per-run and per-call allocations, the `Scope` that
 //! holds dispatch tables and resolves calls, and the structured `KError` that propagates
 //! failures. `kfunction` lives here because scope holds functions and functions capture scope.
 
@@ -12,13 +12,12 @@ mod reattach;
 mod scope;
 mod scope_id;
 mod scope_ptr;
-pub mod source;
-mod storage_frame;
+mod region;
 
 #[cfg(test)]
 mod tests;
 
-pub use arena::{CallArena, FrameStorage, RuntimeArena};
+pub use arena::{CallFrame, FrameStorage, KoanRegion};
 pub use bindings::{
     ApplyOutcome, BindingIndex, Bindings, FunctionLookup, PendingBinderGuard, PendingTypeEntry,
     Resolution,

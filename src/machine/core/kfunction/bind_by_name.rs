@@ -1,7 +1,7 @@
 //! Bind a user-defined call's already-resolved arguments to a function's parameters *by name* — the
 //! binder the `exec` body executor uses, subsuming both call forms (named `f {x = a}` and positional
 //! `f a b`). (Builtins bind via [`KFunction::bind`], which produces a `Record<ArgValue>`.) The
-//! arguments arrive as [`Carried`] values (resolved into the arena by dispatch), so binding is a
+//! arguments arrive as [`Carried`] values (resolved into the region by dispatch), so binding is a
 //! pure rename map into a `Record<Carried>`: no `ArgValue` wrapping and no per-argument type-check —
 //! that is the picker's job, and the carried type is trusted here.
 
@@ -73,7 +73,7 @@ fn arguments<'sig, 'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::core::RuntimeArena;
+    use crate::machine::core::KoanRegion;
     use crate::machine::model::types::ReturnType;
     use crate::machine::model::values::KObject;
     use crate::machine::model::KType;
@@ -102,8 +102,8 @@ mod tests {
 
     #[test]
     fn named_and_positional_bind_identically() {
-        let arena = RuntimeArena::new();
-        let seven = Carried::Object(arena.alloc_object(KObject::Number(7.0)));
+        let region = KoanRegion::new();
+        let seven = Carried::Object(region.alloc_object(KObject::Number(7.0)));
 
         let mut named_args = Record::new();
         named_args.insert("x".to_string(), seven);

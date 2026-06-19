@@ -1,4 +1,4 @@
-//! Newtype + tagged-union construction dispatch. Both the `TypeCall` fast lane (single_poll)
+//! NewType + tagged-union construction dispatch. Both the `TypeCall` fast lane (single_poll)
 //! and the `FunctionValueCall` fast lane (fn_value) route a resolved verb-carrier here. Args
 //! resolve through per-value eager sub-Dispatches; when all are bound, `finish` validates
 //! types and emits the `KObject::Wrapped` / `KObject::Tagged` directly — no bucket lookup, no
@@ -11,12 +11,12 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::DepPlacement;
-use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::NonWrappedRef;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::{KError, KErrorKind, Scope};
+use crate::source::Spanned;
 
 use super::super::DepFinish;
 use super::single_poll::CtorKind;
@@ -54,7 +54,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
     } else {
         ExpressionPart::Expression(Box::new(KExpression::new(value_parts)))
     };
-    launch(vec![value_cell], CtorKind::Newtype { identity })
+    launch(vec![value_cell], CtorKind::NewType { identity })
 }
 
 /// Direct-construct a record-repr newtype from a named record-literal body. Launches one
@@ -70,7 +70,7 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
         record_fields.into_iter().map(|(_, p)| p).collect();
     launch(
         value_parts,
-        CtorKind::RecordNewtype {
+        CtorKind::RecordNewType {
             identity,
             field_names,
         },
@@ -88,8 +88,8 @@ fn construct_newtype<'step>(
         _ => unreachable!("TypeCall fast lane routed a non-SetRef identity into newtype construct"),
     };
     let repr = match RecursiveSet::projected_schema(set, index) {
-        ProjectedSchema::Newtype(repr) => repr,
-        _ => unreachable!("newtype construct ran on a non-Newtype member"),
+        ProjectedSchema::NewType(repr) => repr,
+        _ => unreachable!("newtype construct ran on a non-NewType member"),
     };
     if !repr.matches_value(value) {
         return Err(KError::new(KErrorKind::TypeMismatch {
@@ -154,18 +154,18 @@ fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind<'step>)
 }
 
 /// All value subs have completed. Read each, materialize the kind-keyed
-/// payload, and arena-allocate the produced `KObject`.
+/// payload, and region-allocate the produced `KObject`.
 pub(in crate::machine::execute::dispatch) fn finish<'step>(
     scope: &Scope<'step>,
     kind: &CtorKind<'step>,
     values: &[&'step KObject<'step>],
 ) -> Outcome<'step> {
     let result = match kind {
-        CtorKind::Newtype { identity } => {
+        CtorKind::NewType { identity } => {
             debug_assert_eq!(values.len(), 1);
             construct_newtype(identity, values[0])
         }
-        CtorKind::RecordNewtype {
+        CtorKind::RecordNewType {
             identity,
             field_names,
         } => {
@@ -188,7 +188,7 @@ pub(in crate::machine::execute::dispatch) fn finish<'step>(
         }
     };
     match result {
-        Ok(obj) => Outcome::Done(Ok(Carried::Object(scope.arena.alloc_object(obj)))),
+        Ok(obj) => Outcome::Done(Ok(Carried::Object(scope.region.alloc_object(obj)))),
         Err(e) => Outcome::Done(Err(e)),
     }
 }

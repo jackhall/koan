@@ -21,10 +21,10 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::{KError, KErrorKind};
+use crate::source::Spanned;
 
 use super::ctx::SchedulerView;
 use super::Outcome;
@@ -88,10 +88,10 @@ fn apply_constructor<'step>(
         })));
     };
     match RecursiveSet::projected_schema(set, *index) {
-        // Newtype construction. A named record-literal body (`Point {x = 1, y = 2}`) builds a
+        // NewType construction. A named record-literal body (`Point {x = 1, y = 2}`) builds a
         // record per-field (so literal fields bind synchronously); any other trailing
         // expression (`(Point r)`, `(Distance 3.0)`) is wrapped as a single positional value.
-        ProjectedSchema::Newtype(_) => match expr.parts.get(1..) {
+        ProjectedSchema::NewType(_) => match expr.parts.get(1..) {
             Some(
                 [Spanned {
                     value: ExpressionPart::RecordLiteral(fields),
@@ -123,7 +123,7 @@ fn apply_constructor<'step>(
                     tag,
                 };
                 return Outcome::Done(Ok(Carried::Type(
-                    ctx.current_scope().arena.alloc_ktype(variant),
+                    ctx.current_scope().region.alloc_ktype(variant),
                 )));
             }
             // Positional construction: `Outcome (Error "x")` (paren-group body). Tagged

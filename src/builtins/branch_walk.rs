@@ -8,7 +8,7 @@
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::KType;
-use crate::machine::{KError, KErrorKind, ResolveTypeExprOutcome, Scope};
+use crate::machine::{KError, KErrorKind, TypeIdentifierResolution, Scope};
 use std::rc::Rc;
 
 /// Read the MATCH / TRY `-> :T` slot from `ctx.args` (resolving a forward-referenced bare name
@@ -20,8 +20,8 @@ pub(crate) fn resolve_arm_contract<'a>(
 ) -> Result<ReturnContract<'a>, KError> {
     use crate::machine::core::kfunction::action::arg_type;
     let ret_kt = match arg_type(ctx.args, "return_type") {
-        Some(KType::Unresolved(te)) => match ctx.scope.resolve_type_expr(te, ctx.chain.clone()) {
-            ResolveTypeExprOutcome::Done(kt) => kt.clone(),
+        Some(KType::Unresolved(te)) => match ctx.scope.resolve_type_identifier(te, ctx.chain.clone()) {
+            TypeIdentifierResolution::Done(kt) => kt.clone(),
             _ => KType::from_name(&te.render()).ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
                     "{kind} return type `{}` is not a known type",
@@ -37,9 +37,9 @@ pub(crate) fn resolve_arm_contract<'a>(
         }
     };
     Ok(ReturnContract::Arm {
-        ret: ctx.scope.arena.alloc_ktype(ret_kt),
+        ret: ctx.scope.region.alloc_ktype(ret_kt),
         kind,
-        arena: ctx.scope.arena,
+        region: ctx.scope.region,
     })
 }
 
@@ -56,10 +56,10 @@ pub(crate) fn arm_tail<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{Action, FramePlacement};
     use crate::machine::core::kfunction::body::split_body_statements;
-    use crate::machine::{BindingIndex, CallArena};
-    let frame: Rc<CallArena> = CallArena::new(root, outer_frame);
-    frame.with_frame_interior(|arena, child| {
-        let it_obj = arena.alloc_object(it_value);
+    use crate::machine::{BindingIndex, CallFrame};
+    let frame: Rc<CallFrame> = CallFrame::new(root, outer_frame);
+    frame.with_frame_interior(|region, child| {
+        let it_obj = region.alloc_object(it_value);
         let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
     });
     let arm_scope_id = frame.scope_for_bind().id;

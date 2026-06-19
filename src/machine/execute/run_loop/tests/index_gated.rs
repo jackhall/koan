@@ -11,7 +11,7 @@ use std::rc::Rc;
 use crate::builtins::default_scope;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType, Parseable};
-use crate::machine::{KError, KErrorKind, RuntimeArena, Scope};
+use crate::machine::{KError, KErrorKind, KoanRegion, Scope};
 use crate::parse::parse;
 
 struct Sink;
@@ -35,8 +35,8 @@ impl Write for SharedBuf {
     }
 }
 
-fn run_scope<'run>(arena: &'run RuntimeArena, source: &str) -> &'run Scope<'run> {
-    let scope = default_scope(arena, Box::new(Sink));
+fn run_scope<'run>(region: &'run KoanRegion, source: &str) -> &'run Scope<'run> {
+    let scope = default_scope(region, Box::new(Sink));
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = KoanRuntime::new();
     sched.enter_block(scope.id, exprs, scope);
@@ -45,8 +45,8 @@ fn run_scope<'run>(arena: &'run RuntimeArena, source: &str) -> &'run Scope<'run>
 }
 
 fn run_collect_err(source: &str) -> Option<KError> {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(Sink));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(Sink));
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = KoanRuntime::new();
     let ids: Vec<_> = sched.enter_block(scope.id, exprs, scope);
@@ -82,8 +82,8 @@ fn later_sibling_reference_is_unbound_name() {
 
 #[test]
 fn backward_value_let_resolves() {
-    let arena = RuntimeArena::new();
-    let scope = run_scope(&arena, "LET z = 1\nLET y = z");
+    let region = KoanRegion::new();
+    let scope = run_scope(&region, "LET z = 1\nLET y = z");
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 1.0));
 }
 
@@ -92,9 +92,9 @@ fn backward_value_let_resolves() {
 /// members regardless of their inner indices.
 #[test]
 fn returned_block_locals_visible_from_outer_chain() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let scope = run_scope(
-        &arena,
+        &region,
         "MODULE Mo = ((LET inside = 7) (LET also = 9))\n\
          LET result = Mo.inside",
     );
@@ -109,9 +109,9 @@ fn returned_block_locals_visible_from_outer_chain() {
 /// and its own index, so an inner backward ref resolves against the inner producer.
 #[test]
 fn nested_block_cutoff_is_per_scope() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let scope = run_scope(
-        &arena,
+        &region,
         "LET top = 1\n\
          MODULE Mo = ((LET a = 2) (LET b = a))",
     );
@@ -131,9 +131,9 @@ fn nested_block_cutoff_is_per_scope() {
 /// def index. UNION-tagged termination predicate bounds the recursion.
 #[test]
 fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let buf = Rc::new(RefCell::new(Vec::new()));
-    let scope = default_scope(&arena, Box::new(SharedBuf(buf.clone())));
+    let scope = default_scope(&region, Box::new(SharedBuf(buf.clone())));
     let exprs = parse(
         "UNION Tick = (More :Null Done :Null)\n\
          FN (PING n :Number c :Any) -> Number = (MATCH (c) -> :Number WITH (\
@@ -165,9 +165,9 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
 /// references to Mo's members inside the block resolve.
 #[test]
 fn using_block_post_reference_visible() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let scope = run_scope(
-        &arena,
+        &region,
         "MODULE Mo = ((LET hidden = 99))\n\
          LET visible = (USING Mo SCOPE (hidden))",
     );
@@ -182,9 +182,9 @@ fn using_block_post_reference_visible() {
 /// overload from a consumer between two overloads.
 #[test]
 fn overload_pre_filter_hides_later_sibling_overload() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let scope = run_scope(
-        &arena,
+        &region,
         "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
          LET xs = [1 2 3]\n\
          LET result = (DESCRIBE xs)\n\
@@ -257,9 +257,9 @@ fn fn_return_type_forward_reference_is_position_error() {
 /// A backward return-type reference (the type is declared earlier) still resolves.
 #[test]
 fn fn_return_type_backward_reference_resolves() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let scope = run_scope(
-        &arena,
+        &region,
         "NEWTYPE Early = :{n :Number}\n\
          FN (FOO x :Number) -> Early = (Early {n = x})\n\
          LET out = (FOO 5)",

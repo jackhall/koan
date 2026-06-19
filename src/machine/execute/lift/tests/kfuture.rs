@@ -2,26 +2,26 @@
 
 use super::*;
 use crate::builtins::default_scope;
-use crate::machine::core::source::Spanned;
 use crate::machine::model::types::Record;
 use crate::machine::model::values::ArgValue;
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
-use crate::machine::CallArena;
+use crate::machine::CallFrame;
 use crate::parse::parse;
+use crate::source::Spanned;
 
 use super::{alloc_local_kf, defeat_fast_path, dispatch_for_test};
 
-/// A KFuture with no descendant borrow into the dying arena must lift to
-/// `frame: None` — anchoring would over-keep the arena.
+/// A KFuture with no descendant borrow into the dying region must lift to
+/// `frame: None` — anchoring would over-keep the region.
 #[test]
-fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
+fn unanchored_kfuture_no_region_borrow_does_not_anchor() {
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
     use crate::machine::{Body, KFunction};
 
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     // Defeat the `functions_is_empty()` fast path so the slow path runs.
     let kf = KFunction::new(
         ExpressionSignature {
@@ -30,12 +30,12 @@ fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
         },
         Body::Builtin(|ctx| {
             crate::machine::core::kfunction::action::Action::Done(Ok(
-                crate::machine::model::Carried::Object(ctx.scope.arena.alloc_object(KObject::Null)),
+                crate::machine::model::Carried::Object(ctx.scope.region.alloc_object(KObject::Null)),
             ))
         }),
         dying.scope(),
     );
-    let _ = dying.arena().alloc_function(kf);
+    let _ = dying.region().alloc_function(kf);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
@@ -53,16 +53,16 @@ fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
     assert_eq!(Rc::strong_count(&dying.storage_rc()), strong_before);
 }
 
-/// A KFuture whose parsed parts contain a `Future(Carried::Object(_))` allocated in
-/// the dying arena must lift with `frame: Some(rc)`.
+/// A KFuture whose parsed parts contain a `Spliced(Carried::Object(_))` allocated in
+/// the dying region must lift with `frame: Some(rc)`.
 #[test]
-fn unanchored_kfuture_with_arena_borrow_does_anchor() {
+fn unanchored_kfuture_with_region_borrow_does_anchor() {
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
     use crate::machine::{Body, KFunction};
 
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
 
     let kf = KFunction::new(
         ExpressionSignature {
@@ -71,21 +71,21 @@ fn unanchored_kfuture_with_arena_borrow_does_anchor() {
         },
         Body::Builtin(|ctx| {
             crate::machine::core::kfunction::action::Action::Done(Ok(
-                crate::machine::model::Carried::Object(ctx.scope.arena.alloc_object(KObject::Null)),
+                crate::machine::model::Carried::Object(ctx.scope.region.alloc_object(KObject::Null)),
             ))
         }),
         dying.scope(),
     );
-    let _ = dying.arena().alloc_function(kf);
+    let _ = dying.region().alloc_function(kf);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    let inside: &KObject = dying.arena().alloc_object(KObject::Number(7.0));
+    let inside: &KObject = dying.region().alloc_object(KObject::Number(7.0));
     future
         .parsed
         .parts
-        .push(Spanned::bare(ExpressionPart::Future(Carried::Object(
+        .push(Spanned::bare(ExpressionPart::Spliced(Carried::Object(
             inside,
         ))));
     let kf_obj = KObject::KFuture(future, None);
@@ -97,7 +97,7 @@ fn unanchored_kfuture_with_arena_borrow_does_anchor() {
         other => panic!("expected lifted KFuture, got {:?}", other.ktype()),
     }
     assert_eq!(Rc::strong_count(&dying.storage_rc()), strong_before + 1);
-    // Drop borrowers before `dying` so arena teardown order is well-defined.
+    // Drop borrowers before `dying` so region teardown order is well-defined.
     drop(lifted);
     drop(kf_obj);
 }
@@ -106,9 +106,9 @@ fn unanchored_kfuture_with_arena_borrow_does_anchor() {
 /// recursive borrow walk; the inner future borrows via its captured function.
 #[test]
 fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let inner_future = KFuture {
@@ -143,9 +143,9 @@ fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
 #[test]
 fn kfuture_bundle_arg_with_wrapped_field_anchors() {
     use crate::machine::ScopeId;
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     use crate::machine::model::types::{KType, NominalSchema, RecursiveSet};
@@ -154,11 +154,11 @@ fn kfuture_bundle_arg_with_wrapped_field_anchors() {
         "f".to_string(),
         KObject::KFunction(kf_ref, None),
     )]));
-    let type_id: &KType = arena.alloc_ktype(KType::SetRef {
+    let type_id: &KType = region.alloc_ktype(KType::SetRef {
         set: RecursiveSet::singleton(
             "S".into(),
             ScopeId::next(),
-            NominalSchema::Newtype(Box::new(KType::Record(Box::new(Record::new())))),
+            NominalSchema::NewType(Box::new(KType::Record(Box::new(Record::new())))),
         ),
         index: 0,
     });
@@ -186,19 +186,19 @@ fn kfuture_bundle_arg_with_wrapped_field_anchors() {
 }
 
 /// A `parsed.parts` `Expression(Box<KExpression>)` whose inner parts borrow
-/// into the dying arena must drive anchor.
+/// into the dying region must drive anchor.
 #[test]
-fn kfuture_parsed_expression_part_with_arena_borrow_anchors() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+fn kfuture_parsed_expression_part_with_region_borrow_anchors() {
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    let inside: &KObject = dying.arena().alloc_object(KObject::Number(17.0));
-    let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Future(
+    let inside: &KObject = dying.region().alloc_object(KObject::Number(17.0));
+    let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Spliced(
         Carried::Object(inside),
     ))]);
     future
@@ -220,19 +220,19 @@ fn kfuture_parsed_expression_part_with_arena_borrow_anchors() {
 }
 
 /// A `KExpression` parked in `bundle.args` whose inner parts borrow into
-/// the dying arena must drive anchor.
+/// the dying region must drive anchor.
 #[test]
 fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    let inside: &KObject = dying.arena().alloc_object(KObject::Number(19.0));
-    let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Future(
+    let inside: &KObject = dying.region().alloc_object(KObject::Number(19.0));
+    let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Spliced(
         Carried::Object(inside),
     ))]);
     future.args.insert(
@@ -256,11 +256,11 @@ fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
 /// Pre-anchored KFuture preserves its anchor through lift.
 #[test]
 fn kfuture_with_existing_anchor_preserves_it() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
-    let other = CallArena::new(scope, None);
+    let other = CallFrame::new(scope, None);
     let other_storage = other.storage_rc();
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
@@ -281,13 +281,13 @@ fn kfuture_with_existing_anchor_preserves_it() {
     assert_eq!(other_after, other_before + 1);
 }
 
-/// A KFunction whose captured scope lives in the dying arena, parked in a
+/// A KFunction whose captured scope lives in the dying region, parked in a
 /// bundle slot, must drive lift to anchor.
 #[test]
 fn kfuture_bundle_arg_with_local_kfunction_anchors() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
@@ -311,13 +311,13 @@ fn kfuture_bundle_arg_with_local_kfunction_anchors() {
     drop(obj);
 }
 
-/// A KFuture whose own function was captured in the dying arena anchors
+/// A KFuture whose own function was captured in the dying region anchors
 /// without needing any borrowing payload in parts or bundle.
 #[test]
 fn kfuture_with_local_function_anchors() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let future = KFuture {
@@ -343,9 +343,9 @@ fn kfuture_with_local_function_anchors() {
 /// composite-recursion arms (List/Dict/Tagged).
 #[test]
 fn kfuture_bundle_arg_with_list_of_kfunction_anchors() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
@@ -369,18 +369,18 @@ fn kfuture_bundle_arg_with_list_of_kfunction_anchors() {
     drop(obj);
 }
 
-/// A KModule whose child scope lives in the dying arena, parked in a
+/// A KModule whose child scope lives in the dying region, parked in a
 /// bundle slot, must drive anchor.
 #[test]
 fn kfuture_bundle_arg_with_local_kmodule_anchors() {
     use crate::machine::model::values::Module;
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let module = Module::new("BundleMod".into(), dying.scope());
-    let m_ref: &Module = dying.arena().alloc_module(module);
+    let m_ref: &Module = dying.region().alloc_module(module);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
@@ -406,24 +406,24 @@ fn kfuture_bundle_arg_with_local_kmodule_anchors() {
     drop(obj);
 }
 
-/// A `parsed.parts` `ListLiteral` whose inner `Future` part points into
-/// the dying arena must drive anchor.
+/// A `parsed.parts` `ListLiteral` whose inner `Spliced` part points into
+/// the dying region must drive anchor.
 #[test]
-fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+fn kfuture_parsed_listliteral_with_region_borrow_anchors() {
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    let inside: &KObject = dying.arena().alloc_object(KObject::Number(11.0));
+    let inside: &KObject = dying.region().alloc_object(KObject::Number(11.0));
     future
         .parsed
         .parts
         .push(Spanned::bare(ExpressionPart::ListLiteral(vec![
-            ExpressionPart::Future(Carried::Object(inside)),
+            ExpressionPart::Spliced(Carried::Object(inside)),
         ])));
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying.storage_rc());
@@ -440,24 +440,24 @@ fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
 }
 
 /// A `parsed.parts` `DictLiteral` whose value side carries a borrowing
-/// `Future` part must drive anchor.
+/// `Spliced` part must drive anchor.
 #[test]
-fn kfuture_parsed_dictliteral_with_arena_borrow_anchors() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+fn kfuture_parsed_dictliteral_with_region_borrow_anchors() {
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    let inside: &KObject = dying.arena().alloc_object(KObject::Number(13.0));
+    let inside: &KObject = dying.region().alloc_object(KObject::Number(13.0));
     future
         .parsed
         .parts
         .push(Spanned::bare(ExpressionPart::DictLiteral(vec![(
             ExpressionPart::Keyword("k".into()),
-            ExpressionPart::Future(Carried::Object(inside)),
+            ExpressionPart::Spliced(Carried::Object(inside)),
         )])));
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying.storage_rc());

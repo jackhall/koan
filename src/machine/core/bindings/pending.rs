@@ -1,7 +1,7 @@
 //! In-flight named-type binder tracking. [`super::Bindings`] embeds a [`PendingTypes`] by
 //! value and delegates the surface methods. A binder records itself here for its body's
 //! duration so a consumer referencing an *earlier* still-finalizing type can find the
-//! producer node to park on (the finalize gate in `resolve_type_expr`).
+//! producer node to park on (the finalize gate in `resolve_type_identifier`).
 //!
 //! MODULE does not participate — module bodies park on the outer scheduler,
 //! not on type-name resolution inside elaboration.

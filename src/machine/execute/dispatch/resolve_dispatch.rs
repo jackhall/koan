@@ -188,7 +188,7 @@ fn decide_scope<'step>(
             ScopeDecision::Terminal(ResolveOutcome::Resolved(build_resolved(f, expr)))
         }
         // Tie with an unevaluated eager part may break once it evaluates: a
-        // typed `Future(List …)` re-dispatch is element-aware where the bare
+        // typed `Spliced(List …)` re-dispatch is element-aware where the bare
         // literal is shape-only. Defer; a genuine tie resurfaces as `Ambiguous`
         // on the post-eager-subs pass.
         PickPass::Tie(n) if expr_has_eager_part(expr) => {
@@ -415,8 +415,8 @@ fn slot_admits_strict<'step>(
             // Binder declaration slot: the slot owns the name, so admission
             // is shape-only. SigiledTypeExpr / RecordType still admit speculatively
             // (they sub-dispatch to a type-side carrier — e.g. the FN record-schema
-            // overload's `TypeExprRef` signature slot taking a `:{…}`).
-            if matches!(arg.ktype, KType::Identifier | KType::OfKind(KKind::Proper)) {
+            // overload's `ProperType` signature slot taking a `:{…}`).
+            if matches!(arg.ktype, KType::Identifier | KType::OfKind(KKind::ProperType)) {
                 if matches!(
                     part_value,
                     ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)
@@ -458,7 +458,7 @@ fn slot_admits_strict<'step>(
             }
             match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
                 Some(NameOutcome::Resolved(c)) => {
-                    arg.ktype.accepts_part(&ExpressionPart::Future(*c))
+                    arg.ktype.accepts_part(&ExpressionPart::Spliced(*c))
                 }
                 // Speculative admit so the splice/park walk can surface the
                 // precise per-slot diagnostic.

@@ -8,11 +8,11 @@
 //! types. The scheduler stores only `queues`/`deps`/`store`; the driver installs the ambient context
 //! per step and reads it back through the methods below.
 //!
-//! See design/per-call-arena-protocol.md and design/execution-model.md.
+//! See design/per-call-region/README.md and design/execution/README.md.
 
 use std::rc::Rc;
 
-use crate::machine::CallArena;
+use crate::machine::CallFrame;
 
 use super::nodes::NodePayload;
 use super::runtime::KoanRuntime;
@@ -24,17 +24,17 @@ use super::runtime::KoanRuntime;
 /// driver is the workload, so the erasure the scheduler core needs is unnecessary here.
 #[derive(Default)]
 pub(in crate::machine::execute) struct AmbientContext {
-    /// TraceFrame `Rc` of the slot currently being executed. See
-    /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
-    active_frame: Option<Rc<CallArena>>,
+    /// Active per-call cart (`Rc<CallFrame>`) of the slot currently being executed. See
+    /// [per-call-region/frames.md § Active-frame propagation](../../../design/per-call-region/frames.md#active-frame-propagation).
+    active_frame: Option<Rc<CallFrame>>,
     /// Per-slot reserve frame for the running step. `None` between slot steps. See
-    /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
-    active_reserve: Option<Rc<CallArena>>,
+    /// [per-call-region/frames.md § Ping-pong reserve frame](../../../design/per-call-region/frames.md#ping-pong-reserve-frame).
+    active_reserve: Option<Rc<CallFrame>>,
     /// The run frame: a non-dying frame adopting the top-level run scope, lazily built on the first
     /// run-lifetime submission. Top-level slots carry it as their `frame` cart, so `active_frame` is
     /// never `None` during a top-level step and a body's re-dispatch against its own scope is
     /// uniformly framed (Yoked) at every depth.
-    run_frame: Option<Rc<CallArena>>,
+    run_frame: Option<Rc<CallFrame>>,
     /// The executing slot's own opaque workload payload, installed per step (scope handle + lexical
     /// chain). A body that re-dispatches *against its own scope*, or that needs the ambient chain,
     /// reads this back through [`KoanRuntime::active_payload`]. `None` between slot steps.
@@ -53,13 +53,13 @@ pub(in crate::machine::execute) struct AmbientContext {
 /// RAII-shaped save/restore wrapper around the per-step `active_frame`, `active_payload`,
 /// and `active_reserve` swap that brackets each iteration of [`KoanRuntime::execute`](super::runtime::KoanRuntime::execute).
 /// Bookkeeping spine for the ping-pong reserve-frame rotation; see
-/// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
+/// [per-call-region/frames.md § Ping-pong reserve frame](../../../design/per-call-region/frames.md#ping-pong-reserve-frame).
 pub(in crate::machine::execute) struct SlotStepGuard {
-    prev_frame: Option<Rc<CallArena>>,
+    prev_frame: Option<Rc<CallFrame>>,
     prev_payload: Option<NodePayload>,
     /// Saved so nested slot runs (combinator finish closures) don't inherit the
     /// outer slot's reserve frame.
-    prev_reserve: Option<Rc<CallArena>>,
+    prev_reserve: Option<Rc<CallFrame>>,
     /// The step's own payload, kept so [`KoanRuntime::exit_slot_step`] can hand it back inside the
     /// [`PostStep`] token — the step's scope is then re-derivable from the *returned* payload (and
     /// frame), never the ambient (and possibly invoke-swapped) state.
@@ -77,9 +77,9 @@ pub(in crate::machine::execute) struct PostStep {
     /// an invoke never empties `active_frame` — reuse draws from the reserve via
     /// `acquire_tail_frame`, never the live active cart — so the slot's own cart rides through. The
     /// Replace arm reinstalls / rotates with it.
-    pub(in crate::machine::execute) prev_frame: Rc<CallArena>,
+    pub(in crate::machine::execute) prev_frame: Rc<CallFrame>,
     /// The slot's reserve frame at step end (see ping-pong reserve rotation).
-    pub(in crate::machine::execute) post_step_reserve: Option<Rc<CallArena>>,
+    pub(in crate::machine::execute) post_step_reserve: Option<Rc<CallFrame>>,
     payload: NodePayload,
 }
 
@@ -96,7 +96,7 @@ impl PostStep {
 impl AmbientContext {
     /// Borrow the active per-call cart — the witness the workload binds a `Yoked` slot's
     /// re-anchored scope borrow to.
-    pub(in crate::machine::execute) fn active_frame_ref(&self) -> Option<&Rc<CallArena>> {
+    pub(in crate::machine::execute) fn active_frame_ref(&self) -> Option<&Rc<CallFrame>> {
         self.active_frame.as_ref()
     }
 
@@ -114,8 +114,8 @@ impl<'run> KoanRuntime<'run> {
     /// `Rc` it holds).
     pub(in crate::machine::execute) fn enter_slot_step(
         &mut self,
-        node_frame: Rc<CallArena>,
-        node_reserve: Option<Rc<CallArena>>,
+        node_frame: Rc<CallFrame>,
+        node_reserve: Option<Rc<CallFrame>>,
         node_payload: NodePayload,
     ) -> SlotStepGuard {
         let prev_frame = self.ambient.active_frame.replace(node_frame);
@@ -160,7 +160,7 @@ impl<'run> KoanRuntime<'run> {
     /// per step by [`Self::enter_slot_step`]. The single accessor the workload reads its
     /// name-resolution state back through. `None` between slot steps.
     pub(in crate::machine::execute) fn active_payload(&self) -> Option<&NodePayload> {
-        self.ambient.active_payload.as_ref()
+        self.ambient.active_payload()
     }
 
     /// Whether a slot step is currently installed (a non-`None` ambient payload). The workload reads
@@ -171,16 +171,16 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Active slot's frame `Rc`. See
-    /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
-    pub(in crate::machine::execute) fn current_frame(&self) -> Option<Rc<CallArena>> {
+    /// [per-call-region/frames.md § Active-frame propagation](../../../design/per-call-region/frames.md#active-frame-propagation).
+    pub(in crate::machine::execute) fn current_frame(&self) -> Option<Rc<CallFrame>> {
         self.ambient.active_frame.clone()
     }
 
     /// Borrow the active per-call cart — the witness the workload binds a `Yoked` slot's
     /// re-anchored scope borrow to. Mirrors [`Self::current_frame`] but hands back a borrow, not a
     /// clone.
-    pub(in crate::machine::execute) fn active_frame_ref(&self) -> Option<&Rc<CallArena>> {
-        self.ambient.active_frame.as_ref()
+    pub(in crate::machine::execute) fn active_frame_ref(&self) -> Option<&Rc<CallFrame>> {
+        self.ambient.active_frame_ref()
     }
 
     /// Install `frame` as the ambient cart and return the previous one — the transient save/restore
@@ -188,8 +188,8 @@ impl<'run> KoanRuntime<'run> {
     /// the body frame rather than the caller's.
     pub(in crate::machine::execute) fn swap_active_frame(
         &mut self,
-        frame: Option<Rc<CallArena>>,
-    ) -> Option<Rc<CallArena>> {
+        frame: Option<Rc<CallFrame>>,
+    ) -> Option<Rc<CallFrame>> {
         std::mem::replace(&mut self.ambient.active_frame, frame)
     }
 
@@ -198,7 +198,7 @@ impl<'run> KoanRuntime<'run> {
     /// scope-dependent frame construction the scheduler does not own. The just-finished cart is
     /// rotated back in as the next reserve by `execute`'s Replace arm. Reuse draws from the
     /// *reserve*, never the live `active_frame`, so the slot's own cart is never emptied by an invoke.
-    pub(in crate::machine::execute) fn take_active_reserve(&mut self) -> Option<Rc<CallArena>> {
+    pub(in crate::machine::execute) fn take_active_reserve(&mut self) -> Option<Rc<CallFrame>> {
         self.ambient.active_reserve.take()
     }
 
@@ -219,8 +219,8 @@ impl<'run> KoanRuntime<'run> {
     /// submissions (no active frame) fall back to the run frame, so every slot carries a cart and
     /// the active frame is `Some` during its step. `run_frame` is established by `ensure_run_frame`
     /// before the first submission, so the fallback is always `Some`. The `framed` flag (the active
-    /// frame was present) drives `submit_node`'s fresh-vs-in-flight queue split.
-    pub(in crate::machine::execute) fn submission_cart(&self) -> (Rc<CallArena>, bool) {
+    /// frame was present) drives `alloc_node`'s fresh-vs-in-flight queue split.
+    pub(in crate::machine::execute) fn submission_cart(&self) -> (Rc<CallFrame>, bool) {
         let framed = self.ambient.active_frame.is_some();
         let cart = self.ambient.active_frame.clone().unwrap_or_else(|| {
             self.ambient
@@ -240,13 +240,13 @@ impl<'run> KoanRuntime<'run> {
     /// Borrow the run frame cart (the non-dying frame adopting the run root scope). A top-level
     /// submission carries it as the slot's cart, so the root re-projects from it as `Yoked` rather
     /// than anchoring at `'run` — see [`KoanRuntime::resolve_node_scope`](super::runtime::KoanRuntime).
-    pub(in crate::machine::execute) fn run_frame_ref(&self) -> Option<&Rc<CallArena>> {
+    pub(in crate::machine::execute) fn run_frame_ref(&self) -> Option<&Rc<CallFrame>> {
         self.ambient.run_frame.as_ref()
     }
 
     /// Install the run frame the workload minted by adopting the top-level run scope. Idempotent at
     /// the call site (the workload guards on [`Self::has_run_frame`]).
-    pub(in crate::machine::execute) fn set_run_frame(&mut self, frame: Rc<CallArena>) {
+    pub(in crate::machine::execute) fn set_run_frame(&mut self, frame: Rc<CallFrame>) {
         self.ambient.run_frame = Some(frame);
     }
 }

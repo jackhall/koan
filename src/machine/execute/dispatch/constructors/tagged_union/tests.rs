@@ -3,7 +3,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::builtins::default_scope;
-use crate::machine::core::{KErrorKind, RuntimeArena, Scope};
+use crate::machine::core::{KErrorKind, KoanRegion, Scope};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::values::KObject;
@@ -21,10 +21,10 @@ impl Write for SharedBuf {
 }
 
 fn build_scope<'run>(
-    arena: &'run RuntimeArena,
+    region: &'run KoanRegion,
     captured: Rc<RefCell<Vec<u8>>>,
 ) -> &'run Scope<'run> {
-    default_scope(arena, Box::new(SharedBuf(captured)))
+    default_scope(region, Box::new(SharedBuf(captured)))
 }
 
 fn parse_one<'run>(src: &str) -> KExpression<'run> {
@@ -70,9 +70,9 @@ fn run_one_err<'run>(
 /// resolves to a `KObject` that doesn't match the tag's expected type.
 #[test]
 fn ctor_fast_lane_rejects_value_of_wrong_type() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = build_scope(&arena, captured);
+    let scope = build_scope(&region, captured);
     run(scope, "UNION Maybe = (Some :Number None :Null)");
     let err = run_one_err(scope, parse_one("Maybe (Some \"oops\")"));
     match &err.kind {
@@ -88,9 +88,9 @@ fn ctor_fast_lane_rejects_value_of_wrong_type() {
 /// `TypeCall` fast lane (leaf-Type head) propagates the schema's tag check.
 #[test]
 fn ctor_fast_lane_propagates_tag_validation_error() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = build_scope(&arena, captured);
+    let scope = build_scope(&region, captured);
     run(scope, "UNION Maybe = (Some :Number None :Null)");
     let err = run_one_err(scope, parse_one("Maybe (Other 42)"));
     assert!(
@@ -103,9 +103,9 @@ fn ctor_fast_lane_propagates_tag_validation_error() {
 /// `x` before the synthesized TAG call sees the typed-slot bind.
 #[test]
 fn ctor_fast_lane_with_sub_expression_value() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = build_scope(&arena, captured);
+    let scope = build_scope(&region, captured);
     run(scope, "UNION Maybe = (Some :Number None :Null)\nLET x = 7");
     let result = run_one(scope, parse_one("Maybe (Some (x))"));
     match result {

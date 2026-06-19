@@ -18,7 +18,7 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{KKind, KType, ProjectedSchema, RecursiveSet};
-use koan::machine::{KoanRuntime, RuntimeArena, Scope};
+use koan::machine::{KoanRuntime, KoanRegion, Scope};
 use koan::parse::parse;
 
 struct SharedBuf(Rc<RefCell<Vec<u8>>>);
@@ -32,9 +32,9 @@ impl std::io::Write for SharedBuf {
     }
 }
 
-fn run<'a>(arena: &'a RuntimeArena, src: &str) -> &'a Scope<'a> {
+fn run<'a>(region: &'a KoanRegion, src: &str) -> &'a Scope<'a> {
     let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = default_scope(arena, Box::new(SharedBuf(captured)));
+    let scope = default_scope(region, Box::new(SharedBuf(captured)));
     let exprs = parse(src).expect("parse should succeed");
     let mut sched = KoanRuntime::new();
     for e in exprs {
@@ -44,9 +44,9 @@ fn run<'a>(arena: &'a RuntimeArena, src: &str) -> &'a Scope<'a> {
     scope
 }
 
-fn run_expect_err(arena: &RuntimeArena, src: &str) -> String {
+fn run_expect_err(region: &KoanRegion, src: &str) -> String {
     let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = default_scope(arena, Box::new(SharedBuf(captured)));
+    let scope = default_scope(region, Box::new(SharedBuf(captured)));
     let exprs = parse(src).expect("parse should succeed");
     let mut sched = KoanRuntime::new();
     let ids: Vec<_> = exprs
@@ -88,8 +88,8 @@ fn lookup_sig_value_kt<'a>(scope: &'a Scope<'a>, sig_name: &str, name: &str) -> 
 /// `:(LIST OF Number)` lowers to `KType::List(Number)` and binds via VAL.
 #[test]
 fn sigil_list_of_lowers_to_list_carrier() {
-    let arena = RuntimeArena::new();
-    let scope = run(&arena, "SIG Sig = ((VAL items :(LIST OF Number)))");
+    let region = KoanRegion::new();
+    let scope = run(&region, "SIG Sig = ((VAL items :(LIST OF Number)))");
     let items_kt = lookup_sig_value_kt(scope, "Sig", "items");
     match items_kt {
         KType::List(elem) => assert_eq!(*elem, KType::Number),
@@ -101,8 +101,8 @@ fn sigil_list_of_lowers_to_list_carrier() {
 /// `LIST` has no overload registered without the connector keyword `OF`.
 #[test]
 fn sigil_list_of_missing_of_keyword_errors() {
-    let arena = RuntimeArena::new();
-    let err = run_expect_err(&arena, "LET Ty = :(LIST Number)");
+    let region = KoanRegion::new();
+    let err = run_expect_err(&region, "LET Ty = :(LIST Number)");
     assert!(
         err.contains("dispatch failed") || err.contains("no matching function"),
         "expected DispatchFailed surface, got: {err}",
@@ -115,8 +115,8 @@ fn sigil_list_of_missing_of_keyword_errors() {
 /// changed; underlying carrier identity is unchanged from the legacy `Dict`.
 #[test]
 fn sigil_map_lowers_to_dict_carrier() {
-    let arena = RuntimeArena::new();
-    let scope = run(&arena, "SIG Sig = ((VAL table :(MAP Str -> Number)))");
+    let region = KoanRegion::new();
+    let scope = run(&region, "SIG Sig = ((VAL table :(MAP Str -> Number)))");
     let table_kt = lookup_sig_value_kt(scope, "Sig", "table");
     match table_kt {
         KType::Dict(k, v) => {
@@ -133,9 +133,9 @@ fn sigil_map_lowers_to_dict_carrier() {
 /// whose `params` record keys each parameter type by its declared name.
 #[test]
 fn sigil_fn_lowers_to_kfunction_named() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let scope = run(
-        &arena,
+        &region,
         "SIG Sig = ((VAL compare :(FN (x :Number, y :Str) -> Bool)))",
     );
     let cmp = lookup_sig_value_kt(scope, "Sig", "compare");
@@ -153,8 +153,8 @@ fn sigil_fn_lowers_to_kfunction_named() {
 /// Nullary FN: `:(FN () -> Number)` lowers to a zero-arg function type.
 #[test]
 fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
-    let arena = RuntimeArena::new();
-    let scope = run(&arena, "SIG Sig = ((VAL gen :(FN () -> Number)))");
+    let region = KoanRegion::new();
+    let scope = run(&region, "SIG Sig = ((VAL gen :(FN () -> Number)))");
     let gen = lookup_sig_value_kt(scope, "Sig", "gen");
     match gen {
         KType::KFunction { params, ret } => {
@@ -171,9 +171,9 @@ fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
 /// record keys the parameter type by its (capitalized) declared name `Ty`.
 #[test]
 fn sigil_functor_lowers_to_kfunctor() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let scope = run(
-        &arena,
+        &region,
         "SIG Sig = ((VAL mk :(FUNCTOR (Ty :Signature) -> Module)))",
     );
     let mk = lookup_sig_value_kt(scope, "Sig", "mk");
@@ -200,15 +200,15 @@ fn sigil_functor_lowers_to_kfunctor() {
 /// field-walker splices back as the field's resolved KType inside the record repr.
 #[test]
 fn newtype_record_field_accepts_keyworded_list_of_sigil() {
-    let arena = RuntimeArena::new();
-    let scope = run(&arena, "NEWTYPE Foo = :{xs :(LIST OF Number)}");
+    let region = KoanRegion::new();
+    let scope = run(&region, "NEWTYPE Foo = :{xs :(LIST OF Number)}");
     // NEWTYPE is type-only — its record repr rides the sealed `SetRef` member in `types`.
     let fields = match scope.resolve_type("Foo") {
         Some(KType::SetRef { set, index }) => match RecursiveSet::projected_schema(set, *index) {
-            ProjectedSchema::Newtype(KType::Record(fields)) => fields,
-            _ => panic!("Foo must project a record-repr Newtype schema"),
+            ProjectedSchema::NewType(KType::Record(fields)) => fields,
+            _ => panic!("Foo must project a record-repr NewType schema"),
         },
-        other => panic!("Foo must be a Newtype SetRef in types, got {other:?}"),
+        other => panic!("Foo must be a NewType SetRef in types, got {other:?}"),
     };
     assert_eq!(fields.len(), 1);
     let (xs_name, xs_type) = fields.iter().next().expect("one field");
@@ -223,9 +223,9 @@ fn newtype_record_field_accepts_keyworded_list_of_sigil() {
 /// inside a UNION field. Same sub-Dispatch path, different field-walker invocation.
 #[test]
 fn union_field_accepts_keyworded_map_sigil() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let scope = run(
-        &arena,
+        &region,
         "UNION Maybe = (Some :(MAP Str -> Number), None :Null)",
     );
     // UNION is type-only — its variant schema rides the sealed `SetRef` member in `types`.
@@ -263,9 +263,9 @@ fn union_field_accepts_keyworded_map_sigil() {
 /// `OrderedSig`'s producer and resumes via dep-finish.
 #[test]
 fn sigil_functor_forward_reference_defers_via_combine() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let scope = run(
-        &arena,
+        &region,
         "SIG Outer = ((VAL mk :(FUNCTOR (Ty :OrderedSig) -> Module)))\n\
          SIG OrderedSig = (VAL compare :Number)",
     );
@@ -298,9 +298,9 @@ fn sigil_functor_forward_reference_defers_via_combine() {
 /// exercised in CI.
 #[test]
 fn sigil_user_functor_application_through_dispatch() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let scope = run(
-        &arena,
+        &region,
         "SIG OrderedSig = (VAL compare :Number)\n\
          MODULE IntOrdBase = ((LET compare = 7))\n\
          LET IntOrd = (IntOrdBase :! OrderedSig)\n\

@@ -231,8 +231,8 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         elements,
     };
 
-    let arena = scope.arena;
-    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
+    let region = scope.region;
+    let f: &'a KFunction<'a> = region.alloc_function(KFunction::with_binder_and_functor(
         user_sig,
         Body::UserDefined(body_expr),
         scope,
@@ -242,7 +242,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     ));
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame.
-    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
+    let obj: &'a KObject<'a> = region.alloc_object(KObject::KFunction(f, None));
     // An anonymous FN registers nothing — its only handle is the returned value
     // (LET-bound or dropped into a function-typed slot). A keyworded FN / FUNCTOR
     // registers under its lead keyword.
@@ -275,7 +275,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 ///
 /// Splice protocol: each entry in `inputs.sub_dispatches` becomes a `Dep::Dispatch`;
 /// the finish closure splices each result into `signature_expr.parts[slot_idx]` as
-/// `Future(obj)` before re-running `parse_fn_param_list` against the now-final scope.
+/// `Spliced(obj)` before re-running `parse_fn_param_list` against the now-final scope.
 pub(crate) fn defer<'a>(
     signature_expr: KExpression<'a>,
     inputs: DeferredInputs<'a>,
@@ -321,7 +321,7 @@ pub(crate) fn defer<'a>(
                     carrier.ktype().name(),
                 )))));
             }
-            spliced_parts[slot_idx].value = ExpressionPart::Future(carrier);
+            spliced_parts[slot_idx].value = ExpressionPart::Spliced(carrier);
         }
         let spliced_signature = KExpression::new(spliced_parts);
         let return_type: ReturnType<'a> =

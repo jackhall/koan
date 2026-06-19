@@ -1,11 +1,11 @@
 //! Signature parsing for the `FN` builtin.
 
-use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+use crate::machine::model::types::{elaborate_type_identifier, ElabResult, Elaborator};
 use crate::machine::model::Carried;
 use crate::machine::model::{Argument, SignatureElement};
 use crate::machine::NodeId;
+use crate::source::Spanned;
 
 /// Must run before any outer-scope elaboration: the eager path would otherwise surface
 /// `Unbound` against a parameter name.
@@ -27,7 +27,7 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
                     | Some(ExpressionPart::Expression(_))
                     | Some(ExpressionPart::SigiledTypeExpr(_))
                     | Some(ExpressionPart::RecordType(_))
-                    | Some(ExpressionPart::Future(_))
+                    | Some(ExpressionPart::Spliced(_))
             );
             if next_is_type_slot {
                 names.push(name);
@@ -44,8 +44,8 @@ pub(crate) enum ParamListOutcome<'a> {
     Done(Vec<SignatureElement<'a>>),
     /// One or more parameter slots couldn't elaborate synchronously. The caller schedules
     /// a `AwaitDeps` over `park_producers` and any sub-Dispatches; the closure splices each
-    /// sub-Dispatch's `KObject::KTypeValue` result into the corresponding slot of
-    /// `signature_expr.parts` (replacing `Expression(_)` with `Future(obj)`) and re-runs
+    /// sub-Dispatch's `Carried::Type` result into the corresponding slot of
+    /// `signature_expr.parts` (replacing `Expression(_)` with `Spliced(obj)`) and re-runs
     /// `parse_fn_param_list`.
     Pending {
         park_producers: Vec<NodeId>,
@@ -55,7 +55,7 @@ pub(crate) enum ParamListOutcome<'a> {
     Err(String),
 }
 
-/// Type-name resolution rides on [`elaborate_type_expr`], which returns
+/// Type-name resolution rides on [`elaborate_type_identifier`], which returns
 /// `ElabResult::Park(producers)` for type-binding names that have dispatched but not
 /// finalized. Parking producers and sub-Dispatches accumulate across the whole signature
 /// walk so the caller can register every blocker in one dep-finish.
@@ -86,7 +86,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                 let ty = parts.get(i + 1).map(|p| &p.value);
                 match ty {
                     Some(ExpressionPart::Type(t)) => {
-                        match elaborate_type_expr(elaborator, t) {
+                        match elaborate_type_identifier(elaborator, t) {
                             ElabResult::Done(kt) => {
                                 elements.push(SignatureElement::Argument(Argument {
                                     name: name.clone(),
@@ -111,7 +111,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                     Some(ExpressionPart::SigiledTypeExpr(boxed)) => {
                         // Wrap and sub-Dispatch so the dispatcher routes the inner
                         // expression through its standard classifier; the dep-finish
-                        // splices the type-side carrier back as `Future(_)`.
+                        // splices the type-side carrier back as `Spliced(_)`.
                         let wrapped = KExpression::new(vec![Spanned::bare(
                             ExpressionPart::SigiledTypeExpr(boxed.clone()),
                         )]);
@@ -120,21 +120,21 @@ pub(crate) fn parse_fn_param_list<'a>(
                     }
                     Some(ExpressionPart::RecordType(boxed)) => {
                         // A `:{…}` record param type sub-Dispatches to a `KType::Record`
-                        // carrier the dep-finish splices back as `Future(_)`.
+                        // carrier the dep-finish splices back as `Spliced(_)`.
                         let wrapped = KExpression::new(vec![Spanned::bare(
                             ExpressionPart::RecordType(boxed.clone()),
                         )]);
                         sub_dispatches.push((i + 1, wrapped));
                         i += 2;
                     }
-                    Some(ExpressionPart::Future(Carried::Type(kt))) => {
+                    Some(ExpressionPart::Spliced(Carried::Type(kt))) => {
                         elements.push(SignatureElement::Argument(Argument {
                             name: name.clone(),
                             ktype: (*kt).clone(),
                         }));
                         i += 2;
                     }
-                    Some(ExpressionPart::Future(other)) => {
+                    Some(ExpressionPart::Spliced(other)) => {
                         return ParamListOutcome::Err(format!(
                             "FN signature parameter `{name}` type slot resolved to a non-type \
                              value `{}` (expected a type expression like `:Number` or `:(LIST OF Str)`)",
@@ -205,7 +205,7 @@ pub(crate) fn binder_bucket(
                             | ExpressionPart::Expression(_)
                             | ExpressionPart::SigiledTypeExpr(_)
                             | ExpressionPart::RecordType(_)
-                            | ExpressionPart::Future(_)
+                            | ExpressionPart::Spliced(_)
                     )
                 });
                 if next_is_type_slot {
@@ -223,7 +223,7 @@ pub(crate) fn binder_bucket(
                             | ExpressionPart::Expression(_)
                             | ExpressionPart::SigiledTypeExpr(_)
                             | ExpressionPart::RecordType(_)
-                            | ExpressionPart::Future(_)
+                            | ExpressionPart::Spliced(_)
                     )
                 });
                 if next_is_type_slot {

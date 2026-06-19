@@ -4,7 +4,7 @@
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use crate::machine::core::RuntimeArena;
+use crate::machine::core::KoanRegion;
 use crate::machine::model::types::UntypedKey;
 use crate::machine::model::KType;
 use crate::scheduler::{Erased, Reattachable};
@@ -16,7 +16,7 @@ use super::KFunction;
 /// MATCH / TRY arm with `-> :T`) rides the same channel as an FN call: `Arm` carries the
 /// declared type directly, `Function` reads it off the callee's signature.
 ///
-/// `Arm`'s / `PerCall`'s `ret` is arena-borrowed so the whole contract stays `Copy`, matching the
+/// `Arm`'s / `PerCall`'s `ret` is region-borrowed so the whole contract stays `Copy`, matching the
 /// `&KFunction` it sits beside. Stored erased as [`ErasedContract`] on the node's `TraceFrame`. A tail
 /// chain keeps the **first** contract (the `next_contract` rule in `execute::run_loop`),
 /// so the check fires against the original caller's declared return, not the tail-most callee's.
@@ -25,19 +25,19 @@ pub enum ReturnContract<'a> {
     /// An FN / builtin call: check against `signature.return_type`, label via `summarize()`.
     Function(&'a KFunction<'a>),
     /// A MATCH / TRY arm's `-> :T`: check the lifted value against `ret`, label with `kind`.
-    /// `arena` is the arm's home arena — the call-site (outer) arena `ret` is allocated in, a
+    /// `region` is the arm's home region — the call-site (outer) region `ret` is allocated in, a
     /// strict ancestor of the arm frame — so a coarsened re-tag re-homes there with no step-scope
-    /// walk. `&RuntimeArena` is `Copy`, so the contract stays `Copy`; the cart `Rc` witnesses it.
+    /// walk. `&KoanRegion` is `Copy`, so the contract stays `Copy`; the cart `Rc` witnesses it.
     Arm {
         ret: &'a KType<'a>,
         kind: &'static str,
-        arena: &'a RuntimeArena,
+        region: &'a KoanRegion,
     },
     /// A deferred-return FN whose per-call return type resolved to `ret`. Rides the FN-body
     /// chain shape (a `Function`/`PerCall` contract) so a tail-replaced deferred body assembles its
     /// lexical chain like any FN — preserving TCO — while `check_declared_return` checks the
     /// lifted value against the resolved `ret` (labelled "per-call return type", `func` names
-    /// the frame). `ret` is arena-borrowed like `Arm`'s, so the contract stays `Copy`.
+    /// the frame). `ret` is region-borrowed like `Arm`'s, so the contract stays `Copy`.
     PerCall {
         func: &'a KFunction<'a>,
         ret: &'a KType<'a>,
@@ -45,16 +45,16 @@ pub enum ReturnContract<'a> {
 }
 
 impl<'a> ReturnContract<'a> {
-    /// The contract's home arena — where a coarsened re-tag is re-homed so it outlives the
-    /// producer frame. A `Function`/`PerCall` reads it off the callee's captured-scope arena; an
-    /// `Arm` carries it directly. All three are the cart's *outer* (ancestor) arena, witnessed by
+    /// The contract's home region — where a coarsened re-tag is re-homed so it outlives the
+    /// producer frame. A `Function`/`PerCall` reads it off the callee's captured-scope region; an
+    /// `Arm` carries it directly. All three are the cart's *outer* (ancestor) region, witnessed by
     /// the cart `Rc`, so the Done boundary derives it from the contract with no scope walk.
-    pub fn home_arena(self) -> &'a RuntimeArena {
+    pub fn home_region(self) -> &'a KoanRegion {
         match self {
             ReturnContract::Function(f) | ReturnContract::PerCall { func: f, .. } => {
-                f.captured_scope().arena
+                f.captured_scope().region
             }
-            ReturnContract::Arm { arena, .. } => arena,
+            ReturnContract::Arm { region, .. } => region,
         }
     }
 }
@@ -71,10 +71,10 @@ unsafe impl Reattachable for ContractFamily {
 }
 
 /// A [`ReturnContract`] with its lifetime erased to `'static` for storage on a lifetime-free node
-/// `CallFrame`, and re-anchored at the Done read boundary. The contract's `&KFunction` / `&KType`
-/// point into the cart's frame *outer* arena (a strict ancestor — see
+/// `NodeFrame`, and re-anchored at the Done read boundary. The contract's `&KFunction` / `&KType`
+/// point into the cart's frame *outer* region (a strict ancestor — see
 /// `branch_walk::resolve_arm_return_contract` and `invoke`'s `Outcome::Continue` tail
-/// construction), which the co-stored `cart: Rc<CallArena>` keeps live via its `FrameStorage.outer`
+/// construction), which the co-stored `cart: Rc<CallFrame>` keeps live via its `FrameStorage.outer`
 /// / escape chain; the cart is the liveness witness the caller holds across `reattach`. The
 /// `Function` / `Arm` discriminant is readable without a re-anchor for the chain-shape decision
 /// that needs the tag but not the pointee. See [`Erased`].

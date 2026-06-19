@@ -160,15 +160,15 @@ impl<'a> Default for PendingQueue<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::core::arena::RuntimeArena;
+    use crate::machine::core::arena::KoanRegion;
     use crate::machine::model::types::KType;
 
     #[test]
     fn defer_type_queues_and_drain_replays_into_types() {
-        let arena = RuntimeArena::new();
+        let region = KoanRegion::new();
         let bindings: Bindings<'_> = Bindings::new();
         let queue: PendingQueue<'_> = PendingQueue::new();
-        let kt = arena.alloc_ktype(KType::Number);
+        let kt = region.alloc_ktype(KType::Number);
         queue.defer_type("Foo".to_string(), kt, BindingIndex::BUILTIN);
         assert!(bindings.types().get("Foo").is_none());
         queue.drain(&bindings);

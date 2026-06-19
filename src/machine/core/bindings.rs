@@ -28,7 +28,7 @@ use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 
 use crate::machine::core::kfunction::{KFunction, NodeId};
-use crate::machine::model::ast::TypeName;
+use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::{KType, UntypedKey};
 use crate::machine::model::values::KObject;
@@ -98,7 +98,7 @@ impl BindingIndex {
 /// dispatch parks by the full bucket key keeps `(MAKESET _)` and
 /// `(MAKESET _ USING _)` from colliding.
 ///
-/// Borrow discipline: `types → functions → data`. Lifetime `'a` is the arena
+/// Borrow discipline: `types → functions → data`. Lifetime `'a` is the region
 /// lifetime of the stored references.
 pub struct Bindings<'a> {
     types: RefCell<HashMap<String, (&'a KType<'a>, BindingIndex)>>,
@@ -114,7 +114,7 @@ pub struct Bindings<'a> {
     /// Per-scope operator registry: a chain's sorted-joined operator probe key →
     /// the shared [`OperatorGroup`] it resolves to. A module installs one record per
     /// size-≥2 subset of its declared operators (the per-group powerset), each subset
-    /// key pointing at the same arena-allocated group, so any subset used in one
+    /// key pointing at the same region-allocated group, so any subset used in one
     /// expression resolves in a single hit and a cross-group mix simply misses.
     /// Walked through the scope chain like every other name (innermost visible wins).
     operators: RefCell<HashMap<String, (&'a OperatorGroup, BindingIndex)>>,
@@ -122,13 +122,13 @@ pub struct Bindings<'a> {
     /// earlier still-finalizing type parks on its producer node; this map marks which names
     /// are in flight. See [`pending`] for the surface methods.
     pending: PendingTypes<'a>,
-    /// Scope-bound `TypeName` → `&KType` resolution cache. Monotonic — entries are written
+    /// Scope-bound `TypeIdentifier` → `&KType` resolution cache. Monotonic — entries are written
     /// only when the elaborated `KType` and every user-type it references are fully
     /// finalized; the finalize gate prevents caching a not-yet-sealed type.
-    /// Keyed by `(TypeName, chain cutoff)`: a forward consumer (smaller cutoff) and a
+    /// Keyed by `(TypeIdentifier, chain cutoff)`: a forward consumer (smaller cutoff) and a
     /// backward consumer (larger cutoff) at the same scope resolve the same name to
     /// different verdicts under lexical gating, so they must not share a cache entry.
-    type_expr_memo: RefCell<HashMap<(TypeName, Option<usize>), &'a KType<'a>>>,
+    type_identifier_memo: RefCell<HashMap<(TypeIdentifier, Option<usize>), &'a KType<'a>>>,
 }
 
 impl<'a> Bindings<'a> {
@@ -141,16 +141,16 @@ impl<'a> Bindings<'a> {
             pending_overloads: RefCell::new(HashMap::new()),
             operators: RefCell::new(HashMap::new()),
             pending: PendingTypes::new(),
-            type_expr_memo: RefCell::new(HashMap::new()),
+            type_identifier_memo: RefCell::new(HashMap::new()),
         }
     }
 
-    pub fn type_expr_memo_get(
+    pub fn type_identifier_memo_get(
         &self,
-        te: &TypeName,
+        te: &TypeIdentifier,
         cutoff: Option<usize>,
     ) -> Option<&'a KType<'a>> {
-        self.type_expr_memo
+        self.type_identifier_memo
             .borrow()
             .get(&(te.clone(), cutoff))
             .copied()
@@ -335,11 +335,11 @@ impl<'a> Bindings<'a> {
         }
     }
 
-    /// Insert `(te → kt)` into the resolution cache. Caller arena-allocates
+    /// Insert `(te → kt)` into the resolution cache. Caller region-allocates
     /// `kt` and gates on finalize. Monotonic: a collision means equal values,
     /// so we keep the existing entry rather than panic.
-    pub fn type_expr_memo_insert(&self, te: TypeName, cutoff: Option<usize>, kt: &'a KType<'a>) {
-        let mut memo = self.type_expr_memo.borrow_mut();
+    pub fn type_identifier_memo_insert(&self, te: TypeIdentifier, cutoff: Option<usize>, kt: &'a KType<'a>) {
+        let mut memo = self.type_identifier_memo.borrow_mut();
         memo.entry((te, cutoff)).or_insert(kt);
     }
 

@@ -61,13 +61,13 @@ another. This item closes that gap.
 - *Circular imports — decided.* Resolved via the existing dispatch-as-node
   scheduler by treating cross-file references as another deferred
   dependency, consistent with the
-  [dispatch-time name placeholder](../../design/execution-model.md#dispatch-time-name-placeholders)
+  [dispatch-time name placeholder](../../design/execution/name-placeholders.md#dispatch-time-name-placeholders)
   mechanism. Disallowing or requiring forward-declaration discipline is
   rejected — the scheduler already handles deferred resolution generically
   and forcing source order on multi-file projects is gratuitous.
 - *Source registry per imported file — open, follow-on to source-spans.*
   Each loaded file registers a `SourceFile` via
-  [`crate::machine::core::source`](../../src/machine/core/source.rs) so
+  [`crate::source`](../../src/source.rs) so
   error frames render real `path:line:col` locations across file
   boundaries. `parse_with_path` already takes the filename; the loader
   threads it. Separately, any builtin that synthesizes AST from a literal

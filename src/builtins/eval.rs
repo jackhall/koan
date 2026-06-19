@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::machine::model::KType;
-use crate::machine::{CallArena, Scope};
+use crate::machine::{CallFrame, Scope};
 
 use super::{arg, kw, sig};
 
@@ -29,9 +29,9 @@ pub fn body<'a>(
         }
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("expr".to_string())))),
     };
-    // Chain the call-site frame Rc onto the new frame (keeps the parent arena alive past the
-    // new frame's `outer` pointer) — same as the legacy body.
-    let frame: Rc<CallArena> = CallArena::new(ctx.scope, ctx.frame.map(|f| f.storage_rc()));
+    // Chain the call-site frame Rc onto the new frame (keeps the parent region alive past the
+    // new frame's `outer` pointer) — matching a normal call frame.
+    let frame: Rc<CallFrame> = CallFrame::new(ctx.scope, ctx.frame.map(|f| f.storage_rc()));
     Action::Tail {
         leading: vec![],
         tail: inner,
@@ -51,11 +51,11 @@ mod tests {
     use crate::builtins::test_support::{
         parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
     };
-    use crate::machine::{KErrorKind, RuntimeArena};
+    use crate::machine::{KErrorKind, KoanRegion};
 
     fn run_program(source: &str) -> Vec<u8> {
-        let arena = RuntimeArena::new();
-        let (scope, captured) = run_root_with_buf(&arena);
+        let region = KoanRegion::new();
+        let (scope, captured) = run_root_with_buf(&region);
         run(scope, source);
         let bytes = captured.borrow().clone();
         bytes
@@ -78,8 +78,8 @@ mod tests {
 
     #[test]
     fn eval_of_non_kexpression_errors_with_type_mismatch() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "LET x = 3");
         let err = run_one_err(scope, parse_one("$(x)"));
         assert!(

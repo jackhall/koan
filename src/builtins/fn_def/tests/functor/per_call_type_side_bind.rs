@@ -2,15 +2,15 @@
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_one_type, run_root_silent};
 use crate::machine::model::{KObject, KType};
-use crate::machine::RuntimeArena;
+use crate::machine::KoanRegion;
 
-/// A held `KModule` from a functor body keeps its child-scope arena alive across
+/// A held `KModule` from a functor body keeps its child-scope region alive across
 /// subsequent run-root churn. End-to-end mirror of
 /// [`crate::machine::model::values::module::tests::functor_per_call_module_lifts_correctly`].
 #[test]
 fn functor_body_module_dispatch_does_not_dangle() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -54,8 +54,8 @@ fn functor_body_module_dispatch_does_not_dangle() {
 /// carries an abstract `Carrier` member for the dotted `Er.Carrier` access to return.
 #[test]
 fn functor_body_dotted_type_member_via_per_call_bind() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
@@ -80,12 +80,12 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
 /// Per-call type-side bind survives closure escape: an inner FN returned from an
 /// outer functor reads its captured `Er` from the outer's per-call
 /// `bindings.types` after the outer call has returned. The
-/// `KFunction(&fn, Some(Rc<CallArena>))` lift pins the value-side arena; this
+/// `KFunction(&fn, Some(Rc<CallFrame>))` lift pins the value-side region; this
 /// pins the type-side entry alongside it.
 #[test]
 fn functor_closure_escape_pins_type_class_bind() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
@@ -98,7 +98,7 @@ fn functor_closure_escape_pins_type_class_bind() {
             (FN (LOOKUP) -> Any = (Er.Carrier))",
     );
     run(scope, "LET _maker = (MAKE_LOOKUP IntOrdView)");
-    // Churn the per-call arena's drop discipline before invoking the inner FN.
+    // Churn the per-call region's drop discipline before invoking the inner FN.
     for _ in 0..5 {
         run_one(scope, parse_one("PRINT 1"));
     }
@@ -118,8 +118,8 @@ fn functor_closure_escape_pins_type_class_bind() {
 /// returning the passed-through module without surfacing `UnboundName`.
 #[test]
 fn functor_returning_bare_signature_typed_param_does_not_panic() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\

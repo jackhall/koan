@@ -6,7 +6,7 @@ use super::ktype::KType;
 /// functions all carry a canonical string `summarize` and a structural `equal`. For
 /// container values, `ktype` walks elements to project the parameterized type.
 ///
-/// `'a` matches the arena lifetime carried by `KType<'a>`.
+/// `'a` matches the region lifetime carried by `KType<'a>`.
 pub trait Parseable<'a> {
     fn equal(&self, other: &dyn Parseable<'a>) -> bool;
     fn summarize(&self) -> String;

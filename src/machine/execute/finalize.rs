@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::model::{Carried, KType};
-use crate::machine::{CallArena, KError, KErrorKind};
+use crate::machine::{CallFrame, KError, KErrorKind};
 
 use super::runtime::KoanRuntime;
 
@@ -22,7 +22,7 @@ use super::runtime::KoanRuntime;
 ///
 /// Single-lifetime (`'o -> 'o`): the value arrives already at its destination node lifetime `'o`
 /// (the step lifetime the producer ran against), so the hook re-anchors only the contract — never
-/// the value — and the coarsening re-tag homes into the contract's own arena at the same `'o`.
+/// the value — and the coarsening re-tag homes into the contract's own region at the same `'o`.
 pub(in crate::machine::execute) trait NodeFinalize {
     /// Enforce the declared return on `output` against the already-vended live `contract`. A `None`
     /// frame (a frameless slot or the non-dying run frame) passes the value through untouched — and
@@ -30,7 +30,7 @@ pub(in crate::machine::execute) trait NodeFinalize {
     fn finalize_terminal<'o>(
         &self,
         output: Result<Carried<'o>, KError>,
-        frame: Option<&Rc<CallArena>>,
+        frame: Option<&Rc<CallFrame>>,
         contract: Option<ReturnContract<'o>>,
     ) -> Result<Carried<'o>, KError>;
 }
@@ -39,7 +39,7 @@ impl NodeFinalize for KoanRuntime<'_> {
     fn finalize_terminal<'o>(
         &self,
         output: Result<Carried<'o>, KError>,
-        frame: Option<&Rc<CallArena>>,
+        frame: Option<&Rc<CallFrame>>,
         contract: Option<ReturnContract<'o>>,
     ) -> Result<Carried<'o>, KError> {
         enforce_return_contract(output, frame, contract)
@@ -50,28 +50,27 @@ impl NodeFinalize for KoanRuntime<'_> {
 /// frame (a frameless slot or the non-dying run frame) passes the value through untouched. A failed
 /// return-type check becomes `Err` — the caller clears placeholders and finalizes. A non-coarsening
 /// check leaves the value in the producer frame; a coarsening re-tag is re-allocated into the
-/// contract's own home arena (`ReturnContract::home_arena` — the callee's captured-scope / arm
-/// call-site arena, a strict ancestor of the producer frame) so the re-tagged terminal outlives the
-/// reused/freed producer frame. Reads no scope: the home arena rides the contract, witnessed by the
+/// contract's own home region (`ReturnContract::home_region` — the callee's captured-scope / arm
+/// call-site region, a strict ancestor of the producer frame) so the re-tagged terminal outlives the
+/// reused/freed producer frame. Reads no scope: the home region rides the contract, witnessed by the
 /// cart `Rc`.
 fn enforce_return_contract<'o>(
     output: Result<Carried<'o>, KError>,
-    frame: Option<&Rc<CallArena>>,
-    prev_function: Option<ReturnContract<'o>>,
+    frame: Option<&Rc<CallFrame>>,
+    contract: Option<ReturnContract<'o>>,
 ) -> Result<Carried<'o>, KError> {
     match (output, frame) {
         (Ok(Carried::Object(v)), Some(_)) => {
-            match check_declared_return(prev_function, |d| d.matches_value(v), || v.ktype().name())?
-            {
+            match check_declared_return(contract, |d| d.matches_value(v), || v.ktype().name())? {
                 // Re-tag to the declared return type so downstream dispatch sees the contract
                 // (may coarsen, e.g. `List<Number>` through `:(LIST OF Any)` -> `List<Any>`). The
-                // re-tag is a shallow rebuild homed in the contract's own home arena, since the
+                // re-tag is a shallow rebuild homed in the contract's own home region, since the
                 // producer frame it was born in may be reused or freed before consumers read it.
                 Some(declared) => {
                     let stamped = v.deep_clone().stamp_type(declared);
-                    let home = prev_function
+                    let home = contract
                         .expect("a declared return type implies a contract")
-                        .home_arena();
+                        .home_region();
                     Ok(Carried::Object(home.alloc_object(stamped)))
                 }
                 None => Ok(Carried::Object(v)),
@@ -81,11 +80,11 @@ fn enforce_return_contract<'o>(
         // The type channel ignores the returned declared type — unlike the `Object` arm, it does
         // not re-tag — so the in-frame value passes through unchanged.
         (Ok(Carried::Type(t)), Some(_)) => {
-            check_declared_return(prev_function, |d| d.matches_type(t), || t.name())?;
+            check_declared_return(contract, |d| d.matches_type(t), || t.name())?;
             Ok(Carried::Type(t))
         }
         (Err(e), Some(_frame)) => {
-            let with_frame = match prev_function {
+            let with_frame = match contract {
                 Some(contract) => {
                     let label = match contract {
                         ReturnContract::Function(f) => f.summarize(),

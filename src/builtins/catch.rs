@@ -39,7 +39,7 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        require_kexpression, Action, CatchCont, Dep, DepPlacement,
+        require_kexpression, Action, CatchContinue, Dep, DepPlacement,
     };
     use crate::machine::model::Carried;
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", "expr"));
@@ -49,10 +49,10 @@ pub fn body<'a>(
         Some(KType::SetRef { set, index }) => (Rc::clone(set), *index),
         _ => panic!("Result must be registered before CATCH"),
     };
-    let finish: CatchCont<'a> = Box::new(move |fctx, result| {
+    let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
         let (tag, payload): (&str, KObject<'a>) = match result {
             Ok(v) => ("Ok", v.deep_clone()),
-            Err(e) => ("Error", e.to_tagged(fctx.scope.arena)),
+            Err(e) => ("Error", e.to_tagged(fctx.scope.region)),
         };
         let tagged = KObject::Tagged {
             tag: tag.to_string(),
@@ -61,7 +61,7 @@ pub fn body<'a>(
             index: result_index,
             type_args: Rc::new(vec![]),
         };
-        Action::Done(Ok(Carried::Object(fctx.scope.arena.alloc_object(tagged))))
+        Action::Done(Ok(Carried::Object(fctx.scope.region.alloc_object(tagged))))
     });
     Action::Catch {
         watched: Dep::Dispatch {

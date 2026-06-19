@@ -33,7 +33,7 @@ pub struct OperatorEntry {
 
 /// A declared set of mutually chainable operators plus each member's fold metadata.
 /// Pointer-shared: every powerset key the registering module installs points at the
-/// same arena-allocated record, so a subset used in one expression resolves to the
+/// same region-allocated record, so a subset used in one expression resolves to the
 /// same group as any other subset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperatorGroup {

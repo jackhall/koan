@@ -118,9 +118,9 @@ uses, distinguished by its `type_id`'s KType. So `(IntOrdView.zero)` reads as th
 abstract `Type` (opaque), not the underlying `Number`, and a functor body
 `(FN (GET_ZERO Er :WithZero) -> Er.Type = (Er.zero))` whose return
 type is the per-call abstract member admits the slot read. The carrier and its
-`type_id` are allocated in the *module's* arena (declaration-stable), so the
+`type_id` are allocated in the *module's* region (declaration-stable), so the
 `type_id` outlives any lift or deep-clone of the read value into a per-call functor
-arena.
+region.
 
 Opaque ascription is the type-abstraction primitive. It replaces the
 newtype-with-private-fields pattern that a trait system would need.
@@ -151,13 +151,13 @@ module named as an ATTR receiver, a signature introspected by `:|` or `WITH`,
 or either surfaced by `USING … SCOPE` — surface the
 `KType::Module { .. } | KType::Signature { .. }` identity in the value channel's `Type` arm on
 demand from the type entry via
-[`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_expr.rs);
+[`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs);
 ATTR's `body_type_lhs` routes its Type-classed receiver through that seam rather
 than a raw `bindings.data` lookup.
 
 `KType::Module` carries the live `&Module` pointer (plus the per-call
 frame anchor for functor-built modules); `KType::Signature { sig, pinned_slots }`
-carries the arena-pinned `&Signature` plus any `WITH` abstract-type
+carries the region-pinned `&Signature` plus any `WITH` abstract-type
 pins; `KType::AbstractType { source, name }` carries an abstract-type member —
 either a SIG-declared member (`source: Sig(scope_id)`) or the per-call mint of an
 opaquely-ascribed module (`source: Module(view)`). Module identity is by
@@ -231,16 +231,16 @@ inside the block resolves its own internal names in the module's lexical scope:
 a `KFunction` carries its definition scope and evaluates its body under it, so
 `USING` is purely a lookup/dispatch surface, not a re-capture.
 
-The transparent scope is allocated in the **call-site arena**, and the block is
+The transparent scope is allocated in the **call-site region**, and the block is
 run as a deferred sub-dispatch whose result the `USING` node lifts. Allocating in
-the call-site arena (rather than a per-call frame that drops at block end) is what
+the call-site region (rather than a per-call frame that drops at block end) is what
 makes forwarding sound: a forwarded bind — or a function defined in the block and
 forward-registered into the call site — references values and a captured scope
-that all live in the call-site arena. For a functor-result module whose child
-scope lives in a per-call `CallArena`, the opened module's value (carrying that
-arena's `Rc` per the
-[per-call arena protocol](../per-call-arena-protocol.md#carriers)) is rooted in
-the call-site arena so the borrowed window survives both the block and any
+that all live in the call-site region. For a functor-result module whose child
+scope lives in a per-call `CallFrame`, the opened module's value (carrying that
+region's `Rc` per the
+[per-call region protocol](../per-call-region/lifecycle.md#carriers)) is rooted in
+the call-site region so the borrowed window survives both the block and any
 closure that escapes it reading a surfaced member.
 
 A bare `FN` registration writes only the `functions` dispatch bucket, never

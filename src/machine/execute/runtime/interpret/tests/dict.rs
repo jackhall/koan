@@ -42,9 +42,9 @@ fn lookup_bool_key<'run, 'b>(
 /// `LET` succeeds rather than tripping the empty-container rule.
 #[test]
 fn let_binds_an_empty_record_literal() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run("LET d = {}", &arena, captured);
+    let scope = run("LET d = {}", &region, captured);
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Record(fields, _)) => assert!(fields.is_empty(), "expected empty record"),
@@ -57,9 +57,9 @@ fn let_binds_an_empty_record_literal() {
 
 #[test]
 fn let_binds_a_dict_with_string_keys() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(r#"LET d = {"a": 1, "b": 2}"#, &arena, captured);
+    let scope = run(r#"LET d = {"a": 1, "b": 2}"#, &region, captured);
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
@@ -77,9 +77,9 @@ fn let_binds_a_dict_with_string_keys() {
 
 #[test]
 fn let_binds_a_dict_with_number_keys() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(r#"LET d = {1: "a", 2: "b"}"#, &arena, captured);
+    let scope = run(r#"LET d = {1: "a", 2: "b"}"#, &region, captured);
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
@@ -97,9 +97,9 @@ fn let_binds_a_dict_with_number_keys() {
 
 #[test]
 fn let_binds_a_dict_with_bool_keys() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run("LET d = {true: 1, false: 0}\n", &arena, captured);
+    let scope = run("LET d = {true: 1, false: 0}\n", &region, captured);
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
@@ -117,11 +117,11 @@ fn let_binds_a_dict_with_bool_keys() {
 
 #[test]
 fn bare_identifier_key_is_looked_up() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
         "LET name = \"alice\"\nLET d = {name: 1}\n",
-        &arena,
+        &region,
         captured,
     );
     let data = scope.bindings().data();
@@ -139,9 +139,9 @@ fn bare_identifier_key_is_looked_up() {
 
 #[test]
 fn sub_expression_as_value_evaluates_eagerly() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(r#"LET d = {"a": (LET y = 7)}"#, &arena, captured);
+    let scope = run(r#"LET d = {"a": (LET y = 7)}"#, &region, captured);
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
@@ -156,9 +156,9 @@ fn sub_expression_as_value_evaluates_eagerly() {
 
 #[test]
 fn sub_expression_as_key_evaluates() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run("LET k = \"x\"\nLET d = {(k): 1}\n", &arena, captured);
+    let scope = run("LET k = \"x\"\nLET d = {(k): 1}\n", &region, captured);
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
@@ -172,9 +172,9 @@ fn sub_expression_as_key_evaluates() {
 
 #[test]
 fn multiline_dict_binds_correctly() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run("LET d = {\n  \"a\": 1\n  \"b\": 2\n}\n", &arena, captured);
+    let scope = run("LET d = {\n  \"a\": 1\n  \"b\": 2\n}\n", &region, captured);
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
@@ -192,9 +192,9 @@ fn multiline_dict_binds_correctly() {
 
 #[test]
 fn nested_dict_in_list_binds_correctly() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(r#"LET xs = [{"a": 1} {"b": 2}]"#, &arena, captured);
+    let scope = run(r#"LET xs = [{"a": 1} {"b": 2}]"#, &region, captured);
     let data = scope.bindings().data();
     match data.get("xs").map(|(o, _)| *o) {
         Some(KObject::List(outer, _)) => {

@@ -14,7 +14,7 @@ pub fn body<'a>(
     use crate::machine::core::kfunction::action::{require_kexpression, Action};
     use crate::machine::model::Carried;
     let expr = crate::try_action!(require_kexpression(ctx.args, "QUOTE", "expr"));
-    let obj = ctx.scope.arena.alloc_object(KObject::KExpression(expr));
+    let obj = ctx.scope.region.alloc_object(KObject::KExpression(expr));
     Action::Done(Ok(Carried::Object(obj)))
 }
 
@@ -29,11 +29,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{run, run_root_with_buf};
-    use crate::machine::RuntimeArena;
+    use crate::machine::KoanRegion;
 
     fn run_program(source: &str) -> Vec<u8> {
-        let arena = RuntimeArena::new();
-        let (scope, captured) = run_root_with_buf(&arena);
+        let region = KoanRegion::new();
+        let (scope, captured) = run_root_with_buf(&region);
         run(scope, source);
         let bytes = captured.borrow().clone();
         bytes

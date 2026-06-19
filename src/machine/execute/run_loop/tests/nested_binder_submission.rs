@@ -10,7 +10,7 @@ use std::io::Write;
 use crate::builtins::default_scope;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::types::UntypedElement;
-use crate::machine::RuntimeArena;
+use crate::machine::KoanRegion;
 use crate::parse::parse;
 
 struct Sink;
@@ -25,8 +25,8 @@ impl Write for Sink {
 
 #[test]
 fn nested_binder_installs_inner_placeholder_at_outer_submission() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(Sink));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(Sink));
     let mut exprs =
         parse("LET f = (FN (HELPER x :Number) -> Number = (x))").expect("parse should succeed");
     assert_eq!(exprs.len(), 1, "test fixture: single top-level expression");

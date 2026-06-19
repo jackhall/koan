@@ -1,17 +1,17 @@
 use crate::builtins::default_scope;
-use crate::machine::core::source::Spanned;
 use crate::machine::execute::dispatch::resolve_name_part;
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::NameOutcome;
-use crate::machine::{BindingIndex, RuntimeArena};
+use crate::machine::{BindingIndex, KoanRegion};
+use crate::source::Spanned;
 
 #[test]
 fn resolve_name_part_identifier_resolved() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let bound = arena.alloc_object(KObject::Number(7.0));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let bound = region.alloc_object(KObject::Number(7.0));
     scope
         .bind_value("x".to_string(), bound, BindingIndex::BUILTIN)
         .unwrap();
@@ -25,9 +25,9 @@ fn resolve_name_part_identifier_resolved() {
 
 #[test]
 fn resolve_name_part_type_resolved() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let part = ExpressionPart::Type(TypeName::leaf("Number".to_string()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let part = ExpressionPart::Type(TypeIdentifier::leaf("Number".to_string()));
     let sched = KoanRuntime::new();
     match resolve_name_part(scope, &part, sched.scheduler(), None, None) {
         NameOutcome::Resolved(Carried::Type(KType::Number)) => {}
@@ -46,8 +46,8 @@ fn resolve_name_part_type_resolved() {
 
 #[test]
 fn resolve_name_part_parked() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let producer = sched.dispatch_in_scope(
         KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("_".into()))]),
@@ -65,8 +65,8 @@ fn resolve_name_part_parked() {
 
 #[test]
 fn resolve_name_part_unbound() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let part = ExpressionPart::Identifier("missing".to_string());
     let sched = KoanRuntime::new();
     match resolve_name_part(scope, &part, sched.scheduler(), None, None) {
@@ -78,8 +78,8 @@ fn resolve_name_part_unbound() {
 /// A `consumer` argument that matches its own producer returns `Cycle`, not `Parked`.
 #[test]
 fn resolve_name_part_self_park_is_cycle() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let slot = sched.dispatch_in_scope(
         KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(

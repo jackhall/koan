@@ -1,6 +1,6 @@
 //! Per-`ExpressionPart` admissibility, per-value type-tag checks, and specificity
 //! ordering for dispatch tie-breaking on `KType`. See
-//! [design/typing/ktype.md](../../../../design/typing/ktype.md).
+//! [design/typing/ktype/README.md](../../../../design/typing/ktype/README.md).
 
 use std::rc::Rc;
 
@@ -15,7 +15,7 @@ impl<'a> KType<'a> {
     /// True iff a parameter declared with this `KType` carries a value whose nominal
     /// identity is meaningful as a *type* binding (not just a value binding), so the
     /// per-call binding must be dual-written into the types-side scope. Only the
-    /// *type-value* `OfKind` kinds qualify — a nominal-family kind (`Tagged` / `Newtype` /
+    /// *type-value* `OfKind` kinds qualify — a nominal-family kind (`Tagged` / `NewType` /
     /// `TypeConstructor`) classifies a type value but is not itself used as a binding-side
     /// slot, so it stays out (an `OfKind` is type-channel-only and never binds a runtime
     /// instance).
@@ -23,13 +23,13 @@ impl<'a> KType<'a> {
         matches!(
             self,
             KType::Signature { .. }
-                | KType::OfKind(KKind::Proper | KKind::Any | KKind::Module | KKind::Signature)
+                | KType::OfKind(KKind::ProperType | KKind::AnyType | KKind::Module | KKind::Signature)
         )
     }
 
     /// Admissibility predicate for the FUNCTOR return-type slot. See
     /// [design/typing/functors.md](../../../../design/typing/functors.md).
-    /// `KType::OfKind(KKind::Any)` is intentionally excluded — bare `Type` denotes "any type
+    /// `KType::OfKind(KKind::AnyType)` is intentionally excluded — bare `Type` denotes "any type
     /// value" rather than "a module or signature value", and the design pins
     /// the seam to the narrower set.
     pub fn is_admissible_functor_return(&self) -> bool {
@@ -44,8 +44,8 @@ impl<'a> KType<'a> {
     }
 
     /// Strict specificity ordering. Concrete types outrank `Any` and the
-    /// unconstrained-name slot types (`Identifier`, `TypeExprRef`), so an overload
-    /// like `ATTR <s:Newtype>` beats its `ATTR <s:Identifier>` sibling when both admit.
+    /// unconstrained-name slot types (`Identifier`, `ProperType`), so an overload
+    /// like `ATTR <s:NewType>` beats its `ATTR <s:Identifier>` sibling when both admit.
     /// A nominal-family kind out-specifies `OfKind(Proper)` (`OfKind(Tagged) ≺
     /// OfKind(Proper)`), and a sealed `SetRef` / `Variant` member out-specifies the
     /// `OfKind(kind)` of its own family. Parameterized containers are covariant in their
@@ -55,8 +55,8 @@ impl<'a> KType<'a> {
         if matches!(other, Any) && !matches!(self, Any) {
             return true;
         }
-        if matches!(other, Identifier | OfKind(KKind::Proper))
-            && !matches!(self, Identifier | OfKind(KKind::Proper) | Any)
+        if matches!(other, Identifier | OfKind(KKind::ProperType))
+            && !matches!(self, Identifier | OfKind(KKind::ProperType) | Any)
         {
             return true;
         }
@@ -246,11 +246,11 @@ impl<'a> KType<'a> {
             // (`OfKind(Proper) == ktype()`); every other kind — modules / signatures (which
             // ride the type channel) and the nominal families — admits no runtime instance.
             KType::OfKind(k) => match k {
-                KKind::Proper | KKind::Any => *self == obj.ktype(),
+                KKind::ProperType | KKind::AnyType => *self == obj.ktype(),
                 KKind::Module
                 | KKind::Signature
                 | KKind::Tagged
-                | KKind::Newtype
+                | KKind::NewType
                 | KKind::TypeConstructor => false,
             },
             // A stamped `type_args` carrier (from ascription) takes precedence and is
@@ -309,7 +309,7 @@ impl<'a> KType<'a> {
     /// slot — the type-channel analog of [`matches_value`]. A `Signature` slot is satisfied by
     /// a module satisfying it (sig membership + pinned-slot agreement); an `OfKind` slot when
     /// its kind subsumes `t.kind_of()` (so `OfKind(Proper)` admits any proper type — including
-    /// a now-`Tagged`/`Newtype`-classified nominal — while the module/sig wall keeps `Proper`
+    /// a now-`Tagged`/`NewType`-classified nominal — while the module/sig wall keeps `Proper`
     /// from admitting a module); `Any` by anything; a module/signature *value* slot by
     /// structural identity. Other concrete slots compare against the `OfKind(Proper)` dispatch
     /// identity a non-module/sig type carrier reports, so they admit no bare type value.
@@ -318,7 +318,7 @@ impl<'a> KType<'a> {
         // carries its identity directly; every other type fills the `OfKind(Proper)` marker.
         let carrier_ktype = match t {
             KType::Module { .. } | KType::Signature { .. } => t.clone(),
-            _ => KType::OfKind(KKind::Proper),
+            _ => KType::OfKind(KKind::ProperType),
         };
         match self {
             KType::Any => true,
@@ -355,33 +355,33 @@ impl<'a> KType<'a> {
             KType::Number => matches!(
                 part,
                 ExpressionPart::Literal(KLiteral::Number(_))
-                    | ExpressionPart::Future(Carried::Object(KObject::Number(_)))
+                    | ExpressionPart::Spliced(Carried::Object(KObject::Number(_)))
             ),
             KType::Str => matches!(
                 part,
                 ExpressionPart::Literal(KLiteral::String(_))
-                    | ExpressionPart::Future(Carried::Object(KObject::KString(_)))
+                    | ExpressionPart::Spliced(Carried::Object(KObject::KString(_)))
             ),
             KType::Bool => matches!(
                 part,
                 ExpressionPart::Literal(KLiteral::Boolean(_))
-                    | ExpressionPart::Future(Carried::Object(KObject::Bool(_)))
+                    | ExpressionPart::Spliced(Carried::Object(KObject::Bool(_)))
             ),
             KType::Null => matches!(
                 part,
                 ExpressionPart::Literal(KLiteral::Null)
-                    | ExpressionPart::Future(Carried::Object(KObject::Null))
+                    | ExpressionPart::Spliced(Carried::Object(KObject::Null))
             ),
             KType::List(elem) => match part {
                 ExpressionPart::ListLiteral(_) => true,
-                ExpressionPart::Future(Carried::Object(KObject::List(_, carried))) => {
+                ExpressionPart::Spliced(Carried::Object(KObject::List(_, carried))) => {
                     elem.satisfied_by(carried)
                 }
                 _ => false,
             },
             KType::Dict(k_ty, v_ty) => match part {
                 ExpressionPart::DictLiteral(_) => true,
-                ExpressionPart::Future(Carried::Object(KObject::Dict(_, carried_k, carried_v))) => {
+                ExpressionPart::Spliced(Carried::Object(KObject::Dict(_, carried_k, carried_v))) => {
                     k_ty.satisfied_by(carried_k) && v_ty.satisfied_by(carried_v)
                 }
                 _ => false,
@@ -392,29 +392,29 @@ impl<'a> KType<'a> {
             // memoized field-type record against the slot via `satisfied_by`.
             KType::Record(_) => match part {
                 ExpressionPart::RecordLiteral(_) => true,
-                ExpressionPart::Future(Carried::Object(KObject::Record(_, carried))) => {
+                ExpressionPart::Spliced(Carried::Object(KObject::Record(_, carried))) => {
                     self.satisfied_by(&KType::Record(carried.clone()))
                 }
                 _ => false,
             },
             KType::KFunction { params, ret } => match part {
-                ExpressionPart::Future(Carried::Object(KObject::KFunction(f, _))) => {
+                ExpressionPart::Spliced(Carried::Object(KObject::KFunction(f, _))) => {
                     if f.is_functor {
                         return false;
                     }
                     function_compat(&f.signature, params, ret, false)
                 }
-                ExpressionPart::Future(Carried::Object(KObject::KFuture(_, _))) => true,
+                ExpressionPart::Spliced(Carried::Object(KObject::KFuture(_, _))) => true,
                 _ => false,
             },
             KType::KFunctor { params, ret, .. } => match part {
-                ExpressionPart::Future(Carried::Object(KObject::KFunction(f, _))) => {
+                ExpressionPart::Spliced(Carried::Object(KObject::KFunction(f, _))) => {
                     if !f.is_functor {
                         return false;
                     }
                     function_compat(&f.signature, params, ret, true)
                 }
-                ExpressionPart::Future(Carried::Object(KObject::KFuture(_, _))) => true,
+                ExpressionPart::Spliced(Carried::Object(KObject::KFuture(_, _))) => true,
                 _ => false,
             },
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
@@ -425,14 +425,14 @@ impl<'a> KType<'a> {
             // subsumption. A raw parser type token is a proper type name, admitted only for
             // `Proper` / `Any`. A first-class type value is admitted iff the slot kind
             // subsumes the value's `kind_of` — so `Proper` / `Any` take any non-module /
-            // non-signature type (incl. a `Tagged` / `Newtype` / `TypeConstructor` nominal),
+            // non-signature type (incl. a `Tagged` / `NewType` / `TypeConstructor` nominal),
             // `Module` / `Signature` take only their own carriers, and a nominal-kind slot
             // takes only its own family. `kind_of(Module) == Module` keeps the module/sig wall
             // automatic — `OfKind(Proper)` never admits a module, so a chained `[ATTR <m>
             // <field>]` call cannot tie between `body_module` and `body_type_lhs`.
             KType::OfKind(k) => match part {
-                ExpressionPart::Type(_) => matches!(k, KKind::Proper | KKind::Any),
-                ExpressionPart::Future(Carried::Type(ty)) => k.admits(ty.kind_of()),
+                ExpressionPart::Type(_) => matches!(k, KKind::ProperType | KKind::AnyType),
+                ExpressionPart::Spliced(Carried::Type(ty)) => k.admits(ty.kind_of()),
                 _ => false,
             },
             // Strict `(set ptr, index)` equality is the per-declaration identity check for a
@@ -440,33 +440,33 @@ impl<'a> KType<'a> {
             // the shared allocation and index. A user-`UNION` value reports a `Variant`, so a
             // union-typed slot admits any variant of that union explicitly.
             KType::SetRef { set, index } => match part {
-                ExpressionPart::Future(Carried::Object(KObject::Tagged {
+                ExpressionPart::Spliced(Carried::Object(KObject::Tagged {
                     set: s2,
                     index: i2,
                     ..
                 })) if s2.member(*i2).kind == KKind::Tagged => Rc::ptr_eq(set, s2) && index == i2,
-                ExpressionPart::Future(obj) => &obj.ktype() == self,
+                ExpressionPart::Spliced(obj) => &obj.ktype() == self,
                 _ => false,
             },
             // A variant slot admits exactly its own tagged values via `(set, index, tag)`
             // identity.
             KType::Variant { .. } => {
-                matches!(part, ExpressionPart::Future(obj) if &obj.ktype() == self)
+                matches!(part, ExpressionPart::Spliced(obj) if &obj.ktype() == self)
             }
             KType::Module { .. } => matches!(
                 part,
-                ExpressionPart::Future(obj) if obj.ktype() == *self
+                ExpressionPart::Spliced(obj) if obj.ktype() == *self
             ),
             KType::AbstractType { .. } => matches!(
                 part,
-                ExpressionPart::Future(obj) if obj.ktype() == *self
+                ExpressionPart::Spliced(obj) if obj.ktype() == *self
             ),
             // Constraint role: a `:S` slot admits a *module* satisfying `S` (+ pinned-slot
             // check). Unascribed source modules carry an empty `compatible_sigs` and never
             // match; they must pass through `:|` / `:!` first. A signature *value* is
             // admitted by the `OfKind(Signature)` wildcard above, never here.
             KType::Signature { sig, pinned_slots } => match part {
-                ExpressionPart::Future(Carried::Type(KType::Module { module: m, .. })) => {
+                ExpressionPart::Spliced(Carried::Type(KType::Module { module: m, .. })) => {
                     if !m.compatible_sigs.borrow().contains(&sig.sig_id()) {
                         return false;
                     }
@@ -485,7 +485,7 @@ impl<'a> KType<'a> {
             // Transient / intra-set leaves never reach a real argument slot: `RecursiveRef`
             // is sealed away before dispatch, and `SetLocal` only appears inside a member's
             // schema (reached by navigation, which carries the ambient set).
-            // Transient: consumed by `Scope::resolve_type_expr` before reaching a real slot.
+            // Transient: consumed by `Scope::resolve_type_identifier` before reaching a real slot.
             KType::RecursiveRef(_) | KType::Unresolved(_) => true,
             KType::SetLocal(_) => false,
             // A whole-set handle names a group of types, not a value type — it admits no
@@ -495,10 +495,10 @@ impl<'a> KType<'a> {
             // argument slot, so it admits nothing on its own.
             KType::DeferredReturn(_) => false,
             // Meta-type path: no runtime carrier synthesizes a `ConstructorApply`
-            // `ktype()`, so admit only a `Future(Carried::Type(_))` with structurally-equal
+            // `ktype()`, so admit only a `Spliced(Carried::Type(_))` with structurally-equal
             // inner `KType`.
             KType::ConstructorApply { .. } => match part {
-                ExpressionPart::Future(Carried::Type(kt)) => *kt == self,
+                ExpressionPart::Spliced(Carried::Type(kt)) => *kt == self,
                 _ => false,
             },
         }
@@ -592,7 +592,7 @@ pub fn result_field_param_index(carrier_name: &str, tag: &str) -> Option<usize> 
 ///   iff its surface shadow equals the candidate's; every other slot rejects, because a
 ///   deferred return is opaque until per-call elaboration and so refines nothing more
 ///   precise than its own shadow. See
-///   [ktype.md § Variance](../../../../design/typing/ktype.md#variance).
+///   [ktype/parameterization-and-variance.md § Variance](../../../../design/typing/ktype/parameterization-and-variance.md#variance).
 /// - Params contravariant with width-drop: every `Argument` the value declares must
 ///   appear in `params` (a value-required param the slot doesn't promise is a width
 ///   violation → `false`); for a shared name, the slot's param must be equal-or-more-

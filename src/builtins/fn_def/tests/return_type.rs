@@ -5,13 +5,13 @@ use crate::builtins::test_support::{
 };
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType, ReturnType};
-use crate::machine::{KErrorKind, RuntimeArena};
+use crate::machine::{KErrorKind, KoanRegion};
 use crate::parse::parse;
 
 #[test]
 fn fn_parses_declared_return_type_onto_signature() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
 
     let f = lookup_fn(scope, "DOUBLE");
@@ -23,8 +23,8 @@ fn fn_parses_declared_return_type_onto_signature() {
 /// load-bearing assertion is that `DOUBLE` isn't registered.
 #[test]
 fn fn_without_return_type_annotation_does_not_register() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let exprs = parse("FN (DOUBLE x :Number) = (PRINT \"x\")").expect("parse should succeed");
     let mut sched = KoanRuntime::new();
     for expr in exprs {
@@ -39,8 +39,8 @@ fn fn_without_return_type_annotation_does_not_register() {
 
 #[test]
 fn fn_with_unknown_return_type_name_errors() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Bogus = (x)"), scope);
     sched
@@ -58,8 +58,8 @@ fn fn_with_unknown_return_type_name_errors() {
 
 #[test]
 fn user_fn_return_type_mismatch_surfaces_as_kerror() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (LIE) -> Number = (\"oops\")");
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("LIE"), scope);
@@ -111,11 +111,11 @@ fn fn_with_forward_user_bound_return_type_works() {
 }
 
 /// Pins the surface-form-survives-bind guarantee on `KObject::TypeNameRef` —
-/// see [ktype.md § TypeNameRef](../../../../design/typing/ktype.md#typenameref--surface-form-survives-bind).
+/// see [ktype/slots-and-signatures.md § TypeNameRef](../../../../design/typing/ktype/slots-and-signatures.md#ktypeunresolved--surface-form-survives-bind).
 #[test]
 fn fn_return_type_surface_name_preserved_in_error() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("FN (DOIT) -> SomeWeirdName = (1)"), scope);
     sched
@@ -133,8 +133,8 @@ fn fn_return_type_surface_name_preserved_in_error() {
 
 #[test]
 fn user_fn_with_any_return_type_accepts_anything() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (PURE) -> Any = (\"a string\")");
     let result = run_one(scope, parse_one("PURE"));
     assert!(matches!(result, KObject::KString(s) if s == "a string"));

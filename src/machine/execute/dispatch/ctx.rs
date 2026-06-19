@@ -19,10 +19,10 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
-use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope};
+use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeId, Scope};
+use crate::source::Spanned;
 
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
@@ -40,12 +40,12 @@ use crate::scheduler::Scheduler;
 /// cannot outlive the cart it names.
 pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
     node_scope: &'step NodeScope,
-    frame: Option<&'step Rc<CallArena>>,
+    frame: Option<&'step Rc<CallFrame>>,
 ) -> &'step Scope<'b> {
     match node_scope {
-        // SAFETY: the `YokedChild` pointer was erased from a block scope in a cart-*ancestor* arena
+        // SAFETY: the `YokedChild` pointer was erased from a block scope in a cart-*ancestor* region
         // (`resolve_node_scope`'s outer-chain check); the active cart's `FrameStorage.outer` chain pins that
-        // arena, and `frame` is that cart. The returned borrow is bounded by `frame` (both args share
+        // region, and `frame` is that cart. The returned borrow is bounded by `frame` (both args share
         // `'step`), so it cannot be cashed past the cart that pins the pointee.
         NodeScope::YokedChild(ptr) => {
             let _witness = frame.expect("a YokedChild slot keeps its active cart");
@@ -129,7 +129,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
 
     /// Cloned `Rc` to the active per-call frame — the `invoke` decide reads it to build a
     /// builtin's `BodyCtx`. `None` only outside any frame (top-level builtins).
-    pub(in crate::machine::execute) fn current_frame(&self) -> Option<Rc<CallArena>> {
+    pub(in crate::machine::execute) fn current_frame(&self) -> Option<Rc<CallFrame>> {
         self.ambient.active_frame_ref().cloned()
     }
 
@@ -229,7 +229,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             // pull-lifted into this node's frame and re-exposed at `'step` by the combinator, so they
             // splice straight into the `'step` working expression that re-dispatches in this frame.
             for (slot, value) in part_indices.iter().zip(results) {
-                working_expr.parts[*slot].value = ExpressionPart::Future(*value);
+                working_expr.parts[*slot].value = ExpressionPart::Spliced(*value);
             }
             finish_eager_subs(working_expr, picked)
         });
@@ -242,7 +242,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
 /// frame-installing [`Outcome::Continue`] (via [`invoke_continue`](super::exec::invoke_continue));
 /// `None` defers to a re-resolve `Continue` (via
 /// [`redispatch_continue`](super::keyworded::redispatch_continue), which re-runs
-/// [`keyworded::finish`](super::keyworded::finish), where an element-typed `Future(_)` revealed by a
+/// [`keyworded::finish`](super::keyworded::finish), where an element-typed `Spliced(_)` revealed by a
 /// sub surfaces as a slot-terminal `DispatchFailed`). Pure data — no `&mut`.
 fn finish_eager_subs<'step>(
     working_expr: KExpression<'step>,

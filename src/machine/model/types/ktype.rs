@@ -7,7 +7,7 @@
 //! Predicates live in `ktype_predicates.rs`; elaboration lives in `ktype_resolution.rs`.
 //!
 //! Lifetime parameter `'a`: the module/signature variants (`Module`, `Signature`,
-//! `AbstractType`) hold `&'a Module<'a>` / `&'a Signature<'a>` arena pointers; every other
+//! `AbstractType`) hold `&'a Module<'a>` / `&'a ModuleSignature<'a>` region pointers; every other
 //! variant is owned data and ignores the parameter.
 
 use super::kkind::KKind;
@@ -16,8 +16,8 @@ use super::recursive_set::RecursiveSet;
 use super::signature::DeferredReturnSurface;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{FrameStorage, ScopeId};
-use crate::machine::model::ast::TypeName;
-use crate::machine::model::values::{Module, Signature};
+use crate::machine::model::ast::TypeIdentifier;
+use crate::machine::model::values::{Module, ModuleSignature};
 use std::rc::Rc;
 
 /// Root of a [`KType::AbstractType`] identity. `Sig` carries the SIG decl_scope's id for a
@@ -50,7 +50,7 @@ pub enum KType<'a> {
     /// Bare `Dict` lowers to `Dict<Any, Any>`.
     Dict(Box<KType<'a>>, Box<KType<'a>>),
     /// Structural record type (`:{x :Number, y :Str}`) — an identifier-keyed field
-    /// schema with width/depth subtyping. Anonymous: a record-repr `Newtype` `SetRef`
+    /// schema with width/depth subtyping. Anonymous: a record-repr `NewType` `SetRef`
     /// (an ex-struct) wraps this with a nominal identity, but the bare record type is
     /// structural and order-blind.
     /// The inner `Record<KType>` is declaration-ordered for
@@ -94,7 +94,7 @@ pub enum KType<'a> {
     /// value's `ktype()` returns it, and it admits nothing on its own
     /// (`accepts_part` is `false`). Admission against a precise slot is syntactic
     /// equality of the surface shadow — see
-    /// [ktype.md § Variance](../../../../design/typing/ktype.md#variance).
+    /// [ktype/parameterization-and-variance.md § Variance](../../../../design/typing/ktype/parameterization-and-variance.md#variance).
     DeferredReturn(DeferredReturnSurface),
     Identifier,
     /// Lazy slot: accepts an unevaluated `ExpressionPart::Expression` so the builtin chooses
@@ -104,7 +104,7 @@ pub enum KType<'a> {
     /// `SigiledTypeExpr` part. Captures it raw (via `resolve_for`, as the inner
     /// `KObject::KExpression`) instead of eager-sub-dispatching, so a builtin can defer a
     /// param-referencing dotted/sigil return (`-> Er.Type`) to per-call elaboration. More
-    /// specific than [`KType::OfKind(KKind::Proper)`], so it wins the overload when both admit.
+    /// specific than [`KType::OfKind(KKind::ProperType)`], so it wins the overload when both admit.
     SigiledTypeExpr,
     /// Lazy slot for a `:{…}` record type — the sibling of [`KType::SigiledTypeExpr`] for a
     /// [`ExpressionPart::RecordType`](crate::machine::model::ast::ExpressionPart::RecordType)
@@ -160,7 +160,7 @@ pub enum KType<'a> {
     /// order-preserving (rather than a `HashMap`) so structural equality is deterministic.
     /// Identity is `sig.sig_id()` + `pinned_slots`; `sig.path` is diagnostic-only.
     Signature {
-        sig: &'a Signature<'a>,
+        sig: &'a ModuleSignature<'a>,
         pinned_slots: Vec<(String, KType<'a>)>,
     },
     /// First-class module value's type. `frame` carries the per-call `Rc<FrameStorage>`
@@ -197,9 +197,9 @@ pub enum KType<'a> {
     /// seam — a name not in [`KType::from_name`]'s builtin table (`Point`, `IntOrd`, `MyList`).
     /// Sibling to [`RecursiveRef`](KType::RecursiveRef): it rides the value channel's `Type`
     /// arm, never reaches the dispatch predicates, and is consumed + replaced by the
-    /// park-capable [`Scope::resolve_type_expr`](crate::machine::core::Scope::resolve_type_expr).
-    /// Carries the structured `TypeName` so the surface form survives the bind.
-    Unresolved(TypeName),
+    /// park-capable [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier).
+    /// Carries the structured `TypeIdentifier` so the surface form survives the bind.
+    Unresolved(TypeIdentifier),
     Any,
 }
 
@@ -278,8 +278,8 @@ impl<'a> KType<'a> {
 
     /// Classify a *type* into its shallow dispatch [`KKind`] — the value-side direction of
     /// `OfKind`. A module is `Module`, a signature is `Signature`, a user-declared nominal is
-    /// its family (`Tagged` / `Newtype` / `TypeConstructor`, read off the set member it
-    /// references), and every other type is `Proper`. Never returns `KKind::Any` (a slot-only
+    /// its family (`Tagged` / `NewType` / `TypeConstructor`, read off the set member it
+    /// references), and every other type is `Proper`. Never returns `KKind::AnyType` (a slot-only
     /// expectation). Applied to the type a type value carries — or a runtime value's
     /// `ktype()` — to match it against an `OfKind` slot.
     pub fn kind_of(&self) -> KKind {
@@ -292,7 +292,7 @@ impl<'a> KType<'a> {
             KType::SetRef { set, index } => set.member(*index).kind,
             KType::Variant { set, index, .. } => set.member(*index).kind,
             KType::ConstructorApply { ctor, .. } => ctor.kind_of(),
-            _ => KKind::Proper,
+            _ => KKind::ProperType,
         }
     }
 }
@@ -316,7 +316,7 @@ fn render_param_record(params: &Record<KType<'_>>) -> String {
         .join(" ")
 }
 
-/// Manual `PartialEq` — `Module`, `Signature`, and `AbstractType` carry arena pointers
+/// Manual `PartialEq` — `Module`, `Signature`, and `AbstractType` carry region pointers
 /// whose identity is the pointee's stable `scope_id()` / `sig_id()` rather than the raw
 /// pointer. Two opaque ascriptions of the same source module produce different `&Module`
 /// (each allocates a fresh child scope) and must NOT compare equal under `KType::Module`;
@@ -426,7 +426,7 @@ impl<'a> Eq for KType<'a> {}
 /// variants never alias and the unit variants need no further mixing; each
 /// compound arm then hashes exactly the fields its `PartialEq` arm compares.
 ///
-/// The arena-pointer variants hash their stable identity key — `Module` hashes
+/// The region-pointer variants hash their stable identity key — `Module` hashes
 /// `scope_id()`, `AbstractType` hashes its `source.scope_id()`, `Signature` hashes
 /// `sig_id()` — never the raw pointer, matching how `PartialEq` resolves them. `Module`'s
 /// `frame` lifecycle anchor stays excluded. A `SetRef` hashes `(Rc::as_ptr(set), index)`
@@ -488,7 +488,7 @@ impl<'a> std::hash::Hash for KType<'a> {
     }
 }
 
-/// Manual `Debug` — `derive` is blocked because `Module` / `Signature` / `FrameStorage`
+/// Manual `Debug` — `derive` is blocked because `Module` / `ModuleSignature` / `FrameStorage`
 /// don't implement `Debug` and recursing through module-typed KTypes is unbounded.
 impl<'a> std::fmt::Debug for KType<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -497,325 +497,4 @@ impl<'a> std::fmt::Debug for KType<'a> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::recursive_set::{NominalMember, NominalSchema};
-    use super::*;
-
-    /// A singleton `Rc<RecursiveSet>` over a record-repr newtype member named `name`, schema
-    /// filled.
-    fn record_newtype_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
-        let member = NominalMember::pending(name.into(), scope_id, KKind::Newtype);
-        member.fill(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
-            Record::new(),
-        )))));
-        Rc::new(RecursiveSet::new(vec![member]))
-    }
-
-    #[test]
-    fn name_renders_parameterized_list() {
-        let t = KType::List(Box::new(KType::List(Box::new(KType::Number))));
-        assert_eq!(t.name(), ":(LIST OF :(LIST OF Number))");
-    }
-
-    #[test]
-    fn name_renders_dict() {
-        let t = KType::Dict(Box::new(KType::Str), Box::new(KType::Number));
-        assert_eq!(t.name(), ":(MAP Str -> Number)");
-    }
-
-    #[test]
-    fn name_renders_function() {
-        let t = KType::KFunction {
-            params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
-            ret: Box::new(KType::Bool),
-        };
-        assert_eq!(t.name(), ":(FN (x :Number y :Str) -> Bool)");
-    }
-
-    /// A nested sigiled parameter type already opens with `:`, so the renderer must not
-    /// prefix a second colon (`xs :(LIST OF Number)`, not `xs ::(LIST OF Number)`).
-    #[test]
-    fn name_renders_function_with_sigiled_param() {
-        let t = KType::KFunction {
-            params: Record::from_pairs(vec![("xs".into(), KType::List(Box::new(KType::Number)))]),
-            ret: Box::new(KType::Bool),
-        };
-        assert_eq!(t.name(), ":(FN (xs :(LIST OF Number)) -> Bool)");
-    }
-
-    #[test]
-    fn name_renders_functor() {
-        let t = KType::KFunctor {
-            params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
-            ret: Box::new(KType::Bool),
-            body: None,
-        };
-        assert_eq!(t.name(), ":(FUNCTOR (x :Number y :Str) -> Bool)");
-    }
-
-    #[test]
-    fn functor_structural_eq_same_shape() {
-        let a = KType::KFunctor {
-            params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
-            ret: Box::new(KType::Bool),
-            body: None,
-        };
-        let b = KType::KFunctor {
-            params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
-            ret: Box::new(KType::Bool),
-            body: None,
-        };
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn functor_structural_neq_when_params_or_ret_differ() {
-        let base = KType::KFunctor {
-            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-            ret: Box::new(KType::Bool),
-            body: None,
-        };
-        let diff_params = KType::KFunctor {
-            params: Record::from_pairs(vec![("x".into(), KType::Str)]),
-            ret: Box::new(KType::Bool),
-            body: None,
-        };
-        let diff_ret = KType::KFunctor {
-            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-            ret: Box::new(KType::Null),
-            body: None,
-        };
-        assert_ne!(base, diff_params);
-        assert_ne!(base, diff_ret);
-    }
-
-    #[test]
-    fn functor_and_function_are_disjoint_types() {
-        let f = KType::KFunction {
-            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-            ret: Box::new(KType::Bool),
-        };
-        let g = KType::KFunctor {
-            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-            ret: Box::new(KType::Bool),
-            body: None,
-        };
-        assert_ne!(f, g);
-    }
-
-    #[test]
-    fn name_renders_function_nullary() {
-        let t = KType::KFunction {
-            params: Record::new(),
-            ret: Box::new(KType::Any),
-        };
-        assert_eq!(t.name(), ":(FN () -> Any)");
-    }
-
-    /// Function-slot identity is the record substrate's order-blind equality: the same
-    /// parameters by `(name, type)` in a different declaration order compare equal and
-    /// hash equal.
-    #[test]
-    fn function_params_order_blind_equality() {
-        let xy = KType::KFunction {
-            params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
-            ret: Box::new(KType::Bool),
-        };
-        let yx = KType::KFunction {
-            params: Record::from_pairs(vec![("y".into(), KType::Str), ("x".into(), KType::Number)]),
-            ret: Box::new(KType::Bool),
-        };
-        assert_eq!(xy, yx);
-        assert_eq!(hash_of(&xy), hash_of(&yx));
-    }
-
-    /// Identity is name-sensitive: same type, different parameter name is a different
-    /// function type.
-    #[test]
-    fn function_params_name_sensitive_inequality() {
-        let x = KType::KFunction {
-            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-            ret: Box::new(KType::Bool),
-        };
-        let a = KType::KFunction {
-            params: Record::from_pairs(vec![("a".into(), KType::Number)]),
-            ret: Box::new(KType::Bool),
-        };
-        assert_ne!(x, a);
-    }
-
-    #[test]
-    fn name_renders_recursive_ref_as_name() {
-        let t = KType::RecursiveRef("Tree".into());
-        assert_eq!(t.name(), "Tree");
-    }
-
-    #[test]
-    fn nominal_kind_surface_keywords() {
-        assert_eq!(KKind::Tagged.surface_keyword(), "Tagged");
-        assert_eq!(KKind::Newtype.surface_keyword(), "Newtype");
-        assert_eq!(KKind::TypeConstructor.surface_keyword(), "TypeConstructor",);
-    }
-
-    #[test]
-    fn nominal_of_kind_name_renders_family_keyword() {
-        assert_eq!(KType::OfKind(KKind::Newtype).name(), "Newtype");
-        assert_eq!(KType::OfKind(KKind::Tagged).name(), "Tagged");
-        assert_eq!(
-            KType::OfKind(KKind::TypeConstructor).name(),
-            "TypeConstructor"
-        );
-    }
-
-    #[test]
-    fn any_module_and_any_signature_render_surface_keywords() {
-        let am: KType<'_> = KType::OfKind(KKind::Module);
-        let asg: KType<'_> = KType::OfKind(KKind::Signature);
-        assert_eq!(am.name(), "Module");
-        assert_eq!(asg.name(), "Signature");
-    }
-
-    fn hash_of(t: &KType<'_>) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        t.hash(&mut h);
-        h.finish()
-    }
-
-    /// `a == b` ⟹ `hash(a) == hash(b)` across every arena-free variant. Each pair is
-    /// built independently so a stray identity-from-pointer bug would surface.
-    #[test]
-    fn hash_agrees_with_eq_for_arena_free_variants() {
-        let sid = ScopeId::from_raw(0, 0xBEEF);
-        let pairs: Vec<(KType<'_>, KType<'_>)> = vec![
-            (KType::Number, KType::Number),
-            (KType::Str, KType::Str),
-            (KType::Bool, KType::Bool),
-            (KType::Null, KType::Null),
-            (KType::Identifier, KType::Identifier),
-            (KType::KExpression, KType::KExpression),
-            (KType::OfKind(KKind::Proper), KType::OfKind(KKind::Proper)),
-            (KType::OfKind(KKind::Any), KType::OfKind(KKind::Any)),
-            (KType::Any, KType::Any),
-            (KType::OfKind(KKind::Module), KType::OfKind(KKind::Module)),
-            (
-                KType::OfKind(KKind::Signature),
-                KType::OfKind(KKind::Signature),
-            ),
-            (
-                KType::List(Box::new(KType::Number)),
-                KType::List(Box::new(KType::Number)),
-            ),
-            (
-                KType::Dict(Box::new(KType::Str), Box::new(KType::Number)),
-                KType::Dict(Box::new(KType::Str), Box::new(KType::Number)),
-            ),
-            (
-                KType::KFunction {
-                    params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-                    ret: Box::new(KType::Bool),
-                },
-                KType::KFunction {
-                    params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-                    ret: Box::new(KType::Bool),
-                },
-            ),
-            (
-                KType::KFunctor {
-                    params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-                    ret: Box::new(KType::Bool),
-                    body: None,
-                },
-                KType::KFunctor {
-                    params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-                    ret: Box::new(KType::Bool),
-                    body: None,
-                },
-            ),
-            (KType::OfKind(KKind::Tagged), KType::OfKind(KKind::Tagged)),
-            (
-                KType::RecursiveRef("Tree".into()),
-                KType::RecursiveRef("Tree".into()),
-            ),
-            (KType::SetLocal(2), KType::SetLocal(2)),
-        ];
-        // A `SetRef` pair sharing one `Rc` — identity is `(set ptr, index)`, so the same
-        // allocation must hash and compare equal.
-        let shared = record_newtype_set("Point", sid);
-        let set_ref_a = KType::SetRef {
-            set: Rc::clone(&shared),
-            index: 0,
-        };
-        let set_ref_b = KType::SetRef {
-            set: Rc::clone(&shared),
-            index: 0,
-        };
-        let pairs: Vec<(KType<'_>, KType<'_>)> = pairs
-            .into_iter()
-            .chain(std::iter::once((set_ref_a, set_ref_b)))
-            .collect();
-        for (a, b) in &pairs {
-            assert_eq!(a, b, "values must be equal: {:?}", a);
-            assert_eq!(
-                hash_of(a),
-                hash_of(b),
-                "equal values must hash equal: {:?}",
-                a
-            );
-        }
-    }
-
-    /// `SetRef` identity is `(set ptr, index)` and never descends the (cyclic) schema. Two
-    /// `SetRef`s over the same `Rc` allocation and index compare equal — so `Hash` must
-    /// agree. Two over *distinct* allocations of the same name compare unequal.
-    #[test]
-    fn hash_keys_set_ref_on_pointer_and_index() {
-        let sid = ScopeId::from_raw(0, 0x1234);
-        let set = record_newtype_set("Point", sid);
-        let a = KType::SetRef {
-            set: Rc::clone(&set),
-            index: 0,
-        };
-        let b = KType::SetRef {
-            set: Rc::clone(&set),
-            index: 0,
-        };
-        assert_eq!(a, b);
-        assert_eq!(hash_of(&a), hash_of(&b));
-
-        // A separate allocation with the same name is a distinct identity.
-        let other = record_newtype_set("Point", sid);
-        let c = KType::SetRef {
-            set: other,
-            index: 0,
-        };
-        assert_ne!(a, c);
-    }
-
-    /// Distinct variants must not collide structurally — the leading discriminant
-    /// keeps e.g. `KFunction` and `KFunctor` of the same shape apart in both `Eq`
-    /// and `Hash`.
-    #[test]
-    fn hash_distinguishes_function_from_functor() {
-        let f = KType::KFunction {
-            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-            ret: Box::new(KType::Bool),
-        };
-        let g = KType::KFunctor {
-            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-            ret: Box::new(KType::Bool),
-            body: None,
-        };
-        assert_ne!(f, g);
-        assert_ne!(hash_of(&f), hash_of(&g));
-    }
-
-    #[test]
-    fn set_ref_name_renders_member_name() {
-        // Renders the member's declared `name`, not the kind keyword: a `Point` struct
-        // slot shows `Point`, not `Struct`.
-        let set = record_newtype_set("Point", ScopeId::from_raw(0, 0x1234));
-        let t = KType::SetRef { set, index: 0 };
-        assert_eq!(t.name(), "Point");
-    }
-}
+mod tests;

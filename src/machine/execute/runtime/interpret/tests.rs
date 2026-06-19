@@ -33,11 +33,11 @@ impl Write for SharedBuf {
 /// PRINT output lands in `captured`.
 pub(super) fn run<'run>(
     source: &str,
-    arena: &'run RuntimeArena,
+    region: &'run KoanRegion,
     captured: Rc<RefCell<Vec<u8>>>,
 ) -> &'run Scope<'run> {
     let exprs = parse(source).expect("parse should succeed");
-    let root = default_scope(arena, Box::new(SharedBuf(captured)));
+    let root = default_scope(region, Box::new(SharedBuf(captured)));
     let mut scheduler = KoanRuntime::new();
     for expr in exprs {
         scheduler.dispatch_in_scope(expr, root);

@@ -8,11 +8,11 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::source::Spanned;
 use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{KType, RecursiveSet};
 use crate::machine::model::values::KObject;
+use crate::source::Spanned;
 
 /// Validate the args shape: exactly two parts, the first a `Type`-token
 /// tag (tags are capitalized variant types). The value part rides through

@@ -4,11 +4,11 @@
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
 use crate::machine::model::KObject;
-use crate::machine::RuntimeArena;
+use crate::machine::KoanRegion;
 
 fn run_program(source: &str) -> Vec<u8> {
-    let arena = RuntimeArena::new();
-    let (scope, captured) = run_root_with_buf(&arena);
+    let region = KoanRegion::new();
+    let (scope, captured) = run_root_with_buf(&region);
     run(scope, source);
     let bytes = captured.borrow().clone();
     bytes
@@ -85,8 +85,8 @@ fn catch_inside_tco_position_preserves_frame_chain() {
 /// reference the *same* sealed `RecursiveSet` member so MATCH dispatches them identically.
 #[test]
 fn catch_result_shares_identity_with_constructed_result() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let caught = run_one(scope, parse_one("CATCH (foo)"));
     let constructed = run_one(scope, parse_one("Result (Ok 1)"));
     match (caught, constructed) {

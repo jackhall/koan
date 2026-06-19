@@ -1,11 +1,11 @@
-use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{
-    classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, TypeName,
+    classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, TypeIdentifier,
 };
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::ArgValue;
 use crate::machine::model::Parseable;
+use crate::source::Spanned;
 
 fn kw(s: &str) -> ExpressionPart<'static> {
     ExpressionPart::Keyword(s.into())
@@ -14,7 +14,7 @@ fn ident(s: &str) -> ExpressionPart<'static> {
     ExpressionPart::Identifier(s.into())
 }
 fn ty(s: &str) -> ExpressionPart<'static> {
-    ExpressionPart::Type(TypeName::leaf(s.into()))
+    ExpressionPart::Type(TypeIdentifier::leaf(s.into()))
 }
 fn expr(parts: Vec<ExpressionPart<'static>>) -> ExpressionPart<'static> {
     ExpressionPart::expression(parts)
@@ -25,8 +25,8 @@ fn parts_of(items: Vec<ExpressionPart<'static>>) -> Vec<Spanned<ExpressionPart<'
 
 #[test]
 fn resolve_for_lowers_builtin_leaf_to_type_arm() {
-    let part: ExpressionPart<'static> = ExpressionPart::Type(TypeName::leaf("Number".into()));
-    let slot = KType::OfKind(KKind::Proper);
+    let part: ExpressionPart<'static> = ExpressionPart::Type(TypeIdentifier::leaf("Number".into()));
+    let slot = KType::OfKind(KKind::ProperType);
     match part.resolve_for(&slot) {
         ArgValue::Type(kt) => assert_eq!(kt, KType::Number),
         _ => panic!("expected a Type-arm carrier"),
@@ -35,8 +35,8 @@ fn resolve_for_lowers_builtin_leaf_to_type_arm() {
 
 #[test]
 fn resolve_for_defers_user_bound_leaf_to_unresolved() {
-    let part: ExpressionPart<'static> = ExpressionPart::Type(TypeName::leaf("MyType".into()));
-    let slot = KType::OfKind(KKind::Proper);
+    let part: ExpressionPart<'static> = ExpressionPart::Type(TypeIdentifier::leaf("MyType".into()));
+    let slot = KType::OfKind(KKind::ProperType);
     let r = part.resolve_for(&slot);
     assert!(matches!(r, ArgValue::Type(KType::Unresolved(_))));
 }
@@ -46,7 +46,7 @@ fn summarize_atomic_variants() {
     assert_eq!(kw("LET").summarize(), "LET");
     assert_eq!(ident("x").summarize(), "x");
     assert_eq!(
-        ExpressionPart::Type(TypeName::leaf("Number".into())).summarize(),
+        ExpressionPart::Type(TypeIdentifier::leaf("Number".into())).summarize(),
         "Number",
     );
 }
@@ -112,7 +112,7 @@ fn parseable_equal_and_ktype_for_kexpression() {
 fn binder_name_from_type_part_extracts_or_none() {
     let with_type = KExpression::new(parts_of(vec![
         kw("STRUCT"),
-        ExpressionPart::Type(TypeName::leaf("Point".into())),
+        ExpressionPart::Type(TypeIdentifier::leaf("Point".into())),
     ]));
     assert_eq!(with_type.binder_name_from_type_part(), Some("Point".into()));
 
@@ -297,7 +297,7 @@ fn cache_survives_clone() {
 
 #[test]
 fn key_and_shape_invariant_across_eager_slot_variants() {
-    // The dispatch-time splice replaces an eager `Slot` part with `Future` (also a
+    // The dispatch-time splice replaces an eager `Slot` part with `Spliced` (also a
     // `Slot`), so shape / key / probe are invariant under it. Every eager-part
     // variant contributes `Slot`, so the classification of an `a + <slot> + c` chain
     // must be identical regardless of which eager variant fills the middle slot.
@@ -465,7 +465,7 @@ fn debug_for_expression_part_and_kexpression() {
     let parts: Vec<ExpressionPart<'static>> = vec![
         kw("LET"),
         ident("x"),
-        ExpressionPart::Type(TypeName::leaf("Number".into())),
+        ExpressionPart::Type(TypeIdentifier::leaf("Number".into())),
         ExpressionPart::Literal(KLiteral::Number(1.0)),
         ExpressionPart::ListLiteral(vec![ident("a")]),
         ExpressionPart::DictLiteral(vec![(ident("k"), ident("v"))]),

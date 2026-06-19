@@ -55,7 +55,7 @@ first-class `RecordType` part that sub-dispatches to a resolved
 [`KType::Record`](../src/machine/model/types/ktype.rs) before the binder runs.
 Three `FN` overloads share one bucket ([fn_def.rs](../src/builtins/fn_def.rs)) —
 two keyworded ones split on the return-type carrier, and one whose signature slot
-is a `TypeExprRef` that admits only the resolved record schema. The record's
+admits the resolved record schema. The record's
 fields become keyword-less `Argument`s, and everything downstream —
 `reconstruct_positional`, lexical closure capture, and contravariant function
 subtyping — is shared with the keyworded form, so an anonymous function projects
@@ -76,7 +76,7 @@ have hidden both.
 ## Calling convention: per-call scope
 
 The user-fn body executor (`run_user_fn`, lowered onto the scheduler by
-`dispatch::exec::invoke`) allocates a per-call [`CallArena`](../src/machine/core/arena.rs),
+`dispatch::exec::invoke`) allocates a per-call [`CallFrame`](../src/machine/core/arena.rs),
 binds each parameter into a fresh child `Scope` whose `outer` is the function's
 captured definition scope, and returns the body unmodified as
 `Action::Tail` (lowered to `Outcome::Continue`) for the scheduler to dispatch in the same slot.
@@ -90,11 +90,11 @@ Two consequences:
 
 ## Closures
 
-Per-call arenas back the child scope, parameter clones, and any in-body
+Per-call regions back the child scope, parameter clones, and any in-body
 `LET`/`value_pass` allocations. When a closure escapes (e.g., a fn defined
-inside a body and returned as the body's value), `Rc<CallArena>` keeps the
-captured arena alive for as long as the closure is reachable. The mechanics —
-`lift_kobject`, the `Option<Rc<CallArena>>` carried by `KObject::KFunction`,
+inside a body and returned as the body's value), `Rc<CallFrame>` keeps the
+captured region alive for as long as the closure is reachable. The mechanics —
+`lift_kobject`, the `Option<Rc<FrameStorage>>` carried by `KObject::KFunction`,
 the fast path when no functions were allocated — live in
 [memory-model.md](memory-model.md).
 
@@ -136,4 +136,4 @@ parameterized by another module, applied generatively to produce fresh
 abstract types. See [typing/](typing/README.md) for the full
 plan; container type parameterization (`:(LIST OF Number)`,
 `:(FN (args) -> R)`, etc.) is shipped today and is documented in
-[typing/ktype.md](typing/ktype.md).
+[typing/ktype/README.md](typing/ktype/README.md).

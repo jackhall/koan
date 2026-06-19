@@ -20,7 +20,7 @@ use super::KFunction;
 /// - `wrap_indices`: bare-Identifier / bare-Type parts in non-literal-name slots to
 ///   auto-wrap as sub-Dispatches.
 /// - `ref_name_indices`: bare-Identifier / bare-Type parts in literal-name slots
-///   (`KType::Identifier` / `KType::OfKind(KKind::Proper)`) of a non-`binder_name` function; candidates
+///   (`KType::Identifier` / `KType::OfKind(KKind::ProperType)`) of a non-`binder_name` function; candidates
 ///   for replay-park.
 ///
 /// `picked_has_binder_name` distinguishes binder-shaped expressions (literal-name slots are
@@ -72,7 +72,7 @@ impl<'a> KFunction<'a> {
                     | (_, ExpressionPart::RecordType(_)) => {
                         // Speculative: assume the eager-evaluated result will type-match
                         // at late dispatch. SigiledTypeExpr / RecordType ride the Expression
-                        // path — sub-dispatch produces a type-side Future the slot validates.
+                        // path — sub-dispatch produces a type-side Spliced the slot validates.
                         eager_indices.push(i);
                     }
                     (_, other) => {
@@ -83,7 +83,7 @@ impl<'a> KFunction<'a> {
                         if is_bare_name(other)
                             && !matches!(
                                 arg.ktype,
-                                KType::Identifier | KType::OfKind(KKind::Proper)
+                                KType::Identifier | KType::OfKind(KKind::ProperType)
                             )
                         {
                             continue;
@@ -127,7 +127,7 @@ impl<'a> KFunction<'a> {
             match &arg.ktype {
                 // Binders' literal-name slots are *declarations* — the slot already owns
                 // the name and must not park on its own placeholder.
-                KType::Identifier | KType::OfKind(KKind::Proper) => {
+                KType::Identifier | KType::OfKind(KKind::ProperType) => {
                     if !picked_has_binder_name {
                         ref_name_indices.push(i);
                     }

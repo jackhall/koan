@@ -4,17 +4,17 @@ use super::runtime::KoanWorkload;
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::{assemble_body_chain, ScopeId, ScopePtr};
 use crate::machine::model::Carried;
-use crate::machine::{CallArena, KError, LexicalFrame, NodeId};
+use crate::machine::{CallFrame, KError, LexicalFrame, NodeId};
 
 /// The generic per-node state lives in [`crate::scheduler::nodes`]; re-exported here so the Koan
 /// execute tree has a single `nodes` surface combining them with the Koan-side [`NodeStep`] /
 /// [`NodePayload`] / [`NodeScope`].
-pub(super) use crate::scheduler::nodes::{CallFrame, Node, NodeWork};
+pub(super) use crate::scheduler::nodes::{NodeFrame, Node, NodeWork};
 
 /// Outcome of a node's run. `Replace` is the tail-call path: rewrite the slot's work and
 /// re-enqueue the same index so it runs again with no fresh slot allocated, giving constant
 /// memory across tail-call sequences. When `frame` is `Some`, its `scope()` becomes the
-/// slot's scope and its `arena()` owns per-call allocations; `None` keeps the existing
+/// slot's scope and its `region()` owns per-call allocations; `None` keeps the existing
 /// frame and scope. `contract`, when set, is the erased return contract the replacement is
 /// entering — kept-first against the slot's prior contract by the reinstall site; any error
 /// landing on this slot is checked against it. `chain` is the pre-decided lexical-chain reshape
@@ -35,7 +35,7 @@ pub(super) enum NodeStep<'step> {
     Done(Result<Carried<'step>, KError>),
     Replace {
         work: NodeWork<KoanWorkload>,
-        frame: Option<Rc<CallArena>>,
+        frame: Option<Rc<CallFrame>>,
         contract: Option<ErasedContract>,
         chain: ChainOp,
     },
@@ -95,7 +95,7 @@ impl ChainOp {
     pub(super) fn apply(
         self,
         prev_chain: Rc<LexicalFrame>,
-        body_frame: &CallArena,
+        body_frame: &CallFrame,
     ) -> Rc<LexicalFrame> {
         match self {
             ChainOp::Unchanged => prev_chain,
@@ -119,13 +119,13 @@ impl ChainOp {
 ///   frame `Rc` already on the slot is the sole liveness witness, so there is no second `Rc` clone
 ///   and no contention with `try_reset_for_tail`'s uniqueness check.
 /// - `YokedChild` — an erased [`ScopePtr`] to a block scope a builtin allocated in a cart *ancestor*
-///   arena (an `InScope` body — USING / MODULE / SIG / TRY). Re-attached at read with a borrow
+///   region (an `InScope` body — USING / MODULE / SIG / TRY). Re-attached at read with a borrow
 ///   bounded by the slot's frame `Rc` (`reattach_bounded`), sound because the cart's `FrameStorage.outer`
-///   chain pins that ancestor arena for as long as the slot holds the cart. Distinct from `Yoked`
+///   chain pins that ancestor region for as long as the slot holds the cart. Distinct from `Yoked`
 ///   only in that the child differs from the cart's own scope, so it needs a stored pointer.
 ///
 /// Storing an erased, frame-witnessed handle keeps the borrow honest across a TCO `try_reset_for_tail`
-/// (nothing persisted points into the reset arena; the live frame is re-read each step) and keeps the
+/// (nothing persisted points into the reset region; the live frame is re-read each step) and keeps the
 /// slot from naming `'run` in its node-stored scope state.
 ///
 /// `Copy` because both arms are trivially copyable ([`ScopePtr`] is `Copy` / a unit) and submission
@@ -160,20 +160,20 @@ mod tests {
 
     use super::*;
     use crate::builtins::default_scope;
-    use crate::machine::core::RuntimeArena;
+    use crate::machine::core::KoanRegion;
     use crate::machine::model::KObject;
     use crate::machine::{BindingIndex, Scope};
 
     /// A `NodeScope::YokedChild` erases a cart-ancestor block scope to a lifetime-free `ScopePtr`
     /// (`erase_static`) and reattaches it (`reattach_bounded`) at read — the fabrication the
     /// scheduler performs each step for a `YokedChild` slot, the borrow bounded by the slot's frame.
-    /// Mirrors the erase→reattach pair plus a subsequent arena mutation through a sibling pointer;
+    /// Mirrors the erase→reattach pair plus a subsequent region mutation through a sibling pointer;
     /// fails on UB, not values.
     #[test]
     fn node_scope_yoked_child_erase_reattach_roundtrip() {
-        let arena = RuntimeArena::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let v = arena.alloc_object(KObject::Number(7.0));
+        let region = KoanRegion::new();
+        let scope = default_scope(&region, Box::new(std::io::sink()));
+        let v = region.alloc_object(KObject::Number(7.0));
         scope
             .bind_value("k".to_string(), v, BindingIndex::BUILTIN)
             .unwrap();
@@ -182,11 +182,11 @@ mod tests {
         let NodeScope::YokedChild(ptr) = &ns else {
             unreachable!("constructed YokedChild")
         };
-        // Reattach with a borrow bounded by `&ns`; read a binding back, then mutate the arena
+        // Reattach with a borrow bounded by `&ns`; read a binding back, then mutate the region
         // through a sibling pointer while the reattached scope is still live.
         let reattached: &Scope<'_> = unsafe { ptr.reattach_bounded() };
         assert!(matches!(reattached.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
-        let _other = arena.alloc_object(KObject::Number(8.0));
+        let _other = region.alloc_object(KObject::Number(8.0));
         assert!(reattached.lookup("k").is_some());
     }
 }

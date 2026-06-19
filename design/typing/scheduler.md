@@ -5,7 +5,7 @@ in the same scheduler. Inference of an expression may need an implicit
 search to resolve a parameter; the search may refine type slots that
 other inferences are waiting on; sub-expressions are dispatched and
 executed by the same engine. There is no separate type-checking pass.
-See [execution-model.md § Pegged and free execution](../execution-model.md#pegged-and-free-execution) —
+See [execution/scheduler.md § Pegged and free execution](../execution/scheduler.md#pegged-and-free-execution) —
 build-time and run-time are the same engine, differing only in which nodes
 are pegged.
 
@@ -136,4 +136,4 @@ optimization.
 
 The companion driver-side view — what each outcome routes to in the dispatch
 pipeline — lives at
-[execution-model.md § post-walk fallback](../execution-model.md#dispatch).
+[execution/classify-and-apply.md § post-walk fallback](../execution/classify-and-apply.md#dispatch).

@@ -3,12 +3,12 @@
 
 use crate::builtins::test_support::{lookup_fn, run, run_root_silent};
 use crate::machine::model::KType;
-use crate::machine::RuntimeArena;
+use crate::machine::KoanRegion;
 
 #[test]
 fn functor_binder_sets_is_functor_flag() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -24,8 +24,8 @@ fn functor_binder_sets_is_functor_flag() {
 #[test]
 fn functor_carrier_ktype_projects_to_kfunctor() {
     use crate::machine::model::values::KObject;
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -43,8 +43,8 @@ fn functor_carrier_ktype_projects_to_kfunctor() {
 /// (`bindings.types` as `KType::KFunctor { body: Some(f) }`), never in `bindings.data`.
 #[test]
 fn let_type_class_admits_functor_rhs() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\

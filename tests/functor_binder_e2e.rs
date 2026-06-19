@@ -23,7 +23,7 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{KObject, KType, SignatureElement};
-use koan::machine::{KFunction, KoanRuntime, RuntimeArena, Scope};
+use koan::machine::{KFunction, KoanRuntime, KoanRegion, Scope};
 use koan::parse::parse;
 
 /// Shared `Write` adapter — every test here drops PRINT output (the smoke
@@ -40,9 +40,9 @@ impl std::io::Write for SharedBuf {
     }
 }
 
-fn run<'a>(arena: &'a RuntimeArena, src: &str) -> &'a Scope<'a> {
+fn run<'a>(region: &'a KoanRegion, src: &str) -> &'a Scope<'a> {
     let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = default_scope(arena, Box::new(SharedBuf(captured)));
+    let scope = default_scope(region, Box::new(SharedBuf(captured)));
     let exprs = parse(src).expect("parse should succeed");
     let mut sched = KoanRuntime::new();
     for e in exprs {
@@ -85,7 +85,7 @@ fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
 ///   and the produced `IntSet` module.
 #[test]
 fn functor_binder_e2e_makeset_produces_module() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     // The natural FUNCTOR application form: `(MAKESET IntOrd)` works directly
     // when `IntOrd`'s carrier carries the declared signature in its
     // `compatible_sigs` set. The LET partition guard
@@ -96,7 +96,7 @@ fn functor_binder_e2e_makeset_produces_module() {
     // consults `compatible_sigs` at the signature-typed slot, so no parens-wrap
     // or ascription-view workaround is required at the call site.
     let scope = run(
-        &arena,
+        &region,
         "SIG OrderedSig = (VAL compare :Number)\n\
          MODULE IntOrdBase = ((LET compare = 7))\n\
          LET IntOrd = (IntOrdBase :! OrderedSig)\n\
@@ -159,9 +159,9 @@ fn functor_binder_e2e_makeset_produces_module() {
 /// pinned by `functor_signature_param_satisfied_via_named_sigil` below.
 #[test]
 fn let_bound_functor_applied_via_sigil_yields_module() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let scope = run(
-        &arena,
+        &region,
         "LET ApplyIt = (FUNCTOR (APPLYIT x :Number) -> Module = \
             (MODULE Inner = ((LET tag = x))))\n\
          LET Got = :(ApplyIt {x = 5})",
@@ -220,9 +220,9 @@ fn run_expect_err(src: &str) -> String {
 /// `(LET tag = 0)` then runs, producing the module bound as `Got`.
 #[test]
 fn functor_signature_param_satisfied_via_named_sigil() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let scope = run(
-        &arena,
+        &region,
         "SIG OrderedSig = (VAL compare :Number)\n\
          MODULE IntOrdBase = ((LET compare = 7))\n\
          LET IntOrd = (IntOrdBase :! OrderedSig)\n\
@@ -281,9 +281,9 @@ fn functor_signature_param_unsatisfied_via_named_sigil_errors() {
 /// focused on the disjoint-surface check rather than scheduling.
 #[test]
 fn functor_binder_and_sigil_coexist() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let scope = run(
-        &arena,
+        &region,
         "SIG OrderedSig = (VAL compare :Number)\n\
          FUNCTOR (MAKEINNER Er :OrderedSig) -> Module = \
             (MODULE Res = ((LET inner = 1)))\n\

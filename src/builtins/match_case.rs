@@ -72,7 +72,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             kw("MATCH"),
             arg("value", KType::Any),
             kw("->"),
-            arg("return_type", KType::OfKind(KKind::Proper)),
+            arg("return_type", KType::OfKind(KKind::ProperType)),
             kw("WITH"),
             arg("branches", KType::KExpression),
         ],
@@ -85,11 +85,11 @@ mod tests {
     use crate::builtins::test_support::{
         parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
     };
-    use crate::machine::{KErrorKind, RuntimeArena};
+    use crate::machine::{KErrorKind, KoanRegion};
 
     fn run_program(source: &str) -> Vec<u8> {
-        let arena = RuntimeArena::new();
-        let (scope, captured) = run_root_with_buf(&arena);
+        let region = KoanRegion::new();
+        let (scope, captured) = run_root_with_buf(&region);
         run(scope, source);
         let bytes = captured.borrow().clone();
         bytes
@@ -127,8 +127,8 @@ mod tests {
 
     #[test]
     fn match_inexhaustive_errors() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (None null))",
@@ -145,8 +145,8 @@ mod tests {
 
     #[test]
     fn match_arm_violating_declared_return_type_errors() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (Some 1))",
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn recursive_tagged_match_no_uaf() {
-        // Pins the `FrameStorage.outer` chain — per-call-arena-protocol.md
+        // Pins the `FrameStorage.outer` chain — per-call-region/README.md
         // § MATCH frame lifetime under tail recursion.
         let bytes = run_program(
             "UNION Bit = (One :Null Zero :Null)\n\
@@ -218,8 +218,8 @@ mod tests {
 
     #[test]
     fn match_on_bool_inexhaustive_errors() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let err = run_one_err(
             scope,
             parse_one("MATCH true -> :Str WITH (false -> (PRINT \"x\"))"),

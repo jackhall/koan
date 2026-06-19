@@ -23,6 +23,17 @@ nearest module's `tests` block.
 CI runs `cargo build --verbose && cargo test --verbose` on push and PR against
 `master` (see [.github/workflows/rust.yml](.github/workflows/rust.yml)).
 
+## Tutorial snippets
+
+Every runnable code block in [`tutorial/`](tutorial/README.md) is checked against
+the interpreter by [`tools/verify_snippets.py`](tools/verify_snippets.py): it runs
+each `koan` block that is immediately followed by a `text` expected-output block
+and diffs the result. Run it after editing the tutorial:
+
+```sh
+cargo build && python3 tools/verify_snippets.py
+```
+
 ## Linting and formatting
 
 ```sh
@@ -45,7 +56,7 @@ first, capped to five entries. A refactor should either reduce the score
 by more than rounding noise, reduce code duplication, or enforce some
 invariant using the type system.
 
-`tools/modgraph.py --baseline observe/complexity.txt` manages the file end-to-end:
+`tools/modgraph regen --baseline observe/complexity.txt` manages the file end-to-end:
 it prunes entries whose commit isn't reachable from HEAD (covers `git
 checkout`, `git reset --hard`, rebase drops) and every prior dirty-snapshot
 (`+`-suffixed) entry, then prepends today's measurement and prints a one-
@@ -60,7 +71,7 @@ details and tuning lives in
 The audit slate is the load-bearing memory-safety check. It runs every unsafe
 site in the runtime — lifetime-erasure transmutes, raw-pointer round-trips,
 interior mutation under live shared borrows, the cycle gate that prevents
-self-referential `Rc<CallArena>` storage — under Miri's tree-borrows mode, with
+self-referential `Rc<FrameStorage>` storage — under Miri's tree-borrows mode, with
 zero process-exit leaks and zero UB required for sign-off.
 
 The model the slate signs off on is documented in

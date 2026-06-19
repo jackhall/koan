@@ -6,8 +6,8 @@
 //! synthetic `Keyword("ATTR"|"NOT"|"TRY")` carries the 1-codepoint trigger
 //! span so diagnostics can point at the exact operator character.
 
-use crate::machine::core::source::{self, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::source::{self, Span, Spanned};
 
 pub type UnaryBuild = for<'a> fn(Spanned<ExpressionPart<'a>>, Span) -> Spanned<ExpressionPart<'a>>;
 pub type BinaryBuild = for<'a> fn(
@@ -75,7 +75,7 @@ fn build_attr<'a>(
     let end = rhs.span.map(|s| s.end).unwrap_or(trigger.end);
     let outer = Span { start, end };
     // A Type-classed field is a type member (`M.T`), so the access is a type operation:
-    // wrap it `SigiledTypeExpr` so its result flows into a `TypeExprRef` / `Type` slot. A
+    // wrap it `SigiledTypeExpr` so its result flows into a `ProperType` / `Type` slot. A
     // value field (lowercase `Identifier`, e.g. `M.x`) stays the value-context `Expression`.
     let type_context = matches!(rhs.value, ExpressionPart::Type(_));
     let kw = Spanned::at(ExpressionPart::Keyword("ATTR".to_string()), trigger);

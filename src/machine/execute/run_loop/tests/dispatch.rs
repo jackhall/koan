@@ -5,7 +5,6 @@
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
-use crate::machine::core::source::Spanned;
 use crate::machine::core::BindingIndex;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
@@ -14,7 +13,8 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
-use crate::machine::RuntimeArena;
+use crate::machine::KoanRegion;
+use crate::source::Spanned;
 
 fn body_identifier<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
     Action::Done(Ok(Carried::Object(marker(ctx.scope, "identifier"))))
@@ -47,8 +47,8 @@ fn summarize_marker(obj: &KObject<'_>) -> String {
 /// consult overload buckets.
 #[test]
 fn dispatch_inner_scope_shadows_outer_more_specific() {
-    let arena = RuntimeArena::new();
-    let outer = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let outer = run_root_bare(&region);
     let outer_sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
@@ -69,7 +69,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         BindingIndex::value(1),
     );
 
-    let inner = arena.alloc_scope(outer.child_for_call());
+    let inner = region.alloc_scope(outer.child_for_call());
     let inner_sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
@@ -103,8 +103,8 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
 #[test]
 fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     use crate::machine::KErrorKind;
-    let arena = RuntimeArena::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     register_builtin(
         scope,
         "any_first",
@@ -143,8 +143,8 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
 /// function. (Once monadic effects exist, this should also produce a warning effect.)
 #[test]
 fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![

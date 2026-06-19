@@ -5,7 +5,7 @@
 //! (newtype-over-newtype collapses to a single layer).
 //!
 //! Three registered overloads selected by the repr part-kind. A scalar / bare-leaf repr
-//! (`= Number`, `= Foo`) resolves eagerly through the `:TypeExprRef` slot. A non-record
+//! (`= Number`, `= Foo`) resolves eagerly through the `:ProperType` slot. A non-record
 //! sigil repr (`= :(LIST OF T)`) is captured *raw* through the `:SigiledTypeExpr` slot and
 //! sub-dispatched to a resolved `KType` by the shared [`body`]. A record repr (`= :{…}`) is
 //! captured *raw* through its own `:RecordType` slot and routed to [`body_record_repr`], so
@@ -19,7 +19,6 @@ use crate::machine::model::types::KKind;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::machine::core::source::Spanned;
 use crate::machine::core::ApplyOutcome;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
@@ -29,12 +28,13 @@ use crate::machine::model::types::{
 use crate::machine::model::values::{Carried, KObject};
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, KError, KErrorKind, Resolution, Scope, TraceFrame};
+use crate::source::Spanned;
 
 use super::{arg, kw, sig};
 
 /// Seal a resolved `repr` into the NEWTYPE's identity and register it. A NEWTYPE is
 /// non-recursive (its `repr` is already resolved), so it seals into a singleton set of one
-/// member whose `kind` (`Newtype`) is what `kind_of` reports for the sealed `SetRef`;
+/// member whose `kind` (`NewType`) is what `kind_of` reports for the sealed `SetRef`;
 /// identity never descends `repr`.
 fn finalize_newtype<'a>(
     scope: &Scope<'a>,
@@ -43,16 +43,16 @@ fn finalize_newtype<'a>(
     bind_index: BindingIndex,
 ) -> Result<Carried<'a>, KError> {
     let scope_id = scope.id;
-    let member = NominalMember::pending(name.clone(), scope_id, KKind::Newtype);
-    member.fill(NominalSchema::Newtype(Box::new(repr)));
+    let member = NominalMember::pending(name.clone(), scope_id, KKind::NewType);
+    member.fill(NominalSchema::NewType(Box::new(repr)));
     let set = Rc::new(RecursiveSet::new(vec![member]));
     let identity = KType::SetRef { set, index: 0 };
-    let kt_ref: &'a KType = scope.arena.alloc_ktype(identity);
+    let kt_ref: &'a KType = scope.region.alloc_ktype(identity);
     match scope
         .bindings()
         .try_register_type(&name, kt_ref, bind_index)
     {
-        Ok(ApplyOutcome::Applied) => Ok(Carried::Type(scope.arena.alloc_ktype(kt_ref.clone()))),
+        Ok(ApplyOutcome::Applied) => Ok(Carried::Type(scope.region.alloc_ktype(kt_ref.clone()))),
         // Finalize sites run post-dep-finish outside the re-entrant hot path, so borrow
         // contention here is a programming error. Surface as a structured error rather
         // than panicking — a future re-entrant caller still gets a recoverable diag.
@@ -64,7 +64,7 @@ fn finalize_newtype<'a>(
 }
 
 /// Seal the elaborated record fields into the NEWTYPE's [`RecursiveSet`] member as
-/// `NominalSchema::Newtype(KType::Record(sealed))`. Transient `RecursiveRef(name)` field leaves
+/// `NominalSchema::NewType(KType::Record(sealed))`. Transient `RecursiveRef(name)` field leaves
 /// seal to `SetLocal(index)` against the member's set — the block's shared set when present (a
 /// `RECURSIVE TYPES` member), else a fresh singleton (standalone self-recursion). Shared by the
 /// synchronous and dep-finish paths.
@@ -84,7 +84,7 @@ fn finalize_record_newtype<'a>(
         scope,
         &name,
         scope_id,
-        KKind::Newtype,
+        KKind::NewType,
         |set| {
             let missing = RefCell::new(Vec::new());
             let sealed_pairs: Vec<(String, KType<'a>)> = fields
@@ -94,7 +94,7 @@ fn finalize_record_newtype<'a>(
             let sealed = Record::from_pairs(sealed_pairs);
             match missing.into_inner().into_iter().next() {
                 Some(m) => SchemaSealResult::Dangling(m),
-                None => SchemaSealResult::Ok(NominalSchema::Newtype(Box::new(KType::Record(
+                None => SchemaSealResult::Ok(NominalSchema::NewType(Box::new(KType::Record(
                     Box::new(sealed),
                 )))),
             }
@@ -102,7 +102,7 @@ fn finalize_record_newtype<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => Ok(Carried::Type(scope.arena.alloc_ktype(kt_ref.clone()))),
+        SealOutcome::Sealed(kt_ref) => Ok(Carried::Type(scope.region.alloc_ktype(kt_ref.clone()))),
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE `{name}` record repr references unsealed type `{missing}`",
         )))),
@@ -178,7 +178,7 @@ pub fn body<'a>(
 }
 
 /// A non-record sigil repr (`NEWTYPE Stream = :(LIST OF Number)`): re-wrap the captured sigil,
-/// sub-dispatch it, and seal a plain Newtype over the resolved `KType` at dep-finish.
+/// sub-dispatch it, and seal a plain NewType over the resolved `KType` at dep-finish.
 fn defer_resolved_sigil<'a>(
     name: String,
     inner: KExpression<'a>,
@@ -229,7 +229,7 @@ pub fn body_record_repr<'a>(
         ctx,
         name,
         fields,
-        KKind::Newtype,
+        KKind::NewType,
         "NEWTYPE record repr",
         FieldNameKind::Identifier,
         error_frame,
@@ -242,21 +242,21 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // fast lane via `constructors::dispatch_construct_newtype`.
     let scalar_sig = || {
         sig(
-            KType::OfKind(KKind::Any),
+            KType::OfKind(KKind::AnyType),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::OfKind(KKind::Proper)),
+                arg("name", KType::OfKind(KKind::ProperType)),
                 kw("="),
-                arg("repr", KType::OfKind(KKind::Proper)),
+                arg("repr", KType::OfKind(KKind::ProperType)),
             ],
         )
     };
     let sigil_sig = || {
         sig(
-            KType::OfKind(KKind::Any),
+            KType::OfKind(KKind::AnyType),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::OfKind(KKind::Proper)),
+                arg("name", KType::OfKind(KKind::ProperType)),
                 kw("="),
                 arg("repr", KType::SigiledTypeExpr),
             ],
@@ -264,10 +264,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     };
     let record_sig = || {
         sig(
-            KType::OfKind(KKind::Any),
+            KType::OfKind(KKind::AnyType),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::OfKind(KKind::Proper)),
+                arg("name", KType::OfKind(KKind::ProperType)),
                 kw("="),
                 arg("repr", KType::RecordType),
             ],
@@ -314,7 +314,7 @@ mod tests {
     use crate::machine::execute::KoanRuntime;
     use crate::machine::model::types::{KKind, NominalSchema, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{KErrorKind, RuntimeArena, Scope};
+    use crate::machine::{KErrorKind, KoanRegion, Scope};
 
     /// `(set, record-fields)` of a sealed record-repr newtype, read raw off its `SetRef`
     /// identity so assertions see `SetLocal` / `List(SetLocal)` back-edges before projection.
@@ -327,7 +327,7 @@ mod tests {
                 let member = set.member(*index);
                 let borrow = member.schema();
                 match borrow.as_ref() {
-                    Some(NominalSchema::Newtype(repr)) => match repr.as_ref() {
+                    Some(NominalSchema::NewType(repr)) => match repr.as_ref() {
                         KType::Record(record) => {
                             let fields =
                                 record.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -335,7 +335,7 @@ mod tests {
                         }
                         other => panic!("expected {name} to carry a record repr, got {other:?}"),
                     },
-                    other => panic!("expected {name} to carry a Newtype schema, got {other:?}"),
+                    other => panic!("expected {name} to carry a NewType schema, got {other:?}"),
                 }
             }
             other => panic!("expected {name} to be a SetRef identity, got {other:?}"),
@@ -346,8 +346,8 @@ mod tests {
     /// `bindings.data` — the declaration has no payload value to bind.
     #[test]
     fn declare_mints_newtype_identity() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let types = scope.bindings().types();
         let (kt, _) = types
@@ -356,13 +356,13 @@ mod tests {
         match **kt {
             KType::SetRef { ref set, index } => {
                 assert_eq!(set.member(index).name, "Distance");
-                assert_eq!(set.member(index).kind, KKind::Newtype);
+                assert_eq!(set.member(index).kind, KKind::NewType);
                 match RecursiveSet::projected_schema(set, index) {
-                    ProjectedSchema::Newtype(repr) => assert_eq!(repr, KType::Number),
-                    _ => panic!("expected a Newtype schema"),
+                    ProjectedSchema::NewType(repr) => assert_eq!(repr, KType::Number),
+                    _ => panic!("expected a NewType schema"),
                 }
             }
-            ref other => panic!("expected Newtype SetRef identity, got {other:?}"),
+            ref other => panic!("expected NewType SetRef identity, got {other:?}"),
         }
         drop(types);
         let data = scope.bindings().data();
@@ -376,8 +376,8 @@ mod tests {
     /// `inner` is the bare `Number`.
     #[test]
     fn construct_wraps_repr_matching_value() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let result = run_one(scope, parse_one("Distance (3.0)"));
         match result {
@@ -385,9 +385,9 @@ mod tests {
                 match **type_id {
                     KType::SetRef { ref set, index } => {
                         assert_eq!(set.member(index).name, "Distance");
-                        assert_eq!(set.member(index).kind, KKind::Newtype);
+                        assert_eq!(set.member(index).kind, KKind::NewType);
                     }
-                    ref other => panic!("expected Newtype SetRef type_id, got {other:?}"),
+                    ref other => panic!("expected NewType SetRef type_id, got {other:?}"),
                 }
                 assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
             }
@@ -398,8 +398,8 @@ mod tests {
     /// `Distance("hi")` (Number repr, Str value) surfaces as `TypeMismatch`.
     #[test]
     fn construct_rejects_non_matching_repr() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let err = run_one_err(scope, parse_one("Distance (\"hi\")"));
         assert!(
@@ -416,8 +416,8 @@ mod tests {
     /// leaked a stale value-side placeholder that panicked the next construction).
     #[test]
     fn dependent_newtype_parks_on_record_repr_dependency() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "NEWTYPE Point = :{x :Number, y :Number}\nNEWTYPE Boxed = Point",
@@ -442,8 +442,8 @@ mod tests {
     /// name fails cleanly (unbound) rather than tripping over a leaked producer `NodeId`.
     #[test]
     fn unknown_repr_errors_without_leaking_placeholder() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Boxed = Nope");
         assert!(
             scope.bindings().placeholders().is_empty(),
@@ -463,8 +463,8 @@ mod tests {
     /// this pins the seal shape, not construction.)
     #[test]
     fn record_repr_self_recursion_seals_set_local() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Node = :{value :Number, next :Node}");
         let (set, fields) = record_fields(scope, "Node");
         let node_idx = set.index_of("Node").expect("Node is its own set member");
@@ -487,8 +487,8 @@ mod tests {
     /// literal types as `List(Str)`, both orthogonal to the recursion threading proven here.)
     #[test]
     fn record_repr_list_of_self_field_seals_set_local() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Tree = :{children :(LIST OF Tree)}");
         let (set, fields) = record_fields(scope, "Tree");
         let tree_idx = set.index_of("Tree").expect("Tree is its own set member");
@@ -512,8 +512,8 @@ mod tests {
     /// with an empty threaded set.
     #[test]
     fn nested_record_field_threads_self_reference() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Outer = :{inner :{owner :Outer}}");
         let (set, fields) = record_fields(scope, "Outer");
         let outer_idx = set.index_of("Outer").expect("Outer is its own set member");
@@ -535,12 +535,12 @@ mod tests {
 
     /// A non-record sigil repr (`= :(LIST OF Number)`) routes through the same
     /// `:SigiledTypeExpr` overload but has no self-reference to thread: it sub-dispatches the
-    /// sigil to a resolved `KType` and seals a plain Newtype over it. Regression guard for the
-    /// overload split — this used to ride the `:TypeExprRef` overload's speculative sub-dispatch.
+    /// sigil to a resolved `KType` and seals a plain NewType over it. Regression guard for the
+    /// overload split — this used to ride the `:ProperType` overload's speculative sub-dispatch.
     #[test]
     fn sigil_repr_non_record_seals_newtype_over_resolved_type() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Nums = :(LIST OF Number)");
         let result = run_one(scope, parse_one("(Nums [1.0, 2.0])"));
         match result {
@@ -565,8 +565,8 @@ mod tests {
     /// inner: Number(3.0) }` — pins the collapse invariant.
     #[test]
     fn newtype_over_newtype_collapses() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Foo = Number\nNEWTYPE Bar = Foo");
         let result = run_one(scope, parse_one("Bar (Foo (3.0))"));
         match result {
@@ -594,8 +594,8 @@ mod tests {
     /// per-slot Err result.
     #[test]
     fn dispatch_distinguishes_distance_from_number() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "NEWTYPE Distance = Number\n\
@@ -644,8 +644,8 @@ mod tests {
     /// dep before the finish closure runs — pins the non-trivial-dispatch path.
     #[test]
     fn construct_with_identifier_value() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number\nLET x = 3.0");
         let result = run_one(scope, parse_one("Distance (x)"));
         match result {
@@ -665,8 +665,8 @@ mod tests {
     /// Pins the pre-dispatch arity guard: `Distance ()` rejects with `ArityMismatch`.
     #[test]
     fn construct_arity_zero_rejects() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let err = run_one_err(scope, parse_one("Distance ()"));
         assert!(
@@ -682,12 +682,12 @@ mod tests {
     }
 
     /// Pins the "any sub-expression in the value position" path. Koan has no
-    /// arithmetic operators today (per TUTORIAL.md § "No arithmetic, comparison, or
-    /// logical operators"), so a user-fn call stands in for non-trivial dispatch.
+    /// arithmetic operators today (per tutorial/README.md § "What isn't in the
+    /// language yet"), so a user-fn call stands in for non-trivial dispatch.
     #[test]
     fn construct_with_operator_value() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "NEWTYPE Distance = Number\n\

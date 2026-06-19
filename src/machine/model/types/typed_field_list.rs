@@ -3,8 +3,7 @@
 //! positional construction).
 
 use super::ktype::KType;
-use super::resolver::{elaborate_type_expr, ElabResult, Elaborator};
-use crate::machine::core::source::Spanned;
+use super::resolver::{elaborate_type_identifier, ElabResult, Elaborator};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::Carried;
 use crate::machine::model::Parseable;
@@ -12,13 +11,14 @@ use crate::machine::model::Record;
 use crate::machine::{NodeId, Scope};
 use crate::parse::parse_pair_list;
 pub use crate::parse::FieldNameKind;
+use crate::source::Spanned;
 use std::collections::HashSet;
 
 pub enum FieldListOutcome<'a> {
     Done(Vec<(String, KType<'a>)>),
     /// `sub_dispatches` carries each sigil field's wrapped expression in DFS walk
     /// order. The caller schedules them in that order and, on the dep-finish re-walk,
-    /// feeds the resolved `KObject::KTypeValue`s back through a [`ResultFeed`] — the walk
+    /// feeds the resolved `Carried::Type`s back through a [`ResultFeed`] — the walk
     /// re-descends in the same order, so no slot index is needed.
     Pending {
         park_producers: Vec<NodeId>,
@@ -53,7 +53,7 @@ impl<'b, 'a> ResultFeed<'b, 'a> {
 }
 
 /// Entry point used by STRUCT / UNION / FN / FUNCTOR. Routes each field type through the
-/// scheduler-aware [`elaborate_type_expr`], accumulating parking producers and
+/// scheduler-aware [`elaborate_type_identifier`], accumulating parking producers and
 /// pending sub-Dispatches across the whole walk so the caller can install one
 /// dep-finish for the merged set. `name_kind` selects which token shapes are valid as a
 /// field/parameter name (STRUCT / UNION pass `Identifier`; FN / FUNCTOR pass
@@ -61,7 +61,7 @@ impl<'b, 'a> ResultFeed<'b, 'a> {
 ///
 /// `results` is `None` on the first walk (each sigil field schedules a sub-Dispatch,
 /// collected into `Pending.sub_dispatches`) and `Some(iter)` on the dep-finish re-walk
-/// (each sigil field consumes the next resolved `KObject::KTypeValue` from `iter` in DFS
+/// (each sigil field consumes the next resolved `Carried::Type` from `iter` in DFS
 /// walk order instead of re-scheduling). Because the re-walk re-descends the field list
 /// in the same deterministic order the first walk produced the subs, positional
 /// consumption needs no slot index — and nested field-lists fall out for free.
@@ -76,7 +76,7 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
     let mut sub_dispatches: Vec<KExpression<'a>> = Vec::new();
     let parsed = parse_pair_list(expr, context, name_kind, |part, name| {
         match part {
-            ExpressionPart::Type(t) => match elaborate_type_expr(elaborator, t) {
+            ExpressionPart::Type(t) => match elaborate_type_identifier(elaborator, t) {
                 ElabResult::Done(kt) => Ok(kt),
                 ElabResult::Park(producers) => {
                     parks.extend(producers);
@@ -144,8 +144,8 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
                     }
                 }
             }
-            ExpressionPart::Future(Carried::Type(kt)) => Ok((**kt).clone()),
-            ExpressionPart::Future(Carried::Object(other)) => Err(format!(
+            ExpressionPart::Spliced(Carried::Type(kt)) => Ok((**kt).clone()),
+            ExpressionPart::Spliced(Carried::Object(other)) => Err(format!(
                 "{context} type for `{}` resolved to non-type value `{}`",
                 name,
                 other.summarize(),
@@ -174,7 +174,7 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
 
 /// Pre-resolve self-references inside a keyworded sigil body before it sub-Dispatches
 /// into the standalone dispatcher, which carries no SCC threading context. Every bare
-/// `Type(name)` leaf whose `name` is in `threaded` becomes a `Future(KTypeValue(
+/// `Type(name)` leaf whose `name` is in `threaded` becomes a `Spliced(Carried::Type(
 /// RecursiveRef(name)))` carrier — the same type-side transport `:(LIST OF Number)`
 /// rides — so `STRUCT Tree = (children :(LIST OF Tree))` lowers `Tree` to
 /// `RecursiveRef("Tree")` instead of parking on its own placeholder and closing a
@@ -191,8 +191,8 @@ fn rewrite_threaded_self_refs<'a>(
         .map(|p| {
             let value = match &p.value {
                 ExpressionPart::Type(t) if threaded.contains(t.as_str()) => {
-                    let obj = scope.arena.alloc_ktype(KType::RecursiveRef(t.render()));
-                    ExpressionPart::Future(Carried::Type(obj))
+                    let obj = scope.region.alloc_ktype(KType::RecursiveRef(t.render()));
+                    ExpressionPart::Spliced(Carried::Type(obj))
                 }
                 ExpressionPart::SigiledTypeExpr(b) => ExpressionPart::SigiledTypeExpr(Box::new(
                     rewrite_threaded_self_refs(b, threaded, scope),

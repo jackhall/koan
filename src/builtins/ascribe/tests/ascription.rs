@@ -3,13 +3,13 @@
 use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{KErrorKind, RuntimeArena};
+use crate::machine::{KErrorKind, KoanRegion};
 use crate::parse::parse;
 
 #[test]
 fn transparent_ascription_returns_module() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "MODULE IntOrd = (LET compare = 0)\n\
@@ -29,8 +29,8 @@ fn transparent_ascription_returns_module() {
 
 #[test]
 fn ascription_missing_member_errors() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "MODULE Empty = (LET unrelated = 0)\n\
@@ -46,8 +46,8 @@ fn ascription_missing_member_errors() {
 
 #[test]
 fn opaque_ascription_mints_distinct_module_type_per_application() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let src = "MODULE IntOrd = (LET compare = 0)\n\
          SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
          LET FirstAbstract = (IntOrd :| OrderedSig)\n\
@@ -98,8 +98,8 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
 
 #[test]
 fn transparent_ascription_does_not_mint_module_types() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "MODULE IntOrd = (LET compare = 0)\n\
@@ -119,8 +119,8 @@ fn transparent_ascription_does_not_mint_module_types() {
 /// End-to-end example from [design/typing/modules.md](../../../../design/typing/modules.md).
 #[test]
 fn roadmap_example_int_ord_with_ordered_sig() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\

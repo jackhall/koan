@@ -4,7 +4,7 @@ use crate::machine::model::types::{KKind, NominalMember, NominalSchema, Recursiv
 use crate::machine::model::KType;
 use crate::machine::ScopeId;
 
-/// `TEMPLATE <param:TypeExprRef>` → `TypeExprRef` carrying a template singleton
+/// `TEMPLATE <param:ProperType>` → `ProperType` carrying a template singleton
 /// [`RecursiveSet`] of one [`KKind::TypeConstructor`] member with `ScopeId::SENTINEL`
 /// and a placeholder `name` (`"_typeconstructor"`). The surrounding opaque ascription
 /// (`ascribe.rs:body_opaque`) re-mints a fresh per-call singleton with the binding's slot
@@ -25,7 +25,7 @@ pub fn body<'a>(
             let error = match arg_held(ctx.args, "param") {
                 Some(Held::Object(object)) => KError::new(KErrorKind::TypeMismatch {
                     arg: "param".to_string(),
-                    expected: "TypeExprRef".to_string(),
+                    expected: "ProperType".to_string(),
                     got: object.ktype().name(),
                 }),
                 _ => KError::new(KErrorKind::MissingArg("param".to_string())),
@@ -46,7 +46,7 @@ pub fn body<'a>(
         param_names: vec![param],
     });
     let set = Rc::new(RecursiveSet::new(vec![member]));
-    let kt = ctx.scope.arena.alloc_ktype(KType::SetRef { set, index: 0 });
+    let kt = ctx.scope.region.alloc_ktype(KType::SetRef { set, index: 0 });
     Action::Done(Ok(Carried::Type(kt)))
 }
 
@@ -56,7 +56,7 @@ mod tests {
     use crate::machine::execute::KoanRuntime;
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{BindingIndex, RuntimeArena, ScopeId};
+    use crate::machine::{BindingIndex, KoanRegion, ScopeId};
 
     /// Assert `kt` is a `TypeConstructor`-kind `SetRef` whose projected `param_names` equal
     /// `expected`; returns the member's name.
@@ -81,8 +81,8 @@ mod tests {
     /// Pins the template shape the builtin returns before opaque ascription re-mints it.
     #[test]
     fn type_constructor_builtin_returns_ktype_value() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one("TEMPLATE Type"));
         match result {
             kt @ KType::SetRef { set, index } => {
@@ -97,8 +97,8 @@ mod tests {
     /// Pins the LET-routing + `register_type` path for a higher-kinded SIG slot.
     #[test]
     fn sig_declares_higher_kinded_slot() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "SIG Monad = ((LET Wrap = (TEMPLATE Type)))");
         let s = match scope.resolve_type("Monad") {
             Some(KType::Signature { sig, .. }) => *sig,
@@ -113,8 +113,8 @@ mod tests {
     /// `ConstructorApply` carrier.
     #[test]
     fn fn_return_type_constructor_apply_root_scope() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         scope.register_type(
             "Wrap".into(),
             wrap_type_constructor(ScopeId::from_raw(0, 0xC0DE)),
@@ -150,8 +150,8 @@ mod tests {
     #[test]
     fn monad_signature_smoke() {
         use crate::parse::parse;
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let src = "SIG Monad = ((LET Wrap = (TEMPLATE Type)) \
              (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))";
         let exprs = parse(src).expect("parse should succeed");
@@ -201,8 +201,8 @@ mod tests {
     /// `type_members` to the per-call-minted constructor variant.
     #[test]
     fn module_attr_access_returns_type_constructor() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "SIG MonadSig = ((LET Wrap = (TEMPLATE Type)))\n\

@@ -43,7 +43,7 @@ recently-churned subsystems.
 - *Method — open.* Lean on the `rust-abstraction` skill (file-level seams),
   `doc-abstraction` (concepts that span docs/source without one owner), and
   `modgraph` (complexity scoring of a proposed reshuffle) to locate duplication,
-  and the SCIP-driven `modgraph_rewrite.py item` path to scope extractions.
+  and the SCIP-driven `modgraph rewrite item` path to scope extractions.
   Recommended: one read-only sweep per top-level area (`src/machine/model`,
   `.../execute`, `.../core`, `src/builtins`), each producing a candidate table,
   then a consolidation pass that de-duplicates findings across areas.

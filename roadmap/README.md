@@ -39,7 +39,7 @@ What's shipped that the open items below build on:
 - *Anonymous functions.* A keyword-less `FN :{<field schema>} -> T = (body)`
   literal evaluates to a plain function value with no dispatch keyword, bound by
   `LET` or dropped into a function-typed slot — the record-schema sigil resolves
-  to a `KType::Record` that a third `FN` overload's `TypeExprRef` signature slot
+  to a `KType::Record` that a third `FN` overload's signature slot
   admits. It makes the [standard library](libraries/standard-library.md)'s
   higher-order combinators ergonomic to call with an inline function. See
   [design/functional-programming.md § Anonymous functions](../design/functional-programming.md#anonymous-functions).
@@ -53,14 +53,14 @@ What's shipped that the open items below build on:
   owning the parenthesized-slot error text), and the scheduler `Object`/`Type` finalize
   arms (one [`check_declared_return`](../src/machine/execute/finalize.rs)
   parameterized over the lifted carrier's `matches_value`/`matches_type` predicate).
-- *Arena unsafe consolidation.* Every captured/defining-scope re-attach is funnelled behind one
-  [`ScopePtr`](../src/machine/core/scope_ptr.rs); `RuntimeArena::escape` is `NonNull`.
-  The store-side erasure lives behind one `Stored` trait: all arena-stored
+- *Region unsafe consolidation.* Every captured/defining-scope re-attach is funnelled behind one
+  [`ScopePtr`](../src/machine/core/scope_ptr.rs); `KoanRegion::escape` is `NonNull`.
+  The store-side erasure lives behind one `Stored` trait: all region-stored
   families route the scheduler's single audited `erase_to_static` (the safe direction of the
   one `retype` primitive the read-side re-anchor shares) and one gated `alloc` engine,
   replacing the per-type `T<'a> → T<'static>` transmute pairs with one. The branded `ScopePtr<'a>` makes `Module::child_scope` and `Signature::decl_scope`
   safe re-attaches, concentrating the irreducible
-  `'static → 'a` fabrication at the non-generic `CallArena` boundary.
+  `'static → 'a` fabrication at the non-generic `CallFrame` boundary.
   Honest slot storage landed for per-call frame scopes: a frame scope rides its slot as a
   payload-less [`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the
   slot's own `Node.frame` cart — no fabricated run-length `&'a` persists across a TCO reset.
@@ -68,28 +68,28 @@ What's shipped that the open items below build on:
   boundary is deleted, a within-step frame lifetime `'step` (`'a: 'step`) threads
   `run_dispatch`/`SchedulerView`/`BuiltinFn`, and a slot's scope is now read on demand via
   [`Scheduler::current_scope`](../src/machine/execute/run_loop.rs) through the witness-bounded
-  [`CallArena::scope_bounded`](../src/machine/core/arena.rs) brand (the post-step loop reads it
+  [`CallFrame::scope_bounded`](../src/machine/core/arena.rs) brand (the post-step loop reads it
   through a `PostStep` token off the slot's returned frame). The sole surviving free re-exposure
-  is the arena half of [`CallArena::with_frame_interior`](../src/machine/core/arena.rs), the
+  is the region half of [`CallFrame::with_frame_interior`](../src/machine/core/arena.rs), the
   C0-irreducible seed bind, and `KFunction::captured` now rides a `BoundedScopePtr`
-  (see [design/per-call-arena-protocol.md § Slot-table scope handle](../design/per-call-arena-protocol.md#slot-table-scope-handle)).
-  See [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
-- *Shell-over-storage frame reuse.* `CallArena` is now a thin shell over a refcounted
-  [`FrameStorage`](../src/machine/core/arena.rs) (the per-call `RuntimeArena` plus the ancestor
+  (see [design/per-call-region/scope-handles.md § Slot-table scope handle](../design/per-call-region/scope-handles.md#slot-table-scope-handle)).
+  See [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
+- *Shell-over-storage frame reuse.* `CallFrame` is now a thin shell over a refcounted
+  [`FrameStorage`](../src/machine/core/arena.rs) (the per-call `KoanRegion` plus the ancestor
   `outer` chain). An escaping value (a returned closure, a functor-built module) pins only the
   storage, leaving the shell uniquely owned so `try_reset_for_tail` reuses it across a tail
   iteration instead of being foreclosed — only a live shell clone refuses. The four escape
-  shapes and the cycle-gate walkers carry `Rc<FrameStorage>`; cross-reset arena capture is
+  shapes and the cycle-gate walkers carry `Rc<FrameStorage>`; cross-reset region capture is
   borrow-checker-enforced for safe code (no new unsafe). See
-  [design/per-call-arena-protocol.md § TCO frame reuse](../design/per-call-arena-protocol.md#tco-frame-reuse).
+  [design/per-call-region/frames.md § TCO frame reuse](../design/per-call-region/frames.md#tco-frame-reuse).
 - *Per-node output lift.* A node continuation's output is bound to the per-step frame
   lifetime `'step` ([`Outcome<'step>`](../src/machine/execute/outcome.rs)), not `'run`. The
   producer keeps its terminal in its own frame (the slot's `Done` co-stores the backing
-  `Rc<CallArena>`, so frame death moves Done→free) and does not lift; each consumer
-  pull-lifts its deps into its own arena at read ([`run_step`](../src/machine/execute/run_loop.rs))
+  `Rc<CallFrame>`, so frame death moves Done→free) and does not lift; each consumer
+  pull-lifts its deps into its own region at read ([`run_step`](../src/machine/execute/run_loop.rs))
   through the single [`NodeLift`](../src/machine/execute/lift.rs) workload hook, so an
   intermediate value dies with its consumer and only a consumer-less root drains to the run
-  arena. Return-contract enforcement stays a separate Done-time layer. This output-lifetime
+  region. Return-contract enforcement stays a separate Done-time layer. This output-lifetime
   shrink and lift hook were the prerequisite half of confining `'run` to `KoanRuntime`; the
   *workload-independent DAG runtime* that completes it has shipped — the scheduler is a
   crate-root [`mod scheduler`](../src/scheduler.rs) generic over a `Workload`, naming no Koan
@@ -99,7 +99,7 @@ What's shipped that the open items below build on:
   (`'o -> 'o`), a `Done` terminal is finalized at its step lifetime `'step` *within* the producing step
   (`NodeStep<'step>`; `run_step` owns the step start to finish — enter, run, finalize — over the cart clone that witnesses `'step`),
   and the consumer-pull / `Outcome::Forward` lift re-anchors through [`read_lifted`](../src/machine/execute/runtime.rs)
-  into the consumer scope arena — so `pin_carried_to_run` survives only for the genuine run-global
+  into the consumer scope region — so `pin_carried_to_run` survives only for the genuine run-global
   root drain. The dispatch decide surface then collapsed onto that single cart-scale lifetime:
   `NodeScope::Anchored` is gone (every slot scope is cart-witnessed), `Outcome` is single-lifetime
   (the `Outcome<'run, 's>` split retired along with the `shorten_outcome` / `deps_for_builtin` /
@@ -112,7 +112,7 @@ What's shipped that the open items below build on:
   ([`submit_dispatch`](../src/machine/execute/dispatch/submit.rs)), where a borrowed
   `&KExpression<'ast>` is read against the cart scope — the working expression is re-anchored from
   its erased node carrier to `'step`, so decide never holds a live `'ast` borrow. See
-  [design/per-call-arena-protocol.md § Consumer-pull node-output lift](../design/per-call-arena-protocol.md#consumer-pull-node-output-lift).
+  [design/per-call-region/lifecycle.md § Consumer-pull node-output lift](../design/per-call-region/lifecycle.md#consumer-pull-node-output-lift).
 - *Unified erase/reattach carriers.* The hand-rolled erase-to-`'static` /
   reattach carriers (`ScopePtr`, the contract, the continuation, the scheduler's `Erased<W::Value>`)
   and the cluster of one-off `outcome.rs` reference reattaches now share one generic
@@ -126,7 +126,7 @@ What's shipped that the open items below build on:
   [`vend_carrier`](../src/scheduler/erase.rs), one safe-signature wrapper whose returned `'w` the
   compiler bounds against a witness borrow `&Rc<W::Frame>` the driver passes, so the `run_loop.rs` /
   `finalize.rs` call sites carry no `unsafe` of their own. See
-  [design/memory-model.md § Arena lifetime erasure](../design/memory-model.md#arena-lifetime-erasure).
+  [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
   visibility carve-out is retired and `visible` is the single `idx < cutoff` rule across both
@@ -143,10 +143,10 @@ What's shipped that the open items below build on:
   (record-literal bindings). Computed return types are bare tokens or `:(…)` / dotted
   `SigiledTypeExpr` carriers — the redundant parens-form `KType::KExpression` return overload is
   gone. See [design/typing/functors.md](../design/typing/functors.md) and
-  [design/typing/ktype.md](../design/typing/ktype.md).
+  [design/typing/ktype/README.md](../design/typing/ktype/README.md).
 - *One bare-leaf type resolver.* The synchronous `coerce_type_token_value` is folded into
-  [`resolve_type_leaf_carrier`](../src/machine/execute/dispatch/resolve_type_expr.rs) over the
-  memoized, park-capable `Scope::resolve_type_expr` bridge, so a bare type-name leaf resolves
+  [`resolve_type_leaf_carrier`](../src/machine/execute/dispatch/resolve_type_identifier.rs) over the
+  memoized, park-capable `Scope::resolve_type_identifier` bridge, so a bare type-name leaf resolves
   through one cache and parks on an earlier still-finalizing binder like every compound type
   form; the dead paired-carrier-recovery branch is gone. The type/value binding partition is
   now total at the LET boundary — a type binds only under a Type-classified name, so
@@ -181,13 +181,12 @@ What's shipped that the open items below build on:
   box/unbox round-trip at the binding seam. The bundle dual is `ArgValue` and an aggregate
   cell is `Held` (a list/dict/record element may be a first-class type). A deferred bare
   user-name leaf is now the `KType::Unresolved(TypeName)` transient (sibling to
-  `RecursiveRef`), consumed by `Scope::resolve_type_expr`. Modules and signatures travel in
+  `RecursiveRef`), consumed by `Scope::resolve_type_identifier`. Modules and signatures travel in
   the `Type` arm (projected by `require_module` / `require_signature`), and a shallow
   [`KKind` `{ Proper, Module, Signature, Any }`](../src/machine/model/types/kkind.rs) carried
-  as `KType::OfKind` classifies a type at dispatch — absorbing the former `TypeExprRef` /
-  `Type` / `AnyModule` / `AnySignature` `KType` markers. See
+  as `KType::OfKind` classifies a type at dispatch by its kind. See
   [design/typing/elaboration.md](../design/typing/elaboration.md) and
-  [design/execution-model.md](../design/execution-model.md).
+  [design/execution/README.md](../design/execution/README.md).
 - *Type-kind classification unfused from representation dispatch.* The two parallel kind
   classifiers fold into one subsumption lattice on `KKind`
   (`Any > {Module, Signature, Proper > {Tagged, Newtype, TypeConstructor}}`): the separate
@@ -198,7 +197,7 @@ What's shipped that the open items below build on:
   instance. `ATTR`'s newtype field access matches its value through the least-specific `Any`
   slot and validates the `Wrapped` shape in `access_field`, and `CATCH`'s return is the
   documentary `:(Result Any KError)` rather than a nominal-family wildcard. See
-  [design/typing/ktype.md](../design/typing/ktype.md) and
+  [design/typing/ktype/README.md](../design/typing/ktype/README.md) and
   [design/typing/user-types.md](../design/typing/user-types.md).
 - *Dispatcher pulled out of the scheduler via a write-effect contract.* The dispatch tree
   mirrors the builtin `Action` / `run_action` split: a shape handler *decides* against a
@@ -209,7 +208,7 @@ What's shipped that the open items below build on:
   N→1 shape the action harness installs): deps declared, the `Future`-cell splice lives in the
   finish, and the scheduler stays splice-unaware. A builtin invoked mid-dispatch routes through the shared action harness,
   reading the dispatcher's ambient frame/chain off the view.
-  See [design/execution-model.md § The dispatcher / scheduler boundary](../design/execution-model.md#the-dispatcher--scheduler-boundary).
+  See [design/execution/scheduler.md § The dispatcher / scheduler boundary](../design/execution/scheduler.md#the-dispatcher--scheduler-boundary).
 - *Unified scheduler interface.* Every scheduler-facing step — a dispatch decide, a finish, a
   builtin body, an invoke — decides against one read-only
   [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) and returns one AST-free
@@ -222,7 +221,7 @@ What's shipped that the open items below build on:
   private to the execute tree. A multi-statement FN body's leading statements are now owned deps
   the activation parks on, so they sequence and cascade-free before the tail reuses the frame —
   tail recursion with side-effecting statements runs in constant frame space. See
-  [design/execution-model.md § The dispatcher / scheduler boundary](../design/execution-model.md#the-dispatcher--scheduler-boundary).
+  [design/execution/scheduler.md § The dispatcher / scheduler boundary](../design/execution/scheduler.md#the-dispatcher--scheduler-boundary).
 - *`NodeWork` carries no AST.* The scheduler's slot-work collapsed to a single
   [`NodeWork`](../src/machine/execute/nodes.rs) struct — one captured `SchedulerView -> Outcome`
   `cont` (the combine/catch/decide behavior built in by combinators; the `<deps>` dep-error label
@@ -230,7 +229,7 @@ What's shipped that the open items below build on:
   into a dispatch-layer [`submit_dispatch`](../src/machine/execute/dispatch/submit.rs) chokepoint,
   so the scheduler never introspects a `KExpression` — `submit_node` is a generic slot allocator
   and no `NodeWork` variant names an AST. See
-  [design/execution-model.md § Dispatch birth and resume](../design/execution-model.md#dispatch-birth-and-resume).
+  [design/execution/classify-and-apply.md § Dispatch birth and resume](../design/execution/classify-and-apply.md#dispatch-birth-and-resume).
 - *Literal lowering hoisted to the dispatcher.* The aggregate-literal lowering
   (`schedule_list_literal` / `schedule_dict_literal` / `schedule_record_literal`, the `Slot`
   layout enum, `classify_aggregate_part`, `resolve_aggregate_bare_name`) moved from
@@ -239,7 +238,7 @@ What's shipped that the open items below build on:
   name-resolved and built values from an `ExpressionPart`, so the "scheduler names no AST"
   invariant now holds structurally across `scheduler/**`. The methods are `&mut self` on
   `KoanRuntime` (below), reached through the scheduler's public surface (`submit_in_own_scope` /
-  `current_scope`). See [design/execution-model.md](../design/execution-model.md#the-dispatcher--scheduler-boundary).
+  `current_scope`). See [design/execution/README.md](../design/execution/scheduler.md#the-dispatcher--scheduler-boundary).
 - *Dep-request enum made AST-free at the source.* The six-arm dep enum a
   `ParkThenContinue` declares (`Dispatch` / `ListLit` / `DictLit` / `RecordLit` / `BodyBlock` /
   `Existing`) is renamed `DispatchDep`→[`DepRequest`](../src/machine/execute/dispatch.rs) and
@@ -271,13 +270,23 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
+- [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
+- [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
+- [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md)
 - [FrameStorage self-reference via ouroboros](refactor/framestorage-ouroboros.md)
+- [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
+- [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md)
+- [Structural value equality](refactor/structural-value-equality.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
-- [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md)
+- [Unify the two argument binders](refactor/unify-argument-binders.md)
+- [Unify the value-name lookup outcomes](refactor/unify-name-lookup-outcome.md)
+- [Unify the type-name resolution path](refactor/unify-resolution-outcome.md)
+- [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
+- [Function-typed return annotations](type_language/function-typed-return-annotations.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
 
@@ -336,6 +345,8 @@ build on:
 - [Anonymous structural unions](type_language/anonymous-unions.md)
 - [Tagged-union variants as dispatchable types](type_language/tagged-variant-types.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
+- [Constructing circular values](type_language/circular-value-construction.md)
+- [Function-typed return annotations](type_language/function-typed-return-annotations.md)
 
 ### Editor tooling — [editor_tooling/](editor_tooling/)
 
@@ -353,9 +364,14 @@ reconciling names with behavior, merging responsibilities that have drifted apar
 shrinking the unsafe surface, and cutting hot-path overhead:
 
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Unify the type-resolution-outcome enums](refactor/unify-resolution-outcome.md) —
-  collapse `ElabResult` / `ResolveTypeExprOutcome` / `TypeLeafCarrier` into one generic
-  `ResolveOutcome<T>` with a `map_done` lift.
+- [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md) —
+  co-locate the value↔scope↔closure strongly-connected component that straddles the
+  model/core boundary into one module, turning its cross-boundary cycle edges (the
+  `α·feedback` charge) into free intra-module edges.
+- [Unify the type-name resolution path](refactor/unify-resolution-outcome.md) —
+  collapse `ElabResult` / `TypeIdentifierResolution` / `TypeLeafCarrier` into one generic
+  `ResolveOutcome<T>` with a `map_done` lift, and stop repeating the `from_name`
+  builtin-table fallback across the `from_type_identifier` / `elaborate` resolver layers.
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md) —
   collapse the slot-only `KType::SigiledTypeExpr` / `RecordType` markers into one
   `RawTypePart(TypePartKind)`; `KExpression` stays distinct.
@@ -366,6 +382,30 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
 - [FrameStorage self-reference via ouroboros](refactor/framestorage-ouroboros.md) — replace the
-  hand-rolled arena↔child-scope `pin_deref` / `ScopePtr::reattach_unbounded` loop with an
+  hand-rolled region↔child-scope `pin_deref` / `ScopePtr::reattach_unbounded` loop with an
   `ouroboros #[self_referencing]` struct so the self-reference is compiler-generated, not audited
   `unsafe`.
+- [Unify the two argument binders](refactor/unify-argument-binders.md) — stop the builtin
+  dispatch path building a whole `KFuture` just to gut `future.args`; one arg-binding path
+  instead of `bind` (`Record<ArgValue>`) beside `bind_by_name` (`Record<Carried>`).
+- [Unify the value-name lookup outcomes](refactor/unify-name-lookup-outcome.md) — name the
+  bound/parked/unbound disposition shared by core `Resolution` and execute `NameOutcome` once,
+  without minting a third `ResolveOutcome`.
+- [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md) — the two dep enums
+  carry an identical `Dispatch`/`Existing` core (and already share `DepPlacement`); give them a
+  shared core or a visibly-related pair.
+- [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md) — verify the
+  AST recursion that finds a submission's binders, then cache its parse-static portion on
+  `KExpression` (beside `DispatchShape`) instead of re-deriving it at every submission.
+- [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md) —
+  the committed `types`/`data` maps are partitioned, but the split is held by per-callsite
+  convention and the in-flight `placeholders` map carries no type/value discriminant; make the
+  distinction structural in the `Bindings` API.
+- [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md) — hold
+  a record's `Box<Record<KType>>` field-type memo and an already-region-allocated `KType` by
+  region reference, killing the `alloc_ktype(kt.clone())` and `.ktype()` deep clones on the
+  resolve/bind/lift paths.
+- [Structural value equality](refactor/structural-value-equality.md) — replace the
+  `summarize() == summarize()` string comparison (`Parseable::equal`, and the dict-key
+  `Hash`/`Eq`) with a per-variant structural compare that gets NaN, nominal identity, record
+  field order, and type parameters right.

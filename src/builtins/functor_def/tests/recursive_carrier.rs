@@ -3,12 +3,12 @@
 
 use crate::builtins::test_support::{lookup_fn, run, run_root_silent};
 use crate::machine::model::KType;
-use crate::machine::RuntimeArena;
+use crate::machine::KoanRegion;
 
 #[test]
 fn functor_return_slot_curried_functor_admits() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         // Inner FUNCTOR uses the builtin `:Signature` rather than the sibling

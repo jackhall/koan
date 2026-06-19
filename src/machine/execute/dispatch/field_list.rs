@@ -172,7 +172,7 @@ pub(crate) fn defer_field_list_action<'a>(
     Action::AwaitDeps { deps, finish }
 }
 
-/// Elaborate a standalone `:{…}` record type to `KObject::KTypeValue(KType::Record(_))`.
+/// Elaborate a standalone `:{…}` record type to `Carried::Type(KType::Record(_))`.
 /// The `fields` expression is the record's `(name :Type, …)` field list. A record type at a
 /// value/type position declares no binder, so the elaborator threads no self-reference; a
 /// field naming a forward type parks and a sigil field type sub-dispatches, both deferred
@@ -184,7 +184,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
 ) -> Outcome<'step> {
     fn fold<'step>(scope: &Scope<'step>, pairs: Vec<(String, KType<'step>)>) -> Outcome<'step> {
         let record = Record::from_pairs(pairs);
-        let kt = scope.arena.alloc_ktype(KType::Record(Box::new(record)));
+        let kt = scope.region.alloc_ktype(KType::Record(Box::new(record)));
         Outcome::Done(Ok(Carried::Type(kt)))
     }
     let mut elaborator = Elaborator::new(view.current_scope()).with_chain(chain.clone());

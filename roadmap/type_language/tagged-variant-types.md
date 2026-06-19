@@ -69,7 +69,7 @@ eliminate the same way — but neither blocks the other.
 
 **Requires:**
 
-- [Branch-arm return contract](../../design/execution-model.md#arms-as-own-blocks)
+- [Branch-arm return contract](../../design/execution/calls-and-values.md#arms-as-own-blocks)
   — the `MATCH` arm machinery the remaining work lowers into type-dispatch.
 
 **Unblocks:** none tracked yet.

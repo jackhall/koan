@@ -3,7 +3,7 @@
 use crate::machine::model::types::KKind;
 use std::collections::HashMap;
 
-use crate::machine::core::source::{FileId, Span, Spanned};
+use crate::source::{FileId, Span, Spanned};
 use std::rc::Rc;
 
 use crate::machine::model::{
@@ -21,26 +21,27 @@ pub enum KLiteral {
     Null,
 }
 
-/// Surface representation of a bare type-name leaf (`Number`, `Point`, `T`, `Mo.Ty`).
+/// A bare type identifier as written in source (`Number`, `Point`, `T`, `Mo.Ty`) — a single
+/// name token, never compound syntax.
 ///
-/// A thin newtype over the source name: `Deref`s to `str`, derives eq/hash by string.
-/// Compound shapes (`:(LIST OF X)`, `:(FN … -> …)`) are dispatch expressions, not
-/// `TypeName` structure, so this carries no information the name string wouldn't. The
-/// position tag rides on the carrier variant (`ExpressionPart::Type`,
-/// `KObject::TypeNameRef`), not on this struct.
+/// A thin newtype over the source name: `Deref`s to `str`, derives eq/hash by string. The
+/// identifier stays a flat name even when it *denotes* a compound type (a `NEWTYPE` / `UNION`
+/// name resolves to a record / tagged type); compound *syntax* (`:(LIST OF X)`,
+/// `:(FN … -> …)`) is a dispatch expression (`SigiledTypeExpr`), not a `TypeIdentifier`. The
+/// position tag rides on the carrier variant (`ExpressionPart::Type`), not on this struct.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TypeName(String);
+pub struct TypeIdentifier(String);
 
-impl std::ops::Deref for TypeName {
+impl std::ops::Deref for TypeIdentifier {
     type Target = str;
     fn deref(&self) -> &str {
         &self.0
     }
 }
 
-impl TypeName {
-    pub fn leaf(name: String) -> TypeName {
-        TypeName(name)
+impl TypeIdentifier {
+    pub fn leaf(name: String) -> TypeIdentifier {
+        TypeIdentifier(name)
     }
 
     pub fn as_str(&self) -> &str {
@@ -53,12 +54,12 @@ impl TypeName {
     }
 }
 
-/// One element of a parsed expression. `Future` is introduced by the scheduler when it
+/// One element of a parsed expression. `Spliced` is introduced by the scheduler when it
 /// splices a completed dep's resolved value into its dependent's parts list.
 pub enum ExpressionPart<'a> {
     Keyword(String),
     Identifier(String),
-    Type(TypeName),
+    Type(TypeIdentifier),
     Expression(Box<KExpression<'a>>),
     /// Parse-context marker for a `:(...)` group: the wrapped `KExpression` must dispatch
     /// in type-context, returning a type-side carrier. Shape recognition is the
@@ -81,7 +82,7 @@ pub enum ExpressionPart<'a> {
     Literal(KLiteral),
     /// A resolved sub-result spliced back into a parent expression — the dispatch-argument
     /// carrier, in the two-arm [`Carried`] currency.
-    Future(Carried<'a>),
+    Spliced(Carried<'a>),
 }
 
 impl<'a> std::fmt::Debug for ExpressionPart<'a> {
@@ -105,7 +106,7 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
                 f.debug_tuple("RecordLiteral").field(pairs).finish()
             }
             ExpressionPart::Literal(l) => f.debug_tuple("Literal").field(l).finish(),
-            ExpressionPart::Future(obj) => write!(f, "Future({})", obj.summarize()),
+            ExpressionPart::Spliced(obj) => write!(f, "Spliced({})", obj.summarize()),
         }
     }
 }
@@ -150,7 +151,7 @@ impl<'a> ExpressionPart<'a> {
                 KLiteral::Boolean(b) => b.to_string(),
                 KLiteral::Null => "null".to_string(),
             },
-            ExpressionPart::Future(obj) => obj.summarize(),
+            ExpressionPart::Spliced(obj) => obj.summarize(),
         }
     }
 
@@ -158,20 +159,20 @@ impl<'a> ExpressionPart<'a> {
     /// arm raw; a runtime value rides the `Object` arm. Runs at `KFunction::bind` time, which
     /// has no `Scope` in hand.
     ///
-    /// - A `Future(Carried::Type(_))` sub-result threads its type straight into the `Type` arm.
+    /// - A `Spliced(Carried::Type(_))` sub-result threads its type straight into the `Type` arm.
     /// - A parser `Type`-name token into a proper-type slot lowers to a concrete `KType` via
-    ///   [`KType::from_type_expr`], or to the [`KType::Unresolved`] transient for a bare user
+    ///   [`KType::from_type_identifier`], or to the [`KType::Unresolved`] transient for a bare user
     ///   name (a name not in the builtin table) — scope-aware elaboration defers to
-    ///   [`Scope::resolve_type_expr`](crate::machine::core::Scope::resolve_type_expr).
+    ///   [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier).
     /// - Lazy `:(...)` / `:{…}` slots capture the inner expression raw in the `Object` arm.
     pub fn resolve_for(&self, slot: &crate::machine::model::KType<'a>) -> ArgValue<'a> {
         use crate::machine::model::types::KType;
-        if let ExpressionPart::Future(Carried::Type(kt)) = self {
+        if let ExpressionPart::Spliced(Carried::Type(kt)) = self {
             return ArgValue::Type((*kt).clone());
         }
-        if let (ExpressionPart::Type(t), KType::OfKind(KKind::Proper)) = (self, slot) {
+        if let (ExpressionPart::Type(t), KType::OfKind(KKind::ProperType)) = (self, slot) {
             let kt =
-                KType::<'a>::from_type_expr(t).unwrap_or_else(|_| KType::Unresolved(t.clone()));
+                KType::<'a>::from_type_identifier(t).unwrap_or_else(|_| KType::Unresolved(t.clone()));
             return ArgValue::Type(kt);
         }
         if let (ExpressionPart::SigiledTypeExpr(inner), KType::SigiledTypeExpr) = (self, slot) {
@@ -228,10 +229,10 @@ impl<'a> ExpressionPart<'a> {
                     .collect();
                 KObject::record(fields)
             }
-            // Deep-clone, don't stringify: a Future-borne List or KExpression must
-            // materialize back to its structured form. A value-position Future is the
+            // Deep-clone, don't stringify: a Spliced-borne List or KExpression must
+            // materialize back to its structured form. A value-position Spliced is the
             // `Object` arm; a type arm never reaches `resolve` (it flows the type channel).
-            ExpressionPart::Future(c) => c.object().deep_clone(),
+            ExpressionPart::Spliced(c) => c.object().deep_clone(),
         }
     }
 }
@@ -249,7 +250,7 @@ impl<'a> Clone for ExpressionPart<'a> {
             ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(pairs.clone()),
             ExpressionPart::RecordLiteral(pairs) => ExpressionPart::RecordLiteral(pairs.clone()),
             ExpressionPart::Literal(l) => ExpressionPart::Literal(l.clone()),
-            ExpressionPart::Future(o) => ExpressionPart::Future(*o),
+            ExpressionPart::Spliced(o) => ExpressionPart::Spliced(*o),
         }
     }
 }
@@ -268,7 +269,7 @@ impl<'a> Clone for KExpression<'a> {
 }
 
 /// Pure-structural classification of a `KExpression` into the no-keyword fast-lane
-/// shapes, the chainable operator shape, and the catch-all keyword-bearing shape.
+/// shapes, the chainable operator shape, and the keyword-bearing shape.
 ///
 /// A function of expression structure only (no scope, no types), so it is computed
 /// once when the parts vector is complete and cached on [`KExpression::shape`]. The
@@ -290,7 +291,7 @@ pub enum DispatchShape {
     /// to `KType::Record` (deferring through a dep-finish when a field type sub-dispatches
     /// or forward-references), with no internal type-constructor builtin behind it.
     RecordType,
-    /// Single-part literal-shaped expression — `Literal`, `Future`, nested
+    /// Single-part literal-shaped expression — `Literal`, `Spliced`, nested
     /// `Expression`, `ListLiteral`, `DictLiteral`, or `RecordLiteral`. Surfaces the
     /// inner value without a bucket lookup.
     LiteralPassThrough,
@@ -339,7 +340,7 @@ pub fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
             ExpressionPart::SigiledTypeExpr(_) => DispatchShape::SigiledTypeExpr,
             ExpressionPart::RecordType(_) => DispatchShape::RecordType,
             ExpressionPart::Literal(_)
-            | ExpressionPart::Future(_)
+            | ExpressionPart::Spliced(_)
             | ExpressionPart::Expression(_)
             | ExpressionPart::ListLiteral(_)
             | ExpressionPart::DictLiteral(_)
@@ -364,7 +365,7 @@ pub fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
         // callable, so a non-callable head surfaces a loud `DispatchFailed`. A record
         // *type* is a value, not a callable, so a `:{…}` head joins them here.
         ExpressionPart::Literal(_)
-        | ExpressionPart::Future(_)
+        | ExpressionPart::Spliced(_)
         | ExpressionPart::ListLiteral(_)
         | ExpressionPart::DictLiteral(_)
         | ExpressionPart::RecordLiteral(_)
@@ -420,7 +421,7 @@ fn operator_probe_for(
 /// `untyped_key`, `shape`, and `operator_probe` are a structural cache filled by
 /// [`KExpression::fill_cache`] whenever the parts vector is complete (construction,
 /// parse-frame finalization, redundant-wrapper peeling). They are invariant under the
-/// dispatch-time splice that replaces an eager `Slot` part with a `Future` (also a
+/// dispatch-time splice that replaces an eager `Slot` part with a `Spliced` (also a
 /// `Slot`), so the dispatch driver reads them rather than re-deriving per call. The
 /// same AST node re-dispatches on every call of its enclosing function, so the eager
 /// cache amortizes across all invocations.

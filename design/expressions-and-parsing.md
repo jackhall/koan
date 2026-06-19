@@ -72,7 +72,7 @@ The `Keyword`-vs-slot split is the parser's contract with dispatch:
 - `Keyword` parts contribute fixed tokens to a signature's bucket key (the part
   that has to match exactly).
 - `Identifier`, `Type`, literals, and sub-expressions become slots that compete
-  on type specificity (see [typing/ktype.md](typing/ktype.md)).
+  on type specificity (see [typing/ktype/README.md](typing/ktype/README.md)).
 
 `KExpression` is itself a first-class `KObject` variant — user code can hold an
 unevaluated expression as a value, pass it around, and evaluate it on demand.
@@ -165,7 +165,7 @@ just be a post-hoc selector picking one of the two already-computed values.
 This is a deliberate consequence of the graph-based execution model: the
 parent slot's arguments are dependencies in the DAG, and the topological order
 of execute makes them ready before the parent runs. See
-[execution-model.md](execution-model.md). To get real branching behavior,
+[execution/README.md](execution/README.md). To get real branching behavior,
 `MATCH` opts its branch slots into laziness — the next section.
 
 ## Lazy slots
@@ -228,7 +228,7 @@ prepended with the head, producing the AST shape `(QUOTE <body>)` /
 `KExpression`-typed slot and returns the captured AST as a value;
 [EVAL](../src/builtins/eval.rs)'s slot is `Any` so the scheduler
 eagerly evaluates the operand first, after which the body checks the result is
-a `KExpression` and tail-dispatches the inner AST in a fresh `CallArena`
+a `KExpression` and tail-dispatches the inner AST in a fresh `CallFrame`
 (mirroring `MATCH`'s per-call frame so free names resolve against the
 surrounding lexical scope but body-introduced bindings don't leak). EVAL
 returns whatever the inner AST evaluates to; a non-`KExpression` operand

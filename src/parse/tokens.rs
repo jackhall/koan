@@ -19,11 +19,11 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::machine::core::source::{Span, Spanned};
-use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeName};
+use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeIdentifier};
 use crate::machine::model::is_keyword_token;
 use crate::machine::KError;
 use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, SuffixOp, UnaryBuild};
+use crate::source::{Span, Spanned};
 
 static FLOAT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?$").unwrap());
@@ -91,7 +91,7 @@ fn classify_atom<'a>(tok: &str, token_span: Span) -> Result<ExpressionPart<'a>, 
                 Some(token_span),
             ));
         }
-        return Ok(ExpressionPart::Type(TypeName::leaf(tok.to_string())));
+        return Ok(ExpressionPart::Type(TypeIdentifier::leaf(tok.to_string())));
     }
     if tok.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
         return Err(KError::parse(
@@ -240,7 +240,7 @@ mod tests {
             ExpressionPart::Literal(KLiteral::Number(n)) => format!("n({})", n),
             ExpressionPart::Literal(KLiteral::Boolean(b)) => format!("b({})", b),
             ExpressionPart::Literal(KLiteral::Null) => "null".to_string(),
-            ExpressionPart::Future(_) => "future".to_string(),
+            ExpressionPart::Spliced(_) => "spliced".to_string(),
             ExpressionPart::ListLiteral(items) => {
                 let inner: Vec<String> = items.iter().map(describe).collect();
                 format!("L[{}]", inner.join(" "))

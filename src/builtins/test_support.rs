@@ -14,18 +14,18 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KObject, Parseable};
-use crate::machine::{KError, RuntimeArena, Scope};
+use crate::machine::{KError, KoanRegion, Scope};
 use crate::parse::parse;
 use crate::scheduler::{reattach_value, NodeId};
 
 use super::default_scope;
 
 /// Extract a top-level terminal at the scope lifetime `'a`. The scheduler re-anchors a read to its
-/// own `&self` borrow; a top-level result is a frameless terminal living in the scope arena `'a`,
+/// own `&self` borrow; a top-level result is a frameless terminal living in the scope region `'a`,
 /// which outlives the local scheduler, so widening the read to `'a` is sound. Test-only — production
 /// code reads at the scheduler borrow and never widens.
 pub(crate) fn extract_terminal<'a>(sched: &KoanRuntime<'a>, id: NodeId) -> Carried<'a> {
-    // SAFETY: see the doc comment — the frameless top-level terminal lives in the `'a` scope arena,
+    // SAFETY: see the doc comment — the frameless top-level terminal lives in the `'a` scope region,
     // a strict outliver of the local `sched`, so the conservative `'node` read widens soundly.
     unsafe { reattach_value::<CarriedFamily>(sched.read(id)) }
 }
@@ -44,21 +44,21 @@ impl Write for SharedBuf {
 }
 
 pub(crate) fn run_root_with_buf<'a>(
-    arena: &'a RuntimeArena,
+    region: &'a KoanRegion,
 ) -> (&'a Scope<'a>, Rc<RefCell<Vec<u8>>>) {
     let buf = Rc::new(RefCell::new(Vec::new()));
-    let scope = default_scope(arena, Box::new(SharedBuf(buf.clone())));
+    let scope = default_scope(region, Box::new(SharedBuf(buf.clone())));
     (scope, buf)
 }
 
-pub(crate) fn run_root_silent<'a>(arena: &'a RuntimeArena) -> &'a Scope<'a> {
-    default_scope(arena, Box::new(std::io::sink()))
+pub(crate) fn run_root_silent<'a>(region: &'a KoanRegion) -> &'a Scope<'a> {
+    default_scope(region, Box::new(std::io::sink()))
 }
 
 /// Run-root scope with no builtins registered, for tests that exercise scope machinery
 /// directly.
-pub(crate) fn run_root_bare<'a>(arena: &'a RuntimeArena) -> &'a Scope<'a> {
-    arena.alloc_scope(Scope::run_root(arena, None, Box::new(std::io::sink())))
+pub(crate) fn run_root_bare<'a>(region: &'a KoanRegion) -> &'a Scope<'a> {
+    region.alloc_scope(Scope::run_root(region, None, Box::new(std::io::sink())))
 }
 
 /// Parse a source string expected to contain exactly one top-level expression.
@@ -154,10 +154,10 @@ pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
         })
 }
 
-/// Allocate a labeled marker object on `scope`'s arena. Dispatch tests register builtins
+/// Allocate a labeled marker object on `scope`'s region. Dispatch tests register builtins
 /// whose bodies return distinct markers so the test can assert which overload won.
 pub(crate) fn marker<'a>(scope: &Scope<'a>, label: &'static str) -> &'a KObject<'a> {
-    scope.arena.alloc_object(KObject::KString(label.into()))
+    scope.region.alloc_object(KObject::KString(label.into()))
 }
 
 /// Build a one-argument signature (`<name: kt>`) returning `Any`.

@@ -5,7 +5,7 @@ use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::machine::core::KErrorKind;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::types::KType;
-use crate::machine::RuntimeArena;
+use crate::machine::KoanRegion;
 
 use super::capture_program_output;
 
@@ -14,8 +14,8 @@ use super::capture_program_output;
 /// `List<Any>`, the contract, not the body's incidental `List<Number>` precision.
 #[test]
 fn fn_return_coarsens_list_carrier_to_declared() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (NUMS) -> :(LIST OF Any) = ([1 2 3])");
     let result = run_one(scope, parse_one("NUMS"));
     assert_eq!(result.ktype(), KType::List(Box::new(KType::Any)));
@@ -24,8 +24,8 @@ fn fn_return_coarsens_list_carrier_to_declared() {
 /// Without an annotation, a list keeps its precise memoized join type.
 #[test]
 fn fn_return_keeps_precise_list_carrier_when_declared_precise() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (NUMS) -> :(LIST OF Number) = ([1 2 3])");
     let result = run_one(scope, parse_one("NUMS"));
     assert_eq!(result.ktype(), KType::List(Box::new(KType::Number)));
@@ -35,8 +35,8 @@ fn fn_return_keeps_precise_list_carrier_when_declared_precise() {
 /// declared element type.
 #[test]
 fn fn_return_heterogeneous_list_rejected_by_precise_declared() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (BAD) -> :(LIST OF Number) = ([2 \"hello\"])");
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("BAD"), scope);
@@ -48,8 +48,8 @@ fn fn_return_heterogeneous_list_rejected_by_precise_declared() {
 /// passes and the declared element type is stamped.
 #[test]
 fn fn_return_empty_list_stamps_declared_element_type() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (EMPTY) -> :(LIST OF Number) = ([])");
     let result = run_one(scope, parse_one("EMPTY"));
     assert_eq!(result.ktype(), KType::List(Box::new(KType::Number)));
@@ -77,8 +77,8 @@ fn fn_returning_typed_list_accepts_matching_value() {
 /// failing `execute`, so we read the slot via `read_result` to assert the failure.
 #[test]
 fn fn_returning_typed_list_rejects_wrong_element_type() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (BAD) -> :(LIST OF Number) = ([1 \"x\"])");
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("BAD"), scope);
@@ -115,8 +115,8 @@ fn fn_with_typed_function_param_accepts_matching_function() {
 /// `DispatchFailed` rather than binding the structurally-similar function.
 #[test]
 fn fn_with_typed_function_param_rejects_name_mismatch() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")",
@@ -179,8 +179,8 @@ fn fn_with_typed_function_param_admits_width_drop() {
 /// other overload the call surfaces `DispatchFailed`.
 #[test]
 fn fn_with_typed_function_param_rejects_width_extra() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")",
@@ -228,8 +228,8 @@ fn fn_typed_function_param_contravariant_tiebreak() {
 /// are mutually incomparable, so neither wins → `AmbiguousDispatch`.
 #[test]
 fn fn_typed_function_param_incomparable_is_ambiguous() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"num\")",
@@ -283,7 +283,7 @@ fn dispatch_disambiguates_element_only_overloads_on_literal() {
 }
 
 /// An already-evaluated container forced through parens arrives at re-dispatch as a
-/// typed `Future` whose carried element type selects the overload — no literal-defer
+/// typed `Spliced` whose carried element type selects the overload — no literal-defer
 /// needed.
 #[test]
 fn dispatch_disambiguates_element_only_overloads_on_evaluated_arg() {
@@ -337,8 +337,8 @@ fn dispatch_disambiguates_element_only_overloads_on_bound_variable() {
 /// generic `DispatchFailed`.
 #[test]
 fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")",
@@ -367,8 +367,8 @@ fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
 /// than tying as ambiguous.
 #[test]
 fn dispatch_heterogeneous_literal_matches_no_concrete_element_overload() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")",
@@ -425,7 +425,7 @@ fn fn_with_nested_parens_wrapped_type_param_dispatches() {
     assert_eq!(bytes, b"1\n");
 }
 
-/// Two-type-arg shape of `parse_fn_param_list`'s `Future(_)` re-walk arm.
+/// Two-type-arg shape of `parse_fn_param_list`'s `Spliced(_)` re-walk arm.
 #[test]
 fn fn_with_parens_wrapped_dict_of_param_accepts_matching_dict() {
     let bytes = capture_program_output(
@@ -440,8 +440,8 @@ fn fn_with_parens_wrapped_dict_of_param_accepts_matching_dict() {
 /// no other overload to fall through to, the call surfaces no match.
 #[test]
 fn fn_typed_list_param_wrong_element_type_finds_no_match() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (HEAD xs :(LIST OF Number)) -> Number = (1)");
     let mut sched = KoanRuntime::new();
     let root = sched.dispatch_in_scope(parse_one("HEAD [\"a\"]"), scope);
@@ -463,8 +463,8 @@ fn fn_typed_list_param_wrong_element_type_finds_no_match() {
 /// contract.
 #[test]
 fn fn_typed_list_param_stamps_bound_arg_to_declared_element() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "FN (ECHO xs :(LIST OF Any)) -> :(LIST OF Any) = (xs)",
@@ -476,8 +476,8 @@ fn fn_typed_list_param_stamps_bound_arg_to_declared_element() {
 /// A correct-element call into a precise slot keeps the precise element type.
 #[test]
 fn fn_typed_list_param_accepts_matching_element_at_call() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "FN (ECHO xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)",

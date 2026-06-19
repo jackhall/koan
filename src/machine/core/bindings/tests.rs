@@ -2,15 +2,15 @@
 //! the `pending_types` RAII guard lifecycle.
 
 use super::*;
-use crate::machine::core::arena::RuntimeArena;
+use crate::machine::core::arena::KoanRegion;
 use crate::machine::core::scope_id::ScopeId;
 use crate::machine::model::types::{KKind, KType};
 
 #[test]
 fn try_register_type_inserts_into_types_map() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc_ktype(KType::Number);
+    let kt: &KType = region.alloc_ktype(KType::Number);
     let outcome = bindings
         .try_register_type("Foo", kt, BindingIndex::BUILTIN)
         .expect("try_register_type should succeed on fresh bindings");
@@ -25,10 +25,10 @@ fn try_register_type_inserts_into_types_map() {
 
 #[test]
 fn try_register_type_rejects_collision_with_rebind() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt1: &KType = arena.alloc_ktype(KType::Number);
-    let kt2: &KType = arena.alloc_ktype(KType::Str);
+    let kt1: &KType = region.alloc_ktype(KType::Number);
+    let kt2: &KType = region.alloc_ktype(KType::Str);
     bindings
         .try_register_type("Foo", kt1, BindingIndex::BUILTIN)
         .expect("first register should succeed");
@@ -46,9 +46,9 @@ fn try_register_type_rejects_collision_with_rebind() {
 
 #[test]
 fn try_register_type_yields_conflict_on_live_types_borrow() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc_ktype(KType::Number);
+    let kt: &KType = region.alloc_ktype(KType::Number);
     let _r = bindings.types();
     let outcome = bindings
         .try_register_type("Foo", kt, BindingIndex::BUILTIN)
@@ -59,9 +59,9 @@ fn try_register_type_yields_conflict_on_live_types_borrow() {
 
 #[test]
 fn try_register_type_clears_matching_placeholder() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc_ktype(KType::Number);
+    let kt: &KType = region.alloc_ktype(KType::Number);
     bindings
         .try_install_placeholder("Bar".to_string(), NodeId(7), BindingIndex::BUILTIN)
         .expect("placeholder install should succeed on fresh bindings");
@@ -74,9 +74,9 @@ fn try_register_type_clears_matching_placeholder() {
 
 #[test]
 fn try_register_type_does_not_touch_data_or_functions() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc_ktype(KType::Number);
+    let kt: &KType = region.alloc_ktype(KType::Number);
     bindings
         .try_register_type("Foo", kt, BindingIndex::BUILTIN)
         .expect("register should succeed");
@@ -98,7 +98,7 @@ fn pending_binder_guard_drop_removes_entry() {
     let bindings: Box<Bindings<'static>> = Box::default();
     let bindings: &'static Bindings<'static> = Box::leak(bindings);
     let entry = PendingTypeEntry {
-        kind: KKind::Newtype,
+        kind: KKind::NewType,
         scope_id: ScopeId::from_raw(0, 0xBEEF),
         schema_expr: KExpression::new(Vec::new()),
     };
@@ -119,7 +119,7 @@ fn pending_binder_guard_drop_tolerates_absent_entry() {
     let bindings: Box<Bindings<'static>> = Box::default();
     let bindings: &'static Bindings<'static> = Box::leak(bindings);
     let entry = PendingTypeEntry {
-        kind: KKind::Newtype,
+        kind: KKind::NewType,
         scope_id: ScopeId::from_raw(0, 0xBEEF),
         schema_expr: KExpression::new(Vec::new()),
     };

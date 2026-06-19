@@ -5,14 +5,14 @@ use crate::builtins::test_support::{
 };
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{Argument, KObject, KType, SignatureElement};
-use crate::machine::{KErrorKind, RuntimeArena};
+use crate::machine::{KErrorKind, KoanRegion};
 
 use super::capture_program_output;
 
 #[test]
 fn fn_typed_param_records_ktype_on_signature() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
 
     let f = lookup_fn(scope, "DOUBLE");
@@ -28,8 +28,8 @@ fn fn_typed_param_records_ktype_on_signature() {
 
 #[test]
 fn fn_typed_param_dispatches_on_matching_call() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
     let result = run_one(scope, parse_one("DOUBLE 7"));
     assert!(matches!(result, KObject::Number(n) if *n == 7.0));
@@ -39,8 +39,8 @@ fn fn_typed_param_dispatches_on_matching_call() {
 /// runs out, and the queue stalls — surfaces as `DispatchFailed` from `execute()` itself.
 #[test]
 fn fn_typed_param_rejects_mismatched_call() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
     let mut sched = KoanRuntime::new();
     let root = sched.dispatch_in_scope(parse_one("DOUBLE \"hi\""), scope);
@@ -72,8 +72,8 @@ fn fn_overloads_dispatch_by_param_type() {
 
 #[test]
 fn fn_param_without_annotation_is_rejected() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("FN (DOUBLE x) -> Number = (x)"), scope);
     sched
@@ -95,8 +95,8 @@ fn fn_param_without_annotation_is_rejected() {
 
 #[test]
 fn fn_param_with_unknown_type_name_is_rejected() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("FN (DOUBLE x :Bogus) -> Number = (x)"), scope);
     sched

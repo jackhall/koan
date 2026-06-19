@@ -1,5 +1,5 @@
 use super::*;
-use crate::machine::core::source::Spanned;
+use crate::source::Spanned;
 
 fn one_slot<'a>(kt: KType<'a>) -> ExpressionSignature<'a> {
     ExpressionSignature {
@@ -42,7 +42,7 @@ fn most_specific_returns_none_when_tied() {
 fn return_type_clone_round_trips_all_arms() {
     let r = ReturnType::Resolved(KType::Number);
     assert_eq!(r, r.clone());
-    let d = ReturnType::Deferred(DeferredReturn::TypeExpr(TypeName::leaf("Er".into())));
+    let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Er".into())));
     assert_eq!(d, d.clone());
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword("FOO")));
     assert_eq!(e, e.clone());
@@ -51,19 +51,19 @@ fn return_type_clone_round_trips_all_arms() {
 #[test]
 fn return_type_eq_deferred_match_and_variant_mismatch() {
     let r = ReturnType::Resolved(KType::Number);
-    let d = ReturnType::Deferred(DeferredReturn::TypeExpr(TypeName::leaf("Er".into())));
+    let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Er".into())));
     assert_ne!(r, d);
-    let d2 = ReturnType::Deferred(DeferredReturn::TypeExpr(TypeName::leaf("Er".into())));
+    let d2 = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Er".into())));
     assert_eq!(d, d2);
-    let d3 = ReturnType::Deferred(DeferredReturn::TypeExpr(TypeName::leaf("Other".into())));
+    let d3 = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Other".into())));
     assert_ne!(d, d3);
 }
 
 #[test]
 fn deferred_return_eq_matches_per_carrier() {
-    let t1 = DeferredReturn::TypeExpr(TypeName::leaf("Er".into()));
-    let t2 = DeferredReturn::TypeExpr(TypeName::leaf("Er".into()));
-    let t3 = DeferredReturn::TypeExpr(TypeName::leaf("Other".into()));
+    let t1 = DeferredReturn::Type(TypeIdentifier::leaf("Er".into()));
+    let t2 = DeferredReturn::Type(TypeIdentifier::leaf("Er".into()));
+    let t3 = DeferredReturn::Type(TypeIdentifier::leaf("Other".into()));
     assert_eq!(t1, t2);
     assert_ne!(t1, t3);
 
@@ -78,9 +78,9 @@ fn deferred_return_eq_matches_per_carrier() {
 
 #[test]
 fn type_name_eq_compares_leaf_names() {
-    let leaf_a = TypeName::leaf("A".into());
-    let leaf_a2 = TypeName::leaf("A".into());
-    let leaf_b = TypeName::leaf("B".into());
+    let leaf_a = TypeIdentifier::leaf("A".into());
+    let leaf_a2 = TypeIdentifier::leaf("A".into());
+    let leaf_b = TypeIdentifier::leaf("B".into());
     assert_eq!(leaf_a, leaf_a2);
     assert_ne!(leaf_a, leaf_b);
 }
@@ -107,14 +107,14 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
 fn return_type_debug_renders_both_arms() {
     let r = ReturnType::Resolved(KType::Number);
     assert!(format!("{:?}", r).contains("Resolved"));
-    let d = ReturnType::Deferred(DeferredReturn::TypeExpr(TypeName::leaf("Er".into())));
+    let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Er".into())));
     assert!(format!("{:?}", d).contains("Deferred"));
 }
 
 #[test]
 fn deferred_return_debug_renders_both_arms() {
-    let t = DeferredReturn::TypeExpr(TypeName::leaf("Er".into()));
-    assert!(format!("{:?}", t).contains("TypeExpr"));
+    let t = DeferredReturn::Type(TypeIdentifier::leaf("Er".into()));
+    assert!(format!("{:?}", t).contains("Type"));
     let e = DeferredReturn::Expression(expr_with_keyword("FOO"));
     assert!(format!("{:?}", e).contains("Expression"));
 }
@@ -123,7 +123,7 @@ fn deferred_return_debug_renders_both_arms() {
 fn return_type_name_covers_all_arms() {
     let r = ReturnType::Resolved(KType::Number);
     assert_eq!(r.name(), KType::Number.name());
-    let t = ReturnType::Deferred(DeferredReturn::TypeExpr(TypeName::leaf("Er".into())));
+    let t = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Er".into())));
     assert_eq!(t.name(), "Er");
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword("FOO")));
     assert_eq!(e.name(), "FOO");
@@ -144,14 +144,14 @@ fn exact_equal_unaffected_by_deferred_return_synthesis() {
             })],
         }
     }
-    let er = sig_with(ReturnType::Deferred(DeferredReturn::TypeExpr(
-        TypeName::leaf("Er".into()),
+    let er = sig_with(ReturnType::Deferred(DeferredReturn::Type(
+        TypeIdentifier::leaf("Er".into()),
     )));
-    let er2 = sig_with(ReturnType::Deferred(DeferredReturn::TypeExpr(
-        TypeName::leaf("Er".into()),
+    let er2 = sig_with(ReturnType::Deferred(DeferredReturn::Type(
+        TypeIdentifier::leaf("Er".into()),
     )));
-    let ar = sig_with(ReturnType::Deferred(DeferredReturn::TypeExpr(
-        TypeName::leaf("Ar".into()),
+    let ar = sig_with(ReturnType::Deferred(DeferredReturn::Type(
+        TypeIdentifier::leaf("Ar".into()),
     )));
     assert!(er.exact_equal(&er2));
     assert!(!er.exact_equal(&ar));
@@ -162,7 +162,7 @@ fn return_type_matches_value_deferred_always_true_resolved_delegates() {
     use crate::machine::model::values::KObject;
     let obj = KObject::Number(42.0);
     // Deferred always matches — per-call check runs elsewhere.
-    let d = ReturnType::Deferred(DeferredReturn::TypeExpr(TypeName::leaf("Er".into())));
+    let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Er".into())));
     assert!(d.matches_value(&obj));
     assert!(!d.is_resolved());
     let r_num = ReturnType::Resolved(KType::Number);

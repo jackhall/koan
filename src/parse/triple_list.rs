@@ -14,7 +14,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 /// FN / FUNCTOR parameters may be conventionally capitalized (`Ty`, `Er`), which lexes
 /// as a `Type` token, so they opt into `IdentifierOrType`. UNION variant tags *are*
 /// types (`Some`, `Ok`) and so require `Type` — a lowercase tag is rejected. In every
-/// type-token case the name string is read via `TypeName::render()`.
+/// type-token case the name string is read via `TypeIdentifier::render()`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FieldNameKind {
     Identifier,
@@ -78,15 +78,15 @@ pub fn parse_pair_list<'a, T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::core::source::Spanned;
-    use crate::machine::model::ast::TypeName;
+    use crate::machine::model::ast::TypeIdentifier;
+    use crate::source::Spanned;
 
     /// `[name, slot]` parts where the name rides as a `Type` token (e.g. a capitalized
     /// FUNCTOR param `Ty`) and the slot is an arbitrary leaf, here a `Type` too.
     fn type_named_pair<'a>() -> KExpression<'a> {
         KExpression::new(vec![
-            Spanned::bare(ExpressionPart::Type(TypeName::leaf("Ty".into()))),
-            Spanned::bare(ExpressionPart::Type(TypeName::leaf("Signature".into()))),
+            Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Ty".into()))),
+            Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Signature".into()))),
         ])
     }
 

@@ -24,7 +24,7 @@ fn collect_param_types<'a>(
     signature: &KExpression<'a>,
     scope: &Scope<'a>,
 ) -> std::collections::HashMap<String, KType<'a>> {
-    use crate::machine::model::types::{elaborate_type_expr, ElabResult};
+    use crate::machine::model::types::{elaborate_type_identifier, ElabResult};
     let mut map = std::collections::HashMap::new();
     let mut el = Elaborator::new(scope);
     let parts = &signature.parts;
@@ -38,7 +38,7 @@ fn collect_param_types<'a>(
         if let Some(name) = param_name {
             if let Some(next_part) = parts.get(i + 1) {
                 if let ExpressionPart::Type(t) = &next_part.value {
-                    if let ElabResult::Done(kt) = elaborate_type_expr(&mut el, t) {
+                    if let ElabResult::Done(kt) = elaborate_type_identifier(&mut el, t) {
                         map.insert(name, kt);
                     }
                 }
@@ -134,7 +134,7 @@ pub fn body<'a>(
 ///
 /// The record-schema sigil `:{…}` resolves to a `KType::Record` before this
 /// fires — it is a first-class `ExpressionPart::RecordType` the dispatcher folds
-/// structurally, and the `signature` slot is typed `TypeExprRef`, so the operand
+/// structurally, and the `signature` slot is typed `ProperType`, so the operand
 /// sub-dispatches to a type-side carrier and the args record hands us the
 /// resolved record. Each field becomes a keyword-less `Argument`; the function
 /// registers no dispatch keyword (see [`FnKind::Anonymous`]) and is reachable
@@ -207,10 +207,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // once its signature is known. The constructed `KObject::KFunction` projects
     // its full signature through `ktype()` at the call site.
     //
-    // Two keyworded overloads cover the return-type carrier — `TypeExprRef` for a bare
+    // Two keyworded overloads cover the return-type carrier — `ProperType` for a bare
     // `Type(_)` (`-> Number`) and `SigiledTypeExpr` for a `:(…)` / dotted form
-    // (`-> Er.Type`, `-> :(Set WITH {…})`). `Future(KTypeValue(_))` post-dep-finish wakes
-    // admit only against `TypeExprRef`. A third overload (below) carries the
+    // (`-> Er.Type`, `-> :(Set WITH {…})`). `Spliced(Carried::Type(_))` post-dep-finish wakes
+    // admit only against `ProperType`. A third overload (below) carries the
     // anonymous `:{…}` record-schema signature.
     //
     // FN supplies only `binder_bucket` (no `binder_name`): sibling FN overloads
@@ -224,7 +224,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     //
     // The final `false` is the nominal-binder flag: FN is value-side gated, so
     // `LET f = (FN ...)` does not register a sibling-visible nominal identity.
-    // `:TypeExprRef`-return keyworded overload (`-> Number` / `-> Er`).
+    // `:ProperType`-return keyworded overload (`-> Number` / `-> Er`).
     let typeexpr_sig = || {
         sig(
             KType::Any,
@@ -232,7 +232,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("FN"),
                 arg("signature", KType::KExpression),
                 kw("->"),
-                arg("return_type", KType::OfKind(KKind::Proper)),
+                arg("return_type", KType::OfKind(KKind::ProperType)),
                 kw("="),
                 arg("body", KType::KExpression),
             ],
@@ -240,7 +240,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     };
     // Lazy `:(...)` return carrier — a dotted/sigil return (`-> Er.Type`, `-> :(LIST OF T)`) is a
     // `SigiledTypeExpr`; the `:SigiledTypeExpr` slot captures it raw (more specific than
-    // `:TypeExprRef`, so it wins) and `extract_return_type_raw` defers a param-referencing one
+    // `:ProperType`, so it wins) and `extract_return_type_raw` defers a param-referencing one
     // per-call instead of eager-sub-dispatching it to an unbound parameter.
     let sigil_sig = || {
         sig(
@@ -256,7 +256,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         )
     };
     // Anonymous overload: a `:{…}` record-schema operand is a `RecordType` part, which the two
-    // `KExpression`-signature overloads above reject and only this `TypeExprRef`-signature overload
+    // `KExpression`-signature overloads above reject and only this `ProperType`-signature overload
     // admits (it sub-dispatches to a resolved `KType::Record`). Selection is unambiguous by operand
     // part-kind, so it needs no `binder_bucket` park-guard.
     let record_sig = || {
@@ -264,9 +264,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("FN"),
-                arg("signature", KType::OfKind(KKind::Proper)),
+                arg("signature", KType::OfKind(KKind::ProperType)),
                 kw("->"),
-                arg("return_type", KType::OfKind(KKind::Proper)),
+                arg("return_type", KType::OfKind(KKind::ProperType)),
                 kw("="),
                 arg("body", KType::KExpression),
             ],

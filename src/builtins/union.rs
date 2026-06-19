@@ -14,7 +14,7 @@ use super::{arg, kw, sig};
 /// Seal the elaborated variant schema into the UNION's [`RecursiveSet`] member and install
 /// the `SetRef` identity into `bindings.types` — type-only, no value-side carrier.
 /// Transient `RecursiveRef(name)` variant leaves seal to `SetLocal(index)`. Mirror of
-/// [`super::struct_def::finalize_struct`].
+/// [`super::newtype_def::finalize_record_newtype`].
 fn finalize_union<'a>(
     scope: &Scope<'a>,
     name: String,
@@ -48,7 +48,7 @@ fn finalize_union<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => Ok(Carried::Type(scope.arena.alloc_ktype(kt_ref.clone()))),
+        SealOutcome::Sealed(kt_ref) => Ok(Carried::Type(scope.region.alloc_ktype(kt_ref.clone()))),
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "UNION `{name}` schema references unsealed type `{missing}`",
         )))),
@@ -90,10 +90,10 @@ pub fn body<'a>(
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let signature = sig(
-        KType::OfKind(KKind::Any),
+        KType::OfKind(KKind::AnyType),
         vec![
             kw("UNION"),
-            arg("name", KType::OfKind(KKind::Proper)),
+            arg("name", KType::OfKind(KKind::ProperType)),
             kw("="),
             arg("schema", KType::KExpression),
         ],
@@ -115,7 +115,7 @@ mod tests {
     use crate::builtins::test_support::{parse_one, run_one_err, run_one_type, run_root_silent};
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::KType;
-    use crate::machine::{BindingIndex, KErrorKind, RuntimeArena, Scope};
+    use crate::machine::{BindingIndex, KErrorKind, KoanRegion, Scope};
 
     /// The projected (`SetLocal`s resolved) variant schema of a UNION member, by name.
     fn tagged_schema<'a>(
@@ -141,8 +141,8 @@ mod tests {
 
     #[test]
     fn union_named_registers_type_in_scope() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         // UNION is type-only: the declaration yields a `SetRef` type whose Tagged
         // member carries the variant schema, registered into `types`.
         let result = run_one_type(scope, parse_one("UNION Maybe = (Some :Number None :Null)"));
@@ -171,8 +171,8 @@ mod tests {
     fn anonymous_union_fails_dispatch() {
         use crate::machine::execute::KoanRuntime;
 
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let mut sched = KoanRuntime::new();
         let root = sched.dispatch_in_scope(parse_one("UNION (Ok :Number Err :Str)"), scope);
         sched
@@ -190,8 +190,8 @@ mod tests {
 
     #[test]
     fn union_rejects_unknown_type_name() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("UNION Bad = (Some :Bogus)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("Bogus")),
@@ -201,8 +201,8 @@ mod tests {
 
     #[test]
     fn union_rejects_empty_schema() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("UNION Empty = ()"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("at least one tag")),
@@ -212,8 +212,8 @@ mod tests {
 
     #[test]
     fn union_rejects_duplicate_tag() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("UNION Dupe = (Some :Number Some :Str)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`Some`")),
@@ -226,8 +226,8 @@ mod tests {
     /// (no value-side carrier) idempotency net.
     #[test]
     fn finalize_union_idempotent_after_seal_pre_install() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let scope_id = scope.id;
         // Pre-install a `SetRef` to a pending (unfilled) member, as the RECURSIVE TYPES
         // block does for its co-declared members.
@@ -275,8 +275,8 @@ mod tests {
     fn union_rejects_odd_part_count() {
         // Typed variants parse as `[Identifier, Type]` pairs; odd-count parts are
         // rejected by the pair-list walker.
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("UNION Pair = (Some :Number None)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("pair") || msg.contains("multiple of 2")),

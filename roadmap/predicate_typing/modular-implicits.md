@@ -65,7 +65,7 @@ site needs.
   reads `Any` on both sides. The deferred-*return* case already ships its fix — a
   confined `KType::DeferredReturn` shadow carried in the `ret` box, admitted by
   syntactic shadow equality
-  ([ktype.md § Variance](../../design/typing/ktype.md#variance)); the parameter side
+  ([ktype/parameterization-and-variance.md § Variance](../../design/typing/ktype/parameterization-and-variance.md#variance)); the parameter side
   wants the contravariant mirror. Recommended: reuse the surface-shadow shape for
   symmetry, decided alongside the resolution that first produces such a slot.
 - *Implicit-parameter declaration syntax — open.* The function signature

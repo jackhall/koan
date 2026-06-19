@@ -61,12 +61,12 @@ enum SlotState<W: Workload> {
     /// `reinstall` / `finalize` / `free_one` exits this state.
     Running,
     /// A finalized terminal, plus the producer frame `Rc` that backs it (`None` for a frameless /
-    /// run-arena value). The value is stored erased to `'static` — a read re-anchors it to the read
+    /// run-region value). The value is stored erased to `'static` — a read re-anchors it to the read
     /// borrow. Holding the frame `Rc` here pins the producer's per-call memory until the slot is
     /// freed, so frame death moves from Done to free and a read's re-anchored lifetime cannot
-    /// outlive the backing arena. The pin is established now and read by the consumer-pull lift,
+    /// outlive the backing region. The pin is established now and read by the consumer-pull lift,
     /// which copies the terminal out of this frame into the consumer's.
-    Done(Result<Erased<W::Value>, W::Error>, Option<Rc<W::Frame>>),
+    Done(Result<Erased<W::Value>, W::Error>, Option<Rc<W::Cart>>),
     /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
     /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
     /// slot's consumers were moved onto `producer`'s notify list at splice time, so `producer`'s
@@ -144,7 +144,7 @@ impl<W: Workload> NodeStore<W> {
     }
 
     /// Replace a finalized terminal in place, dropping any pinned producer frame. The drain
-    /// boundary uses this to re-home a consumer-less root into a surviving arena (`output` already
+    /// boundary uses this to re-home a consumer-less root into a surviving region (`output` already
     /// lifted there), releasing the per-call frame the producer kept it in.
     pub(super) fn rehome_terminal(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {
         debug_assert!(
@@ -156,15 +156,15 @@ impl<W: Workload> NodeStore<W> {
 
     /// Callers must pair this with the dep-graph notify-walk so consumers
     /// wake atomically with the write. `frame` is the producer's per-call frame, pinned in the
-    /// slot until it is freed (`None` for a frameless / run-arena terminal).
+    /// slot until it is freed (`None` for a frameless / run-region terminal).
     pub(super) fn finalize(
         &mut self,
         id: NodeId,
         output: Result<Live<'_, W>, W::Error>,
-        frame: Option<Rc<W::Frame>>,
+        frame: Option<Rc<W::Cart>>,
     ) {
         // Erase the live terminal to `'static` for storage; the co-stored frame `Rc` pins its
-        // backing arena until the slot frees, so a later read can re-anchor it soundly.
+        // backing region until the slot frees, so a later read can re-anchor it soundly.
         self.slots[id] = SlotState::Done(output.map(Erased::erase), frame);
     }
 
@@ -196,9 +196,9 @@ impl<W: Workload> NodeStore<W> {
     pub(super) fn read_result(&self, id: NodeId) -> Result<Live<'_, W>, &W::Error> {
         match &self.slots[id] {
             // SAFETY: the re-anchored value lives in the slot's co-stored frame `Rc` (or the run
-            // arena for a frameless terminal); `free_one`/`finalize` need `&mut self`, so for the
+            // region for a frameless terminal); `free_one`/`finalize` need `&mut self`, so for the
             // whole `&self` borrow the frame cannot drop, so the read borrow cannot outlive the
-            // backing arena. The erased carrier is `Copy`, copied out before re-anchoring.
+            // backing region. The erased carrier is `Copy`, copied out before re-anchoring.
             &SlotState::Done(Ok(c), _) => Ok(unsafe { c.reattach() }),
             SlotState::Done(Err(e), _) => Err(e),
             _ => panic!("result must be ready by the time it's read"),
@@ -206,13 +206,13 @@ impl<W: Workload> NodeStore<W> {
     }
 
     /// Read a finalized terminal together with the producer frame `Rc` that backs it (`None` for a
-    /// frameless / run-arena value, which is already in a surviving arena). The consumer-pull lift
-    /// copies the value out of that frame into the consumer's arena before the producer slot frees.
+    /// frameless / run-region value, which is already in a surviving region). The consumer-pull lift
+    /// copies the value out of that frame into the consumer's region before the producer slot frees.
     pub(super) fn read_result_with_frame(&self, id: NodeId) -> FramedRead<'_, W> {
         match &self.slots[id] {
             // SAFETY: as `read_result` — the value is re-anchored to the `&self` read borrow, over
             // which the co-stored frame `Rc` (cloned out here for the consumer-pull lift) pins the
-            // backing arena.
+            // backing region.
             SlotState::Done(Ok(c), frame) => Ok((unsafe { c.reattach() }, frame.clone())),
             SlotState::Done(Err(e), _) => Err(e),
             _ => panic!("result must be ready by the time it's read"),
@@ -353,7 +353,7 @@ mod tests {
         type Payload = ();
         type Value = U32Value;
         type Error = ();
-        type Frame = ();
+        type Cart = ();
         type Contract = UnitCarrier;
         type Continuation = UnitCarrier;
     }

@@ -5,7 +5,7 @@ use crate::builtins::default_scope;
 use crate::machine::model::types::{KType, NominalSchema, Record, RecursiveSet};
 use crate::machine::model::values::Held;
 use crate::machine::model::KObject;
-use crate::machine::{CallArena, ScopeId};
+use crate::machine::{CallFrame, ScopeId};
 
 use super::{alloc_local_kf, defeat_fast_path};
 
@@ -24,7 +24,7 @@ fn record_newtype_set<'run>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'r
     RecursiveSet::singleton(
         name.into(),
         scope_id,
-        NominalSchema::Newtype(Box::new(KType::Record(Box::new(Record::new())))),
+        NominalSchema::NewType(Box::new(KType::Record(Box::new(Record::new())))),
     )
 }
 
@@ -34,9 +34,9 @@ fn record_newtype_set<'run>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'r
 fn list_of_dict_with_kfunction_anchors_via_recursion() {
     use crate::machine::model::types::Serializable;
     use crate::machine::model::values::KKey;
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let mut inner_map: HashMap<Box<dyn Serializable<'_>>, KObject> = HashMap::new();
@@ -67,9 +67,9 @@ fn list_of_dict_with_kfunction_anchors_via_recursion() {
 #[test]
 fn list_of_tagged_with_kfunction_anchors_via_recursion() {
     use crate::machine::ScopeId;
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let tagged = KObject::Tagged {
@@ -103,17 +103,17 @@ fn list_of_tagged_with_kfunction_anchors_via_recursion() {
 #[test]
 fn list_with_pre_anchored_variants_skips_them() {
     use crate::machine::model::values::Module;
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
-    let other = CallArena::new(scope, None);
+    let other = CallFrame::new(scope, None);
     // Anchors pin the frame's `FrameStorage`, not the shell, so counts track storage.
     let other_storage = other.storage_rc();
     let dying_storage = dying.storage_rc();
     let kf_ref = alloc_local_kf(&dying);
     let module = Module::new("M".into(), dying.scope());
-    let m_ref: &Module = dying.arena().alloc_module(module);
+    let m_ref: &Module = dying.region().alloc_module(module);
 
     let future = KFuture {
         parsed: KExpression::new(vec![]),
@@ -150,9 +150,9 @@ fn list_with_pre_anchored_variants_skips_them() {
 /// drives the rebuild.
 #[test]
 fn list_with_unanchored_kfuture_anchors() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let future = KFuture {
@@ -177,16 +177,16 @@ fn list_with_unanchored_kfuture_anchors() {
     assert_eq!(count_after, before + 1);
 }
 
-/// Unanchored KModule whose child scope is the dying arena, inside a list.
+/// Unanchored KModule whose child scope is the dying region, inside a list.
 #[test]
 fn list_with_unanchored_kmodule_anchors() {
     use crate::machine::model::values::Module;
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
     let module = Module::new("LocalM".into(), dying.scope());
-    let m_ref: &Module = dying.arena().alloc_module(module);
+    let m_ref: &Module = dying.region().alloc_module(module);
 
     let list = KObject::list_of_held(vec![Held::Type(KType::Module {
         module: m_ref,
@@ -212,13 +212,13 @@ fn list_with_unanchored_kmodule_anchors() {
 fn list_with_wrapped_and_kexpression_descendants_clones_rc() {
     use crate::machine::model::values::NonWrappedRef;
     use crate::machine::ScopeId;
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let record = KObject::record(Record::new());
-    let type_id: &KType = arena.alloc_ktype(KType::SetRef {
+    let type_id: &KType = region.alloc_ktype(KType::SetRef {
         set: record_newtype_set("S", ScopeId::next()),
         index: 0,
     });
@@ -244,9 +244,9 @@ fn list_with_wrapped_and_kexpression_descendants_clones_rc() {
 /// over-allocate.
 #[test]
 fn list_no_descendants_clones_rc() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let items = Rc::new(vec![
@@ -270,9 +270,9 @@ fn list_no_descendants_clones_rc() {
 
 #[test]
 fn list_with_local_kfunction_rebuilds_and_anchors() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let list = KObject::list(vec![KObject::KFunction(kf_ref, None)]);
@@ -298,9 +298,9 @@ fn list_with_local_kfunction_rebuilds_and_anchors() {
 fn dict_no_descendants_clones_rc() {
     use crate::machine::model::types::Serializable;
     use crate::machine::model::values::KKey;
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let mut map: HashMap<Box<dyn Serializable<'_>>, Held> = HashMap::new();
@@ -329,9 +329,9 @@ fn dict_no_descendants_clones_rc() {
 fn dict_with_local_kfunction_rebuilds_and_anchors() {
     use crate::machine::model::types::Serializable;
     use crate::machine::model::values::KKey;
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let mut map: HashMap<Box<dyn Serializable<'_>>, KObject> = HashMap::new();
@@ -362,9 +362,9 @@ fn dict_with_local_kfunction_rebuilds_and_anchors() {
 #[test]
 fn tagged_no_borrow_clones_inner_rc() {
     use crate::machine::ScopeId;
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let inner = Rc::new(KObject::Number(42.0));
@@ -408,9 +408,9 @@ fn tagged_no_borrow_clones_inner_rc() {
 #[test]
 fn tagged_with_local_kfunction_rebuilds_and_anchors() {
     use crate::machine::ScopeId;
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let sid = ScopeId::next();
@@ -448,22 +448,22 @@ fn tagged_with_local_kfunction_rebuilds_and_anchors() {
 }
 
 /// A `KTypeValue` carrying a *recursive* `SetRef` (a self-recursive STRUCT type value)
-/// lifts across the dying arena by `Rc::clone` of the whole set — no copy, no anchor. After
+/// lifts across the dying region by `Rc::clone` of the whole set — no copy, no anchor. After
 /// lift the set is still navigable (its self-edge `SetLocal` resolves back to the lifted
-/// member). Mirrors `recursive_tagged_match_no_uaf`: the type value escapes the call arena
+/// member). Mirrors `recursive_tagged_match_no_uaf`: the type value escapes the call region
 /// that built it without UAF.
 #[test]
 fn recursive_setref_type_value_lifts_by_rc_clone() {
     use crate::machine::model::types::{KKind, NominalMember, NominalSchema};
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     // A self-recursive `Tree` whose `children` field is `List(SetLocal(0))` — the shape a
     // `NEWTYPE Tree = :{children :(LIST OF Tree)}` seals into.
-    let member = NominalMember::pending("Tree".into(), ScopeId::next(), KKind::Newtype);
-    member.fill(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
+    let member = NominalMember::pending("Tree".into(), ScopeId::next(), KKind::NewType);
+    member.fill(NominalSchema::NewType(Box::new(KType::Record(Box::new(
         Record::from_pairs(vec![(
             "children".into(),
             KType::List(Box::new(KType::SetLocal(0))),
@@ -493,14 +493,14 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
             // Navigable: the member's self-edge `SetLocal(0)` survives the lift.
             let borrow = lifted_set.member(*index).schema();
             match borrow.as_ref() {
-                Some(NominalSchema::Newtype(repr)) => match repr.as_ref() {
+                Some(NominalSchema::NewType(repr)) => match repr.as_ref() {
                     KType::Record(fields) => assert_eq!(
                         fields.get("children"),
                         Some(&KType::List(Box::new(KType::SetLocal(0))))
                     ),
                     other => panic!("expected a record repr after lift, got {other:?}"),
                 },
-                other => panic!("expected a navigable Newtype schema after lift, got {other:?}"),
+                other => panic!("expected a navigable NewType schema after lift, got {other:?}"),
             }
         }
         other => panic!("expected a SetRef type after lift, got {other:?}"),
@@ -508,7 +508,7 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
 }
 
 /// A recursive record-repr-newtype *value* (`KObject::Wrapped` whose `type_id` is a `SetRef`
-/// into a self-recursive set) lifts across the dying arena: its `inner` record rides an `Rc`
+/// into a self-recursive set) lifts across the dying region: its `inner` record rides an `Rc`
 /// (lift-stable by `Rc::clone`) and its `type_id` is the declaration-stable `SetRef`, so the
 /// recursive group stays navigable (the `children` field type is the self-edge `SetLocal(0)`).
 /// Builds the value directly so the assertion targets the lift path without FN-dispatch
@@ -520,13 +520,13 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
 fn recursive_newtype_value_lifts_and_navigates() {
     use crate::machine::model::types::{KKind, NominalMember, NominalSchema};
     use crate::machine::model::values::NonWrappedRef;
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
-    let member = NominalMember::pending("Tree".into(), ScopeId::next(), KKind::Newtype);
-    member.fill(NominalSchema::Newtype(Box::new(KType::Record(Box::new(
+    let member = NominalMember::pending("Tree".into(), ScopeId::next(), KKind::NewType);
+    member.fill(NominalSchema::NewType(Box::new(KType::Record(Box::new(
         Record::from_pairs(vec![(
             "children".into(),
             KType::List(Box::new(KType::SetLocal(0))),
@@ -537,7 +537,7 @@ fn recursive_newtype_value_lifts_and_navigates() {
         "children".to_string(),
         KObject::list(vec![]),
     )]));
-    let type_id: &KType = arena.alloc_ktype(KType::SetRef {
+    let type_id: &KType = region.alloc_ktype(KType::SetRef {
         set: Rc::clone(&set),
         index: 0,
     });
@@ -563,7 +563,7 @@ fn recursive_newtype_value_lifts_and_navigates() {
                 );
                 let borrow = lifted_set.member(*index).schema();
                 match borrow.as_ref() {
-                    Some(NominalSchema::Newtype(repr)) => match repr.as_ref() {
+                    Some(NominalSchema::NewType(repr)) => match repr.as_ref() {
                         KType::Record(fields) => assert_eq!(
                             fields.get("children"),
                             Some(&KType::List(Box::new(KType::SetLocal(0)))),
@@ -571,7 +571,7 @@ fn recursive_newtype_value_lifts_and_navigates() {
                         ),
                         other => panic!("expected a record repr, got {other:?}"),
                     },
-                    other => panic!("expected a navigable Newtype schema, got {other:?}"),
+                    other => panic!("expected a navigable NewType schema, got {other:?}"),
                 }
             }
             other => panic!("expected a SetRef type_id, got {other:?}"),

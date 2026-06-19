@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use crate::builtins::default_scope;
 use crate::machine::execute::KoanRuntime;
-use crate::machine::{KErrorKind, RuntimeArena};
+use crate::machine::{KErrorKind, KoanRegion};
 use crate::parse::parse;
 
 struct Sink;
@@ -41,8 +41,8 @@ impl Write for SharedBuf {
 /// separate path.
 #[test]
 fn self_referential_let_surfaces_unbound_name() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(Sink));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(Sink));
     let exprs = parse("LET Ty = Ty").expect("parse should succeed");
     let mut sched = KoanRuntime::new();
     let ids = sched.enter_block(scope.id, exprs, scope);
@@ -64,9 +64,9 @@ fn self_referential_let_surfaces_unbound_name() {
 /// combined park, and on wake the rebuilt cache resolves and dispatch commits.
 #[test]
 fn forward_reference_parks_then_resolves_on_wake() {
-    let arena = RuntimeArena::new();
+    let region = KoanRegion::new();
     let buf: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = default_scope(&arena, Box::new(SharedBuf(Rc::clone(&buf))));
+    let scope = default_scope(&region, Box::new(SharedBuf(Rc::clone(&buf))));
     // STRUCT (like MODULE) is a nominal binder, so the placeholder is visible
     // to the forward reference and parks rather than reading as Unbound.
     let exprs = parse(

@@ -9,7 +9,7 @@
 //! This closes record subtyping's projection direction: it can break an
 //! `AmbiguousDispatch` tie between two width-incomparable record arms by
 //! re-tagging the carrier so only one arm admits. See
-//! [design/typing/ktype.md § Variance](../../design/typing/ktype.md#variance).
+//! [design/typing/ktype/parameterization-and-variance.md § Variance](../../design/typing/ktype/parameterization-and-variance.md#variance).
 
 use std::rc::Rc;
 
@@ -90,7 +90,7 @@ pub fn body<'a>(
 
     let narrowed = Record::from_pairs(narrowed_pairs);
     let result = KObject::record_with_type(Rc::clone(fields), narrowed);
-    let obj = ctx.scope.arena.alloc_object(result);
+    let obj = ctx.scope.region.alloc_object(result);
     Action::Done(Ok(Carried::Object(obj)))
 }
 
@@ -115,14 +115,14 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
     use crate::machine::model::{KObject, KType};
-    use crate::machine::RuntimeArena;
+    use crate::machine::KoanRegion;
 
     /// `(x y) FROM r` re-tags the carried type to `{x, y}` while every field of `r`
     /// stays physically present on the `Rc`-shared backing record.
     #[test]
     fn from_narrows_carried_type_keeping_all_fields_present() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let result = run_one(scope, parse_one("(x y) FROM {x = 1, y = 2, z = 3}"));
         match result {
             KObject::Record(fields, types) => {
@@ -144,8 +144,8 @@ mod tests {
     /// admits it and no second overload is needed.
     #[test]
     fn from_single_field_projection() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let result = run_one(scope, parse_one("(x) FROM {x = 1, y = 2}"));
         match result {
             KObject::Record(fields, types) => {
@@ -161,8 +161,8 @@ mod tests {
     /// `() FROM r` projects to zero fields → the empty record `:{}`, not an error.
     #[test]
     fn from_empty_field_list_yields_empty_record() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let result = run_one(scope, parse_one("() FROM {x = 1}"));
         match result {
             KObject::Record(fields, types) => {
@@ -177,8 +177,8 @@ mod tests {
     /// Naming a field absent from the record is a `ShapeError`.
     #[test]
     fn from_unknown_field_errors() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("(x w) FROM {x = 1}"));
         let msg = format!("{err}");
         assert!(
@@ -190,8 +190,8 @@ mod tests {
     /// A duplicate name in the field list is a `ShapeError`.
     #[test]
     fn from_duplicate_field_errors() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("(x x) FROM {x = 1}"));
         let msg = format!("{err}");
         assert!(
@@ -213,8 +213,8 @@ mod tests {
         use crate::machine::core::KErrorKind;
         use crate::machine::execute::KoanRuntime;
 
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let mut sched = KoanRuntime::new();
         let root = sched.dispatch_in_scope(parse_one("(x y) FROM 5"), scope);
         sched
@@ -238,8 +238,8 @@ mod tests {
         use crate::machine::core::KErrorKind;
         use crate::machine::execute::KoanRuntime;
 
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "FN (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")\n\

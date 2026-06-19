@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
 use crate::machine::{KError, KErrorKind, NameOutcome, NodeId, TraceFrame};
+use crate::source::Spanned;
 
 use super::super::outcome::Outcome;
 use super::super::runtime::KoanRuntime;
@@ -41,11 +41,11 @@ impl<'step> Slot<'step> {
     }
 }
 
-/// Allocate `obj` in the executing slot's arena and wrap it as a successful combine result — the
+/// Allocate `obj` in the executing slot's region and wrap it as a successful combine result — the
 /// shared tail of every aggregate-literal finish.
 fn done_object<'step>(view: &SchedulerView<'step, '_>, obj: KObject<'step>) -> Outcome<'step> {
     Outcome::Done(Ok(Carried::Object(
-        view.current_scope().arena.alloc_object(obj),
+        view.current_scope().region.alloc_object(obj),
     )))
 }
 
@@ -176,7 +176,7 @@ impl<'step> KoanRuntime<'step> {
             }
             ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
                 // A `:(...)` / `:{…}` type value is a type-context sub-Dispatch to a
-                // `KTypeValue`, like the keyworded eager-subs path — it cannot `resolve()`.
+                // `Carried::Type`, like the keyworded eager-subs path — it cannot `resolve()`.
                 let wrapped =
                     crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part)]);
                 Slot::owned(deps, self.dispatch_in_own_scope(wrapped))

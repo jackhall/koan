@@ -3,7 +3,7 @@
 //! producer/consumer slots park on each other via `pending_deps` and wake on terminal
 //! writes.
 //!
-//! See [design/execution-model.md](../../design/execution-model.md) and
+//! See [design/execution/README.md](../../design/execution/README.md) and
 //! [design/memory-model.md](../../design/memory-model.md).
 
 mod ambient;
@@ -24,7 +24,7 @@ pub(in crate::machine::execute) use outcome::{
 pub use runtime::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};
 
 pub(crate) use dispatch::{defer_field_list_action, resolve_type_leaf_carrier, TypeLeafCarrier};
-pub use dispatch::{NameOutcome, ResolveOutcome, ResolveTypeExprOutcome, Resolved};
+pub use dispatch::{NameOutcome, ResolveOutcome, TypeIdentifierResolution, Resolved};
 
 #[cfg(test)]
 pub use lift::lift_ktype_for_test;

@@ -18,7 +18,7 @@ fn newtype_singleton<'a>(
     RecursiveSet::singleton(
         name.into(),
         scope_id,
-        NominalSchema::Newtype(Box::new(repr)),
+        NominalSchema::NewType(Box::new(repr)),
     )
 }
 
@@ -199,11 +199,11 @@ fn unstamped_empty_container_detection() {
 /// per-declaration identity comparisons.
 #[test]
 fn wrapped_ktype_reports_clone_of_type_id() {
-    use crate::machine::RuntimeArena;
-    let arena = RuntimeArena::new();
-    let inner = arena.alloc_object(KObject::Number(3.0));
+    use crate::machine::KoanRegion;
+    let region = KoanRegion::new();
+    let inner = region.alloc_object(KObject::Number(3.0));
     let set = newtype_singleton("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
-    let type_id: &KType = arena.alloc_ktype(KType::SetRef { set, index: 0 });
+    let type_id: &KType = region.alloc_ktype(KType::SetRef { set, index: 0 });
     let w = KObject::Wrapped {
         inner: NonWrappedRef::peel(inner),
         type_id,
@@ -213,18 +213,18 @@ fn wrapped_ktype_reports_clone_of_type_id() {
             assert_eq!(set.member(index).name, "Distance");
             assert_eq!(set.member(index).scope_id, ScopeId::from_raw(0, 0xAA));
         }
-        other => panic!("expected Newtype SetRef identity, got {other:?}"),
+        other => panic!("expected NewType SetRef identity, got {other:?}"),
     }
 }
 
 #[test]
 fn wrapped_summarize_renders_surface_form() {
     use crate::machine::model::types::Parseable;
-    use crate::machine::RuntimeArena;
-    let arena = RuntimeArena::new();
-    let inner = arena.alloc_object(KObject::Number(3.0));
+    use crate::machine::KoanRegion;
+    let region = KoanRegion::new();
+    let inner = region.alloc_object(KObject::Number(3.0));
     let set = newtype_singleton("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
-    let type_id = arena.alloc_ktype(KType::SetRef { set, index: 0 });
+    let type_id = region.alloc_ktype(KType::SetRef { set, index: 0 });
     let w = KObject::Wrapped {
         inner: NonWrappedRef::peel(inner),
         type_id,
@@ -236,11 +236,11 @@ fn wrapped_summarize_renders_surface_form() {
 /// source `Wrapped`, not re-deep-cloning the repr) and copies the `&'a` `type_id` slot.
 #[test]
 fn wrapped_deep_clone_shares_inner_rc_and_type_id() {
-    use crate::machine::RuntimeArena;
-    let arena = RuntimeArena::new();
-    let inner = arena.alloc_object(KObject::Number(3.0));
+    use crate::machine::KoanRegion;
+    let region = KoanRegion::new();
+    let inner = region.alloc_object(KObject::Number(3.0));
     let set = newtype_singleton("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
-    let type_id = arena.alloc_ktype(KType::SetRef { set, index: 0 });
+    let type_id = region.alloc_ktype(KType::SetRef { set, index: 0 });
     let original = KObject::Wrapped {
         inner: NonWrappedRef::peel(inner),
         type_id,

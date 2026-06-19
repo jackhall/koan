@@ -23,11 +23,11 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::source::Spanned;
-use crate::machine::core::CallArena;
+use crate::machine::core::CallFrame;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
+use crate::source::Spanned;
 
 use super::nodes::NodeWork;
 use super::runtime::KoanWorkload;
@@ -46,7 +46,7 @@ pub(in crate::machine::execute) mod keyworded;
 mod literal;
 pub(in crate::machine::execute) mod operator_chain;
 pub(in crate::machine) mod resolve_dispatch;
-pub(in crate::machine) mod resolve_type_expr;
+pub(in crate::machine) mod resolve_type_identifier;
 pub(in crate::machine::execute) mod single_poll;
 mod submit;
 
@@ -59,8 +59,8 @@ pub(crate) use field_list::defer_field_list_action;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
-pub use resolve_type_expr::ResolveTypeExprOutcome;
-pub(crate) use resolve_type_expr::{resolve_type_leaf_carrier, TypeLeafCarrier};
+pub use resolve_type_identifier::TypeIdentifierResolution;
+pub(crate) use resolve_type_identifier::{resolve_type_leaf_carrier, TypeLeafCarrier};
 
 /// The shape classification and classifier live in
 /// [`crate::machine::model::ast`] (pure-structural, cached on the node at parse
@@ -177,7 +177,7 @@ pub(in crate::machine::execute) enum DepRequest<'step> {
     /// last (the resolved return type) to build the `PerCall` contract; the earlier statements'
     /// scope binds feed the tail body. The only dep that carries its own frame.
     BodyBlock {
-        frame: Rc<CallArena>,
+        frame: Rc<CallFrame>,
         statements: Vec<KExpression<'step>>,
     },
     Existing(NodeId),
@@ -287,7 +287,7 @@ pub(in crate::machine::execute) fn park_resume<'step>(
 
 /// A bare-identifier slot whose name binds to `producer`: the slot's result *is* `producer`'s
 /// result, so the harness splices the slot out (no forwarding node) — see [`Outcome::Forward`].
-pub(in crate::machine::execute) fn park_lift<'step>(producer: NodeId) -> Outcome<'step> {
+pub(in crate::machine::execute) fn forward_to_producer<'step>(producer: NodeId) -> Outcome<'step> {
     Outcome::Forward(producer)
 }
 
@@ -331,7 +331,7 @@ pub(super) fn stage_all_eager_parts<'step>(
         if wrap_indices.contains(&i) {
             // Bare-name value slot: resolve the name through a single-part
             // sub-Dispatch (the `BareIdentifier` / `BareTypeLeaf` fast lane), so
-            // the resolved `Future` carrier reaches `accepts_part` at bind.
+            // the resolved `Spliced` carrier reaches `accepts_part` at bind.
             let wrapped = KExpression::new(vec![Spanned {
                 value: part.value,
                 span,
@@ -396,7 +396,7 @@ pub(in crate::machine::execute) fn decide<'step>(
 }
 
 /// Birth dispatch [`NodeWork`](super::nodes::NodeWork) carrying the dispatch layer's pre-submitted nested sub-Dispatches
-/// (computed by [`submit_dispatch`]).
+/// (computed by [`submit_expression`]).
 pub(in crate::machine::execute) fn decide_with_presubs<'step>(
     expr: KExpression<'step>,
     pre_subs: Vec<(usize, NodeId)>,

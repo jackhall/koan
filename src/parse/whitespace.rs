@@ -9,9 +9,9 @@
 //!
 //! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
 
-use crate::machine::core::source::Span;
 use crate::machine::KError;
 use crate::parse::quotes::{JUMP_MARK, LEN_SEP, LITERAL_MARK};
+use crate::source::Span;
 
 /// Each non-blank line becomes a `(...)` group; deeper indents nest, dedents close. Tabs and
 /// odd-numbered space indentation are rejected.

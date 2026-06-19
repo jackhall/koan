@@ -11,12 +11,12 @@
 //!
 //! Generic over a single [`Workload`] `W`: an opaque per-node payload `W::Payload` (persisted across
 //! a slot's steps), an inter-node value `W::Value` passed along dep edges, a terminal error
-//! `W::Error`, a per-node memory frame `W::Frame` managed by `Rc`, a per-node return `W::Contract`,
+//! `W::Error`, a per-node memory cart `W::Cart` managed by `Rc`, a per-node return `W::Contract`,
 //! and a one-shot `W::Continuation`. The scheduler stores all of these and hands them back but
 //! inspects none. The Koan interpreter ([`crate::machine`]) is the sole workload; it instantiates
 //! the scheduler and drives it through the inherent-method contract.
 //!
-//! See design/execution-model.md and design/memory-model.md.
+//! See design/execution/README.md and design/memory-model.md.
 
 use dep_graph::DepGraph;
 use node_store::NodeStore;
@@ -30,7 +30,7 @@ mod node_id;
 mod node_store;
 pub mod nodes;
 mod splice;
-mod submit;
+mod alloc;
 mod work_queues;
 mod workload;
 
@@ -131,7 +131,7 @@ impl<W: Workload> Scheduler<W> {
         self.store.read_result_with_frame(self.resolve_alias(id))
     }
 
-    /// Re-home a finalized terminal (already lifted into a surviving arena), dropping the pinned
+    /// Re-home a finalized terminal (already lifted into a surviving region), dropping the pinned
     /// producer frame. The drain boundary uses this for consumer-less roots. Resolves a bare-name
     /// alias so the real producer's frame — not the alias slot — is released.
     pub(crate) fn rehome_terminal(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {

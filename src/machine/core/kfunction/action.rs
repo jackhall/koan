@@ -8,7 +8,7 @@
 use std::rc::Rc;
 
 use super::body::ReturnContract;
-use crate::machine::core::{CallArena, LexicalFrame, Scope, ScopeId};
+use crate::machine::core::{CallFrame, LexicalFrame, Scope, ScopeId};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::Held;
@@ -58,13 +58,13 @@ pub fn arg_held<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c Held<'a
 }
 
 /// Read a builtin argument's `KType` (a type-cell arg), or the canonical diagnostic —
-/// `TypeMismatch{expected: "TypeExprRef"}` for an object cell, `MissingArg` when absent.
+/// `TypeMismatch{expected: "ProperType"}` for an object cell, `MissingArg` when absent.
 pub fn require_ktype<'a>(args: &KObject<'a>, name: &str) -> Result<KType<'a>, KError> {
     match arg_held(args, name) {
         Some(Held::Type(kt)) => Ok(kt.clone()),
         Some(Held::Object(o)) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: name.to_string(),
-            expected: "TypeExprRef".to_string(),
+            expected: "ProperType".to_string(),
             got: o.ktype().name(),
         })),
         None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
@@ -89,7 +89,7 @@ pub fn require_bare_type_name<'a>(
 
 /// Resolve a resolved `KType` to its bare type name, for the binders that read their name from a
 /// `KObject::Record` type cell. A simple / nominal leaf yields its `name()`; a structural type
-/// (List, Record, FN, …) is a `ShapeError`. `surface` is the keyword (`"STRUCT"`, `"UNION"`, …)
+/// (List, Record, FN, …) is a `ShapeError`. `surface` is the keyword (`"NEWTYPE"`, `"UNION"`, …)
 /// embedded in the message.
 fn bare_type_name<'a>(t: &KType<'a>, name: &str, surface: &str) -> Result<String, KError> {
     match t {
@@ -154,9 +154,9 @@ pub type ActionFn = for<'a> fn(&BodyCtx<'a, '_>) -> Action<'a>;
 /// cells.
 pub struct BodyCtx<'a, 'c> {
     pub scope: &'c Scope<'a>,
-    pub frame: Option<&'c Rc<CallArena>>,
+    pub frame: Option<&'c Rc<CallFrame>>,
     /// The ambient lexical chain (an `Rc`, as `current_lexical_chain` hands it out — binders read
-    /// its `index` for `BindingIndex`, MATCH passes it to `resolve_type_expr`). `None` at top level.
+    /// its `index` for `BindingIndex`, MATCH passes it to `resolve_type_identifier`). `None` at top level.
     pub chain: Option<Rc<LexicalFrame>>,
     pub args: &'c KObject<'a>,
 }
@@ -173,7 +173,7 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
     }
 }
 
-/// Wake-time context a finish receives: the slot's **own** scope (interior-mutable, with `.arena`)
+/// Wake-time context a finish receives: the slot's **own** scope (interior-mutable, with `.region`)
 /// re-projected at wake — a deferred binder `register_*`s on it here.
 pub struct FinishCtx<'a, 'c> {
     pub scope: &'c Scope<'a>,
@@ -184,7 +184,7 @@ pub struct FinishCtx<'a, 'c> {
 pub type AwaitContinue<'a> = Box<dyn FnOnce(&FinishCtx<'a, '_>, &[Carried<'a>]) -> Action<'a> + 'a>;
 
 /// A `Catch` finish: re-entered with the watched slot's `Result`, yielding a `Action`.
-pub type CatchCont<'a> =
+pub type CatchContinue<'a> =
     Box<dyn FnOnce(&FinishCtx<'a, '_>, Result<&'a KObject<'a>, KError>) -> Action<'a> + 'a>;
 
 /// What happens next for a slot — the four shapes the builtin survey reduced everything to.
@@ -213,7 +213,7 @@ pub enum Action<'a> {
     /// Watch `watched`, recover via `finish`.
     Catch {
         watched: Dep<'a>,
-        finish: CatchCont<'a>,
+        finish: CatchContinue<'a>,
     },
 }
 
@@ -246,11 +246,11 @@ pub enum FramePlacement<'a> {
     /// Reuse the slot's ping-pong reserve cart (`acquire_tail_frame(outer)`). The TCO tail-call
     /// frame — FN-body invoke, deferred `PerCall` tails. The only harness-constructed cart.
     ReuseReserve { outer: &'a Scope<'a> },
-    /// A **pre-built** fresh cart the builtin minted (`CallArena::new`, never the reserve), handed
+    /// A **pre-built** fresh cart the builtin minted (`CallFrame::new`, never the reserve), handed
     /// to the harness to install. The builtin owns construction because it may seed the cart before
     /// the tail dispatches — MATCH/TRY bind `it` into it via `with_frame_interior`; EVAL builds it
     /// for the UAF guard.
-    FreshChild { frame: Rc<CallArena> },
+    FreshChild { frame: Rc<CallFrame> },
     /// No new frame; continue in the slot's current cart. Frameless tails / `Done`.
     Inherit,
 }

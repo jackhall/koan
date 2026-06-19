@@ -1,41 +1,12 @@
-#!/usr/bin/env python3
-"""Apply structural rewrites to a cargo-modules DOT graph + mirrored src/
-tree, so a proposed refactor can be scored with `modgraph.py` without
-touching real files.
+"""What-if structural rewrites of a DOT graph + mirrored src/ tree.
 
-Two subcommands, differing in granularity:
+Two granularities, so a proposed refactor can be scored before touching real
+files:
 
-  module — rename whole modules
-    Each `--rename OLD=NEW` rebinds every module path equal to OLD or
-    starting with `OLD::`. The mirrored src/ tree uses the new paths.
-
-      python3 tools/modgraph_rewrite.py module \\
-          --edges /tmp/koan.dot --src-root src \\
-          --output-edges /tmp/koan_proposed.dot \\
-          --output-src /tmp/koan_proposed_src \\
-          --rename koan::parse::kexpression=koan::ast
-
-  item — extract individual items into new modules
-    Uses a SCIP code-index from `rust-analyzer scip` to resolve each
-    item's definition site and every module that references it.
-    Brace-balanced extraction transplants the item's body to a new
-    file; surgical edits to the DOT add/remove only the edges the
-    move actually changes.
-
-      rust-analyzer scip <REPO> --output /tmp/koan.scip
-      python3 tools/modgraph_rewrite.py item \\
-          --scip /tmp/koan.scip --edges /tmp/koan.dot --src-root src \\
-          --output-edges /tmp/koan_proposed.dot \\
-          --output-src /tmp/koan_proposed_src \\
-          --move koan::machine::core::scope::Scope::register_nominal=koan::machine::core::nominal
-
-Then score the proposal under either mode:
-  python3 tools/modgraph.py --edges /tmp/koan_proposed.dot --root koan \\
-                            --src-root /tmp/koan_proposed_src
-
-`module` mode accepts `--rename-file <path>` (one `OLD=NEW` per line,
-`#` for comments). `item` mode requires `rust-analyzer` on PATH
-(`rustup component add rust-analyzer`).
+  * `cmd_module` — rename whole modules (text-level token rewrite of the DOT,
+    plus a mirrored src/ tree under the new paths; colliding merges concatenate).
+  * `cmd_item` — SCIP-driven extraction of individual items into new modules,
+    with a surgical edge diff and brace-balanced body transplant.
 """
 from __future__ import annotations
 
@@ -46,10 +17,19 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+import reexport
+from graph import parse_dot
+from modules import module_to_file, relpath_to_module
+from scip import parse_scip, scip_symbol_to_path
+
+REPO = Path(__file__).resolve().parents[2]
 
 MODULE_TOKEN = re.compile(r'"([a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z0-9_]+)*)"')
 
+
+# ====================================================================
+# module mode — whole-module renames
+# ====================================================================
 
 def parse_rename(s: str) -> tuple[str, str]:
     if "=" not in s:
@@ -90,7 +70,8 @@ def rewrite_edges(dot_in: Path, dot_out: Path,
     return text
 
 
-def discover_modules(dot_text: str, root: str) -> set[str]:
+def _discover_in_dot(dot_text: str, root: str) -> set[str]:
+    """Module tokens in the DOT text (edges + node decls) under `root`."""
     prefix = root + "::"
     return {
         m.group(1) for m in MODULE_TOKEN.finditer(dot_text)
@@ -98,24 +79,16 @@ def discover_modules(dot_text: str, root: str) -> set[str]:
     }
 
 
-def module_to_file(module: str, src_root: Path) -> Path | None:
-    parts = module.split("::")[1:]
-    if not parts:
-        flat = src_root / "lib.rs"
-        return flat if flat.exists() else None
-    flat = src_root.joinpath(*parts).with_suffix(".rs")
-    if flat.exists():
-        return flat
-    nested = src_root.joinpath(*parts, "mod.rs")
-    return nested if nested.exists() else None
-
-
 def mirror_src(dot_text: str, src_root: Path, src_out: Path,
                renames: list[tuple[str, str]], root: str) -> int:
     if src_out.exists():
         shutil.rmtree(src_out)
     copied = 0
-    for mod in discover_modules(dot_text, root):
+    written: set[Path] = set()
+    # Sorted so colliding merges concatenate in a stable order — file_loc's
+    # #[cfg(test)] brace-skipping is order-sensitive, so an unstable order
+    # makes a merge's production-LOC (and thus its score) nondeterministic.
+    for mod in sorted(_discover_in_dot(dot_text, root)):
         src_path = module_to_file(mod, src_root)
         if src_path is None:
             continue
@@ -128,7 +101,16 @@ def mirror_src(dot_text: str, src_root: Path, src_out: Path,
         else:
             target = src_out.joinpath(*parts_new).with_suffix(".rs")
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(src_path, target)
+        # Multiple source modules can rename onto the same target (a merge);
+        # concatenate their bodies so the merged file's LOC — and thus the
+        # size term — reflects the real total instead of only the last copy.
+        if target in written:
+            with open(target, "a") as out:
+                out.write("\n")
+                out.write(src_path.read_text())
+        else:
+            shutil.copy(src_path, target)
+            written.add(target)
         copied += 1
     return copied
 
@@ -157,165 +139,6 @@ def cmd_module(args: argparse.Namespace) -> int:
 # item mode — SCIP-driven item-level extraction
 # ====================================================================
 
-# ---------- SCIP wire-format reader (stdlib-only protobuf decoder) ----------
-
-def _varint(buf: bytes, pos: int) -> tuple[int, int]:
-    result, shift = 0, 0
-    while True:
-        b = buf[pos]
-        pos += 1
-        result |= (b & 0x7F) << shift
-        if not (b & 0x80):
-            return result, pos
-        shift += 7
-
-
-def _iter_fields(buf: bytes):
-    """Yield (field_number, wire_type, payload) per protobuf field. Payload is
-    bytes for wire 2, int for wire 0, raw N bytes for wire 1/5."""
-    pos, n = 0, len(buf)
-    while pos < n:
-        tag, pos = _varint(buf, pos)
-        fnum, wt = tag >> 3, tag & 0x7
-        if wt == 0:
-            v, pos = _varint(buf, pos)
-            yield fnum, wt, v
-        elif wt == 2:
-            ln, pos = _varint(buf, pos)
-            yield fnum, wt, buf[pos:pos + ln]
-            pos += ln
-        elif wt == 5:
-            yield fnum, wt, buf[pos:pos + 4]
-            pos += 4
-        elif wt == 1:
-            yield fnum, wt, buf[pos:pos + 8]
-            pos += 8
-        else:
-            raise ValueError(f"unsupported wire type {wt} at byte {pos}")
-
-
-# SCIP schema field numbers (from sourcegraph/scip/scip.proto):
-#   Index { metadata=1, documents=2, external_symbols=3 }
-#   Document { language=4, relative_path=1, occurrences=2, symbols=3 }
-#   Occurrence { range=1, symbol=2, symbol_roles=3, ... }
-# SymbolRole bits: Definition=1, Import=2, WriteAccess=4, ReadAccess=8
-SYMBOL_ROLE_DEFINITION = 1
-
-
-def parse_scip(path: Path) -> dict[str, dict]:
-    """Return {document_relative_path: {"defs": [(symbol, line)],
-                                        "refs": [(symbol, line)]}}.
-    line is the 0-indexed start line from the SCIP Occurrence range."""
-    data = path.read_bytes()
-    out: dict[str, dict] = {}
-    for fnum, wt, payload in _iter_fields(data):
-        if fnum != 2 or wt != 2:
-            continue
-        doc = _parse_document(payload)
-        if doc is None:
-            continue
-        out[doc[0]] = doc[1]
-    return out
-
-
-def _parse_document(buf: bytes) -> tuple[str, dict] | None:
-    relpath = ""
-    defs: list[tuple[str, int]] = []
-    refs: list[tuple[str, int]] = []
-    for fnum, wt, payload in _iter_fields(buf):
-        if fnum == 1 and wt == 2:
-            relpath = payload.decode("utf-8", "replace")
-        elif fnum == 2 and wt == 2:
-            occ = _parse_occurrence(payload)
-            if occ is None:
-                continue
-            sym, line, is_def = occ
-            (defs if is_def else refs).append((sym, line))
-    if not relpath:
-        return None
-    return relpath, {"defs": defs, "refs": refs}
-
-
-def _parse_occurrence(buf: bytes) -> tuple[str, int, bool] | None:
-    sym = ""
-    roles = 0
-    start_line = 0
-    for fnum, wt, payload in _iter_fields(buf):
-        if fnum == 1 and wt == 2:
-            # range is packed [start_line, start_col, end_line, end_col]
-            # (or 3 ints if start_line == end_line). Plain int32, not zigzag.
-            vals = []
-            pos = 0
-            while pos < len(payload):
-                v, pos = _varint(payload, pos)
-                vals.append(v)
-            if vals:
-                start_line = vals[0]
-        elif fnum == 2 and wt == 2:
-            sym = payload.decode("utf-8", "replace")
-        elif fnum == 3 and wt == 0:
-            roles = payload
-    if not sym:
-        return None
-    return sym, start_line, bool(roles & SYMBOL_ROLE_DEFINITION)
-
-
-# ---------- SCIP symbol → koan module-path mapping ----------
-
-# rust-analyzer SCIP symbols look like:
-#   "rust-analyzer cargo koan 0.1.0 machine/core/scope/register_nominal()."
-# 5 space-separated tokens (scheme/manager/package/version + a space), then
-# slash-separated descriptors with type-tagging suffix markers (`.` namespace,
-# `#` type, `()` method, etc.). We strip the markers and emit a `koan::a::b`
-# path.
-
-_DESC_MARKER_RE = re.compile(r"(\(\)|\(\+(\d+)\))?[.#`!:]?$")
-# impl#[`TypeName<...>`]method  — SCIP's wrapper around inherent-impl methods.
-# We unwrap it to `TypeName::method` and strip generics/lifetimes so the path
-# matches Rust-canonical spelling.
-_IMPL_RE = re.compile(r"^impl#\[`?([A-Za-z_][A-Za-z0-9_]*)[^`]*`?\](.+)$")
-
-
-def scip_symbol_to_path(sym: str, package: str = "koan") -> str | None:
-    """Convert a SCIP symbol to `koan::a::b::name`, or None for locals."""
-    parts = sym.split(" ", 4)
-    if len(parts) < 5 or parts[0] == "local":
-        return None
-    descriptors = parts[4]
-    segments: list[str] = []
-    for seg in descriptors.split("/"):
-        if not seg:
-            continue
-        seg = _DESC_MARKER_RE.sub("", seg)
-        if seg in ("", "crate"):
-            continue
-        m = _IMPL_RE.match(seg)
-        if m:
-            segments.append(m.group(1))
-            segments.append(_DESC_MARKER_RE.sub("", m.group(2)))
-        else:
-            segments.append(seg)
-    if not segments:
-        return None
-    return package + "::" + "::".join(segments)
-
-
-def relpath_to_module(relpath: str, package: str = "koan") -> str | None:
-    """src/machine/core/scope.rs -> koan::machine::core::scope
-       src/machine/core/scope/mod.rs -> koan::machine::core::scope"""
-    if not relpath.startswith("src/") or not relpath.endswith(".rs"):
-        return None
-    stem = relpath[len("src/"):-len(".rs")]
-    parts = stem.split("/")
-    if parts and parts[-1] in ("mod", "lib"):
-        parts = parts[:-1]
-    if not parts:
-        return package
-    return package + "::" + "::".join(parts)
-
-
-# ---------- move resolution ----------
-
 class MoveSpec:
     def __init__(self, old_path: str, new_module: str, is_delete: bool = False):
         self.old_path = old_path
@@ -326,6 +149,9 @@ class MoveSpec:
         self.source_file: str = ""
         self.def_line: int = -1
         self.symbol: str = ""
+        # filled in by compute_body_ends() (line after the item's last line);
+        # delimits the body span whose refs are the item's outbound edges.
+        self.body_end: int = -1
 
 
 def parse_move(s: str) -> MoveSpec:
@@ -379,50 +205,165 @@ def resolve_moves(moves: list[MoveSpec],
     return errors
 
 
-# ---------- surgical edge diff ----------
+def _resolve_dep(sym: str,
+                 moved_syms: dict[str, "MoveSpec"],
+                 source_facade: dict[str, str],
+                 known: set[str],
+                 *, redirect_moved: bool) -> str | None:
+    """Resolve a body-ref SCIP symbol to the module its outbound edge targets,
+    seen from the source module that currently holds the referencing item.
+
+    `redirect_moved` selects the granularity:
+      * True (add side) — a ref to a moved sibling targets its *new* module, so a
+        reference between two members of one group becomes a self-edge the caller
+        drops.
+      * False (canonical side) — every symbol resolves to its pre-move module, so
+        a removal names the edge actually present in the canonical DOT.
+
+    A name the source module imports through a re-export facade
+    (`source_facade`, from `reexport.attributions`) resolves to that facade,
+    matching the canonical DOT; otherwise the symbol's def-site path collapses to
+    its deepest known module. Returns None for locals, external-crate refs, and
+    paths under no known module."""
+    if redirect_moved:
+        mv = moved_syms.get(sym)
+        if mv is not None and not mv.is_delete:
+            return mv.new_module
+    path = scip_symbol_to_path(sym)
+    if path is None:
+        return None
+    name = path.rsplit("::", 1)[-1]
+    if name in source_facade:
+        return source_facade[name]
+    return reexport.written_module(path.split("::"), known)
+
 
 def diff_edges(docs: dict[str, dict],
-               moves: list[MoveSpec]) -> tuple[set[tuple[str, str]],
-                                               set[tuple[str, str]]]:
-    """Return (edges_to_add, edges_to_remove) for the proposed moves,
-    relative to the original cargo-modules DOT.
+               moves: list[MoveSpec],
+               attribution: dict[str, list[tuple[str, str]]],
+               known: set[str],
+               ) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+    """Return (edges_to_add, edges_to_remove) for the proposed moves, relative
+    to the re-export-corrected canonical DOT. Models both sides of a move:
 
-    Add: for each module M that references a moved item, M -> NEW_MOD.
-    Remove: M -> OLD_MOD only when M referenced *only* moved items from OLD_MOD
-            (i.e. nothing left in OLD_MOD that M still touches)."""
+    Inbound — the edges a moved item's *consumers* carry.
+      Add: for each consumer M that references a moved item, M -> NEW_MOD (SCIP
+           refs say *whether* M uses the item; this is precise).
+      Remove: the canonical DOT attributes M's import to the *facade* module M
+           literally named (`reexport.correct`), not the item's def-site. So a
+           removal must target that facade. `attribution[M]` is the per-leaf
+           (written_module, item_name) list; we drop M -> FACADE only when, after
+           the move, no item M imports still enters FACADE — i.e. every leaf at
+           FACADE is a moved item redirected away from it.
+
+      This subsumes the plain deep-import case (where the written facade equals
+      the def-site, so the dropped edge matches today's behavior) and the
+      re-exported case (facade != def-site) that a def-site removal silently
+      missed.
+
+    Outbound — the edges a moved item's *own body* carries (the symmetric case,
+      with the source module standing in for the consumer). The refs inside the
+      item's body span [def_line, body_end) become NEW_MOD -> dep edges, facade-
+      corrected from the source module's imports; a source_module -> dep edge is
+      dropped only when no item still in source_module references dep. This is
+      what makes a relocated dependency-bearing item score its reconstituting
+      back-edges instead of looking strictly cheaper than reality.
+
+    `known` is the canonical DOT's module node set, used to collapse a def-site
+    path to the deepest module that is actually a graph node."""
     moved_syms = {mv.symbol: mv for mv in moves if mv.symbol}
 
+    # A moving item's own body refs leave the source module with it, so they are
+    # the outbound side's concern; excluding them here keeps the inbound pass from
+    # charging the source module an edge to a sibling's new module (the intra-group
+    # case). Spans are only known once compute_body_ends has run; an unset body_end
+    # (e.g. a unit test driving diff_edges directly) leaves the inbound pass intact.
+    spans_by_file: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    for mv in moves:
+        if mv.symbol and not mv.is_delete and mv.body_end >= 0:
+            spans_by_file[mv.source_file].append((mv.def_line, mv.body_end))
+
     mod_refs: dict[str, set[str]] = defaultdict(set)
-    sym_owner: dict[str, str] = {}
     for relpath, doc in docs.items():
         src_mod = relpath_to_module(relpath)
         if src_mod is None:
             continue
-        for sym, _ in doc["refs"]:
+        spans = spans_by_file.get(relpath, [])
+        for sym, line in doc["refs"]:
+            if any(start <= line < end for start, end in spans):
+                continue
             mod_refs[src_mod].add(sym)
-        for sym, _ in doc["defs"]:
-            sym_owner[sym] = src_mod
 
     add: set[tuple[str, str]] = set()
     remove: set[tuple[str, str]] = set()
     for mod, syms in mod_refs.items():
-        moved_seen: set[str] = set()
-        for sym in syms:
-            mv = moved_syms.get(sym)
-            if mv is None:
-                continue
+        referenced = [moved_syms[s] for s in syms if s in moved_syms]
+        if not referenced:
+            continue
+        # Map each moved item this consumer references by its simple name — the
+        # segment a `use` leaf ends in, which is how `attribution` keys it.
+        moved_names: dict[str, MoveSpec] = {
+            mv.old_path.rsplit("::", 1)[-1]: mv for mv in referenced
+        }
+        for mv in referenced:
             if not mv.is_delete and mv.new_module != mod:
                 add.add((mod, mv.new_module))
-            moved_seen.add(sym_owner.get(sym, ""))
-        for old_mod in moved_seen:
-            if old_mod == mod or not old_mod:
+
+        facade_items: dict[str, list[str]] = defaultdict(list)
+        for facade, name in attribution.get(mod, []):
+            facade_items[facade].append(name)
+        for facade, names in facade_items.items():
+            if facade == mod:
                 continue
-            still_uses_old = any(
-                s in syms and s not in moved_syms and sym_owner.get(s) == old_mod
-                for s in syms
-            )
-            if not still_uses_old:
-                remove.add((mod, old_mod))
+            loses = any(name in moved_names and moved_names[name].new_module != facade
+                        for name in names)
+            if not loses:
+                continue
+            stays = any(name not in moved_names or moved_names[name].new_module == facade
+                        for name in names)
+            if not stays:
+                remove.add((mod, facade))
+
+    # ---- outbound: the dependency edges each moved item carries with it ----
+    real_moves = [mv for mv in moves
+                  if mv.symbol and not mv.is_delete and mv.body_end >= 0]
+    by_source: dict[str, list[MoveSpec]] = defaultdict(list)
+    for mv in real_moves:
+        by_source[mv.source_file].append(mv)
+
+    for source_file, group in by_source.items():
+        source_module = group[0].source_module
+        source_facade = {name: facade
+                         for facade, name in attribution.get(source_module, [])}
+        all_refs = docs.get(source_file, {}).get("refs", [])
+
+        # The moved items' body refs reconstitute as new_module -> dep edges;
+        # their canonical (pre-move) deps are the source_module edges at risk.
+        moved_canonical_deps: set[str] = set()
+        surviving_deps: set[str] = set()
+        for sym, line in all_refs:
+            owner = next((mv for mv in group
+                          if mv.def_line <= line < mv.body_end), None)
+            if owner is None:
+                dep = _resolve_dep(sym, moved_syms, source_facade, known,
+                                   redirect_moved=False)
+                if dep is not None:
+                    surviving_deps.add(dep)
+                continue
+            dep_add = _resolve_dep(sym, moved_syms, source_facade, known,
+                                   redirect_moved=True)
+            if dep_add is not None and dep_add != owner.new_module:
+                add.add((owner.new_module, dep_add))
+            dep_canon = _resolve_dep(sym, moved_syms, source_facade, known,
+                                     redirect_moved=False)
+            if dep_canon is not None and dep_canon != source_module:
+                moved_canonical_deps.add(dep_canon)
+
+        # A source edge survives iff some item still in source_module justifies
+        # it; one no surviving item references is dropped.
+        for dep in moved_canonical_deps - surviving_deps:
+            remove.add((source_module, dep))
+
     return add, remove
 
 
@@ -464,7 +405,7 @@ def render_dot_diff(original_dot: str,
             closing_brace_idx = len(out)
         out.append(line)
     extra: list[str] = []
-    # Match cargo-modules' edge attributes so modgraph's EDGE_RE (which
+    # Match cargo-modules' edge attributes so the scorer's edge match (which
     # requires [label="uses"]) and direct_children (which derives the tree
     # from owns edges + node names) both see the new module.
     uses_attrs = '[label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge'
@@ -483,8 +424,6 @@ def render_dot_diff(original_dot: str,
         out.append("}")
     return "\n".join(out) + "\n"
 
-
-# ---------- brace-balanced item extraction ----------
 
 def find_item_end(lines: list[str], def_line: int) -> int:
     """Return the line index *after* the last line of the item starting at
@@ -578,6 +517,25 @@ def _strip_for_brace_scan(line: str, in_block_comment: bool = False,
     return "".join(out)
 
 
+def compute_body_ends(moves: list[MoveSpec], src_root: Path) -> None:
+    """Fill `mv.body_end` (the line index after each item's last line) by
+    brace-scanning its source file. Done once here so `find_item_end` runs a
+    single time per move and the same span feeds both the outbound edge diff
+    (`diff_edges`) and the body transplant (`write_item_mirror`)."""
+    by_file: dict[str, list[MoveSpec]] = defaultdict(list)
+    for mv in moves:
+        if mv.source_file and mv.def_line >= 0:
+            by_file[mv.source_file].append(mv)
+    for source_rel, group in by_file.items():
+        rel_under_src = source_rel[len("src/"):]
+        path = src_root / rel_under_src
+        lines = (path.read_text(encoding="utf-8").splitlines()
+                 if path.exists() else [])
+        for mv in group:
+            mv.body_end = (find_item_end(lines, mv.def_line)
+                           if mv.def_line < len(lines) else mv.def_line + 1)
+
+
 def write_item_mirror(src_root: Path, mirror_root: Path,
                       moves: list[MoveSpec]) -> None:
     """Copy `src_root` to `mirror_root`, then transplant each moved item's
@@ -601,7 +559,7 @@ def write_item_mirror(src_root: Path, mirror_root: Path,
         for mv in group:
             if mv.def_line >= len(lines):
                 continue
-            end = find_item_end(lines, mv.def_line)
+            end = mv.body_end if mv.body_end >= 0 else find_item_end(lines, mv.def_line)
             extracted.append((mv, mv.def_line, end, lines[mv.def_line:end]))
 
         for mv, start, end, _blob in sorted(extracted, key=lambda x: -x[1]):
@@ -636,8 +594,15 @@ def cmd_item(args: argparse.Namespace) -> int:
         for e in errors:
             print(f"error: {e}", file=sys.stderr)
         return 1
+    compute_body_ends(args.move, args.src_root)
 
-    add, remove = diff_edges(docs, args.move)
+    # The canonical DOT is re-export-corrected, so removals must target the
+    # facade module each consumer literally imports through, not the def-site.
+    # `attribution` carries that mapping; `known` is the DOT's module node set
+    # (item mode is koan-specific throughout, matching resolve_moves' default).
+    known = parse_dot(args.edges).nodes
+    attribution = reexport.attributions(known, args.src_root, "koan")
+    add, remove = diff_edges(docs, args.move, attribution, known)
     original_dot = args.edges.read_text(encoding="utf-8")
     new_modules = {mv.new_module for mv in args.move if not mv.is_delete}
 
@@ -679,78 +644,3 @@ def cmd_item(args: argparse.Namespace) -> int:
     for f in delete_files:
         print(f"  deleted file {f}")
     return 0
-
-
-# ====================================================================
-# CLI
-# ====================================================================
-
-def main() -> int:
-    ap = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    sub = ap.add_subparsers(dest="cmd", required=True)
-
-    pm = sub.add_parser("module", help="rename whole modules")
-    pm.add_argument("--edges", required=True, type=Path,
-                    help="cargo-modules DOT input")
-    pm.add_argument("--output-edges", required=True, type=Path,
-                    help="rewritten DOT output")
-    pm.add_argument("--src-root", type=Path, default=Path("src"),
-                    help="source root to mirror (default: src)")
-    pm.add_argument("--output-src", type=Path,
-                    help="where to mirror src/ under renamed paths "
-                         "(default: skip mirror)")
-    pm.add_argument("--root", default="koan",
-                    help="crate root module name (default: koan)")
-    pm.add_argument("--rename", action="append", type=parse_rename, default=[],
-                    metavar="OLD=NEW", help="module rename; repeatable")
-    pm.add_argument("--rename-file", type=Path,
-                    help="file of OLD=NEW lines, one per rename")
-    pm.set_defaults(func=cmd_module)
-
-    pi = sub.add_parser("item",
-                        help="extract individual items into new modules "
-                             "(SCIP-driven)")
-    pi.add_argument("--scip", required=True, type=Path,
-                    help="path to SCIP index (produced by "
-                         "`rust-analyzer scip <repo> --output ...`)")
-    pi.add_argument("--edges", required=True, type=Path,
-                    help="cargo-modules DOT graph to rewrite")
-    pi.add_argument("--src-root", required=True, type=Path,
-                    help="src/ directory to mirror")
-    pi.add_argument("--output-edges", required=True, type=Path,
-                    help="where to write the rewritten DOT")
-    pi.add_argument("--output-src", required=True, type=Path,
-                    help="where to mirror the modified src/ tree")
-    pi.add_argument("--move", action="append", type=parse_move,
-                    default=[], metavar="OLD=NEW",
-                    help="move item OLD (full koan-path) into module NEW. "
-                         "Repeatable.")
-    pi.add_argument("--delete", action="append", type=parse_delete,
-                    default=[], dest="delete_specs", metavar="ITEM",
-                    help="delete item ITEM from its source file. "
-                         "Item is removed from the mirrored src tree and "
-                         "from the rewritten DOT — no destination module is "
-                         "created, and `M -> source_module` uses-edges are "
-                         "dropped iff M referenced only deleted items from "
-                         "that module. Repeatable. Use to model pure dead-"
-                         "code removal (which `--move` cannot).")
-    pi.add_argument("--delete-file", action="append", default=[],
-                    dest="delete_files", metavar="PATH",
-                    help="delete the entire file at PATH (repo-relative, "
-                         "must be under src/). Mirror removes the file, and "
-                         "the DOT drops the corresponding module node plus "
-                         "every edge touching it. Use to model orphaning a "
-                         "wrapper module after `--move` migrates its items "
-                         "elsewhere — `--move` shrinks the file but can't "
-                         "remove the module node or its leftover scaffolding.")
-    pi.set_defaults(func=cmd_item)
-
-    args = ap.parse_args()
-    return args.func(args)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -5,7 +5,7 @@
 use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
 use crate::machine::model::types::{NominalSchema, RecursiveSet};
 use crate::machine::model::KType;
-use crate::machine::{KErrorKind, RuntimeArena, Scope};
+use crate::machine::{KErrorKind, KoanRegion, Scope};
 
 /// `(set, field-types)` of a sealed record-repr newtype member, read off its `SetRef` identity. Field
 /// types carry raw `SetLocal` / `SetRef` leaves so assertions inspect the seal shape.
@@ -18,14 +18,14 @@ fn struct_set_and_fields<'a>(
             let member = set.member(*index);
             let borrow = member.schema();
             match borrow.as_ref() {
-                Some(NominalSchema::Newtype(repr)) => match repr.as_ref() {
+                Some(NominalSchema::NewType(repr)) => match repr.as_ref() {
                     KType::Record(record) => {
                         let fields = record.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                         (std::rc::Rc::clone(set), fields)
                     }
                     other => panic!("expected {name} to carry a record repr, got {other:?}"),
                 },
-                other => panic!("expected {name} to carry a Newtype schema, got {other:?}"),
+                other => panic!("expected {name} to carry a NewType schema, got {other:?}"),
             }
         }
         other => panic!("expected {name} to be a SetRef identity in types, got {other:?}"),
@@ -37,8 +37,8 @@ fn struct_set_and_fields<'a>(
 /// scope.
 #[test]
 fn block_mutual_pair_seals_one_set_with_set_local_cross_refs() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :Aa}\n)",
@@ -60,8 +60,8 @@ fn block_mutual_pair_seals_one_set_with_set_local_cross_refs() {
 /// The group name binds a `RecursiveGroup` handle over the members' shared set.
 #[test]
 fn block_group_name_binds_the_set_handle() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :Aa}\n)",
@@ -79,8 +79,8 @@ fn block_group_name_binds_the_set_handle() {
 /// Three-way mutual recursion: one shared set of 3; each field is a `SetLocal` to the next.
 #[test]
 fn block_three_way_seals_one_set() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "RECURSIVE TYPES Trio = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{c :Cc}\n  NEWTYPE Cc = :{a :Aa}\n)",
@@ -101,8 +101,8 @@ fn block_three_way_seals_one_set() {
 /// A non-declaration statement in the block body is a shape error, and nothing binds.
 #[test]
 fn block_body_rejects_non_declaration() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let err = run_one_err(
         scope,
         parse_one("RECURSIVE TYPES Grp = (\n  NEWTYPE Aa = :{x :Number}\n  LET y = 1\n)"),
@@ -122,8 +122,8 @@ fn block_body_rejects_non_declaration() {
 /// the group handle binds (the block guarantees resolution at its boundary).
 #[test]
 fn block_member_referencing_non_member_does_not_bind() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "RECURSIVE TYPES Grp = (NEWTYPE Aa = :{b :Nope})");
     assert!(
         scope.resolve_type("Aa").is_none(),
@@ -138,8 +138,8 @@ fn block_member_referencing_non_member_does_not_bind() {
 /// A duplicate member name in the body is a shape error.
 #[test]
 fn block_rejects_duplicate_member() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let err = run_one_err(
         scope,
         parse_one(

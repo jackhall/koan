@@ -11,14 +11,14 @@ pub fn body<'a>(
     use crate::machine::core::kfunction::action::{arg_held, Action};
     use crate::machine::model::Carried;
     // `msg` is an `Any` slot, so render whichever arm the carrier holds (object or type) —
-    // `Held::summarize` is the twin of the legacy `ArgValue::summarize`.
+    // `Held::summarize` is the twin of `ArgValue::summarize`.
     let rendered = match arg_held(ctx.args, "msg") {
         Some(value) => value.summarize(),
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("msg".to_string())))),
     };
     let line = format!("{rendered}\n");
     ctx.scope.write_out(line.as_bytes());
-    let obj = ctx.scope.arena.alloc_object(KObject::KString(rendered));
+    let obj = ctx.scope.region.alloc_object(KObject::KString(rendered));
     Action::Done(Ok(Carried::Object(obj)))
 }
 
