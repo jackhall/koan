@@ -102,7 +102,7 @@ fn using_window_shadows_call_site_binding() {
 }
 
 /// SAFETY-anchor: closure escape for a functor-result module. `MAKE` returns
-/// a module living in its per-call `CallArena`; opening it with `USING` and
+/// a module living in its per-call `CallFrame`; opening it with `USING` and
 /// returning a closure that reads a surfaced member must keep both the
 /// closure's transparent scope and the module's arena alive past the block.
 /// Run-root churn after the escape exercises drop discipline; under Miri this

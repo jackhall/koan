@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::model::{Carried, KType};
-use crate::machine::{CallArena, KError, KErrorKind};
+use crate::machine::{CallFrame, KError, KErrorKind};
 
 use super::runtime::KoanRuntime;
 
@@ -30,7 +30,7 @@ pub(in crate::machine::execute) trait NodeFinalize {
     fn finalize_terminal<'o>(
         &self,
         output: Result<Carried<'o>, KError>,
-        frame: Option<&Rc<CallArena>>,
+        frame: Option<&Rc<CallFrame>>,
         contract: Option<ReturnContract<'o>>,
     ) -> Result<Carried<'o>, KError>;
 }
@@ -39,7 +39,7 @@ impl NodeFinalize for KoanRuntime<'_> {
     fn finalize_terminal<'o>(
         &self,
         output: Result<Carried<'o>, KError>,
-        frame: Option<&Rc<CallArena>>,
+        frame: Option<&Rc<CallFrame>>,
         contract: Option<ReturnContract<'o>>,
     ) -> Result<Carried<'o>, KError> {
         enforce_return_contract(output, frame, contract)
@@ -56,7 +56,7 @@ impl NodeFinalize for KoanRuntime<'_> {
 /// cart `Rc`.
 fn enforce_return_contract<'o>(
     output: Result<Carried<'o>, KError>,
-    frame: Option<&Rc<CallArena>>,
+    frame: Option<&Rc<CallFrame>>,
     contract: Option<ReturnContract<'o>>,
 ) -> Result<Carried<'o>, KError> {
     match (output, frame) {

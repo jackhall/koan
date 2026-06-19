@@ -21,7 +21,7 @@ use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Carried;
-use crate::machine::{CallArena, KError, LexicalFrame, NameOutcome, NodeId, Scope};
+use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 use crate::source::Spanned;
 
 use super::super::ambient::AmbientContext;
@@ -40,7 +40,7 @@ use crate::scheduler::Scheduler;
 /// cannot outlive the cart it names.
 pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
     node_scope: &'step NodeScope,
-    frame: Option<&'step Rc<CallArena>>,
+    frame: Option<&'step Rc<CallFrame>>,
 ) -> &'step Scope<'b> {
     match node_scope {
         // SAFETY: the `YokedChild` pointer was erased from a block scope in a cart-*ancestor* arena
@@ -129,7 +129,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
 
     /// Cloned `Rc` to the active per-call frame — the `invoke` decide reads it to build a
     /// builtin's `BodyCtx`. `None` only outside any frame (top-level builtins).
-    pub(in crate::machine::execute) fn current_frame(&self) -> Option<Rc<CallArena>> {
+    pub(in crate::machine::execute) fn current_frame(&self) -> Option<Rc<CallFrame>> {
         self.ambient.active_frame_ref().cloned()
     }
 

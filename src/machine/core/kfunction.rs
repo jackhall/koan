@@ -34,7 +34,7 @@ pub struct KFunction<'a> {
     /// same reader-bounded handle [`Scope::outer`] uses): the FN may be defined inside a per-call
     /// frame, so the capture borrow is frame-bounded while the scope *content* stays `'a`.
     /// [`Self::captured_scope`] re-hands it behind a reader-bounded borrow; liveness past the
-    /// defining frame rides the `Rc<CallArena>` that lift attaches to an escaping closure.
+    /// defining frame rides the `Rc<CallFrame>` that lift attaches to an escaping closure.
     ///
     /// **Variance-load-bearing.** `BoundedScopePtr<'a>` carries `'a` structurally (`Scope<'a>` is
     /// invariant — it contains `RefCell`s), so `captured` is what keeps `KFunction<'a>` invariant

@@ -80,7 +80,7 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
 /// Per-call type-side bind survives closure escape: an inner FN returned from an
 /// outer functor reads its captured `Er` from the outer's per-call
 /// `bindings.types` after the outer call has returned. The
-/// `KFunction(&fn, Some(Rc<CallArena>))` lift pins the value-side arena; this
+/// `KFunction(&fn, Some(Rc<CallFrame>))` lift pins the value-side arena; this
 /// pins the type-side entry alongside it.
 #[test]
 fn functor_closure_escape_pins_type_class_bind() {

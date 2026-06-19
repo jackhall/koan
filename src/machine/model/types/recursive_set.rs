@@ -4,7 +4,7 @@
 //! `A ↔ B` pair, a longer cycle) is sealed into one [`RecursiveSet`]. A non-recursive type
 //! is a set of one. The set is `Rc`-owned (never arena-owned): lifting any reference to a
 //! member is just `Rc::clone` of the set, so the whole group travels as a unit — no copy,
-//! no visited-map cycle-walk, no `Rc<CallArena>` anchor.
+//! no visited-map cycle-walk, no `Rc<CallFrame>` anchor.
 //!
 //! References:
 //! - *Intra-set* (a member's schema naming a sibling) is [`KType::SetLocal`] — a bare index

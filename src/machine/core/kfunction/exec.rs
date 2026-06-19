@@ -23,7 +23,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::{BindingIndex, CallArena, KError};
+use crate::machine::core::{BindingIndex, CallFrame, KError};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     elaborate_type_identifier, DeferredReturn, ElabResult, Elaborator, KType, Record, ReturnType,
@@ -40,7 +40,7 @@ use super::KFunction;
 pub struct ExecFrame {
     /// The per-call arena the body executes in: it backs allocations, and its child scope is the
     /// body's scope. Owned — supplied (and, for TCO, reset) by the scheduler.
-    pub arena: Rc<CallArena>,
+    pub arena: Rc<CallFrame>,
 }
 
 /// **exec → scheduler.** What running a body describes next, in `exec`'s native currency. Two

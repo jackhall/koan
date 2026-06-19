@@ -14,7 +14,7 @@
 //! `Bindings`, so abstract ascriptions stay opaque inside the block.
 //!
 //! Functor-result escape soundness: the opened module's child scope lives in a
-//! per-call `CallArena` kept alive by an `Rc` on the eager `m`. That `Rc` would
+//! per-call `CallFrame` kept alive by an `Rc` on the eager `m`. That `Rc` would
 //! drop when `m` drops at body return, so we root a copy of the module value
 //! in the call-site arena. An escaping closure captures the transparent scope,
 //! which anchors the call-site frame, which keeps the rooted `Rc` alive.

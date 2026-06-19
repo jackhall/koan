@@ -16,7 +16,7 @@ use crate::scheduler::vend_carrier;
 
 use super::dispatch::{reattach_node_scope, SchedulerView};
 use super::finalize::NodeFinalize;
-use super::nodes::{CallFrame, Node, NodePayload, NodeScope, NodeStep, NodeWork};
+use super::nodes::{NodeFrame, Node, NodePayload, NodeScope, NodeStep, NodeWork};
 use super::outcome::deps_at_step;
 use super::runtime::{KoanRuntime, KoanWorkload};
 use super::NodeContinuation;
@@ -72,7 +72,7 @@ impl<'run> KoanRuntime<'run> {
         // re-acquire it per use, so nothing holds a scope borrow across the step's `&mut self`
         // work or the in-step TCO frame reset.
         let node_scope = node.payload.scope;
-        let CallFrame {
+        let NodeFrame {
             cart,
             reserve,
             contract: prev_contract,
@@ -191,7 +191,7 @@ impl<'run> KoanRuntime<'run> {
                 // (a `FramePlacement::Inherit` FN-body re-enters the cart a prior `Continue` already
                 // installed — the folded `invoke`). The `ChainOp` reads it (for an `AssembleBody`) to
                 // walk the body scope's lexical chain.
-                let body_frame: &crate::machine::core::CallArena =
+                let body_frame: &crate::machine::core::CallFrame =
                     new_frame.as_deref().unwrap_or(&prev_frame);
                 let new_chain = chain.apply(prev_chain_carrier, body_frame);
                 match new_frame {
@@ -217,7 +217,7 @@ impl<'run> KoanRuntime<'run> {
                                     scope: NodeScope::Yoked,
                                     chain: new_chain,
                                 },
-                                frame: CallFrame {
+                                frame: NodeFrame {
                                     cart: f,
                                     reserve: new_reserve,
                                     contract: next_contract,
@@ -236,7 +236,7 @@ impl<'run> KoanRuntime<'run> {
                                     scope: node_scope,
                                     chain: new_chain,
                                 },
-                                frame: CallFrame {
+                                frame: NodeFrame {
                                     cart: prev_frame,
                                     reserve: post_step_reserve,
                                     contract: next_contract,

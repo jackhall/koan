@@ -56,8 +56,8 @@ pub(crate) fn arm_tail<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{Action, FramePlacement};
     use crate::machine::core::kfunction::body::split_body_statements;
-    use crate::machine::{BindingIndex, CallArena};
-    let frame: Rc<CallArena> = CallArena::new(root, outer_frame);
+    use crate::machine::{BindingIndex, CallFrame};
+    let frame: Rc<CallFrame> = CallFrame::new(root, outer_frame);
     frame.with_frame_interior(|arena, child| {
         let it_obj = arena.alloc_object(it_value);
         let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));

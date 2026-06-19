@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::machine::model::KType;
-use crate::machine::{CallArena, Scope};
+use crate::machine::{CallFrame, Scope};
 
 use super::{arg, kw, sig};
 
@@ -31,7 +31,7 @@ pub fn body<'a>(
     };
     // Chain the call-site frame Rc onto the new frame (keeps the parent arena alive past the
     // new frame's `outer` pointer) — matching a normal call frame.
-    let frame: Rc<CallArena> = CallArena::new(ctx.scope, ctx.frame.map(|f| f.storage_rc()));
+    let frame: Rc<CallFrame> = CallFrame::new(ctx.scope, ctx.frame.map(|f| f.storage_rc()));
     Action::Tail {
         leading: vec![],
         tail: inner,

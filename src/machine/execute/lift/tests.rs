@@ -10,7 +10,7 @@ mod leaf;
 
 use super::*;
 use crate::machine::model::{KObject, Parseable};
-use crate::machine::{CallArena, KError, KErrorKind, ResolveOutcome, Scope};
+use crate::machine::{CallFrame, KError, KErrorKind, ResolveOutcome, Scope};
 
 /// Test-only `(scope, expr) → KFuture` driver for one-shot bind without spinning a
 /// `Scheduler`.
@@ -38,7 +38,7 @@ pub(super) fn dispatch_for_test<'run>(
 /// Stamp a sentinel KFunction into `dying.arena()` so `functions_is_empty()` is false
 /// and `lift_kobject` enters the slow path. Side-effect only — the alloc'd ref is
 /// discarded; the function lives until `dying`'s arena drops.
-pub(super) fn defeat_fast_path(dying: &Rc<CallArena>) {
+pub(super) fn defeat_fast_path(dying: &Rc<CallFrame>) {
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
     use crate::machine::{Body, KFunction};
     let kf = KFunction::new(
@@ -59,7 +59,7 @@ pub(super) fn defeat_fast_path(dying: &Rc<CallArena>) {
 /// A KFunction whose `captured_scope` lives in the dying arena. Caller is responsible
 /// for not allocating a separate bait — this KFunction itself defeats `functions_is_empty`.
 pub(super) fn alloc_local_kf<'run>(
-    dying: &'run Rc<CallArena>,
+    dying: &'run Rc<CallFrame>,
 ) -> &'run crate::machine::KFunction<'run> {
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
     use crate::machine::{Body, KFunction};

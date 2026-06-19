@@ -179,7 +179,7 @@ invariant.
 `alloc_function`, `alloc_scope`, `alloc_module`, `alloc_signature`, and
 `alloc_operator_group` — that route a single `alloc` engine where the gate
 lives. The engine and its `unsafe` erase-store machinery live generically in
-the `StorageFrame<W>` substrate (`src/machine/core/storage_frame.rs`), which
+the `StorageFrame<W>` substrate (`src/machine/core/region.rs`), which
 names no Koan type; `RuntimeArena` is the Koan instantiation
 `StorageFrame<KoanStorageProfile>`, with the per-family policy supplied by `Stored`
 impls in `core::arena`. Every family implements `Stored`, and the engine runs

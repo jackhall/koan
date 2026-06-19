@@ -23,7 +23,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::CallArena;
+use crate::machine::core::CallFrame;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
@@ -177,7 +177,7 @@ pub(in crate::machine::execute) enum DepRequest<'step> {
     /// last (the resolved return type) to build the `PerCall` contract; the earlier statements'
     /// scope binds feed the tail body. The only dep that carries its own frame.
     BodyBlock {
-        frame: Rc<CallArena>,
+        frame: Rc<CallFrame>,
         statements: Vec<KExpression<'step>>,
     },
     Existing(NodeId),

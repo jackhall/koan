@@ -16,21 +16,21 @@ use crate::machine::BindingIndex;
 fn scope_bounded_reanchors_within_witness_borrow() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let frame: Rc<CallArena> = CallArena::new(scope, None);
+    let frame: Rc<CallFrame> = CallFrame::new(scope, None);
     let bounded: &Scope<'_> = frame.scope_bounded();
     // Same underlying child scope as the unbounded accessors, just a shorter borrow.
     assert_eq!(bounded.id, frame.scope().id);
     assert_eq!(bounded.id, frame.scope_for_bind().id);
 }
 
-/// `CallArena::scope`'s re-borrow stays valid when the arena is mutated through a
+/// `CallFrame::scope`'s re-borrow stays valid when the arena is mutated through a
 /// sibling pointer afterward — `frame.scope()` and `frame.arena().alloc(...)`
 /// must coexist soundly under tree borrows.
 #[test]
 fn call_arena_scope_survives_subsequent_alloc() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let frame = CallArena::new(scope, None);
+    let frame = CallFrame::new(scope, None);
     let s = frame.scope();
     let _new = frame.arena().alloc_object(KObject::Number(1.0));
     assert!(std::ptr::eq(s.arena, frame.arena()));
@@ -43,7 +43,7 @@ fn call_arena_scope_survives_subsequent_alloc() {
 fn call_arena_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let frame: Rc<CallArena> = CallArena::new(scope, None);
+    let frame: Rc<CallFrame> = CallFrame::new(scope, None);
     let arena_ptr: *const RuntimeArena = frame.arena();
     let scope_ptr: *const Scope<'_> = frame.scope();
     let inner_arena: &RuntimeArena = unsafe { &*(arena_ptr as *const _) };
@@ -61,7 +61,7 @@ fn call_arena_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
 fn call_arena_scope_repeated_calls_alias() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let frame = CallArena::new(scope, None);
+    let frame = CallFrame::new(scope, None);
     let s1 = frame.scope();
     let s2 = frame.scope();
     let s3 = frame.scope();
@@ -76,8 +76,8 @@ fn call_arena_scope_repeated_calls_alias() {
 fn call_arena_chained_outer_frame_walkable() {
     let arena = RuntimeArena::new();
     let run_scope = default_scope(&arena, Box::new(std::io::sink()));
-    let outer = CallArena::new(run_scope, None);
-    let inner = CallArena::new(outer.scope(), Some(outer.storage_rc()));
+    let outer = CallFrame::new(run_scope, None);
+    let inner = CallFrame::new(outer.scope(), Some(outer.storage_rc()));
     drop(outer);
     let outer_scope = inner
         .scope()
@@ -96,13 +96,13 @@ fn call_arena_chained_outer_frame_walkable() {
 fn call_arena_scope_re_anchored_into_struct_alongside_rc() {
     struct Holder<'a> {
         s: &'a Scope<'a>,
-        _f: Rc<CallArena>,
+        _f: Rc<CallFrame>,
     }
 
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let h = {
-        let f = CallArena::new(scope, None);
+        let f = CallFrame::new(scope, None);
         let s: &Scope<'_> = unsafe { std::mem::transmute::<&Scope<'_>, &Scope<'_>>(f.scope()) };
         Holder { s, _f: f }
     };
@@ -138,7 +138,7 @@ fn alloc_ktype_returns_arena_lifetime_ref_and_counts() {
 fn call_arena_try_reset_for_tail_round_trip() {
     let outer_arena = RuntimeArena::new();
     let outer_scope = default_scope(&outer_arena, Box::new(std::io::sink()));
-    let mut frame: Rc<CallArena> = CallArena::new(outer_scope, None);
+    let mut frame: Rc<CallFrame> = CallFrame::new(outer_scope, None);
     let _pre = frame.arena().alloc_object(KObject::Number(1.0));
     assert!(frame.arena().alloc_count() >= 1);
 
@@ -157,7 +157,7 @@ fn call_arena_try_reset_for_tail_round_trip() {
     assert!(frame.scope().outer().is_some());
 }
 
-/// `try_reset_for_tail` refuses when another `Rc<CallArena>` *shell* clone exists — a
+/// `try_reset_for_tail` refuses when another `Rc<CallFrame>` *shell* clone exists — a
 /// transient holder still naming the frame, for which in-place reset would mutate the shell
 /// under a live alias. (An escaped value pins `FrameStorage`, not the shell — see
 /// [`call_arena_try_reset_for_tail_allows_reset_under_escaped_storage`].)
@@ -165,10 +165,10 @@ fn call_arena_try_reset_for_tail_round_trip() {
 fn call_arena_try_reset_for_tail_refuses_when_aliased() {
     let outer_arena = RuntimeArena::new();
     let outer_scope = default_scope(&outer_arena, Box::new(std::io::sink()));
-    let mut frame: Rc<CallArena> = CallArena::new(outer_scope, None);
+    let mut frame: Rc<CallFrame> = CallFrame::new(outer_scope, None);
     let pre_arena_addr = frame.arena() as *const RuntimeArena as usize;
 
-    // A second shell holder (not an escape): clone the `Rc<CallArena>` so strong_count > 1.
+    // A second shell holder (not an escape): clone the `Rc<CallFrame>` so strong_count > 1.
     let _alias = Rc::clone(&frame);
 
     let did_reset = frame.try_reset_for_tail(outer_scope);
@@ -189,7 +189,7 @@ fn call_arena_try_reset_for_tail_refuses_when_aliased() {
 fn call_arena_try_reset_for_tail_allows_reset_under_escaped_storage() {
     let outer_arena = RuntimeArena::new();
     let outer_scope = default_scope(&outer_arena, Box::new(std::io::sink()));
-    let mut frame: Rc<CallArena> = CallArena::new(outer_scope, None);
+    let mut frame: Rc<CallFrame> = CallFrame::new(outer_scope, None);
     let _escaped = frame.arena().alloc_object(KObject::Number(7.0));
     let pre_alloc_count = frame.arena().alloc_count();
     let pre_storage_addr = frame.arena() as *const RuntimeArena as usize;
@@ -219,13 +219,13 @@ fn call_arena_try_reset_for_tail_allows_reset_under_escaped_storage() {
 }
 
 /// Cycle gate: alloc'ing a value that anchors back at the receiving arena via an
-/// `Rc<CallArena>` redirects to the escape arena. Without the redirect the per-call
+/// `Rc<CallFrame>` redirects to the escape arena. Without the redirect the per-call
 /// arena's storage would hold an Rc to itself and never drop.
 #[test]
 fn alloc_object_redirects_self_anchored_value_to_escape_arena() {
     let outer = RuntimeArena::new();
     let scope = default_scope(&outer, Box::new(std::io::sink()));
-    let frame: Rc<CallArena> = CallArena::new(scope, None);
+    let frame: Rc<CallFrame> = CallFrame::new(scope, None);
     // Build a List whose only element is a `KFunction` carrying an
     // `Rc<FrameStorage>` pointing at `frame.arena()`. The cycle gate only inspects the
     // carried `Rc`, so the placeholder `KFunction` body is irrelevant.

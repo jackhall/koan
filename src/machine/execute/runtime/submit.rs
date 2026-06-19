@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use crate::machine::core::{assemble_body_chain, RuntimeArena, ScopeId, ScopePtr};
 use crate::machine::model::ast::KExpression;
-use crate::machine::{CallArena, LexicalFrame, NodeId, Scope};
+use crate::machine::{CallFrame, LexicalFrame, NodeId, Scope};
 
 /// Pointer equality of two scopes (identity, not structural).
 fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
@@ -67,12 +67,12 @@ impl<'run> KoanRuntime<'run> {
 
     /// Establish the run frame on the first run-lifetime submission (top-level run scope), so every
     /// top-level slot carries a frame cart and `active_frame` is never `None` during a top-level
-    /// step. Mints a non-dying `CallArena` adopting the run scope (no child) — the scope-dependent
+    /// step. Mints a non-dying `CallFrame` adopting the run scope (no child) — the scope-dependent
     /// construction the scheduler delegates to the workload — and hands it to the scheduler, which
     /// owns the frame's lifecycle. Idempotent (guarded on `has_run_frame`).
     pub(in crate::machine::execute) fn ensure_run_frame<'a>(&mut self, scope: &'a Scope<'a>) {
         if !self.has_run_frame() {
-            self.set_run_frame(CallArena::adopting(scope));
+            self.set_run_frame(CallFrame::adopting(scope));
         }
     }
 
@@ -230,7 +230,7 @@ impl<'run> KoanRuntime<'run> {
     /// caller tail-replaces into the body's last statement separately. Returns the sub-slots' ids.
     pub(in crate::machine::execute) fn dispatch_body<'a>(
         &mut self,
-        frame: &Rc<CallArena>,
+        frame: &Rc<CallFrame>,
         statements: Vec<KExpression<'a>>,
     ) -> Vec<NodeId> {
         let body_scope = frame.scope_for_bind();

@@ -459,7 +459,7 @@ fn fast_lane_unbound_returns_error() {
 }
 
 /// A closure returned out of its defining call remains invocable. The lifted
-/// `KObject::KFunction` carries an `Rc<CallArena>` keeping the per-call arena
+/// `KObject::KFunction` carries an `Rc<CallFrame>` keeping the per-call arena
 /// (where the inner function's storage and captured scope live) alive past
 /// frame drop. The fast lane's `KObject::KFunction(f, _)` pattern matches
 /// regardless of whether the second field is `Some(rc)` or `None`.
@@ -499,7 +499,7 @@ fn fast_lane_escaped_closure_with_param_returns_body_value() {
 }
 
 /// `lift_kobject` must recurse through the `List` variant to attach the dying
-/// frame's `Rc<CallArena>` to embedded `KFunction(_, None)` elements; otherwise
+/// frame's `Rc<CallFrame>` to embedded `KFunction(_, None)` elements; otherwise
 /// the inner function's `&KFunction` reference would dangle into the freed
 /// per-call arena. Asserting the lifted closure's frame field is `Some` verifies
 /// the recursion fired.
@@ -522,7 +522,7 @@ fn fast_lane_list_of_closures_escapes_outer_call_with_rc_attached() {
     match &items[0] {
         Held::Object(KObject::KFunction(_, frame)) => assert!(
             frame.is_some(),
-            "list-borne escaping closure must have an :(Rc CallArena) attached by \
+            "list-borne escaping closure must have an :(Rc CallFrame) attached by \
              lift_kobject's recursion through the List variant",
         ),
         other => panic!(

@@ -93,12 +93,12 @@ fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
 }
 
 /// Build a `KTypeValue(KType::Module { module, frame })` whose `child_scope` lives in
-/// a `CallArena`, lift it against the dying frame, and assert the lifted carrier
+/// a `CallFrame`, lift it against the dying frame, and assert the lifted carrier
 /// carries the arena anchor. Pins the unsafe site behind functor execution end-to-end.
 #[test]
 fn functor_per_call_module_lifts_correctly() {
     use crate::machine::core::kfunction::{Body, KFunction};
-    use crate::machine::core::{CallArena, RuntimeArena as RA};
+    use crate::machine::core::{CallFrame, RuntimeArena as RA};
     use crate::machine::execute::lift_ktype_for_test;
     use crate::machine::model::types::{ExpressionSignature, KType, ReturnType, SignatureElement};
     use crate::machine::model::values::KObject;
@@ -106,10 +106,10 @@ fn functor_per_call_module_lifts_correctly() {
 
     let outer_arena = RuntimeArena::new();
     let outer_scope = default_scope(&outer_arena, Box::new(sink()));
-    let frame: Rc<CallArena> = CallArena::new(outer_scope, None);
+    let frame: Rc<CallFrame> = CallFrame::new(outer_scope, None);
 
     // Borrow into the per-call arena via raw-pointer roundtrip so the borrow doesn't
-    // outlive `frame` for the borrow-checker (the SAFETY invariant on `CallArena` —
+    // outlive `frame` for the borrow-checker (the SAFETY invariant on `CallFrame` —
     // arena heap address is stable for the Rc's life — backs this).
     let arena_ptr: *const RA = frame.arena();
     let inner_arena: &RA = unsafe { &*arena_ptr };

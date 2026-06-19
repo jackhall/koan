@@ -6,7 +6,7 @@ use crate::machine::model::types::Record;
 use crate::machine::model::values::ArgValue;
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
-use crate::machine::CallArena;
+use crate::machine::CallFrame;
 use crate::parse::parse;
 use crate::source::Spanned;
 
@@ -21,7 +21,7 @@ fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
 
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     // Defeat the `functions_is_empty()` fast path so the slow path runs.
     let kf = KFunction::new(
         ExpressionSignature {
@@ -62,7 +62,7 @@ fn unanchored_kfuture_with_arena_borrow_does_anchor() {
 
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
 
     let kf = KFunction::new(
         ExpressionSignature {
@@ -108,7 +108,7 @@ fn unanchored_kfuture_with_arena_borrow_does_anchor() {
 fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let inner_future = KFuture {
@@ -145,7 +145,7 @@ fn kfuture_bundle_arg_with_wrapped_field_anchors() {
     use crate::machine::ScopeId;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     use crate::machine::model::types::{KType, NominalSchema, RecursiveSet};
@@ -191,7 +191,7 @@ fn kfuture_bundle_arg_with_wrapped_field_anchors() {
 fn kfuture_parsed_expression_part_with_arena_borrow_anchors() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
@@ -225,7 +225,7 @@ fn kfuture_parsed_expression_part_with_arena_borrow_anchors() {
 fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
@@ -258,9 +258,9 @@ fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
 fn kfuture_with_existing_anchor_preserves_it() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
-    let other = CallArena::new(scope, None);
+    let other = CallFrame::new(scope, None);
     let other_storage = other.storage_rc();
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
@@ -287,7 +287,7 @@ fn kfuture_with_existing_anchor_preserves_it() {
 fn kfuture_bundle_arg_with_local_kfunction_anchors() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
@@ -317,7 +317,7 @@ fn kfuture_bundle_arg_with_local_kfunction_anchors() {
 fn kfuture_with_local_function_anchors() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let future = KFuture {
@@ -345,7 +345,7 @@ fn kfuture_with_local_function_anchors() {
 fn kfuture_bundle_arg_with_list_of_kfunction_anchors() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
@@ -376,7 +376,7 @@ fn kfuture_bundle_arg_with_local_kmodule_anchors() {
     use crate::machine::model::values::Module;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let module = Module::new("BundleMod".into(), dying.scope());
@@ -412,7 +412,7 @@ fn kfuture_bundle_arg_with_local_kmodule_anchors() {
 fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
@@ -445,7 +445,7 @@ fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
 fn kfuture_parsed_dictliteral_with_arena_borrow_anchors() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");

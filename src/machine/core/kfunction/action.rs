@@ -8,7 +8,7 @@
 use std::rc::Rc;
 
 use super::body::ReturnContract;
-use crate::machine::core::{CallArena, LexicalFrame, Scope, ScopeId};
+use crate::machine::core::{CallFrame, LexicalFrame, Scope, ScopeId};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::Held;
@@ -154,7 +154,7 @@ pub type ActionFn = for<'a> fn(&BodyCtx<'a, '_>) -> Action<'a>;
 /// cells.
 pub struct BodyCtx<'a, 'c> {
     pub scope: &'c Scope<'a>,
-    pub frame: Option<&'c Rc<CallArena>>,
+    pub frame: Option<&'c Rc<CallFrame>>,
     /// The ambient lexical chain (an `Rc`, as `current_lexical_chain` hands it out — binders read
     /// its `index` for `BindingIndex`, MATCH passes it to `resolve_type_identifier`). `None` at top level.
     pub chain: Option<Rc<LexicalFrame>>,
@@ -246,11 +246,11 @@ pub enum FramePlacement<'a> {
     /// Reuse the slot's ping-pong reserve cart (`acquire_tail_frame(outer)`). The TCO tail-call
     /// frame — FN-body invoke, deferred `PerCall` tails. The only harness-constructed cart.
     ReuseReserve { outer: &'a Scope<'a> },
-    /// A **pre-built** fresh cart the builtin minted (`CallArena::new`, never the reserve), handed
+    /// A **pre-built** fresh cart the builtin minted (`CallFrame::new`, never the reserve), handed
     /// to the harness to install. The builtin owns construction because it may seed the cart before
     /// the tail dispatches — MATCH/TRY bind `it` into it via `with_frame_interior`; EVAL builds it
     /// for the UAF guard.
-    FreshChild { frame: Rc<CallArena> },
+    FreshChild { frame: Rc<CallFrame> },
     /// No new frame; continue in the slot's current cart. Frameless tails / `Done`.
     Inherit,
 }

@@ -4,7 +4,7 @@ use std::rc::Rc;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::{ArgValue, Held};
 use crate::machine::model::{Carried, KObject, KType};
-use crate::machine::{CallArena, KFuture, RuntimeArena};
+use crate::machine::{CallFrame, KFuture, RuntimeArena};
 
 use super::runtime::KoanRuntime;
 
@@ -25,7 +25,7 @@ pub(in crate::machine::execute) trait NodeLift {
     fn lift<'o>(
         &self,
         value: Carried<'o>,
-        src: &Rc<CallArena>,
+        src: &Rc<CallFrame>,
         dst: &'o RuntimeArena,
     ) -> Carried<'o>;
 }
@@ -34,7 +34,7 @@ impl NodeLift for KoanRuntime<'_> {
     fn lift<'o>(
         &self,
         value: Carried<'o>,
-        src: &Rc<CallArena>,
+        src: &Rc<CallFrame>,
         dst: &'o RuntimeArena,
     ) -> Carried<'o> {
         match value {
@@ -45,16 +45,16 @@ impl NodeLift for KoanRuntime<'_> {
 }
 
 /// Lift a KObject out of `dying_frame`'s arena into the destination arena, attaching
-/// an `Rc<CallArena>` to anchor any descendant that borrows into the dying arena.
+/// an `Rc<CallFrame>` to anchor any descendant that borrows into the dying arena.
 /// See [per-call-arena-protocol.md § Lift-time anchor decision](../../../design/per-call-arena-protocol.md#lift-time-anchor-decision).
 /// Test seam for the type-channel lift: a first-class type (e.g. a per-call `Module`
 /// carrier) lifts via [`lift_ktype`], re-anchoring its frame onto the dying arena.
 #[cfg(test)]
-pub fn lift_ktype_for_test<'run>(t: &KType<'run>, dying_frame: &Rc<CallArena>) -> KType<'run> {
+pub fn lift_ktype_for_test<'run>(t: &KType<'run>, dying_frame: &Rc<CallFrame>) -> KType<'run> {
     lift_ktype(t, dying_frame)
 }
 
-pub(super) fn lift_kobject<'run>(v: &KObject<'run>, dying_frame: &Rc<CallArena>) -> KObject<'run> {
+pub(super) fn lift_kobject<'run>(v: &KObject<'run>, dying_frame: &Rc<CallFrame>) -> KObject<'run> {
     if dying_frame.arena().functions_is_empty() {
         return v.deep_clone();
     }
@@ -139,7 +139,7 @@ pub(super) fn lift_kobject<'run>(v: &KObject<'run>, dying_frame: &Rc<CallArena>)
 /// dual of [`lift_kobject`]. A `KType::Module { frame }` re-anchors on the dying frame if its
 /// child scope was alloc'd there (mirroring the module arm of `lift_kobject`); every other
 /// `KType` is `Rc`-owned (recursive sets) or owned data, so it travels by `clone`.
-pub(super) fn lift_ktype<'run>(t: &KType<'run>, dying_frame: &Rc<CallArena>) -> KType<'run> {
+pub(super) fn lift_ktype<'run>(t: &KType<'run>, dying_frame: &Rc<CallFrame>) -> KType<'run> {
     match t {
         KType::Module {
             module: m,
@@ -221,7 +221,7 @@ where
 /// by `Rc::clone`, like the retired `Struct`'s `Rc<IndexMap>` fields), and a bare
 /// `KExpression` isn't reachable as a value inside a List/Dict/Tagged at lift time in current
 /// Koan, so neither needs an arena anchor of its own.
-fn needs_lift<'run>(v: &KObject<'run>, dying_frame: &Rc<CallArena>) -> bool {
+fn needs_lift<'run>(v: &KObject<'run>, dying_frame: &Rc<CallFrame>) -> bool {
     let dying_runtime: *const RuntimeArena = dying_frame.arena();
     any_descendant(v, &|obj: &KObject<'run>| match obj {
         KObject::KFunction(_, Some(_)) => Some(false),
@@ -239,7 +239,7 @@ fn needs_lift<'run>(v: &KObject<'run>, dying_frame: &Rc<CallArena>) -> bool {
 
 /// Lift an aggregate cell: the `Object` arm rides [`lift_kobject`], the `Type` arm rides
 /// [`lift_ktype`] (re-anchoring a per-call `Module`'s frame).
-fn lift_held<'run>(cell: &Held<'run>, dying_frame: &Rc<CallArena>) -> Held<'run> {
+fn lift_held<'run>(cell: &Held<'run>, dying_frame: &Rc<CallFrame>) -> Held<'run> {
     match cell {
         Held::Object(o) => Held::Object(lift_kobject(o, dying_frame)),
         Held::Type(t) => Held::Type(lift_ktype(t, dying_frame)),
@@ -248,7 +248,7 @@ fn lift_held<'run>(cell: &Held<'run>, dying_frame: &Rc<CallArena>) -> Held<'run>
 
 /// True iff lifting `cell` would attach an anchor: an `Object` arm via [`needs_lift`], or a
 /// `Type` arm holding an unanchored `Module` whose child scope rides the dying arena.
-fn held_needs_lift<'run>(cell: &Held<'run>, dying_frame: &Rc<CallArena>) -> bool {
+fn held_needs_lift<'run>(cell: &Held<'run>, dying_frame: &Rc<CallFrame>) -> bool {
     match cell {
         Held::Object(o) => needs_lift(o, dying_frame),
         Held::Type(KType::Module {

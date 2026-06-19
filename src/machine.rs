@@ -12,7 +12,7 @@ pub mod model;
 
 pub use core::kfunction::{Body, KFunction, NodeId};
 pub use core::{
-    BindingIndex, Bindings, CallArena, FunctionLookup, KError, KErrorKind, KFuture, LexicalFrame,
+    BindingIndex, Bindings, CallFrame, FunctionLookup, KError, KErrorKind, KFuture, LexicalFrame,
     Resolution, RuntimeArena, Scope, ScopeId, ScopeKind, TraceFrame,
 };
 pub use execute::{

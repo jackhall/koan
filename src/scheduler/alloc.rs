@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use super::dep_graph::work_owned_edges;
-use super::nodes::{work_park_producers, CallFrame, Node, NodeWork};
+use super::nodes::{work_park_producers, NodeFrame, Node, NodeWork};
 use super::{NodeId, Scheduler, Workload};
 
 impl<W: Workload> Scheduler<W> {
@@ -35,7 +35,7 @@ impl<W: Workload> Scheduler<W> {
         let id = self.store.alloc_slot(Node {
             work,
             payload,
-            frame: CallFrame {
+            frame: NodeFrame {
                 cart,
                 reserve: None,
                 contract: None,

@@ -154,7 +154,7 @@ pub(in crate::machine::execute) type NodeContinuation<'a> = Box<
 /// [`vend_carrier`](crate::scheduler::vend_carrier) before the single-shot run. The continuation
 /// captures run-lived data (the parked AST, a finish closure's captured scope) living in the run
 /// arena or a strict ancestor of the slot's per-call cart, which the node's
-/// [`CallFrame`](super::nodes::CallFrame) cart `Rc` keeps live across the step — the liveness witness
+/// [`NodeFrame`](super::nodes::NodeFrame) cart `Rc` keeps live across the step — the liveness witness
 /// the scheduler's reattach is bounded by. Unlike the `Copy` value / contract carriers the
 /// continuation is a `Box<dyn FnOnce>` consumed once, so the family is not `Copy` and the vend takes
 /// the erased carrier by value. Layout-invariant: `NodeContinuation<'r>` is a `Box<dyn …>` fat pointer whose
@@ -245,7 +245,7 @@ mod erased_continuation_tests {
 
     use super::*;
     use crate::builtins::default_scope;
-    use crate::machine::core::{CallArena, RuntimeArena};
+    use crate::machine::core::{CallFrame, RuntimeArena};
     use crate::scheduler::{vend_carrier, Erased, Scheduler};
     use std::rc::Rc;
 
@@ -262,7 +262,7 @@ mod erased_continuation_tests {
         // The captured value lives in the run arena — the ancestor the cart's `outer` chain pins.
         let captured: &KObject = arena.alloc_object(KObject::Number(7.0));
         // The cart `Rc` held live to the end of the test witnesses the reattach below.
-        let cart = Rc::new(CallArena::new(scope, None));
+        let cart = Rc::new(CallFrame::new(scope, None));
 
         let continuation: NodeContinuation = Box::new(move |_view, _results, _idx| {
             // Read the run-lived capture through the reattached box.

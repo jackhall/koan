@@ -1,5 +1,5 @@
 //! `ScopePtr` — the single audited owner of the `Scope` lifetime-erasure that
-//! arena-stored carriers rely on. `CallArena`, `Module`, `ModuleSignature`, and `KFunction`
+//! arena-stored carriers rely on. `CallFrame`, `Module`, `ModuleSignature`, and `KFunction`
 //! each hold a captured/defining scope whose real lifetime the borrow checker can't
 //! track across the arena's `'static` storage; they store a `ScopePtr<'a>` and re-attach
 //! the scope on access, so the transmute and the cast that erases it live in one place
@@ -13,7 +13,7 @@
 //! through `reattach` and carry no `unsafe`.
 //!
 //! Two lifetime-free carriers store a `ScopePtr<'static>` and must fabricate the content lifetime
-//! back, because neither can brand it: `CallArena` (non-generic — it backs `Rc<CallArena>` and
+//! back, because neither can brand it: `CallFrame` (non-generic — it backs `Rc<CallFrame>` and
 //! carries no lifetime) shortens to an `&self`-bounded lifetime through the `unsafe`
 //! [`ScopePtr::reattach_unbounded`]; a scheduler node's `NodeScope::YokedChild` — a cart-ancestor
 //! block scope evicted off the lifetime-free node — re-attaches a free content lifetime behind
@@ -44,7 +44,7 @@ unsafe impl Reattachable for ScopeFamily {
 }
 
 /// A branded `Scope` pointer: its lifetime is erased to `'static` for storage in a
-/// lifetime-free (`CallArena`) or self-referential (`Module` / `ModuleSignature` / `KFunction`)
+/// lifetime-free (`CallFrame`) or self-referential (`Module` / `ModuleSignature` / `KFunction`)
 /// carrier, while `_brand` records the `'a` the live borrow proved.
 ///
 /// The `PhantomData<&'a Scope<'a>>` brand does two jobs. It bounds every use of the
@@ -78,7 +78,7 @@ impl<'a> ScopePtr<'a> {
     /// the brand to `'static`, so the caller commits to recovering the content lifetime through an
     /// `unsafe` re-attach ([`Self::reattach_unbounded`] / [`Self::reattach_bounded`]). Safe to
     /// *construct*: it only casts a live reference to a `'static` pointer (same cast as
-    /// [`Self::erase`]); forgetting the lifetime cannot fabricate one. Used by `CallArena` and by a
+    /// [`Self::erase`]); forgetting the lifetime cannot fabricate one. Used by `CallFrame` and by a
     /// scheduler node's `NodeScope::YokedChild`.
     pub fn erase_static(scope: &Scope<'_>) -> ScopePtr<'static> {
         // Non-null by construction; `cast` retags to `'static` (same store-side erasure as
@@ -105,7 +105,7 @@ impl<'a> ScopePtr<'a> {
     /// Re-attach a caller-chosen `'b`, ignoring the brand. The single
     /// `transmute::<&Scope<'static>, &'b Scope<'b>>` in the model.
     ///
-    /// SAFETY: the caller guarantees the pointee outlives `'b`. Used only by `CallArena`,
+    /// SAFETY: the caller guarantees the pointee outlives `'b`. Used only by `CallFrame`,
     /// which stores a `ScopePtr<'static>` and must shorten it to an `&self`-bounded `'b` that
     /// the invariant brand cannot supply by safe coercion. The carriers that own a real `'a`
     /// route the safe [`Self::reattach`] instead.
@@ -122,7 +122,7 @@ impl<'a> ScopePtr<'a> {
     /// frame-`Rc`-pinned content claim (the same erasure [`Self::reattach_unbounded`] already
     /// carries), reachable only behind the `'step` borrow.
     ///
-    /// SAFETY: `self.ptr` points at a live `Scope` the caller's `Rc<CallArena>` witness pins
+    /// SAFETY: `self.ptr` points at a live `Scope` the caller's `Rc<CallFrame>` witness pins
     /// for all of `'step`; the returned borrow is bounded to `'step`, so it cannot escape that pin.
     /// `'step` is driven by the receiver, `'b` by the return-type annotation.
     pub unsafe fn reattach_bounded<'step, 'b: 'step>(&'step self) -> &'step Scope<'b> {
@@ -136,7 +136,7 @@ impl<'a> ScopePtr<'a> {
 /// at the reader (`get`). Distinct from [`ScopePtr`] precisely because it omits the unbounded
 /// `reattach`: with no way to cash the free content `'a` except behind a reader-bounded borrow,
 /// the constructor needs **no** borrow==content coupling. [`ScopePtr::erase`]'s coupling exists
-/// only to keep its unbounded `reattach()` sound — which `CallArena` still needs — so the two
+/// only to keep its unbounded `reattach()` sound — which `CallFrame` still needs — so the two
 /// handle types stay separate rather than relaxing one and reintroducing the fabrication hazard.
 ///
 /// Invariant in `'a` for the same reason as [`ScopePtr`] (the `Scope<'a>` brand); do not weaken.

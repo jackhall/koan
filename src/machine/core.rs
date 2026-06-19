@@ -12,12 +12,12 @@ mod reattach;
 mod scope;
 mod scope_id;
 mod scope_ptr;
-mod storage_frame;
+mod region;
 
 #[cfg(test)]
 mod tests;
 
-pub use arena::{CallArena, FrameStorage, RuntimeArena};
+pub use arena::{CallFrame, FrameStorage, RuntimeArena};
 pub use bindings::{
     ApplyOutcome, BindingIndex, Bindings, FunctionLookup, PendingBinderGuard, PendingTypeEntry,
     Resolution,

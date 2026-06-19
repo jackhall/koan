@@ -26,7 +26,7 @@ use crate::machine::core::kfunction::body::{
     split_body_statements, ContractFamily, ErasedContract,
 };
 use crate::machine::model::ast::KExpression;
-use crate::machine::{CallArena, KError, NodeId, Scope};
+use crate::machine::{CallFrame, KError, NodeId, Scope};
 
 use super::dispatch::{reattach_node_scope, DepRequest};
 use super::lift::NodeLift;
@@ -52,7 +52,7 @@ impl Workload for KoanWorkload {
     type Payload = NodePayload;
     type Value = CarriedFamily;
     type Error = KError;
-    type Cart = CallArena;
+    type Cart = CallFrame;
     type Contract = ContractFamily;
     type Continuation = ContinuationFamily;
 }
@@ -343,7 +343,7 @@ impl<'run> KoanRuntime<'run> {
     fn resolve_frame_placement<'x>(
         &mut self,
         placement: FramePlacement<'x>,
-    ) -> Option<Rc<CallArena>> {
+    ) -> Option<Rc<CallFrame>> {
         match placement {
             FramePlacement::ReuseReserve { outer } => Some(self.acquire_tail_frame(outer)),
             FramePlacement::FreshChild { frame } => Some(frame),
@@ -354,16 +354,16 @@ impl<'run> KoanRuntime<'run> {
     /// Reuse the slot's reserve cart (reset in place) when uniquely owned, else mint fresh under
     /// `outer` — the scope-dependent per-call frame construction the scheduler delegates to the
     /// workload. The scheduler owns the reserve *slot* (rotation, lifecycle); this owns the
-    /// `CallArena` minting/reset, which names the run-lived `Scope`. `try_reset_for_tail`'s
+    /// `CallFrame` minting/reset, which names the run-lived `Scope`. `try_reset_for_tail`'s
     /// `Rc::get_mut` gate is the "no escape" uniqueness check (a cloned `Rc` forecloses reuse).
-    fn acquire_tail_frame(&mut self, outer: &Scope<'_>) -> Rc<CallArena> {
+    fn acquire_tail_frame(&mut self, outer: &Scope<'_>) -> Rc<CallFrame> {
         if let Some(mut reserve) = self.take_active_reserve() {
             if reserve.try_reset_for_tail(outer) {
                 self.note_tail_reuse();
                 return reserve;
             }
         }
-        CallArena::new(outer, None)
+        CallFrame::new(outer, None)
     }
 
     /// Interpret an [`Outcome`] into the scheduler effect it names and return the slot's

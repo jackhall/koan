@@ -4,12 +4,12 @@ use super::runtime::KoanWorkload;
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::{assemble_body_chain, ScopeId, ScopePtr};
 use crate::machine::model::Carried;
-use crate::machine::{CallArena, KError, LexicalFrame, NodeId};
+use crate::machine::{CallFrame, KError, LexicalFrame, NodeId};
 
 /// The generic per-node state lives in [`crate::scheduler::nodes`]; re-exported here so the Koan
 /// execute tree has a single `nodes` surface combining them with the Koan-side [`NodeStep`] /
 /// [`NodePayload`] / [`NodeScope`].
-pub(super) use crate::scheduler::nodes::{CallFrame, Node, NodeWork};
+pub(super) use crate::scheduler::nodes::{NodeFrame, Node, NodeWork};
 
 /// Outcome of a node's run. `Replace` is the tail-call path: rewrite the slot's work and
 /// re-enqueue the same index so it runs again with no fresh slot allocated, giving constant
@@ -35,7 +35,7 @@ pub(super) enum NodeStep<'step> {
     Done(Result<Carried<'step>, KError>),
     Replace {
         work: NodeWork<KoanWorkload>,
-        frame: Option<Rc<CallArena>>,
+        frame: Option<Rc<CallFrame>>,
         contract: Option<ErasedContract>,
         chain: ChainOp,
     },
@@ -95,7 +95,7 @@ impl ChainOp {
     pub(super) fn apply(
         self,
         prev_chain: Rc<LexicalFrame>,
-        body_frame: &CallArena,
+        body_frame: &CallFrame,
     ) -> Rc<LexicalFrame> {
         match self {
             ChainOp::Unchanged => prev_chain,

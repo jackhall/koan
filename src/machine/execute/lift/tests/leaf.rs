@@ -3,7 +3,7 @@
 use super::*;
 use crate::builtins::default_scope;
 use crate::machine::model::KObject;
-use crate::machine::CallArena;
+use crate::machine::CallFrame;
 
 use super::{alloc_local_kf, defeat_fast_path};
 
@@ -14,8 +14,8 @@ use super::{alloc_local_kf, defeat_fast_path};
 fn kfunction_with_existing_anchor_preserves_it() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
-    let other = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
+    let other = CallFrame::new(scope, None);
     // The anchor pins the frame's `FrameStorage`, not the shell, so the counts track storage.
     let other_storage = other.storage_rc();
     let dying_storage = dying.storage_rc();
@@ -56,7 +56,7 @@ fn kfunction_with_existing_anchor_preserves_it() {
 fn kfunction_with_foreign_runtime_does_not_anchor() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
@@ -96,7 +96,7 @@ fn kmodule_with_local_child_scope_anchors() {
     use crate::machine::model::values::Module;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let module = Module::new("LocalMod".into(), dying.scope());
@@ -126,7 +126,7 @@ fn kmodule_with_foreign_child_scope_does_not_anchor() {
     use crate::machine::model::values::Module;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let module = Module::new("ForeignMod".into(), scope);
@@ -152,9 +152,9 @@ fn kmodule_with_existing_anchor_preserves_it() {
     use crate::machine::model::values::Module;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
-    let other = CallArena::new(scope, None);
+    let other = CallFrame::new(scope, None);
     let other_storage = other.storage_rc();
 
     let module = Module::new("Pre".into(), dying.scope());
@@ -183,7 +183,7 @@ fn kmodule_with_existing_anchor_preserves_it() {
 fn primitive_lifts_via_deep_clone_on_slow_path() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let dying = CallArena::new(scope, None);
+    let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let obj = KObject::Number(2.5);

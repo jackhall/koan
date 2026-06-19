@@ -1,12 +1,12 @@
 //! Generic run-lifetime storage substrate. Owns the cycle-redirect `escape` pointer and an address
 //! membership side-table, and routes its store-side lifetime-erasure through the scheduler's single
 //! audited [`erase_to_static`](crate::scheduler) primitive — it names no workload type. A
-//! [`StorageProfile`] injects its storage families via [`Stored`]; the single [`StorageFrame::alloc`]
-//! engine runs the cycle gate uniformly. The gate is unbypassable because [`StorageFrame::storage`]
+//! [`StorageProfile`] injects its storage families via [`Stored`]; the single [`Region::alloc`]
+//! engine runs the cycle gate uniformly. The gate is unbypassable because [`Region::storage`]
 //! is private and `alloc` is the only path that reaches it — no `&Arena` ever escapes, so no `Stored`
 //! impl can route a value around the redirect.
 //!
-//! The Koan instantiation (`RuntimeArena = StorageFrame<KoanStorageProfile>`, the family `Stored` impls,
+//! The Koan instantiation (`RuntimeArena = Region<KoanStorageProfile>`, the family `Stored` impls,
 //! the cycle-gate walkers) lives in [`super::arena`]. See
 //! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
 //! for the lifetime-erasure soundness argument and
@@ -21,7 +21,7 @@ use typed_arena::Arena;
 use super::reattach::pin_deref;
 use crate::scheduler::{erase_to_static, Reattachable};
 
-/// A workload's declaration of what a [`StorageFrame`] stores for it. `Storage` is the bundle of
+/// A workload's declaration of what a [`Region`] stores for it. `Storage` is the bundle of
 /// typed sub-arenas the frame owns; the workload's [`Stored`] impls project each family out of it.
 pub trait StorageProfile {
     type Storage: Default;
@@ -33,10 +33,10 @@ pub trait StorageProfile {
 /// the scheduler share one audited primitive instead of each carrying its own transmute. A live value
 /// enters the engine as `At<'a>`. One trait carries every storage-safety answer for a family — which
 /// sub-arena it lands in, whether it would self-cycle, and any post-store side effect — so
-/// [`StorageFrame::alloc`] reasons about the gate-erase-store sequence once instead of forking it per type.
+/// [`Region::alloc`] reasons about the gate-erase-store sequence once instead of forking it per type.
 ///
 /// Not sealed: this is the workload's extension point. Unbypassability comes from elsewhere — the
-/// engine is the only path to the private [`StorageFrame::storage`], so an impl can supply policy
+/// engine is the only path to the private [`Region::storage`], so an impl can supply policy
 /// but cannot route a value around the cycle gate.
 pub trait Stored<W: StorageProfile>: Reattachable + Sized + 'static {
     /// Project this family's sub-arena out of the workload storage bundle. This return type is the
@@ -46,17 +46,17 @@ pub trait Stored<W: StorageProfile>: Reattachable + Sized + 'static {
     /// True iff any descendant of `value` carries an anchor back to the frame at `self_ptr` — i.e.
     /// storing it there would form a self-referential cycle. Families that hold no anchor return
     /// `false` as a deliberate declaration.
-    fn anchors_to(value: &Self::At<'_>, self_ptr: *const StorageFrame<W>) -> bool;
+    fn anchors_to(value: &Self::At<'_>, self_ptr: *const Region<W>) -> bool;
     /// Post-store hook, run inside the engine on the *final* storing frame (after any escape
     /// redirect). Default no-op; a family overrides it to record the stored address for
-    /// [`StorageFrame::owns_addr`] membership queries.
-    fn record_local(_frame: &StorageFrame<W>, _stored: &Self::At<'static>) {}
+    /// [`Region::owns_addr`] membership queries.
+    fn record_local(_frame: &Region<W>, _stored: &Self::At<'static>) {}
 }
 
 /// Run-lifetime allocation frame. Lives for one program run (or one per-call frame). Sub-arenas
 /// store `K::At<'static>` (phantom); each [`alloc`](Self::alloc) re-anchors to the caller's `'a`
 /// on the way out.
-pub struct StorageFrame<W: StorageProfile> {
+pub struct Region<W: StorageProfile> {
     /// The workload's typed sub-arena bundle. PRIVATE and never exposed by reference: the only
     /// path in is [`alloc`](Self::alloc), which runs the cycle gate, so the gate is unbypassable
     /// by construction.
@@ -69,10 +69,10 @@ pub struct StorageFrame<W: StorageProfile> {
     /// lifetime: the per-call frame heap-pins the outer via `Rc` and the outer outlives this inner
     /// per the lexical-scoping invariant. `NonNull` because a `Some` escape is always a live frame
     /// address, never null.
-    escape: Option<NonNull<StorageFrame<W>>>,
+    escape: Option<NonNull<Region<W>>>,
 }
 
-impl<W: StorageProfile> StorageFrame<W> {
+impl<W: StorageProfile> Region<W> {
     pub fn new() -> Self {
         Self {
             storage: W::Storage::default(),
@@ -82,7 +82,7 @@ impl<W: StorageProfile> StorageFrame<W> {
     }
 
     /// `alloc` will redirect self-cyclic values to `escape`; see the cycle gate in [`alloc`](Self::alloc).
-    pub fn with_escape(escape: NonNull<StorageFrame<W>>) -> Self {
+    pub fn with_escape(escape: NonNull<Region<W>>) -> Self {
         Self {
             storage: W::Storage::default(),
             membership: RefCell::new(Vec::new()),
@@ -119,8 +119,8 @@ impl<W: StorageProfile> StorageFrame<W> {
     /// escape pointer.
     pub(crate) fn alloc<'a, K: Stored<W>>(&'a self, value: K::At<'a>) -> &'a K::At<'a> {
         if let Some(escape_ptr) = self.escape {
-            if K::anchors_to(&value, self as *const StorageFrame<W>) {
-                let escape_ref: &'a StorageFrame<W> = unsafe { pin_deref(escape_ptr.as_ptr()) };
+            if K::anchors_to(&value, self as *const Region<W>) {
+                let escape_ref: &'a Region<W> = unsafe { pin_deref(escape_ptr.as_ptr()) };
                 return escape_ref.alloc::<K>(value);
             }
         }
@@ -143,7 +143,7 @@ impl<W: StorageProfile> StorageFrame<W> {
     }
 }
 
-impl<W: StorageProfile> Default for StorageFrame<W> {
+impl<W: StorageProfile> Default for Region<W> {
     fn default() -> Self {
         Self::new()
     }

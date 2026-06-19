@@ -10,7 +10,7 @@
 //! `Scope` pointer with an invariance brand.
 
 /// Materialize a `&'x T` from a raw `*const T` whose pointee a heap pin keeps fixed in place for
-/// `'x` — the audited home for the self-referential `Rc<CallArena>` arena-pointer derefs (the
+/// `'x` — the audited home for the self-referential `Rc<CallFrame>` arena-pointer derefs (the
 /// per-call arena and its escape frame) and the functor-result arena pin. Distinct from the
 /// `Reattachable` retypes in the scheduler: those move a *value* between lifetimes; this re-borrows
 /// a pointer whose pointee an owning `Rc` (or the frame holding it) cannot relocate or drop while

@@ -10,9 +10,9 @@
 //! Lifetime erasure on the scope pointer routes through
 //! [`ScopePtr`](crate::machine::core::scope_ptr::ScopePtr), shared with
 //! [`KFunction`](crate::machine::core::kfunction::KFunction) and
-//! [`CallArena`](crate::machine::core::arena::CallArena). The branded `ScopePtr<'a>` makes
+//! [`CallFrame`](crate::machine::core::arena::CallFrame). The branded `ScopePtr<'a>` makes
 //! `child_scope` / `decl_scope` safe re-attaches; the irreducible `unsafe` re-attach lives at
-//! `CallArena`.
+//! `CallFrame`.
 
 use std::cell::RefCell;
 use std::collections::HashMap;

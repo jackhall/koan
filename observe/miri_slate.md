@@ -5,8 +5,8 @@ src/builtins/test_support.rs: 1
 src/machine/core/arena.rs: 16
 src/machine/core/kfunction/body.rs: 1
 src/machine/core/reattach.rs: 2
+src/machine/core/region.rs: 3
 src/machine/core/scope_ptr.rs: 5
-src/machine/core/storage_frame.rs: 3
 src/machine/execute/dispatch/ctx.rs: 1
 src/machine/execute/nodes.rs: 1
 src/machine/execute/outcome.rs: 3
@@ -53,15 +53,15 @@ unsafe and fingerprint-drift checks still fire.
 23 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
-**`CallArena` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
+**`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
 child-scope `Option<ScopePtr<'static>>` (shortened to an `&self`-bounded lifetime via the
-`unsafe` `ScopePtr::reattach_unbounded`) plus the `Rc<CallArena>` chain that keeps per-call
+`unsafe` `ScopePtr::reattach_unbounded`) plus the `Rc<CallFrame>` chain that keeps per-call
 arenas pinned across re-borrow. One test pins the re-attach surviving a sibling alloc; the
-other pins the `Rc<CallArena>` chain keeping an outer arena alive after its local handle
+other pins the `Rc<CallFrame>` chain keeping an outer arena alive after its local handle
 drops. A third pins the witness-bounded sibling `ScopePtr::reattach_bounded` (via
-`CallArena::scope_bounded`), which splits the stored `'static` into a `&self`-bounded borrow
+`CallFrame::scope_bounded`), which splits the stored `'static` into a `&self`-bounded borrow
 and a free content lifetime — re-read alongside the unbounded `scope` / `scope_for_bind`
-accessors over the same child scope. `CallArena::adopting` (the scheduler-owned run frame)
+accessors over the same child scope. `CallFrame::adopting` (the scheduler-owned run frame)
 carries the same `&Scope<'_> → &Scope<'static>` erasure as `new`, over the run scope it adopts
 rather than a freshly-minted child; it is built on the first run-lifetime submission, so every
 scheduler-driving slate test below (`recursive_tagged_match_no_uaf`,
@@ -72,27 +72,27 @@ end-to-end — the run scope outlives the frame, so no separate minimal test.
 - `call_arena_chained_outer_frame_walkable`
 - `scope_bounded_reanchors_within_witness_borrow`
 
-**`StorageFrame` alloc engine under live borrows** ([src/machine/core/storage_frame.rs](../src/machine/core/storage_frame.rs)) — the
+**`Region` alloc engine under live borrows** ([src/machine/core/region.rs](../src/machine/core/region.rs)) — the
 generic `alloc` engine erases the value to `'static` (the move-through-union `erase_store`),
 stores it, records its address into the `membership` `RefCell` via `borrow_mut`, and re-anchors
 the `'static` store to `'a` — all while a prior `&` from the same frame is shared-borrowed. Pins
-that tree-borrows shape over the engine `RuntimeArena` (= `StorageFrame<KoanStorageProfile>`) routes.
+that tree-borrows shape over the engine `RuntimeArena` (= `Region<KoanStorageProfile>`) routes.
 
 - `runtime_arena_alloc_while_prior_ref_live`
 
-**Cycle gate** ([src/machine/core/storage_frame.rs](../src/machine/core/storage_frame.rs)) — the generic `alloc`
+**Cycle gate** ([src/machine/core/region.rs](../src/machine/core/region.rs)) — the generic `alloc`
 engine redirects a value whose family `anchors_to` answers true for `self` (a self-anchored
-`Rc<CallArena>`) to the escape frame via the audited `pin_deref` on the escape pointer, breaking the
+`Rc<CallFrame>`) to the escape frame via the audited `pin_deref` on the escape pointer, breaking the
 storage cycle that closure-escape returns can otherwise produce. The Koan `anchors_to` walkers that drive the
 decision live in [src/machine/core/arena.rs](../src/machine/core/arena.rs).
 
 - `alloc_object_redirects_self_anchored_value_to_escape_arena`
 
-**`CallArena::try_reset_for_tail`** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — TCO
+**`CallFrame::try_reset_for_tail`** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — TCO
 frame reuse installs a fresh refcounted `FrameStorage` (a new `RuntimeArena`) and
 re-allocates the child `Scope`, with two transmutes: `&Scope<'_> →
 &Scope<'static>` for the new outer link and a raw-ptr re-anchor for the new
-inner arena. The `Rc::get_mut` gate refuses only when another `Rc<CallArena>`
+inner arena. The `Rc::get_mut` gate refuses only when another `Rc<CallFrame>`
 *shell* holder still exists; an escaped value pins the `FrameStorage`, not the
 shell, so it does not foreclose reuse — the swap drops the shell's reference to the
 old storage while the escapee's clone keeps that snapshot alive and aliased.
@@ -129,7 +129,7 @@ because tree borrows catches a regression in the aliasing or rooting discipline.
 - `using_temporary_functor_result_is_sound`
 
 **MATCH on `Tagged` recursion** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — MATCH
-builds its per-call frame and seeds its `it` bind through `CallArena::with_frame_interior`
+builds its per-call frame and seeds its `it` bind through `CallFrame::with_frame_interior`
 (arena re-exposed free, child scope re-handed via the bounded `scope_bounded` brand); the
 `FrameStorage` ancestor chain keeps the call-site arena alive across
 TCO replace when a user-fn recurses through a `Tagged` parameter via MATCH.
@@ -137,7 +137,7 @@ TCO replace when a user-fn recurses through a `Tagged` parameter via MATCH.
 - `recursive_tagged_match_no_uaf`
 
 **TRY-WITH inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — same
-`CallArena::with_frame_interior` seed bind as MATCH for the per-branch frame; the
+`CallFrame::with_frame_interior` seed bind as MATCH for the per-branch frame; the
 `FrameStorage.outer` chain keeps the call-site arena alive when the branch body
 tail-calls back through the enclosing user-fn.
 
@@ -146,16 +146,16 @@ tail-calls back through the enclosing user-fn.
 **KFuture anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — a KFuture with a
 `Future(&KObject)` allocated in the dying arena anchors with `frame: Some(rc)`.
 Test source lives in [src/machine/execute/lift.rs](../src/machine/execute/lift.rs);
-the unsafe site it pins is the `Rc<CallArena>` heap-pinning that backs the
+the unsafe site it pins is the `Rc<CallFrame>` heap-pinning that backs the
 anchored case (the `frame: None` non-anchor branch is a logic case with no
 unsafe site, covered under plain `cargo test`).
 
 - `unanchored_kfuture_with_arena_borrow_does_anchor`
 
 **`KFunction::invoke` per-call frame re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
-seed bind routed through `CallArena::with_frame_interior`: the per-call arena re-exposed at a
+seed bind routed through `CallFrame::with_frame_interior`: the per-call arena re-exposed at a
 free `'a` (an `'a`-typed value must land in an `'a`-typed arena) while the child scope rides the
-witness-bounded `scope_bounded` brand. Witnessed by the `Rc<CallArena>` moved into
+witness-bounded `scope_bounded` brand. Witnessed by the `Rc<CallFrame>` moved into
 `BodyResult::Tail`. Exercised by every user-fn invocation: repeated-call reclamation, type-op
 dispatch through a functor-call's per-call scope, and `MODULE_TYPE_OF` lift-out.
 
@@ -165,9 +165,9 @@ dispatch through a functor-call's per-call scope, and `MODULE_TYPE_OF` lift-out.
 `transmute::<&Scope<'static>, &'b Scope<'b>>` (and the `erase` cast) that the unbounded carrier
 scope accessors route through. The two carriers that own a real `'a` — `Module::child_scope` and
 `Signature::decl_scope` — route the safe `reattach` (the brand makes the call sound);
-`CallArena::scope` / `scope_for_bind`, storing a `ScopePtr<'static>`, route the `unsafe`
+`CallFrame::scope` / `scope_for_bind`, storing a `ScopePtr<'static>`, route the `unsafe`
 `reattach_unbounded` to shorten the brand to an `&self`-bounded lifetime. Both paths share the
-one transmute. This test pins it directly through the `Module` carrier; the `CallArena` group
+one transmute. This test pins it directly through the `Module` carrier; the `CallFrame` group
 exercises the same transmute through its own accessors. `Signature::decl_scope` calls the
 identical `reattach` (its line-for-line equivalent runs under plain `cargo test`).
 `KFunction::captured_scope` now routes the bounded-twin `BoundedScopePtr::get` (the
@@ -191,7 +191,7 @@ stored as a `ScopePtr<'static>` through the brand-dropping `ScopePtr::erase_stat
 cast as `erase`, in [src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs)) and re-attached
 at the read boundary through the `unsafe` `ScopePtr::reattach_bounded` — a borrow bounded by the
 reader (the slot's frame `Rc`), a free content lifetime, sound because the cart's `outer_frame` chain
-pins the ancestor arena. This is the second `'static`-storing scope carrier (alongside `CallArena`).
+pins the ancestor arena. This is the second `'static`-storing scope carrier (alongside `CallFrame`).
 This test pins the erase → reattach round-trip directly, plus a sibling-pointer arena mutation while
 the re-attached scope is live.
 
@@ -228,7 +228,7 @@ after the helper calls to catch a tree-borrows regression.
 **`pin_deref` — raw heap-pin deref** ([src/machine/core/reattach.rs](../src/machine/core/reattach.rs))
 — the one audited raw heap-pin deref, materializing a `&'x T` from an `Rc`-pinned `*const T` (the
 self-referential arena-pointer derefs the `Erased` retype can't express). Carries no minimal test of
-its own: every `CallArena` construction routes it (`CallArena` lifetime erasure /
+its own: every `CallFrame` construction routes it (`CallFrame` lifetime erasure /
 `try_reset_for_tail` groups), and the storage engine's escape redirect routes it under
 `runtime_arena_alloc_while_prior_ref_live`.
 
@@ -296,7 +296,7 @@ program runs under plain `cargo test`. No separate minimal test.
 
 **`NodeStore::reinstall_with_frame` slot re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
 the Replace arm stores the slot's scope as a payload-less `NodeScope::Yoked` marker re-projected
-from the frame cart (no fabricated `&'a` persists), so the `Rc<CallArena>` witness in `Node.frame`
+from the frame cart (no fabricated `&'a` persists), so the `Rc<CallFrame>` witness in `Node.frame`
 remains the sole liveness root for the re-installed slot's scope.
 Exercised by the dispatch-time parking shapes that reinstall through this entry
 point (and transitively by user-fn TCO; that path is covered by the MATCH-on-

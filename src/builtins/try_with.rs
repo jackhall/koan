@@ -11,7 +11,7 @@
 //! slot would short-circuit through eager-subs dep-error propagation before `TRY`'s
 //! body ran. Wiring uses an `add_catch` slot: `<expr>` is sub-dispatched and a
 //! finish closure walks `<branches>` against the `Result`, dispatching the matched
-//! arm (per-call `CallArena` for `it`) or re-raising on no-match.
+//! arm (per-call `CallFrame` for `it`) or re-raising on no-match.
 
 use crate::machine::model::types::KKind;
 
