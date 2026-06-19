@@ -5,7 +5,7 @@
 
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
-use crate::machine::core::{BindingIndex, Resolution, RuntimeArena};
+use crate::machine::core::{BindingIndex, Resolution, KoanRegion};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
@@ -15,7 +15,7 @@ use super::{body_no_op, unit_signature};
 
 #[test]
 fn lookup_value_chain_cutoff_none_admits_every_index() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let value = arena.alloc_object(KObject::Number(7.0));
     scope
@@ -29,7 +29,7 @@ fn lookup_value_chain_cutoff_none_admits_every_index() {
 
 #[test]
 fn lookup_value_strict_less_than_hides_later_sibling() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let value = arena.alloc_object(KObject::Number(7.0));
     scope
@@ -40,7 +40,7 @@ fn lookup_value_strict_less_than_hides_later_sibling() {
 
 #[test]
 fn lookup_value_strict_less_than_admits_earlier_sibling() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let value = arena.alloc_object(KObject::Number(7.0));
     scope
@@ -54,7 +54,7 @@ fn lookup_value_strict_less_than_admits_earlier_sibling() {
 
 #[test]
 fn lookup_value_placeholder_filtered_same_as_value() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     scope
         .install_placeholder("placeholder".to_string(), NodeId(2), BindingIndex::value(5))
@@ -71,7 +71,7 @@ fn lookup_value_placeholder_filtered_same_as_value() {
 
 #[test]
 fn lookup_type_chain_cutoff_none_admits_every_index() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     scope.register_type("Tee".into(), KType::Number, BindingIndex::value(99));
     assert!(matches!(
@@ -82,7 +82,7 @@ fn lookup_type_chain_cutoff_none_admits_every_index() {
 
 #[test]
 fn lookup_type_strict_less_than_hides_later_sibling() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     scope.register_type("TyLate".into(), KType::Number, BindingIndex::value(5));
     assert!(scope.bindings().lookup_type("TyLate", Some(3)).is_none());
@@ -91,7 +91,7 @@ fn lookup_type_strict_less_than_hides_later_sibling() {
 
 #[test]
 fn lookup_function_chain_cutoff_none_returns_full_bucket() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let f = arena.alloc_function(KFunction::new(
         unit_signature(),
@@ -111,7 +111,7 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
 
 #[test]
 fn lookup_function_filters_per_overload_visibility() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     // Two overloads sharing the same bucket key but differing on a value-side
     // argument shape so they coexist in `functions[key]`.
@@ -165,7 +165,7 @@ fn lookup_function_filters_per_overload_visibility() {
 
 #[test]
 fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     // No bucket for this key, but a pending-overload entry stands in for an
     // in-flight FN/FUNCTOR producer.
@@ -185,7 +185,7 @@ fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
 
 #[test]
 fn lookup_function_surfaces_pending_overload_alongside_bucket() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let f = arena.alloc_function(KFunction::new(
         unit_signature(),
@@ -209,7 +209,7 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
 
 #[test]
 fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let f = arena.alloc_function(KFunction::new(
         unit_signature(),

@@ -149,8 +149,8 @@ fn record_disjoint_fields_incomparable() {
 /// literal admits any record slot shape-only.
 #[test]
 fn record_value_admission_and_matches() {
-    use crate::machine::core::RuntimeArena;
-    let arena = RuntimeArena::new();
+    use crate::machine::core::KoanRegion;
+    let arena = KoanRegion::new();
     let value: &KObject<'_> = arena.alloc_object(KObject::record(Record::from_pairs(vec![
         ("x".to_string(), KObject::Number(1.0)),
         ("y".to_string(), KObject::KString("a".into())),
@@ -179,10 +179,10 @@ fn record_value_admission_and_matches() {
 #[test]
 fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     use crate::builtins::default_scope;
-    use crate::machine::core::RuntimeArena;
+    use crate::machine::core::KoanRegion;
     use crate::machine::model::values::{Module, ModuleSignature};
     use std::collections::HashMap;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let t = KType::OfKind(KKind::AnyType);
     let kt_number: &KType<'_> = arena.alloc_ktype(KType::Number);
@@ -236,8 +236,8 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
 /// the runtime `Wrapped` *instance* entirely; `OfKind(Proper)` subsumes the NewType type.
 #[test]
 fn of_kind_nominal_is_type_channel_only() {
-    use crate::machine::core::RuntimeArena;
-    let arena = RuntimeArena::new();
+    use crate::machine::core::KoanRegion;
+    let arena = KoanRegion::new();
     let newtype_ty = KType::OfKind(KKind::NewType);
 
     // The NewType *type value* — admitted in the type channel.
@@ -308,9 +308,9 @@ fn user_type_specificity_lattice() {
 #[test]
 fn is_type_denoting_table() {
     use crate::builtins::default_scope;
-    use crate::machine::core::RuntimeArena;
+    use crate::machine::core::KoanRegion;
     use crate::machine::model::values::ModuleSignature;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let sig = arena.alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
     let sb = KType::Signature {
@@ -362,9 +362,9 @@ fn is_type_denoting_table() {
 #[test]
 fn is_more_specific_for_pinned_signature_bound() {
     use crate::builtins::default_scope;
-    use crate::machine::core::RuntimeArena;
+    use crate::machine::core::KoanRegion;
     use crate::machine::model::values::ModuleSignature;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     // Two distinct decl_scopes → two distinct `sig_id`s.
     let ordered_scope = arena.alloc_scope(crate::machine::Scope::child_under_sig(

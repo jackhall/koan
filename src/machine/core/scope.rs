@@ -6,7 +6,7 @@ use crate::machine::model::types::RecursiveSet;
 
 use crate::machine::model::ast::KExpression;
 
-use super::arena::RuntimeArena;
+use super::arena::KoanRegion;
 pub use super::bindings::Resolution;
 use super::bindings::{ApplyOutcome, BindingIndex, Bindings};
 use super::kerror::{KError, KErrorKind};
@@ -61,7 +61,7 @@ pub struct Scope<'a> {
     root: Option<&'a Scope<'a>>,
     bindings: ScopeBindings<'a>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
-    pub arena: &'a RuntimeArena,
+    pub arena: &'a KoanRegion,
     /// Position-independent origin id recorded on a sealed `NominalMember` (diagnostics)
     /// and on `KType::Signature { sig, .. }` (via `sig.sig_id()`) so dispatch on
     /// user-declared types compares ids rather than scope pointers.
@@ -124,7 +124,7 @@ pub enum ScopeKind {
 
 impl<'a> Scope<'a> {
     pub fn run_root(
-        arena: &'a RuntimeArena,
+        arena: &'a KoanRegion,
         outer: Option<&'a Scope<'a>>,
         out: Box<dyn Write + 'a>,
     ) -> Self {

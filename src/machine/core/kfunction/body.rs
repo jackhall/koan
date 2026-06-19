@@ -4,7 +4,7 @@
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use crate::machine::core::RuntimeArena;
+use crate::machine::core::KoanRegion;
 use crate::machine::model::types::UntypedKey;
 use crate::machine::model::KType;
 use crate::scheduler::{Erased, Reattachable};
@@ -27,11 +27,11 @@ pub enum ReturnContract<'a> {
     /// A MATCH / TRY arm's `-> :T`: check the lifted value against `ret`, label with `kind`.
     /// `arena` is the arm's home arena — the call-site (outer) arena `ret` is allocated in, a
     /// strict ancestor of the arm frame — so a coarsened re-tag re-homes there with no step-scope
-    /// walk. `&RuntimeArena` is `Copy`, so the contract stays `Copy`; the cart `Rc` witnesses it.
+    /// walk. `&KoanRegion` is `Copy`, so the contract stays `Copy`; the cart `Rc` witnesses it.
     Arm {
         ret: &'a KType<'a>,
         kind: &'static str,
-        arena: &'a RuntimeArena,
+        arena: &'a KoanRegion,
     },
     /// A deferred-return FN whose per-call return type resolved to `ret`. Rides the FN-body
     /// chain shape (a `Function`/`PerCall` contract) so a tail-replaced deferred body assembles its
@@ -49,7 +49,7 @@ impl<'a> ReturnContract<'a> {
     /// producer frame. A `Function`/`PerCall` reads it off the callee's captured-scope arena; an
     /// `Arm` carries it directly. All three are the cart's *outer* (ancestor) arena, witnessed by
     /// the cart `Rc`, so the Done boundary derives it from the contract with no scope walk.
-    pub fn home_arena(self) -> &'a RuntimeArena {
+    pub fn home_arena(self) -> &'a KoanRegion {
         match self {
             ReturnContract::Function(f) | ReturnContract::PerCall { func: f, .. } => {
                 f.captured_scope().arena

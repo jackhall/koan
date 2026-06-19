@@ -160,7 +160,7 @@ mod tests {
 
     use super::*;
     use crate::builtins::default_scope;
-    use crate::machine::core::RuntimeArena;
+    use crate::machine::core::KoanRegion;
     use crate::machine::model::KObject;
     use crate::machine::{BindingIndex, Scope};
 
@@ -171,7 +171,7 @@ mod tests {
     /// fails on UB, not values.
     #[test]
     fn node_scope_yoked_child_erase_reattach_roundtrip() {
-        let arena = RuntimeArena::new();
+        let arena = KoanRegion::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         let v = arena.alloc_object(KObject::Number(7.0));
         scope

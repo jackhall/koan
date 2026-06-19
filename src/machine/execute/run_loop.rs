@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::model::Carried;
-use crate::machine::{KError, KErrorKind, NodeId, RuntimeArena};
+use crate::machine::{KError, KErrorKind, NodeId, KoanRegion};
 use crate::scheduler::vend_carrier;
 
 use super::dispatch::{reattach_node_scope, SchedulerView};
@@ -112,7 +112,7 @@ impl<'run> KoanRuntime<'run> {
         // lifetime `'s` bounded by the cart `Rc` cloned into `consumer_frame` — not the run global.
         // `read_lifted` re-anchors each producer read to it.
         let consumer_frame = self.ambient.active_frame_ref().cloned();
-        let dest: &RuntimeArena = {
+        let dest: &KoanRegion = {
             let payload = self
                 .ambient
                 .active_payload()

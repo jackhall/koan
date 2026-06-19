@@ -34,7 +34,7 @@ fn record_newtype_set<'run>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'r
 fn list_of_dict_with_kfunction_anchors_via_recursion() {
     use crate::machine::model::types::Serializable;
     use crate::machine::model::values::KKey;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
@@ -67,7 +67,7 @@ fn list_of_dict_with_kfunction_anchors_via_recursion() {
 #[test]
 fn list_of_tagged_with_kfunction_anchors_via_recursion() {
     use crate::machine::ScopeId;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
@@ -103,7 +103,7 @@ fn list_of_tagged_with_kfunction_anchors_via_recursion() {
 #[test]
 fn list_with_pre_anchored_variants_skips_them() {
     use crate::machine::model::values::Module;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -150,7 +150,7 @@ fn list_with_pre_anchored_variants_skips_them() {
 /// drives the rebuild.
 #[test]
 fn list_with_unanchored_kfuture_anchors() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
@@ -181,7 +181,7 @@ fn list_with_unanchored_kfuture_anchors() {
 #[test]
 fn list_with_unanchored_kmodule_anchors() {
     use crate::machine::model::values::Module;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -212,7 +212,7 @@ fn list_with_unanchored_kmodule_anchors() {
 fn list_with_wrapped_and_kexpression_descendants_clones_rc() {
     use crate::machine::model::values::NonWrappedRef;
     use crate::machine::ScopeId;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -244,7 +244,7 @@ fn list_with_wrapped_and_kexpression_descendants_clones_rc() {
 /// over-allocate.
 #[test]
 fn list_no_descendants_clones_rc() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -270,7 +270,7 @@ fn list_no_descendants_clones_rc() {
 
 #[test]
 fn list_with_local_kfunction_rebuilds_and_anchors() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
@@ -298,7 +298,7 @@ fn list_with_local_kfunction_rebuilds_and_anchors() {
 fn dict_no_descendants_clones_rc() {
     use crate::machine::model::types::Serializable;
     use crate::machine::model::values::KKey;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -329,7 +329,7 @@ fn dict_no_descendants_clones_rc() {
 fn dict_with_local_kfunction_rebuilds_and_anchors() {
     use crate::machine::model::types::Serializable;
     use crate::machine::model::values::KKey;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
@@ -362,7 +362,7 @@ fn dict_with_local_kfunction_rebuilds_and_anchors() {
 #[test]
 fn tagged_no_borrow_clones_inner_rc() {
     use crate::machine::ScopeId;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -408,7 +408,7 @@ fn tagged_no_borrow_clones_inner_rc() {
 #[test]
 fn tagged_with_local_kfunction_rebuilds_and_anchors() {
     use crate::machine::ScopeId;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
@@ -455,7 +455,7 @@ fn tagged_with_local_kfunction_rebuilds_and_anchors() {
 #[test]
 fn recursive_setref_type_value_lifts_by_rc_clone() {
     use crate::machine::model::types::{KKind, NominalMember, NominalSchema};
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -520,7 +520,7 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
 fn recursive_newtype_value_lifts_and_navigates() {
     use crate::machine::model::types::{KKind, NominalMember, NominalSchema};
     use crate::machine::model::values::NonWrappedRef;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);

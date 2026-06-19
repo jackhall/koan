@@ -76,7 +76,7 @@ end-to-end — the run scope outlives the frame, so no separate minimal test.
 generic `alloc` engine erases the value to `'static` (the move-through-union `erase_store`),
 stores it, records its address into the `membership` `RefCell` via `borrow_mut`, and re-anchors
 the `'static` store to `'a` — all while a prior `&` from the same frame is shared-borrowed. Pins
-that tree-borrows shape over the engine `RuntimeArena` (= `Region<KoanStorageProfile>`) routes.
+that tree-borrows shape over the engine `KoanRegion` (= `Region<KoanStorageProfile>`) routes.
 
 - `runtime_arena_alloc_while_prior_ref_live`
 
@@ -89,7 +89,7 @@ decision live in [src/machine/core/arena.rs](../src/machine/core/arena.rs).
 - `alloc_object_redirects_self_anchored_value_to_escape_arena`
 
 **`CallFrame::try_reset_for_tail`** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — TCO
-frame reuse installs a fresh refcounted `FrameStorage` (a new `RuntimeArena`) and
+frame reuse installs a fresh refcounted `FrameStorage` (a new `KoanRegion`) and
 re-allocates the child `Scope`, with two transmutes: `&Scope<'_> →
 &Scope<'static>` for the new outer link and a raw-ptr re-anchor for the new
 inner arena. The `Rc::get_mut` gate refuses only when another `Rc<CallFrame>`

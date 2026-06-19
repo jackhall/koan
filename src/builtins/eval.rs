@@ -51,10 +51,10 @@ mod tests {
     use crate::builtins::test_support::{
         parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
     };
-    use crate::machine::{KErrorKind, RuntimeArena};
+    use crate::machine::{KErrorKind, KoanRegion};
 
     fn run_program(source: &str) -> Vec<u8> {
-        let arena = RuntimeArena::new();
+        let arena = KoanRegion::new();
         let (scope, captured) = run_root_with_buf(&arena);
         run(scope, source);
         let bytes = captured.borrow().clone();
@@ -78,7 +78,7 @@ mod tests {
 
     #[test]
     fn eval_of_non_kexpression_errors_with_type_mismatch() {
-        let arena = RuntimeArena::new();
+        let arena = KoanRegion::new();
         let scope = run_root_silent(&arena);
         run(scope, "LET x = 3");
         let err = run_one_err(scope, parse_one("$(x)"));

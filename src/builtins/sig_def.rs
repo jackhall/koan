@@ -93,7 +93,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{run, run_root_silent};
-    use crate::machine::RuntimeArena;
+    use crate::machine::KoanRegion;
     use crate::parse::parse;
 
     #[test]
@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn sig_binds_under_name_in_scope() {
         use crate::machine::model::types::KType;
-        let arena = RuntimeArena::new();
+        let arena = KoanRegion::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = (VAL x :Number)");
         // SIG installs a single type-side identity; nothing lands in `bindings.data`.
@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn sig_path_records_name() {
         use crate::machine::model::types::KType;
-        let arena = RuntimeArena::new();
+        let arena = KoanRegion::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = (VAL x :Number)");
         let sig = match scope.resolve_type("OrderedSig") {
@@ -135,7 +135,7 @@ mod tests {
     /// outer-scope-bound type alias and resolves once the alias finalizes.
     #[test]
     fn sig_body_parks_on_outer_placeholder() {
-        let arena = RuntimeArena::new();
+        let arena = KoanRegion::new();
         let scope = run_root_silent(&arena);
         run(scope, "LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
         use crate::machine::model::types::KType;
@@ -158,7 +158,7 @@ mod tests {
     /// `Foo` (type side) in the parent scope.
     #[test]
     fn sig_body_error_short_circuits_finalize() {
-        let arena = RuntimeArena::new();
+        let arena = KoanRegion::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG Foo = (VAL x :NonexistentType)");
         assert!(

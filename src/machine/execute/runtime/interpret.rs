@@ -1,5 +1,5 @@
 //! The program entry points. [`interpret`] and its writer-carrying siblings parse Koan source,
-//! stand up a fresh [`RuntimeArena`] and root [`Scope`], then drive the whole program through
+//! stand up a fresh [`KoanRegion`] and root [`Scope`], then drive the whole program through
 //! [`KoanRuntime::run_program`] — the harness method that enters every top-level statement, runs
 //! the scheduler to quiescence, and rejects a bare top-level expression that resolved to an
 //! unstamped empty container. All values allocated by the program die when these return.
@@ -9,10 +9,10 @@ use crate::builtins::default_scope;
 use crate::machine::execute::lift::NodeLift;
 use crate::machine::execute::outcome::pin_carried_to_run;
 use crate::machine::model::ast::KExpression;
-use crate::machine::{KError, KErrorKind, RuntimeArena, Scope};
+use crate::machine::{KError, KErrorKind, KoanRegion, Scope};
 use crate::parse::{parse, parse_with_path};
 
-/// Parse Koan source and run it on a fresh `RuntimeArena`; all values allocated by the
+/// Parse Koan source and run it on a fresh `KoanRegion`; all values allocated by the
 /// program die when this returns.
 pub fn interpret(source: &str) -> Result<(), KError> {
     interpret_with_writer(source, Box::new(std::io::stdout()))
@@ -35,7 +35,7 @@ pub fn interpret_with_writer_path(
         Some(p) => parse_with_path(source, p)?,
         None => parse(source)?,
     };
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let root = default_scope(&arena, out);
     let mut runtime = KoanRuntime::new();
     runtime.run_program(root, exprs)

@@ -19,7 +19,7 @@ fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
     use crate::machine::{Body, KFunction};
 
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     // Defeat the `functions_is_empty()` fast path so the slow path runs.
@@ -60,7 +60,7 @@ fn unanchored_kfuture_with_arena_borrow_does_anchor() {
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
     use crate::machine::{Body, KFunction};
 
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
 
@@ -106,7 +106,7 @@ fn unanchored_kfuture_with_arena_borrow_does_anchor() {
 /// recursive borrow walk; the inner future borrows via its captured function.
 #[test]
 fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
@@ -143,7 +143,7 @@ fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
 #[test]
 fn kfuture_bundle_arg_with_wrapped_field_anchors() {
     use crate::machine::ScopeId;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
@@ -189,7 +189,7 @@ fn kfuture_bundle_arg_with_wrapped_field_anchors() {
 /// into the dying arena must drive anchor.
 #[test]
 fn kfuture_parsed_expression_part_with_arena_borrow_anchors() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -223,7 +223,7 @@ fn kfuture_parsed_expression_part_with_arena_borrow_anchors() {
 /// the dying arena must drive anchor.
 #[test]
 fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -256,7 +256,7 @@ fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
 /// Pre-anchored KFuture preserves its anchor through lift.
 #[test]
 fn kfuture_with_existing_anchor_preserves_it() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -285,7 +285,7 @@ fn kfuture_with_existing_anchor_preserves_it() {
 /// bundle slot, must drive lift to anchor.
 #[test]
 fn kfuture_bundle_arg_with_local_kfunction_anchors() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
@@ -315,7 +315,7 @@ fn kfuture_bundle_arg_with_local_kfunction_anchors() {
 /// without needing any borrowing payload in parts or bundle.
 #[test]
 fn kfuture_with_local_function_anchors() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
@@ -343,7 +343,7 @@ fn kfuture_with_local_function_anchors() {
 /// composite-recursion arms (List/Dict/Tagged).
 #[test]
 fn kfuture_bundle_arg_with_list_of_kfunction_anchors() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
@@ -374,7 +374,7 @@ fn kfuture_bundle_arg_with_list_of_kfunction_anchors() {
 #[test]
 fn kfuture_bundle_arg_with_local_kmodule_anchors() {
     use crate::machine::model::values::Module;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -410,7 +410,7 @@ fn kfuture_bundle_arg_with_local_kmodule_anchors() {
 /// the dying arena must drive anchor.
 #[test]
 fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -443,7 +443,7 @@ fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
 /// `Spliced` part must drive anchor.
 #[test]
 fn kfuture_parsed_dictliteral_with_arena_borrow_anchors() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);

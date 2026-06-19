@@ -3,13 +3,13 @@
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::machine::model::KObject;
-use crate::machine::RuntimeArena;
+use crate::machine::KoanRegion;
 
 use super::capture_program_output;
 
 #[test]
 fn multi_statement_fn_body_returns_last_value() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(scope, "FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
     let v = run_one(scope, parse_one("FOO"));
@@ -44,7 +44,7 @@ fn multi_statement_fn_body_runs_each_statement() {
 /// admits the read because `a` was submitted at a lower chain index.
 #[test]
 fn backward_reference_across_statements_works() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,

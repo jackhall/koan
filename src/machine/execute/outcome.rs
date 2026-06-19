@@ -245,7 +245,7 @@ mod erased_continuation_tests {
 
     use super::*;
     use crate::builtins::default_scope;
-    use crate::machine::core::{CallFrame, RuntimeArena};
+    use crate::machine::core::{CallFrame, KoanRegion};
     use crate::scheduler::{vend_carrier, Erased, Scheduler};
     use std::rc::Rc;
 
@@ -257,7 +257,7 @@ mod erased_continuation_tests {
     /// (`run_step`); fails on UB, not values.
     #[test]
     fn erased_continuation_reattach_roundtrip() {
-        let arena = RuntimeArena::new();
+        let arena = KoanRegion::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         // The captured value lives in the run arena — the ancestor the cart's `outer` chain pins.
         let captured: &KObject = arena.alloc_object(KObject::Number(7.0));

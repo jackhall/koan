@@ -4,10 +4,10 @@
 use crate::builtins::test_support::{
     parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
 };
-use crate::machine::{KErrorKind, RuntimeArena};
+use crate::machine::{KErrorKind, KoanRegion};
 
 fn run_program(source: &str) -> Vec<u8> {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let (scope, captured) = run_root_with_buf(&arena);
     run(scope, source);
     let bytes = captured.borrow().clone();
@@ -29,7 +29,7 @@ fn ok_binds_it_to_success_value() {
 #[test]
 fn arm_violating_declared_return_type_errors() {
     // Declared `:Number`, but the `ok` arm returns a Str (PRINT's rendered string).
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     let err = run_one_err(
         scope,
@@ -98,7 +98,7 @@ fn type_mismatch_arm_catches_record_newtype_value_mismatch() {
 
 #[test]
 fn re_raise_when_no_arm_matches_error_kind() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     let err = run_one_err(
         scope,
@@ -112,7 +112,7 @@ fn re_raise_when_no_arm_matches_error_kind() {
 
 #[test]
 fn missing_ok_arm_on_success_raises_shape_error() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     let err = run_one_err(
         scope,

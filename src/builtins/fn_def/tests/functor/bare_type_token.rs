@@ -8,7 +8,7 @@ use crate::builtins::test_support::{parse_one, run, run_one, run_one_type, run_r
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{KError, KErrorKind, RuntimeArena, Scope};
+use crate::machine::{KError, KErrorKind, KoanRegion, Scope};
 
 /// Tolerates the error surfacing either from `KoanRuntime::execute()` (resolve
 /// rejects at admission) or from `read_result` (auto-wrap committed and bind
@@ -31,7 +31,7 @@ fn run_expecting_dispatch_error<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>)
 
 #[test]
 fn functor_admits_bare_number_token_at_type_slot() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,
@@ -48,7 +48,7 @@ fn functor_admits_bare_number_token_at_type_slot() {
 
 #[test]
 fn functor_admits_bare_str_bool_null_tokens_at_type_slot() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,
@@ -68,7 +68,7 @@ fn functor_admits_bare_str_bool_null_tokens_at_type_slot() {
 
 #[test]
 fn functor_per_call_type_side_bind_is_observable_via_module_type_members() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,
@@ -95,7 +95,7 @@ fn functor_per_call_type_side_bind_is_observable_via_module_type_members() {
 /// scope walk.
 #[test]
 fn functor_bare_value_carrier_is_dispatch_no_match_not_typemismatch() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,
@@ -115,7 +115,7 @@ fn functor_bare_value_carrier_is_dispatch_no_match_not_typemismatch() {
 /// (committed-then-failed bind) satisfies the wall's contract.
 #[test]
 fn functor_module_carrier_does_not_fill_type_slot() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,
@@ -131,7 +131,7 @@ fn functor_module_carrier_does_not_fill_type_slot() {
 #[test]
 fn functor_deferred_return_resolves_against_builtin_keyed_bind() {
     use crate::machine::model::ReturnType;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(scope, "FUNCTOR (BUILD Elt :Type) -> :Elt = (42)");
     let f = crate::builtins::test_support::lookup_fn(scope, "BUILD");
@@ -156,7 +156,7 @@ fn functor_deferred_return_resolves_against_builtin_keyed_bind() {
 #[test]
 fn functor_deferred_return_builtin_keyed_mismatch_surfaces_per_call_diagnostic() {
     use crate::machine::execute::KoanRuntime;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(scope, "FUNCTOR (BUILD Elt :Type) -> :Elt = (42)");
     let mut sched = KoanRuntime::new();

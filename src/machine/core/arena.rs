@@ -1,8 +1,8 @@
 //! The Koan instantiation of the generic [`Region`](super::region::Region)
-//! storage substrate: `RuntimeArena = Region<KoanStorageProfile>`, the per-family
+//! storage substrate: `KoanRegion = Region<KoanStorageProfile>`, the per-family
 //! [`Stored`](super::region::Stored) impls (which sub-arena a family lands in, its cycle-gate
 //! `anchors_to` answer), the cycle-gate walkers, and the Koan-typed `alloc_*` wrappers. `CallFrame`
-//! — the per-call frame shell over a refcounted `FrameStorage` (the `RuntimeArena` plus the ancestor
+//! — the per-call frame shell over a refcounted `FrameStorage` (the `KoanRegion` plus the ancestor
 //! chain), holding the child `Scope` and resetting in place for TCO — also lives here.
 //!
 //! The generic erase-store engine and the cycle-redirect plumbing live in
@@ -51,20 +51,20 @@ impl StorageProfile for KoanStorageProfile {
 }
 
 /// Run-lifetime allocator. A [`Region`] carrying the Koan family set; lives for one program
-/// run. The `RuntimeArena` references across the tree and the `Rc<CallFrame>` back-edge ride this
+/// run. The `KoanRegion` references across the tree and the `Rc<CallFrame>` back-edge ride this
 /// alias unchanged.
-pub type RuntimeArena = Region<KoanStorageProfile>;
+pub type KoanRegion = Region<KoanStorageProfile>;
 
-/// True iff any descendant of `obj` carries an `Rc<FrameStorage>` whose backing `RuntimeArena`
+/// True iff any descendant of `obj` carries an `Rc<FrameStorage>` whose backing `KoanRegion`
 /// is `arena_ptr`. Walks the composite shapes mirrored from `KObject::deep_clone`
 /// (`List`/`Dict`/`Tagged`/`Struct`) plus `KFunction`/`KFuture` anchors.
-fn rc_targets(rc: &Rc<FrameStorage>, arena_ptr: *const RuntimeArena) -> bool {
-    // `rc.arena()` coerces `&RuntimeArena → *const` for the address compare — no explicit raw
+fn rc_targets(rc: &Rc<FrameStorage>, arena_ptr: *const KoanRegion) -> bool {
+    // `rc.arena()` coerces `&KoanRegion → *const` for the address compare — no explicit raw
     // cast, so the borrow stays lifetime-bounded right up to the comparison.
     std::ptr::eq(rc.arena(), arena_ptr)
 }
 
-fn obj_anchors_to(obj: &KObject<'_>, arena_ptr: *const RuntimeArena) -> bool {
+fn obj_anchors_to(obj: &KObject<'_>, arena_ptr: *const KoanRegion) -> bool {
     match obj {
         KObject::KFunction(_, Some(rc)) => rc_targets(rc, arena_ptr),
         KObject::KFuture(_, Some(rc)) => rc_targets(rc, arena_ptr),
@@ -79,14 +79,14 @@ fn obj_anchors_to(obj: &KObject<'_>, arena_ptr: *const RuntimeArena) -> bool {
 
 /// An aggregate cell anchors to `arena_ptr` iff its `Object` arm does, or its `Type` arm is
 /// a `Module` whose frame `Rc` backs that arena.
-fn held_anchors_to(cell: &Held<'_>, arena_ptr: *const RuntimeArena) -> bool {
+fn held_anchors_to(cell: &Held<'_>, arena_ptr: *const KoanRegion) -> bool {
     match cell {
         Held::Object(o) => obj_anchors_to(o, arena_ptr),
         Held::Type(t) => ktype_anchors_to(t, arena_ptr),
     }
 }
 
-fn ktype_anchors_to(t: &KType<'_>, arena_ptr: *const RuntimeArena) -> bool {
+fn ktype_anchors_to(t: &KType<'_>, arena_ptr: *const KoanRegion) -> bool {
     match t {
         KType::Module {
             frame: Some(rc), ..
@@ -130,10 +130,10 @@ impl Stored<KoanStorageProfile> for KObject<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<KObject<'static>> {
         &s.objects
     }
-    fn anchors_to(value: &KObject<'_>, arena_ptr: *const RuntimeArena) -> bool {
+    fn anchors_to(value: &KObject<'_>, arena_ptr: *const KoanRegion) -> bool {
         obj_anchors_to(value, arena_ptr)
     }
-    fn record_local(frame: &RuntimeArena, stored: &KObject<'static>) {
+    fn record_local(frame: &KoanRegion, stored: &KObject<'static>) {
         frame.record_addr(stored as *const _ as usize);
     }
 }
@@ -142,7 +142,7 @@ impl Stored<KoanStorageProfile> for KType<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<KType<'static>> {
         &s.ktypes
     }
-    fn anchors_to(value: &KType<'_>, arena_ptr: *const RuntimeArena) -> bool {
+    fn anchors_to(value: &KType<'_>, arena_ptr: *const KoanRegion) -> bool {
         ktype_anchors_to(value, arena_ptr)
     }
 }
@@ -151,7 +151,7 @@ impl Stored<KoanStorageProfile> for KFunction<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<KFunction<'static>> {
         &s.functions
     }
-    fn anchors_to(_value: &KFunction<'_>, _arena_ptr: *const RuntimeArena) -> bool {
+    fn anchors_to(_value: &KFunction<'_>, _arena_ptr: *const KoanRegion) -> bool {
         false
     }
 }
@@ -160,7 +160,7 @@ impl Stored<KoanStorageProfile> for Scope<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<Scope<'static>> {
         &s.scopes
     }
-    fn anchors_to(_value: &Scope<'_>, _arena_ptr: *const RuntimeArena) -> bool {
+    fn anchors_to(_value: &Scope<'_>, _arena_ptr: *const KoanRegion) -> bool {
         false
     }
 }
@@ -169,7 +169,7 @@ impl Stored<KoanStorageProfile> for Module<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<Module<'static>> {
         &s.modules
     }
-    fn anchors_to(_value: &Module<'_>, _arena_ptr: *const RuntimeArena) -> bool {
+    fn anchors_to(_value: &Module<'_>, _arena_ptr: *const KoanRegion) -> bool {
         false
     }
 }
@@ -178,7 +178,7 @@ impl Stored<KoanStorageProfile> for ModuleSignature<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<ModuleSignature<'static>> {
         &s.signatures
     }
-    fn anchors_to(_value: &ModuleSignature<'_>, _arena_ptr: *const RuntimeArena) -> bool {
+    fn anchors_to(_value: &ModuleSignature<'_>, _arena_ptr: *const KoanRegion) -> bool {
         false
     }
 }
@@ -187,7 +187,7 @@ impl Stored<KoanStorageProfile> for OperatorGroup {
     fn sub_arena(s: &KoanStorage) -> &Arena<OperatorGroup> {
         &s.operator_groups
     }
-    fn anchors_to(_value: &OperatorGroup, _arena_ptr: *const RuntimeArena) -> bool {
+    fn anchors_to(_value: &OperatorGroup, _arena_ptr: *const KoanRegion) -> bool {
         false
     }
 }
@@ -208,7 +208,7 @@ impl Region<KoanStorageProfile> {
         self.alloc::<KType<'static>>(t)
     }
 
-    /// INVARIANT: a `KFunction` must be allocated into the same `RuntimeArena` that owns its
+    /// INVARIANT: a `KFunction` must be allocated into the same `KoanRegion` that owns its
     /// captured scope. The `functions_is_empty` fast path relies on this — without the
     /// invariant, "no KFunction allocated here" no longer implies "no KFunction has
     /// `captured_scope` in this arena," and the path silently drops arenas out from under
@@ -217,10 +217,10 @@ impl Region<KoanStorageProfile> {
     pub fn alloc_function<'a>(&'a self, f: KFunction<'a>) -> &'a KFunction<'a> {
         debug_assert!(
             std::ptr::eq(
-                self as *const RuntimeArena,
-                f.captured_scope().arena as *const RuntimeArena
+                self as *const KoanRegion,
+                f.captured_scope().arena as *const KoanRegion
             ),
-            "alloc_function invariant :KFunction must be allocated into the same RuntimeArena \
+            "alloc_function invariant :KFunction must be allocated into the same KoanRegion \
              that owns its captured scope"
         );
         self.alloc::<KFunction<'static>>(f)
@@ -276,14 +276,14 @@ impl Region<KoanStorageProfile> {
     }
 }
 
-/// A frame's refcounted storage: the per-call `RuntimeArena` plus the `outer` link that keeps
+/// A frame's refcounted storage: the per-call `KoanRegion` plus the `outer` link that keeps
 /// the lexical-ancestor frames' storage alive. An escaping value (a returned closure, a module
 /// frame) pins *this* — not the [`CallFrame`] shell — so the shell stays uniquely owned and the
 /// scheduler can reuse it for the next tail iteration while the escapee's captured environment
 /// rides the old `FrameStorage` it still holds. Field order is load-bearing: `arena` drops
 /// before `outer`, so inner pointers die before the outer storage they may reference.
 pub struct FrameStorage {
-    arena: RuntimeArena,
+    arena: KoanRegion,
     /// Liveness pin only — held so the ancestor frames' storage outlives this child's `outer`
     /// scope pointer, dropped (never read) when this storage drops. The drop *is* the use.
     #[allow(dead_code)]
@@ -291,9 +291,9 @@ pub struct FrameStorage {
 }
 
 impl FrameStorage {
-    /// The backing `RuntimeArena`. Used for cycle-gate / lift identity comparisons by holders
+    /// The backing `KoanRegion`. Used for cycle-gate / lift identity comparisons by holders
     /// that pin storage but never name a `CallFrame`.
-    pub(crate) fn arena(&self) -> &RuntimeArena {
+    pub(crate) fn arena(&self) -> &KoanRegion {
         &self.arena
     }
 }
@@ -328,13 +328,13 @@ impl CallFrame {
         // The arena is born inside its own `Rc<FrameStorage>`, heap-pinned from this point on, so
         // the child-scope pointer below stays valid as the storage Rc moves into the shell.
         let storage = Rc::new(FrameStorage {
-            arena: RuntimeArena::with_escape(escape),
+            arena: KoanRegion::with_escape(escape),
             outer: outer_frame,
         });
-        let arena_ptr: *const RuntimeArena = &storage.arena;
+        let arena_ptr: *const KoanRegion = &storage.arena;
         // SAFETY: heap-pinning keeps `arena_ptr` valid for the storage Rc's lifetime, which exceeds
         // this function's duration; `outer` lives long enough by caller contract.
-        let arena_ref: &'static RuntimeArena = unsafe { pin_deref(arena_ptr) };
+        let arena_ref: &'static KoanRegion = unsafe { pin_deref(arena_ptr) };
         // SAFETY: lexical-scoping invariant — `outer` (the captured definition scope, or a
         // longer-lived ancestor) outlives this frame, so erasing its lifetime to `'static`
         // for the child's `outer` link is sound; the child borrow is re-anchored on read.
@@ -368,7 +368,7 @@ impl CallFrame {
         let scope_static: &'static Scope<'static> = unsafe { reattach_ref::<ScopeFamily>(scope) };
         Rc::new(CallFrame {
             storage: Rc::new(FrameStorage {
-                arena: RuntimeArena::new(),
+                arena: KoanRegion::new(),
                 outer: None,
             }),
             scope_ptr: Some(ScopePtr::erase(scope_static)),
@@ -449,17 +449,17 @@ impl CallFrame {
     /// as long as any value `f` binds into the scope lives.
     pub fn with_frame_interior<'a, R>(
         self: &Rc<Self>,
-        f: impl FnOnce(&'a RuntimeArena, &Scope<'a>) -> R,
+        f: impl FnOnce(&'a KoanRegion, &Scope<'a>) -> R,
     ) -> R {
         // SAFETY: the held frame `Rc` heap-pins the arena for all of `'a`, so re-borrowing the
         // stable arena pointer at `'a` is sound. This is a pointer re-borrow, not a value retype, so
         // it routes the audited `pin_deref` rather than a bespoke `transmute`. `'a` is driven by the
         // closure's parameter type, not a turbofish argument.
-        let arena: &'a RuntimeArena = unsafe { pin_deref(self.arena() as *const RuntimeArena) };
+        let arena: &'a KoanRegion = unsafe { pin_deref(self.arena() as *const KoanRegion) };
         f(arena, self.scope_bounded())
     }
 
-    pub fn arena(&self) -> &RuntimeArena {
+    pub fn arena(&self) -> &KoanRegion {
         &self.storage.arena
     }
 
@@ -471,7 +471,7 @@ impl CallFrame {
     }
 
     /// Reset this frame for a tail-call iteration: install a fresh `FrameStorage` (a new
-    /// `RuntimeArena` escaping into `new_outer.arena`, no `outer` link) and re-allocate the child
+    /// `KoanRegion` escaping into `new_outer.arena`, no `outer` link) and re-allocate the child
     /// `Scope` under `new_outer`. The old `FrameStorage` is dropped here — and its arena with it —
     /// *unless* an escaped value still holds it, in which case that snapshot lives on independently
     /// while the shell reuses. Returns `false` (untouched) only when `Rc::get_mut` fails — another
@@ -488,12 +488,12 @@ impl CallFrame {
         // Build the fresh storage and its child scope before touching the shell, so the
         // arena pointer is heap-pinned by the new storage Rc when it lands in the shell.
         let storage = Rc::new(FrameStorage {
-            arena: RuntimeArena::with_escape(escape),
+            arena: KoanRegion::with_escape(escape),
             outer: None,
         });
-        let arena_ptr: *const RuntimeArena = &storage.arena;
+        let arena_ptr: *const KoanRegion = &storage.arena;
         // SAFETY: heap-pinned via the storage Rc; pointer is stable for its lifetime.
-        let arena_ref: &'static RuntimeArena = unsafe { pin_deref(arena_ptr) };
+        let arena_ref: &'static KoanRegion = unsafe { pin_deref(arena_ptr) };
         let mut child = Scope::child_under(outer_static);
         child.arena = arena_ref;
         // `arena_ref` is `&'static` (the `pin_deref` above is where the `'static` claim

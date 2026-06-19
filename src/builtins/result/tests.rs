@@ -1,11 +1,11 @@
 use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
 use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
 use crate::machine::model::{KObject, KType};
-use crate::machine::{KErrorKind, RuntimeArena};
+use crate::machine::{KErrorKind, KoanRegion};
 
 #[test]
 fn result_registers_type_constructor_with_schema() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
 
     // Type-only: `Result`'s `TypeConstructor` member carries both `param_names` and the
@@ -38,7 +38,7 @@ fn result_registers_type_constructor_with_schema() {
 
 #[test]
 fn result_constructs_ok_variant() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     let result = run_one(scope, parse_one("Result (Ok 1)"));
     match result {
@@ -59,7 +59,7 @@ fn result_constructs_ok_variant() {
 
 #[test]
 fn result_constructs_error_variant() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     let result = run_one(scope, parse_one("Result (Error \"x\")"));
     match result {
@@ -80,7 +80,7 @@ fn result_constructs_error_variant() {
 
 #[test]
 fn result_rejects_unknown_tag() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     let err = run_one_err(scope, parse_one("Result (Bogus 1)"));
     assert!(
@@ -92,7 +92,7 @@ fn result_rejects_unknown_tag() {
 /// The carrier flows through MATCH dispatch by tag like any other tagged union.
 #[test]
 fn result_matches_ok_branch() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let (scope, buf) = crate::builtins::test_support::run_root_with_buf(&arena);
     run(
         scope,
@@ -105,7 +105,7 @@ fn result_matches_ok_branch() {
 /// non-function value (the carrier), so the union errors before finalizing.
 #[test]
 fn redeclaring_result_errors() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     let err = run_one_err(scope, parse_one("UNION Result = (Ok :Str Err :Str)"));
     assert!(

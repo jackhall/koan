@@ -17,7 +17,7 @@ mod region;
 #[cfg(test)]
 mod tests;
 
-pub use arena::{CallFrame, FrameStorage, RuntimeArena};
+pub use arena::{CallFrame, FrameStorage, KoanRegion};
 pub use bindings::{
     ApplyOutcome, BindingIndex, Bindings, FunctionLookup, PendingBinderGuard, PendingTypeEntry,
     Resolution,

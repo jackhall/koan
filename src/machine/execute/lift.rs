@@ -4,7 +4,7 @@ use std::rc::Rc;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::{ArgValue, Held};
 use crate::machine::model::{Carried, KObject, KType};
-use crate::machine::{CallFrame, KFuture, RuntimeArena};
+use crate::machine::{CallFrame, KFuture, KoanRegion};
 
 use super::runtime::KoanRuntime;
 
@@ -26,7 +26,7 @@ pub(in crate::machine::execute) trait NodeLift {
         &self,
         value: Carried<'o>,
         src: &Rc<CallFrame>,
-        dst: &'o RuntimeArena,
+        dst: &'o KoanRegion,
     ) -> Carried<'o>;
 }
 
@@ -35,7 +35,7 @@ impl NodeLift for KoanRuntime<'_> {
         &self,
         value: Carried<'o>,
         src: &Rc<CallFrame>,
-        dst: &'o RuntimeArena,
+        dst: &'o KoanRegion,
     ) -> Carried<'o> {
         match value {
             Carried::Object(v) => Carried::Object(dst.alloc_object(lift_kobject(v, src))),
@@ -63,8 +63,8 @@ pub(super) fn lift_kobject<'run>(v: &KObject<'run>, dying_frame: &Rc<CallFrame>)
             let new_frame = if existing.is_some() {
                 existing.clone()
             } else {
-                let dying_runtime: *const RuntimeArena = dying_frame.arena();
-                let captured_runtime: *const RuntimeArena = f.captured_scope().arena;
+                let dying_runtime: *const KoanRegion = dying_frame.arena();
+                let captured_runtime: *const KoanRegion = f.captured_scope().arena;
                 if std::ptr::eq(captured_runtime, dying_runtime) {
                     Some(dying_frame.storage_rc())
                 } else {
@@ -148,8 +148,8 @@ pub(super) fn lift_ktype<'run>(t: &KType<'run>, dying_frame: &Rc<CallFrame>) -> 
             let new_frame = if existing.is_some() {
                 existing.clone()
             } else {
-                let dying_runtime: *const RuntimeArena = dying_frame.arena();
-                let module_runtime: *const RuntimeArena = m.child_scope().arena;
+                let dying_runtime: *const KoanRegion = dying_frame.arena();
+                let module_runtime: *const KoanRegion = m.child_scope().arena;
                 if std::ptr::eq(module_runtime, dying_runtime) {
                     Some(dying_frame.storage_rc())
                 } else {
@@ -222,11 +222,11 @@ where
 /// `KExpression` isn't reachable as a value inside a List/Dict/Tagged at lift time in current
 /// Koan, so neither needs an arena anchor of its own.
 fn needs_lift<'run>(v: &KObject<'run>, dying_frame: &Rc<CallFrame>) -> bool {
-    let dying_runtime: *const RuntimeArena = dying_frame.arena();
+    let dying_runtime: *const KoanRegion = dying_frame.arena();
     any_descendant(v, &|obj: &KObject<'run>| match obj {
         KObject::KFunction(_, Some(_)) => Some(false),
         KObject::KFunction(f, None) => {
-            let captured_runtime: *const RuntimeArena = f.captured_scope().arena;
+            let captured_runtime: *const KoanRegion = f.captured_scope().arena;
             Some(std::ptr::eq(captured_runtime, dying_runtime))
         }
         KObject::KFuture(_, Some(_)) => Some(false),
@@ -262,10 +262,10 @@ fn held_needs_lift<'run>(cell: &Held<'run>, dying_frame: &Rc<CallFrame>) -> bool
 /// True iff any descendant of an unanchored `KFuture` borrows into `arena`. Three
 /// borrow sites: the function ref's captured arena, the parsed expression's
 /// `Spliced(Carried)` parts, and the bundle args.
-fn kfuture_borrows_dying_arena<'run>(t: &KFuture<'run>, arena: &RuntimeArena) -> bool {
+fn kfuture_borrows_dying_arena<'run>(t: &KFuture<'run>, arena: &KoanRegion) -> bool {
     if std::ptr::eq(
         t.function.captured_scope().arena,
-        arena as *const RuntimeArena,
+        arena as *const KoanRegion,
     ) {
         return true;
     }
@@ -277,7 +277,7 @@ fn kfuture_borrows_dying_arena<'run>(t: &KFuture<'run>, arena: &RuntimeArena) ->
 
 /// An [`ArgValue`] borrows the dying arena iff its object arm has an arena-borrowing
 /// descendant, or its type arm is a `Module` whose child scope rides the dying arena.
-fn argvalue_borrows_arena<'run>(v: &ArgValue<'run>, arena: &RuntimeArena) -> bool {
+fn argvalue_borrows_arena<'run>(v: &ArgValue<'run>, arena: &KoanRegion) -> bool {
     match v {
         ArgValue::Object(obj) => kobject_borrows_arena(obj, arena),
         ArgValue::Type(kt) => ktype_borrows_arena(kt, arena),
@@ -286,18 +286,18 @@ fn argvalue_borrows_arena<'run>(v: &ArgValue<'run>, arena: &RuntimeArena) -> boo
 
 /// True iff `kt` is a `Module` whose child scope borrows the dying arena. Other type
 /// carriers are declaration-stable and never anchor into a per-call arena.
-fn ktype_borrows_arena(kt: &KType<'_>, arena: &RuntimeArena) -> bool {
+fn ktype_borrows_arena(kt: &KType<'_>, arena: &KoanRegion) -> bool {
     matches!(kt, KType::Module { module: m, .. }
-        if std::ptr::eq(m.child_scope().arena, arena as *const RuntimeArena))
+        if std::ptr::eq(m.child_scope().arena, arena as *const KoanRegion))
 }
 
-fn expression_borrows_arena<'run>(expr: &KExpression<'run>, arena: &RuntimeArena) -> bool {
+fn expression_borrows_arena<'run>(expr: &KExpression<'run>, arena: &KoanRegion) -> bool {
     expr.parts
         .iter()
         .any(|p| part_borrows_arena(&p.value, arena))
 }
 
-fn part_borrows_arena<'run>(part: &ExpressionPart<'run>, arena: &RuntimeArena) -> bool {
+fn part_borrows_arena<'run>(part: &ExpressionPart<'run>, arena: &KoanRegion) -> bool {
     match part {
         // Only a value-arm Spliced borrows an arena `KObject`; a type arm's `Module` rides
         // its own frame anchor, not an arena `KObject`.
@@ -323,13 +323,13 @@ fn part_borrows_arena<'run>(part: &ExpressionPart<'run>, arena: &RuntimeArena) -
 /// settle as predicate leaves (their recursion is not `KObject`-shaped — parts,
 /// bundle args, function ref) so the walker doesn't double-traverse via the
 /// KExpression arm.
-fn kobject_borrows_arena<'run>(v: &KObject<'run>, arena: &RuntimeArena) -> bool {
+fn kobject_borrows_arena<'run>(v: &KObject<'run>, arena: &KoanRegion) -> bool {
     any_descendant(v, &|obj: &KObject<'run>| match obj {
         KObject::KExpression(e) => Some(expression_borrows_arena(e, arena)),
         KObject::KFuture(t, _) => Some(kfuture_borrows_dying_arena(t, arena)),
         KObject::KFunction(f, _) => Some(std::ptr::eq(
             f.captured_scope().arena,
-            arena as *const RuntimeArena,
+            arena as *const KoanRegion,
         )),
         KObject::List(..)
         | KObject::Dict(..)

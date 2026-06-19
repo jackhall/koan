@@ -7,11 +7,11 @@
 use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::KObject;
-use crate::machine::{KErrorKind, RuntimeArena};
+use crate::machine::{KErrorKind, KoanRegion};
 
 #[test]
 fn using_surfaces_module_value_as_bare_name() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(scope, "MODULE Mod = (LET val = 42)");
     let result = run_one(scope, parse_one("USING Mod SCOPE (val)"));
@@ -20,7 +20,7 @@ fn using_surfaces_module_value_as_bare_name() {
 
 #[test]
 fn using_surfaces_module_function_for_bare_dispatch() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,
@@ -32,7 +32,7 @@ fn using_surfaces_module_function_for_bare_dispatch() {
 
 #[test]
 fn using_block_bind_persists_at_call_site() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(scope, "MODULE Mod = (LET val = 1)");
     run(scope, "USING Mod SCOPE (LET local = 5)");
@@ -44,7 +44,7 @@ fn using_block_bind_persists_at_call_site() {
 /// member would silently shadow the bind.
 #[test]
 fn using_block_bind_colliding_with_member_errors() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(scope, "MODULE Mod = (LET x = 1)");
     let err = run_one_err(scope, parse_one("USING Mod SCOPE (LET x = 2)"));
@@ -59,7 +59,7 @@ fn using_block_bind_colliding_with_member_errors() {
 /// scope, not the call site — opening the module must not change that.
 #[test]
 fn using_module_function_resolves_its_own_internals() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,
@@ -75,7 +75,7 @@ fn using_module_function_resolves_its_own_internals() {
 /// (not the first statement's). Pins block semantics through the transparent window.
 #[test]
 fn using_multi_statement_body_sequences_and_returns_last() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(scope, "MODULE Mod = (LET base = 7)");
     let result = run_one(
@@ -93,7 +93,7 @@ fn using_multi_statement_body_sequences_and_returns_last() {
 /// call-site binding inside the block.
 #[test]
 fn using_window_shadows_call_site_binding() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET val = 1");
     run(scope, "MODULE Mod = (LET val = 7)");
@@ -110,7 +110,7 @@ fn using_window_shadows_call_site_binding() {
 /// against use-after-free.
 #[test]
 fn using_functor_result_closure_escapes_soundly() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,
@@ -139,7 +139,7 @@ fn using_functor_result_closure_escapes_soundly() {
 /// immediate use-after-free; under Miri this pins the rooting path.
 #[test]
 fn using_temporary_functor_result_is_sound() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(scope, "FN (MAKE) -> Module = (MODULE Res = (LET val = 9))");
     run(scope, "USING (MAKE) SCOPE (FN (GETW) -> Number = (val))");
@@ -159,7 +159,7 @@ fn using_temporary_functor_result_is_sound() {
 /// surfaces `DispatchFailed`.
 #[test]
 fn using_on_non_module_fails_dispatch() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET n = 5");
     let mut sched = KoanRuntime::new();

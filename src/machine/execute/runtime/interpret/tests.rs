@@ -33,7 +33,7 @@ impl Write for SharedBuf {
 /// PRINT output lands in `captured`.
 pub(super) fn run<'run>(
     source: &str,
-    arena: &'run RuntimeArena,
+    arena: &'run KoanRegion,
     captured: Rc<RefCell<Vec<u8>>>,
 ) -> &'run Scope<'run> {
     let exprs = parse(source).expect("parse should succeed");

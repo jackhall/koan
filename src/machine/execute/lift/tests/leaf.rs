@@ -12,7 +12,7 @@ use super::{alloc_local_kf, defeat_fast_path};
 /// extend two arenas' lives on one descendant.
 #[test]
 fn kfunction_with_existing_anchor_preserves_it() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     let other = CallFrame::new(scope, None);
@@ -54,7 +54,7 @@ fn kfunction_with_existing_anchor_preserves_it() {
 /// captured scope (which `dying`'s arena doesn't own).
 #[test]
 fn kfunction_with_foreign_runtime_does_not_anchor() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -94,7 +94,7 @@ fn kfunction_with_foreign_runtime_does_not_anchor() {
 #[test]
 fn kmodule_with_local_child_scope_anchors() {
     use crate::machine::model::values::Module;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -124,7 +124,7 @@ fn kmodule_with_local_child_scope_anchors() {
 #[test]
 fn kmodule_with_foreign_child_scope_does_not_anchor() {
     use crate::machine::model::values::Module;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -150,7 +150,7 @@ fn kmodule_with_foreign_child_scope_does_not_anchor() {
 #[test]
 fn kmodule_with_existing_anchor_preserves_it() {
     use crate::machine::model::values::Module;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
@@ -181,7 +181,7 @@ fn kmodule_with_existing_anchor_preserves_it() {
 /// slow path. Defeats the fast path so the match is actually reached.
 #[test]
 fn primitive_lifts_via_deep_clone_on_slow_path() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);

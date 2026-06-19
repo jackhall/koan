@@ -1,6 +1,6 @@
 //! `dispatch` arm of `machine::core` tests.
 
-use super::super::{RuntimeArena, Scope};
+use super::super::{KoanRegion, Scope};
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
@@ -39,7 +39,7 @@ fn two_slot_sig<'a>(a: KType<'a>, b: KType<'a>) -> ExpressionSignature<'a> {
 /// An Identifier in an `Any` slot lands in `wrap_indices`.
 #[test]
 fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     register_builtin(scope, "ONE", one_slot_sig("v", KType::Any), body_a);
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
@@ -58,7 +58,7 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
 
 #[test]
 fn resolve_returns_ambiguous_for_tied_overloads() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     register_builtin(scope, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
     register_builtin(scope, "AN", two_slot_sig(KType::Any, KType::Number), body_b);
@@ -78,7 +78,7 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
 /// resolution does not fall through past a tie.
 #[test]
 fn resolve_does_not_descend_outer_on_inner_ambiguity() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let outer = run_root_bare(&arena);
     // User-position (not BUILTIN) so the builtin root-first short-circuit doesn't fire —
     // this exercises the inner-ambiguity-doesn't-descend walk, not builtin authority.
@@ -114,7 +114,7 @@ fn resolve_carries_placeholder_name_for_binder_function() {
             _ => None,
         }
     }
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
@@ -160,7 +160,7 @@ fn resolve_carries_placeholder_name_for_binder_function() {
 /// *and* tentatively (a Literal is not a bare name).
 #[test]
 fn resolve_tentative_falls_back_only_when_strict_empty() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     register_builtin(
         scope,
@@ -185,7 +185,7 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
 /// eager-sub loop instead of erroring.
 #[test]
 fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     register_builtin(
         scope,
@@ -215,7 +215,7 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
 fn pending_overload_parks_only_on_exact_bucket_match() {
     use crate::machine::model::types::{UntypedElement, UntypedKey};
     use crate::machine::NodeId;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let bucket_single: UntypedKey = vec![
         UntypedElement::Keyword("MAKESET".into()),
@@ -259,7 +259,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
 #[test]
 fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     use crate::machine::NodeId;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let outer = run_root_bare(&arena);
     // Outer finalized overload that strictly Picks `(MARK <number>)`.
     let outer_sig = ExpressionSignature {
@@ -309,7 +309,7 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
 /// strict Pick: the inner scope `Deferred`s rather than letting the outer win.
 #[test]
 fn inner_scope_eager_lean_shadows_outer_strict_pick() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let outer = run_root_bare(&arena);
     // Outer overload that would strictly Pick once the eager sub resolves.
     register_builtin(
@@ -349,7 +349,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
 #[test]
 fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     use crate::machine::NameOutcome;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let outer = run_root_bare(&arena);
     // Outer `:Identifier` overload that owns the bare name (shape-only admit).
     register_builtin(
@@ -391,7 +391,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     use crate::machine::core::kfunction::{Body, KFunction};
     use crate::machine::model::values::KObject;
     use crate::machine::NodeId;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     // Finalized `(PICK <number>)` user overload that strictly Picks. Registered at a
     // user index (not BUILTIN) so the same-bucket sibling below is a legitimate
@@ -494,7 +494,7 @@ fn scope_install_pending<'a>(
 fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     use crate::machine::model::types::{UntypedElement, UntypedKey};
     use crate::machine::NodeId;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let bucket: UntypedKey = vec![UntypedElement::Keyword("PICK".into()), UntypedElement::Slot];
     scope

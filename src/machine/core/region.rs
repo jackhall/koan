@@ -6,7 +6,7 @@
 //! is private and `alloc` is the only path that reaches it — no `&Arena` ever escapes, so no `Stored`
 //! impl can route a value around the redirect.
 //!
-//! The Koan instantiation (`RuntimeArena = Region<KoanStorageProfile>`, the family `Stored` impls,
+//! The Koan instantiation (`KoanRegion = Region<KoanStorageProfile>`, the family `Stored` impls,
 //! the cycle-gate walkers) lives in [`super::arena`]. See
 //! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
 //! for the lifetime-erasure soundness argument and

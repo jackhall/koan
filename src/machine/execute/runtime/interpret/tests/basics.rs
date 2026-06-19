@@ -11,7 +11,7 @@ use super::run;
 
 #[test]
 fn interprets_let_and_print() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run("LET x = 42\nPRINT \"hello\"\n", &arena, captured.clone());
 
@@ -22,7 +22,7 @@ fn interprets_let_and_print() {
 
 #[test]
 fn interprets_match_via_print() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
         r#"PRINT (MATCH true -> :Str WITH (true -> ("yes") false -> ("no")))"#,
@@ -37,7 +37,7 @@ fn match_branch_resolves_outer_name() {
     // The branch body's lazy slot evaluates in the surrounding scope, so a name bound
     // before the MATCH (`greeting`) resolves through the outer chain at branch-dispatch
     // time.
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
         "LET greeting = \"hi\"\nPRINT (MATCH true -> :Str WITH (true -> (greeting) false -> (\"no\")))\n",
@@ -51,7 +51,7 @@ fn match_branch_resolves_outer_name() {
 fn match_unmatched_branch_skips_let_side_effect() {
     // The unmatched branch's body is never dispatched, so its `LET y = 1` must not
     // execute and `y` must remain unbound.
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
         "MATCH false -> :Null WITH (true -> (LET y = 1) false -> (null))\nPRINT \"after\"\n",
@@ -67,7 +67,7 @@ fn match_unmatched_branch_skips_let_side_effect() {
 
 #[test]
 fn interprets_nested_expression() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
         r#"(PRINT (LET msg = "hello world!"))"#,
@@ -84,7 +84,7 @@ fn interprets_nested_expression() {
 
 #[test]
 fn let_binds_a_list_literal_of_numbers() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run("LET xs = [1 2 3]\n", &arena, captured);
     let data = scope.bindings().data();
@@ -103,7 +103,7 @@ fn let_binds_a_list_literal_of_numbers() {
 /// empty-container rule.
 #[test]
 fn let_binds_stamped_empty_list_from_typed_fn_return() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
         "FN (EMPTY) -> :(LIST OF Number) = ([])\nLET xs = (EMPTY)\n",
@@ -143,7 +143,7 @@ fn let_binds_an_empty_list_literal_errors() {
 
 #[test]
 fn list_literal_with_subexpression_element_evaluates_eagerly() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run("LET xs = [1 (LET y = 7) 3]\n", &arena, captured);
     let data = scope.bindings().data();
@@ -161,7 +161,7 @@ fn list_literal_with_subexpression_element_evaluates_eagerly() {
 
 #[test]
 fn multiline_list_literal_binds_correctly() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run("LET xs = [\n  1\n  2\n  3\n]\n", &arena, captured);
     let data = scope.bindings().data();
@@ -177,7 +177,7 @@ fn multiline_list_literal_binds_correctly() {
 
 #[test]
 fn nested_list_literal_produces_list_of_lists() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run("LET xs = [[1 2] [3 4]]\n", &arena, captured);
     let data = scope.bindings().data();

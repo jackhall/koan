@@ -14,7 +14,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KObject, Parseable};
-use crate::machine::{KError, RuntimeArena, Scope};
+use crate::machine::{KError, KoanRegion, Scope};
 use crate::parse::parse;
 use crate::scheduler::{reattach_value, NodeId};
 
@@ -44,20 +44,20 @@ impl Write for SharedBuf {
 }
 
 pub(crate) fn run_root_with_buf<'a>(
-    arena: &'a RuntimeArena,
+    arena: &'a KoanRegion,
 ) -> (&'a Scope<'a>, Rc<RefCell<Vec<u8>>>) {
     let buf = Rc::new(RefCell::new(Vec::new()));
     let scope = default_scope(arena, Box::new(SharedBuf(buf.clone())));
     (scope, buf)
 }
 
-pub(crate) fn run_root_silent<'a>(arena: &'a RuntimeArena) -> &'a Scope<'a> {
+pub(crate) fn run_root_silent<'a>(arena: &'a KoanRegion) -> &'a Scope<'a> {
     default_scope(arena, Box::new(std::io::sink()))
 }
 
 /// Run-root scope with no builtins registered, for tests that exercise scope machinery
 /// directly.
-pub(crate) fn run_root_bare<'a>(arena: &'a RuntimeArena) -> &'a Scope<'a> {
+pub(crate) fn run_root_bare<'a>(arena: &'a KoanRegion) -> &'a Scope<'a> {
     arena.alloc_scope(Scope::run_root(arena, None, Box::new(std::io::sink())))
 }
 

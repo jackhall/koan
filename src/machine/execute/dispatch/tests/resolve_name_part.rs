@@ -4,12 +4,12 @@ use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::NameOutcome;
-use crate::machine::{BindingIndex, RuntimeArena};
+use crate::machine::{BindingIndex, KoanRegion};
 use crate::source::Spanned;
 
 #[test]
 fn resolve_name_part_identifier_resolved() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let bound = arena.alloc_object(KObject::Number(7.0));
     scope
@@ -25,7 +25,7 @@ fn resolve_name_part_identifier_resolved() {
 
 #[test]
 fn resolve_name_part_type_resolved() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let part = ExpressionPart::Type(TypeIdentifier::leaf("Number".to_string()));
     let sched = KoanRuntime::new();
@@ -46,7 +46,7 @@ fn resolve_name_part_type_resolved() {
 
 #[test]
 fn resolve_name_part_parked() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let producer = sched.dispatch_in_scope(
@@ -65,7 +65,7 @@ fn resolve_name_part_parked() {
 
 #[test]
 fn resolve_name_part_unbound() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let part = ExpressionPart::Identifier("missing".to_string());
     let sched = KoanRuntime::new();
@@ -78,7 +78,7 @@ fn resolve_name_part_unbound() {
 /// A `consumer` argument that matches its own producer returns `Cycle`, not `Parked`.
 #[test]
 fn resolve_name_part_self_park_is_cycle() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let slot = sched.dispatch_in_scope(

@@ -143,7 +143,7 @@ pub(crate) fn register_overload_at<'a>(
 /// Registration order does not affect dispatch — [`Scope::resolve_dispatch`] buckets by
 /// untyped signature shape and picks overloads by `KType` specificity.
 pub fn default_scope<'a>(
-    arena: &'a crate::machine::core::RuntimeArena,
+    arena: &'a crate::machine::core::KoanRegion,
     out: Box<dyn std::io::Write + 'a>,
 ) -> &'a Scope<'a> {
     let scope = arena.alloc_scope(Scope::run_root(arena, None, out));

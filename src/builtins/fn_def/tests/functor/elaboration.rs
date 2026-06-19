@@ -1,7 +1,7 @@
 //! Scope-aware type elaboration of FN signatures: signature-bound params, LET→FN ordering, type-value bindings.
 
 use crate::builtins::test_support::{fn_is_registered, lookup_fn, run, run_root_silent};
-use crate::machine::RuntimeArena;
+use crate::machine::KoanRegion;
 
 /// `LET MyList = :(LIST OF Number)` writes the elaborated `KType::List(Number)`
 /// to `bindings.types` (reachable via `Scope::resolve_type`); the `KTypeValue`
@@ -9,7 +9,7 @@ use crate::machine::RuntimeArena;
 #[test]
 fn list_of_let_binding_is_ktype_value() {
     use crate::machine::model::KType;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET MyList = :(LIST OF Number)");
     let kt = scope
@@ -25,7 +25,7 @@ fn elaborator_lowers_ktype_value_binding() {
     use crate::machine::model::ast::TypeIdentifier;
     use crate::machine::model::types::{elaborate_type_identifier, ElabResult, Elaborator};
     use crate::machine::model::KType;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET MyList = :(LIST OF Number)");
     let mut el = Elaborator::new(scope);
@@ -42,7 +42,7 @@ fn elaborator_lowers_ktype_value_binding() {
 #[test]
 fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     use crate::machine::model::{Argument, KType, SignatureElement};
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,
@@ -87,7 +87,7 @@ fn let_then_fn_in_same_batch_works() {
     use crate::builtins::default_scope;
     use crate::machine::execute::KoanRuntime;
     use crate::parse::parse;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let exprs = parse(

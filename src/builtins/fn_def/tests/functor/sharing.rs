@@ -2,7 +2,7 @@
 
 use crate::builtins::test_support::{lookup_fn, parse_one, run, run_root_silent};
 use crate::machine::model::Carried;
-use crate::machine::RuntimeArena;
+use crate::machine::KoanRegion;
 
 /// Sharing-constraint admissibility: a `Signature { .. }` slot with a pinned
 /// `type_members["Type"] = Number` rejects modules whose pin disagrees, is absent,
@@ -12,7 +12,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     use crate::machine::model::ast::ExpressionPart;
     use crate::machine::model::values::{Module, ModuleSignature};
     use crate::machine::model::KType;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     // Real signature so the slot's `sig.sig_id()` is the one modules `mark_satisfies`.
     let sig_scope = arena.alloc_scope(crate::machine::Scope::child_under_sig(
@@ -99,7 +99,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
 #[test]
 fn functor_with_two_pinned_slots_round_trips() {
     use crate::machine::model::KType;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,
@@ -136,7 +136,7 @@ fn functor_with_two_pinned_slots_round_trips() {
 #[test]
 fn functor_return_with_sharing_constraint_pins_output_type() {
     use crate::machine::model::KType;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,
@@ -171,7 +171,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
 #[test]
 fn functor_return_with_mismatched_sharing_constraint_errors() {
     use crate::machine::execute::KoanRuntime;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,

@@ -85,10 +85,10 @@ mod tests {
     use crate::builtins::test_support::{
         parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
     };
-    use crate::machine::{KErrorKind, RuntimeArena};
+    use crate::machine::{KErrorKind, KoanRegion};
 
     fn run_program(source: &str) -> Vec<u8> {
-        let arena = RuntimeArena::new();
+        let arena = KoanRegion::new();
         let (scope, captured) = run_root_with_buf(&arena);
         run(scope, source);
         let bytes = captured.borrow().clone();
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn match_inexhaustive_errors() {
-        let arena = RuntimeArena::new();
+        let arena = KoanRegion::new();
         let scope = run_root_silent(&arena);
         run(
             scope,
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn match_arm_violating_declared_return_type_errors() {
-        let arena = RuntimeArena::new();
+        let arena = KoanRegion::new();
         let scope = run_root_silent(&arena);
         run(
             scope,
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn match_on_bool_inexhaustive_errors() {
-        let arena = RuntimeArena::new();
+        let arena = KoanRegion::new();
         let scope = run_root_silent(&arena);
         let err = run_one_err(
             scope,

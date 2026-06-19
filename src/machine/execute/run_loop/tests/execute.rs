@@ -4,14 +4,14 @@ use crate::builtins::default_scope;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::KObject;
-use crate::machine::RuntimeArena;
+use crate::machine::KoanRegion;
 use crate::source::Spanned;
 
 use super::let_expr;
 
 #[test]
 fn dispatches_independent_expressions_in_order() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let ids = sched.enter_block(root.id, vec![let_expr("x", 1.0), let_expr("y", 2.0)], root);
@@ -31,7 +31,7 @@ fn dispatches_independent_expressions_in_order() {
 fn later_expression_sees_earlier_binding_via_lookup() {
     // The second top-level expression spawns a sub-Dispatch for `(x)`; the earlier
     // LET runs first because its NodeId is smaller. Guards in-order processing.
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
 

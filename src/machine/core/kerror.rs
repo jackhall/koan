@@ -8,7 +8,7 @@ use crate::machine::model::types::{
     KKind, KType, NominalMember, NominalSchema, Parseable, Record, RecursiveSet,
 };
 use crate::machine::model::values::{KObject, NonWrappedRef};
-use crate::machine::RuntimeArena;
+use crate::machine::KoanRegion;
 use crate::source::{self, FileId, SourceLoc, Span};
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
@@ -175,7 +175,7 @@ impl KError {
     /// arm that returns the raw payload across a frame boundary inherits the general
     /// `Wrapped.type_id` re-anchor gap (the `inner` record itself rides an `Rc` and is
     /// lift-safe).
-    pub fn to_tagged<'a>(&self, arena: &'a RuntimeArena) -> KObject<'a> {
+    pub fn to_tagged<'a>(&self, arena: &'a KoanRegion) -> KObject<'a> {
         let (name, fields) = self.kind.to_struct_fields();
         let frames_list = KObject::list(
             self.frames

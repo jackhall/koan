@@ -1,6 +1,6 @@
 //! `register` arm of `machine::core` tests.
 
-use super::super::{BindingIndex, Resolution, RuntimeArena};
+use super::super::{BindingIndex, Resolution, KoanRegion};
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::model::types::{
@@ -16,7 +16,7 @@ use super::{body_no_op, unit_signature};
 
 #[test]
 fn bind_value_errors_on_same_scope_rebind() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let v1 = arena.alloc_object(KObject::Number(1.0));
     let v2 = arena.alloc_object(KObject::Number(2.0));
@@ -34,7 +34,7 @@ fn bind_value_errors_on_same_scope_rebind() {
 
 #[test]
 fn bind_value_allows_shadowing_in_child_scope() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let outer = run_root_bare(&arena);
     let v1 = arena.alloc_object(KObject::Number(1.0));
     outer
@@ -51,7 +51,7 @@ fn bind_value_allows_shadowing_in_child_scope() {
 
 #[test]
 fn register_function_dedupes_exact_signature() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let f1 = arena.alloc_function(KFunction::new(
         unit_signature(),
@@ -82,7 +82,7 @@ fn register_function_dedupes_exact_signature() {
 /// the unified `try_apply` shares the FN dedupe rule.
 #[test]
 fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let f1 = arena.alloc_function(KFunction::new(
         unit_signature(),
@@ -113,7 +113,7 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
 /// structural-rejection only on pointer-distinct ones.
 #[test]
 fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let f = arena.alloc_function(KFunction::new(
         unit_signature(),
@@ -132,7 +132,7 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
 
 #[test]
 fn register_function_allows_overload_with_different_arg_types() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let sig_num = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
@@ -170,7 +170,7 @@ fn register_function_allows_overload_with_different_arg_types() {
 /// coexist with a same-name value binding. The two namespaces stay independent.
 #[test]
 fn register_function_coexists_with_same_name_value() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let v = arena.alloc_object(KObject::Number(1.0));
     scope
@@ -199,7 +199,7 @@ fn register_function_coexists_with_same_name_value() {
 
 #[test]
 fn resolve_returns_placeholder_when_only_placeholder_exists() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     scope
         .install_placeholder("x".to_string(), NodeId(7), BindingIndex::BUILTIN)
@@ -212,7 +212,7 @@ fn resolve_returns_placeholder_when_only_placeholder_exists() {
 
 #[test]
 fn resolve_stops_at_first_hit_does_not_descend_outer() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let outer = run_root_bare(&arena);
     let v = arena.alloc_object(KObject::Number(1.0));
     outer
@@ -237,7 +237,7 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
 
 #[test]
 fn bind_value_clears_own_placeholder() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     scope
         .install_placeholder("x".to_string(), NodeId(2), BindingIndex::BUILTIN)
@@ -258,7 +258,7 @@ fn bind_value_clears_own_placeholder() {
 fn visibility_chain_none_sees_every_entry() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let v = arena.alloc_object(KObject::Number(7.0));
     scope
@@ -278,7 +278,7 @@ fn visibility_chain_none_sees_every_entry() {
 fn visibility_strict_less_than_hides_later_sibling() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let v = arena.alloc_object(KObject::Number(7.0));
     scope
@@ -296,7 +296,7 @@ fn visibility_strict_less_than_hides_later_sibling() {
 fn visibility_strict_less_than_admits_earlier_sibling() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let v = arena.alloc_object(KObject::Number(7.0));
     scope
@@ -313,7 +313,7 @@ fn visibility_strict_less_than_admits_earlier_sibling() {
 fn visibility_self_index_hidden_under_strict_less_than() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     let v = arena.alloc_object(KObject::Number(7.0));
     scope
@@ -331,7 +331,7 @@ fn visibility_self_index_hidden_under_strict_less_than() {
 fn visibility_placeholder_filtered_same_as_value() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     scope
         .install_placeholder("ph".to_string(), NodeId(2), BindingIndex::value(5))
@@ -352,7 +352,7 @@ fn visibility_placeholder_filtered_same_as_value() {
 fn visibility_type_side_gate_mirrors_value_side() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_bare(&arena);
     scope.register_type("TyLate".to_string(), KType::Number, BindingIndex::value(5));
     let consumer_before: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);

@@ -23,7 +23,7 @@ pub use action::ActionFn;
 pub use body::{BinderBucketFn, BinderNameFn, Body};
 pub use pick::ClassifiedSlots;
 
-/// SAFETY: the captured scope is allocated in a `RuntimeArena` that outlives this
+/// SAFETY: the captured scope is allocated in a `KoanRegion` that outlives this
 /// `KFunction` — they share the arena (FN registers the function in the same scope it
 /// captures; builtins are registered in run-root). See `core/arena.rs` for the broader
 /// lifetime-erasure pattern.

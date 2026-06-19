@@ -117,7 +117,7 @@ impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn read_lifted<'o>(
         &self,
         dep: NodeId,
-        dest: &'o crate::machine::core::RuntimeArena,
+        dest: &'o crate::machine::core::KoanRegion,
     ) -> Result<crate::machine::model::Carried<'o>, KError> {
         match self.sched.read_result_with_frame(dep) {
             // Re-anchor the scheduler's `'node` read to the destination *node* lifetime `'o` (the

@@ -2,13 +2,13 @@
 //! the `pending_types` RAII guard lifecycle.
 
 use super::*;
-use crate::machine::core::arena::RuntimeArena;
+use crate::machine::core::arena::KoanRegion;
 use crate::machine::core::scope_id::ScopeId;
 use crate::machine::model::types::{KKind, KType};
 
 #[test]
 fn try_register_type_inserts_into_types_map() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = arena.alloc_ktype(KType::Number);
     let outcome = bindings
@@ -25,7 +25,7 @@ fn try_register_type_inserts_into_types_map() {
 
 #[test]
 fn try_register_type_rejects_collision_with_rebind() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let bindings: Bindings<'_> = Bindings::new();
     let kt1: &KType = arena.alloc_ktype(KType::Number);
     let kt2: &KType = arena.alloc_ktype(KType::Str);
@@ -46,7 +46,7 @@ fn try_register_type_rejects_collision_with_rebind() {
 
 #[test]
 fn try_register_type_yields_conflict_on_live_types_borrow() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = arena.alloc_ktype(KType::Number);
     let _r = bindings.types();
@@ -59,7 +59,7 @@ fn try_register_type_yields_conflict_on_live_types_borrow() {
 
 #[test]
 fn try_register_type_clears_matching_placeholder() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = arena.alloc_ktype(KType::Number);
     bindings
@@ -74,7 +74,7 @@ fn try_register_type_clears_matching_placeholder() {
 
 #[test]
 fn try_register_type_does_not_touch_data_or_functions() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = arena.alloc_ktype(KType::Number);
     bindings

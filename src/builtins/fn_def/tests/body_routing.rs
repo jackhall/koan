@@ -4,13 +4,13 @@
 use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, run, run_root_silent};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KType, ReturnType};
-use crate::machine::{KErrorKind, RuntimeArena};
+use crate::machine::{KErrorKind, KoanRegion};
 
 /// Parens-form return type carrying a bare lowercase identifier matching a parameter
 /// name must defer.
 #[test]
 fn fn_def_sigil_return_type_with_identifier_param_ref_defers() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(scope, "FN (USE xs :Number) -> :(somefn xs) = (xs)");
     let f = lookup_fn(scope, "USE");
@@ -24,7 +24,7 @@ fn fn_def_sigil_return_type_with_identifier_param_ref_defers() {
 /// must defer.
 #[test]
 fn fn_def_sigil_return_type_with_list_literal_param_ref_defers() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(scope, "FN (USE xs :Number) -> :([xs]) = (xs)");
     let f = lookup_fn(scope, "USE");
@@ -38,7 +38,7 @@ fn fn_def_sigil_return_type_with_list_literal_param_ref_defers() {
 /// in a value position must defer.
 #[test]
 fn fn_def_sigil_return_type_with_dict_literal_param_ref_defers() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(scope, "FN (USE xs :Number) -> :({\"k\": xs}) = (xs)");
     let f = lookup_fn(scope, "USE");
@@ -54,7 +54,7 @@ fn fn_def_sigil_return_type_with_dict_literal_param_ref_defers() {
 /// into `ReturnType::Deferred(_)` once the SIG terminalizes.
 #[test]
 fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,
@@ -75,7 +75,7 @@ fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
 /// the lifted `KTypeValue` out of `&[&KObject]`.
 #[test]
 fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,
@@ -94,7 +94,7 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
 /// and routes through `ReturnTypeCapture::Unresolved(name)` (`make_capture`).
 #[test]
 fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     run(
         scope,
@@ -114,7 +114,7 @@ fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
 /// rejection to the right signature slot rather than an opaque elaborator failure.
 #[test]
 fn fn_def_parens_param_type_non_type_value_errors() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("FN (USE xs (1)) -> Null = (xs)"), scope);
@@ -137,7 +137,7 @@ fn fn_def_parens_param_type_non_type_value_errors() {
 /// `ReturnTypeCapture::ReturnTypeExpr` arm of the dep-finish).
 #[test]
 fn fn_def_sigil_return_type_non_type_value_errors() {
-    let arena = RuntimeArena::new();
+    let arena = KoanRegion::new();
     let scope = run_root_silent(&arena);
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("FN (NOP) -> :(1) = (1)"), scope);
