@@ -191,7 +191,7 @@ fn access_type_member<'a>(
                 return Ok(Carried::Object(obj));
             }
             if let Some(kt) = decl.resolve_type(field) {
-                return Ok(Carried::Type(scope.arena.alloc_ktype(kt.clone())));
+                return Ok(Carried::Type(scope.region.alloc_ktype(kt.clone())));
             }
             Err(KError::new(KErrorKind::ShapeError(format!(
                 "signature `{}` has no member `{}`",
@@ -227,9 +227,9 @@ fn access_field<'a>(
         KObject::Wrapped { inner, type_id } => match inner.get() {
             KObject::Record(values, _) => match values.get(field) {
                 Some(Held::Object(value)) => Ok(Carried::Object(
-                    scope.arena.alloc_object(value.deep_clone()),
+                    scope.region.alloc_object(value.deep_clone()),
                 )),
-                Some(Held::Type(kt)) => Ok(Carried::Type(scope.arena.alloc_ktype(kt.clone()))),
+                Some(Held::Type(kt)) => Ok(Carried::Type(scope.region.alloc_ktype(kt.clone()))),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",
                     type_id.name(),
@@ -260,22 +260,22 @@ fn access_field<'a>(
 /// "Type"}`, not the underlying `Number`). Transparent `:!` leaves `slot_type_tags` empty,
 /// so transparent reads stay concrete.
 ///
-/// The re-tag carrier (and its `type_id`) is alloc'd in the *module*'s arena, not the
+/// The re-tag carrier (and its `type_id`) is alloc'd in the *module*'s region, not the
 /// read-site `scope`'s: `Wrapped::deep_clone` is shallow (the NEWTYPE invariant that
 /// `type_id` is a declaration-stable `&'a KType`), so the `type_id` must outlive any
 /// lift/deep-clone of the read value — e.g. a functor body's `(Er.zero)` whose read-site
-/// scope is a per-call arena. The module and its `slot_type_tags` are declaration-stable,
-/// so the module arena is the right home; both `inner` (the slot value) and `type_id`
+/// scope is a per-call region. The module and its `slot_type_tags` are declaration-stable,
+/// so the module region is the right home; both `inner` (the slot value) and `type_id`
 /// (the abstract tag, which references the module) then live there together.
 fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<Carried<'a>, KError> {
     let module_scope = m.child_scope();
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
-        return Ok(Carried::Type(module_scope.arena.alloc_ktype(kt)));
+        return Ok(Carried::Type(module_scope.region.alloc_ktype(kt)));
     }
     if let Some(Resolution::Value(obj)) = module_scope.bindings().lookup_value(field, None) {
         if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
-            let type_id = module_scope.arena.alloc_ktype(tag);
-            return Ok(Carried::Object(module_scope.arena.alloc_object(
+            let type_id = module_scope.region.alloc_ktype(tag);
+            return Ok(Carried::Object(module_scope.region.alloc_object(
                 KObject::Wrapped {
                     inner: NonWrappedRef::peel(obj),
                     type_id,
@@ -285,7 +285,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<Carried<'a
         return Ok(Carried::Object(obj));
     }
     if let Some(kt) = module_scope.resolve_type(field) {
-        return Ok(Carried::Type(module_scope.arena.alloc_ktype(kt.clone())));
+        return Ok(Carried::Type(module_scope.region.alloc_ktype(kt.clone())));
     }
     Err(KError::new(KErrorKind::ShapeError(format!(
         "module `{}` has no member `{}`",
@@ -381,8 +381,8 @@ mod tests {
 
     #[test]
     fn attr_reads_field_from_named_struct() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "NEWTYPE Point = :{x :Number, y :Number}\nLET p = (Point {x = 3, y = 4})",
@@ -393,8 +393,8 @@ mod tests {
 
     #[test]
     fn attr_reads_each_field_independently() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "NEWTYPE Point = :{x :Number, y :Number}\nLET p = (Point {x = 3, y = 4})",
@@ -405,8 +405,8 @@ mod tests {
 
     #[test]
     fn attr_chained_through_nested_struct() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "NEWTYPE Point = :{x :Number, y :Number}\n\
@@ -421,8 +421,8 @@ mod tests {
 
     #[test]
     fn attr_unbound_name_errors() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("ghost.x"));
         assert!(
             matches!(&err.kind, KErrorKind::UnboundName(name) if name == "ghost"),
@@ -432,8 +432,8 @@ mod tests {
 
     #[test]
     fn attr_on_non_struct_value_errors() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "LET n = 5");
         let err = run_one_err(scope, parse_one("n.x"));
         match &err.kind {
@@ -448,8 +448,8 @@ mod tests {
 
     #[test]
     fn attr_unknown_field_errors() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "NEWTYPE Point = :{x :Number, y :Number}\nLET p = (Point {x = 3, y = 4})",
@@ -464,8 +464,8 @@ mod tests {
 
     #[test]
     fn attr_chained_unknown_field_errors() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "NEWTYPE Point = :{x :Number, y :Number}\n\
@@ -485,8 +485,8 @@ mod tests {
     /// `b.x` on a NEWTYPE-wrapped record-newtype reads through to the underlying field.
     #[test]
     fn access_field_falls_through_wrapped_record_newtype() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "NEWTYPE Point = :{x :Number, y :Number}\n\
@@ -501,8 +501,8 @@ mod tests {
     /// Wrapping a scalar doesn't grow fields: `d.x` on a NEWTYPE-over-Number errors.
     #[test]
     fn access_field_rejects_wrapped_non_struct() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "NEWTYPE Distance = Number\n\
@@ -524,8 +524,8 @@ mod tests {
     /// underlying `Number`, so a deferred return `Er.Carrier` accepts the body.
     #[test]
     fn opaque_view_slot_read_re_tags_with_abstract_type() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))\n\
@@ -545,8 +545,8 @@ mod tests {
     /// concrete: `IntOrdView.zero` reads as the underlying `Number`, not the abstract `Type`.
     #[test]
     fn transparent_view_slot_read_stays_concrete() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))\n\
@@ -566,8 +566,8 @@ mod tests {
     /// `b = Boxed(p)` wraps the bare record tagged `Boxed`; the diagnostic names `Boxed`.
     #[test]
     fn access_field_falls_through_wrapped_with_missing_field() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "NEWTYPE Point = :{x :Number, y :Number}\n\

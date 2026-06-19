@@ -173,7 +173,7 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
     }
 }
 
-/// Wake-time context a finish receives: the slot's **own** scope (interior-mutable, with `.arena`)
+/// Wake-time context a finish receives: the slot's **own** scope (interior-mutable, with `.region`)
 /// re-projected at wake — a deferred binder `register_*`s on it here.
 pub struct FinishCtx<'a, 'c> {
     pub scope: &'c Scope<'a>,

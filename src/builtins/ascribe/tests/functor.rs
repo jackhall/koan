@@ -9,8 +9,8 @@ use crate::parse::parse;
 
 #[test]
 fn functor_returns_a_module() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -41,8 +41,8 @@ fn functor_returns_a_module() {
 
 #[test]
 fn functor_body_reads_signature_typed_parameter() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -76,8 +76,8 @@ fn functor_body_reads_signature_typed_parameter() {
 /// require multi-statement-FN-body forward refs that don't share lexical bindings.
 #[test]
 fn functor_application_is_generative() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -116,8 +116,8 @@ fn functor_application_is_generative() {
 /// `Signature { sig, .. }` (constraint-role) slot.
 #[test]
 fn functor_rejects_unascribed_module_argument() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -151,8 +151,8 @@ fn functor_rejects_unascribed_module_argument() {
 /// (`OrderedSig` vs `HashedSig`); dispatch routes by the argument's satisfied sig.
 #[test]
 fn functor_overloads_dispatch_by_signature_bound_param() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -218,8 +218,8 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
 /// and the body still reads the underlying member through the view.
 #[test]
 fn transparent_ascription_satisfies_signature_bound_slot() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -252,8 +252,8 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
 /// just like the lowercase-identifier and parens-wrapped forms do.
 #[test]
 fn functor_argument_bare_type_token_auto_wraps() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -289,8 +289,8 @@ fn functor_argument_bare_type_token_auto_wraps() {
 #[test]
 fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     use crate::machine::model::types::KKind;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let src = "SIG MonadSig = ((LET Wrap = (TEMPLATE Type)))\n\
                MODULE IntList = ((LET Wrap = Number))\n\
                LET First = (IntList :| MonadSig)\n\
@@ -359,11 +359,11 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
 }
 
 /// Miri audit-slate: the held `&Module` plus its re-bound child scope must
-/// survive subsequent arena churn under tree borrows.
+/// survive subsequent region churn under tree borrows.
 #[test]
 fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     // Plain `LET` plus `LET = FN` so the re-bind walk hits both the `data` write
     // and the `KFunction → functions` mirror.
     run(
@@ -381,7 +381,7 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
         other => panic!("Held should be a module identity in types, got {other:?}"),
     };
 
-    // Churn the run-root arena, then re-ascribe to allocate a second re-bind
+    // Churn the run-root region, then re-ascribe to allocate a second re-bind
     // scope. The original `held` must still walk through to its own pair.
     run(scope, "FN (CHURNCALL) -> Number = (1)");
     for _ in 0..20 {

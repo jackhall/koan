@@ -1,7 +1,7 @@
 //! `ScopePtr` — the single audited owner of the `Scope` lifetime-erasure that
-//! arena-stored carriers rely on. `CallFrame`, `Module`, `ModuleSignature`, and `KFunction`
+//! region-stored carriers rely on. `CallFrame`, `Module`, `ModuleSignature`, and `KFunction`
 //! each hold a captured/defining scope whose real lifetime the borrow checker can't
-//! track across the arena's `'static` storage; they store a `ScopePtr<'a>` and re-attach
+//! track across the region's `'static` storage; they store a `ScopePtr<'a>` and re-attach
 //! the scope on access, so the transmute and the cast that erases it live in one place
 //! instead of at every carrier.
 //!
@@ -21,10 +21,10 @@
 //! `'static` store through [`ScopePtr::erase_static`], a brand-dropping constructor that is *safe*
 //! to call (forgetting a lifetime cannot fabricate one); the fabrication hazard is deferred to the
 //! `unsafe` re-attach, witnessed by the carrier's pinning — the frame `Rc` (which, for a
-//! `YokedChild`, pins the ancestor arena via its `FrameStorage.outer` chain). The carriers that own a real `'a` — `Module`, `ModuleSignature`,
+//! `YokedChild`, pins the ancestor region via its `FrameStorage.outer` chain). The carriers that own a real `'a` — `Module`, `ModuleSignature`,
 //! `KFunction` — route the safe [`ScopePtr::reattach`] and carry no `unsafe`.
 //!
-//! See [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
+//! See [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the soundness argument the carriers' pinning supplies.
 
 use std::marker::PhantomData;
@@ -33,7 +33,7 @@ use std::ptr::NonNull;
 use super::scope::Scope;
 use crate::scheduler::{reattach_ref, Reattachable};
 
-/// `Reattachable` family for [`Scope`] — the family every scope-pointer re-attach (and the arena's
+/// `Reattachable` family for [`Scope`] — the family every scope-pointer re-attach (and the region's
 /// scope-erasure storage) routes through the single audited lifetime-retype. Layout-invariant: a
 /// `Scope<'r>` is generic only in `'r`.
 pub struct ScopeFamily;
@@ -91,10 +91,10 @@ impl<'a> ScopePtr<'a> {
 
     /// Re-attach the branded `'a` to the stored scope. Safe: [`Self::erase`] consumed a real
     /// `&'a Scope<'a>`, `_brand` bounds every use of this `ScopePtr<'a>` (and its carrier) to
-    /// `'a`, and the arena keeps the pointee alive for all of `'a`, so handing back `'a` is
+    /// `'a`, and the region keeps the pointee alive for all of `'a`, so handing back `'a` is
     /// exactly the lifetime the original borrow proved.
     pub fn reattach(&self) -> &'a Scope<'a> {
-        // SAFETY: `'a` is the brand-recorded lifetime of a real `&'a Scope<'a>` the arena
+        // SAFETY: `'a` is the brand-recorded lifetime of a real `&'a Scope<'a>` the region
         // keeps live for all of `'a`; re-attaching the same `'a` is sound. `'a` is driven by
         // the return-type annotation — `reattach_unbounded`'s lifetime is late-bound, so it
         // cannot be a turbofish argument.

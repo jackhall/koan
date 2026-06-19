@@ -33,14 +33,14 @@ use crate::machine::model::values::{Carried, Held, KObject};
 use super::body::{body_statement_refs, Body};
 use super::KFunction;
 
-/// A body's execution context: the per-call `arena` it runs in. Owned (an `Rc`), so it carries no
-/// lifetime; the body re-projects its scope from the arena on demand. The arena rides forward via
+/// A body's execution context: the per-call `region` it runs in. Owned (an `Rc`), so it carries no
+/// lifetime; the body re-projects its scope from the region on demand. The region rides forward via
 /// the `Rc` — no borrow is stored.
 #[derive(Clone)]
 pub struct ExecFrame {
-    /// The per-call arena the body executes in: it backs allocations, and its child scope is the
+    /// The per-call region the body executes in: it backs allocations, and its child scope is the
     /// body's scope. Owned — supplied (and, for TCO, reset) by the scheduler.
-    pub arena: Rc<CallFrame>,
+    pub region: Rc<CallFrame>,
 }
 
 /// **exec → scheduler.** What running a body describes next, in `exec`'s native currency. Two
@@ -108,10 +108,10 @@ pub fn run_user_fn<'ast, 'step>(
     // bindings (scope bindings store `&KObject`). Concentrated in `with_frame_interior` so the seed
     // fabricates no `&'a`.
     let bind = ctx
-        .arena
-        .with_frame_interior(|inner_arena, child| -> Result<(), KError> {
+        .region
+        .with_frame_interior(|inner_region, child| -> Result<(), KError> {
             let cells: Record<Held> = args.map(|carried| Held::from_carried(*carried));
-            let args_record = inner_arena.alloc_object(KObject::record_of_held(cells));
+            let args_record = inner_region.alloc_object(KObject::record_of_held(cells));
             if let KObject::Record(cells, _types) = args_record {
                 for (name, cell) in cells.iter() {
                     match cell {
@@ -167,7 +167,7 @@ pub fn run_user_fn<'ast, 'step>(
                 // `Type` form (`-> Er`): elaborate it inline against the per-call (param-bound)
                 // child scope and carry the resolved type on the tail-replace.
                 DeferredReturn::Type(type_expr) => {
-                    let return_type = ctx.arena.with_frame_interior(|_inner_arena, child| {
+                    let return_type = ctx.region.with_frame_interior(|_inner_region, child| {
                         let mut elaborator = Elaborator::new(child);
                         match elaborate_type_identifier(&mut elaborator, type_expr) {
                             ElabResult::Done(kt) => kt,

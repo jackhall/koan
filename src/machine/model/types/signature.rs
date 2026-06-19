@@ -69,7 +69,7 @@ pub enum ReturnType<'a> {
 /// return-type slot kinds:
 ///
 /// - `Type` — parser-preserved structured form (`Er`, `List<Er>`). Re-elaborated per
-///   call via `elaborate_type_identifier`. Owns its strings, so no arena lifetime.
+///   call via `elaborate_type_identifier`. Owns its strings, so no region lifetime.
 /// - `Expression` — captured `:(…)` / dotted return expression (`Er.Type`,
 ///   `Set WITH {…}`). Re-runs as a sub-Dispatch under the per-call scope; the resulting
 ///   `Carried::Type`'s inner `KType` is the per-call return type.
@@ -302,7 +302,7 @@ pub enum SignatureElement<'a> {
 }
 
 /// `name` keys the slot in the bound argument record; `ktype` gates what `ExpressionPart`s it
-/// accepts. `'a` because the declared `KType` may reference arena-pinned `Module` /
+/// accepts. `'a` because the declared `KType` may reference region-pinned `Module` /
 /// `ModuleSignature` carriers.
 pub struct Argument<'a> {
     pub name: String,

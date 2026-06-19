@@ -153,7 +153,7 @@ pub(in crate::machine::execute) type NodeContinuation<'a> = Box<
 /// (`Erased<ContinuationFamily>`) on a lifetime-free node and re-anchors it once at step entry via
 /// [`vend_carrier`](crate::scheduler::vend_carrier) before the single-shot run. The continuation
 /// captures run-lived data (the parked AST, a finish closure's captured scope) living in the run
-/// arena or a strict ancestor of the slot's per-call cart, which the node's
+/// region or a strict ancestor of the slot's per-call cart, which the node's
 /// [`NodeFrame`](super::nodes::NodeFrame) cart `Rc` keeps live across the step — the liveness witness
 /// the scheduler's reattach is bounded by. Unlike the `Copy` value / contract carriers the
 /// continuation is a `Box<dyn FnOnce>` consumed once, so the family is not `Copy` and the vend takes
@@ -217,11 +217,11 @@ pub(in crate::machine::execute) fn ignore_results<'a>(
 /// Reattach a step-bound `'step` terminal up to `'run` for storage in the slot table. The value is
 /// born in the producer's per-call frame (or is genuinely `'run`-lived), and the harness pins that
 /// frame's `Rc` alongside the terminal in the scheduler's finalized-slot state until the slot is
-/// freed, so the stored `'run` view cannot outlive its backing arena. The reattach is needed only
+/// freed, so the stored `'run` view cannot outlive its backing region. The reattach is needed only
 /// because `Carried` is invariant; this is the held-`Rc` re-exposure seam.
 pub(in crate::machine::execute) fn pin_carried_to_run<'run>(value: Carried<'_>) -> Carried<'run> {
     // SAFETY: lifetime-only reattach; the frame `Rc` co-stored in `SlotState::Done` heap-pins the
-    // backing arena for as long as the terminal is readable. See the doc comment.
+    // backing region for as long as the terminal is readable. See the doc comment.
     unsafe { reattach_value::<CarriedFamily>(value) }
 }
 
@@ -249,18 +249,18 @@ mod erased_continuation_tests {
     use crate::scheduler::{vend_carrier, Erased, Scheduler};
     use std::rc::Rc;
 
-    /// A continuation capturing cart-ancestor data (a `&KObject` in the run arena — a strict
+    /// A continuation capturing cart-ancestor data (a `&KObject` in the run region — a strict
     /// ancestor of the cart) is erased to `'static`, reattached against the cart `Rc` for one step,
     /// and then *invoked*, so tree borrows checks the capture read through the lifetime-fabricated
-    /// box. The cart's `outer` chain pins the ancestor arena, so the step-scale fabrication is
+    /// box. The cart's `outer` chain pins the ancestor region, so the step-scale fabrication is
     /// honest. Mirrors the erase → reattach transmute pair plus the single-shot call site
     /// (`run_step`); fails on UB, not values.
     #[test]
     fn erased_continuation_reattach_roundtrip() {
-        let arena = KoanRegion::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
-        // The captured value lives in the run arena — the ancestor the cart's `outer` chain pins.
-        let captured: &KObject = arena.alloc_object(KObject::Number(7.0));
+        let region = KoanRegion::new();
+        let scope = default_scope(&region, Box::new(std::io::sink()));
+        // The captured value lives in the run region — the ancestor the cart's `outer` chain pins.
+        let captured: &KObject = region.alloc_object(KObject::Number(7.0));
         // The cart `Rc` held live to the end of the test witnesses the reattach below.
         let cart = Rc::new(CallFrame::new(scope, None));
 
@@ -280,8 +280,8 @@ mod erased_continuation_tests {
         let view = SchedulerView::new(&sched, &ambient);
         let out = reattached(&view, &[], 0);
         assert!(matches!(out, Outcome::Done(Err(_))));
-        // Mutate the arena through a sibling pointer after the call to catch a stacked-borrow regression.
-        let _other = arena.alloc_object(KObject::Number(8.0));
+        // Mutate the region through a sibling pointer after the call to catch a stacked-borrow regression.
+        let _other = region.alloc_object(KObject::Number(8.0));
         assert!(matches!(captured, KObject::Number(n) if *n == 7.0));
     }
 }

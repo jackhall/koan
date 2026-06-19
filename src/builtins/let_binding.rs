@@ -6,7 +6,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
 
-/// `LET <name> = <value:Any>` — deep-clones the bound value into the arena and inserts it
+/// `LET <name> = <value:Any>` — deep-clones the bound value into the region and inserts it
 /// under `name`. Two overloads share this body, differing only in the `name` slot's `KType`:
 /// `Identifier` and `ProperType`. Same partition logic across both: reads its args from the
 /// `BodyCtx::args` record, writes the binding directly on `ctx.scope` (interior-mutable), and
@@ -89,7 +89,7 @@ pub fn body<'a>(
              `(VAL {name}: <Type>)` instead of `(LET {name} = <example-value>)`",
         ))));
     }
-    let arena = ctx.scope.arena;
+    let region = ctx.scope.region;
     if let Some(kt) = type_for_types_map {
         let is_type_constructor = matches!(
             &kt,
@@ -105,7 +105,7 @@ pub fn body<'a>(
         } else {
             kt
         };
-        let kt_ref: &'a KType<'a> = arena.alloc_ktype(kt.clone());
+        let kt_ref: &'a KType<'a> = region.alloc_ktype(kt.clone());
         if let Err(e) = ctx.scope.register_user_type(name, kt, bind_index) {
             return done_err(e);
         }
@@ -122,7 +122,7 @@ pub fn body<'a>(
                 suggestion = capitalize_identifier(&name),
             ))));
         }
-        let allocated: &'a KObject<'a> = arena.alloc_object(value.deep_clone());
+        let allocated: &'a KObject<'a> = region.alloc_object(value.deep_clone());
         if allocated.is_unstamped_empty_container() {
             return done_err(KError::new(KErrorKind::ShapeError(format!(
                 "empty container bound to `{name}` has no element type to infer; \

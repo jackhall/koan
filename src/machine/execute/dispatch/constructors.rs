@@ -154,7 +154,7 @@ fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind<'step>)
 }
 
 /// All value subs have completed. Read each, materialize the kind-keyed
-/// payload, and arena-allocate the produced `KObject`.
+/// payload, and region-allocate the produced `KObject`.
 pub(in crate::machine::execute::dispatch) fn finish<'step>(
     scope: &Scope<'step>,
     kind: &CtorKind<'step>,
@@ -188,7 +188,7 @@ pub(in crate::machine::execute::dispatch) fn finish<'step>(
         }
     };
     match result {
-        Ok(obj) => Outcome::Done(Ok(Carried::Object(scope.arena.alloc_object(obj)))),
+        Ok(obj) => Outcome::Done(Ok(Carried::Object(scope.region.alloc_object(obj)))),
         Err(e) => Outcome::Done(Err(e)),
     }
 }

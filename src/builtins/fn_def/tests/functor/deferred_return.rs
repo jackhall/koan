@@ -12,8 +12,8 @@ use crate::machine::KoanRegion;
 #[test]
 fn functor_return_bare_parameter_name_resolves_per_call() {
     use crate::machine::model::ReturnType;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
@@ -44,8 +44,8 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
 #[test]
 fn functor_return_dotted_type_member_parameter_resolves_per_call() {
     use crate::machine::model::ReturnType;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))\n\
@@ -81,8 +81,8 @@ fn functor_return_dotted_type_member_parameter_resolves_per_call() {
 /// carrier yields the underlying `Number(0)`.
 #[test]
 fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))\n\
@@ -128,8 +128,8 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
 #[test]
 fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     use crate::machine::model::ReturnType;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
@@ -157,8 +157,8 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
 /// incidental `Number` element type would leak through.
 #[test]
 fn functor_deferred_return_coarsens_list_carrier() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG Seq = ((LET Carrier = :(LIST OF Any)) (VAL items :Carrier))\n\
@@ -188,8 +188,8 @@ fn functor_deferred_return_coarsens_list_carrier() {
 #[test]
 fn deferred_return_tail_call_stays_tco_flat() {
     use crate::machine::execute::KoanRuntime;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG Seq = ((LET Carrier = Number) (VAL v :Number))\n\
@@ -227,8 +227,8 @@ fn deferred_return_tail_call_stays_tco_flat() {
 #[test]
 fn deferred_expression_return_tail_chain_reuses_frames() {
     use crate::machine::execute::KoanRuntime;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG Seq = ((LET Carrier = Number) (VAL v :Number))\n\
@@ -268,8 +268,8 @@ fn deferred_expression_return_tail_chain_reuses_frames() {
 fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     use crate::machine::execute::KoanRuntime;
     use crate::machine::KErrorKind;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\

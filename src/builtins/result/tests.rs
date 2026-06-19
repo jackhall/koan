@@ -5,8 +5,8 @@ use crate::machine::{KErrorKind, KoanRegion};
 
 #[test]
 fn result_registers_type_constructor_with_schema() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
 
     // Type-only: `Result`'s `TypeConstructor` member carries both `param_names` and the
     // variant `schema`; no value-side carrier in `data`.
@@ -38,8 +38,8 @@ fn result_registers_type_constructor_with_schema() {
 
 #[test]
 fn result_constructs_ok_variant() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let result = run_one(scope, parse_one("Result (Ok 1)"));
     match result {
         KObject::Tagged {
@@ -59,8 +59,8 @@ fn result_constructs_ok_variant() {
 
 #[test]
 fn result_constructs_error_variant() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let result = run_one(scope, parse_one("Result (Error \"x\")"));
     match result {
         KObject::Tagged {
@@ -80,8 +80,8 @@ fn result_constructs_error_variant() {
 
 #[test]
 fn result_rejects_unknown_tag() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let err = run_one_err(scope, parse_one("Result (Bogus 1)"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`Bogus`")),
@@ -92,8 +92,8 @@ fn result_rejects_unknown_tag() {
 /// The carrier flows through MATCH dispatch by tag like any other tagged union.
 #[test]
 fn result_matches_ok_branch() {
-    let arena = KoanRegion::new();
-    let (scope, buf) = crate::builtins::test_support::run_root_with_buf(&arena);
+    let region = KoanRegion::new();
+    let (scope, buf) = crate::builtins::test_support::run_root_with_buf(&region);
     run(
         scope,
         "MATCH (Result (Ok 1)) -> :Str WITH (Ok -> (PRINT it) Error -> (PRINT \"no\"))",
@@ -105,8 +105,8 @@ fn result_matches_ok_branch() {
 /// non-function value (the carrier), so the union errors before finalizing.
 #[test]
 fn redeclaring_result_errors() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let err = run_one_err(scope, parse_one("UNION Result = (Ok :Str Err :Str)"));
     assert!(
         matches!(&err.kind, KErrorKind::Rebind { name } if name == "Result"),

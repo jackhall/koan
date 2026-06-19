@@ -9,8 +9,8 @@ use super::capture_program_output;
 
 #[test]
 fn multi_statement_fn_body_returns_last_value() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
     let v = run_one(scope, parse_one("FOO"));
     assert!(matches!(v, KObject::Number(n) if *n == 2.0));
@@ -44,8 +44,8 @@ fn multi_statement_fn_body_runs_each_statement() {
 /// admits the read because `a` was submitted at a lower chain index.
 #[test]
 fn backward_reference_across_statements_works() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "FN (FOO) -> Number = ((LET a = 10) (LET b = (a)) (b))",

@@ -19,8 +19,8 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
     use crate::machine::execute::KoanRuntime;
     use crate::machine::KoanRegion;
     use crate::parse::parse;
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let exprs = parse("LET hello = 1").unwrap();
     for e in exprs {
@@ -41,8 +41,8 @@ fn let_t_cycle_errors() {
     use crate::machine::KErrorKind;
     use crate::machine::KoanRegion;
     use crate::parse::parse;
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let exprs = parse("LET Ty = Ty").unwrap();
     let ids = sched.enter_block(scope.id, exprs, scope);
@@ -72,8 +72,8 @@ fn let_type_class_with_non_type_value_errors() {
     use crate::machine::KoanRegion;
     use crate::parse::parse;
     for (src, expected) in [("LET Foo = 1", "Number"), ("LET Foo = \"hello\"", "Str")] {
-        let arena = KoanRegion::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let region = KoanRegion::new();
+        let scope = default_scope(&region, Box::new(std::io::sink()));
         let mut sched = KoanRuntime::new();
         let exprs = parse(src).unwrap();
         let id = sched.dispatch_in_scope(exprs.into_iter().next().unwrap(), scope);
@@ -98,8 +98,8 @@ fn let_type_class_with_type_value_still_binds() {
     use crate::machine::model::KType;
     use crate::machine::KoanRegion;
     use crate::parse::parse;
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let exprs = parse("LET Foo = Number").unwrap();
     let mut ids = Vec::new();
@@ -123,8 +123,8 @@ fn let_type_class_with_type_value_still_binds() {
 fn let_identifier_lhs_with_non_type_still_binds() {
     use crate::machine::KoanRegion;
     use crate::parse::parse;
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let exprs = parse("LET foo = 1").unwrap();
     let mut ids = Vec::new();
@@ -152,8 +152,8 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     use crate::machine::KErrorKind;
     use crate::machine::KoanRegion;
     use crate::parse::parse;
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let exprs = parse("LET :(LIST OF Number) = 1").unwrap();
     let mut ids = Vec::new();
@@ -181,8 +181,8 @@ fn let_aliases_struct_preserves_type_identity() {
     use crate::builtins::test_support::run;
     use crate::machine::model::KType;
     use crate::machine::KoanRegion;
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     run(
         scope,
         "NEWTYPE Point = :{x :Number, y :Number}\n\
@@ -208,8 +208,8 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
     use crate::machine::KoanRegion;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let _err = run_one_err(scope, parse_one("SIG Bad = (LET compare = 0)"));
     assert!(
         scope.bindings().data().get("Bad").is_none(),
@@ -219,7 +219,7 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     // outer SIG's error is a combine-propagated shape error and doesn't carry
     // the inner diagnostic text.
     use crate::machine::Scope;
-    let sig_scope = arena.alloc_scope(Scope::child_under_sig(
+    let sig_scope = region.alloc_scope(Scope::child_under_sig(
         scope,
         "SyntheticForTest".to_string(),
     ));
@@ -243,8 +243,8 @@ fn let_type_class_with_plain_function_rejects() {
     use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
     use crate::machine::KoanRegion;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let err = run_one_err(
         scope,
         parse_one("LET Plain = (FN (PP x :Number) -> Number = (x))"),
@@ -265,8 +265,8 @@ fn let_type_class_with_plain_function_rejects() {
 fn let_type_class_with_functor_admits() {
     use crate::builtins::test_support::{run, run_root_silent};
     use crate::machine::KoanRegion;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -296,8 +296,8 @@ fn let_value_class_with_functor_rejects() {
     use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
     use crate::machine::KoanRegion;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "SIG OrderedSig = (VAL compare :Number)");
     let err = run_one_err(
         scope,
@@ -333,8 +333,8 @@ fn let_type_class_in_sig_body_still_works() {
     use crate::builtins::test_support::{run, run_root_silent};
     use crate::machine::model::types::AbstractSource;
     use crate::machine::KoanRegion;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG WithType = ((LET Carrier = Number) (VAL zero :Number))",
@@ -374,8 +374,8 @@ fn let_type_class_in_sig_body_still_works() {
 fn let_type_class_signature_alias_preserves_identity() {
     use crate::builtins::test_support::{run, run_root_silent};
     use crate::machine::KoanRegion;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\nLET Po = OrderedSig",
@@ -403,8 +403,8 @@ fn let_value_class_lhs_with_module_rhs_rejects() {
     use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
     use crate::machine::KoanRegion;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -434,8 +434,8 @@ fn let_value_class_lhs_with_signature_rhs_rejects() {
     use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
     use crate::machine::KoanRegion;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "SIG OrderedSig = (VAL compare :Number)");
     let err = run_one_err(scope, parse_one("LET sig_alias = OrderedSig"));
     match &err.kind {

@@ -169,13 +169,13 @@ impl KError {
     /// `tag` and `value` directly without going through dispatch — these carriers never need
     /// real nominal identity.
     ///
-    /// `arena` homes the payload's `&'a` `type_id`. It is the call-site scope's arena, like
+    /// `region` homes the payload's `&'a` `type_id`. It is the call-site scope's region, like
     /// any newtype's construction-site identity; unlike a declared NEWTYPE (whose identity
     /// lives in its outer declaring scope), this synthetic identity is minted here, so a TRY
     /// arm that returns the raw payload across a frame boundary inherits the general
     /// `Wrapped.type_id` re-anchor gap (the `inner` record itself rides an `Rc` and is
     /// lift-safe).
-    pub fn to_tagged<'a>(&self, arena: &'a KoanRegion) -> KObject<'a> {
+    pub fn to_tagged<'a>(&self, region: &'a KoanRegion) -> KObject<'a> {
         let (name, fields) = self.kind.to_struct_fields();
         let frames_list = KObject::list(
             self.frames
@@ -195,7 +195,7 @@ impl KError {
         let mut pairs: Vec<(String, KObject<'a>)> = fields;
         pairs.push(("frames".to_string(), frames_list));
         let record = KObject::record(Record::from_pairs(pairs));
-        let type_id: &'a KType<'a> = arena.alloc_ktype(KType::SetRef {
+        let type_id: &'a KType<'a> = region.alloc_ktype(KType::SetRef {
             set: synthetic_singleton(name.clone(), KKind::NewType),
             index: 0,
         });

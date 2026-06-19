@@ -13,14 +13,14 @@ use super::{body_no_op, unit_signature};
 /// iteration sees the pre-write state and the write surfaces only after `drain_pending`.
 #[test]
 fn add_during_active_data_borrow_queues_and_drains() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
-    let pre = arena.alloc_object(KObject::Number(1.0));
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
+    let pre = region.alloc_object(KObject::Number(1.0));
     scope
         .bind_value("pre".to_string(), pre, BindingIndex::BUILTIN)
         .unwrap();
 
-    let new_entry = arena.alloc_object(KObject::Number(2.0));
+    let new_entry = region.alloc_object(KObject::Number(2.0));
     {
         let snapshot = scope.bindings().data();
         assert!(snapshot.contains_key("pre"));
@@ -42,20 +42,20 @@ fn add_during_active_data_borrow_queues_and_drains() {
 #[test]
 #[should_panic(expected = "PendingQueue::drain")]
 fn drain_debug_asserts_on_invariant_violation() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
-    let kfn1 = arena.alloc_function(KFunction::new(
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
+    let kfn1 = region.alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj1 = arena.alloc_object(KObject::KFunction(kfn1, None));
-    let kfn2 = arena.alloc_function(KFunction::new(
+    let obj1 = region.alloc_object(KObject::KFunction(kfn1, None));
+    let kfn2 = region.alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj2 = arena.alloc_object(KObject::KFunction(kfn2, None));
+    let obj2 = region.alloc_object(KObject::KFunction(kfn2, None));
 
     let snapshot = scope.bindings().data();
     scope
@@ -73,14 +73,14 @@ fn drain_debug_asserts_on_invariant_violation() {
 /// `Function` arm, landing in `functions` only (no `data` mirror).
 #[test]
 fn register_function_defers_and_drains_through_function_arm() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
-    let kfn = arena.alloc_function(KFunction::new(
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
+    let kfn = region.alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = arena.alloc_object(KObject::KFunction(kfn, None));
+    let obj = region.alloc_object(KObject::KFunction(kfn, None));
     let key = kfn.signature.untyped_key();
     {
         let snapshot = scope.bindings().functions();
@@ -100,9 +100,9 @@ fn register_function_defers_and_drains_through_function_arm() {
 /// extends back onto `still_pending`; once the borrow drops the next drain applies.
 #[test]
 fn drain_requeues_value_on_persistent_borrow_conflict() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
-    let obj = arena.alloc_object(KObject::Number(7.0));
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
+    let obj = region.alloc_object(KObject::Number(7.0));
 
     let snapshot = scope.bindings().data();
     scope
@@ -121,14 +121,14 @@ fn drain_requeues_value_on_persistent_borrow_conflict() {
 /// deferred write is a `register_function`, contending on `functions` rather than `data`.
 #[test]
 fn drain_requeues_function_on_persistent_borrow_conflict() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
-    let kfn = arena.alloc_function(KFunction::new(
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
+    let kfn = region.alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = arena.alloc_object(KObject::KFunction(kfn, None));
+    let obj = region.alloc_object(KObject::KFunction(kfn, None));
     let key = kfn.signature.untyped_key();
 
     let snapshot = scope.bindings().functions();
@@ -147,8 +147,8 @@ fn drain_requeues_function_on_persistent_borrow_conflict() {
 /// read borrow; `try_register_type` only contends on `types`.
 #[test]
 fn drain_requeues_type_on_persistent_borrow_conflict() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
 
     let snapshot = scope.bindings().types();
     scope.register_type("Foo".to_string(), KType::Number, BindingIndex::BUILTIN);
@@ -166,20 +166,20 @@ fn drain_requeues_type_on_persistent_borrow_conflict() {
 #[test]
 #[should_panic(expected = "PendingQueue::drain")]
 fn drain_debug_asserts_on_function_arm_invariant_violation() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
-    let kfn1 = arena.alloc_function(KFunction::new(
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
+    let kfn1 = region.alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj1 = arena.alloc_object(KObject::KFunction(kfn1, None));
-    let kfn2 = arena.alloc_function(KFunction::new(
+    let obj1 = region.alloc_object(KObject::KFunction(kfn1, None));
+    let kfn2 = region.alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj2 = arena.alloc_object(KObject::KFunction(kfn2, None));
+    let obj2 = region.alloc_object(KObject::KFunction(kfn2, None));
 
     let snapshot = scope.bindings().functions();
     scope
@@ -199,8 +199,8 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
 #[test]
 #[should_panic(expected = "PendingQueue::drain")]
 fn drain_debug_asserts_on_type_arm_invariant_violation() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     let snapshot = scope.bindings().types();
     scope.register_type("Foo".to_string(), KType::Number, BindingIndex::BUILTIN);
     drop(snapshot);

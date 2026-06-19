@@ -35,8 +35,8 @@ pub fn interpret_with_writer_path(
         Some(p) => parse_with_path(source, p)?,
         None => parse(source)?,
     };
-    let arena = KoanRegion::new();
-    let root = default_scope(&arena, out);
+    let region = KoanRegion::new();
+    let root = default_scope(&region, out);
     let mut runtime = KoanRuntime::new();
     runtime.run_program(root, exprs)
 }
@@ -56,16 +56,16 @@ impl<'run> KoanRuntime<'run> {
         self.execute()?;
         // Drain boundary: each top-level statement is a consumer-less root, so its terminal stays
         // pinned in the producer's per-call frame (a producer keeps its terminal in-frame and does
-        // not lift at Done; each consumer pull-lifts instead). Lift each into the run arena here so
-        // the root lives run-long and its per-call frame is released. A frameless / run-arena or
+        // not lift at Done; each consumer pull-lifts instead). Lift each into the run region here so
+        // the root lives run-long and its per-call frame is released. A frameless / run-region or
         // errored terminal needs no lift.
         for &id in &top_level {
             if let Ok((value, Some(frame))) = self.sched.read_result_with_frame(id) {
                 // The scheduler hands back the value re-anchored to this `&self` borrow. A
                 // consumer-less root has no pull-lift to node-scale it, so this is the one genuine
                 // `'run` re-home: `pin_carried_to_run` re-anchors the read up to the run-global root
-                // arena. The lifted root is handed back live — the scheduler re-erases it for storage.
-                let lifted = self.lift(pin_carried_to_run(value), &frame, root.arena);
+                // region. The lifted root is handed back live — the scheduler re-erases it for storage.
+                let lifted = self.lift(pin_carried_to_run(value), &frame, root.region);
                 self.sched.rehome_terminal(id, Ok(lifted));
             }
         }

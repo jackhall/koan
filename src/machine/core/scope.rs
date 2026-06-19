@@ -27,7 +27,7 @@ pub struct KFuture<'a> {
 }
 
 impl<'a> KFuture<'a> {
-    /// `function` is shared (arena-allocated, immutable); `parsed` and `args` clone deeply.
+    /// `function` is shared (region-allocated, immutable); `parsed` and `args` clone deeply.
     pub fn deep_clone(&self) -> KFuture<'a> {
         KFuture {
             parsed: self.parsed.clone(),
@@ -61,7 +61,7 @@ pub struct Scope<'a> {
     root: Option<&'a Scope<'a>>,
     bindings: ScopeBindings<'a>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
-    pub arena: &'a KoanRegion,
+    pub region: &'a KoanRegion,
     /// Position-independent origin id recorded on a sealed `NominalMember` (diagnostics)
     /// and on `KType::Signature { sig, .. }` (via `sig.sig_id()`) so dispatch on
     /// user-declared types compares ids rather than scope pointers.
@@ -86,9 +86,9 @@ pub struct Scope<'a> {
 enum ScopeBindings<'a> {
     Owned(Bindings<'a>),
     /// `&'a Bindings<'a>` (not a shorter borrow) keeps `Scope<'a>` invariant in `'a`.
-    /// The borrowed façade lives in the opened module's child-scope arena; the
-    /// `USING` builtin keeps that arena alive by rooting the module value in the
-    /// call-site arena.
+    /// The borrowed façade lives in the opened module's child-scope region; the
+    /// `USING` builtin keeps that region alive by rooting the module value in the
+    /// call-site region.
     Borrowed(&'a Bindings<'a>),
 }
 
@@ -124,7 +124,7 @@ pub enum ScopeKind {
 
 impl<'a> Scope<'a> {
     pub fn run_root(
-        arena: &'a KoanRegion,
+        region: &'a KoanRegion,
         outer: Option<&'a Scope<'a>>,
         out: Box<dyn Write + 'a>,
     ) -> Self {
@@ -133,7 +133,7 @@ impl<'a> Scope<'a> {
             root: None,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(Some(out)),
-            arena,
+            region,
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Root,
@@ -164,7 +164,7 @@ impl<'a> Scope<'a> {
             root: outer.root,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
-            arena: outer.arena,
+            region: outer.region,
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
@@ -179,7 +179,7 @@ impl<'a> Scope<'a> {
             root: outer.root,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
-            arena: outer.arena,
+            region: outer.region,
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Sig { name },
@@ -195,7 +195,7 @@ impl<'a> Scope<'a> {
             root: outer.root,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
-            arena: outer.arena,
+            region: outer.region,
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Module { name },
@@ -213,7 +213,7 @@ impl<'a> Scope<'a> {
             root: outer.root,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
-            arena: outer.arena,
+            region: outer.region,
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
@@ -233,7 +233,7 @@ impl<'a> Scope<'a> {
     /// Transparent `USING … SCOPE` child scope. `outer` is the call site (the lexical
     /// parent, not the opened module's def site); bindings are a read-only window onto
     /// `module_bindings`. Reads consult the window first then walk `outer`; writes
-    /// forward to `outer`. `arena` is `outer.arena` so block-body allocations outlive
+    /// forward to `outer`. `region` is `outer.region` so block-body allocations outlive
     /// the block (forwarded binds are sound).
     pub fn child_transparent(outer: &Scope<'a>, module_bindings: &'a Bindings<'a>) -> Scope<'a> {
         Scope {
@@ -241,7 +241,7 @@ impl<'a> Scope<'a> {
             root: outer.root,
             bindings: ScopeBindings::Borrowed(module_bindings),
             out: RefCell::new(None),
-            arena: outer.arena,
+            region: outer.region,
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
@@ -427,7 +427,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Register `name` as a type-valued binding. Lives in [`Bindings::types`] as an
-    /// arena-allocated `&KType`; reads go through [`Self::resolve_type`]. Same
+    /// region-allocated `&KType`; reads go through [`Self::resolve_type`]. Same
     /// conditional-defer shape as [`Self::bind_value`]. Infallible: a name collision
     /// at builtin registration is a programming error, so the [`KError`] is dropped.
     pub fn register_type(
@@ -440,7 +440,7 @@ impl<'a> Scope<'a> {
             self.write_target().register_type(name, ktype, index);
             return;
         }
-        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc_ktype(ktype);
+        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.region.alloc_ktype(ktype);
         match self.bindings.get().try_register_type(&name, kt_ref, index) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref, index),
@@ -470,7 +470,7 @@ impl<'a> Scope<'a> {
     /// Upsert install for a type-only nominal finalize (STRUCT / named UNION / Result /
     /// MODULE). Writes the sealed `SetRef` identity into [`Bindings::types`], overwriting
     /// a `PartialEq`-equal `SetRef` a `RECURSIVE TYPES` block pre-installed (same set + index).
-    /// Returns the arena-allocated `&KType` so the caller can yield it as a
+    /// Returns the region-allocated `&KType` so the caller can yield it as a
     /// `Carried::Type`. Same conditional-defer shape as [`Self::register_type`];
     /// `Err(Rebind)` on a genuine non-equal collision.
     ///
@@ -489,7 +489,7 @@ impl<'a> Scope<'a> {
         if self.shadows_builtin_type(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc_ktype(ktype);
+        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.region.alloc_ktype(ktype);
         match self
             .bindings
             .get()
@@ -523,7 +523,7 @@ impl<'a> Scope<'a> {
             self.write_target().preinstall_identity(name, ktype, index);
             return;
         }
-        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc_ktype(ktype);
+        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.region.alloc_ktype(ktype);
         match self.bindings.get().try_register_type(&name, kt_ref, index) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => panic!(

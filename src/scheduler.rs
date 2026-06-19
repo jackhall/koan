@@ -131,7 +131,7 @@ impl<W: Workload> Scheduler<W> {
         self.store.read_result_with_frame(self.resolve_alias(id))
     }
 
-    /// Re-home a finalized terminal (already lifted into a surviving arena), dropping the pinned
+    /// Re-home a finalized terminal (already lifted into a surviving region), dropping the pinned
     /// producer frame. The drain boundary uses this for consumer-less roots. Resolves a bare-name
     /// alias so the real producer's frame — not the alias slot — is released.
     pub(crate) fn rehome_terminal(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {

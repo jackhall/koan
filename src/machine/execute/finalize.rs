@@ -22,7 +22,7 @@ use super::runtime::KoanRuntime;
 ///
 /// Single-lifetime (`'o -> 'o`): the value arrives already at its destination node lifetime `'o`
 /// (the step lifetime the producer ran against), so the hook re-anchors only the contract — never
-/// the value — and the coarsening re-tag homes into the contract's own arena at the same `'o`.
+/// the value — and the coarsening re-tag homes into the contract's own region at the same `'o`.
 pub(in crate::machine::execute) trait NodeFinalize {
     /// Enforce the declared return on `output` against the already-vended live `contract`. A `None`
     /// frame (a frameless slot or the non-dying run frame) passes the value through untouched — and
@@ -50,9 +50,9 @@ impl NodeFinalize for KoanRuntime<'_> {
 /// frame (a frameless slot or the non-dying run frame) passes the value through untouched. A failed
 /// return-type check becomes `Err` — the caller clears placeholders and finalizes. A non-coarsening
 /// check leaves the value in the producer frame; a coarsening re-tag is re-allocated into the
-/// contract's own home arena (`ReturnContract::home_arena` — the callee's captured-scope / arm
-/// call-site arena, a strict ancestor of the producer frame) so the re-tagged terminal outlives the
-/// reused/freed producer frame. Reads no scope: the home arena rides the contract, witnessed by the
+/// contract's own home region (`ReturnContract::home_region` — the callee's captured-scope / arm
+/// call-site region, a strict ancestor of the producer frame) so the re-tagged terminal outlives the
+/// reused/freed producer frame. Reads no scope: the home region rides the contract, witnessed by the
 /// cart `Rc`.
 fn enforce_return_contract<'o>(
     output: Result<Carried<'o>, KError>,
@@ -64,13 +64,13 @@ fn enforce_return_contract<'o>(
             match check_declared_return(contract, |d| d.matches_value(v), || v.ktype().name())? {
                 // Re-tag to the declared return type so downstream dispatch sees the contract
                 // (may coarsen, e.g. `List<Number>` through `:(LIST OF Any)` -> `List<Any>`). The
-                // re-tag is a shallow rebuild homed in the contract's own home arena, since the
+                // re-tag is a shallow rebuild homed in the contract's own home region, since the
                 // producer frame it was born in may be reused or freed before consumers read it.
                 Some(declared) => {
                     let stamped = v.deep_clone().stamp_type(declared);
                     let home = contract
                         .expect("a declared return type implies a contract")
-                        .home_arena();
+                        .home_region();
                     Ok(Carried::Object(home.alloc_object(stamped)))
                 }
                 None => Ok(Carried::Object(v)),

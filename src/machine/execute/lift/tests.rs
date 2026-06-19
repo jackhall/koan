@@ -35,9 +35,9 @@ pub(super) fn dispatch_for_test<'run>(
     }
 }
 
-/// Stamp a sentinel KFunction into `dying.arena()` so `functions_is_empty()` is false
+/// Stamp a sentinel KFunction into `dying.region()` so `functions_is_empty()` is false
 /// and `lift_kobject` enters the slow path. Side-effect only — the alloc'd ref is
-/// discarded; the function lives until `dying`'s arena drops.
+/// discarded; the function lives until `dying`'s region drops.
 pub(super) fn defeat_fast_path(dying: &Rc<CallFrame>) {
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
     use crate::machine::{Body, KFunction};
@@ -48,15 +48,15 @@ pub(super) fn defeat_fast_path(dying: &Rc<CallFrame>) {
         },
         Body::Builtin(|ctx| {
             crate::machine::core::kfunction::action::Action::Done(Ok(
-                crate::machine::model::Carried::Object(ctx.scope.arena.alloc_object(KObject::Null)),
+                crate::machine::model::Carried::Object(ctx.scope.region.alloc_object(KObject::Null)),
             ))
         }),
         dying.scope(),
     );
-    let _ = dying.arena().alloc_function(kf);
+    let _ = dying.region().alloc_function(kf);
 }
 
-/// A KFunction whose `captured_scope` lives in the dying arena. Caller is responsible
+/// A KFunction whose `captured_scope` lives in the dying region. Caller is responsible
 /// for not allocating a separate bait — this KFunction itself defeats `functions_is_empty`.
 pub(super) fn alloc_local_kf<'run>(
     dying: &'run Rc<CallFrame>,
@@ -70,10 +70,10 @@ pub(super) fn alloc_local_kf<'run>(
         },
         Body::Builtin(|ctx| {
             crate::machine::core::kfunction::action::Action::Done(Ok(
-                crate::machine::model::Carried::Object(ctx.scope.arena.alloc_object(KObject::Null)),
+                crate::machine::model::Carried::Object(ctx.scope.region.alloc_object(KObject::Null)),
             ))
         }),
         dying.scope(),
     );
-    dying.arena().alloc_function(kf)
+    dying.region().alloc_function(kf)
 }

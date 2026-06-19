@@ -2,7 +2,7 @@
 //!
 //! A strongly-connected component of mutually-recursive types (a self-recursive type, an
 //! `A ↔ B` pair, a longer cycle) is sealed into one [`RecursiveSet`]. A non-recursive type
-//! is a set of one. The set is `Rc`-owned (never arena-owned): lifting any reference to a
+//! is a set of one. The set is `Rc`-owned (never region-owned): lifting any reference to a
 //! member is just `Rc::clone` of the set, so the whole group travels as a unit — no copy,
 //! no visited-map cycle-walk, no `Rc<CallFrame>` anchor.
 //!

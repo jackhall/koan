@@ -10,7 +10,7 @@
 //! [`crate::machine::core::kfunction::action`].
 //!
 //! The [`interpret`] submodule holds the program entry points ([`interpret`], [`interpret_with_writer`],
-//! [`interpret_with_writer_path`]); they parse, stand up the arena/root scope, and drive the run via
+//! [`interpret_with_writer_path`]); they parse, stand up the region/root scope, and drive the run via
 //! [`KoanRuntime::run_program`]. The [`submit`] submodule holds the AST-aware dispatch-submission
 //! wrappers ([`KoanRuntime::enter_block`], [`KoanRuntime::dispatch_in_scope`], `dispatch_in_own_scope`,
 //! `dispatch_body`, `submit_dep_finish_in_own_scope`) — the only callers that turn a `KExpression` into
@@ -111,8 +111,8 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Pull a dep's terminal lifted into `dest` (consumer-pull): a framed terminal is copied out of
-    /// its producer frame, a frameless / run-arena terminal is forwarded as-is. The `unsafe` reattach
-    /// is internal — the slot's co-stored frame `Rc` / run arena pins the value for the transient
+    /// its producer frame, a frameless / run-region terminal is forwarded as-is. The `unsafe` reattach
+    /// is internal — the slot's co-stored frame `Rc` / run region pins the value for the transient
     /// read, and the lift copies it into `dest` — so the run loop's dep collection stays safe.
     pub(in crate::machine::execute) fn read_lifted<'o>(
         &self,
@@ -121,12 +121,12 @@ impl<'run> KoanRuntime<'run> {
     ) -> Result<crate::machine::model::Carried<'o>, KError> {
         match self.sched.read_result_with_frame(dep) {
             // Re-anchor the scheduler's `'node` read to the destination *node* lifetime `'o` (the
-            // consumer scope's arena, bounded by the held consumer-frame `Rc`), then lift it into
+            // consumer scope's region, bounded by the held consumer-frame `Rc`), then lift it into
             // `dest`. The held producer frame `Rc` witnesses the framed re-anchor (the lift
-            // self-anchors the copy via the embedded `Rc`); a frameless terminal lives in a run arena
+            // self-anchors the copy via the embedded `Rc`); a frameless terminal lives in a run region
             // that outlives `'o`. Node-scale — no `'run` fabrication.
             // SAFETY: `'node` and `'o` are both pinned for the read+lift by the held producer frame
-            // `Rc` (Some) / the run arena (None); the carrier is invariant, so the lifetime-only
+            // `Rc` (Some) / the run region (None); the carrier is invariant, so the lifetime-only
             // re-anchor routes `reattach_value`.
             Ok((value, Some(frame))) => Ok(self.lift(
                 unsafe { reattach_value::<CarriedFamily>(value) },
@@ -500,7 +500,7 @@ impl<'run> KoanRuntime<'run> {
                 // then this slot's consumers pull from here. Otherwise splice the slot out: move its
                 // consumers onto `producer`'s notify list and alias the slot to `producer`.
                 if self.sched.is_result_ready(producer) {
-                    // Pull `producer`'s terminal into this consumer's own scope arena, at a *node*
+                    // Pull `producer`'s terminal into this consumer's own scope region, at a *node*
                     // lifetime bounded by the active cart — not a fabricated `'run`. `read_lifted`
                     // does the same node-scale re-anchor the dep path uses: it lifts a framed
                     // terminal into `dest` and forwards a frameless one as-is, with no `'run` step.
@@ -509,7 +509,7 @@ impl<'run> KoanRuntime<'run> {
                         .active_payload()
                         .expect("a slot step installs the ambient payload");
                     let dest =
-                        reattach_node_scope(&payload.scope, self.ambient.active_frame_ref()).arena;
+                        reattach_node_scope(&payload.scope, self.ambient.active_frame_ref()).region;
                     let pulled = self.read_lifted(producer, dest);
                     // Shorten the node value to the uniform `NodeStep` step lifetime `'s`: it lives
                     // in `dest`, which the active cart pins for all of `'s`. A node→step reattach,

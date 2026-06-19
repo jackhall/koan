@@ -146,7 +146,7 @@ pub(super) fn literal_pass_through<'step>(
         .expect("LiteralPassThrough shape implies one part");
     match only.value {
         ExpressionPart::Literal(_) => {
-            let allocated = ctx.current_scope().arena.alloc_object(only.value.resolve());
+            let allocated = ctx.current_scope().region.alloc_object(only.value.resolve());
             Outcome::Done(Ok(Carried::Object(allocated)))
         }
         ExpressionPart::Spliced(c) => Outcome::Done(Ok(c)),

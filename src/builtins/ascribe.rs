@@ -14,7 +14,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::{arg, kw, sig};
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription. Reads `m` / `s` from the
-/// `BodyCtx::args` type channel, mints on `ctx.scope.arena`, and returns the view module as
+/// `BodyCtx::args` type channel, mints on `ctx.scope.region`, and returns the view module as
 /// `Action::Done(Ok(Carried::Type(..)))`.
 pub fn body_opaque<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
@@ -24,8 +24,8 @@ pub fn body_opaque<'a>(
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args));
 
-    let arena = ctx.scope.arena;
-    let new_scope = arena.alloc_scope(Scope::child_under_module(
+    let region = ctx.scope.region;
+    let new_scope = region.alloc_scope(Scope::child_under_module(
         ctx.scope,
         format!("{} :| {}", m.path, s.path),
     ));
@@ -35,7 +35,7 @@ pub fn body_opaque<'a>(
         return Action::Done(Err(e));
     }
 
-    let new_module: &'a Module<'a> = arena.alloc_module(Module::new(m.path.clone(), new_scope));
+    let new_module: &'a Module<'a> = region.alloc_module(Module::new(m.path.clone(), new_scope));
     // Per-slot kind: a SIG-declared `LET Wrap = (TEMPLATE T)` mints a fresh
     // `TypeConstructor` rather than the default `AbstractType` arm, preserving the
     // higher-kinded shape across the ascription barrier.
@@ -118,7 +118,7 @@ pub fn body_opaque<'a>(
 
     new_module.mark_satisfies(s.sig_id());
 
-    let module_obj: &'a KType<'a> = arena.alloc_ktype(KType::Module {
+    let module_obj: &'a KType<'a> = region.alloc_ktype(KType::Module {
         module: new_module,
         frame: None,
     });
@@ -137,13 +137,13 @@ pub fn body_transparent<'a>(
     if let Err(e) = shape_check(s, m.child_scope()) {
         return Action::Done(Err(e));
     }
-    let arena = ctx.scope.arena;
-    let new_module: &'a Module<'a> = arena.alloc_module(Module::new(
+    let region = ctx.scope.region;
+    let new_module: &'a Module<'a> = region.alloc_module(Module::new(
         format!("{} :! {}", m.path, s.path),
         m.child_scope(),
     ));
     new_module.mark_satisfies(s.sig_id());
-    let module_obj: &'a KType<'a> = arena.alloc_ktype(KType::Module {
+    let module_obj: &'a KType<'a> = region.alloc_ktype(KType::Module {
         module: new_module,
         frame: None,
     });

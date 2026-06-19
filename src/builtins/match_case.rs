@@ -88,8 +88,8 @@ mod tests {
     use crate::machine::{KErrorKind, KoanRegion};
 
     fn run_program(source: &str) -> Vec<u8> {
-        let arena = KoanRegion::new();
-        let (scope, captured) = run_root_with_buf(&arena);
+        let region = KoanRegion::new();
+        let (scope, captured) = run_root_with_buf(&region);
         run(scope, source);
         let bytes = captured.borrow().clone();
         bytes
@@ -127,8 +127,8 @@ mod tests {
 
     #[test]
     fn match_inexhaustive_errors() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (None null))",
@@ -145,8 +145,8 @@ mod tests {
 
     #[test]
     fn match_arm_violating_declared_return_type_errors() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (Some 1))",
@@ -218,8 +218,8 @@ mod tests {
 
     #[test]
     fn match_on_bool_inexhaustive_errors() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let err = run_one_err(
             scope,
             parse_one("MATCH true -> :Str WITH (false -> (PRINT \"x\"))"),

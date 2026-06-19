@@ -24,7 +24,7 @@ pub use body::{BinderBucketFn, BinderNameFn, Body};
 pub use pick::ClassifiedSlots;
 
 /// SAFETY: the captured scope is allocated in a `KoanRegion` that outlives this
-/// `KFunction` — they share the arena (FN registers the function in the same scope it
+/// `KFunction` — they share the region (FN registers the function in the same scope it
 /// captures; builtins are registered in run-root). See `core/arena.rs` for the broader
 /// lifetime-erasure pattern.
 pub struct KFunction<'a> {
@@ -91,7 +91,7 @@ impl<'a> KFunction<'a> {
 
     /// Re-attach `'a` to the captured scope. The branded `captured` makes this a safe
     /// re-attach: it was erased from a `&'a Scope<'a>` in [`Self::with_binder_and_functor`],
-    /// and points at a scope that outlives this `KFunction<'a>` by the broader runtime-arena
+    /// and points at a scope that outlives this `KFunction<'a>` by the broader runtime-region
     /// argument.
     pub fn captured_scope(&self) -> &Scope<'a> {
         self.captured.get()

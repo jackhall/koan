@@ -47,12 +47,12 @@ fn finalize_newtype<'a>(
     member.fill(NominalSchema::NewType(Box::new(repr)));
     let set = Rc::new(RecursiveSet::new(vec![member]));
     let identity = KType::SetRef { set, index: 0 };
-    let kt_ref: &'a KType = scope.arena.alloc_ktype(identity);
+    let kt_ref: &'a KType = scope.region.alloc_ktype(identity);
     match scope
         .bindings()
         .try_register_type(&name, kt_ref, bind_index)
     {
-        Ok(ApplyOutcome::Applied) => Ok(Carried::Type(scope.arena.alloc_ktype(kt_ref.clone()))),
+        Ok(ApplyOutcome::Applied) => Ok(Carried::Type(scope.region.alloc_ktype(kt_ref.clone()))),
         // Finalize sites run post-dep-finish outside the re-entrant hot path, so borrow
         // contention here is a programming error. Surface as a structured error rather
         // than panicking — a future re-entrant caller still gets a recoverable diag.
@@ -102,7 +102,7 @@ fn finalize_record_newtype<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => Ok(Carried::Type(scope.arena.alloc_ktype(kt_ref.clone()))),
+        SealOutcome::Sealed(kt_ref) => Ok(Carried::Type(scope.region.alloc_ktype(kt_ref.clone()))),
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE `{name}` record repr references unsealed type `{missing}`",
         )))),
@@ -346,8 +346,8 @@ mod tests {
     /// `bindings.data` — the declaration has no payload value to bind.
     #[test]
     fn declare_mints_newtype_identity() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let types = scope.bindings().types();
         let (kt, _) = types
@@ -376,8 +376,8 @@ mod tests {
     /// `inner` is the bare `Number`.
     #[test]
     fn construct_wraps_repr_matching_value() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let result = run_one(scope, parse_one("Distance (3.0)"));
         match result {
@@ -398,8 +398,8 @@ mod tests {
     /// `Distance("hi")` (Number repr, Str value) surfaces as `TypeMismatch`.
     #[test]
     fn construct_rejects_non_matching_repr() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let err = run_one_err(scope, parse_one("Distance (\"hi\")"));
         assert!(
@@ -416,8 +416,8 @@ mod tests {
     /// leaked a stale value-side placeholder that panicked the next construction).
     #[test]
     fn dependent_newtype_parks_on_record_repr_dependency() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "NEWTYPE Point = :{x :Number, y :Number}\nNEWTYPE Boxed = Point",
@@ -442,8 +442,8 @@ mod tests {
     /// name fails cleanly (unbound) rather than tripping over a leaked producer `NodeId`.
     #[test]
     fn unknown_repr_errors_without_leaking_placeholder() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Boxed = Nope");
         assert!(
             scope.bindings().placeholders().is_empty(),
@@ -463,8 +463,8 @@ mod tests {
     /// this pins the seal shape, not construction.)
     #[test]
     fn record_repr_self_recursion_seals_set_local() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Node = :{value :Number, next :Node}");
         let (set, fields) = record_fields(scope, "Node");
         let node_idx = set.index_of("Node").expect("Node is its own set member");
@@ -487,8 +487,8 @@ mod tests {
     /// literal types as `List(Str)`, both orthogonal to the recursion threading proven here.)
     #[test]
     fn record_repr_list_of_self_field_seals_set_local() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Tree = :{children :(LIST OF Tree)}");
         let (set, fields) = record_fields(scope, "Tree");
         let tree_idx = set.index_of("Tree").expect("Tree is its own set member");
@@ -512,8 +512,8 @@ mod tests {
     /// with an empty threaded set.
     #[test]
     fn nested_record_field_threads_self_reference() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Outer = :{inner :{owner :Outer}}");
         let (set, fields) = record_fields(scope, "Outer");
         let outer_idx = set.index_of("Outer").expect("Outer is its own set member");
@@ -539,8 +539,8 @@ mod tests {
     /// overload split — this used to ride the `:ProperType` overload's speculative sub-dispatch.
     #[test]
     fn sigil_repr_non_record_seals_newtype_over_resolved_type() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Nums = :(LIST OF Number)");
         let result = run_one(scope, parse_one("(Nums [1.0, 2.0])"));
         match result {
@@ -565,8 +565,8 @@ mod tests {
     /// inner: Number(3.0) }` — pins the collapse invariant.
     #[test]
     fn newtype_over_newtype_collapses() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Foo = Number\nNEWTYPE Bar = Foo");
         let result = run_one(scope, parse_one("Bar (Foo (3.0))"));
         match result {
@@ -594,8 +594,8 @@ mod tests {
     /// per-slot Err result.
     #[test]
     fn dispatch_distinguishes_distance_from_number() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "NEWTYPE Distance = Number\n\
@@ -644,8 +644,8 @@ mod tests {
     /// dep before the finish closure runs — pins the non-trivial-dispatch path.
     #[test]
     fn construct_with_identifier_value() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number\nLET x = 3.0");
         let result = run_one(scope, parse_one("Distance (x)"));
         match result {
@@ -665,8 +665,8 @@ mod tests {
     /// Pins the pre-dispatch arity guard: `Distance ()` rejects with `ArityMismatch`.
     #[test]
     fn construct_arity_zero_rejects() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let err = run_one_err(scope, parse_one("Distance ()"));
         assert!(
@@ -686,8 +686,8 @@ mod tests {
     /// logical operators"), so a user-fn call stands in for non-trivial dispatch.
     #[test]
     fn construct_with_operator_value() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "NEWTYPE Distance = Number\n\

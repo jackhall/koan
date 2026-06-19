@@ -9,13 +9,13 @@ use super::run;
 
 #[test]
 fn tagged_union_full_program_via_type_token() {
-    let arena = KoanRegion::new();
+    let region = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
         "UNION Outcome = (Ok :Str Err :Str)\n\
          LET r = (Outcome (Ok \"all good\"))\n\
          MATCH (r) -> :Str WITH (Ok -> (PRINT it) Err -> (PRINT \"failed\"))",
-        &arena,
+        &region,
         captured.clone(),
     );
     assert_eq!(captured.borrow().as_slice(), b"all good\n");
@@ -23,13 +23,13 @@ fn tagged_union_full_program_via_type_token() {
 
 #[test]
 fn tagged_union_full_program_constructs_and_matches() {
-    let arena = KoanRegion::new();
+    let region = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
         "UNION Outcome = (Ok :Str Err :Str)\n\
          LET r = (Outcome (Err \"oops\"))\n\
          MATCH (r) -> :Str WITH (Ok -> (PRINT \"good\") Err -> (PRINT it))",
-        &arena,
+        &region,
         captured.clone(),
     );
     assert_eq!(captured.borrow().as_slice(), b"oops\n");
@@ -37,13 +37,13 @@ fn tagged_union_full_program_constructs_and_matches() {
 
 #[test]
 fn tagged_union_none_branch_runs() {
-    let arena = KoanRegion::new();
+    let region = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
         "UNION Maybe = (Some :Number None :Null)\n\
          LET m = (Maybe (None null))\n\
          MATCH (m) -> :Str WITH (Some -> (PRINT \"some-branch\") None -> (PRINT \"none-branch\"))",
-        &arena,
+        &region,
         captured.clone(),
     );
     assert_eq!(captured.borrow().as_slice(), b"none-branch\n");
@@ -53,7 +53,7 @@ fn tagged_union_none_branch_runs() {
 /// `:(Maybe None)` select by the value's variant identity, the criterion-1/3 headline.
 #[test]
 fn variant_typed_overloads_dispatch_by_variant() {
-    let arena = KoanRegion::new();
+    let region = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
         "UNION Maybe = (Some :Number None :Null)\n\
@@ -61,7 +61,7 @@ fn variant_typed_overloads_dispatch_by_variant() {
          FN (DESC x :(Maybe None)) -> :Str = (\"is-none\")\n\
          PRINT (DESC (Maybe (Some 1)))\n\
          PRINT (DESC (Maybe (None null)))",
-        &arena,
+        &region,
         captured.clone(),
     );
     assert_eq!(captured.borrow().as_slice(), b"is-some\nis-none\n");
@@ -92,13 +92,13 @@ fn variant_typed_slot_rejects_other_variant() {
 /// even though that value's `ktype()` is now the `None` variant refinement.
 #[test]
 fn union_typed_slot_admits_any_variant() {
-    let arena = KoanRegion::new();
+    let region = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
         "UNION Maybe = (Some :Number None :Null)\n\
          FN (ANY x :Maybe) -> :Str = (\"any-variant\")\n\
          PRINT (ANY (Maybe (None null)))",
-        &arena,
+        &region,
         captured.clone(),
     );
     assert_eq!(captured.borrow().as_slice(), b"any-variant\n");
@@ -108,12 +108,12 @@ fn union_typed_slot_admits_any_variant() {
 /// back to its union-qualified surface.
 #[test]
 fn variant_type_value_renders_union_qualified() {
-    let arena = KoanRegion::new();
+    let region = KoanRegion::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
         "UNION Maybe = (Some :Number None :Null)\n\
          PRINT :(Maybe Some)",
-        &arena,
+        &region,
         captured.clone(),
     );
     assert_eq!(captured.borrow().as_slice(), b":(Maybe Some)\n");

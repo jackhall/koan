@@ -10,8 +10,8 @@ use super::capture_program_output;
 
 #[test]
 fn fn_registers_user_function_under_keyword_signature() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (GREET) -> Null = (PRINT \"hi\")");
 
     let f = lookup_fn(scope, "GREET");
@@ -23,8 +23,8 @@ fn fn_registers_user_function_under_keyword_signature() {
 
 #[test]
 fn fn_call_dispatches_body_at_call_time() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "LET x = 42\nFN (GETX) -> Number = (x)");
 
     let result = run_one(scope, parse_one("GETX"));
@@ -36,8 +36,8 @@ fn fn_call_dispatches_body_at_call_time() {
 
 #[test]
 fn fn_rejects_non_keyword_name() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (greet) -> Null = (PRINT \"hi\")");
     assert!(!fn_is_registered(scope, "greet"));
     assert!(!fn_is_registered(scope, "GREET"));
@@ -45,8 +45,8 @@ fn fn_rejects_non_keyword_name() {
 
 #[test]
 fn fn_call_runs_body_each_time() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "LET x = 7\nFN (GETX) -> Number = (x)");
 
     for _ in 0..2 {
@@ -133,8 +133,8 @@ fn fn_param_resolves_inside_nested_subexpression() {
 
 #[test]
 fn fn_returns_param_value_directly() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (ECHO v :Number) -> Number = (v)");
 
     let result = run_one(scope, parse_one("ECHO 7"));
@@ -143,8 +143,8 @@ fn fn_returns_param_value_directly() {
 
 #[test]
 fn fn_signature_with_no_keyword_is_rejected() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "FN (x :Number) -> Null = (PRINT \"oops\")");
     assert!(!fn_is_registered(scope, "x"));
 }
@@ -153,8 +153,8 @@ fn fn_signature_with_no_keyword_is_rejected() {
 /// callable handle via `LET f = (FN ...)`.
 #[test]
 fn fn_def_returns_the_registered_kfunction() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let result = run_one(scope, parse_one("FN (DOUBLE x :Number) -> Number = (x)"));
     assert!(
         matches!(result, KObject::KFunction(_, _)),

@@ -14,8 +14,8 @@ use crate::machine::BindingIndex;
 /// `scope_bounded`'s `'step` borrow cannot widen to a free `'a`, and `Scope<'a>` is invariant.
 #[test]
 fn scope_bounded_reanchors_within_witness_borrow() {
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame: Rc<CallFrame> = CallFrame::new(scope, None);
     let bounded: &Scope<'_> = frame.scope_bounded();
     // Same underlying child scope as the unbounded accessors, just a shorter borrow.
@@ -23,17 +23,17 @@ fn scope_bounded_reanchors_within_witness_borrow() {
     assert_eq!(bounded.id, frame.scope_for_bind().id);
 }
 
-/// `CallFrame::scope`'s re-borrow stays valid when the arena is mutated through a
-/// sibling pointer afterward — `frame.scope()` and `frame.arena().alloc(...)`
+/// `CallFrame::scope`'s re-borrow stays valid when the region is mutated through a
+/// sibling pointer afterward — `frame.scope()` and `frame.region().alloc(...)`
 /// must coexist soundly under tree borrows.
 #[test]
 fn call_arena_scope_survives_subsequent_alloc() {
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame = CallFrame::new(scope, None);
     let s = frame.scope();
-    let _new = frame.arena().alloc_object(KObject::Number(1.0));
-    assert!(std::ptr::eq(s.arena, frame.arena()));
+    let _new = frame.region().alloc_object(KObject::Number(1.0));
+    assert!(std::ptr::eq(s.region, frame.region()));
 }
 
 /// Raw-pointer roundtrip: lifetime-anchor an extracted `*const KoanRegion` and
@@ -41,14 +41,14 @@ fn call_arena_scope_survives_subsequent_alloc() {
 /// stays live.
 #[test]
 fn call_arena_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame: Rc<CallFrame> = CallFrame::new(scope, None);
-    let arena_ptr: *const KoanRegion = frame.arena();
+    let region_ptr: *const KoanRegion = frame.region();
     let scope_ptr: *const Scope<'_> = frame.scope();
-    let inner_arena: &KoanRegion = unsafe { &*(arena_ptr as *const _) };
+    let inner_region: &KoanRegion = unsafe { &*(region_ptr as *const _) };
     let child: &Scope<'_> = unsafe { &*(scope_ptr as *const _) };
-    let it_obj: &KObject<'_> = inner_arena.alloc_object(KObject::Number(42.0));
+    let it_obj: &KObject<'_> = inner_region.alloc_object(KObject::Number(42.0));
     child
         .bind_value("it".to_string(), it_obj, BindingIndex::BUILTIN)
         .unwrap();
@@ -59,8 +59,8 @@ fn call_arena_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
 /// concurrently readable.
 #[test]
 fn call_arena_scope_repeated_calls_alias() {
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame = CallFrame::new(scope, None);
     let s1 = frame.scope();
     let s2 = frame.scope();
@@ -71,11 +71,11 @@ fn call_arena_scope_repeated_calls_alias() {
 }
 
 /// Two-deep chain: dropping the local `outer` handle leaves only `inner`'s `FrameStorage.outer`
-/// keeping the outer arena alive while we read through `inner.scope().outer`.
+/// keeping the outer region alive while we read through `inner.scope().outer`.
 #[test]
 fn call_arena_chained_outer_frame_walkable() {
-    let arena = KoanRegion::new();
-    let run_scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let run_scope = default_scope(&region, Box::new(std::io::sink()));
     let outer = CallFrame::new(run_scope, None);
     let inner = CallFrame::new(outer.scope(), Some(outer.storage_rc()));
     drop(outer);
@@ -84,13 +84,13 @@ fn call_arena_chained_outer_frame_walkable() {
         .outer()
         .expect("inner.scope().outer must be Some");
     assert!(std::ptr::eq(
-        outer_scope.arena,
-        inner.scope().outer().unwrap().arena
+        outer_scope.region,
+        inner.scope().outer().unwrap().region
     ));
     assert!(outer_scope.outer().is_some());
 }
 
-/// In-struct Rc must keep the arena alive for a re-anchored `&Scope` stored alongside
+/// In-struct Rc must keep the region alive for a re-anchored `&Scope` stored alongside
 /// it once the local Rc handle is dropped.
 #[test]
 fn call_arena_scope_re_anchored_into_struct_alongside_rc() {
@@ -99,8 +99,8 @@ fn call_arena_scope_re_anchored_into_struct_alongside_rc() {
         _f: Rc<CallFrame>,
     }
 
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let h = {
         let f = CallFrame::new(scope, None);
         let s: &Scope<'_> = unsafe { std::mem::transmute::<&Scope<'_>, &Scope<'_>>(f.scope()) };
@@ -110,7 +110,7 @@ fn call_arena_scope_re_anchored_into_struct_alongside_rc() {
 }
 
 /// Allocating records the stored address into the `membership` side-table via
-/// `RefCell::borrow_mut` while a prior `&KObject` from the same arena is shared-borrowed.
+/// `RefCell::borrow_mut` while a prior `&KObject` from the same region is shared-borrowed.
 /// Pins that tree-borrows shape.
 #[test]
 fn runtime_arena_alloc_while_prior_ref_live() {
@@ -121,7 +121,7 @@ fn runtime_arena_alloc_while_prior_ref_live() {
     assert!(matches!(r2, KObject::Number(n) if *n == 2.0));
 }
 
-/// `alloc_ktype` returns an arena-lifetime `&KType` and bumps `alloc_count` by one.
+/// `alloc_ktype` returns an region-lifetime `&KType` and bumps `alloc_count` by one.
 #[test]
 fn alloc_ktype_returns_arena_lifetime_ref_and_counts() {
     let a = KoanRegion::new();
@@ -132,23 +132,23 @@ fn alloc_ktype_returns_arena_lifetime_ref_and_counts() {
 }
 
 /// Pins the reset transmute pair (`&Scope<'_> → &Scope<'static>` outer cast plus the
-/// raw-arena-ptr re-anchor) under tree borrows: after reset, a fresh alloc via
-/// `arena()` and a `bind_value` on `scope()` must coexist.
+/// raw-region-ptr re-anchor) under tree borrows: after reset, a fresh alloc via
+/// `region()` and a `bind_value` on `scope()` must coexist.
 #[test]
 fn call_arena_try_reset_for_tail_round_trip() {
-    let outer_arena = KoanRegion::new();
-    let outer_scope = default_scope(&outer_arena, Box::new(std::io::sink()));
+    let outer_region = KoanRegion::new();
+    let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
     let mut frame: Rc<CallFrame> = CallFrame::new(outer_scope, None);
-    let _pre = frame.arena().alloc_object(KObject::Number(1.0));
-    assert!(frame.arena().alloc_count() >= 1);
+    let _pre = frame.region().alloc_object(KObject::Number(1.0));
+    assert!(frame.region().alloc_count() >= 1);
 
     let did_reset = frame.try_reset_for_tail(outer_scope);
     assert!(did_reset, "Rc was unique, reset must succeed");
 
-    // Fresh arena: only the new child scope remains.
-    assert_eq!(frame.arena().alloc_count(), 1);
+    // Fresh region: only the new child scope remains.
+    assert_eq!(frame.region().alloc_count(), 1);
 
-    let v = frame.arena().alloc_object(KObject::Number(42.0));
+    let v = frame.region().alloc_object(KObject::Number(42.0));
     frame
         .scope()
         .bind_value("k".to_string(), v, BindingIndex::BUILTIN)
@@ -163,10 +163,10 @@ fn call_arena_try_reset_for_tail_round_trip() {
 /// [`call_arena_try_reset_for_tail_allows_reset_under_escaped_storage`].)
 #[test]
 fn call_arena_try_reset_for_tail_refuses_when_aliased() {
-    let outer_arena = KoanRegion::new();
-    let outer_scope = default_scope(&outer_arena, Box::new(std::io::sink()));
+    let outer_region = KoanRegion::new();
+    let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
     let mut frame: Rc<CallFrame> = CallFrame::new(outer_scope, None);
-    let pre_arena_addr = frame.arena() as *const KoanRegion as usize;
+    let pre_region_addr = frame.region() as *const KoanRegion as usize;
 
     // A second shell holder (not an escape): clone the `Rc<CallFrame>` so strong_count > 1.
     let _alias = Rc::clone(&frame);
@@ -175,9 +175,9 @@ fn call_arena_try_reset_for_tail_refuses_when_aliased() {
     assert!(!did_reset, "aliased frame must refuse reset");
 
     assert_eq!(
-        frame.arena() as *const KoanRegion as usize,
-        pre_arena_addr,
-        "refused reset must leave arena pointer unchanged",
+        frame.region() as *const KoanRegion as usize,
+        pre_region_addr,
+        "refused reset must leave region pointer unchanged",
     );
 }
 
@@ -187,12 +187,12 @@ fn call_arena_try_reset_for_tail_refuses_when_aliased() {
 /// could not distinguish this from a live shell alias and would refuse it.
 #[test]
 fn call_arena_try_reset_for_tail_allows_reset_under_escaped_storage() {
-    let outer_arena = KoanRegion::new();
-    let outer_scope = default_scope(&outer_arena, Box::new(std::io::sink()));
+    let outer_region = KoanRegion::new();
+    let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
     let mut frame: Rc<CallFrame> = CallFrame::new(outer_scope, None);
-    let _escaped = frame.arena().alloc_object(KObject::Number(7.0));
-    let pre_alloc_count = frame.arena().alloc_count();
-    let pre_storage_addr = frame.arena() as *const KoanRegion as usize;
+    let _escaped = frame.region().alloc_object(KObject::Number(7.0));
+    let pre_alloc_count = frame.region().alloc_count();
+    let pre_storage_addr = frame.region() as *const KoanRegion as usize;
 
     // Simulate a closure escape: hold the frame's storage Rc (what an anchored value carries).
     let escaped_storage = frame.storage_rc();
@@ -203,31 +203,31 @@ fn call_arena_try_reset_for_tail_allows_reset_under_escaped_storage() {
         "an escaped *storage* hold must not foreclose reuse"
     );
 
-    // The shell reset to a fresh arena, distinct from the snapshot the escapee still holds.
+    // The shell reset to a fresh region, distinct from the snapshot the escapee still holds.
     assert_ne!(
-        frame.arena() as *const KoanRegion as usize,
+        frame.region() as *const KoanRegion as usize,
         pre_storage_addr,
         "reuse installed fresh storage",
     );
     // The escaped snapshot is still alive (its retained storage Rc still owns the pre-reset
-    // arena, allocations intact) — the reset dropped only the shell's reference to it.
+    // region, allocations intact) — the reset dropped only the shell's reference to it.
     assert!(std::ptr::eq(
-        escaped_storage.arena() as *const KoanRegion,
+        escaped_storage.region() as *const KoanRegion,
         pre_storage_addr as *const KoanRegion
     ));
-    assert_eq!(escaped_storage.arena().alloc_count(), pre_alloc_count);
+    assert_eq!(escaped_storage.region().alloc_count(), pre_alloc_count);
 }
 
-/// Cycle gate: alloc'ing a value that anchors back at the receiving arena via an
-/// `Rc<CallFrame>` redirects to the escape arena. Without the redirect the per-call
-/// arena's storage would hold an Rc to itself and never drop.
+/// Cycle gate: alloc'ing a value that anchors back at the receiving region via an
+/// `Rc<CallFrame>` redirects to the escape region. Without the redirect the per-call
+/// region's storage would hold an Rc to itself and never drop.
 #[test]
 fn alloc_object_redirects_self_anchored_value_to_escape_arena() {
     let outer = KoanRegion::new();
     let scope = default_scope(&outer, Box::new(std::io::sink()));
     let frame: Rc<CallFrame> = CallFrame::new(scope, None);
     // Build a List whose only element is a `KFunction` carrying an
-    // `Rc<FrameStorage>` pointing at `frame.arena()`. The cycle gate only inspects the
+    // `Rc<FrameStorage>` pointing at `frame.region()`. The cycle gate only inspects the
     // carried `Rc`, so the placeholder `KFunction` body is irrelevant.
     let dummy_fn_obj = outer.alloc_object(KObject::KFunction(
         outer.alloc_function(crate::machine::core::kfunction::KFunction::new(
@@ -243,7 +243,7 @@ fn alloc_object_redirects_self_anchored_value_to_escape_arena() {
                 crate::machine::core::kfunction::action::Action::Done(Ok(
                     crate::machine::model::Carried::Object(
                         ctx.scope
-                            .arena
+                            .region
                             .alloc_object(crate::machine::model::KObject::Null),
                     ),
                 ))
@@ -259,14 +259,14 @@ fn alloc_object_redirects_self_anchored_value_to_escape_arena() {
     let cyclic_kfn = KObject::KFunction(f_ref, Some(frame.storage_rc()));
     let list = KObject::list(vec![cyclic_kfn]);
 
-    let stored = frame.arena().alloc_object(list);
+    let stored = frame.region().alloc_object(list);
     let stored_ptr = stored as *const KObject<'_>;
     assert!(
         outer.owns_object(stored_ptr),
-        "self-anchored alloc should redirect to the escape arena (outer)",
+        "self-anchored alloc should redirect to the escape region (outer)",
     );
     assert!(
-        !frame.arena().owns_object(stored_ptr),
-        "self-anchored value must not land in the per-call arena",
+        !frame.region().owns_object(stored_ptr),
+        "self-anchored value must not land in the per-call region",
     );
 }

@@ -184,7 +184,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
 ) -> Outcome<'step> {
     fn fold<'step>(scope: &Scope<'step>, pairs: Vec<(String, KType<'step>)>) -> Outcome<'step> {
         let record = Record::from_pairs(pairs);
-        let kt = scope.arena.alloc_ktype(KType::Record(Box::new(record)));
+        let kt = scope.region.alloc_ktype(KType::Record(Box::new(record)));
         Outcome::Done(Ok(Carried::Type(kt)))
     }
     let mut elaborator = Elaborator::new(view.current_scope()).with_chain(chain.clone());

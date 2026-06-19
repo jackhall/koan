@@ -116,7 +116,7 @@ pub fn body<'a>(
     ));
     let child = ctx
         .scope
-        .arena
+        .region
         .alloc_scope(Scope::child_recursive_group(ctx.scope, Rc::clone(&set)));
     for (index, (name, _)) in members.iter().enumerate() {
         child.preinstall_identity(
@@ -160,7 +160,7 @@ pub fn body<'a>(
             .register_type_upsert(group_name.clone(), handle, bind_index)
         {
             Ok(kt_ref) => Action::Done(Ok(Carried::Type(
-                fctx.scope.arena.alloc_ktype(kt_ref.clone()),
+                fctx.scope.region.alloc_ktype(kt_ref.clone()),
             ))),
             Err(e) => Action::Done(Err(e.with_frame(frame()))),
         }

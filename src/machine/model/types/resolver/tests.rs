@@ -14,12 +14,12 @@ fn leaf(n: &str) -> TypeIdentifier {
 #[test]
 fn value_language_leaf_names_layering() {
     use crate::machine::model::values::KObject;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     scope
         .bind_value(
             "Gee".into(),
-            arena.alloc_object(KObject::Number(7.0)),
+            region.alloc_object(KObject::Number(7.0)),
             BindingIndex::BUILTIN,
         )
         .expect("bind_value");
@@ -35,8 +35,8 @@ fn value_language_leaf_names_layering() {
 
 #[test]
 fn unbound_leaf_names_unknown_type() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(&mut el, &leaf("NopeType")) {
         ElabResult::Unbound(msg) => assert!(
@@ -52,13 +52,13 @@ fn unbound_leaf_names_unknown_type() {
 /// A non-member falls through to ordinary resolution.
 #[test]
 fn recursive_group_member_lowers_to_recursive_ref() {
-    let arena = KoanRegion::new();
-    let parent = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let parent = run_root_silent(&region);
     let set = std::rc::Rc::new(RecursiveSet::new(vec![
         NominalMember::pending("A".into(), parent.id, KKind::NewType),
         NominalMember::pending("B".into(), parent.id, KKind::NewType),
     ]));
-    let child = arena.alloc_scope(Scope::child_recursive_group(parent, set));
+    let child = region.alloc_scope(Scope::child_recursive_group(parent, set));
     let mut el = Elaborator::new(child);
     match elaborate_type_identifier(&mut el, &leaf("B")) {
         ElabResult::Done(KType::RecursiveRef(name)) => assert_eq!(name, "B"),

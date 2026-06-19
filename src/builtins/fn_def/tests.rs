@@ -2,7 +2,7 @@
 //!
 //! - [`anonymous`] — keyword-less `FN :{…}` record-schema binder.
 //! - [`basic`] — registration, dispatch routing, param binding, infix shapes.
-//! - [`arena`] — run-root and scheduler-slot reclamation invariants.
+//! - [`region`] — run-root and scheduler-slot reclamation invariants.
 //! - [`body_block`] — multi-statement body split, sibling visibility, TCO on last.
 //! - [`body_routing`] — selection of the body to evaluate per call.
 //! - [`return_type`] — parsing the `-> Type` slot and runtime return-type checks.
@@ -25,8 +25,8 @@ use crate::builtins::test_support::{run, run_root_with_buf};
 use crate::machine::KoanRegion;
 
 pub(super) fn capture_program_output(source: &str) -> Vec<u8> {
-    let arena = KoanRegion::new();
-    let (scope, captured) = run_root_with_buf(&arena);
+    let region = KoanRegion::new();
+    let (scope, captured) = run_root_with_buf(&region);
     run(scope, source);
     let bytes = captured.borrow().clone();
     bytes

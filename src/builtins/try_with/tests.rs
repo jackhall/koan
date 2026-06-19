@@ -7,8 +7,8 @@ use crate::builtins::test_support::{
 use crate::machine::{KErrorKind, KoanRegion};
 
 fn run_program(source: &str) -> Vec<u8> {
-    let arena = KoanRegion::new();
-    let (scope, captured) = run_root_with_buf(&arena);
+    let region = KoanRegion::new();
+    let (scope, captured) = run_root_with_buf(&region);
     run(scope, source);
     let bytes = captured.borrow().clone();
     bytes
@@ -29,8 +29,8 @@ fn ok_binds_it_to_success_value() {
 #[test]
 fn arm_violating_declared_return_type_errors() {
     // Declared `:Number`, but the `ok` arm returns a Str (PRINT's rendered string).
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let err = run_one_err(
         scope,
         parse_one("TRY (PRINT \"v\") -> :Number WITH (Ok -> (PRINT \"caught\"))"),
@@ -98,8 +98,8 @@ fn type_mismatch_arm_catches_record_newtype_value_mismatch() {
 
 #[test]
 fn re_raise_when_no_arm_matches_error_kind() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let err = run_one_err(
         scope,
         parse_one("TRY (foo) -> :Str WITH (TypeMismatch -> (PRINT \"never\"))"),
@@ -112,8 +112,8 @@ fn re_raise_when_no_arm_matches_error_kind() {
 
 #[test]
 fn missing_ok_arm_on_success_raises_shape_error() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let err = run_one_err(
         scope,
         parse_one("TRY (PRINT \"x\") -> :Str WITH (TypeMismatch -> (PRINT \"never\"))"),

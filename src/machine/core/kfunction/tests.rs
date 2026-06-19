@@ -38,8 +38,8 @@ fn find_match<'a>(scope: &'a Scope<'a>, expr: &KExpression<'a>) -> Option<&'a KF
 /// resolved through the `BareIdentifier` fast lane.
 #[test]
 fn classify_returns_wrap_indices_for_value_slot_identifiers() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
@@ -68,8 +68,8 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
 /// resolves to a placeholder.
 #[test]
 fn classify_returns_ref_name_indices_for_non_binder_function() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
@@ -104,8 +104,8 @@ fn classify_returns_ref_name_indices_for_non_binder_function() {
 /// not a reference, and `classify_for_pick` must exclude it from `ref_name_indices`.
 #[test]
 fn classify_skips_ref_name_indices_for_binder_function() {
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("LET".into())),
         Spanned::bare(ExpressionPart::Identifier("x".into())),
@@ -128,8 +128,8 @@ fn classify_skips_ref_name_indices_for_binder_function() {
 /// [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders).
 #[test]
 fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
@@ -157,8 +157,8 @@ fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
 #[test]
 fn function_value_ktype_projects_kfunctor_when_flagged() {
     use crate::machine::model::types::{ExpressionSignature, ReturnType};
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     let make_sig = || ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Number),
         elements: vec![
@@ -170,7 +170,7 @@ fn function_value_ktype_projects_kfunctor_when_flagged() {
         ],
     };
     let plain = KFunction::with_binder_name(make_sig(), Body::Builtin(body_any), scope, None);
-    let plain_obj = KObject::KFunction(arena.alloc_function(plain), None);
+    let plain_obj = KObject::KFunction(region.alloc_function(plain), None);
     assert!(matches!(plain_obj.ktype(), KType::KFunction { .. }));
     let functor = KFunction::with_binder_and_functor(
         make_sig(),
@@ -180,7 +180,7 @@ fn function_value_ktype_projects_kfunctor_when_flagged() {
         None,
         true,
     );
-    let functor_obj = KObject::KFunction(arena.alloc_function(functor), None);
+    let functor_obj = KObject::KFunction(region.alloc_function(functor), None);
     match functor_obj.ktype() {
         KType::KFunctor { params, ret, body } => {
             assert_eq!(params.get("x"), Some(&KType::Number));
@@ -201,8 +201,8 @@ fn function_value_ktype_projects_kfunctor_when_flagged() {
 fn functor_ktype_identity_ignores_body() {
     use crate::machine::model::types::{ExpressionSignature, ReturnType};
     use std::hash::{Hash, Hasher};
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     let make_sig = || ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Number),
         elements: vec![
@@ -222,7 +222,7 @@ fn functor_ktype_identity_ignores_body() {
             None,
             true,
         );
-        KObject::KFunction(arena.alloc_function(f), None)
+        KObject::KFunction(region.alloc_function(f), None)
     };
     let a = mk_functor().ktype();
     let b = mk_functor().ktype();
@@ -266,8 +266,8 @@ fn functor_ktype_identity_ignores_body() {
 /// lane.
 #[test]
 fn classify_type_token_in_any_slot_returns_wrap_indices() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![

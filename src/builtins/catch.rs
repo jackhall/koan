@@ -52,7 +52,7 @@ pub fn body<'a>(
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
         let (tag, payload): (&str, KObject<'a>) = match result {
             Ok(v) => ("Ok", v.deep_clone()),
-            Err(e) => ("Error", e.to_tagged(fctx.scope.arena)),
+            Err(e) => ("Error", e.to_tagged(fctx.scope.region)),
         };
         let tagged = KObject::Tagged {
             tag: tag.to_string(),
@@ -61,7 +61,7 @@ pub fn body<'a>(
             index: result_index,
             type_args: Rc::new(vec![]),
         };
-        Action::Done(Ok(Carried::Object(fctx.scope.arena.alloc_object(tagged))))
+        Action::Done(Ok(Carried::Object(fctx.scope.region.alloc_object(tagged))))
     });
     Action::Catch {
         watched: Dep::Dispatch {

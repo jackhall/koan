@@ -47,8 +47,8 @@ fn summarize_marker(obj: &KObject<'_>) -> String {
 /// consult overload buckets.
 #[test]
 fn dispatch_inner_scope_shadows_outer_more_specific() {
-    let arena = KoanRegion::new();
-    let outer = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let outer = run_root_bare(&region);
     let outer_sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
@@ -69,7 +69,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         BindingIndex::value(1),
     );
 
-    let inner = arena.alloc_scope(outer.child_for_call());
+    let inner = region.alloc_scope(outer.child_for_call());
     let inner_sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
@@ -103,8 +103,8 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
 #[test]
 fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     use crate::machine::KErrorKind;
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     register_builtin(
         scope,
         "any_first",
@@ -143,8 +143,8 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
 /// function. (Once monadic effects exist, this should also produce a warning effect.)
 #[test]
 fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![

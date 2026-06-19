@@ -90,7 +90,7 @@ pub fn body<'a>(
 
     let narrowed = Record::from_pairs(narrowed_pairs);
     let result = KObject::record_with_type(Rc::clone(fields), narrowed);
-    let obj = ctx.scope.arena.alloc_object(result);
+    let obj = ctx.scope.region.alloc_object(result);
     Action::Done(Ok(Carried::Object(obj)))
 }
 
@@ -121,8 +121,8 @@ mod tests {
     /// stays physically present on the `Rc`-shared backing record.
     #[test]
     fn from_narrows_carried_type_keeping_all_fields_present() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let result = run_one(scope, parse_one("(x y) FROM {x = 1, y = 2, z = 3}"));
         match result {
             KObject::Record(fields, types) => {
@@ -144,8 +144,8 @@ mod tests {
     /// admits it and no second overload is needed.
     #[test]
     fn from_single_field_projection() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let result = run_one(scope, parse_one("(x) FROM {x = 1, y = 2}"));
         match result {
             KObject::Record(fields, types) => {
@@ -161,8 +161,8 @@ mod tests {
     /// `() FROM r` projects to zero fields → the empty record `:{}`, not an error.
     #[test]
     fn from_empty_field_list_yields_empty_record() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let result = run_one(scope, parse_one("() FROM {x = 1}"));
         match result {
             KObject::Record(fields, types) => {
@@ -177,8 +177,8 @@ mod tests {
     /// Naming a field absent from the record is a `ShapeError`.
     #[test]
     fn from_unknown_field_errors() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("(x w) FROM {x = 1}"));
         let msg = format!("{err}");
         assert!(
@@ -190,8 +190,8 @@ mod tests {
     /// A duplicate name in the field list is a `ShapeError`.
     #[test]
     fn from_duplicate_field_errors() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("(x x) FROM {x = 1}"));
         let msg = format!("{err}");
         assert!(
@@ -213,8 +213,8 @@ mod tests {
         use crate::machine::core::KErrorKind;
         use crate::machine::execute::KoanRuntime;
 
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let mut sched = KoanRuntime::new();
         let root = sched.dispatch_in_scope(parse_one("(x y) FROM 5"), scope);
         sched
@@ -238,8 +238,8 @@ mod tests {
         use crate::machine::core::KErrorKind;
         use crate::machine::execute::KoanRuntime;
 
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "FN (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")\n\

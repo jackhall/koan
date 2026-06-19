@@ -18,7 +18,7 @@ pub fn body<'a>(
     };
     let line = format!("{rendered}\n");
     ctx.scope.write_out(line.as_bytes());
-    let obj = ctx.scope.arena.alloc_object(KObject::KString(rendered));
+    let obj = ctx.scope.region.alloc_object(KObject::KString(rendered));
     Action::Done(Ok(Carried::Object(obj)))
 }
 

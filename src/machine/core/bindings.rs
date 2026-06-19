@@ -98,7 +98,7 @@ impl BindingIndex {
 /// dispatch parks by the full bucket key keeps `(MAKESET _)` and
 /// `(MAKESET _ USING _)` from colliding.
 ///
-/// Borrow discipline: `types → functions → data`. Lifetime `'a` is the arena
+/// Borrow discipline: `types → functions → data`. Lifetime `'a` is the region
 /// lifetime of the stored references.
 pub struct Bindings<'a> {
     types: RefCell<HashMap<String, (&'a KType<'a>, BindingIndex)>>,
@@ -114,7 +114,7 @@ pub struct Bindings<'a> {
     /// Per-scope operator registry: a chain's sorted-joined operator probe key →
     /// the shared [`OperatorGroup`] it resolves to. A module installs one record per
     /// size-≥2 subset of its declared operators (the per-group powerset), each subset
-    /// key pointing at the same arena-allocated group, so any subset used in one
+    /// key pointing at the same region-allocated group, so any subset used in one
     /// expression resolves in a single hit and a cross-group mix simply misses.
     /// Walked through the scope chain like every other name (innermost visible wins).
     operators: RefCell<HashMap<String, (&'a OperatorGroup, BindingIndex)>>,
@@ -335,7 +335,7 @@ impl<'a> Bindings<'a> {
         }
     }
 
-    /// Insert `(te → kt)` into the resolution cache. Caller arena-allocates
+    /// Insert `(te → kt)` into the resolution cache. Caller region-allocates
     /// `kt` and gates on finalize. Monotonic: a collision means equal values,
     /// so we keep the existing entry rather than panic.
     pub fn type_identifier_memo_insert(&self, te: TypeIdentifier, cutoff: Option<usize>, kt: &'a KType<'a>) {

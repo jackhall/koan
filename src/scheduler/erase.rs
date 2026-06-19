@@ -56,7 +56,7 @@ unsafe fn retype<A, B>(value: A) -> B {
 /// erase/reattach pair, mirroring [`Erased::erase`] for a value stored raw rather than wrapped.
 /// Forgetting a lifetime for storage cannot fabricate one (the value is stored, never used at
 /// `'static`, until a witnessed re-anchor), so this is sound to call without `unsafe`. The
-/// run-lifetime storage substrate routes its arena writes through here instead of carrying its own
+/// run-lifetime storage substrate routes its region writes through here instead of carrying its own
 /// transmute, so [`retype`] is the single audited home for value lifetime-erasure.
 pub(crate) fn erase_to_static<T: Reattachable>(value: T::At<'_>) -> T::At<'static> {
     // SAFETY: lifetime-only retype for storage of a single-lifetime family (the `Reattachable`
@@ -88,7 +88,7 @@ impl<T: Reattachable> Erased<T> {
     ///
     /// # Safety
     ///
-    /// The caller holds a liveness witness — the carrier's frame `Rc`, or the run arena — that
+    /// The caller holds a liveness witness — the carrier's frame `Rc`, or the run region — that
     /// pins the pointee for all of `'r`, and re-anchors only transiently while that witness is
     /// held, so the fabricated `'r` cannot outlive the pointee. `'r` is driven by the return-type
     /// annotation, not a turbofish argument.
@@ -154,7 +154,7 @@ pub(crate) unsafe fn reattach_slice<'i, 'o, 'a, 'b, T: Reattachable>(
 ///
 /// The **signature is safe** — `'w` is bounded by the `witness` borrow, so the frame the witness pins
 /// is live for all of `'w`, and the caller cannot pick a `'w` outliving it. The carrier's captures
-/// live in that frame's arena or a strict ancestor its `outer` chain pins, the structural invariant
+/// live in that frame's region or a strict ancestor its `outer` chain pins, the structural invariant
 /// every node upholds: a node's continuation / contract is built against that node's own frame, and
 /// the driver passes that same held cart as `witness`. So the call sites (`run_loop` / `finalize`)
 /// carry no `unsafe` block of their own.

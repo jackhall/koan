@@ -182,7 +182,7 @@ fn hash_of(t: &KType<'_>) -> u64 {
     h.finish()
 }
 
-/// `a == b` ⟹ `hash(a) == hash(b)` across every arena-free variant. Each pair is
+/// `a == b` ⟹ `hash(a) == hash(b)` across every region-free variant. Each pair is
 /// built independently so a stray identity-from-pointer bug would surface.
 #[test]
 fn hash_agrees_with_eq_for_arena_free_variants() {

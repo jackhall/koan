@@ -16,8 +16,8 @@ use super::capture_program_output;
 /// by record runs the body against the named field.
 #[test]
 fn anonymous_fn_call_by_record_runs_body() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "LET f = (FN :{x :Number} -> Number = (x))");
     let result = run_one(scope, parse_one("f {x = 7}"));
     assert!(
@@ -29,8 +29,8 @@ fn anonymous_fn_call_by_record_runs_body() {
 /// The bound value is a `KFunction` — the only handle to an anonymous function.
 #[test]
 fn anonymous_fn_binds_a_function_value() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "LET f = (FN :{x :Number} -> Number = (x))");
     let result = run_one(scope, parse_one("f"));
     assert!(
@@ -88,8 +88,8 @@ fn anonymous_fn_with_sub_dispatched_field_type() {
 /// surfaces the `NAMED_ONLY` dispatch failure rather than binding.
 #[test]
 fn anonymous_fn_rejects_positional_call() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "LET f = (FN :{x :Number} -> Number = (x))");
     let error = run_one_err(scope, parse_one("f (1)"));
     assert!(
@@ -102,8 +102,8 @@ fn anonymous_fn_rejects_positional_call() {
 /// binder demands a record schema.
 #[test]
 fn anonymous_fn_non_record_signature_is_shape_error() {
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     let error = run_one_err(scope, parse_one("FN :Number -> Number = (1)"));
     assert!(
         matches!(error.kind, KErrorKind::ShapeError(_)),

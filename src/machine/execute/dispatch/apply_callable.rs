@@ -123,7 +123,7 @@ fn apply_constructor<'step>(
                     tag,
                 };
                 return Outcome::Done(Ok(Carried::Type(
-                    ctx.current_scope().arena.alloc_ktype(variant),
+                    ctx.current_scope().region.alloc_ktype(variant),
                 )));
             }
             // Positional construction: `Outcome (Error "x")` (paren-group body). Tagged

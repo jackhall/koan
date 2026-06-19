@@ -153,7 +153,7 @@ fn finalize_val<'a>(
     bind_index: BindingIndex,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::Action;
-    let kt_ref: &'a KType<'a> = scope.arena.alloc_ktype(declared_kt.clone());
+    let kt_ref: &'a KType<'a> = scope.region.alloc_ktype(declared_kt.clone());
     if let Err(e) = scope.register_user_type(name, declared_kt, bind_index) {
         return Action::Done(Err(e));
     }

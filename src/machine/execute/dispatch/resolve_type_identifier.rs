@@ -1,4 +1,4 @@
-//! Scope-bound resolution of a surface [`TypeIdentifier`] into an arena-allocated `&KType`.
+//! Scope-bound resolution of a surface [`TypeIdentifier`] into an region-allocated `&KType`.
 //!
 //! Read-only consumer of the bindings façade: never touches `data`, `functions`,
 //! `placeholders`, `pending`, `out`, or `kind` — the read-only dependency is what
@@ -21,7 +21,7 @@ use crate::machine::model::types::KType;
 
 /// Outcome of [`Scope::resolve_type_identifier`]. Mirrors
 /// [`crate::machine::model::types::ElabResult`] but `Done` carries an
-/// arena-allocated cache reference and `Park` carries scheduler `NodeId`s.
+/// region-allocated cache reference and `Park` carries scheduler `NodeId`s.
 pub enum TypeIdentifierResolution<'step> {
     Done(&'step KType<'step>),
     Park(Vec<NodeId>),
@@ -51,7 +51,7 @@ impl<'step> Scope<'step> {
             ElabResult::Done(kt) => {
                 let pending = FinalizeGate { scope: self }.pending_producers(&kt);
                 if pending.is_empty() {
-                    let kt_ref: &'step KType<'step> = self.arena.alloc_ktype(kt);
+                    let kt_ref: &'step KType<'step> = self.region.alloc_ktype(kt);
                     self.type_identifier_memo_insert(te.clone(), cutoff, kt_ref);
                     TypeIdentifierResolution::Done(kt_ref)
                 } else {
@@ -92,7 +92,7 @@ pub(crate) fn resolve_type_leaf_carrier<'step>(
 ) -> TypeLeafCarrier<'step> {
     match scope.resolve_type_identifier(t, chain) {
         TypeIdentifierResolution::Done(kt) => {
-            TypeLeafCarrier::Resolved(scope.arena.alloc_ktype(kt.clone()))
+            TypeLeafCarrier::Resolved(scope.region.alloc_ktype(kt.clone()))
         }
         TypeIdentifierResolution::Park(producers) => TypeLeafCarrier::Park(producers),
         TypeIdentifierResolution::Unbound(message) => TypeLeafCarrier::Unbound(message),

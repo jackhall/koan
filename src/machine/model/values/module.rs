@@ -31,7 +31,7 @@ pub struct Module<'a> {
     pub path: String,
     child_scope_ptr: ScopePtr<'a>,
     /// `RefCell` because opaque-ascription installs entries after the surrounding `KObject`
-    /// is alloc'd. `Module` is arena-pinned and never moved, so a `&'a Module<'a>` borrow
+    /// is alloc'd. `Module` is region-pinned and never moved, so a `&'a Module<'a>` borrow
     /// stays valid alongside interior mutation.
     pub type_members: RefCell<HashMap<String, KType<'a>>>,
     /// VAL-slot name → the per-call abstract `KType` an opaque ascription minted for the
@@ -68,7 +68,7 @@ impl<'a> Module<'a> {
     }
 
     /// Re-attach `'a` to the stored scope. The branded `child_scope_ptr` makes this a safe
-    /// re-attach: it consumed a real `&'a Scope<'a>` at construction, and the arena outlives
+    /// re-attach: it consumed a real `&'a Scope<'a>` at construction, and the region outlives
     /// every `&Module<'a>` by construction.
     pub fn child_scope(&self) -> &'a Scope<'a> {
         self.child_scope_ptr.reattach()
@@ -103,7 +103,7 @@ impl<'a> ModuleSignature<'a> {
     }
 
     /// Re-attach `'a` to the stored scope. The branded `decl_scope_ptr` makes this a safe
-    /// re-attach: the decl scope is arena-allocated and outlives every `&ModuleSignature<'a>` by
+    /// re-attach: the decl scope is region-allocated and outlives every `&ModuleSignature<'a>` by
     /// construction.
     pub fn decl_scope(&self) -> &'a Scope<'a> {
         self.decl_scope_ptr.reattach()

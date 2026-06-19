@@ -71,7 +71,7 @@ pub fn body<'a>(
             }
         }
     }
-    let kt = ctx.scope.arena.alloc_ktype(KType::Signature {
+    let kt = ctx.scope.region.alloc_ktype(KType::Signature {
         sig: s,
         pinned_slots: pinned,
     });
@@ -87,8 +87,8 @@ mod tests {
 
     #[test]
     fn with_one_slot_pins_the_named_slot() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
@@ -113,8 +113,8 @@ mod tests {
     /// Pins land in record-literal order — `pinned_slots` is an ordered `Vec`.
     #[test]
     fn with_two_slots_preserve_order() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "SIG Set = ((LET Elt = Number) (LET Ord = Number) (VAL tag :Number))",
@@ -137,8 +137,8 @@ mod tests {
     /// handler could not take (was `#[ignore]`d there).
     #[test]
     fn with_inner_module_attr_path_pins_abstract_type() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "MODULE IntOrd = ((LET Carrier = Number) (LET compare = 0))\n\
@@ -165,8 +165,8 @@ mod tests {
 
     #[test]
     fn with_rejects_unknown_slot() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
@@ -187,8 +187,8 @@ mod tests {
 
     #[test]
     fn with_rejects_lowercase_slot_name() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(
             scope,
             "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",

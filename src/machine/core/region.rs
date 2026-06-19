@@ -8,7 +8,7 @@
 //!
 //! The Koan instantiation (`KoanRegion = Region<KoanStorageProfile>`, the family `Stored` impls,
 //! the cycle-gate walkers) lives in [`super::arena`]. See
-//! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
+//! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the lifetime-erasure soundness argument and
 //! [per-call-arena-protocol.md § Cycle gate](../../../design/per-call-arena-protocol.md#cycle-gate-on-alloc_object)
 //! for the redirect `alloc` enforces.

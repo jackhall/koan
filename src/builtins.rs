@@ -84,8 +84,8 @@ pub(crate) fn register_builtin_full<'a>(
     binder_bucket: Option<crate::machine::core::kfunction::BinderBucketFn>,
     is_functor: bool,
 ) {
-    let arena = scope.arena;
-    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
+    let region = scope.region;
+    let f: &'a KFunction<'a> = region.alloc_function(KFunction::with_binder_and_functor(
         signature,
         Body::Builtin(body),
         scope,
@@ -93,7 +93,7 @@ pub(crate) fn register_builtin_full<'a>(
         binder_bucket,
         is_functor,
     ));
-    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
+    let obj: &'a KObject<'a> = region.alloc_object(KObject::KFunction(f, None));
     let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
 }
 
@@ -119,8 +119,8 @@ pub(crate) fn register_overload_at<'a>(
     body: crate::machine::core::kfunction::ActionFn,
     index: BindingIndex,
 ) {
-    let arena = scope.arena;
-    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
+    let region = scope.region;
+    let f: &'a KFunction<'a> = region.alloc_function(KFunction::with_binder_and_functor(
         signature,
         Body::Builtin(body),
         scope,
@@ -128,7 +128,7 @@ pub(crate) fn register_overload_at<'a>(
         None,
         false,
     ));
-    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
+    let obj: &'a KObject<'a> = region.alloc_object(KObject::KFunction(f, None));
     scope
         .register_function(name.into(), f, obj, index)
         .expect("register_overload_at: user-index overload should not collide with a builtin");
@@ -143,10 +143,10 @@ pub(crate) fn register_overload_at<'a>(
 /// Registration order does not affect dispatch — [`Scope::resolve_dispatch`] buckets by
 /// untyped signature shape and picks overloads by `KType` specificity.
 pub fn default_scope<'a>(
-    arena: &'a crate::machine::core::KoanRegion,
+    region: &'a crate::machine::core::KoanRegion,
     out: Box<dyn std::io::Write + 'a>,
 ) -> &'a Scope<'a> {
-    let scope = arena.alloc_scope(Scope::run_root(arena, None, out));
+    let scope = region.alloc_scope(Scope::run_root(region, None, out));
 
     scope.register_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
     scope.register_type("Str".into(), KType::Str, BindingIndex::BUILTIN);
@@ -207,5 +207,5 @@ pub fn default_scope<'a>(
     type_ops::register(scope);
     parameterized_types::register(scope);
 
-    arena.alloc_scope(Scope::run_child(scope))
+    region.alloc_scope(Scope::run_child(scope))
 }

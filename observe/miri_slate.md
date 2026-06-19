@@ -57,7 +57,7 @@ test identifiers; pass them after `--` in the Miri command.
 child-scope `Option<ScopePtr<'static>>` (shortened to an `&self`-bounded lifetime via the
 `unsafe` `ScopePtr::reattach_unbounded`) plus the `Rc<CallFrame>` chain that keeps per-call
 arenas pinned across re-borrow. One test pins the re-attach surviving a sibling alloc; the
-other pins the `Rc<CallFrame>` chain keeping an outer arena alive after its local handle
+other pins the `Rc<CallFrame>` chain keeping an outer region alive after its local handle
 drops. A third pins the witness-bounded sibling `ScopePtr::reattach_bounded` (via
 `CallFrame::scope_bounded`), which splits the stored `'static` into a `&self`-bounded borrow
 and a free content lifetime — re-read alongside the unbounded `scope` / `scope_for_bind`
@@ -92,7 +92,7 @@ decision live in [src/machine/core/arena.rs](../src/machine/core/arena.rs).
 frame reuse installs a fresh refcounted `FrameStorage` (a new `KoanRegion`) and
 re-allocates the child `Scope`, with two transmutes: `&Scope<'_> →
 &Scope<'static>` for the new outer link and a raw-ptr re-anchor for the new
-inner arena. The `Rc::get_mut` gate refuses only when another `Rc<CallFrame>`
+inner region. The `Rc::get_mut` gate refuses only when another `Rc<CallFrame>`
 *shell* holder still exists; an escaped value pins the `FrameStorage`, not the
 shell, so it does not foreclose reuse — the swap drops the shell's reference to the
 old storage while the escapee's clone keeps that snapshot alive and aliased.
@@ -120,31 +120,31 @@ violation if the queue/drain discipline regresses.)
 **`USING … SCOPE` transparent-window aliasing** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — a
 `ScopeBindings::Borrowed` window reads another scope's `RefCell` maps through a
 borrowed reference, and the block (run in a transparent scope allocated in the
-call-site arena) can define a closure that escapes carrying that window. Pins
+call-site region) can define a closure that escapes carrying that window. Pins
 that an escaping closure reading a surfaced member of a *temporary* functor-result
-module — the harder case, relying on the call-site-arena `Rc` rooting — does not
-dangle into the freed module/USING arena. (Safe code by construction; pinned
+module — the harder case, relying on the call-site-region `Rc` rooting — does not
+dangle into the freed module/USING region. (Safe code by construction; pinned
 because tree borrows catches a regression in the aliasing or rooting discipline.)
 
 - `using_temporary_functor_result_is_sound`
 
 **MATCH on `Tagged` recursion** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — MATCH
 builds its per-call frame and seeds its `it` bind through `CallFrame::with_frame_interior`
-(arena re-exposed free, child scope re-handed via the bounded `scope_bounded` brand); the
-`FrameStorage` ancestor chain keeps the call-site arena alive across
+(region re-exposed free, child scope re-handed via the bounded `scope_bounded` brand); the
+`FrameStorage` ancestor chain keeps the call-site region alive across
 TCO replace when a user-fn recurses through a `Tagged` parameter via MATCH.
 
 - `recursive_tagged_match_no_uaf`
 
 **TRY-WITH inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — same
 `CallFrame::with_frame_interior` seed bind as MATCH for the per-branch frame; the
-`FrameStorage.outer` chain keeps the call-site arena alive when the branch body
+`FrameStorage.outer` chain keeps the call-site region alive when the branch body
 tail-calls back through the enclosing user-fn.
 
 - `try_inside_tco_position_preserves_frame_chain`
 
 **KFuture anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — a KFuture with a
-`Future(&KObject)` allocated in the dying arena anchors with `frame: Some(rc)`.
+`Future(&KObject)` allocated in the dying region anchors with `frame: Some(rc)`.
 Test source lives in [src/machine/execute/lift.rs](../src/machine/execute/lift.rs);
 the unsafe site it pins is the `Rc<CallFrame>` heap-pinning that backs the
 anchored case (the `frame: None` non-anchor branch is a logic case with no
@@ -153,8 +153,8 @@ unsafe site, covered under plain `cargo test`).
 - `unanchored_kfuture_with_arena_borrow_does_anchor`
 
 **`KFunction::invoke` per-call frame re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
-seed bind routed through `CallFrame::with_frame_interior`: the per-call arena re-exposed at a
-free `'a` (an `'a`-typed value must land in an `'a`-typed arena) while the child scope rides the
+seed bind routed through `CallFrame::with_frame_interior`: the per-call region re-exposed at a
+free `'a` (an `'a`-typed value must land in an `'a`-typed region) while the child scope rides the
 witness-bounded `scope_bounded` brand. Witnessed by the `Rc<CallFrame>` moved into
 `BodyResult::Tail`. Exercised by every user-fn invocation: repeated-call reclamation, type-op
 dispatch through a functor-call's per-call scope, and `MODULE_TYPE_OF` lift-out.
@@ -191,8 +191,8 @@ stored as a `ScopePtr<'static>` through the brand-dropping `ScopePtr::erase_stat
 cast as `erase`, in [src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs)) and re-attached
 at the read boundary through the `unsafe` `ScopePtr::reattach_bounded` — a borrow bounded by the
 reader (the slot's frame `Rc`), a free content lifetime, sound because the cart's `outer_frame` chain
-pins the ancestor arena. This is the second `'static`-storing scope carrier (alongside `CallFrame`).
-This test pins the erase → reattach round-trip directly, plus a sibling-pointer arena mutation while
+pins the ancestor region. This is the second `'static`-storing scope carrier (alongside `CallFrame`).
+This test pins the erase → reattach round-trip directly, plus a sibling-pointer region mutation while
 the re-attached scope is live.
 
 - `node_scope_yoked_child_erase_reattach_roundtrip`
@@ -227,7 +227,7 @@ after the helper calls to catch a tree-borrows regression.
 
 **`pin_deref` — raw heap-pin deref** ([src/machine/core/reattach.rs](../src/machine/core/reattach.rs))
 — the one audited raw heap-pin deref, materializing a `&'x T` from an `Rc`-pinned `*const T` (the
-self-referential arena-pointer derefs the `Erased` retype can't express). Carries no minimal test of
+self-referential region-pointer derefs the `Erased` retype can't express). Carries no minimal test of
 its own: every `CallFrame` construction routes it (`CallFrame` lifetime erasure /
 `try_reset_for_tail` groups), and the storage engine's escape redirect routes it under
 `runtime_arena_alloc_while_prior_ref_live`.
@@ -242,7 +242,7 @@ through `ErasedValue` / the dep-delivery helpers). No separate minimal test.
 — the contract-lifetime erasure that mirrors `ScopePtr` for `ReturnContract`, now an
 `Erased<ContractFamily>` routing the shared `retype` primitive: `erase` forgets the lifetime for
 storage on a node's lifetime-free `Frame`, and the `unsafe` `reattach` recovers a lifetime witnessed
-by the cart `Rc` that pins the contract's home arena (the cart's frame-outer arena — a strict
+by the cart `Rc` that pins the contract's home region (the cart's frame-outer region — a strict
 ancestor). As a thin-value `Erased` carrier its erase → reattach round-trip is the owned path of the
 `retype` primitive, pinned by `erased_roundtrip_and_helpers`; end-to-end, `recursive_tagged_match_no_uaf`
 exercises the full carrier through a MATCH arm's `-> :T` carried across tail recursion. No separate
@@ -260,7 +260,7 @@ minimal test.
 `NodeContinuation` (`Box<dyn FnOnce>`), as an `Erased<ContinuationFamily>` routing the shared `retype`:
 `erase` forgets the captured `'run` for storage on a lifetime-free node, and the scheduler's
 `vend_carrier` recovers a step lifetime witnessed by the slot's cart `Rc` (which pins the captures'
-home — the run arena or a strict ancestor of the cart). Distinct shape from the contract group above:
+home — the run region or a strict ancestor of the cart). Distinct shape from the contract group above:
 the retype is over a **fat pointer** (data + vtable), not a thin enum, so it carries its own minimal
 test. The vend call site in
 [src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs) (`run_step`) runs the same
@@ -315,7 +315,7 @@ is finalized at the step lifetime within its own step. The `Carried` *storage* e
 scheduler (`node_store.rs`, group below), not here.
 All are exercised by every program; this test pins the hardest shape directly — a tail-chain
 return-type **coarsening**, where the re-tagged terminal must be homed in the contract's scope to
-outlive the reused producer frame, then re-read after the run drains the root into the run arena.
+outlive the reused producer frame, then re-read after the run drains the root into the run region.
 
 - `tail_call_stamps_result_against_first_callers_return_contract`
 
@@ -324,19 +324,19 @@ outlive the reused producer frame, then re-read after the run drains the root in
 it on read (`read_result` / `read` / `read_result_with_frame`) to the read's own `&self` borrow,
 witnessed by the slot's co-stored producer-frame `Rc`: `free_one` / `finalize` need `&mut self`, so
 the frame cannot drop while a read borrow is live, so the re-anchored lifetime cannot outlive the
-backing arena. The generic `retype` primitive (`erase.rs` group above) does the transmute; these are
+backing region. The generic `retype` primitive (`erase.rs` group above) does the transmute; these are
 its stored-carrier consumers. Exercised end-to-end by every scheduler-driving program — every dep
 delivery and top-level read routes a re-anchor — and pinned by
 `tail_call_stamps_result_against_first_callers_return_contract`. No separate minimal test.
 
 **`Carried` re-attach — consumer-pull dep lift** ([src/machine/execute/runtime.rs](../src/machine/execute/runtime.rs))
 — `KoanRuntime::read_lifted` re-anchors a producer's scheduler read (`'node`) to the destination
-*node* lifetime `'o` — the consumer scope's arena, bounded by the active frame `Rc` cloned in
-`run_step` — then the `NodeLift` copy relocates it into that arena. Node-to-node, not a `'run`
-fabrication: the held producer-frame `Rc` (framed) / the run arena (frameless) pins the read for the
+*node* lifetime `'o` — the consumer scope's region, bounded by the active frame `Rc` cloned in
+`run_step` — then the `NodeLift` copy relocates it into that region. Node-to-node, not a `'run`
+fabrication: the held producer-frame `Rc` (framed) / the run region (frameless) pins the read for the
 copy, and the lift self-anchors the result via the embedded `Rc`. The `Outcome::Forward` ready path
 (`apply_outcome`) routes the same primitive: it pulls the producer terminal through `read_lifted`
-into the consumer scope arena, then shortens the node value to the uniform `NodeStep` step lifetime
+into the consumer scope region, then shortens the node value to the uniform `NodeStep` step lifetime
 `'s` (a node→step reattach, the value frame-pinned for all of `'s`). Same `retype` primitive as the
 `erase.rs` group. Exercised end-to-end by the lift/park slate tests
 (`lift_park_minimal_program_for_miri`, `recursive_tagged_match_no_uaf`, …). No separate minimal test.
@@ -344,7 +344,7 @@ into the consumer scope arena, then shortens the node value to the uniform `Node
 **`Carried` re-attach — test-only terminal extraction** ([src/builtins/test_support.rs](../src/builtins/test_support.rs))
 — `extract_terminal` widens the scheduler's `'node` read to the scope lifetime for test helpers
 (`run_one` / `run_one_type` and peers) that return a top-level result: a frameless terminal living in
-the scope arena, which outlives the local scheduler. Test scaffolding, not runtime; exercised under
+the scope region, which outlives the local scheduler. Test scaffolding, not runtime; exercised under
 Miri by every `run_one`-based test. No separate minimal test.
 
 ## Adding tests to the slate

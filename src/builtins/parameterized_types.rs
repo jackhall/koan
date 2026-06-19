@@ -71,7 +71,7 @@ fn finalize_carrier<'a>(
             ret: Box::new(ret),
         },
     };
-    scope.arena.alloc_ktype(kt)
+    scope.region.alloc_ktype(kt)
 }
 
 /// `Action`-harness twins of the type-constructor bodies. LIST/MAP/AS fold resolved type args
@@ -88,7 +88,7 @@ mod action_bodies {
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let elem = crate::try_action!(require_ktype(ctx.args, "elem"));
         Action::Done(Ok(Carried::Type(
-            ctx.scope.arena.alloc_ktype(KType::List(Box::new(elem))),
+            ctx.scope.region.alloc_ktype(KType::List(Box::new(elem))),
         )))
     }
 
@@ -97,7 +97,7 @@ mod action_bodies {
         let v = crate::try_action!(require_ktype(ctx.args, "v"));
         Action::Done(Ok(Carried::Type(
             ctx.scope
-                .arena
+                .region
                 .alloc_ktype(KType::Dict(Box::new(k), Box::new(v))),
         )))
     }
@@ -128,7 +128,7 @@ mod action_bodies {
                 ctor.name(),
             )))));
         }
-        Action::Done(Ok(Carried::Type(ctx.scope.arena.alloc_ktype(
+        Action::Done(Ok(Carried::Type(ctx.scope.region.alloc_ktype(
             KType::ConstructorApply {
                 ctor: Box::new(ctor),
                 args: vec![applied],
@@ -267,8 +267,8 @@ mod tests {
 
     #[test]
     fn list_of_number_lowers_to_list_number() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(LIST OF Number)"));
         assert_eq!(*result, KType::List(Box::new(KType::Number)));
     }
@@ -279,8 +279,8 @@ mod tests {
     fn apply_as_lowers_to_constructor_apply() {
         use crate::machine::model::types::{KKind, NominalSchema, RecursiveSet};
         use crate::machine::{BindingIndex, ScopeId};
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let wrap_set = RecursiveSet::singleton(
             "Wrap".into(),
             ScopeId::from_raw(0, 0xC0DE),
@@ -314,8 +314,8 @@ mod tests {
 
     #[test]
     fn map_str_number_lowers_to_dict() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(MAP Str -> Number)"));
         assert_eq!(
             *result,
@@ -325,8 +325,8 @@ mod tests {
 
     #[test]
     fn fn_lowers_to_kfunction() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(FN (x :Number, y :Str) -> Bool)"));
         assert_eq!(
             *result,
@@ -342,8 +342,8 @@ mod tests {
 
     #[test]
     fn fn_nullary_lowers_to_kfunction() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(FN () -> Number)"));
         assert_eq!(
             *result,
@@ -357,8 +357,8 @@ mod tests {
     // Param name `Ty` uses two letters because koan rejects single-uppercase-letter tokens.
     #[test]
     fn functor_lowers_to_kfunctor() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(FUNCTOR (Ty :Signature) -> Module)"));
         assert_eq!(
             *result,
@@ -374,8 +374,8 @@ mod tests {
     /// shared field-list parser and lands in the parameter record.
     #[test]
     fn fn_with_nested_list_param_lowers_to_kfunction() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(FN (xs :(LIST OF Number)) -> Bool)"));
         assert_eq!(
             *result,
@@ -403,8 +403,8 @@ mod tests {
 
     #[test]
     fn fn_multi_param_round_trips() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         assert_round_trips(
             scope,
             KType::KFunction {
@@ -419,8 +419,8 @@ mod tests {
 
     #[test]
     fn fn_nullary_round_trips() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         assert_round_trips(
             scope,
             KType::KFunction {
@@ -432,8 +432,8 @@ mod tests {
 
     #[test]
     fn fn_nested_param_round_trips() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         assert_round_trips(
             scope,
             KType::KFunction {
@@ -448,8 +448,8 @@ mod tests {
 
     #[test]
     fn functor_capitalized_param_round_trips_and_preserves_name() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         let expected = KType::KFunctor {
             params: Record::from_pairs(vec![("Ty".into(), KType::OfKind(KKind::Signature))]),
             ret: Box::new(KType::OfKind(KKind::Module)),

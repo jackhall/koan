@@ -118,7 +118,7 @@ pub(super) fn invoke<'step>(
         .current_frame()
         .expect("a user-fn invoke runs against the Continue-installed per-call cart");
     let exec_frame = ExecFrame {
-        arena: frame.clone(),
+        region: frame.clone(),
     };
     // A deferred-return FN dispatched as a tail call inside an established contract chain skips
     // resolving its own (keep-first-discarded) return type — see `run_user_fn`.
@@ -132,10 +132,10 @@ pub(super) fn invoke<'step>(
             let contract = match ret {
                 PerCallReturn::FromSignature => ReturnContract::Function(picked),
                 PerCallReturn::Resolved(kt) => {
-                    // Re-home the per-call type in the captured-scope (frame-outer) arena — a strict
+                    // Re-home the per-call type in the captured-scope (frame-outer) region — a strict
                     // ancestor the cart keeps live — so the erased contract's `ret` borrow stays
                     // valid past the dying frame, mirroring an `Arm`'s `ret`.
-                    let ret_ref = outer.arena.alloc_ktype(lift_ktype(&kt, &frame));
+                    let ret_ref = outer.region.alloc_ktype(lift_ktype(&kt, &frame));
                     ReturnContract::PerCall {
                         func: picked,
                         ret: ret_ref,
@@ -214,7 +214,7 @@ pub(super) fn invoke<'step>(
                         )))))
                     }
                 };
-                // The per-call type rides the captured-scope (frame-outer) arena, a strict ancestor
+                // The per-call type rides the captured-scope (frame-outer) region, a strict ancestor
                 // the cart keeps live — same home as the `Type` form's `PerCall.ret`. `kt` was
                 // pull-lifted into this node's call frame, which the captured scope outlives, so
                 // relocate it with `lift_ktype` (re-anchoring any per-call `Module` frame onto the
@@ -224,7 +224,7 @@ pub(super) fn invoke<'step>(
                     .expect("a deferred-return finish runs against a per-call frame");
                 let ret_ref = picked
                     .captured_scope()
-                    .arena
+                    .region
                     .alloc_ktype(lift_ktype(kt, &call_frame));
                 let contract = ReturnContract::PerCall {
                     func: picked,
@@ -267,7 +267,7 @@ fn run_action_builtin<'step>(
     });
     let args_obj: &'step KObject<'step> = view
         .current_scope()
-        .arena
+        .region
         .alloc_object(KObject::record_of_held(cells));
     let frame = view.current_frame();
     let chain = view.current_lexical_chain();
@@ -296,12 +296,12 @@ fn extract_carried_args<'step>(
         match &part.value {
             ExpressionPart::Keyword(_) => {}
             ExpressionPart::Spliced(carried) => args.push(*carried),
-            // A literal value part isn't `Spliced`-spliced; resolve it into the run arena now
+            // A literal value part isn't `Spliced`-spliced; resolve it into the run region now
             // (mirrors `literal_pass_through`) so it joins the args as a `'step` `Carried`.
             ExpressionPart::Literal(_) => {
                 let object = view
                     .current_scope()
-                    .arena
+                    .region
                     .alloc_object(part.value.resolve());
                 args.push(Carried::Object(object));
             }

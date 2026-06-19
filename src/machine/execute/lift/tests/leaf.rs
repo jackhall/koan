@@ -12,8 +12,8 @@ use super::{alloc_local_kf, defeat_fast_path};
 /// extend two arenas' lives on one descendant.
 #[test]
 fn kfunction_with_existing_anchor_preserves_it() {
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     let other = CallFrame::new(scope, None);
     // The anchor pins the frame's `FrameStorage`, not the shell, so the counts track storage.
@@ -49,13 +49,13 @@ fn kfunction_with_existing_anchor_preserves_it() {
     );
 }
 
-/// A KFunction whose captured scope lives in a different runtime arena must
+/// A KFunction whose captured scope lives in a different runtime region must
 /// lift to `frame: None` — anchoring on `dying` would not protect the foreign
-/// captured scope (which `dying`'s arena doesn't own).
+/// captured scope (which `dying`'s region doesn't own).
 #[test]
 fn kfunction_with_foreign_runtime_does_not_anchor() {
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
@@ -68,12 +68,12 @@ fn kfunction_with_foreign_runtime_does_not_anchor() {
         },
         Body::Builtin(|ctx| {
             crate::machine::core::kfunction::action::Action::Done(Ok(
-                crate::machine::model::Carried::Object(ctx.scope.arena.alloc_object(KObject::Null)),
+                crate::machine::model::Carried::Object(ctx.scope.region.alloc_object(KObject::Null)),
             ))
         }),
         scope,
     );
-    let foreign_ref: &KFunction = arena.alloc_function(foreign);
+    let foreign_ref: &KFunction = region.alloc_function(foreign);
     let obj = KObject::KFunction(foreign_ref, None);
     let before = Rc::strong_count(&dying.storage_rc());
 
@@ -89,18 +89,18 @@ fn kfunction_with_foreign_runtime_does_not_anchor() {
     assert_eq!(count_after, before, "non-anchor lift must not bump Rc");
 }
 
-/// KModule whose child scope was allocated in the dying frame's arena must
+/// KModule whose child scope was allocated in the dying frame's region must
 /// anchor on the dying frame's Rc — same lifecycle rule as the KFunction arm.
 #[test]
 fn kmodule_with_local_child_scope_anchors() {
     use crate::machine::model::values::Module;
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let module = Module::new("LocalMod".into(), dying.scope());
-    let m_ref: &Module = dying.arena().alloc_module(module);
+    let m_ref: &Module = dying.region().alloc_module(module);
     let obj = KType::Module {
         module: m_ref,
         frame: None,
@@ -112,7 +112,7 @@ fn kmodule_with_local_child_scope_anchors() {
     match lifted {
         KType::Module { module: _, frame } => assert!(
             frame.is_some(),
-            "KModule with child scope in dying arena must anchor",
+            "KModule with child scope in dying region must anchor",
         ),
         other => panic!("expected KModule, got {}", other.name()),
     }
@@ -124,13 +124,13 @@ fn kmodule_with_local_child_scope_anchors() {
 #[test]
 fn kmodule_with_foreign_child_scope_does_not_anchor() {
     use crate::machine::model::values::Module;
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 
     let module = Module::new("ForeignMod".into(), scope);
-    let m_ref: &Module = arena.alloc_module(module);
+    let m_ref: &Module = region.alloc_module(module);
     let obj = KType::Module {
         module: m_ref,
         frame: None,
@@ -150,15 +150,15 @@ fn kmodule_with_foreign_child_scope_does_not_anchor() {
 #[test]
 fn kmodule_with_existing_anchor_preserves_it() {
     use crate::machine::model::values::Module;
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
     let other = CallFrame::new(scope, None);
     let other_storage = other.storage_rc();
 
     let module = Module::new("Pre".into(), dying.scope());
-    let m_ref: &Module = dying.arena().alloc_module(module);
+    let m_ref: &Module = dying.region().alloc_module(module);
     let obj = KType::Module {
         module: m_ref,
         frame: Some(Rc::clone(&other_storage)),
@@ -181,8 +181,8 @@ fn kmodule_with_existing_anchor_preserves_it() {
 /// slow path. Defeats the fast path so the match is actually reached.
 #[test]
 fn primitive_lifts_via_deep_clone_on_slow_path() {
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
     defeat_fast_path(&dying);
 

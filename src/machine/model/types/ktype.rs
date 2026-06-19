@@ -7,7 +7,7 @@
 //! Predicates live in `ktype_predicates.rs`; elaboration lives in `ktype_resolution.rs`.
 //!
 //! Lifetime parameter `'a`: the module/signature variants (`Module`, `Signature`,
-//! `AbstractType`) hold `&'a Module<'a>` / `&'a ModuleSignature<'a>` arena pointers; every other
+//! `AbstractType`) hold `&'a Module<'a>` / `&'a ModuleSignature<'a>` region pointers; every other
 //! variant is owned data and ignores the parameter.
 
 use super::kkind::KKind;
@@ -316,7 +316,7 @@ fn render_param_record(params: &Record<KType<'_>>) -> String {
         .join(" ")
 }
 
-/// Manual `PartialEq` — `Module`, `Signature`, and `AbstractType` carry arena pointers
+/// Manual `PartialEq` — `Module`, `Signature`, and `AbstractType` carry region pointers
 /// whose identity is the pointee's stable `scope_id()` / `sig_id()` rather than the raw
 /// pointer. Two opaque ascriptions of the same source module produce different `&Module`
 /// (each allocates a fresh child scope) and must NOT compare equal under `KType::Module`;
@@ -426,7 +426,7 @@ impl<'a> Eq for KType<'a> {}
 /// variants never alias and the unit variants need no further mixing; each
 /// compound arm then hashes exactly the fields its `PartialEq` arm compares.
 ///
-/// The arena-pointer variants hash their stable identity key — `Module` hashes
+/// The region-pointer variants hash their stable identity key — `Module` hashes
 /// `scope_id()`, `AbstractType` hashes its `source.scope_id()`, `Signature` hashes
 /// `sig_id()` — never the raw pointer, matching how `PartialEq` resolves them. `Module`'s
 /// `frame` lifecycle anchor stays excluded. A `SetRef` hashes `(Rc::as_ptr(set), index)`

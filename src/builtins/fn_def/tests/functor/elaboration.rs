@@ -9,8 +9,8 @@ use crate::machine::KoanRegion;
 #[test]
 fn list_of_let_binding_is_ktype_value() {
     use crate::machine::model::KType;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "LET MyList = :(LIST OF Number)");
     let kt = scope
         .resolve_type("MyList")
@@ -25,8 +25,8 @@ fn elaborator_lowers_ktype_value_binding() {
     use crate::machine::model::ast::TypeIdentifier;
     use crate::machine::model::types::{elaborate_type_identifier, ElabResult, Elaborator};
     use crate::machine::model::KType;
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(scope, "LET MyList = :(LIST OF Number)");
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(&mut el, &TypeIdentifier::leaf("MyList".into())) {
@@ -42,8 +42,8 @@ fn elaborator_lowers_ktype_value_binding() {
 #[test]
 fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     use crate::machine::model::{Argument, KType, SignatureElement};
-    let arena = KoanRegion::new();
-    let scope = run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_silent(&region);
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -87,8 +87,8 @@ fn let_then_fn_in_same_batch_works() {
     use crate::builtins::default_scope;
     use crate::machine::execute::KoanRuntime;
     use crate::parse::parse;
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let exprs = parse(
         "LET MyList = :(LIST OF Number)\n\

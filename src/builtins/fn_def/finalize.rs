@@ -231,8 +231,8 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         elements,
     };
 
-    let arena = scope.arena;
-    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
+    let region = scope.region;
+    let f: &'a KFunction<'a> = region.alloc_function(KFunction::with_binder_and_functor(
         user_sig,
         Body::UserDefined(body_expr),
         scope,
@@ -242,7 +242,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     ));
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame.
-    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
+    let obj: &'a KObject<'a> = region.alloc_object(KObject::KFunction(f, None));
     // An anonymous FN registers nothing — its only handle is the returned value
     // (LET-bound or dropped into a function-typed slot). A keyworded FN / FUNCTOR
     // registers under its lead keyword.

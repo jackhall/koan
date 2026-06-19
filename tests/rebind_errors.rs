@@ -22,9 +22,9 @@ impl std::io::Write for SharedBuf {
     }
 }
 
-fn build_scope<'a>(arena: &'a KoanRegion) -> &'a Scope<'a> {
+fn build_scope<'a>(region: &'a KoanRegion) -> &'a Scope<'a> {
     let captured = Rc::new(RefCell::new(Vec::new()));
-    default_scope(arena, Box::new(SharedBuf(captured)))
+    default_scope(region, Box::new(SharedBuf(captured)))
 }
 
 fn run_collecting_errors<'a>(scope: &'a Scope<'a>, source: &str) -> Vec<Result<(), KError>> {
@@ -46,8 +46,8 @@ fn run_collecting_errors<'a>(scope: &'a Scope<'a>, source: &str) -> Vec<Result<(
 /// duplicate is rejected per the decided rule).
 #[test]
 fn same_scope_let_rebind_errors() {
-    let arena = KoanRegion::new();
-    let scope = build_scope(&arena);
+    let region = KoanRegion::new();
+    let scope = build_scope(&region);
     let results = run_collecting_errors(scope, "LET x = 1\nLET x = 2");
     assert!(results[0].is_ok(), "first LET should succeed");
     let err = match &results[1] {
@@ -65,8 +65,8 @@ fn same_scope_let_rebind_errors() {
 /// any subsequent `LET x = ...` (function or otherwise) collides.
 #[test]
 fn let_function_collides_with_let_value() {
-    let arena = KoanRegion::new();
-    let scope = build_scope(&arena);
+    let region = KoanRegion::new();
+    let scope = build_scope(&region);
     let results = run_collecting_errors(
         scope,
         "LET x = 1\n\
@@ -89,8 +89,8 @@ fn let_function_collides_with_let_value() {
 /// from a same-shape overload with different KTypes.
 #[test]
 fn exact_signature_duplicate_errors() {
-    let arena = KoanRegion::new();
-    let scope = build_scope(&arena);
+    let region = KoanRegion::new();
+    let scope = build_scope(&region);
     let results = run_collecting_errors(
         scope,
         "FN (DOUBLE x :Number) -> Number = (x)\n\
@@ -111,8 +111,8 @@ fn exact_signature_duplicate_errors() {
 /// doesn't collide with the outer LET.
 #[test]
 fn cross_scope_shadowing_succeeds() {
-    let arena = KoanRegion::new();
-    let scope = build_scope(&arena);
+    let region = KoanRegion::new();
+    let scope = build_scope(&region);
     let results = run_collecting_errors(
         scope,
         "LET x = 1\n\

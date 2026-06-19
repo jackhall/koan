@@ -5,7 +5,7 @@
 //! Construction mirrors [`module_def`](super::module_def): body statements dispatch
 //! against a fresh child scope on the outer scheduler; a `AwaitDeps` over those slots
 //! captures the populated scope into a [`ModuleSignature`] value, allocates it in the
-//! parent's arena, and binds it under the signature's name. Body declarations are
+//! parent's region, and binds it under the signature's name. Body declarations are
 //! `LET name = (FN <signature> -> <return> = ...)` for operations and
 //! `LET Carrier = TypeIdentifier` for abstract type declarations. The ascription operators
 //! (`:|` / `:!`) iterate the stored scope at ascription time.
@@ -33,7 +33,7 @@ pub fn body<'a>(
 
     let decl_scope = ctx
         .scope
-        .arena
+        .region
         .alloc_scope(Scope::child_under_sig(ctx.scope, name.clone()));
 
     let bind_index = ctx.bind_index();
@@ -41,7 +41,7 @@ pub fn body<'a>(
     let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
         let sig: &'a ModuleSignature<'a> = fctx
             .scope
-            .arena
+            .region
             .alloc_signature(ModuleSignature::new(name_for_finish.clone(), decl_scope));
         let identity = KType::Signature {
             sig,
@@ -52,7 +52,7 @@ pub fn body<'a>(
             .register_type_upsert(name_for_finish.clone(), identity, bind_index)
         {
             Ok(kt_ref) => Action::Done(Ok(Carried::Type(
-                fctx.scope.arena.alloc_ktype(kt_ref.clone()),
+                fctx.scope.region.alloc_ktype(kt_ref.clone()),
             ))),
             Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                 "<signature>",
@@ -107,8 +107,8 @@ mod tests {
     #[test]
     fn sig_binds_under_name_in_scope() {
         use crate::machine::model::types::KType;
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "SIG OrderedSig = (VAL x :Number)");
         // SIG installs a single type-side identity; nothing lands in `bindings.data`.
         assert!(scope.bindings().data().get("OrderedSig").is_none());
@@ -121,8 +121,8 @@ mod tests {
     #[test]
     fn sig_path_records_name() {
         use crate::machine::model::types::KType;
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "SIG OrderedSig = (VAL x :Number)");
         let sig = match scope.resolve_type("OrderedSig") {
             Some(KType::Signature { sig, .. }) => *sig,
@@ -135,8 +135,8 @@ mod tests {
     /// outer-scope-bound type alias and resolves once the alias finalizes.
     #[test]
     fn sig_body_parks_on_outer_placeholder() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
         use crate::machine::model::types::KType;
         let sig = match scope.resolve_type("Foo") {
@@ -158,8 +158,8 @@ mod tests {
     /// `Foo` (type side) in the parent scope.
     #[test]
     fn sig_body_error_short_circuits_finalize() {
-        let arena = KoanRegion::new();
-        let scope = run_root_silent(&arena);
+        let region = KoanRegion::new();
+        let scope = run_root_silent(&region);
         run(scope, "SIG Foo = (VAL x :NonexistentType)");
         assert!(
             scope.resolve_type("Foo").is_none(),

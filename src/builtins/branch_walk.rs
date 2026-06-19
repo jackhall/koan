@@ -37,9 +37,9 @@ pub(crate) fn resolve_arm_contract<'a>(
         }
     };
     Ok(ReturnContract::Arm {
-        ret: ctx.scope.arena.alloc_ktype(ret_kt),
+        ret: ctx.scope.region.alloc_ktype(ret_kt),
         kind,
-        arena: ctx.scope.arena,
+        region: ctx.scope.region,
     })
 }
 
@@ -58,8 +58,8 @@ pub(crate) fn arm_tail<'a>(
     use crate::machine::core::kfunction::body::split_body_statements;
     use crate::machine::{BindingIndex, CallFrame};
     let frame: Rc<CallFrame> = CallFrame::new(root, outer_frame);
-    frame.with_frame_interior(|arena, child| {
-        let it_obj = arena.alloc_object(it_value);
+    frame.with_frame_interior(|region, child| {
+        let it_obj = region.alloc_object(it_value);
         let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
     });
     let arm_scope_id = frame.scope_for_bind().id;

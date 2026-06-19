@@ -200,10 +200,10 @@ fn unstamped_empty_container_detection() {
 #[test]
 fn wrapped_ktype_reports_clone_of_type_id() {
     use crate::machine::KoanRegion;
-    let arena = KoanRegion::new();
-    let inner = arena.alloc_object(KObject::Number(3.0));
+    let region = KoanRegion::new();
+    let inner = region.alloc_object(KObject::Number(3.0));
     let set = newtype_singleton("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
-    let type_id: &KType = arena.alloc_ktype(KType::SetRef { set, index: 0 });
+    let type_id: &KType = region.alloc_ktype(KType::SetRef { set, index: 0 });
     let w = KObject::Wrapped {
         inner: NonWrappedRef::peel(inner),
         type_id,
@@ -221,10 +221,10 @@ fn wrapped_ktype_reports_clone_of_type_id() {
 fn wrapped_summarize_renders_surface_form() {
     use crate::machine::model::types::Parseable;
     use crate::machine::KoanRegion;
-    let arena = KoanRegion::new();
-    let inner = arena.alloc_object(KObject::Number(3.0));
+    let region = KoanRegion::new();
+    let inner = region.alloc_object(KObject::Number(3.0));
     let set = newtype_singleton("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
-    let type_id = arena.alloc_ktype(KType::SetRef { set, index: 0 });
+    let type_id = region.alloc_ktype(KType::SetRef { set, index: 0 });
     let w = KObject::Wrapped {
         inner: NonWrappedRef::peel(inner),
         type_id,
@@ -237,10 +237,10 @@ fn wrapped_summarize_renders_surface_form() {
 #[test]
 fn wrapped_deep_clone_shares_inner_rc_and_type_id() {
     use crate::machine::KoanRegion;
-    let arena = KoanRegion::new();
-    let inner = arena.alloc_object(KObject::Number(3.0));
+    let region = KoanRegion::new();
+    let inner = region.alloc_object(KObject::Number(3.0));
     let set = newtype_singleton("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
-    let type_id = arena.alloc_ktype(KType::SetRef { set, index: 0 });
+    let type_id = region.alloc_ktype(KType::SetRef { set, index: 0 });
     let original = KObject::Wrapped {
         inner: NonWrappedRef::peel(inner),
         type_id,

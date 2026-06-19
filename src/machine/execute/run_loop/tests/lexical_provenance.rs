@@ -19,8 +19,8 @@ fn lit<'run>(name: &str) -> KExpression<'run> {
 
 #[test]
 fn top_level_statements_get_root_frames_with_consecutive_indices() {
-    let arena = KoanRegion::new();
-    let root = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let root = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let ids = sched.enter_block(
         root.id,
@@ -43,8 +43,8 @@ fn top_level_statements_get_root_frames_with_consecutive_indices() {
 
 #[test]
 fn sibling_statements_in_inner_block_share_parent_rc() {
-    let arena = KoanRegion::new();
-    let root = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let root = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let ids = sched.enter_block(root.id, vec![lit("ANY1"), lit("ANY2")], root);
     let chain_a = sched.chain_of(ids[0]).unwrap();
@@ -65,8 +65,8 @@ fn sibling_statements_in_inner_block_share_parent_rc() {
 #[test]
 fn module_body_chain_parent_points_at_module_statement_frame() {
     use crate::machine::model::values::Module;
-    let arena = KoanRegion::new();
-    let root = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let root = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let module_expr = parse_one("MODULE Foo = (LET x = 1)");
     let ids = sched.enter_block(root.id, vec![module_expr], root);
@@ -90,8 +90,8 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
 /// call depth. Non-tail-recursive Rc allocation would OOM or overflow.
 #[test]
 fn tail_recursive_fn_does_not_balloon_chain() {
-    let arena = KoanRegion::new();
-    let (scope, captured) = crate::builtins::test_support::run_root_with_buf(&arena);
+    let region = KoanRegion::new();
+    let (scope, captured) = crate::builtins::test_support::run_root_with_buf(&region);
     crate::builtins::test_support::run(
         scope,
         "UNION Counter = (more :Null done :Null)\n\
@@ -109,8 +109,8 @@ fn tail_recursive_fn_does_not_balloon_chain() {
 /// `tail_recursive_fn_does_not_balloon_chain`; this smoke-tests assembly.
 #[test]
 fn fn_body_call_with_spacers_produces_value() {
-    let arena = KoanRegion::new();
-    let scope = crate::builtins::test_support::run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = crate::builtins::test_support::run_root_silent(&region);
     crate::builtins::test_support::run(
         scope,
         "FN (DBL x :Number) -> Number = (x)\n\
@@ -128,8 +128,8 @@ fn fn_body_call_with_spacers_produces_value() {
 fn cons_head_subdispatch_inherits_parent_chain() {
     // CONS-head `dispatch_in_scope` inherits the active chain of the slot running
     // CONS; pinned indirectly via a multi-statement FN body folded into CONS.
-    let arena = KoanRegion::new();
-    let scope = crate::builtins::test_support::run_root_silent(&arena);
+    let region = KoanRegion::new();
+    let scope = crate::builtins::test_support::run_root_silent(&region);
     crate::builtins::test_support::run(scope, "FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
     use crate::machine::model::KObject;
     let v = crate::builtins::test_support::run_one(
@@ -145,8 +145,8 @@ fn cons_head_subdispatch_inherits_parent_chain() {
 #[test]
 #[should_panic(expected = "every dispatched node has a chain")]
 fn add_with_chain_without_chain_panics() {
-    let arena = KoanRegion::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let region = KoanRegion::new();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     sched.add_with_chain(
         crate::machine::execute::dispatch::decide(KExpression::new(vec![Spanned::bare(

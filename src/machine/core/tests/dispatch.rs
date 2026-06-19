@@ -39,8 +39,8 @@ fn two_slot_sig<'a>(a: KType<'a>, b: KType<'a>) -> ExpressionSignature<'a> {
 /// An Identifier in an `Any` slot lands in `wrap_indices`.
 #[test]
 fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     register_builtin(scope, "ONE", one_slot_sig("v", KType::Any), body_a);
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "foo".into(),
@@ -58,8 +58,8 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
 
 #[test]
 fn resolve_returns_ambiguous_for_tied_overloads() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     register_builtin(scope, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
     register_builtin(scope, "AN", two_slot_sig(KType::Any, KType::Number), body_b);
     let expr = KExpression::new(vec![
@@ -78,8 +78,8 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
 /// resolution does not fall through past a tie.
 #[test]
 fn resolve_does_not_descend_outer_on_inner_ambiguity() {
-    let arena = KoanRegion::new();
-    let outer = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let outer = run_root_bare(&region);
     // User-position (not BUILTIN) so the builtin root-first short-circuit doesn't fire —
     // this exercises the inner-ambiguity-doesn't-descend walk, not builtin authority.
     register_overload_at(
@@ -89,7 +89,7 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
         body_a,
         BindingIndex::value(1),
     );
-    let inner = arena.alloc_scope(outer.child_for_call());
+    let inner = region.alloc_scope(outer.child_for_call());
     register_builtin(inner, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
     register_builtin(inner, "AN", two_slot_sig(KType::Any, KType::Number), body_b);
     let expr = KExpression::new(vec![
@@ -114,8 +114,8 @@ fn resolve_carries_placeholder_name_for_binder_function() {
             _ => None,
         }
     }
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
@@ -160,8 +160,8 @@ fn resolve_carries_placeholder_name_for_binder_function() {
 /// *and* tentatively (a Literal is not a bare name).
 #[test]
 fn resolve_tentative_falls_back_only_when_strict_empty() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     register_builtin(
         scope,
         "ONE_ID",
@@ -185,8 +185,8 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
 /// eager-sub loop instead of erroring.
 #[test]
 fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     register_builtin(
         scope,
         "PLUS",
@@ -215,8 +215,8 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
 fn pending_overload_parks_only_on_exact_bucket_match() {
     use crate::machine::model::types::{UntypedElement, UntypedKey};
     use crate::machine::NodeId;
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     let bucket_single: UntypedKey = vec![
         UntypedElement::Keyword("MAKESET".into()),
         UntypedElement::Slot,
@@ -259,8 +259,8 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
 #[test]
 fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     use crate::machine::NodeId;
-    let arena = KoanRegion::new();
-    let outer = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let outer = run_root_bare(&region);
     // Outer finalized overload that strictly Picks `(MARK <number>)`.
     let outer_sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
@@ -282,7 +282,7 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
         BindingIndex::value(1),
     );
 
-    let inner = arena.alloc_scope(outer.child_for_call());
+    let inner = region.alloc_scope(outer.child_for_call());
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("MARK".into())),
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
@@ -309,8 +309,8 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
 /// strict Pick: the inner scope `Deferred`s rather than letting the outer win.
 #[test]
 fn inner_scope_eager_lean_shadows_outer_strict_pick() {
-    let arena = KoanRegion::new();
-    let outer = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let outer = run_root_bare(&region);
     // Outer overload that would strictly Pick once the eager sub resolves.
     register_builtin(
         outer,
@@ -318,7 +318,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
         two_slot_sig(KType::Number, KType::Number),
         body_a,
     );
-    let inner = arena.alloc_scope(outer.child_for_call());
+    let inner = region.alloc_scope(outer.child_for_call());
     register_builtin(
         inner,
         "inner_plus",
@@ -349,8 +349,8 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
 #[test]
 fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     use crate::machine::NameOutcome;
-    let arena = KoanRegion::new();
-    let outer = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let outer = run_root_bare(&region);
     // Outer `:Identifier` overload that owns the bare name (shape-only admit).
     register_builtin(
         outer,
@@ -358,7 +358,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
         one_slot_sig("v", KType::Identifier),
         body_a,
     );
-    let inner = arena.alloc_scope(outer.child_for_call());
+    let inner = region.alloc_scope(outer.child_for_call());
     // Inner `:Number` overload: the unbound bare name rejects its shape, so the
     // inner scope's only contribution is a dead lean (must not terminate).
     register_builtin(inner, "inner_num", one_slot_sig("v", KType::Number), body_b);
@@ -391,8 +391,8 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     use crate::machine::core::kfunction::{Body, KFunction};
     use crate::machine::model::values::KObject;
     use crate::machine::NodeId;
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     // Finalized `(PICK <number>)` user overload that strictly Picks. Registered at a
     // user index (not BUILTIN) so the same-bucket sibling below is a legitimate
     // user-vs-user overload — a builtin bucket admits no user siblings.
@@ -406,8 +406,8 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             }),
         ],
     };
-    let pick_num_fn = arena.alloc_function(KFunction::new(pick_num, Body::Builtin(body_a), scope));
-    let pick_num_obj = arena.alloc_object(KObject::KFunction(pick_num_fn, None));
+    let pick_num_fn = region.alloc_function(KFunction::new(pick_num, Body::Builtin(body_a), scope));
+    let pick_num_obj = region.alloc_object(KObject::KFunction(pick_num_fn, None));
     scope
         .register_function(
             "pick_num".to_string(),
@@ -451,12 +451,12 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             }),
         ],
     };
-    let sibling = arena.alloc_function(KFunction::new(
+    let sibling = region.alloc_function(KFunction::new(
         pick_str,
         Body::Builtin(super::body_no_op),
         scope,
     ));
-    let sibling_obj = arena.alloc_object(KObject::KFunction(sibling, None));
+    let sibling_obj = region.alloc_object(KObject::KFunction(sibling, None));
     scope
         .register_function(
             "pick_str".to_string(),
@@ -494,8 +494,8 @@ fn scope_install_pending<'a>(
 fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     use crate::machine::model::types::{UntypedElement, UntypedKey};
     use crate::machine::NodeId;
-    let arena = KoanRegion::new();
-    let scope = run_root_bare(&arena);
+    let region = KoanRegion::new();
+    let scope = run_root_bare(&region);
     let bucket: UntypedKey = vec![UntypedElement::Keyword("PICK".into()), UntypedElement::Slot];
     scope
         .install_pending_overload(bucket.clone(), NodeId(101), BindingIndex::value(3))

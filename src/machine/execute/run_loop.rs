@@ -2,7 +2,7 @@
 //! run loop ([`KoanRuntime::execute`]) pops ready slots and hands each to [`run_step`](KoanRuntime::run_step),
 //! which brackets the step's ambient frame context end-to-end and applies the [`NodeStep`] it returns
 //! through the scheduler's method contract. The scheduler stores and hands back opaque per-node state;
-//! all Koan semantics — the per-call arena lift, the return-contract enforcement, the lexical-chain
+//! all Koan semantics — the per-call region lift, the return-contract enforcement, the lexical-chain
 //! assembly — live here.
 //!
 //! See design/execution-model.md and design/memory-model.md.
@@ -27,8 +27,8 @@ mod run_tests;
 mod tests;
 
 impl<'run> KoanRuntime<'run> {
-    /// On `Done` with a frame, the return `Value` references the per-call arena that's
-    /// about to drop, so it must be lifted into the captured scope's arena before the
+    /// On `Done` with a frame, the return `Value` references the per-call region that's
+    /// about to drop, so it must be lifted into the captured scope's region before the
     /// frame is released. See design/memory-model.md.
     pub fn execute(&mut self) -> Result<(), KError> {
         while let Some(idx) = self.sched.pop_next() {
@@ -103,12 +103,12 @@ impl<'run> KoanRuntime<'run> {
         // discards it anyway).
         self.ambient.active_in_contract_chain = prev_contract.is_some();
         // Consumer-pull: lift each dep's terminal out of its producer frame into this consumer's
-        // own scope arena, so the value dies with the consumer and the producer keeps no surviving
-        // copy that would outlive its own dying frame. A frameless / run-arena terminal already
+        // own scope region, so the value dies with the consumer and the producer keeps no surviving
+        // copy that would outlive its own dying frame. A frameless / run-region terminal already
         // survives and is forwarded as-is.
         //
-        // `dest` is the consumer *scope's* arena (the right arena even for a transparent USING
-        // window, whose scope arena differs from the active frame's), re-anchored at the step
+        // `dest` is the consumer *scope's* region (the right region even for a transparent USING
+        // window, whose scope region differs from the active frame's), re-anchored at the step
         // lifetime `'s` bounded by the cart `Rc` cloned into `consumer_frame` — not the run global.
         // `read_lifted` re-anchors each producer read to it.
         let consumer_frame = self.ambient.active_frame_ref().cloned();
@@ -117,13 +117,13 @@ impl<'run> KoanRuntime<'run> {
                 .ambient
                 .active_payload()
                 .expect("a slot step installs the ambient payload");
-            reattach_node_scope(&payload.scope, consumer_frame.as_ref()).arena
+            reattach_node_scope(&payload.scope, consumer_frame.as_ref()).region
         };
         let results: Vec<Result<Carried<'_>, KError>> =
             deps.iter().map(|d| self.read_lifted(*d, dest)).collect();
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
         // Vend the slot's continuation re-anchored to the step lifetime the held `continuation_witness`
-        // cart pins (cart-scale data in the cart arena or a strict ancestor its `outer` chain pins).
+        // cart pins (cart-scale data in the cart region or a strict ancestor its `outer` chain pins).
         // The scheduler owns the `unsafe` reattach inside `vend_carrier`; its safe signature bounds the
         // step lifetime to the witness borrow, so no fabricated free `'_` or `unsafe` lives here.
         let continuation: NodeContinuation<'_> =
@@ -156,7 +156,7 @@ impl<'run> KoanRuntime<'run> {
                     .map(|(c, witness)| vend_carrier(c, witness));
                 // Contract layer (the `NodeFinalize` workload hook): check the declared return and —
                 // when the declared type coarsens the value (e.g. `List<Number>` through
-                // `:(LIST OF Any)`) — re-tag it into the contract's own home arena so the terminal
+                // `:(LIST OF Any)`) — re-tag it into the contract's own home region so the terminal
                 // survives to every consumer's pull-lift and the top-level read even when the producer
                 // frame is reused/freed. A non-coarsened terminal stays in the producer's own frame
                 // (pinned below); the producer does **not** lift it at Done. The whole finalize runs
@@ -169,7 +169,7 @@ impl<'run> KoanRuntime<'run> {
                 // Pin the producer's per-call frame in the slot's terminal: a dying frame is held
                 // until the slot is freed (frame death Done->free), keeping the terminal readable
                 // until every consumer has pulled it; a frameless / run-frame producer pins nothing
-                // (its value already lives in the run arena). Hand the scheduler the live `'s`
+                // (its value already lives in the run region). Hand the scheduler the live `'s`
                 // terminal; it erases it for storage internally — severing `'s` before
                 // `consumer_frame` drops at return.
                 self.sched.finalize(idx, result, frame.cloned());
@@ -199,7 +199,7 @@ impl<'run> KoanRuntime<'run> {
                         // Rotate the ping-pong reserve: the post-step reserve is superseded by
                         // today's post-step frame (which we park as the new reserve).
                         drop(post_step_reserve);
-                        // The non-dying run frame is not a reusable per-call arena; parking it as
+                        // The non-dying run frame is not a reusable per-call region; parking it as
                         // the ping-pong reserve would defer (and mis-time) a real frame's drop.
                         // Treat it as no reserve — the run scope is re-reached through the
                         // scheduler's `run_frame`, never a reset reserve.
