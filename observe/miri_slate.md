@@ -56,7 +56,7 @@ test identifiers; pass them after `--` in the Miri command.
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
 child-scope `Option<ScopePtr<'static>>` (shortened to an `&self`-bounded lifetime via the
 `unsafe` `ScopePtr::reattach_unbounded`) plus the `Rc<CallFrame>` chain that keeps per-call
-arenas pinned across re-borrow. One test pins the re-attach surviving a sibling alloc; the
+regions pinned across re-borrow. One test pins the re-attach surviving a sibling alloc; the
 other pins the `Rc<CallFrame>` chain keeping an outer region alive after its local handle
 drops. A third pins the witness-bounded sibling `ScopePtr::reattach_bounded` (via
 `CallFrame::scope_bounded`), which splits the stored `'static` into a `&self`-bounded borrow
@@ -68,8 +68,8 @@ scheduler-driving slate test below (`recursive_tagged_match_no_uaf`,
 `lift_park_minimal_program_for_miri`, …) exercises it
 end-to-end — the run scope outlives the frame, so no separate minimal test.
 
-- `call_arena_scope_survives_subsequent_alloc`
-- `call_arena_chained_outer_frame_walkable`
+- `call_frame_scope_survives_subsequent_alloc`
+- `call_frame_chained_outer_frame_walkable`
 - `scope_bounded_reanchors_within_witness_borrow`
 
 **`Region` alloc engine under live borrows** ([src/machine/core/region.rs](../src/machine/core/region.rs)) — the
@@ -78,7 +78,7 @@ stores it, records its address into the `membership` `RefCell` via `borrow_mut`,
 the `'static` store to `'a` — all while a prior `&` from the same frame is shared-borrowed. Pins
 that tree-borrows shape over the engine `KoanRegion` (= `Region<KoanStorageProfile>`) routes.
 
-- `runtime_arena_alloc_while_prior_ref_live`
+- `region_alloc_while_prior_ref_live`
 
 **Cycle gate** ([src/machine/core/region.rs](../src/machine/core/region.rs)) — the generic `alloc`
 engine redirects a value whose family `anchors_to` answers true for `self` (a self-anchored
@@ -86,7 +86,7 @@ engine redirects a value whose family `anchors_to` answers true for `self` (a se
 storage cycle that closure-escape returns can otherwise produce. The Koan `anchors_to` walkers that drive the
 decision live in [src/machine/core/arena.rs](../src/machine/core/arena.rs).
 
-- `alloc_object_redirects_self_anchored_value_to_escape_arena`
+- `alloc_object_redirects_self_anchored_value_to_escape_region`
 
 **`CallFrame::try_reset_for_tail`** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — TCO
 frame reuse installs a fresh refcounted `FrameStorage` (a new `KoanRegion`) and
@@ -97,9 +97,9 @@ inner region. The `Rc::get_mut` gate refuses only when another `Rc<CallFrame>`
 shell, so it does not foreclose reuse — the swap drops the shell's reference to the
 old storage while the escapee's clone keeps that snapshot alive and aliased.
 
-- `call_arena_try_reset_for_tail_round_trip`
-- `call_arena_try_reset_for_tail_refuses_when_aliased`
-- `call_arena_try_reset_for_tail_allows_reset_under_escaped_storage`
+- `call_frame_try_reset_for_tail_round_trip`
+- `call_frame_try_reset_for_tail_refuses_when_aliased`
+- `call_frame_try_reset_for_tail_allows_reset_under_escaped_storage`
 
 **`KFunction` captured-scope re-borrow** ([src/machine/core/kfunction.rs](../src/machine/core/kfunction.rs)) — every
 closure invocation reads `KFunction::captured_scope`, a safe call that routes the
@@ -150,7 +150,7 @@ the unsafe site it pins is the `Rc<CallFrame>` heap-pinning that backs the
 anchored case (the `frame: None` non-anchor branch is a logic case with no
 unsafe site, covered under plain `cargo test`).
 
-- `unanchored_kfuture_with_arena_borrow_does_anchor`
+- `unanchored_kfuture_with_region_borrow_does_anchor`
 
 **`KFunction::invoke` per-call frame re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
 seed bind routed through `CallFrame::with_frame_interior`: the per-call region re-exposed at a
@@ -230,7 +230,7 @@ after the helper calls to catch a tree-borrows regression.
 self-referential region-pointer derefs the `Erased` retype can't express). Carries no minimal test of
 its own: every `CallFrame` construction routes it (`CallFrame` lifetime erasure /
 `try_reset_for_tail` groups), and the storage engine's escape redirect routes it under
-`runtime_arena_alloc_while_prior_ref_live`.
+`region_alloc_while_prior_ref_live`.
 
 **`Reattachable` families — value channel** ([src/machine/model/values/carried.rs](../src/machine/model/values/carried.rs))
 — `CarriedFamily` / `ResultCarriedFamily` are `unsafe impl Reattachable` layout-invariance

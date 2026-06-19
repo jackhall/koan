@@ -119,7 +119,7 @@ fn using_functor_result_closure_escapes_soundly() {
     );
     run(scope, "USING Inst SCOPE (FN (GETV) -> Number = (val))");
     // Churn the run-root region so a dangling reference into the dropped
-    // USING/functor arenas would surface under Miri.
+    // USING/functor regions would surface under Miri.
     run(scope, "FN (NOOP) -> Number = (1)");
     for _ in 0..10 {
         run_one(scope, parse_one("NOOP"));

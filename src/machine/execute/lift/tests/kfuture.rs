@@ -15,7 +15,7 @@ use super::{alloc_local_kf, defeat_fast_path, dispatch_for_test};
 /// A KFuture with no descendant borrow into the dying region must lift to
 /// `frame: None` — anchoring would over-keep the region.
 #[test]
-fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
+fn unanchored_kfuture_no_region_borrow_does_not_anchor() {
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
     use crate::machine::{Body, KFunction};
 
@@ -56,7 +56,7 @@ fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
 /// A KFuture whose parsed parts contain a `Spliced(Carried::Object(_))` allocated in
 /// the dying region must lift with `frame: Some(rc)`.
 #[test]
-fn unanchored_kfuture_with_arena_borrow_does_anchor() {
+fn unanchored_kfuture_with_region_borrow_does_anchor() {
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
     use crate::machine::{Body, KFunction};
 
@@ -188,7 +188,7 @@ fn kfuture_bundle_arg_with_wrapped_field_anchors() {
 /// A `parsed.parts` `Expression(Box<KExpression>)` whose inner parts borrow
 /// into the dying region must drive anchor.
 #[test]
-fn kfuture_parsed_expression_part_with_arena_borrow_anchors() {
+fn kfuture_parsed_expression_part_with_region_borrow_anchors() {
     let region = KoanRegion::new();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
@@ -409,7 +409,7 @@ fn kfuture_bundle_arg_with_local_kmodule_anchors() {
 /// A `parsed.parts` `ListLiteral` whose inner `Spliced` part points into
 /// the dying region must drive anchor.
 #[test]
-fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
+fn kfuture_parsed_listliteral_with_region_borrow_anchors() {
     let region = KoanRegion::new();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);
@@ -442,7 +442,7 @@ fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
 /// A `parsed.parts` `DictLiteral` whose value side carries a borrowing
 /// `Spliced` part must drive anchor.
 #[test]
-fn kfuture_parsed_dictliteral_with_arena_borrow_anchors() {
+fn kfuture_parsed_dictliteral_with_region_borrow_anchors() {
     let region = KoanRegion::new();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let dying = CallFrame::new(scope, None);

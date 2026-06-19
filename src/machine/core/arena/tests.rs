@@ -27,7 +27,7 @@ fn scope_bounded_reanchors_within_witness_borrow() {
 /// sibling pointer afterward — `frame.scope()` and `frame.region().alloc(...)`
 /// must coexist soundly under tree borrows.
 #[test]
-fn call_arena_scope_survives_subsequent_alloc() {
+fn call_frame_scope_survives_subsequent_alloc() {
     let region = KoanRegion::new();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame = CallFrame::new(scope, None);
@@ -40,7 +40,7 @@ fn call_arena_scope_survives_subsequent_alloc() {
 /// `*const Scope<'_>` from the same frame, then mutate via one ref while the other
 /// stays live.
 #[test]
-fn call_arena_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
+fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
     let region = KoanRegion::new();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame: Rc<CallFrame> = CallFrame::new(scope, None);
@@ -58,7 +58,7 @@ fn call_arena_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
 /// Repeated `frame.scope()` calls produce aliasing shared refs that must be
 /// concurrently readable.
 #[test]
-fn call_arena_scope_repeated_calls_alias() {
+fn call_frame_scope_repeated_calls_alias() {
     let region = KoanRegion::new();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame = CallFrame::new(scope, None);
@@ -73,7 +73,7 @@ fn call_arena_scope_repeated_calls_alias() {
 /// Two-deep chain: dropping the local `outer` handle leaves only `inner`'s `FrameStorage.outer`
 /// keeping the outer region alive while we read through `inner.scope().outer`.
 #[test]
-fn call_arena_chained_outer_frame_walkable() {
+fn call_frame_chained_outer_frame_walkable() {
     let region = KoanRegion::new();
     let run_scope = default_scope(&region, Box::new(std::io::sink()));
     let outer = CallFrame::new(run_scope, None);
@@ -93,7 +93,7 @@ fn call_arena_chained_outer_frame_walkable() {
 /// In-struct Rc must keep the region alive for a re-anchored `&Scope` stored alongside
 /// it once the local Rc handle is dropped.
 #[test]
-fn call_arena_scope_re_anchored_into_struct_alongside_rc() {
+fn call_frame_scope_re_anchored_into_struct_alongside_rc() {
     struct Holder<'a> {
         s: &'a Scope<'a>,
         _f: Rc<CallFrame>,
@@ -113,7 +113,7 @@ fn call_arena_scope_re_anchored_into_struct_alongside_rc() {
 /// `RefCell::borrow_mut` while a prior `&KObject` from the same region is shared-borrowed.
 /// Pins that tree-borrows shape.
 #[test]
-fn runtime_arena_alloc_while_prior_ref_live() {
+fn region_alloc_while_prior_ref_live() {
     let a = KoanRegion::new();
     let r1 = a.alloc_object(KObject::Number(1.0));
     let r2 = a.alloc_object(KObject::Number(2.0));
@@ -121,9 +121,9 @@ fn runtime_arena_alloc_while_prior_ref_live() {
     assert!(matches!(r2, KObject::Number(n) if *n == 2.0));
 }
 
-/// `alloc_ktype` returns an region-lifetime `&KType` and bumps `alloc_count` by one.
+/// `alloc_ktype` returns a region-lifetime `&KType` and bumps `alloc_count` by one.
 #[test]
-fn alloc_ktype_returns_arena_lifetime_ref_and_counts() {
+fn alloc_ktype_returns_region_lifetime_ref_and_counts() {
     let a = KoanRegion::new();
     let baseline = a.alloc_count();
     let t: &KType = a.alloc_ktype(KType::Number);
@@ -135,7 +135,7 @@ fn alloc_ktype_returns_arena_lifetime_ref_and_counts() {
 /// raw-region-ptr re-anchor) under tree borrows: after reset, a fresh alloc via
 /// `region()` and a `bind_value` on `scope()` must coexist.
 #[test]
-fn call_arena_try_reset_for_tail_round_trip() {
+fn call_frame_try_reset_for_tail_round_trip() {
     let outer_region = KoanRegion::new();
     let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
     let mut frame: Rc<CallFrame> = CallFrame::new(outer_scope, None);
@@ -160,9 +160,9 @@ fn call_arena_try_reset_for_tail_round_trip() {
 /// `try_reset_for_tail` refuses when another `Rc<CallFrame>` *shell* clone exists — a
 /// transient holder still naming the frame, for which in-place reset would mutate the shell
 /// under a live alias. (An escaped value pins `FrameStorage`, not the shell — see
-/// [`call_arena_try_reset_for_tail_allows_reset_under_escaped_storage`].)
+/// [`call_frame_try_reset_for_tail_allows_reset_under_escaped_storage`].)
 #[test]
-fn call_arena_try_reset_for_tail_refuses_when_aliased() {
+fn call_frame_try_reset_for_tail_refuses_when_aliased() {
     let outer_region = KoanRegion::new();
     let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
     let mut frame: Rc<CallFrame> = CallFrame::new(outer_scope, None);
@@ -186,7 +186,7 @@ fn call_arena_try_reset_for_tail_refuses_when_aliased() {
 /// still holds while the shell installs fresh storage. A gate keyed on the shell's `Rc` count
 /// could not distinguish this from a live shell alias and would refuse it.
 #[test]
-fn call_arena_try_reset_for_tail_allows_reset_under_escaped_storage() {
+fn call_frame_try_reset_for_tail_allows_reset_under_escaped_storage() {
     let outer_region = KoanRegion::new();
     let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
     let mut frame: Rc<CallFrame> = CallFrame::new(outer_scope, None);
@@ -222,7 +222,7 @@ fn call_arena_try_reset_for_tail_allows_reset_under_escaped_storage() {
 /// `Rc<CallFrame>` redirects to the escape region. Without the redirect the per-call
 /// region's storage would hold an Rc to itself and never drop.
 #[test]
-fn alloc_object_redirects_self_anchored_value_to_escape_arena() {
+fn alloc_object_redirects_self_anchored_value_to_escape_region() {
     let outer = KoanRegion::new();
     let scope = default_scope(&outer, Box::new(std::io::sink()));
     let frame: Rc<CallFrame> = CallFrame::new(scope, None);

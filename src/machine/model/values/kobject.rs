@@ -16,7 +16,7 @@ mod tests;
 /// An [`Rc`]-shared [`KObject`] statically guaranteed not to be a [`KObject::Wrapped`].
 /// The sole constructor [`Self::peel`] collapses any `Wrapped` layer; by induction peeling
 /// one level suffices. Encodes the newtype-over-newtype collapse invariant in the type
-/// rather than caller discipline. The payload rides an `Rc` (not an region `&'a` reference)
+/// rather than caller discipline. The payload rides an `Rc` (not a region `&'a` reference)
 /// so a `Wrapped` carrier lifts across a dying frame by `Rc::clone` — the lift-stability a
 /// carrier needs to outlive the frame it was born in.
 #[derive(Clone)]
@@ -125,7 +125,7 @@ impl<'a> KObject<'a> {
     }
 
     /// `List` carrier with an explicitly supplied element type — for lift (preserve the
-    /// memoized type across an region-anchor rebuild) and ascription stamping (re-tag to
+    /// memoized type across a region-anchor rebuild) and ascription stamping (re-tag to
     /// the declared element type, coarsening included).
     pub fn list_with_type(items: Rc<Vec<Held<'a>>>, elem: KType<'a>) -> KObject<'a> {
         KObject::List(items, Box::new(elem))

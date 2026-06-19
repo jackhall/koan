@@ -1,4 +1,4 @@
-//! Scope-bound resolution of a surface [`TypeIdentifier`] into an region-allocated `&KType`.
+//! Scope-bound resolution of a surface [`TypeIdentifier`] into a region-allocated `&KType`.
 //!
 //! Read-only consumer of the bindings façade: never touches `data`, `functions`,
 //! `placeholders`, `pending`, `out`, or `kind` — the read-only dependency is what

@@ -9,7 +9,7 @@ use super::{alloc_local_kf, defeat_fast_path};
 
 /// A pre-anchored KFunction must keep its existing `Rc` instead of re-deriving
 /// from `dying` — even if it could have anchored fresh, double-anchoring would
-/// extend two arenas' lives on one descendant.
+/// extend two regions' lives on one descendant.
 #[test]
 fn kfunction_with_existing_anchor_preserves_it() {
     let region = KoanRegion::new();

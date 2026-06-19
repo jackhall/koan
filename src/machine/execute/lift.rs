@@ -76,7 +76,7 @@ pub(super) fn lift_kobject<'run>(v: &KObject<'run>, dying_frame: &Rc<CallFrame>)
         KObject::KFuture(t, existing) => {
             let new_frame = if existing.is_some() {
                 existing.clone()
-            } else if kfuture_borrows_dying_arena(t, dying_frame.region()) {
+            } else if kfuture_borrows_dying_region(t, dying_frame.region()) {
                 Some(dying_frame.storage_rc())
             } else {
                 None
@@ -220,7 +220,7 @@ where
 /// Bottoms out on `Wrapped`/`KExpression`: a `Wrapped` holds its repr by `Rc` (lift-stable
 /// by `Rc::clone`, like the retired `Struct`'s `Rc<IndexMap>` fields), and a bare
 /// `KExpression` isn't reachable as a value inside a List/Dict/Tagged at lift time in current
-/// Koan, so neither needs an region anchor of its own.
+/// Koan, so neither needs a region anchor of its own.
 fn needs_lift<'run>(v: &KObject<'run>, dying_frame: &Rc<CallFrame>) -> bool {
     let dying_runtime: *const KoanRegion = dying_frame.region();
     any_descendant(v, &|obj: &KObject<'run>| match obj {
@@ -230,7 +230,7 @@ fn needs_lift<'run>(v: &KObject<'run>, dying_frame: &Rc<CallFrame>) -> bool {
             Some(std::ptr::eq(captured_runtime, dying_runtime))
         }
         KObject::KFuture(_, Some(_)) => Some(false),
-        KObject::KFuture(t, None) => Some(kfuture_borrows_dying_arena(t, dying_frame.region())),
+        KObject::KFuture(t, None) => Some(kfuture_borrows_dying_region(t, dying_frame.region())),
         KObject::KExpression(_) => Some(false),
         KObject::List(..) | KObject::Dict(..) | KObject::Tagged { .. } => None,
         _ => Some(false),
@@ -262,7 +262,7 @@ fn held_needs_lift<'run>(cell: &Held<'run>, dying_frame: &Rc<CallFrame>) -> bool
 /// True iff any descendant of an unanchored `KFuture` borrows into `region`. Three
 /// borrow sites: the function ref's captured region, the parsed expression's
 /// `Spliced(Carried)` parts, and the bundle args.
-fn kfuture_borrows_dying_arena<'run>(t: &KFuture<'run>, region: &KoanRegion) -> bool {
+fn kfuture_borrows_dying_region<'run>(t: &KFuture<'run>, region: &KoanRegion) -> bool {
     if std::ptr::eq(
         t.function.captured_scope().region,
         region as *const KoanRegion,
@@ -275,7 +275,7 @@ fn kfuture_borrows_dying_arena<'run>(t: &KFuture<'run>, region: &KoanRegion) -> 
     t.args.values().any(|v| argvalue_borrows_region(v, region))
 }
 
-/// An [`ArgValue`] borrows the dying region iff its object arm has an region-borrowing
+/// An [`ArgValue`] borrows the dying region iff its object arm has a region-borrowing
 /// descendant, or its type arm is a `Module` whose child scope rides the dying region.
 fn argvalue_borrows_region<'run>(v: &ArgValue<'run>, region: &KoanRegion) -> bool {
     match v {
@@ -299,8 +299,8 @@ fn expression_borrows_region<'run>(expr: &KExpression<'run>, region: &KoanRegion
 
 fn part_borrows_region<'run>(part: &ExpressionPart<'run>, region: &KoanRegion) -> bool {
     match part {
-        // Only a value-arm Spliced borrows an region `KObject`; a type arm's `Module` rides
-        // its own frame anchor, not an region `KObject`.
+        // Only a value-arm Spliced borrows a region `KObject`; a type arm's `Module` rides
+        // its own frame anchor, not a region `KObject`.
         ExpressionPart::Spliced(Carried::Object(obj)) => {
             region.owns_object(*obj as *const KObject<'run>)
         }
@@ -326,7 +326,7 @@ fn part_borrows_region<'run>(part: &ExpressionPart<'run>, region: &KoanRegion) -
 fn kobject_borrows_region<'run>(v: &KObject<'run>, region: &KoanRegion) -> bool {
     any_descendant(v, &|obj: &KObject<'run>| match obj {
         KObject::KExpression(e) => Some(expression_borrows_region(e, region)),
-        KObject::KFuture(t, _) => Some(kfuture_borrows_dying_arena(t, region)),
+        KObject::KFuture(t, _) => Some(kfuture_borrows_dying_region(t, region)),
         KObject::KFunction(f, _) => Some(std::ptr::eq(
             f.captured_scope().region,
             region as *const KoanRegion,

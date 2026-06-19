@@ -1,4 +1,4 @@
-//! Execution machinery: arenas that own per-run and per-call allocations, the `Scope` that
+//! Execution machinery: regions that own per-run and per-call allocations, the `Scope` that
 //! holds dispatch tables and resolves calls, and the structured `KError` that propagates
 //! failures. `kfunction` lives here because scope holds functions and functions capture scope.
 

@@ -185,7 +185,7 @@ fn hash_of(t: &KType<'_>) -> u64 {
 /// `a == b` ⟹ `hash(a) == hash(b)` across every region-free variant. Each pair is
 /// built independently so a stray identity-from-pointer bug would surface.
 #[test]
-fn hash_agrees_with_eq_for_arena_free_variants() {
+fn hash_agrees_with_eq_for_region_free_variants() {
     let sid = ScopeId::from_raw(0, 0xBEEF);
     let pairs: Vec<(KType<'_>, KType<'_>)> = vec![
         (KType::Number, KType::Number),

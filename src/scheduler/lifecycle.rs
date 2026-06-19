@@ -38,7 +38,7 @@ impl<W: Workload> Scheduler<W> {
     /// across a park edge into the producer's subtree.
     ///
     /// Idempotent and safe to call on a still-live slot. References handed out by `read` survive
-    /// because the value lives in an region.
+    /// because the value lives in a region.
     pub(crate) fn free(&mut self, idx: usize) {
         let mut stack: Vec<NodeId> = vec![NodeId(idx)];
         while let Some(id) = stack.pop() {

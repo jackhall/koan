@@ -211,7 +211,7 @@ impl Region<KoanStorageProfile> {
     /// INVARIANT: a `KFunction` must be allocated into the same `KoanRegion` that owns its
     /// captured scope. The `functions_is_empty` fast path relies on this — without the
     /// invariant, "no KFunction allocated here" no longer implies "no KFunction has
-    /// `captured_scope` in this region," and the path silently drops arenas out from under
+    /// `captured_scope` in this region," and the path silently drops regions out from under
     /// live `&KFunction` references. The `debug_assert!` catches violations at the
     /// allocation site rather than later as use-after-free.
     pub fn alloc_function<'a>(&'a self, f: KFunction<'a>) -> &'a KFunction<'a> {
