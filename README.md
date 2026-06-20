@@ -1,6 +1,6 @@
 # Koan
 
-A multiparadigm, graph-based language with a metaprogrammable expression syntax and an ML-like module system.
+A functional, graph-based language with a metaprogrammable expression syntax and an ML-like module system.
 
 ## Build
 
