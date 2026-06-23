@@ -74,6 +74,33 @@ impl<'a> BoundedScopePtr<'a> {
         }
     }
 
+    /// Erase a scope of content `'long` to a handle branded at a **shorter** `'a` (`'long: 'a`).
+    /// The brand under-claims the real content lifetime: [`Self::get`] only ever re-hands at the
+    /// branded `'a`, ≤ the scope's real life, so a reader can never out-claim the pointee. Used by
+    /// the per-call frame builder ([`Scope::child_for_frame`](super::scope::Scope::child_for_frame))
+    /// to brand a longer-lived lexical parent at the fresh per-call region's lifetime, so the child
+    /// needs no common lifetime with its parent. Safe by construction (pointer cast + phantom).
+    pub fn erase_shortened<'b, 'long: 'a>(scope: &'b Scope<'long>) -> Self {
+        BoundedScopePtr {
+            ptr: NonNull::from(scope).cast::<Scope<'static>>(),
+            _brand: PhantomData,
+        }
+    }
+
+    /// Shorten an existing handle's brand from `'a` to `'short` (`'a: 'short`). The handle's stored
+    /// pointer is unchanged; only the phantom brand narrows. Sound for the same reason as
+    /// [`Self::erase_shortened`] — narrowing the brand under-claims the pointee's real life. Copies a
+    /// parent's `root` handle into a shorter-lived per-call child.
+    pub fn shortened<'short>(self) -> BoundedScopePtr<'short>
+    where
+        'a: 'short,
+    {
+        BoundedScopePtr {
+            ptr: self.ptr,
+            _brand: PhantomData,
+        }
+    }
+
     /// Re-hand the scope with the borrow **bounded** to the `&'step self` receiver, content `'a`
     /// left free (`'a: 'step`). Re-anchoring longer than the receiver borrow is a compile error,
     /// not a fabrication.

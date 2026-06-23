@@ -12,8 +12,9 @@ A `KoanRegion` holds seven `typed_arena`-backed sub-arenas — for `KObject`,
 heap addresses; the runtime carries cross-references between them rather
 than ownership trees. The structural edges:
 
-- `Scope.outer: Option<&'a Scope<'a>>` — the lexical-parent chain. Many
-  sibling scopes can share one outer, so the in-degree is unbounded.
+- `Scope.outer: Option<BoundedScopePtr<'a>>` — the lexical-parent chain, a
+  content-branded handle. Many sibling scopes can share one outer, so the
+  in-degree is unbounded.
 - `Scope.region: &'a KoanRegion` — back-pointer to the owning region.
 - [`Bindings.data`](../src/machine/core/bindings.rs) maps each bound name
   to a `&'a KObject<'a>`. The pointee may live in this scope's region or in
@@ -111,11 +112,24 @@ scope's `'a`**.
 
 The **safe** [`BoundedScopePtr<'a>`](../src/machine/core/scope_ptr.rs) backs every carrier that owns
 a real `'a`: `KFunction::captured`, `Module::child_scope`, `Signature::decl_scope`, and a `Scope`'s
-`outer` lexical parent. `erase(&Scope<'a>)` records the content `'a` in a `PhantomData<&'a Scope<'a>>`
-brand (which, because `Scope<'a>` is invariant, also pins the carrier invariant in `'a`); `get(&'p
-self) -> &'p Scope<'a>` re-hands the content `'a` behind a reader-bounded borrow. Because the free
-content `'a` is never cashed *unbounded*, a shorter witness borrow cannot fabricate a longer-lived
-reference, so `get` needs no borrow==content coupling and carries **no `unsafe`**.
+`outer` lexical parent and `root` handle. `erase(&Scope<'a>)` records the content `'a` in a
+`PhantomData<&'a Scope<'a>>` brand (which, because `Scope<'a>` is invariant, also pins the carrier
+invariant in `'a`); `get(&'p self) -> &'p Scope<'a>` re-hands the content `'a` behind a
+reader-bounded borrow. Because the free content `'a` is never cashed *unbounded*, a shorter witness
+borrow cannot fabricate a longer-lived reference, so `get` needs no borrow==content coupling and
+carries **no `unsafe`**.
+
+`BoundedScopePtr` also carries two **brand-shortening** helpers — `erase_shortened<'long: 'a>(&Scope<'long>)`
+and `shortened<'short>(self) where 'a: 'short` — that brand a longer-lived scope at a shorter `'a`.
+Narrowing the brand *under-claims* the pointee's real life (`get` only ever re-hands at the branded
+`'a`), so both are safe by construction (pointer cast + phantom, no `unsafe`). They let
+[`Scope::child_for_frame`](../src/machine/core/scope.rs) build a per-call child against its **fresh**
+per-call region's lifetime while brand-shortening the longer-lived lexical parent and run-global root
+to that lifetime, so the child needs no common lifetime with its parent. That is what lets
+`CallFrame::new` / `try_reset_for_tail` construct the per-call child at real (non-`'static`)
+lifetimes and erase it once through the safe `ErasedScopePtr::erase` — the per-call frame builds with
+no construction-time lifetime fabrication, leaving `ErasedScopePtr::reattach` (read-side) as the only
+`unsafe` the per-call child scope touches.
 
 The remaining [`ErasedScopePtr`](../src/machine/core/scope_ptr.rs) is the **one audited `unsafe`** the
 whole scope-erasure surface reduces to, for the two carriers that hold *no* lifetime and so cannot

@@ -21,12 +21,11 @@ use typed_arena::Arena;
 use super::reattach::pin_deref;
 use super::region::{Region, StorageProfile, Stored};
 use super::scope::Scope;
-use super::scope_ptr::{ErasedScopePtr, ScopeFamily};
+use super::scope_ptr::ErasedScopePtr;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{Held, KObject, Module, ModuleSignature};
-use crate::scheduler::reattach_ref;
 use crate::witnessed::reattachable;
 
 /// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
@@ -330,24 +329,20 @@ impl CallFrame {
             region: KoanRegion::with_escape(escape),
             outer: outer_frame,
         });
-        let region_ptr: *const KoanRegion = &storage.region;
-        // SAFETY: heap-pinning keeps `region_ptr` valid for the storage Rc's lifetime, which exceeds
-        // this function's duration; `outer` lives long enough by caller contract.
-        let region_ref: &'static KoanRegion = unsafe { pin_deref(region_ptr) };
-        // SAFETY: lexical-scoping invariant — `outer` (the captured definition scope, or a
-        // longer-lived ancestor) outlives this frame, so erasing its lifetime to `'static`
-        // for the child's `outer` link is sound; the child borrow is re-anchored on read.
-        let outer_static: &Scope<'static> = unsafe { reattach_ref::<ScopeFamily>(outer) };
-        let mut child = Scope::child_under(outer_static);
-        // `child_under` defaults `region` to `outer.region`; override to the per-call region.
-        child.region = region_ref;
-        // `region_ref` is `&'static` (the `pin_deref` above is where the `'static` claim
-        // originates), so `alloc_scope` returns `&'static Scope<'static>` and the safe `erase`
-        // yields an `ErasedScopePtr` — no fabrication here.
-        let allocated: &'static Scope<'static> = region_ref.alloc_scope(child);
+        // A real borrow of the heap-pinned region — no `'static` claim, no `pin_deref`. The child
+        // is built at this borrow's lifetime; `outer` (a longer-lived ancestor) is brand-shortened
+        // to it by `child_for_frame`, so the two need no common lifetime and the outer link needs
+        // no `reattach_ref`.
+        let region_ref: &KoanRegion = &storage.region;
+        let child = Scope::child_for_frame(outer, region_ref);
+        // Stored at the region's real lifetime, then erased once through the safe `erase`. The
+        // local borrow of `storage` ends here (the `ErasedScopePtr` holds no borrow), so `storage`
+        // moves into the shell below; the `KoanRegion` stays at a fixed heap address behind the Rc,
+        // keeping the erased pointer valid.
+        let scope_ptr = ErasedScopePtr::erase(region_ref.alloc_scope(child));
         Rc::new(CallFrame {
             storage,
-            scope_ptr: Some(ErasedScopePtr::erase(allocated)),
+            scope_ptr: Some(scope_ptr),
             non_dying: false,
         })
     }
@@ -478,28 +473,23 @@ impl CallFrame {
             return false;
         }
         let escape = NonNull::from(new_outer.region);
-        // SAFETY: lexical-scoping invariant — `new_outer.region` outlives this frame
-        // (it is the captured definition scope's region, or a longer-lived ancestor).
-        let outer_static: &Scope<'static> = unsafe { reattach_ref::<ScopeFamily>(new_outer) };
-        // Build the fresh storage and its child scope before touching the shell, so the
-        // region pointer is heap-pinned by the new storage Rc when it lands in the shell.
+        // Build the fresh storage and its child scope before touching the shell, so the region is
+        // heap-pinned by the new storage Rc when it lands in the shell.
         let storage = Rc::new(FrameStorage {
             region: KoanRegion::with_escape(escape),
             outer: None,
         });
-        let region_ptr: *const KoanRegion = &storage.region;
-        // SAFETY: heap-pinned via the storage Rc; pointer is stable for its lifetime.
-        let region_ref: &'static KoanRegion = unsafe { pin_deref(region_ptr) };
-        let mut child = Scope::child_under(outer_static);
-        child.region = region_ref;
-        // `region_ref` is `&'static` (the `pin_deref` above is where the `'static` claim
-        // originates), so `alloc_scope` returns `&'static Scope<'static>` and the safe `erase`
-        // yields an `ErasedScopePtr` — no fabrication here.
-        let allocated: &'static Scope<'static> = region_ref.alloc_scope(child);
+        // A real borrow of the heap-pinned region — no `'static` claim, no `pin_deref`; the child
+        // is built at this borrow's lifetime, with `new_outer` brand-shortened to it by
+        // `child_for_frame` (no `reattach_ref` on the outer link).
+        let region_ref: &KoanRegion = &storage.region;
+        let child = Scope::child_for_frame(new_outer, region_ref);
+        let scope_ptr = ErasedScopePtr::erase(region_ref.alloc_scope(child));
+        // The local borrow of `storage` ends above, so it can move into the shell.
         let this = Rc::get_mut(self).expect("just-verified unique above");
         // Drops the old storage (and its region) unless an escapee still holds it.
         this.storage = storage;
-        this.scope_ptr = Some(ErasedScopePtr::erase(allocated));
+        this.scope_ptr = Some(scope_ptr);
         true
     }
 }

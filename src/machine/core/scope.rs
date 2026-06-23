@@ -54,11 +54,13 @@ pub struct Scope<'a> {
     /// with a borrow capped at the reader (`BoundedScopePtr::get`), so a frame-bounded child can
     /// never claim its (possibly frame-bounded) parent outlives the read.
     outer: Option<BoundedScopePtr<'a>>,
-    /// Direct handle to the run-global [`ScopeKind::Root`] (builtins only, immutable).
-    /// `None` iff `self` is the root. Every other scope points straight at it, so a
-    /// builtin lookup or the no-shadow consult reaches the root in one hop instead of
-    /// walking `outer` — the root holds the builtins and never changes for a run.
-    root: Option<&'a Scope<'a>>,
+    /// Content-branded handle to the run-global [`ScopeKind::Root`] (builtins only, immutable),
+    /// re-handed through [`Scope::root_scope`]. `None` iff `self` is the root. Every other scope
+    /// points straight at it, so a builtin lookup or the no-shadow consult reaches the root in one
+    /// hop instead of walking `outer` — the root holds the builtins and never changes for a run.
+    /// Stored as a [`BoundedScopePtr`] (not a plain `&'a Scope<'a>`) so a per-call child can
+    /// brand-shorten the longer-lived root to its own region lifetime at construction.
+    root: Option<BoundedScopePtr<'a>>,
     bindings: ScopeBindings<'a>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
     pub region: &'a KoanRegion,
@@ -152,7 +154,7 @@ impl<'a> Scope<'a> {
     /// root as a genuine `&'a`.
     pub fn run_child(run_root: &'a Scope<'a>) -> Scope<'a> {
         let mut child = Self::child_under(run_root);
-        child.root = Some(run_root);
+        child.root = Some(BoundedScopePtr::erase(run_root));
         child
     }
 
@@ -165,6 +167,29 @@ impl<'a> Scope<'a> {
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             region: outer.region,
+            id: ScopeId::next(),
+            pending: PendingQueue::new(),
+            kind: ScopeKind::Anonymous,
+            recursive_set: None,
+        }
+    }
+
+    /// Per-call frame child: built against a **fresh** `region` whose lifetime `'a` is shorter than
+    /// the lexical parent's `'long`. Unlike [`Self::child_under`] (same-region, single lifetime),
+    /// this takes the fresh per-call region explicitly and **brand-shortens** the parent and root
+    /// handles to `'a`, so the child needs no common lifetime with its (longer-lived) parent. That
+    /// is what lets [`CallFrame::new`](super::arena::CallFrame::new) build the child at real
+    /// lifetimes and erase it once through the safe [`ErasedScopePtr::erase`](super::scope_ptr::ErasedScopePtr::erase),
+    /// with no construction-time lifetime fabrication. The frame `Rc` pins the real parent (via
+    /// `FrameStorage.outer`) and the run-global root, so the shortened brands never out-claim a live
+    /// pointee.
+    pub fn child_for_frame<'long: 'a>(outer: &Scope<'long>, region: &'a KoanRegion) -> Scope<'a> {
+        Scope {
+            outer: Some(BoundedScopePtr::erase_shortened(outer)),
+            root: outer.root.map(BoundedScopePtr::shortened),
+            bindings: ScopeBindings::Owned(Bindings::new()),
+            out: RefCell::new(None),
+            region,
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
@@ -311,7 +336,10 @@ impl<'a> Scope<'a> {
     /// The run-global [`ScopeKind::Root`] (builtins only). `self` if it is the root,
     /// else the direct `root` handle every scope carries — one hop, no `outer` walk.
     pub(crate) fn root_scope(&self) -> &Scope<'a> {
-        self.root.unwrap_or(self)
+        match &self.root {
+            Some(p) => p.get(),
+            None => self,
+        }
     }
 
     /// True iff `name` is a builtin type. The builtins live once in the immutable

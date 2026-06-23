@@ -463,7 +463,6 @@ digraph {
     "koan::machine::core::arena" -> "koan::machine::model::operators" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::values" [label="uses", style="dashed"];
-    "koan::machine::core::arena" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::core::arena" [label="uses", style="dashed"];
