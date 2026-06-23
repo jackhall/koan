@@ -43,13 +43,14 @@ pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
     frame: Option<&'step Rc<CallFrame>>,
 ) -> &'step Scope<'b> {
     match node_scope {
-        // SAFETY: the `YokedChild` pointer was erased from a block scope in a cart-*ancestor* region
-        // (`resolve_node_scope`'s outer-chain check); the active cart's `FrameStorage.outer` chain pins that
-        // region, and `frame` is that cart. The returned borrow is bounded by `frame` (both args share
-        // `'step`), so it cannot be cashed past the cart that pins the pointee.
+        // The `YokedChild` pointer was erased from a block scope in a cart-*ancestor* region
+        // (`resolve_node_scope`'s outer-chain check); the active cart's `FrameStorage.outer` chain
+        // pins that region. Re-anchor through the witness-bounded `reattach_witnessed` with `frame`
+        // (the active cart) as the pin, so this carries no `unsafe`: the returned borrow is bounded
+        // by `frame`, so it cannot be cashed past the cart that pins the pointee.
         NodeScope::YokedChild(ptr) => {
-            let _witness = frame.expect("a YokedChild slot keeps its active cart");
-            unsafe { ptr.reattach() }
+            let frame = frame.expect("a YokedChild slot keeps its active cart");
+            ptr.reattach_witnessed(frame)
         }
         NodeScope::Yoked => frame
             .expect("a Yoked slot keeps its active cart")

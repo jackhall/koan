@@ -183,9 +183,9 @@ mod tests {
         let NodeScope::YokedChild(ptr) = &ns else {
             unreachable!("constructed YokedChild")
         };
-        // Reattach with a borrow bounded by `&ns`; read a binding back, then mutate the region
-        // through a sibling pointer while the reattached scope is still live.
-        let reattached: &Scope<'_> = unsafe { ptr.reattach() };
+        // Reattach with a borrow bounded by the region witness; read a binding back, then mutate the
+        // region through a sibling pointer while the reattached scope is still live.
+        let reattached: &Scope<'_> = ptr.reattach_witnessed(&region);
         assert!(matches!(reattached.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
         let _other = region.alloc_object(KObject::Number(8.0));
         assert!(reattached.lookup("k").is_some());

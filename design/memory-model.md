@@ -128,20 +128,24 @@ per-call region's lifetime while brand-shortening the longer-lived lexical paren
 to that lifetime, so the child needs no common lifetime with its parent. That is what lets
 `CallFrame::new` / `try_reset_for_tail` construct the per-call child at real (non-`'static`)
 lifetimes and erase it once through the safe `ErasedScopePtr::erase` — the per-call frame builds with
-no construction-time lifetime fabrication, leaving `ErasedScopePtr::reattach` (read-side) as the only
-`unsafe` the per-call child scope touches.
+no construction-time lifetime fabrication, leaving only the read-side re-attach, which takes the
+pinning `Rc` as an explicit witness so it carries no in-situ `unsafe` either.
 
-The remaining [`ErasedScopePtr`](../src/machine/core/scope_ptr.rs) is the **one audited `unsafe`** the
-whole scope-erasure surface reduces to, for the two carriers that hold *no* lifetime and so cannot
-brand `'a`: `CallFrame`'s per-call child scope (non-generic — it backs `Rc<CallFrame>`) and a
-scheduler slot's `NodeScope::YokedChild` (a cart-ancestor block scope evicted off the lifetime-free
-node). Both store through the safe `erase(&Scope<'_>)` (forgetting a lifetime for storage cannot
-fabricate one) and recover the content lifetime on read through the single `unsafe fn reattach<'s,
-'b: 's>(&'s self) -> &'s Scope<'b>` — borrow bounded by the reader, content `'b` free. The witness is
-**external** (the frame `Rc`, which for a `YokedChild` pins the ancestor region through its
-`FrameStorage.outer` chain) and not expressible in the type, so the re-attach cannot be safe. The
-`CallFrame` accessors (`scope` / `scope_for_bind` / `scope_bounded`) are thin safe wrappers that only
-pick the lifetimes; every frame-scope fabrication funnels through the one `ErasedScopePtr::reattach`.
+The remaining [`ErasedScopePtr`](../src/machine/core/scope_ptr.rs) backs the two carriers that hold
+*no* lifetime and so cannot brand `'a`: `CallFrame`'s per-call child scope (non-generic — it backs
+`Rc<CallFrame>`) and a scheduler slot's `NodeScope::YokedChild` (a cart-ancestor block scope evicted
+off the lifetime-free node). Both store through the safe `erase(&Scope<'_>)` (forgetting a lifetime
+for storage cannot fabricate one) and recover the content lifetime on read through the
+**safe-signature** `reattach_witnessed<'w, 'b: 'w, W: Witness>(&'w self, &'w W) -> &'w Scope<'b>` —
+the scope-pointer analog of [`reattach_with`](../src/witnessed.rs). The witness is **external** (the
+frame `Rc`, which for a `YokedChild` pins the ancestor region through its `FrameStorage.outer` chain)
+and not expressible in the *carrier's* type, so rather than fabricate the lifetime in-situ the
+re-attach takes it as an explicit `Witness` borrow: `'w` is bounded by that borrow, content `'b` is
+free, and the lone `unsafe` is the `NonNull` deref inside the one method (the content retype routes
+the witnessed `reattach_ref_with`). The `CallFrame` accessors (`scope` / `scope_for_bind` /
+`scope_bounded`) are thin **safe** wrappers that pass the frame's own storage `Rc` as the witness, so
+every frame-scope fabrication funnels through the one `reattach_witnessed` and call sites carry no
+`unsafe`.
 
 Beyond the store-side erasure and the branded scope pointers, a handful of carriers store a
 borrow-carrying *value* on a structure the borrow checker cannot lifetime-track — a scheduler
@@ -157,8 +161,8 @@ two opaque GAT projections share a size), guarded by a `const` size assert that 
 `transmute` would emit — is the only place a
 `T::At<'a> → T::At<'b>` lifetime retype is written; `Erased::erase` / `Erased::reattach`, the
 transient `reattach_value` / `reattach_ref` / `reattach_slice_with` helpers, the witness-borrowed
-`reattach_with` / `vend_carrier`, the `Witnessed` accessors, and the region's store-side
-`erase_to_static` all route it. The carrier families live beside their own
+`reattach_with` / `reattach_ref_with` / `vend_carrier`, the `Witnessed` accessors, and the region's
+store-side `erase_to_static` all route it. The carrier families live beside their own
 types as declarative `unsafe impl Reattachable` instantiations — `ContractFamily` for the
 node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` /
 `ContinuationFamily` for the scheduler value (`Workload::Value`) and continuation
@@ -256,7 +260,8 @@ A scheduler slot's scope handle is lifetime-free, so the node carries no `'run` 
 A per-call frame scope is stored as a payload-less
 [`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the slot's own
 `Node.frame` cart; a genuinely run-lived scope (a binder body's decl-scope child) is stored
-as `NodeScope::YokedChild`, an erased `ErasedScopePtr` re-attached at read through the `unsafe` `reattach`.
+as `NodeScope::YokedChild`, an erased `ErasedScopePtr` re-attached at read through the safe-signature
+`reattach_witnessed`, witnessed by the slot's cart `Rc`.
 Both arms ride a grouped `NodePayload` (scope handle + lexical chain) alongside the slot's frame. The
 slot-storage scope handle and the seed-side `with_frame_interior` re-anchor are documented in
 [per-call-region/scope-handles.md § Slot-table scope handle](per-call-region/scope-handles.md#slot-table-scope-handle).

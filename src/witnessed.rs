@@ -349,6 +349,26 @@ pub(crate) fn reattach_slice_with<'i, 'w, T: Reattachable, W: Witness>(
     unsafe { retype::<&'i [T::At<'_>], &'i [T::At<'w>]>(slice) }
 }
 
+/// Reference twin of [`reattach_with`]: re-anchor a `&T::At<'static>` (an erased value read back in
+/// place) to the lifetime a borrowed [`Witness`] pins, content `'b` left free (`'b: 'w`). Where
+/// [`reattach_ref`] hands out a free borrow *and* free content (so it is `unsafe`), this caps the
+/// borrow at the witness, so a reference cannot be cashed past the pin.
+///
+/// The **signature is safe** for the same reason as [`reattach_with`]: the caller supplies a witness
+/// whose pin keeps the referent's region live (the call-site co-location invariant), and the result
+/// borrow `'w` is bounded by the witness borrow, so the re-anchored reference cannot outrun the pin.
+/// The free content `'b` is the borrow-bounded/content-free shape — sound because the `'w` borrow
+/// caps every use, so `'b` is never cashed unbounded. Call sites carry no `unsafe` of their own.
+pub(crate) fn reattach_ref_with<'w, 'b: 'w, T: Reattachable, W: Witness>(
+    reference: &'w T::At<'static>,
+    _witness: &'w W,
+) -> &'w T::At<'b> {
+    // SAFETY: `'w` is the witness borrow, which pins the referent's region (the co-location
+    // invariant); the output borrow is capped at `'w`, so the free content `'b` is never cashed past
+    // the pin. A reference is a thin pointer, retyped lifetime-only (the `Reattachable` contract).
+    unsafe { retype::<&'w T::At<'static>, &'w T::At<'b>>(reference) }
+}
+
 /// Transient lifetime-retype of an owned single-lifetime-family value — [`Erased::reattach`] for a
 /// value re-exposed at a different lifetime in place rather than recovered from storage.
 ///

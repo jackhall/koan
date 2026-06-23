@@ -84,8 +84,10 @@ fn read_borrow_bounded_witness_only() {
     assert_eq!(*w.read(), 7);
 }
 
-/// `reattach_with` / `reattach_slice_with`: re-anchor a live value (and a slice) to a borrowed
-/// witness's lifetime — the witness-explicit transient re-anchor.
+/// `reattach_with` / `reattach_slice_with` / `reattach_ref_with`: re-anchor a live value, a slice,
+/// and a reference-to-an-erased-store to a borrowed witness's lifetime — the witness-explicit
+/// transient re-anchors. `reattach_ref_with` mirrors the production region-store flow: erase a borrow
+/// to the `'static` store, then re-hand a reference to it bounded by the witness pin.
 #[test]
 fn reattach_with_live_value_and_slice() {
     let frame: Rc<u32> = Rc::new(0);
@@ -95,6 +97,12 @@ fn reattach_with_live_value_and_slice() {
     let elems: &[&u32] = &[&backing[1], &backing[2]];
     let viaslice: &[&u32] = reattach_slice_with::<RefFamily, _>(elems, &frame);
     assert_eq!(viaslice.iter().map(|r| **r).sum::<u32>(), 55);
+    // Erase a borrow to the `'static` store, then re-anchor a *reference* to it under the witness —
+    // the shape the region's store-side re-anchor and the scope pointer's `reattach_witnessed` route.
+    let stored: <RefFamily as Reattachable>::At<'static> =
+        erase_to_static::<RefFamily>(&backing[0]);
+    let reref: &&u32 = reattach_ref_with::<RefFamily, _>(&stored, &frame);
+    assert_eq!(**reref, 11);
 }
 
 /// Covariant carrier round-trips after the original borrow drops; the bundled witness keeps it live.

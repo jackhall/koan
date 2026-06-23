@@ -19,7 +19,7 @@ use std::ptr::NonNull;
 use typed_arena::Arena;
 
 use super::reattach::pin_deref;
-use crate::scheduler::{erase_to_static, reattach_ref, Reattachable};
+use crate::scheduler::{erase_to_static, reattach_ref_with, Reattachable};
 
 /// A workload's declaration of what a [`Region`] stores for it. `Storage` is the bundle of
 /// typed sub-arenas the frame owns; the workload's [`Stored`] impls project each family out of it.
@@ -129,10 +129,11 @@ impl<W: StorageProfile> Region<W> {
         // The post-store hook fires on the final storing frame (this one, after any redirect
         // above), so a recorded address tracks its true owner.
         K::record_local(self, stored);
-        // SAFETY: re-anchor the `'static` store to the frame-bounded `'a` through the audited
-        // `reattach_ref` retype rather than an open-coded raw deref. The returned `&'a` cannot
-        // outlive `&'a self`, so no `'static`-claiming reference escapes the frame's own borrow.
-        unsafe { reattach_ref::<K>(stored) }
+        // Re-anchor the `'static` store to the frame-bounded `'a` through the witness-bounded
+        // `reattach_ref_with`, with `self` (the region the value now lives in) as the pin. Carries no
+        // `unsafe`: the result borrow is capped at `&'a self`, so no `'static`-claiming reference
+        // escapes the frame's own borrow.
+        reattach_ref_with::<K, _>(stored, self)
     }
 }
 

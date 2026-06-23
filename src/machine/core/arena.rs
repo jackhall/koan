@@ -404,14 +404,11 @@ impl CallFrame {
 
     /// The sole re-attach of the frame's child scope: borrow bounded by the `&'s self` receiver,
     /// content `'b` free (`'b: 's`). The three public accessors above are safe wrappers that only
-    /// pick the lifetimes — every frame-scope fabrication funnels through this one `unsafe`.
-    ///
-    /// SAFETY: `scope_ptr` stores an [`ErasedScopePtr`] that is `Some` after construction and stable
-    /// for the `Rc`'s lifetime (the region is heap-pinned). The returned borrow is bounded by
-    /// `&'s self`, so the fabricated content lifetime cannot outlive the pointee the held frame keeps
-    /// alive. `'b` is driven by the return-type annotation, not a turbofish argument.
+    /// pick the lifetimes. Carries **no `unsafe`** of its own — it re-anchors through the
+    /// witness-bounded [`ErasedScopePtr::reattach_witnessed`], passing this frame's own storage `Rc`
+    /// as the pin, so the returned borrow cannot outlive the region that `Rc` keeps alive.
     fn reattach_scope<'s, 'b: 's>(&'s self) -> &'s Scope<'b> {
-        unsafe { self.scope_ptr_set().reattach() }
+        self.scope_ptr_set().reattach_witnessed(&self.storage)
     }
 
     /// The child scope's [`ErasedScopePtr`], which is `Some` for the whole life of a
