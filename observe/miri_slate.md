@@ -1,7 +1,6 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/builtins/test_support.rs: 1
 src/machine/core/arena.rs: 17
 src/machine/core/kfunction/body.rs: 1
 src/machine/core/reattach.rs: 2
@@ -342,12 +341,6 @@ value's region across the copy, and `lift_kobject` self-anchors any surviving bo
 an embedded `Rc`, so the fabricated lifetime is discarded by the copy. Exercised end-to-end by the
 lift/park slate tests (`lift_park_minimal_program_for_miri`, `recursive_tagged_match_no_uaf`, …) —
 every consumer-pull dep delivery and the consumer-less root drain route it. No separate minimal test.
-
-**`Carried` re-attach — test-only terminal extraction** ([src/builtins/test_support.rs](../src/builtins/test_support.rs))
-— `extract_terminal` widens the scheduler's `'node` read to the scope lifetime for test helpers
-(`run_one` / `run_one_type` and peers) that return a top-level result: a frameless terminal living in
-the scope region, which outlives the local scheduler. Test scaffolding, not runtime; exercised under
-Miri by every `run_one`-based test. No separate minimal test.
 
 ## Adding tests to the slate
 

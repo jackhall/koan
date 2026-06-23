@@ -16,18 +16,20 @@ use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{KError, KoanRegion, Scope};
 use crate::parse::parse;
-use crate::scheduler::{reattach_value, NodeId};
+use crate::scheduler::{reattach_with, NodeId};
 
 use super::default_scope;
 
-/// Extract a top-level terminal at the scope lifetime `'a`. The scheduler re-anchors a read to its
-/// own `&self` borrow; a top-level result is a frameless terminal living in the scope region `'a`,
-/// which outlives the local scheduler, so widening the read to `'a` is sound. Test-only — production
-/// code reads at the scheduler borrow and never widens.
-pub(crate) fn extract_terminal<'a>(sched: &KoanRuntime<'a>, id: NodeId) -> Carried<'a> {
-    // SAFETY: see the doc comment — the frameless top-level terminal lives in the `'a` scope region,
-    // a strict outliver of the local `sched`, so the conservative `'node` read widens soundly.
-    unsafe { reattach_value::<CarriedFamily>(sched.read(id)) }
+/// Extract a top-level terminal at the scope lifetime `'a`. The scheduler reads at its own `&self`
+/// borrow; a top-level result is a frameless terminal living in `scope`'s region `'a`, which outlives
+/// the local scheduler, so re-anchoring the read to `'a` — a safe `reattach_with` witnessed by the
+/// `scope.region` borrow — is sound. Test-only — production code reads at the scheduler borrow.
+pub(crate) fn extract_terminal<'a>(
+    sched: &KoanRuntime<'a>,
+    scope: &'a Scope<'a>,
+    id: NodeId,
+) -> Carried<'a> {
+    reattach_with::<CarriedFamily, _>(sched.read(id), scope.region)
 }
 
 /// `Write` adapter that mirrors output into a shared `Vec<u8>` so tests can read it back.
@@ -75,7 +77,7 @@ pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KO
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().expect("scheduler should succeed");
-    extract_terminal(&sched, id).object()
+    extract_terminal(&sched, scope, id).object()
 }
 
 /// Like [`run_one`] but for a type-producing expression: narrows the result's carrier to
@@ -84,7 +86,7 @@ pub(crate) fn run_one_type<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().expect("scheduler should succeed");
-    match extract_terminal(&sched, id) {
+    match extract_terminal(&sched, scope, id) {
         Carried::Type(kt) => kt,
         Carried::Object(obj) => panic!("expected a type result, got value {}", obj.summarize()),
     }
