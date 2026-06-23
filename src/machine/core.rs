@@ -27,4 +27,4 @@ pub use kerror::{KError, KErrorKind, TraceFrame};
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};
 pub use scope::{KFuture, Scope, ScopeKind};
 pub use scope_id::ScopeId;
-pub use scope_ptr::ScopePtr;
+pub use scope_ptr::{BoundedScopePtr, ErasedScopePtr};

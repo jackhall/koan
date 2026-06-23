@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use super::runtime::KoanWorkload;
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
-use crate::machine::core::{assemble_body_chain, ScopeId, ScopePtr};
+use crate::machine::core::{assemble_body_chain, ErasedScopePtr, ScopeId};
 use crate::machine::model::Carried;
 use crate::machine::{CallFrame, KError, LexicalFrame, NodeId};
 
@@ -118,21 +118,22 @@ impl ChainOp {
 ///   from the [`Node::frame`](crate::scheduler::nodes::Node) cart (`scope_bounded`). Single-cart: the
 ///   frame `Rc` already on the slot is the sole liveness witness, so there is no second `Rc` clone
 ///   and no contention with `try_reset_for_tail`'s uniqueness check.
-/// - `YokedChild` — an erased [`ScopePtr`] to a block scope a builtin allocated in a cart *ancestor*
-///   region (an `InScope` body — USING / MODULE / SIG / TRY). Re-attached at read with a borrow
-///   bounded by the slot's frame `Rc` (`reattach_bounded`), sound because the cart's `FrameStorage.outer`
-///   chain pins that ancestor region for as long as the slot holds the cart. Distinct from `Yoked`
-///   only in that the child differs from the cart's own scope, so it needs a stored pointer.
+/// - `YokedChild` — an erased [`ErasedScopePtr`] to a block scope a builtin allocated in a cart
+///   *ancestor* region (an `InScope` body — USING / MODULE / SIG / TRY). Re-attached at read with a
+///   borrow bounded by the slot's frame `Rc` ([`ErasedScopePtr::reattach`]), sound because the cart's
+///   `FrameStorage.outer` chain pins that ancestor region for as long as the slot holds the cart.
+///   Distinct from `Yoked` only in that the child differs from the cart's own scope, so it needs a
+///   stored pointer.
 ///
 /// Storing an erased, frame-witnessed handle keeps the borrow honest across a TCO `try_reset_for_tail`
 /// (nothing persisted points into the reset region; the live frame is re-read each step) and keeps the
 /// slot from naming `'run` in its node-stored scope state.
 ///
-/// `Copy` because both arms are trivially copyable ([`ScopePtr`] is `Copy` / a unit) and submission
-/// threads the handle through `pre_subs` recursion without re-deriving it.
+/// `Copy` because both arms are trivially copyable ([`ErasedScopePtr`] is `Copy` / a unit) and
+/// submission threads the handle through `pre_subs` recursion without re-deriving it.
 #[derive(Clone, Copy)]
 pub(super) enum NodeScope {
-    YokedChild(ScopePtr<'static>),
+    YokedChild(ErasedScopePtr),
     Yoked,
 }
 
@@ -164,11 +165,11 @@ mod tests {
     use crate::machine::model::KObject;
     use crate::machine::{BindingIndex, Scope};
 
-    /// A `NodeScope::YokedChild` erases a cart-ancestor block scope to a lifetime-free `ScopePtr`
-    /// (`erase_static`) and reattaches it (`reattach_bounded`) at read — the fabrication the
-    /// scheduler performs each step for a `YokedChild` slot, the borrow bounded by the slot's frame.
-    /// Mirrors the erase→reattach pair plus a subsequent region mutation through a sibling pointer;
-    /// fails on UB, not values.
+    /// A `NodeScope::YokedChild` erases a cart-ancestor block scope to a lifetime-free
+    /// `ErasedScopePtr` (`erase`) and reattaches it ([`ErasedScopePtr::reattach`]) at read — the
+    /// fabrication the scheduler performs each step for a `YokedChild` slot, the borrow bounded by
+    /// the slot's frame. Mirrors the erase→reattach pair plus a subsequent region mutation through a
+    /// sibling pointer; fails on UB, not values.
     #[test]
     fn node_scope_yoked_child_erase_reattach_roundtrip() {
         let region = KoanRegion::new();
@@ -178,13 +179,13 @@ mod tests {
             .bind_value("k".to_string(), v, BindingIndex::BUILTIN)
             .unwrap();
 
-        let ns = NodeScope::YokedChild(ScopePtr::erase_static(scope));
+        let ns = NodeScope::YokedChild(ErasedScopePtr::erase(scope));
         let NodeScope::YokedChild(ptr) = &ns else {
             unreachable!("constructed YokedChild")
         };
         // Reattach with a borrow bounded by `&ns`; read a binding back, then mutate the region
         // through a sibling pointer while the reattached scope is still live.
-        let reattached: &Scope<'_> = unsafe { ptr.reattach_bounded() };
+        let reattached: &Scope<'_> = unsafe { ptr.reattach() };
         assert!(matches!(reattached.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
         let _other = region.alloc_object(KObject::Number(8.0));
         assert!(reattached.lookup("k").is_some());

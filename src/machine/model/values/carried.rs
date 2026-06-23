@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use crate::machine::model::types::{KType, Parseable};
 use crate::machine::KError;
-use crate::scheduler::Reattachable;
+use crate::witnessed::reattachable;
 
 use super::KObject;
 
@@ -28,21 +28,16 @@ pub enum Carried<'a> {
 /// depend on `'a`.
 pub struct CarriedFamily;
 
-// SAFETY: `Carried<'r>` is one type generic only in `'r`; its layout (two pointers) is identical
-// for every `'r`.
-unsafe impl Reattachable for CarriedFamily {
-    type At<'r> = Carried<'r>;
-}
-
 /// `Reattachable` family for a dep terminal `Result<Carried, KError>` — the element type the
 /// dep-delivery slice retypes (`deps_at_step`). Layout-invariant for the same reason as
 /// [`CarriedFamily`] (`KError` carries no lifetime).
 pub struct ResultCarriedFamily;
 
-// SAFETY: `Result<Carried<'r>, KError>` is generic only in `'r` (the `KError` arm is lifetime-free);
-// its layout does not depend on `'r`.
-unsafe impl Reattachable for ResultCarriedFamily {
-    type At<'r> = Result<Carried<'r>, KError>;
+// Both families are one type generic only in `'r` (the `KError` arm is lifetime-free), layout
+// identical for every `'r`; the shared `reattachable!` macro discharges that obligation once.
+reattachable! {
+    CarriedFamily => Carried<'r>,
+    ResultCarriedFamily => Result<Carried<'r>, KError>,
 }
 
 impl<'a> Carried<'a> {

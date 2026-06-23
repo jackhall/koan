@@ -15,7 +15,7 @@ from the slot's live frame at read, never re-anchored at a free `'run`:
   from the frame at the read boundary. Single-cart, because the slot's own `Frame::cart`
   `Rc<CallFrame>` is the sole liveness witness, so there is no second `Rc` clone and no contention
   with `try_reset_for_tail`'s `strong_count == 1` TCO reuse check.
-- `YokedChild(ScopePtr<'static>)` holds an erased pointer to a block scope a builtin allocated in a
+- `YokedChild(ErasedScopePtr)` holds an erased pointer to a block scope a builtin allocated in a
   cart *ancestor* region (an `InScope` body — USING / MODULE / SIG / TRY), re-attached at read with a
   borrow bounded by the slot's frame `Rc`, sound because the cart's `FrameStorage.outer` chain pins
   that ancestor region for as long as the slot holds the cart. It differs from `Yoked` only in that the
@@ -24,7 +24,7 @@ from the slot's live frame at read, never re-anchored at a free `'run`:
 The funnel [`resolve_node_scope`](../../src/machine/execute/runtime/submit.rs) decides the arm in
 order: a pointer test (`std::ptr::eq(active_frame.scope(), scope)`) routes a frame's-own-child slot
 to `Yoked`; a walk of the active cart's scope `outer` chain that reaches `scope`'s region routes a
-cart-ancestor block scope to `YokedChild`, erasing the borrow through `ScopePtr::erase_static`; the
+cart-ancestor block scope to `YokedChild`, erasing the borrow through `ErasedScopePtr::erase`; the
 frameless top-level run root routes to `Yoked` via the `run_frame` cart that adopts it (the slot's
 cart is that `run_frame`). The two residual fall-throughs are `unreachable!` — an instrumented
 whole-suite spike confirmed every framed submission resolves to `Yoked` / `YokedChild` and every
@@ -33,7 +33,7 @@ honest across a TCO `try_reset_for_tail`: nothing persisted points into the rese
 
 The read boundary hands a slot's scope back on demand, not as a stored free `&'run`:
 [`reattach_node_scope`](../../src/machine/execute/dispatch/ctx.rs) materializes it per use — a
-`YokedChild` slot re-attaches its erased `ScopePtr<'static>` through the `unsafe` `reattach_bounded`
+`YokedChild` slot re-attaches its erased `ErasedScopePtr` through the `unsafe` `reattach`
 (borrow bounded by the frame `Rc`, content lifetime free, sound because the cart pins the ancestor
 region); a `Yoked` slot re-reads from the live
 `active_frame` cart via [`CallFrame::scope_bounded`](../../src/machine/core/arena.rs), a

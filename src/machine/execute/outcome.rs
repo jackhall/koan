@@ -24,7 +24,8 @@ use crate::machine::model::values::{Carried, KObject, ResultCarriedFamily};
 use std::rc::Rc;
 
 use crate::machine::{KError, NodeId, TraceFrame};
-use crate::scheduler::{reattach_slice_with, Reattachable};
+use crate::scheduler::reattach_slice_with;
+use crate::witnessed::reattachable;
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
 use super::nodes::NodeWork;
@@ -163,11 +164,9 @@ pub(in crate::machine::execute) type NodeContinuation<'a> = Box<
 /// representation never depends on `'r`.
 pub(in crate::machine::execute) struct ContinuationFamily;
 
-// SAFETY: `NodeContinuation<'r>` is one type generic only in `'r` (a boxed trait object); its fat-pointer
-// layout is identical for every `'r`.
-unsafe impl Reattachable for ContinuationFamily {
-    type At<'r> = NodeContinuation<'r>;
-}
+// `NodeContinuation<'r>` is one type generic only in `'r` (a boxed trait object); its fat-pointer
+// layout is identical for every `'r`, so the shared `reattachable!` macro discharges the obligation.
+reattachable!(ContinuationFamily => NodeContinuation<'r>);
 
 /// Dep-finish continuation: short-circuit on the first errored dep (labelled with `dep_error_frame`),
 /// else hand the resolved [`Carried`] values to a value-only [`DepFinish`]. The short-circuit

@@ -49,9 +49,8 @@ so [`yoke`](https://docs.rs/yoke), whose safe `get` assumes covariance, cannot e
 - *Relocate `Reattachable` behind a re-export first — decided.* Move the trait + primitive into
   `witnessed` and leave a `pub use` in `scheduler`, so existing call sites compile unchanged while the
   module lands; migrate call sites incrementally after.
-- *`map`'s first consumer — deferred.* The value-carrier migration uses only `with`; `map` (scope
-  mutation inside the brand) is exercised by the optional branded-mutation model in
-  [FrameStorage self-reference removal](framestorage-self-reference.md). The module ships and tests
+- *`map`'s first consumer — deferred.* The value-carrier migration uses only `with`; a `map`
+  consumer (scope mutation inside the brand) has no shipped caller yet. The module ships and tests
   `map` regardless.
 
 ## Dependencies
@@ -62,6 +61,3 @@ Working notes, the spike crate, and the invariance / accessor-soundness findings
 **Requires:** none — foundation.
 
 **Unblocks:**
-- [FrameStorage self-reference removal](framestorage-self-reference.md) — relocates the
-  `Reattachable` / `ScopeFamily` substrate into the shared `witnessed` module and provides the
-  `Witnessed<ScopeFamily, …>` frame-scope carrier the self-reference work builds on.

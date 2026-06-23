@@ -7,9 +7,11 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::{assemble_body_chain, KoanRegion, ScopeId, ScopePtr};
+use crate::machine::core::{assemble_body_chain, ErasedScopePtr, KoanRegion, ScopeId};
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallFrame, LexicalFrame, NodeId, Scope};
+
+use super::super::dispatch::reattach_node_scope;
 
 /// Pointer equality of two scopes (identity, not structural).
 fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
@@ -99,7 +101,7 @@ impl<'run> KoanRuntime<'run> {
                 return NodeScope::Yoked;
             }
             if cart_chain_reaches_region(f.scope(), scope.region) {
-                return NodeScope::YokedChild(ScopePtr::erase_static(scope));
+                return NodeScope::YokedChild(ErasedScopePtr::erase(scope));
             }
             unreachable!("a framed submission's scope is the cart's own or a cart-ancestor child");
         }
@@ -113,7 +115,7 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Submit `work` against the executing slot's own [`NodeScope`] handle (read back from the
-    /// ambient payload): `YokedChild` re-uses the erased cart-ancestor `ScopePtr` the slot already
+    /// ambient payload): `YokedChild` re-uses the erased cart-ancestor `ErasedScopePtr` the slot already
     /// holds; `Yoked` re-projects from the active frame cart at the read boundary. The chain defaults
     /// to the ambient one (or a detached chain at top level). Backs the `*_here` re-dispatch path.
     pub(in crate::machine::execute) fn submit_in_own_scope(
@@ -211,11 +213,14 @@ impl<'run> KoanRuntime<'run> {
             .scope;
         let chain = self.ambient_or_detached_chain();
         match node_scope {
-            NodeScope::YokedChild(ptr) => {
-                // SAFETY: the `YokedChild` pointer was erased from a cart-ancestor block scope the
-                // active cart pins (`resolve_node_scope`); reattach with a borrow bounded by the local
-                // `ptr`, used only for the transient `submit_expression` call below.
-                let scope: &Scope<'_> = unsafe { ptr.reattach_bounded() };
+            NodeScope::YokedChild(_) => {
+                // Clone the active cart `Rc` to a local so the reattached borrow is witnessed by an
+                // owned handle (decoupled from `&mut self` for the `submit_expression` call below).
+                // Routes the single audited reattach in `reattach_node_scope` rather than a second
+                // open-coded fabrication — `node_scope`'s `YokedChild` pointer is pinned by the cart's
+                // `FrameStorage.outer` chain the held `Rc` keeps alive.
+                let cart = self.active_frame_ref().cloned();
+                let scope: &Scope<'_> = reattach_node_scope(&node_scope, cart.as_ref());
                 self.submit_expression(expr, scope, node_scope, chain)
             }
             NodeScope::Yoked => self.dispatch_in_active_frame(expr, chain),

@@ -8,16 +8,17 @@
 //! are distinct concepts; do not conflate.
 //!
 //! Lifetime erasure on the scope pointer routes through
-//! [`ScopePtr`](crate::machine::core::scope_ptr::ScopePtr), shared with
-//! [`KFunction`](crate::machine::core::kfunction::KFunction) and
-//! [`CallFrame`](crate::machine::core::arena::CallFrame). The branded `ScopePtr<'a>` makes
-//! `child_scope` / `decl_scope` safe re-attaches; the irreducible `unsafe` re-attach lives at
-//! `CallFrame`.
+//! [`BoundedScopePtr`](crate::machine::core::scope_ptr::BoundedScopePtr), the same content-branded
+//! handle [`KFunction`](crate::machine::core::kfunction::KFunction) and
+//! [`Scope::outer`](crate::machine::core::Scope) use. `Module` / `ModuleSignature` own a real `'a`,
+//! so the brand makes `child_scope` / `decl_scope` **safe** reader-bounded re-hands; the irreducible
+//! `unsafe` re-attach lives at the lifetime-free carriers
+//! ([`ErasedScopePtr`](crate::machine::core::ErasedScopePtr)).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::machine::core::{Scope, ScopeId, ScopePtr};
+use crate::machine::core::{BoundedScopePtr, Scope, ScopeId};
 
 use super::super::types::KType;
 
@@ -29,7 +30,7 @@ use super::super::types::KType;
 /// `AbstractType` vs `Module`).
 pub struct Module<'a> {
     pub path: String,
-    child_scope_ptr: ScopePtr<'a>,
+    child_scope_ptr: BoundedScopePtr<'a>,
     /// `RefCell` because opaque-ascription installs entries after the surrounding `KObject`
     /// is alloc'd. `Module` is region-pinned and never moved, so a `&'a Module<'a>` borrow
     /// stays valid alongside interior mutation.
@@ -51,7 +52,7 @@ impl<'a> Module<'a> {
     pub fn new(path: String, child_scope: &'a Scope<'a>) -> Self {
         Self {
             path,
-            child_scope_ptr: ScopePtr::erase(child_scope),
+            child_scope_ptr: BoundedScopePtr::erase(child_scope),
             type_members: RefCell::new(HashMap::new()),
             slot_type_tags: RefCell::new(HashMap::new()),
             compatible_sigs: RefCell::new(Vec::new()),
@@ -67,11 +68,12 @@ impl<'a> Module<'a> {
         }
     }
 
-    /// Re-attach `'a` to the stored scope. The branded `child_scope_ptr` makes this a safe
-    /// re-attach: it consumed a real `&'a Scope<'a>` at construction, and the region outlives
-    /// every `&Module<'a>` by construction.
-    pub fn child_scope(&self) -> &'a Scope<'a> {
-        self.child_scope_ptr.reattach()
+    /// Re-hand the captured child scope with the borrow bounded by the `&self` receiver and the
+    /// content `'a` left free. The branded `child_scope_ptr` makes this a **safe** re-hand: it
+    /// consumed a real `&Scope<'a>` at construction, and the region outlives every `&Module<'a>` by
+    /// construction.
+    pub fn child_scope(&self) -> &Scope<'a> {
+        self.child_scope_ptr.get()
     }
 
     /// Stable identity keyed by `KType::Module` equality (and recorded on per-call abstract
@@ -88,25 +90,25 @@ impl<'a> Module<'a> {
 /// ascription time.
 pub struct ModuleSignature<'a> {
     pub path: String,
-    /// Branded [`ScopePtr<'a>`]: `Scope<'a>` is invariant in `'a`, and the brand's
+    /// Branded [`BoundedScopePtr<'a>`]: `Scope<'a>` is invariant in `'a`, and the brand's
     /// `PhantomData<&'a Scope<'a>>` carries that invariance structurally, so it is what pins
     /// `ModuleSignature<'a>` invariant in `'a` — no separate marker field is needed.
-    decl_scope_ptr: ScopePtr<'a>,
+    decl_scope_ptr: BoundedScopePtr<'a>,
 }
 
 impl<'a> ModuleSignature<'a> {
     pub fn new(path: String, decl_scope: &'a Scope<'a>) -> Self {
         Self {
             path,
-            decl_scope_ptr: ScopePtr::erase(decl_scope),
+            decl_scope_ptr: BoundedScopePtr::erase(decl_scope),
         }
     }
 
-    /// Re-attach `'a` to the stored scope. The branded `decl_scope_ptr` makes this a safe
-    /// re-attach: the decl scope is region-allocated and outlives every `&ModuleSignature<'a>` by
-    /// construction.
-    pub fn decl_scope(&self) -> &'a Scope<'a> {
-        self.decl_scope_ptr.reattach()
+    /// Re-hand the decl scope with the borrow bounded by the `&self` receiver and content `'a`
+    /// left free. The branded `decl_scope_ptr` makes this a **safe** re-hand: the decl scope is
+    /// region-allocated and outlives every `&ModuleSignature<'a>` by construction.
+    pub fn decl_scope(&self) -> &Scope<'a> {
+        self.decl_scope_ptr.get()
     }
 
     /// Stable identity for `KType::Signature { sig, .. }` (its dispatch identity is

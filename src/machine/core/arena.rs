@@ -21,12 +21,13 @@ use typed_arena::Arena;
 use super::reattach::pin_deref;
 use super::region::{Region, StorageProfile, Stored};
 use super::scope::Scope;
-use super::scope_ptr::{ScopeFamily, ScopePtr};
+use super::scope_ptr::{ErasedScopePtr, ScopeFamily};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{Held, KObject, Module, ModuleSignature};
-use crate::scheduler::{reattach_ref, Reattachable};
+use crate::scheduler::reattach_ref;
+use crate::witnessed::reattachable;
 
 /// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
 /// family's `'static` form (phantom); the [`Region`] engine re-anchors to the caller's `'a`
@@ -106,28 +107,17 @@ fn ktype_anchors_to(t: &KType<'_>, region_ptr: *const KoanRegion) -> bool {
 
 // The lifetime family of each stored type, keyed on its `'static` form — the GAT the
 // `Region` engine erases to `'static` for storage and re-anchors to the caller's `'a` on read.
-// SAFETY: each family is one type generic only in a single lifetime, so its layout is identical for
-// every choice of that lifetime; `OperatorGroup` is lifetime-free, trivially invariant.
-unsafe impl Reattachable for KObject<'static> {
-    type At<'r> = KObject<'r>;
-}
-unsafe impl Reattachable for KType<'static> {
-    type At<'r> = KType<'r>;
-}
-unsafe impl Reattachable for KFunction<'static> {
-    type At<'r> = KFunction<'r>;
-}
-unsafe impl Reattachable for Scope<'static> {
-    type At<'r> = Scope<'r>;
-}
-unsafe impl Reattachable for Module<'static> {
-    type At<'r> = Module<'r>;
-}
-unsafe impl Reattachable for ModuleSignature<'static> {
-    type At<'r> = ModuleSignature<'r>;
-}
-unsafe impl Reattachable for OperatorGroup {
-    type At<'r> = OperatorGroup;
+// Each family is one type generic only in a single lifetime, so its layout is identical for every
+// choice of that lifetime; `OperatorGroup` is lifetime-free, trivially invariant. The shared
+// `reattachable!` macro discharges the layout-invariance `unsafe` obligation once (see its docs).
+reattachable! {
+    KObject<'static> => KObject<'r>,
+    KType<'static> => KType<'r>,
+    KFunction<'static> => KFunction<'r>,
+    Scope<'static> => Scope<'r>,
+    Module<'static> => Module<'r>,
+    ModuleSignature<'static> => ModuleSignature<'r>,
+    OperatorGroup => OperatorGroup,
 }
 
 // Per-family `Stored` policy. `KObject` and `KType` answer `anchors_to` by walking their composite
@@ -319,7 +309,7 @@ impl FrameStorage {
 /// for the heap-pinning / drop-order invariants.
 pub struct CallFrame {
     storage: Rc<FrameStorage>,
-    scope_ptr: Option<ScopePtr<'static>>,
+    scope_ptr: Option<ErasedScopePtr>,
     /// True only for the scheduler-owned run frame, which carries the top-level run scope and
     /// never drops mid-run. Its `region` is empty (top-level values live in the externally-owned
     /// run region, reached via `scope.region`), so there is nothing to lift out of it: the Done
@@ -353,11 +343,11 @@ impl CallFrame {
         child.region = region_ref;
         // `region_ref` is `&'static` (the `pin_deref` above is where the `'static` claim
         // originates), so `alloc_scope` returns `&'static Scope<'static>` and the safe `erase`
-        // yields a `ScopePtr<'static>` — no fabrication here.
+        // yields an `ErasedScopePtr` — no fabrication here.
         let allocated: &'static Scope<'static> = region_ref.alloc_scope(child);
         Rc::new(CallFrame {
             storage,
-            scope_ptr: Some(ScopePtr::erase(allocated)),
+            scope_ptr: Some(ErasedScopePtr::erase(allocated)),
             non_dying: false,
         })
     }
@@ -370,17 +360,17 @@ impl CallFrame {
     /// nothing to redirect into). Marked `non_dying` so the Done boundary skips the (pointless)
     /// self-lift of top-level results.
     ///
-    /// SAFETY: the adopted run scope lives in the externally-owned run region, which outlives this
-    /// scheduler-owned frame; erasing its borrow to `'static` for storage in `scope_ptr` is the
-    /// same re-anchored-on-read erasure every [`ScopePtr`] carries.
+    /// The adopted run scope lives in the externally-owned run region, which outlives this
+    /// scheduler-owned frame; erasing its borrow for storage in `scope_ptr` is the same
+    /// re-anchored-on-read erasure every [`ErasedScopePtr`] carries. The store-side
+    /// [`ErasedScopePtr::erase`] is safe — the fabrication hazard is deferred to the re-attach.
     pub fn adopting(scope: &Scope<'_>) -> Rc<CallFrame> {
-        let scope_static: &'static Scope<'static> = unsafe { reattach_ref::<ScopeFamily>(scope) };
         Rc::new(CallFrame {
             storage: Rc::new(FrameStorage {
                 region: KoanRegion::new(),
                 outer: None,
             }),
-            scope_ptr: Some(ScopePtr::erase(scope_static)),
+            scope_ptr: Some(ErasedScopePtr::erase(scope)),
             non_dying: true,
         })
     }
@@ -392,29 +382,17 @@ impl CallFrame {
     }
 
     pub fn scope<'a>(&'a self) -> &'a Scope<'a> {
-        // SAFETY: `scope_ptr` stores a `ScopePtr<'static>`; the free-`'a` fabrication is
-        // concentrated here at the non-generic `CallFrame` boundary. `scope_ptr` is `Some`
-        // after construction and stable for the `Rc`'s lifetime (heap-pinned), and the
-        // returned `'a` is bounded by `&self`, so the fabricated lifetime cannot outlive the
-        // pointee. `'a` is driven by the return-type annotation — `reattach_unbounded`'s
-        // lifetime is late-bound, so it cannot be a turbofish argument.
-        let scope: &'a Scope<'a> = unsafe { self.scope_ptr_set().reattach_unbounded() };
-        scope
+        // Borrow and content collapse to the receiver's `'a` (`'b = 's = 'a`).
+        self.reattach_scope()
     }
 
     /// Scope handle bounded by `&'step Rc<Self>` — strictly shorter than the `&'a Scope<'a>`
     /// claim of [`CallFrame::scope`]. Use this for local-bind plumbing (e.g.
     /// [`Scope::bind_value`]) that does not need to escape the `Rc`'s borrow, so the caller
-    /// avoids an `unsafe` `'a`-anchoring transmute on the receiving end.
-    ///
-    /// SAFETY: `scope_ptr` stores a `ScopePtr<'static>`; the free-`'step` fabrication is
-    /// concentrated here at the non-generic `CallFrame` boundary. The pointer is stable for
-    /// the `Rc`'s lifetime (heap-pinned by `Rc`), and the returned `'step` is bounded by the
-    /// receiver so the borrow cannot outlive it. `'step` is driven by the return-type annotation
-    /// — `reattach_unbounded`'s lifetime is late-bound, so it cannot be a turbofish argument.
+    /// avoids an `unsafe` `'a`-anchoring transmute on the receiving end. Borrow and content collapse
+    /// to the receiver's `'step`.
     pub fn scope_for_bind<'step>(self: &'step Rc<Self>) -> &'step Scope<'step> {
-        let scope: &'step Scope<'step> = unsafe { self.scope_ptr_set().reattach_unbounded() };
-        scope
+        (**self).reattach_scope()
     }
 
     /// The child scope re-handed with a **witness-bounded** borrow: the borrow `'step` is bounded by
@@ -425,17 +403,26 @@ impl CallFrame {
     /// invariant), so this ephemeral form needs no separate brand struct. Reached through the
     /// scheduler's workload-side scope re-anchor (`reattach_node_scope`, `Yoked` slots) and
     /// [`Self::with_frame_interior`] (the seed binds).
-    ///
-    /// SAFETY: delegates to [`ScopePtr::reattach_bounded`]; the `&'step Rc<Self>` receiver pins
-    /// the region and child scope for all of `'step`, so the `'step`-bounded borrow cannot dangle.
     pub fn scope_bounded<'step, 'a: 'step>(self: &'step Rc<Self>) -> &'step Scope<'a> {
-        unsafe { self.scope_ptr_set().reattach_bounded() }
+        (**self).reattach_scope()
     }
 
-    /// The child scope's `ScopePtr<'static>`, which is `Some` for the whole life of a
+    /// The sole re-attach of the frame's child scope: borrow bounded by the `&'s self` receiver,
+    /// content `'b` free (`'b: 's`). The three public accessors above are safe wrappers that only
+    /// pick the lifetimes — every frame-scope fabrication funnels through this one `unsafe`.
+    ///
+    /// SAFETY: `scope_ptr` stores an [`ErasedScopePtr`] that is `Some` after construction and stable
+    /// for the `Rc`'s lifetime (the region is heap-pinned). The returned borrow is bounded by
+    /// `&'s self`, so the fabricated content lifetime cannot outlive the pointee the held frame keeps
+    /// alive. `'b` is driven by the return-type annotation, not a turbofish argument.
+    fn reattach_scope<'s, 'b: 's>(&'s self) -> &'s Scope<'b> {
+        unsafe { self.scope_ptr_set().reattach() }
+    }
+
+    /// The child scope's [`ErasedScopePtr`], which is `Some` for the whole life of a
     /// constructed frame (`None` only transiently inside `new` / `try_reset_for_tail` before
     /// the child scope is allocated).
-    fn scope_ptr_set(&self) -> &ScopePtr<'static> {
+    fn scope_ptr_set(&self) -> &ErasedScopePtr {
         self.scope_ptr
             .as_ref()
             .expect("scope_ptr is set after construction")
@@ -507,12 +494,12 @@ impl CallFrame {
         child.region = region_ref;
         // `region_ref` is `&'static` (the `pin_deref` above is where the `'static` claim
         // originates), so `alloc_scope` returns `&'static Scope<'static>` and the safe `erase`
-        // yields a `ScopePtr<'static>` — no fabrication here.
+        // yields an `ErasedScopePtr` — no fabrication here.
         let allocated: &'static Scope<'static> = region_ref.alloc_scope(child);
         let this = Rc::get_mut(self).expect("just-verified unique above");
         // Drops the old storage (and its region) unless an escapee still holds it.
         this.storage = storage;
-        this.scope_ptr = Some(ScopePtr::erase(allocated));
+        this.scope_ptr = Some(ErasedScopePtr::erase(allocated));
         true
     }
 }
