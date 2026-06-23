@@ -113,15 +113,14 @@ relocates it across each dep edge — never the producer.
 
 Because `KObject` / `Carried` / `Scope` are invariant in their lifetime, none
 of these transitions can be a coercion — each cross-frame move is a genuine
-`NodeLift` copy (or the held-Rc re-exposure at storage). Two audited
-lifetime-reattach primitives in
-[outcome.rs](../../src/machine/execute/outcome.rs) remain: `deps_at_step`
-re-anchors consumer-pull dep terminals to the cart-witnessed lifetime the
-continuation runs at, and `pin_carried_to_run` re-anchors a node read up to
-`'run` for the run-global root drain. (The single-lifetime `Outcome` makes the
-former up/down decide-surface bridges unnecessary — the splice slot and dep
-value share one lifetime.) They are pinned
-in the Miri slate by `tail_call_stamps_result_against_first_callers_return_contract`.
+`NodeLift` copy (or the held-Rc re-exposure at storage). The consumer-pull dep
+re-anchor in [outcome.rs](../../src/machine/execute/outcome.rs), `deps_at_step`,
+is a **safe** `reattach_slice_with` bounded by the cart `Rc` the continuation
+runs under, and the run-global root drain re-anchors through `lift` directly
+rather than a standalone primitive. (The single-lifetime `Outcome` makes the
+up/down decide-surface bridges unnecessary — the splice slot and dep value share
+one lifetime.) The seam is pinned in the Miri slate by
+`tail_call_stamps_result_against_first_callers_return_contract`.
 
 ### Fast path
 

@@ -1,20 +1,19 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/builtins/test_support.rs: 1
-src/machine/core/arena.rs: 16
+src/machine/core/arena.rs: 17
 src/machine/core/kfunction/body.rs: 1
 src/machine/core/reattach.rs: 2
 src/machine/core/region.rs: 3
 src/machine/core/scope_ptr.rs: 5
 src/machine/execute/dispatch/ctx.rs: 1
+src/machine/execute/lift.rs: 1
 src/machine/execute/nodes.rs: 1
-src/machine/execute/outcome.rs: 3
-src/machine/execute/runtime.rs: 3
+src/machine/execute/outcome.rs: 1
 src/machine/execute/runtime/submit.rs: 1
 src/machine/model/values/carried.rs: 2
-src/scheduler/erase.rs: 19
-src/scheduler/node_store.rs: 5
+src/scheduler/node_store.rs: 2
+src/witnessed.rs: 19
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -50,7 +49,7 @@ unsafe and fingerprint-drift checks still fire.
 
 ## The slate
 
-23 tests, grouped by the unsafe site each pins down. Names below are the exact
+30 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -211,19 +210,34 @@ pins it. No separate minimal test.
 against a `YokedChild` slot's own scope, running the same transmute with none of its own; pinned by
 `node_scope_yoked_child_erase_reattach_roundtrip`. No separate minimal test.
 
-**`retype` primitive — `Erased<T>` / `Reattachable`** ([src/scheduler/erase.rs](../src/scheduler/erase.rs))
+**`retype` primitive — `Erased<T>` / `Witnessed<T, W>`** ([src/witnessed.rs](../src/witnessed.rs))
 — the single audited lifetime-retype every carrier family routes: `retype<A, B>` (a
 `transmute_copy` behind a `ManuallyDrop`, the one site `transmute`'s GAT size-proof can't cover),
-reached only through `Erased<T>::erase` / `reattach` (stored carriers) and the `reattach_value` /
-`reattach_ref` / `reattach_slice` transient helpers. The `unsafe impl Reattachable` families declare
+reached through `Erased<T>::erase` / `reattach`, the witness-borrowed `reattach_with` /
+`reattach_slice_with` / `vend_carrier` helpers, the `reattach_value` / `reattach_ref` transient
+helpers, and through the three `Witnessed` accessors: the rank-2 branded `with` (borrow + read) and
+`map` (consume + transform), plus the borrow-bounded `read` that hands the carrier *out* at the
+`&self` borrow — sound because its content lifetime is the borrow itself (not a free `'b`), so the
+bundled `Witness` pins it for exactly that long. The `unsafe impl Reattachable` families declare
 layout-invariance and carry no runtime `unsafe` of their own — they are exercised through this
 primitive: `CarriedFamily` / `ResultCarriedFamily`
 ([src/machine/model/values/carried.rs](../src/machine/model/values/carried.rs)), `ContractFamily`,
-`ContFamily`, and `ScopeFamily`. The test erases a borrow-carrying family to the
-`'static` store, re-anchors it, and reads through every entry point, re-reading the first borrow
-after the helper calls to catch a tree-borrows regression.
+`ContFamily`, and `ScopeFamily`. The tests erase a borrow-carrying family to the `'static` store and
+re-anchor it through every entry point — the witness-less helpers, the borrow-bounded `read` (read
+after the original binding drops), and the `Witnessed` accessors that drop the *original* binding and
+read back only through the bundled witness (the load-bearing case for the invariant `Cell<&'r u32>`
+carrier) — plus `map`'s branded projection (binding a cart-coherent `&'b` value into the invariant
+scope slot, the write `with` rejects). The escape-can't-compile guards are `compile_fail` doctests on
+`with` / `map`.
 
 - `erased_roundtrip_and_helpers`
+- `witness_borrowed_reattach`
+- `read_borrow_bounded_witness_only`
+- `reattach_with_live_value_and_slice`
+- `covariant_roundtrip_witness_only`
+- `invariant_roundtrip_witness_only`
+- `continuation_binds_cart_coherent_value_via_map`
+- `invariant_same_brand_mutation`
 
 **`pin_deref` — raw heap-pin deref** ([src/machine/core/reattach.rs](../src/machine/core/reattach.rs))
 — the one audited raw heap-pin deref, materializing a `&'x T` from an `Rc`-pinned `*const T` (the
@@ -248,10 +262,10 @@ ancestor). As a thin-value `Erased` carrier its erase → reattach round-trip is
 exercises the full carrier through a MATCH arm's `-> :T` carried across tail recursion. No separate
 minimal test.
 
-**`ReturnContract` re-attach — Done-boundary vend** ([src/scheduler/erase.rs](../src/scheduler/erase.rs))
-— the contract reattach now routes the scheduler's `vend_carrier` (the safe-signature wrapper over
-`Erased::reattach`), called from the run loop's Done arm; the `unsafe` lives in `vend_carrier`, not in
-`finalize.rs`. It re-anchors the contract against the producer cart `frame` witnesses;
+**`ReturnContract` re-attach — Done-boundary vend** ([src/witnessed.rs](../src/witnessed.rs))
+— the contract reattach routes `vend_carrier` (the safe-signature wrapper over `Erased::reattach`),
+called from the run loop's Done arm; the `unsafe` lives in `vend_carrier`, not in `finalize.rs`. It
+re-anchors the contract against the producer cart `frame` witnesses;
 `erased_roundtrip_and_helpers` (and end-to-end `recursive_tagged_match_no_uaf`) pins it. No separate
 minimal test.
 
@@ -270,7 +284,7 @@ read.
 
 - `erased_continuation_reattach_roundtrip`
 
-**Carrier re-attach — `vend_carrier` scheduler vend** ([src/scheduler/erase.rs](../src/scheduler/erase.rs))
+**Carrier re-attach — `vend_carrier` scheduler vend** ([src/witnessed.rs](../src/witnessed.rs))
 — the `unsafe { erased.reattach() }` inside `vend_carrier` runs the transmute defined in the group
 above with none of its own, re-anchoring each slot's continuation (in `run_step`) and contract (at the
 Done boundary) against the held cart witness; the same `erased_continuation_reattach_roundtrip` (and
@@ -305,47 +319,28 @@ point (and transitively by user-fn TCO; that path is covered by the MATCH-on-
 - `lift_park_minimal_program_for_miri`
 - `replay_park_minimal_program_for_miri`
 
-**`Outcome` step-lifetime reattach** ([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs)) —
-the lifetime-only transmutes that remain after the decide surface collapsed to a single cart-scale
-lifetime: `deps_at_step` (re-anchors consumer-pull dep terminals to the cart-witnessed lifetime the
-continuation runs at) and `pin_carried_to_run` (re-anchors a `'node` read up to `'run` for the
-run-global root drain — its sole caller, `interpret.rs`). `Outcome` is single-lifetime, so the
-splice slot and dep value share one lifetime — no up/down decide-surface bridge — and a Done terminal
-is finalized at the step lifetime within its own step. The `Carried` *storage* erase / read re-anchor itself lives in the
-scheduler (`node_store.rs`, group below), not here.
-All are exercised by every program; this test pins the hardest shape directly — a tail-chain
-return-type **coarsening**, where the re-tagged terminal must be homed in the contract's scope to
-outlive the reused producer frame, then re-read after the run drains the root into the run region.
+**`Carried` slot read + dep re-anchor — `Witnessed::read` / `reattach_with`** ([src/scheduler/node_store.rs](../src/scheduler/node_store.rs))
+— the scheduler stores a finalized terminal as a `Witnessed<W::Value, Option<Rc<W::Cart>>>` bundling
+the erased value with its producer-frame `Rc`, and `read_result` / `read` / `read_result_with_frame`
+hand it back through the **safe** `Witnessed::read` (the borrow-bounded accessor in the `witnessed`
+group above): `free_one` / `finalize` need `&mut self`, so the frame cannot drop while a read borrow
+is live, so the re-anchored lifetime cannot outlive the backing region. The consumer-pull dep
+re-anchor `deps_at_step` (cart-witnessed) and the frameless `read_lifted` re-anchor (`dest`-witnessed)
+are likewise safe `reattach_slice_with` / `reattach_with`. `node_store.rs`'s own residual `unsafe` is
+only the test-family `Reattachable` markers. Exercised end-to-end by every scheduler-driving program;
+the listed test pins the hardest shape — a tail-chain return-type **coarsening** re-homed in the
+contract's scope, re-read after the run drains the root into the run region.
 
 - `tail_call_stamps_result_against_first_callers_return_contract`
 
-**`Carried` re-attach — scheduler slot read** ([src/scheduler/node_store.rs](../src/scheduler/node_store.rs))
-— the scheduler stores a finalized terminal erased to `'static` (`Erased<W::Value>`) and re-anchors
-it on read (`read_result` / `read` / `read_result_with_frame`) to the read's own `&self` borrow,
-witnessed by the slot's co-stored producer-frame `Rc`: `free_one` / `finalize` need `&mut self`, so
-the frame cannot drop while a read borrow is live, so the re-anchored lifetime cannot outlive the
-backing region. The generic `retype` primitive (`erase.rs` group above) does the transmute; these are
-its stored-carrier consumers. Exercised end-to-end by every scheduler-driving program — every dep
-delivery and top-level read routes a re-anchor — and pinned by
-`tail_call_stamps_result_against_first_callers_return_contract`. No separate minimal test.
-
-**`Carried` re-attach — consumer-pull dep lift** ([src/machine/execute/runtime.rs](../src/machine/execute/runtime.rs))
-— `KoanRuntime::read_lifted` re-anchors a producer's scheduler read (`'node`) to the destination
-*node* lifetime `'o` — the consumer scope's region, bounded by the active frame `Rc` cloned in
-`run_step` — then the `NodeLift` copy relocates it into that region. Node-to-node, not a `'run`
-fabrication: the held producer-frame `Rc` (framed) / the run region (frameless) pins the read for the
-copy, and the lift self-anchors the result via the embedded `Rc`. The `Outcome::Forward` ready path
-(`apply_outcome`) routes the same primitive: it pulls the producer terminal through `read_lifted`
-into the consumer scope region, then shortens the node value to the uniform `NodeStep` step lifetime
-`'s` (a node→step reattach, the value frame-pinned for all of `'s`). Same `retype` primitive as the
-`erase.rs` group. Exercised end-to-end by the lift/park slate tests
-(`lift_park_minimal_program_for_miri`, `recursive_tagged_match_no_uaf`, …). No separate minimal test.
-
-**`Carried` re-attach — test-only terminal extraction** ([src/builtins/test_support.rs](../src/builtins/test_support.rs))
-— `extract_terminal` widens the scheduler's `'node` read to the scope lifetime for test helpers
-(`run_one` / `run_one_type` and peers) that return a top-level result: a frameless terminal living in
-the scope region, which outlives the local scheduler. Test scaffolding, not runtime; exercised under
-Miri by every `run_one`-based test. No separate minimal test.
+**`Carried` re-attach — value relocation fabrication** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
+— `NodeLift::lift` owns the one audited fabrication in the value-relocation path: it re-anchors the
+producer read to the destination region's lifetime so the rebuild allocs into `dest`. There is no
+held witness for a value about to be copied out, but the producer frame `Rc` (`src`) heap-pins the
+value's region across the copy, and `lift_kobject` self-anchors any surviving borrow into `dest` via
+an embedded `Rc`, so the fabricated lifetime is discarded by the copy. Exercised end-to-end by the
+lift/park slate tests (`lift_park_minimal_program_for_miri`, `recursive_tagged_match_no_uaf`, …) —
+every consumer-pull dep delivery and the consumer-less root drain route it. No separate minimal test.
 
 ## Adding tests to the slate
 

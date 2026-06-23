@@ -18,7 +18,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     let template_sig = || {
         sig(
             KType::OfKind(KKind::ProperType),
-            vec![kw("TEMPLATE"), arg("param", KType::OfKind(KKind::ProperType))],
+            vec![
+                kw("TEMPLATE"),
+                arg("param", KType::OfKind(KKind::ProperType)),
+            ],
         )
     };
     // Infix `<sig> WITH {Slot = Type, …}`. A lone binary

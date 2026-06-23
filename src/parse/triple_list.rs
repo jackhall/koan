@@ -86,7 +86,9 @@ mod tests {
     fn type_named_pair<'a>() -> KExpression<'a> {
         KExpression::new(vec![
             Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Ty".into()))),
-            Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Signature".into()))),
+            Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf(
+                "Signature".into(),
+            ))),
         ])
     }
 

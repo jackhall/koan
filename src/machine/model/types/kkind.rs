@@ -62,7 +62,9 @@ impl KKind {
     pub fn admits(self, other: KKind) -> bool {
         use KKind::*;
         match self {
-            ProperType | AnyType => matches!(other, ProperType | Tagged | NewType | TypeConstructor),
+            ProperType | AnyType => {
+                matches!(other, ProperType | Tagged | NewType | TypeConstructor)
+            }
             Module => other == Module,
             Signature => other == Signature,
             Tagged => other == Tagged,
@@ -76,7 +78,10 @@ impl KKind {
     /// `OfKind(Tagged)` slot out-specifies an `OfKind(ProperType)` sibling.
     pub fn strictly_below(self, other: KKind) -> bool {
         use KKind::*;
-        matches!((self, other), (Tagged | NewType | TypeConstructor, ProperType))
+        matches!(
+            (self, other),
+            (Tagged | NewType | TypeConstructor, ProperType)
+        )
     }
 
     /// Surface keyword rendered in diagnostics and type-name printing.

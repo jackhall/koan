@@ -11,12 +11,12 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::model::Carried;
-use crate::machine::{KError, KErrorKind, NodeId, KoanRegion};
+use crate::machine::{KError, KErrorKind, KoanRegion, NodeId};
 use crate::scheduler::vend_carrier;
 
 use super::dispatch::{reattach_node_scope, SchedulerView};
 use super::finalize::NodeFinalize;
-use super::nodes::{NodeFrame, Node, NodePayload, NodeScope, NodeStep, NodeWork};
+use super::nodes::{Node, NodeFrame, NodePayload, NodeScope, NodeStep, NodeWork};
 use super::outcome::deps_at_step;
 use super::runtime::{KoanRuntime, KoanWorkload};
 use super::NodeContinuation;
@@ -131,11 +131,11 @@ impl<'run> KoanRuntime<'run> {
         // The pull-lifted values die with this consumer's frame; deliver them at that `'s`.
         let outcome = continuation(
             &SchedulerView::new(&self.sched, &self.ambient),
-            deps_at_step(&results),
+            deps_at_step(&results, &continuation_witness),
             idx,
         );
         self.sched.reclaim_deps(idx, owned_indices);
-        let step = self.apply_outcome(outcome, idx);
+        let step = self.apply_outcome(outcome, idx, &continuation_witness);
         // The post-step token owns the slot's frame at step end and is the *only* source of the
         // step scope (via `post.payload()`), so the wrong-frame read that ambient `active_frame`
         // allowed is unspellable here.

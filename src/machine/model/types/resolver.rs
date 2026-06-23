@@ -80,7 +80,10 @@ impl<'b, 'a> Elaborator<'b, 'a> {
 /// fixture scopes that skip builtin registration still resolve builtin names.
 /// Parameterized shapes (`:(LIST OF X)`, `:(MAP K -> V)`) no longer reach this
 /// walk — they sub-Dispatch through the standalone dispatcher.
-pub fn elaborate_type_identifier<'a>(el: &mut Elaborator<'_, 'a>, t: &TypeIdentifier) -> ElabResult<'a> {
+pub fn elaborate_type_identifier<'a>(
+    el: &mut Elaborator<'_, 'a>,
+    t: &TypeIdentifier,
+) -> ElabResult<'a> {
     let name = t.as_str();
     if el.threaded.contains(name) {
         // Self / forward-sibling reference inside a type-definition body: a transient

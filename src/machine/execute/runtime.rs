@@ -36,7 +36,7 @@ use super::{
     catch_continuation, ignore_results, short_circuit, CatchFinish, ContinuationFamily, DepFinish,
 };
 use crate::machine::model::values::CarriedFamily;
-use crate::scheduler::{reattach_value, Scheduler, Workload};
+use crate::scheduler::{reattach_with, Scheduler, Workload};
 
 mod interpret;
 mod submit;
@@ -111,29 +111,23 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Pull a dep's terminal lifted into `dest` (consumer-pull): a framed terminal is copied out of
-    /// its producer frame, a frameless / run-region terminal is forwarded as-is. The `unsafe` reattach
-    /// is internal — the slot's co-stored frame `Rc` / run region pins the value for the transient
-    /// read, and the lift copies it into `dest` — so the run loop's dep collection stays safe.
+    /// its producer frame by `lift` (which owns the producer read's re-anchor — see its docs), a
+    /// frameless / run-region terminal is re-anchored to `dest` and forwarded as-is. Both are safe
+    /// here: the frameless re-anchor is a `reattach_with` witnessed by the `dest` borrow, and the
+    /// framed copy delegates its one audited fabrication to `lift`.
     pub(in crate::machine::execute) fn read_lifted<'o>(
         &self,
         dep: NodeId,
         dest: &'o crate::machine::core::KoanRegion,
     ) -> Result<crate::machine::model::Carried<'o>, KError> {
         match self.sched.read_result_with_frame(dep) {
-            // Re-anchor the scheduler's `'node` read to the destination *node* lifetime `'o` (the
-            // consumer scope's region, bounded by the held consumer-frame `Rc`), then lift it into
-            // `dest`. The held producer frame `Rc` witnesses the framed re-anchor (the lift
-            // self-anchors the copy via the embedded `Rc`); a frameless terminal lives in a run region
-            // that outlives `'o`. Node-scale — no `'run` fabrication.
-            // SAFETY: `'node` and `'o` are both pinned for the read+lift by the held producer frame
-            // `Rc` (Some) / the run region (None); the carrier is invariant, so the lifetime-only
-            // re-anchor routes `reattach_value`.
-            Ok((value, Some(frame))) => Ok(self.lift(
-                unsafe { reattach_value::<CarriedFamily>(value) },
-                &frame,
-                dest,
-            )),
-            Ok((value, None)) => Ok(unsafe { reattach_value::<CarriedFamily>(value) }),
+            // Framed: copy the producer-frame value into `dest`; `lift` owns the re-anchor (the copy
+            // discards the producer read's lifetime, `src` pins it for the copy) — no caller reattach.
+            Ok((value, Some(frame))) => Ok(self.lift(value, &frame, dest)),
+            // Frameless: the value already lives in a run region that outlives `'o` — a strict
+            // ancestor of `dest` — so re-anchor it to `dest`'s lifetime witnessed by the `dest`
+            // borrow, no copy. `reattach_with`'s safe signature bounds `'o` to that borrow.
+            Ok((value, None)) => Ok(reattach_with::<CarriedFamily, _>(value, dest)),
             Err(e) => Err(e.clone()),
         }
     }
@@ -369,11 +363,18 @@ impl<'run> KoanRuntime<'run> {
     /// Interpret an [`Outcome`] into the scheduler effect it names and return the slot's
     /// [`NodeStep`]. This is the sole graph writer the dispatch side reaches — a decide handler
     /// never holds `&mut Scheduler`.
-    pub(in crate::machine::execute) fn apply_outcome<'step>(
+    pub(in crate::machine::execute) fn apply_outcome<'step, 'w>(
         &mut self,
         outcome: Outcome<'step>,
         idx: usize,
-    ) -> NodeStep<'step> {
+        // The caller's step-held cart `Rc`, borrowed for the whole step (`'w: 'step`), so the
+        // `Outcome::Forward` node→step re-anchor below is a safe `reattach_with` rather than a
+        // fabrication: the cart pins the pulled value's region for all of `'step`.
+        witness: &'w Rc<CallFrame>,
+    ) -> NodeStep<'step>
+    where
+        'w: 'step,
+    {
         match outcome {
             // The terminal stays at the step lifetime `'s` — the run loop's `run_step` finalizes it
             // into the slot store (erasing it) before the step's frame witness drops, so it never
@@ -511,12 +512,11 @@ impl<'run> KoanRuntime<'run> {
                     let dest =
                         reattach_node_scope(&payload.scope, self.ambient.active_frame_ref()).region;
                     let pulled = self.read_lifted(producer, dest);
-                    // Shorten the node value to the uniform `NodeStep` step lifetime `'s`: it lives
-                    // in `dest`, which the active cart pins for all of `'s`. A node→step reattach,
-                    // not a `'run` fabrication.
-                    // SAFETY: the value lives in `dest` ⊇ `'s`; lifetime-only reattach of an
-                    // invariant carrier.
-                    NodeStep::Done(pulled.map(|v| unsafe { reattach_value::<CarriedFamily>(v) }))
+                    // Shorten the node value to the uniform `NodeStep` step lifetime `'s`: it lives in
+                    // `dest`, which the caller's step-held cart `witness` pins for all of `'s` (`'w:
+                    // 's`), so this is a safe `reattach_with` — its signature bounds `'s` to the
+                    // witness borrow.
+                    NodeStep::Done(pulled.map(|v| reattach_with::<CarriedFamily, _>(v, witness)))
                 } else {
                     // Not ready: `NodeStep::Alias` drives `splice_forward` (move consumers onto the
                     // producer + alias the slot) in the execute loop.

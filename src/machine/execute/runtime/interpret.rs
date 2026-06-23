@@ -7,7 +7,6 @@
 use super::KoanRuntime;
 use crate::builtins::default_scope;
 use crate::machine::execute::lift::NodeLift;
-use crate::machine::execute::outcome::pin_carried_to_run;
 use crate::machine::model::ast::KExpression;
 use crate::machine::{KError, KErrorKind, KoanRegion, Scope};
 use crate::parse::{parse, parse_with_path};
@@ -62,10 +61,10 @@ impl<'run> KoanRuntime<'run> {
         for &id in &top_level {
             if let Ok((value, Some(frame))) = self.sched.read_result_with_frame(id) {
                 // The scheduler hands back the value re-anchored to this `&self` borrow. A
-                // consumer-less root has no pull-lift to node-scale it, so this is the one genuine
-                // `'run` re-home: `pin_carried_to_run` re-anchors the read up to the run-global root
-                // region. The lifted root is handed back live — the scheduler re-erases it for storage.
-                let lifted = self.lift(pin_carried_to_run(value), &frame, root.region);
+                // consumer-less root has no pull-lift to node-scale it, so this `'run` re-home copies
+                // it into the run-global root region via `lift` (which owns the read's re-anchor). The
+                // lifted root is handed back live — the scheduler re-erases it for storage.
+                let lifted = self.lift(value, &frame, root.region);
                 self.sched.rehome_terminal(id, Ok(lifted));
             }
         }

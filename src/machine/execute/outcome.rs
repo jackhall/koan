@@ -20,9 +20,11 @@
 use crate::machine::core::kfunction::action::{Dep, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::ScopeId;
-use crate::machine::model::values::{Carried, CarriedFamily, KObject, ResultCarriedFamily};
+use crate::machine::model::values::{Carried, KObject, ResultCarriedFamily};
+use std::rc::Rc;
+
 use crate::machine::{KError, NodeId, TraceFrame};
-use crate::scheduler::{reattach_slice, reattach_value, Reattachable};
+use crate::scheduler::{reattach_slice_with, Reattachable};
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
 use super::nodes::NodeWork;
@@ -214,27 +216,15 @@ pub(in crate::machine::execute) fn ignore_results<'a>(
     Box::new(move |view, _results, idx| resume(view, idx))
 }
 
-/// Reattach a step-bound `'step` terminal up to `'run` for storage in the slot table. The value is
-/// born in the producer's per-call frame (or is genuinely `'run`-lived), and the harness pins that
-/// frame's `Rc` alongside the terminal in the scheduler's finalized-slot state until the slot is
-/// freed, so the stored `'run` view cannot outlive its backing region. The reattach is needed only
-/// because `Carried` is invariant; this is the held-`Rc` re-exposure seam.
-pub(in crate::machine::execute) fn pin_carried_to_run<'run>(value: Carried<'_>) -> Carried<'run> {
-    // SAFETY: lifetime-only reattach; the frame `Rc` co-stored in `SlotState::Done` heap-pins the
-    // backing region for as long as the terminal is readable. See the doc comment.
-    unsafe { reattach_value::<CarriedFamily>(value) }
-}
-
-/// Reattach the consumer's pull-lifted dep terminals to the cart-scale lifetime `'step` the
+/// Reattach the consumer's pull-lifted dep terminals to the cart-scale lifetime `'w` the
 /// continuation runs at. Each value was just copied into this consumer's per-call frame and dies
-/// with it; the reattach is needed only because `Carried` is invariant, so a lifetime-only re-anchor
-/// to the lifetime the cart `Rc` witnesses is sound.
-pub(in crate::machine::execute) fn deps_at_step<'b, 'run, 'step>(
-    results: &'b [Result<Carried<'run>, KError>],
-) -> &'b [Result<Carried<'step>, KError>] {
-    // SAFETY: lifetime-only reattach of an invariant carrier to the cart-witnessed lifetime the
-    // values genuinely live at (they die with the consumer frame). See the doc comment.
-    unsafe { reattach_slice::<ResultCarriedFamily>(results) }
+/// with it, so re-anchoring to the lifetime the cart `Rc` `witness` pins is sound — a safe
+/// `reattach_slice_with` whose `'w` cannot outrun the witness borrow.
+pub(in crate::machine::execute) fn deps_at_step<'b, 'w, F>(
+    results: &'b [Result<Carried<'_>, KError>],
+    witness: &'w Rc<F>,
+) -> &'b [Result<Carried<'w>, KError>] {
+    reattach_slice_with::<ResultCarriedFamily, _>(results, witness)
 }
 
 #[cfg(test)]

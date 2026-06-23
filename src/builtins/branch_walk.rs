@@ -8,7 +8,7 @@
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::KType;
-use crate::machine::{KError, KErrorKind, TypeIdentifierResolution, Scope};
+use crate::machine::{KError, KErrorKind, Scope, TypeIdentifierResolution};
 use std::rc::Rc;
 
 /// Read the MATCH / TRY `-> :T` slot from `ctx.args` (resolving a forward-referenced bare name
@@ -20,15 +20,17 @@ pub(crate) fn resolve_arm_contract<'a>(
 ) -> Result<ReturnContract<'a>, KError> {
     use crate::machine::core::kfunction::action::arg_type;
     let ret_kt = match arg_type(ctx.args, "return_type") {
-        Some(KType::Unresolved(te)) => match ctx.scope.resolve_type_identifier(te, ctx.chain.clone()) {
-            TypeIdentifierResolution::Done(kt) => kt.clone(),
-            _ => KType::from_name(&te.render()).ok_or_else(|| {
-                KError::new(KErrorKind::ShapeError(format!(
-                    "{kind} return type `{}` is not a known type",
-                    te.render()
-                )))
-            })?,
-        },
+        Some(KType::Unresolved(te)) => {
+            match ctx.scope.resolve_type_identifier(te, ctx.chain.clone()) {
+                TypeIdentifierResolution::Done(kt) => kt.clone(),
+                _ => KType::from_name(&te.render()).ok_or_else(|| {
+                    KError::new(KErrorKind::ShapeError(format!(
+                        "{kind} return type `{}` is not a known type",
+                        te.render()
+                    )))
+                })?,
+            }
+        }
         Some(other) => other.clone(),
         None => {
             return Err(KError::new(KErrorKind::MissingArg(

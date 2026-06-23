@@ -16,6 +16,7 @@ use std::rc::Rc;
 
 use super::nodes::{Node, NodeWork};
 use super::{Erased, FramedRead, Live, NodeId, Workload};
+use crate::witnessed::Witnessed;
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -55,18 +56,23 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
     }
 }
 
+/// A finalized value terminal: the erased inter-node value bundled with the producer frame `Rc` that
+/// backs it (`None` for a frameless / run-region value). Read back through `Witnessed::read`.
+type FinalizedValue<W> = Witnessed<<W as Workload>::Value, Option<Rc<<W as Workload>::Cart>>>;
+
 enum SlotState<W: Workload> {
     PreRun(Node<W>),
     /// Node payload has been moved out by `take_for_run`. A matching
     /// `reinstall` / `finalize` / `free_one` exits this state.
     Running,
-    /// A finalized terminal, plus the producer frame `Rc` that backs it (`None` for a frameless /
-    /// run-region value). The value is stored erased to `'static` — a read re-anchors it to the read
-    /// borrow. Holding the frame `Rc` here pins the producer's per-call memory until the slot is
-    /// freed, so frame death moves from Done to free and a read's re-anchored lifetime cannot
-    /// outlive the backing region. The pin is established now and read by the consumer-pull lift,
-    /// which copies the terminal out of this frame into the consumer's.
-    Done(Result<Erased<W::Value>, W::Error>, Option<Rc<W::Cart>>),
+    /// A finalized terminal: a [`Witnessed`] bundling the value (erased to `'static`) with the
+    /// producer frame `Rc` that backs it (`None` for a frameless / run-region value). A read
+    /// re-anchors the value to the read borrow through `Witnessed::read`, witnessed by the bundled
+    /// frame. Holding the frame `Rc` inside the carrier pins the producer's per-call memory until the
+    /// slot is freed, so frame death moves from Done to free and a read's re-anchored lifetime cannot
+    /// outlive the backing region. The pin is read by the consumer-pull lift, which copies the
+    /// terminal out of this frame into the consumer's. The error carries no frame (it owns its data).
+    Done(Result<FinalizedValue<W>, W::Error>),
     /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
     /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
     /// slot's consumers were moved onto `producer`'s notify list at splice time, so `producer`'s
@@ -151,7 +157,11 @@ impl<W: Workload> NodeStore<W> {
             matches!(self.slots[id], SlotState::Done(..)),
             "rehome_terminal expects a finalized slot",
         );
-        self.slots[id] = SlotState::Done(output.map(Erased::erase), None);
+        self.slots[id] = SlotState::Done(
+            output
+                .map(Erased::erase)
+                .map(|e| Witnessed::from_erased(e, None)),
+        );
     }
 
     /// Callers must pair this with the dep-graph notify-walk so consumers
@@ -163,9 +173,15 @@ impl<W: Workload> NodeStore<W> {
         output: Result<Live<'_, W>, W::Error>,
         frame: Option<Rc<W::Cart>>,
     ) {
-        // Erase the live terminal to `'static` for storage; the co-stored frame `Rc` pins its
-        // backing region until the slot frees, so a later read can re-anchor it soundly.
-        self.slots[id] = SlotState::Done(output.map(Erased::erase), frame);
+        // Bundle the live terminal with its producer frame into a `Witnessed`: the value is erased to
+        // `'static` for storage and the co-stored frame `Rc` pins its backing region until the slot
+        // frees, so a later `read` can re-anchor it soundly. On `Err` the frame is dropped now — the
+        // error owns its data and needs no pin.
+        self.slots[id] = SlotState::Done(
+            output
+                .map(Erased::erase)
+                .map(|e| Witnessed::from_erased(e, frame)),
+        );
     }
 
     /// Idempotent on already-`Free` slots when paired with the cascade-free
@@ -195,12 +211,11 @@ impl<W: Workload> NodeStore<W> {
     /// their parent. Raw — callers pass an already alias-resolved id.
     pub(super) fn read_result(&self, id: NodeId) -> Result<Live<'_, W>, &W::Error> {
         match &self.slots[id] {
-            // SAFETY: the re-anchored value lives in the slot's co-stored frame `Rc` (or the run
-            // region for a frameless terminal); `free_one`/`finalize` need `&mut self`, so for the
-            // whole `&self` borrow the frame cannot drop, so the read borrow cannot outlive the
-            // backing region. The erased carrier is `Copy`, copied out before re-anchoring.
-            &SlotState::Done(Ok(c), _) => Ok(unsafe { c.reattach() }),
-            SlotState::Done(Err(e), _) => Err(e),
+            // `Witnessed::read` re-anchors the carrier to this `&self` borrow, bounded by the bundled
+            // frame `Rc`: `free_one`/`finalize` need `&mut self`, so for the whole `&self` borrow the
+            // frame cannot drop, so the read borrow cannot outlive the backing region.
+            SlotState::Done(Ok(w), ..) => Ok(w.read()),
+            SlotState::Done(Err(e), ..) => Err(e),
             _ => panic!("result must be ready by the time it's read"),
         }
     }
@@ -210,23 +225,20 @@ impl<W: Workload> NodeStore<W> {
     /// copies the value out of that frame into the consumer's region before the producer slot frees.
     pub(super) fn read_result_with_frame(&self, id: NodeId) -> FramedRead<'_, W> {
         match &self.slots[id] {
-            // SAFETY: as `read_result` — the value is re-anchored to the `&self` read borrow, over
-            // which the co-stored frame `Rc` (cloned out here for the consumer-pull lift) pins the
-            // backing region.
-            SlotState::Done(Ok(c), frame) => Ok((unsafe { c.reattach() }, frame.clone())),
-            SlotState::Done(Err(e), _) => Err(e),
+            // `read` re-anchors to the `&self` read borrow; the bundled frame `Rc` (cloned out here
+            // for the consumer-pull lift) pins the backing region over that borrow.
+            SlotState::Done(Ok(w), ..) => Ok((w.read(), w.witness().clone())),
+            SlotState::Done(Err(e), ..) => Err(e),
             _ => panic!("result must be ready by the time it's read"),
         }
     }
 
     pub(super) fn read(&self, id: NodeId) -> Live<'_, W> {
         match &self.slots[id] {
-            // SAFETY: as `read_result`. Matched directly (not via `read_result`) so the re-anchored
-            // borrow is this method's own `&self`, sidestepping the invariant-GAT reborrow nest.
-            &SlotState::Done(Ok(c), _) => unsafe { c.reattach() },
+            SlotState::Done(Ok(w), ..) => w.read(),
             // The scheduler stores the opaque error but never inspects it, so the misuse panic
             // names the node, not the error value.
-            SlotState::Done(Err(_), _) => panic!("read called on errored node"),
+            SlotState::Done(Err(_), ..) => panic!("read called on errored node"),
             _ => panic!("result must be ready by the time it's read"),
         }
     }
@@ -292,7 +304,11 @@ impl<W: Workload> NodeStore<W> {
 
     #[cfg(test)]
     pub(super) fn set_result(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {
-        self.slots[id] = SlotState::Done(output.map(Erased::erase), None);
+        self.slots[id] = SlotState::Done(
+            output
+                .map(Erased::erase)
+                .map(|e| Witnessed::from_erased(e, None)),
+        );
     }
 
     #[cfg(test)]

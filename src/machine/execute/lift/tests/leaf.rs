@@ -68,7 +68,9 @@ fn kfunction_with_foreign_runtime_does_not_anchor() {
         },
         Body::Builtin(|ctx| {
             crate::machine::core::kfunction::action::Action::Done(Ok(
-                crate::machine::model::Carried::Object(ctx.scope.region.alloc_object(KObject::Null)),
+                crate::machine::model::Carried::Object(
+                    ctx.scope.region.alloc_object(KObject::Null),
+                ),
             ))
         }),
         scope,

@@ -46,7 +46,10 @@ pub fn body<'a>(
         param_names: vec![param],
     });
     let set = Rc::new(RecursiveSet::new(vec![member]));
-    let kt = ctx.scope.region.alloc_ktype(KType::SetRef { set, index: 0 });
+    let kt = ctx
+        .scope
+        .region
+        .alloc_ktype(KType::SetRef { set, index: 0 });
     Action::Done(Ok(Carried::Type(kt)))
 }
 

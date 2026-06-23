@@ -338,7 +338,12 @@ impl<'a> Bindings<'a> {
     /// Insert `(te → kt)` into the resolution cache. Caller region-allocates
     /// `kt` and gates on finalize. Monotonic: a collision means equal values,
     /// so we keep the existing entry rather than panic.
-    pub fn type_identifier_memo_insert(&self, te: TypeIdentifier, cutoff: Option<usize>, kt: &'a KType<'a>) {
+    pub fn type_identifier_memo_insert(
+        &self,
+        te: TypeIdentifier,
+        cutoff: Option<usize>,
+        kt: &'a KType<'a>,
+    ) {
         let mut memo = self.type_identifier_memo.borrow_mut();
         memo.entry((te, cutoff)).or_insert(kt);
     }

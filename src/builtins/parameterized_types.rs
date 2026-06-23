@@ -198,7 +198,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "LIST",
         sig(
             KType::OfKind(KKind::AnyType),
-            vec![kw("LIST"), kw("OF"), arg("elem", KType::OfKind(KKind::AnyType))],
+            vec![
+                kw("LIST"),
+                kw("OF"),
+                arg("elem", KType::OfKind(KKind::AnyType)),
+            ],
         ),
         action_bodies::body_list_of,
     );

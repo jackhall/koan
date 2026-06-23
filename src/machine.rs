@@ -12,10 +12,10 @@ pub mod model;
 
 pub use core::kfunction::{Body, KFunction, NodeId};
 pub use core::{
-    BindingIndex, Bindings, CallFrame, FunctionLookup, KError, KErrorKind, KFuture, LexicalFrame,
-    Resolution, KoanRegion, Scope, ScopeId, ScopeKind, TraceFrame,
+    BindingIndex, Bindings, CallFrame, FunctionLookup, KError, KErrorKind, KFuture, KoanRegion,
+    LexicalFrame, Resolution, Scope, ScopeId, ScopeKind, TraceFrame,
 };
 pub use execute::{
     interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime, NameOutcome,
-    ResolveOutcome, TypeIdentifierResolution, Resolved,
+    ResolveOutcome, Resolved, TypeIdentifierResolution,
 };

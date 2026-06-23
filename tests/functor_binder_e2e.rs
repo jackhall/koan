@@ -23,7 +23,7 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{KObject, KType, SignatureElement};
-use koan::machine::{KFunction, KoanRuntime, KoanRegion, Scope};
+use koan::machine::{KFunction, KoanRegion, KoanRuntime, Scope};
 use koan::parse::parse;
 
 /// Shared `Write` adapter — every test here drops PRINT output (the smoke

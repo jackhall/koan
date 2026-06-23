@@ -194,7 +194,10 @@ fn hash_agrees_with_eq_for_region_free_variants() {
         (KType::Null, KType::Null),
         (KType::Identifier, KType::Identifier),
         (KType::KExpression, KType::KExpression),
-        (KType::OfKind(KKind::ProperType), KType::OfKind(KKind::ProperType)),
+        (
+            KType::OfKind(KKind::ProperType),
+            KType::OfKind(KKind::ProperType),
+        ),
         (KType::OfKind(KKind::AnyType), KType::OfKind(KKind::AnyType)),
         (KType::Any, KType::Any),
         (KType::OfKind(KKind::Module), KType::OfKind(KKind::Module)),

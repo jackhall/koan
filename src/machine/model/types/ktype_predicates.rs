@@ -23,7 +23,9 @@ impl<'a> KType<'a> {
         matches!(
             self,
             KType::Signature { .. }
-                | KType::OfKind(KKind::ProperType | KKind::AnyType | KKind::Module | KKind::Signature)
+                | KType::OfKind(
+                    KKind::ProperType | KKind::AnyType | KKind::Module | KKind::Signature
+                )
         )
     }
 
@@ -381,9 +383,11 @@ impl<'a> KType<'a> {
             },
             KType::Dict(k_ty, v_ty) => match part {
                 ExpressionPart::DictLiteral(_) => true,
-                ExpressionPart::Spliced(Carried::Object(KObject::Dict(_, carried_k, carried_v))) => {
-                    k_ty.satisfied_by(carried_k) && v_ty.satisfied_by(carried_v)
-                }
+                ExpressionPart::Spliced(Carried::Object(KObject::Dict(
+                    _,
+                    carried_k,
+                    carried_v,
+                ))) => k_ty.satisfied_by(carried_k) && v_ty.satisfied_by(carried_v),
                 _ => false,
             },
             // Mirrors the List/Dict split: an unevaluated record literal admits

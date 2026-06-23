@@ -39,7 +39,7 @@ fn sched_read_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -
     sched.execute().expect("scheduler should succeed");
     // The frameless top-level terminal outlives the local `sched`; widen the scheduler's `'node`
     // read to the scope lifetime (see `test_support::extract_terminal`).
-    crate::builtins::test_support::extract_terminal(&sched, id)
+    crate::builtins::test_support::extract_terminal(&sched, scope, id)
 }
 
 /// Accepts one Number arg and returns it unchanged. The signature is `<n :Number>`

@@ -22,10 +22,10 @@ pub enum Carried<'a> {
 }
 
 /// `Reattachable` family for [`Carried`] — the value channel's erase/reattach owner. It is the
-/// `Workload::Value` the scheduler stores erased (`Erased<CarriedFamily>`) and re-anchors on read,
-/// and the family the transient `pin_carried_to_run` / `deps_at_step` re-anchors route.
-/// Layout-invariant: a `Carried<'a>` is two `&'a` references, whose representation does not depend
-/// on `'a`.
+/// `Workload::Value` the scheduler stores in a `Witnessed<CarriedFamily, _>` slot and re-anchors on
+/// read (`Witnessed::read`), and the family the transient `reattach_with` / `deps_at_step` re-anchors
+/// route. Layout-invariant: a `Carried<'a>` is two `&'a` references, whose representation does not
+/// depend on `'a`.
 pub struct CarriedFamily;
 
 // SAFETY: `Carried<'r>` is one type generic only in `'r`; its layout (two pointers) is identical
