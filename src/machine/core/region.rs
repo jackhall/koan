@@ -19,7 +19,7 @@ use std::ptr::NonNull;
 use typed_arena::Arena;
 
 use super::reattach::pin_deref;
-use crate::scheduler::{erase_to_static, Reattachable};
+use crate::scheduler::{erase_to_static, reattach_ref, Reattachable};
 
 /// A workload's declaration of what a [`Region`] stores for it. `Storage` is the bundle of
 /// typed sub-arenas the frame owns; the workload's [`Stored`] impls project each family out of it.
@@ -124,22 +124,15 @@ impl<W: StorageProfile> Region<W> {
                 return escape_ref.alloc::<K>(value);
             }
         }
-        let stored: &'a mut K::At<'static> =
+        let stored: &'a K::At<'static> =
             K::sub_arena(&self.storage).alloc(erase_to_static::<K>(value));
-        let p: *const K::At<'static> = stored;
         // The post-store hook fires on the final storing frame (this one, after any redirect
         // above), so a recorded address tracks its true owner.
-        K::record_local(self, unsafe { pin_deref(p) });
-        // SAFETY: `At<'static>`/`At<'a>` share layout; re-anchor the `'static` store to the
-        // frame-bounded `'a`. The returned `&'a` cannot outlive `&'a self`, so no `'static`-claiming
-        // reference escapes the frame's own borrow.
-        //
-        // The `'static` → `'a` cast only changes the lifetime parameter, which clippy can't see, so
-        // it reads as a no-op cast despite being load-bearing.
-        #[allow(clippy::unnecessary_cast)]
-        unsafe {
-            &*(p as *const K::At<'a>)
-        }
+        K::record_local(self, stored);
+        // SAFETY: re-anchor the `'static` store to the frame-bounded `'a` through the audited
+        // `reattach_ref` retype rather than an open-coded raw deref. The returned `&'a` cannot
+        // outlive `&'a self`, so no `'static`-claiming reference escapes the frame's own borrow.
+        unsafe { reattach_ref::<K>(stored) }
     }
 }
 

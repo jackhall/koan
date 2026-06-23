@@ -3,7 +3,7 @@
 <!-- slate-fingerprint
 src/machine/core/arena.rs: 3
 src/machine/core/reattach.rs: 2
-src/machine/core/region.rs: 3
+src/machine/core/region.rs: 2
 src/machine/core/scope_ptr.rs: 2
 src/machine/execute/dispatch/ctx.rs: 1
 src/machine/execute/lift.rs: 1
@@ -361,9 +361,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-23: 104s — 30 tests, 0 leaks, 0 UB
 - 2026-06-23: 106s — 30 tests, 0 leaks, 0 UB
 - 2026-06-23: 103s — 30 tests, 0 leaks, 0 UB
 - 2026-06-23: 104s — 30 tests, 0 leaks, 0 UB
 - 2026-06-18: 250s — 23 tests, 0 leaks, 0 UB
-- 2026-06-18: 1510s — 26 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
