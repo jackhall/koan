@@ -13,8 +13,8 @@ src/machine/execute/outcome.rs: 3
 src/machine/execute/runtime.rs: 3
 src/machine/execute/runtime/submit.rs: 1
 src/machine/model/values/carried.rs: 2
-src/scheduler/erase.rs: 19
 src/scheduler/node_store.rs: 5
+src/witnessed/mod.rs: 18
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -50,7 +50,7 @@ unsafe and fingerprint-drift checks still fire.
 
 ## The slate
 
-23 tests, grouped by the unsafe site each pins down. Names below are the exact
+28 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -211,19 +211,29 @@ pins it. No separate minimal test.
 against a `YokedChild` slot's own scope, running the same transmute with none of its own; pinned by
 `node_scope_yoked_child_erase_reattach_roundtrip`. No separate minimal test.
 
-**`retype` primitive — `Erased<T>` / `Reattachable`** ([src/scheduler/erase.rs](../src/scheduler/erase.rs))
+**`retype` primitive — `Erased<T>` / `Witnessed<T, W>`** ([src/witnessed/mod.rs](../src/witnessed/mod.rs))
 — the single audited lifetime-retype every carrier family routes: `retype<A, B>` (a
 `transmute_copy` behind a `ManuallyDrop`, the one site `transmute`'s GAT size-proof can't cover),
-reached only through `Erased<T>::erase` / `reattach` (stored carriers) and the `reattach_value` /
-`reattach_ref` / `reattach_slice` transient helpers. The `unsafe impl Reattachable` families declare
-layout-invariance and carry no runtime `unsafe` of their own — they are exercised through this
-primitive: `CarriedFamily` / `ResultCarriedFamily`
+reached through `Erased<T>::erase` / `reattach` and the `reattach_value` / `reattach_ref` /
+`reattach_slice` transient helpers (the witness-less path), and through the two rank-2 `Witnessed`
+accessors `with` (borrow + read) and `map` (consume + transform), which bundle the erased value with
+its liveness `Witness` and brand the fabricated content lifetime so it cannot escape. The
+`unsafe impl Reattachable` families declare layout-invariance and carry no runtime `unsafe` of their
+own — they are exercised through this primitive: `CarriedFamily` / `ResultCarriedFamily`
 ([src/machine/model/values/carried.rs](../src/machine/model/values/carried.rs)), `ContractFamily`,
-`ContFamily`, and `ScopeFamily`. The test erases a borrow-carrying family to the
-`'static` store, re-anchors it, and reads through every entry point, re-reading the first borrow
-after the helper calls to catch a tree-borrows regression.
+`ContFamily`, and `ScopeFamily`. The first test erases a borrow-carrying family to the `'static`
+store, re-anchors it, and reads through every witness-less entry point, re-reading the first borrow
+after the helper calls. The `Witnessed` tests drop the *original* binding and read back only through
+the bundled witness — the load-bearing case for the invariant `Cell<&'r u32>` carrier — and exercise
+`map`'s branded projection (binding a cart-coherent `&'b` value into the invariant scope slot, the
+write `with` rejects). The escape-can't-compile guards are `compile_fail` doctests on `with` / `map`.
 
 - `erased_roundtrip_and_helpers`
+- `witness_borrowed_reattach`
+- `covariant_roundtrip_witness_only`
+- `invariant_roundtrip_witness_only`
+- `continuation_binds_cart_coherent_value_via_map`
+- `invariant_same_brand_mutation`
 
 **`pin_deref` — raw heap-pin deref** ([src/machine/core/reattach.rs](../src/machine/core/reattach.rs))
 — the one audited raw heap-pin deref, materializing a `&'x T` from an `Rc`-pinned `*const T` (the
@@ -248,10 +258,10 @@ ancestor). As a thin-value `Erased` carrier its erase → reattach round-trip is
 exercises the full carrier through a MATCH arm's `-> :T` carried across tail recursion. No separate
 minimal test.
 
-**`ReturnContract` re-attach — Done-boundary vend** ([src/scheduler/erase.rs](../src/scheduler/erase.rs))
-— the contract reattach now routes the scheduler's `vend_carrier` (the safe-signature wrapper over
-`Erased::reattach`), called from the run loop's Done arm; the `unsafe` lives in `vend_carrier`, not in
-`finalize.rs`. It re-anchors the contract against the producer cart `frame` witnesses;
+**`ReturnContract` re-attach — Done-boundary vend** ([src/witnessed/mod.rs](../src/witnessed/mod.rs))
+— the contract reattach routes `vend_carrier` (the safe-signature wrapper over `Erased::reattach`),
+called from the run loop's Done arm; the `unsafe` lives in `vend_carrier`, not in `finalize.rs`. It
+re-anchors the contract against the producer cart `frame` witnesses;
 `erased_roundtrip_and_helpers` (and end-to-end `recursive_tagged_match_no_uaf`) pins it. No separate
 minimal test.
 
@@ -270,7 +280,7 @@ read.
 
 - `erased_continuation_reattach_roundtrip`
 
-**Carrier re-attach — `vend_carrier` scheduler vend** ([src/scheduler/erase.rs](../src/scheduler/erase.rs))
+**Carrier re-attach — `vend_carrier` scheduler vend** ([src/witnessed/mod.rs](../src/witnessed/mod.rs))
 — the `unsafe { erased.reattach() }` inside `vend_carrier` runs the transmute defined in the group
 above with none of its own, re-anchoring each slot's continuation (in `run_step`) and contract (at the
 Done boundary) against the held cart witness; the same `erased_continuation_reattach_roundtrip` (and
@@ -324,7 +334,7 @@ outlive the reused producer frame, then re-read after the run drains the root in
 it on read (`read_result` / `read` / `read_result_with_frame`) to the read's own `&self` borrow,
 witnessed by the slot's co-stored producer-frame `Rc`: `free_one` / `finalize` need `&mut self`, so
 the frame cannot drop while a read borrow is live, so the re-anchored lifetime cannot outlive the
-backing region. The generic `retype` primitive (`erase.rs` group above) does the transmute; these are
+backing region. The generic `retype` primitive (`witnessed` group above) does the transmute; these are
 its stored-carrier consumers. Exercised end-to-end by every scheduler-driving program — every dep
 delivery and top-level read routes a re-anchor — and pinned by
 `tail_call_stamps_result_against_first_callers_return_contract`. No separate minimal test.

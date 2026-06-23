@@ -24,7 +24,6 @@ use nodes::Node;
 use work_queues::WorkQueues;
 
 mod dep_graph;
-mod erase;
 mod lifecycle;
 mod node_id;
 mod node_store;
@@ -34,7 +33,9 @@ mod alloc;
 mod work_queues;
 mod workload;
 
-pub(crate) use erase::{
+// The lifetime-erasure carrier substrate lives in the top-level `witnessed` module (below both
+// `machine` and `scheduler`); re-exported here so the scheduler's carriers name it unqualified.
+pub(crate) use crate::witnessed::{
     erase_to_static, reattach_ref, reattach_slice, reattach_value, vend_carrier, Erased,
     Reattachable,
 };
