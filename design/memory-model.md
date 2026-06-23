@@ -19,7 +19,7 @@ than ownership trees. The structural edges:
   to a `&'a KObject<'a>`. The pointee may live in this scope's region or in
   an outer one.
 - [`KFunction.captured`](../src/machine/core/kfunction.rs) holds a
-  [`ScopePtr`](../src/machine/core/scope_ptr.rs) — the closure's definition
+  [`BoundedScopePtr`](../src/machine/core/scope_ptr.rs) — the closure's definition
   scope, lifetime-erased. Multiple `KFunction`s share one captured scope when
   they were defined in the same body.
 - `KObject::KFunction(&'a KFunction<'a>, Option<Rc<FrameStorage>>)` and
@@ -27,7 +27,7 @@ than ownership trees. The structural edges:
   reference to a function-region slot and an optional `Rc<FrameStorage>` anchor
   to the per-call region that owns the function's captured scope.
 - `Module` and `Signature` cache their declaration scopes as a
-  [`ScopePtr`](../src/machine/core/scope_ptr.rs) (heap-pinned by the surrounding
+  [`BoundedScopePtr`](../src/machine/core/scope_ptr.rs) (heap-pinned by the surrounding
   region chain).
 
 **Directionality rule.** References go inward freely — a per-call region's
@@ -106,32 +106,28 @@ because:
 The scope-pointer case — `CallFrame`, `Module`, `Signature`, `KFunction`, and a `Scope`'s
 own lexical parent each holding a pointer to a captured, defining, or parent `Scope` — is
 centralized in two branded handles in
-[`scope_ptr.rs`](../src/machine/core/scope_ptr.rs). The branded
-[`ScopePtr<'a>`](../src/machine/core/scope_ptr.rs) backs the carriers that re-hand at an
-unbounded `'a`: `erase(&'a Scope<'a>)` records the input's `'a` in the brand, so the carriers
-that own a real `'a` — `Module::child_scope` and `Signature::decl_scope` — re-attach
-through a **safe** `reattach(&self) -> &'a Scope<'a>`, the brand carrying both the
-lifetime bound and (because `Scope<'a>` is invariant) the carrier's invariance in `'a`
-structurally.
+[`scope_ptr.rs`](../src/machine/core/scope_ptr.rs), split on **whether the carrier can brand the
+scope's `'a`**.
 
-Two lifetime-free carriers store a `ScopePtr<'static>` and fabricate the content lifetime back,
-because neither can brand it. `CallFrame` is non-generic — it backs `Rc<CallFrame>` and carries no
-lifetime — so its `scope` / `scope_for_bind` accessors fabricate an `&self`-bounded lifetime through
-the `unsafe` `reattach_unbounded`. A scheduler slot's `NodeScope::YokedChild` evicts a genuinely
-run-lived scope off the lifetime-free node and re-attaches a free content lifetime behind an
-`&self`-bounded borrow through the `unsafe` `reattach_bounded` (sound because the pointee lives for
-all of `'run`). Both reach the `'static` store through `ScopePtr::erase_static`, a brand-dropping
-constructor that is *safe* to call (forgetting a lifetime cannot fabricate one); the fabrication
-hazard is deferred to the `unsafe` re-attach, witnessed by the carrier's pinning (the frame `Rc`) or,
-for a `YokedChild` node, the scope being run-lived. The irreducible `'static → 'a` casts live in
-`scope_ptr.rs`; the carriers no longer restate them.
+The **safe** [`BoundedScopePtr<'a>`](../src/machine/core/scope_ptr.rs) backs every carrier that owns
+a real `'a`: `KFunction::captured`, `Module::child_scope`, `Signature::decl_scope`, and a `Scope`'s
+`outer` lexical parent. `erase(&Scope<'a>)` records the content `'a` in a `PhantomData<&'a Scope<'a>>`
+brand (which, because `Scope<'a>` is invariant, also pins the carrier invariant in `'a`); `get(&'p
+self) -> &'p Scope<'a>` re-hands the content `'a` behind a reader-bounded borrow. Because the free
+content `'a` is never cashed *unbounded*, a shorter witness borrow cannot fabricate a longer-lived
+reference, so `get` needs no borrow==content coupling and carries **no `unsafe`**.
 
-The constraint-free twin [`BoundedScopePtr<'a>`](../src/machine/core/scope_ptr.rs) backs the
-handles that re-hand *only* behind a reader-bounded borrow: `KFunction::captured` and a
-`Scope`'s `outer` lexical parent. Its `get(&'p self) -> &'p Scope<'a>` caps the borrow at the
-reader, so the free content `'a` is never cashed unbounded — no borrow==content coupling is
-needed, and a frame-bounded child can hold a (possibly frame-bounded) parent without
-fabrication. It carries `Scope<'a>`'s invariance structurally for the same reason as `ScopePtr`.
+The remaining [`ErasedScopePtr`](../src/machine/core/scope_ptr.rs) is the **one audited `unsafe`** the
+whole scope-erasure surface reduces to, for the two carriers that hold *no* lifetime and so cannot
+brand `'a`: `CallFrame`'s per-call child scope (non-generic — it backs `Rc<CallFrame>`) and a
+scheduler slot's `NodeScope::YokedChild` (a cart-ancestor block scope evicted off the lifetime-free
+node). Both store through the safe `erase(&Scope<'_>)` (forgetting a lifetime for storage cannot
+fabricate one) and recover the content lifetime on read through the single `unsafe fn reattach<'s,
+'b: 's>(&'s self) -> &'s Scope<'b>` — borrow bounded by the reader, content `'b` free. The witness is
+**external** (the frame `Rc`, which for a `YokedChild` pins the ancestor region through its
+`FrameStorage.outer` chain) and not expressible in the type, so the re-attach cannot be safe. The
+`CallFrame` accessors (`scope` / `scope_for_bind` / `scope_bounded`) are thin safe wrappers that only
+pick the lifetimes; every frame-scope fabrication funnels through the one `ErasedScopePtr::reattach`.
 
 Beyond the store-side erasure and the branded scope pointers, a handful of carriers store a
 borrow-carrying *value* on a structure the borrow checker cannot lifetime-track — a scheduler
@@ -153,7 +149,7 @@ types as declarative `unsafe impl Reattachable` instantiations — `ContractFami
 node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` /
 `ContinuationFamily` for the scheduler value (`Workload::Value`) and continuation
 (`Workload::Continuation`), `ResultCarriedFamily` for the transient step-lifetime re-anchor
-(`deps_at_step`) in `outcome.rs`, and `ScopeFamily` so the branded `ScopePtr` re-attaches and the
+(`deps_at_step`) in `outcome.rs`, and `ScopeFamily` so the scope-pointer handles re-attach and the
 region's `&Scope → &Scope<'static>` storage erasures route the same primitive — so `witnessed.rs`
 names no concrete Koan type and the scheduler stays workload-independent (the workload depends on
 the substrate for the machinery, not the reverse).
@@ -206,7 +202,7 @@ moves a value between lifetimes; `pin_deref` recovers a reference from a pointer
 never tracked, so it stays in `machine::core` (it recovers a pointer an region pins, not a value
 moving between nodes) as the one audited home for the `&*ptr` the region and storage engine would
 otherwise each open inline. The
-store side carries no `unsafe` at all: `ScopePtr::erase` builds its stored pointer with the safe
+store side carries no `unsafe` at all: each handle's `erase` builds its stored pointer with the safe
 `NonNull::from(scope).cast()`, deferring every fabrication hazard to the re-attach.
 
 Every family implements the `Stored` trait and routes the one gated
@@ -222,7 +218,7 @@ escape region no matter which wrapper stored it.
 
 A [`CallFrame`](../src/machine/core/arena.rs) is a thin shell over a refcounted
 [`FrameStorage`](../src/machine/core/arena.rs): the shell carries a `Rc<FrameStorage>` and an
-`Option<ScopePtr<'static>>` (the child scope; `None` only transiently during construction), while
+`Option<ErasedScopePtr>` (the child scope; `None` only transiently during construction), while
 `FrameStorage` bundles the `KoanRegion` and an `Option<Rc<FrameStorage>>` for the parent-frame
 chain. The shell/storage split lets an escaping value pin only the storage, leaving the shell
 uniquely owned for tail reuse (see
@@ -246,7 +242,7 @@ A scheduler slot's scope handle is lifetime-free, so the node carries no `'run` 
 A per-call frame scope is stored as a payload-less
 [`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the slot's own
 `Node.frame` cart; a genuinely run-lived scope (a binder body's decl-scope child) is stored
-as `NodeScope::YokedChild`, an erased `ScopePtr<'static>` re-attached at read through `reattach_bounded`.
+as `NodeScope::YokedChild`, an erased `ErasedScopePtr` re-attached at read through the `unsafe` `reattach`.
 Both arms ride a grouped `NodePayload` (scope handle + lexical chain) alongside the slot's frame. The
 slot-storage scope handle and the seed-side `with_frame_interior` re-anchor are documented in
 [per-call-region/scope-handles.md § Slot-table scope handle](per-call-region/scope-handles.md#slot-table-scope-handle).

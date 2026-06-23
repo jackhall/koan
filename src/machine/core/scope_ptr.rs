@@ -92,7 +92,7 @@ impl<'a> BoundedScopePtr<'a> {
 /// `NodeScope::YokedChild` (a cart-ancestor block scope evicted off the lifetime-free node). Both
 /// carriers hold no lifetime — `CallFrame` backs `Rc<CallFrame>`, a node is stored erased — so
 /// neither can brand the scope's `'a`, and both fabricate the content lifetime back on read. Unlike
-/// [`BoundedScopePtr`] / [`ScopePtr`], whose safe re-hand is witnessed by a real `'a` the carrier
+/// [`BoundedScopePtr`], whose safe re-hand is witnessed by a real `'a` the carrier
 /// structurally proves, this handle's witness is **external** (the frame `Rc`, which for a
 /// `YokedChild` pins the ancestor region via its `FrameStorage.outer` chain) and not expressible in
 /// the type — so the re-attach is the one consolidated `unsafe` the whole scope-erasure surface

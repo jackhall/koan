@@ -39,8 +39,9 @@ and its parent's at once.
 
 ## Dependencies
 
-**Requires:**
-- [FrameStorage self-reference removal](framestorage-self-reference.md) — the `ErasedScopePtr`
-  consolidation the safe once-erased child-scope construction builds on.
+Builds on the shipped `ErasedScopePtr` consolidation (the safe once-erased child-scope construction
+this splits the lifetimes for).
+
+**Requires:** none — its prerequisite consolidation has shipped.
 
 **Unblocks:** none.

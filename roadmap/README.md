@@ -53,14 +53,21 @@ What's shipped that the open items below build on:
   owning the parenthesized-slot error text), and the scheduler `Object`/`Type` finalize
   arms (one [`check_declared_return`](../src/machine/execute/finalize.rs)
   parameterized over the lifted carrier's `matches_value`/`matches_type` predicate).
-- *Region unsafe consolidation.* Every captured/defining-scope re-attach is funnelled behind one
-  [`ScopePtr`](../src/machine/core/scope_ptr.rs); `KoanRegion::escape` is `NonNull`.
+- *Region unsafe consolidation.* Every captured/defining-scope re-attach is funnelled behind two
+  audited [`scope_ptr`](../src/machine/core/scope_ptr.rs) handles; `KoanRegion::escape` is `NonNull`.
   The store-side erasure lives behind one `Stored` trait: all region-stored
   families route the scheduler's single audited `erase_to_static` (the safe direction of the
   one `retype` primitive the read-side re-anchor shares) and one gated `alloc` engine,
-  replacing the per-type `T<'a> → T<'static>` transmute pairs with one. The branded `ScopePtr<'a>` makes `Module::child_scope` and `Signature::decl_scope`
-  safe re-attaches, concentrating the irreducible
-  `'static → 'a` fabrication at the non-generic `CallFrame` boundary.
+  replacing the per-type `T<'a> → T<'static>` transmute pairs with one. The scope-pointer surface
+  split on whether the carrier can brand the scope's `'a`: the safe `BoundedScopePtr<'a>` makes
+  `Module::child_scope`, `Signature::decl_scope`, `KFunction::captured` and a `Scope`'s `outer`
+  reader-bounded re-hands carrying no `unsafe`, while the two lifetime-free carriers (`CallFrame`'s
+  per-call child scope and a node's `NodeScope::YokedChild`) collapse to the single audited
+  `unsafe ErasedScopePtr::reattach` — the FrameStorage region↔child-scope self-reference proved
+  irreducible (its `Scope<'a>` single-lifetime construction `pin_deref` and outer-link re-attach
+  remain, tracked by [Split Scope into region and outer lifetimes](refactor/scope-region-outer-lifetimes.md)),
+  so the work consolidated rather than eliminated it. The `unsafe impl Reattachable` obligation is
+  discharged once through a shared `reattachable!` macro instead of per-carrier.
   Honest slot storage landed for per-call frame scopes: a frame scope rides its slot as a
   payload-less [`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the
   slot's own `Node.frame` cart — no fabricated run-length `&'a` persists across a TCO reset.
@@ -114,13 +121,14 @@ What's shipped that the open items below build on:
   its erased node carrier to `'step`, so decide never holds a live `'ast` borrow. See
   [design/per-call-region/lifecycle.md § Consumer-pull node-output lift](../design/per-call-region/lifecycle.md#consumer-pull-node-output-lift).
 - *Unified erase/reattach carriers.* The hand-rolled erase-to-`'static` /
-  reattach carriers (`ScopePtr`, the contract, the continuation, the scheduler's `Erased<W::Value>`)
+  reattach carriers (the scope pointers, the contract, the continuation, the scheduler's `Erased<W::Value>`)
   and the cluster of one-off `outcome.rs` reference reattaches now share one generic
   [`Erased<T>`](../src/witnessed.rs) owner over an `unsafe trait Reattachable { type
   At<'r>; }` lifetime-family. A single `retype` primitive (a `ManuallyDrop` `transmute_copy`) is the
-  only lifetime-retype site; each carrier is a declarative `unsafe impl Reattachable` beside its own
-  type (`ContractFamily`, `CarriedFamily`, `ContinuationFamily`, `KObjectFamily`, `ScopeFamily`, …)
-  with no `transmute` of its own. The scheduler then took sole ownership of all three inter-node
+  only lifetime-retype site; each carrier family is declared beside its own type
+  (`ContractFamily`, `CarriedFamily`, `ContinuationFamily`, `KObjectFamily`, `ScopeFamily`, …) through
+  the shared `reattachable!` macro, which discharges the layout-invariance `unsafe impl` obligation
+  once, with no `transmute` of its own. The scheduler then took sole ownership of all three inter-node
   carrier reattaches: the continuation and contract — like the value channel before them — are
   stored `Erased` on the lifetime-free node and re-anchored only through
   [`vend_carrier`](../src/witnessed.rs), one safe-signature wrapper whose returned `'w` the
@@ -288,6 +296,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md)
+- [Split Scope into region and outer lifetimes](refactor/scope-region-outer-lifetimes.md)
 - [Structural value equality](refactor/structural-value-equality.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the two argument binders](refactor/unify-argument-binders.md)
@@ -395,10 +404,6 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   the scattered `Reattachable` / `Erased` / `retype` reattach machinery into one top-level `witnessed`
   module whose `unsafe` is two rank-2 branded accessors (`with` / `map`), bundling each erased value
   with its liveness witness.
-- [FrameStorage self-reference removal](refactor/framestorage-self-reference.md) — remove the
-  hand-rolled region↔child-scope `pin_deref` / `ScopePtr::reattach_unbounded` loop, preferring to
-  drop the `Scope.region` back-pointer outright (no dependency) over encapsulating it with
-  `self_cell` / `ouroboros`, and delete `ScopePtr`.
 - [Split Scope into region and outer lifetimes](refactor/scope-region-outer-lifetimes.md) — give
   `Scope` separate region/content and lexical-parent lifetimes so the per-call child scope is built
   at real lifetimes and erased once through the safe `ErasedScopePtr::erase`, retiring the
