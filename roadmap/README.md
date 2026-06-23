@@ -399,6 +399,10 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   hand-rolled region↔child-scope `pin_deref` / `ScopePtr::reattach_unbounded` loop, preferring to
   drop the `Scope.region` back-pointer outright (no dependency) over encapsulating it with
   `self_cell` / `ouroboros`, and delete `ScopePtr`.
+- [Split Scope into region and outer lifetimes](refactor/scope-region-outer-lifetimes.md) — give
+  `Scope` separate region/content and lexical-parent lifetimes so the per-call child scope is built
+  at real lifetimes and erased once through the safe `ErasedScopePtr::erase`, retiring the
+  construction-time region `pin_deref` and outer-link `reattach_ref`.
 - [Unify the two argument binders](refactor/unify-argument-binders.md) — stop the builtin
   dispatch path building a whole `KFuture` just to gut `future.args`; one arg-binding path
   instead of `bind` (`Record<ArgValue>`) beside `bind_by_name` (`Record<Carried>`).

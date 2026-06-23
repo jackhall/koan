@@ -382,29 +382,17 @@ impl CallFrame {
     }
 
     pub fn scope<'a>(&'a self) -> &'a Scope<'a> {
-        // SAFETY: `scope_ptr` stores an `ErasedScopePtr`; the content fabrication is concentrated
-        // in its single [`ErasedScopePtr::reattach`]. `scope_ptr` is `Some` after construction and
-        // stable for the `Rc`'s lifetime (heap-pinned), and the returned borrow is bounded by
-        // `&self`, so the fabricated lifetime cannot outlive the pointee. Here borrow and content
-        // collapse to the receiver's `'a` (`'b = 'step = 'a`); both are driven by the return-type
-        // annotation, not turbofish arguments.
-        let scope: &'a Scope<'a> = unsafe { self.scope_ptr_set().reattach() };
-        scope
+        // Borrow and content collapse to the receiver's `'a` (`'b = 's = 'a`).
+        self.reattach_scope()
     }
 
     /// Scope handle bounded by `&'step Rc<Self>` — strictly shorter than the `&'a Scope<'a>`
     /// claim of [`CallFrame::scope`]. Use this for local-bind plumbing (e.g.
     /// [`Scope::bind_value`]) that does not need to escape the `Rc`'s borrow, so the caller
-    /// avoids an `unsafe` `'a`-anchoring transmute on the receiving end.
-    ///
-    /// SAFETY: `scope_ptr` stores an `ErasedScopePtr`; the content fabrication is concentrated in
-    /// its single [`ErasedScopePtr::reattach`]. The pointer is stable for the `Rc`'s lifetime
-    /// (heap-pinned by `Rc`), and the returned borrow is bounded by the receiver so it cannot
-    /// outlive the pin. Here borrow and content collapse to the receiver's `'step` (`'b = 'step`),
-    /// driven by the return-type annotation, not a turbofish argument.
+    /// avoids an `unsafe` `'a`-anchoring transmute on the receiving end. Borrow and content collapse
+    /// to the receiver's `'step`.
     pub fn scope_for_bind<'step>(self: &'step Rc<Self>) -> &'step Scope<'step> {
-        let scope: &'step Scope<'step> = unsafe { self.scope_ptr_set().reattach() };
-        scope
+        (**self).reattach_scope()
     }
 
     /// The child scope re-handed with a **witness-bounded** borrow: the borrow `'step` is bounded by
@@ -415,10 +403,19 @@ impl CallFrame {
     /// invariant), so this ephemeral form needs no separate brand struct. Reached through the
     /// scheduler's workload-side scope re-anchor (`reattach_node_scope`, `Yoked` slots) and
     /// [`Self::with_frame_interior`] (the seed binds).
-    ///
-    /// SAFETY: delegates to [`ErasedScopePtr::reattach`]; the `&'step Rc<Self>` receiver pins
-    /// the region and child scope for all of `'step`, so the `'step`-bounded borrow cannot dangle.
     pub fn scope_bounded<'step, 'a: 'step>(self: &'step Rc<Self>) -> &'step Scope<'a> {
+        (**self).reattach_scope()
+    }
+
+    /// The sole re-attach of the frame's child scope: borrow bounded by the `&'s self` receiver,
+    /// content `'b` free (`'b: 's`). The three public accessors above are safe wrappers that only
+    /// pick the lifetimes — every frame-scope fabrication funnels through this one `unsafe`.
+    ///
+    /// SAFETY: `scope_ptr` stores an [`ErasedScopePtr`] that is `Some` after construction and stable
+    /// for the `Rc`'s lifetime (the region is heap-pinned). The returned borrow is bounded by
+    /// `&'s self`, so the fabricated content lifetime cannot outlive the pointee the held frame keeps
+    /// alive. `'b` is driven by the return-type annotation, not a turbofish argument.
+    fn reattach_scope<'s, 'b: 's>(&'s self) -> &'s Scope<'b> {
         unsafe { self.scope_ptr_set().reattach() }
     }
 

@@ -34,6 +34,12 @@ covariant, and an encapsulation crate (`ouroboros` / `self_cell`) is forced to c
   `child_scope()` / `decl_scope()` consumer sites read a receiver-bounded `&'step Scope<'a>`.
 - TCO reuse (`try_reset_for_tail`) still passes its three Miri slate tests: round-trip,
   refuses-when-aliased, allows-reset-under-escaped-storage.
+- The Miri slate shrinks as the scope-erasure `unsafe` disappears: the `ScopePtr::reattach_unbounded`
+  sites (`CallFrame` lifetime erasure) and the `NodeScope::YokedChild` fabrication / re-attach groups
+  (`nodes.rs`, `dispatch/ctx.rs`, `runtime/submit.rs`) lose their backing `unsafe`, so their slate
+  groups are pruned and `slate-audit` confirms no stale groups remain. (The value-carrier
+  consolidation in [witnessed-carrier](witnessed-carrier.md) already retired the now-safe slot-read /
+  `deps_at_step` / `apply_outcome` groups; this is the scope-path remainder.)
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` are clean.
 
 **Directions.**
@@ -82,4 +88,6 @@ measurement, the scope-mutation census, and the invariance / continuation spike 
   `Reattachable` / `ScopeFamily` substrate into the shared `witnessed` module and provides the
   `Witnessed<ScopeFamily, …>` frame-scope carrier.
 
-**Unblocks:** none.
+**Unblocks:**
+- [Split Scope into region and outer lifetimes](scope-region-outer-lifetimes.md) — the consolidated
+  `ErasedScopePtr` is the substrate the once-erased child-scope construction builds on.

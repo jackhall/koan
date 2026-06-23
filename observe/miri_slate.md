@@ -1,7 +1,7 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena.rs: 9
+src/machine/core/arena.rs: 7
 src/machine/core/reattach.rs: 2
 src/machine/core/region.rs: 3
 src/machine/core/scope_ptr.rs: 2
@@ -358,9 +358,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-23: 103s — 30 tests, 0 leaks, 0 UB
 - 2026-06-23: 104s — 30 tests, 0 leaks, 0 UB
 - 2026-06-18: 250s — 23 tests, 0 leaks, 0 UB
 - 2026-06-18: 1510s — 26 tests, 0 leaks, 0 UB
 - 2026-06-18: 1485s — 26 tests, 0 leaks, 0 UB
-- 2026-06-17: 1414s — 25 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
