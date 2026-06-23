@@ -7,7 +7,8 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::core::KoanRegion;
 use crate::machine::model::types::UntypedKey;
 use crate::machine::model::KType;
-use crate::scheduler::{Erased, Reattachable};
+use crate::scheduler::Erased;
+use crate::witnessed::reattachable;
 
 use super::KFunction;
 
@@ -64,11 +65,9 @@ impl<'a> ReturnContract<'a> {
 /// whose representation does not depend on `'a`.
 pub struct ContractFamily;
 
-// SAFETY: `ReturnContract<'r>` is one type generic only in `'r`; every arm is a reference whose
-// layout is identical for all `'r`.
-unsafe impl Reattachable for ContractFamily {
-    type At<'r> = ReturnContract<'r>;
-}
+// `ReturnContract<'r>` is one type generic only in `'r` (every arm is a reference), layout identical
+// for all `'r`; the shared `reattachable!` macro discharges that obligation once.
+reattachable!(ContractFamily => ReturnContract<'r>);
 
 /// A [`ReturnContract`] with its lifetime erased to `'static` for storage on a lifetime-free node
 /// `NodeFrame`, and re-anchored at the Done read boundary. The contract's `&KFunction` / `&KType`

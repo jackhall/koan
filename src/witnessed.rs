@@ -39,6 +39,25 @@ pub unsafe trait Reattachable {
     type At<'r>;
 }
 
+/// Generate `unsafe impl Reattachable` for layout-invariant carrier families. Each
+/// `Family => At<'r>` pair expands to the trait impl; write the GAT body with a literal `'r`
+/// (`CarriedFamily => Carried<'r>`, `KObject<'static> => KObject<'r>`,
+/// `OperatorGroup => OperatorGroup`).
+///
+/// The `unsafe` obligation — that `Family`'s `At<'r>` is one type up to the lifetime `'r` (identical
+/// size, alignment, and validity for every `'r`, per [`Reattachable`]'s contract) — is discharged
+/// **once** here, so the carrier sites carry no open-coded `unsafe impl`. The macro cannot *check*
+/// layout-invariance, so only invoke it with families that genuinely satisfy the contract.
+macro_rules! reattachable {
+    ($($family:ty => $at:ty),+ $(,)?) => {$(
+        // SAFETY: see the macro docs — `$family`'s `At<'r>` is layout-invariant in `'r`.
+        unsafe impl $crate::witnessed::Reattachable for $family {
+            type At<'r> = $at;
+        }
+    )+};
+}
+pub(crate) use reattachable;
+
 /// The single lifetime-retype primitive: move an `A` out as a `B`, where the caller guarantees `A`
 /// and `B` are one type up to a lifetime. Private to this module and reached only through the
 /// `Reattachable`-bounded wrappers, so `A` / `B` are always `T::At<_>` for one family — the trait's
@@ -359,7 +378,7 @@ pub(crate) fn vend_carrier<'w, T: Reattachable, F>(
 }
 
 /// Borrowed shared-reference retype: re-expose a `&T::At<'a>` at a different content (and borrow)
-/// lifetime in place. The scope-pointer path ([`ScopePtr`](crate::machine::core::scope_ptr)) routes
+/// lifetime in place. The scope-pointer path ([`scope_ptr`](crate::machine::core::scope_ptr)) routes
 /// its re-attach through here — that path is branded at the pointer, not bundled with an owned
 /// witness, so it needs the bare reference retype rather than a [`Witnessed`] accessor.
 ///

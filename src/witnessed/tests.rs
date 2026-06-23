@@ -14,19 +14,10 @@ use super::*;
 /// Covariant stand-in: a plain shared reference. `At<'r>` is a `&'r u32`, whose lifetime the borrow
 /// checker can't track across the `'static` store.
 struct RefFamily;
-// SAFETY: `&'r u32` is one type generic only in `'r`; a reference's layout is lifetime-independent.
-unsafe impl Reattachable for RefFamily {
-    type At<'r> = &'r u32;
-}
 
 /// Invariant stand-in — the case that actually matters. `Cell<&'r u32>` is invariant in `'r`
 /// (interior mutability over a `'r` reference), exactly like koan's `Scope` binding table.
 struct InvFamily;
-// SAFETY: `Cell<&'r u32>` is one type generic only in `'r`; a cell of a reference is
-// layout-independent of `'r`.
-unsafe impl Reattachable for InvFamily {
-    type At<'r> = Cell<&'r u32>;
-}
 
 /// Mutable-scope-plus-pool family: a carrier holding a mutable "scope" slot AND a cart-coherent
 /// "pool" (both share `'r` — the region). Stands in for koan's continuation, whose `map` binds a
@@ -36,9 +27,13 @@ struct ScopeAndPool<'r> {
     scope: Cell<Option<&'r u32>>,
     pool: &'r [u32],
 }
-// SAFETY: `ScopeAndPool<'r>` is generic only in `'r`; its layout is lifetime-independent.
-unsafe impl Reattachable for ScopeFamily {
-    type At<'r> = ScopeAndPool<'r>;
+
+// Each stand-in is one type generic only in `'r` with a lifetime-independent layout (a reference, a
+// cell of a reference, a struct of both); the shared `reattachable!` macro discharges the obligation.
+reattachable! {
+    RefFamily => &'r u32,
+    InvFamily => Cell<&'r u32>,
+    ScopeFamily => ScopeAndPool<'r>,
 }
 
 /// The witness-less primitives still routed by the value-carrier path: `Erased` storage and the

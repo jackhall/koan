@@ -6,7 +6,9 @@
 //!
 //! The generic erase-to-`'static` / reattach-to-`'r` machinery every lifetime-free *value* carrier
 //! shares lives in the scheduler ([`crate::scheduler`]) — moving a value between nodes is the
-//! scheduler's job. [`ScopePtr`](super::scope_ptr::ScopePtr) is that discipline specialized to a
+//! scheduler's job. The [`scope_ptr`](super::scope_ptr) handles
+//! ([`BoundedScopePtr`](super::scope_ptr::BoundedScopePtr) /
+//! [`ErasedScopePtr`](super::scope_ptr::ErasedScopePtr)) are that discipline specialized to a
 //! `Scope` pointer with an invariance brand.
 
 /// Materialize a `&'x T` from a raw `*const T` whose pointee a heap pin keeps fixed in place for

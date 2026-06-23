@@ -34,10 +34,10 @@ use crate::scheduler::Scheduler;
 /// scheduler no longer owns. The driver hands back the opaque payload
 /// ([`AmbientContext::active_payload`] / `PostStep::payload`), from which the workload extracts the
 /// scope handle, plus the per-call cart the slot ran against; this workload-side helper reattaches
-/// them. A `YokedChild` slot reattaches its erased
-/// cart-ancestor [`ScopePtr`](crate::machine::core::ScopePtr) (`reattach_bounded`); a `Yoked` slot
-/// re-projects from `frame`. Content lifetime free, borrow bounded by `frame` — so the result
-/// cannot outlive the cart it names.
+/// them. A `YokedChild` slot reattaches its erased cart-ancestor
+/// [`ErasedScopePtr`](crate::machine::core::ErasedScopePtr) ([`reattach`](crate::machine::core::ErasedScopePtr::reattach));
+/// a `Yoked` slot re-projects from `frame`. Content lifetime free, borrow bounded by `frame` — so
+/// the result cannot outlive the cart it names.
 pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
     node_scope: &'step NodeScope,
     frame: Option<&'step Rc<CallFrame>>,
@@ -49,7 +49,7 @@ pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
         // `'step`), so it cannot be cashed past the cart that pins the pointee.
         NodeScope::YokedChild(ptr) => {
             let _witness = frame.expect("a YokedChild slot keeps its active cart");
-            unsafe { ptr.reattach_bounded() }
+            unsafe { ptr.reattach() }
         }
         NodeScope::Yoked => frame
             .expect("a Yoked slot keeps its active cart")

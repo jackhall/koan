@@ -346,20 +346,17 @@ impl<W: Workload> NodeStore<W> {
 mod tests {
     use super::*;
 
-    use crate::scheduler::Reattachable;
+    use crate::witnessed::reattachable;
 
     /// A lifetime-free `Reattachable` family for the trivial test value.
     struct U32Value;
-    // SAFETY: `u32` carries no lifetime, so `At<'r>` is the same type for every `'r`.
-    unsafe impl Reattachable for U32Value {
-        type At<'r> = u32;
-    }
-
     /// A lifetime-free `Reattachable` family standing in for the contract / continuation carriers.
     struct UnitCarrier;
-    // SAFETY: `()` carries no lifetime, so `At<'r>` is the same type for every `'r`.
-    unsafe impl Reattachable for UnitCarrier {
-        type At<'r> = ();
+    // Both are lifetime-free, so `At<'r>` is the same type for every `'r`; the shared `reattachable!`
+    // macro discharges the obligation.
+    reattachable! {
+        U32Value => u32,
+        UnitCarrier => (),
     }
 
     /// A minimal workload for the white-box store tests: every associated type is trivial, so the
