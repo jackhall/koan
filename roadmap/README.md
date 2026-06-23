@@ -63,11 +63,13 @@ What's shipped that the open items below build on:
   `Module::child_scope`, `Signature::decl_scope`, `KFunction::captured` and a `Scope`'s `outer`
   reader-bounded re-hands carrying no `unsafe`, while the two lifetime-free carriers (`CallFrame`'s
   per-call child scope and a node's `NodeScope::YokedChild`) collapse to the single audited
-  `unsafe ErasedScopePtr::reattach` — the FrameStorage region↔child-scope self-reference proved
-  irreducible (its `Scope<'a>` single-lifetime construction `pin_deref` and outer-link re-attach
-  remain, tracked by [Split Scope into region and outer lifetimes](refactor/scope-region-outer-lifetimes.md)),
-  so the work consolidated rather than eliminated it. The `unsafe impl Reattachable` obligation is
-  discharged once through a shared `reattachable!` macro instead of per-carrier.
+  `unsafe ErasedScopePtr::reattach`. The per-call child's construction-time lifetime erasure (the
+  region `pin_deref` and outer-link re-attach in `CallFrame::new` / `try_reset_for_tail`) has since
+  been removed: `Scope::child_for_frame` builds the child at real lifetimes, brand-shortening the
+  longer-lived lexical parent and run-global root to the fresh per-call region's lifetime, so the
+  read-side `ErasedScopePtr::reattach` is the only `unsafe` the per-call child touches. The
+  `unsafe impl Reattachable` obligation is discharged once through a shared `reattachable!` macro
+  instead of per-carrier.
   Honest slot storage landed for per-call frame scopes: a frame scope rides its slot as a
   payload-less [`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the
   slot's own `Node.frame` cart — no fabricated run-length `&'a` persists across a TCO reset.
@@ -296,7 +298,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md)
-- [Split Scope into region and outer lifetimes](refactor/scope-region-outer-lifetimes.md)
 - [Structural value equality](refactor/structural-value-equality.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the two argument binders](refactor/unify-argument-binders.md)
@@ -404,10 +405,6 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   the scattered `Reattachable` / `Erased` / `retype` reattach machinery into one top-level `witnessed`
   module whose `unsafe` is two rank-2 branded accessors (`with` / `map`), bundling each erased value
   with its liveness witness.
-- [Split Scope into region and outer lifetimes](refactor/scope-region-outer-lifetimes.md) — give
-  `Scope` separate region/content and lexical-parent lifetimes so the per-call child scope is built
-  at real lifetimes and erased once through the safe `ErasedScopePtr::erase`, retiring the
-  construction-time region `pin_deref` and outer-link `reattach_ref`.
 - [Unify the two argument binders](refactor/unify-argument-binders.md) — stop the builtin
   dispatch path building a whole `KFuture` just to gut `future.args`; one arg-binding path
   instead of `bind` (`Record<ArgValue>`) beside `bind_by_name` (`Record<Carried>`).

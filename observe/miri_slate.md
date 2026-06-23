@@ -104,9 +104,12 @@ decision live in [src/machine/core/arena.rs](../src/machine/core/arena.rs).
 
 **`CallFrame::try_reset_for_tail`** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — TCO
 frame reuse installs a fresh refcounted `FrameStorage` (a new `KoanRegion`) and
-re-allocates the child `Scope`, with two transmutes: `&Scope<'_> →
-&Scope<'static>` for the new outer link and a raw-ptr re-anchor for the new
-inner region. The `Rc::get_mut` gate refuses only when another `Rc<CallFrame>`
+re-allocates the child `Scope` through the safe `Scope::child_for_frame`: the new
+outer link and root are brand-shortened to the fresh region's lifetime, so the
+child is built at real lifetimes and erased once via `ErasedScopePtr::erase` with
+no construction-time transmute. The `unsafe` these tests pin is the read-side
+`ErasedScopePtr::reattach` on the re-installed child plus the swap's drop
+discipline: the `Rc::get_mut` gate refuses only when another `Rc<CallFrame>`
 *shell* holder still exists; an escaped value pins the `FrameStorage`, not the
 shell, so it does not foreclose reuse — the swap drops the shell's reference to the
 old storage while the escapee's clone keeps that snapshot alive and aliased.
@@ -254,9 +257,9 @@ scope slot, the write `with` rejects). The escape-can't-compile guards are `comp
 **`pin_deref` — raw heap-pin deref** ([src/machine/core/reattach.rs](../src/machine/core/reattach.rs))
 — the one audited raw heap-pin deref, materializing a `&'x T` from an `Rc`-pinned `*const T` (the
 self-referential region-pointer derefs the `Erased` retype can't express). Carries no minimal test of
-its own: every `CallFrame` construction routes it (`CallFrame` lifetime erasure /
-`try_reset_for_tail` groups), and the storage engine's escape redirect routes it under
-`region_alloc_while_prior_ref_live`.
+its own: the per-call frame's `with_frame_interior` region re-exposure routes it (the MATCH /
+TRY-WITH / `KFunction::invoke` groups), and the storage engine's escape redirect and `record_local`
+hook route it under the cycle gate and `region_alloc_while_prior_ref_live`.
 
 **`ReturnContract` re-attach — Done-boundary vend** ([src/witnessed.rs](../src/witnessed.rs))
 — the contract reattach routes `vend_carrier` (the safe-signature wrapper over `Erased::reattach`),
