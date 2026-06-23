@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use super::dep_graph::work_owned_edges;
-use super::nodes::{work_park_producers, NodeFrame, Node, NodeWork};
+use super::nodes::{work_park_producers, Node, NodeFrame, NodeWork};
 use super::{NodeId, Scheduler, Workload};
 
 impl<W: Workload> Scheduler<W> {

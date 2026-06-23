@@ -9,10 +9,10 @@ pub(crate) mod kfunction;
 mod lexical_frame;
 mod pending;
 mod reattach;
+mod region;
 mod scope;
 mod scope_id;
 mod scope_ptr;
-mod region;
 
 #[cfg(test)]
 mod tests;

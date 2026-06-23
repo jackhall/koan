@@ -1,6 +1,6 @@
 //! `register` arm of `machine::core` tests.
 
-use super::super::{BindingIndex, Resolution, KoanRegion};
+use super::super::{BindingIndex, KoanRegion, Resolution};
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::model::types::{

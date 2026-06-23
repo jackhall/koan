@@ -48,7 +48,9 @@ pub(super) fn defeat_fast_path(dying: &Rc<CallFrame>) {
         },
         Body::Builtin(|ctx| {
             crate::machine::core::kfunction::action::Action::Done(Ok(
-                crate::machine::model::Carried::Object(ctx.scope.region.alloc_object(KObject::Null)),
+                crate::machine::model::Carried::Object(
+                    ctx.scope.region.alloc_object(KObject::Null),
+                ),
             ))
         }),
         dying.scope(),
@@ -70,7 +72,9 @@ pub(super) fn alloc_local_kf<'run>(
         },
         Body::Builtin(|ctx| {
             crate::machine::core::kfunction::action::Action::Done(Ok(
-                crate::machine::model::Carried::Object(ctx.scope.region.alloc_object(KObject::Null)),
+                crate::machine::model::Carried::Object(
+                    ctx.scope.region.alloc_object(KObject::Null),
+                ),
             ))
         }),
         dying.scope(),

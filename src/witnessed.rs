@@ -164,10 +164,15 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// the erase cannot fabricate a lifetime, and the witness records the liveness obligation the
     /// later re-anchor relies on.
     pub fn new(value: T::At<'_>, witness: W) -> Self {
-        Witnessed {
-            value: Erased::erase(value),
-            witness,
-        }
+        Self::from_erased(Erased::erase(value), witness)
+    }
+
+    /// Bundle an **already-erased** carrier with its witness. The `'static`-erased input carries no
+    /// lifetime, so unlike [`Self::new`] it leaves no input lifetime for inference to pick: it is the
+    /// constructor for a `Result::map(Erased::erase)` pipeline, where threading the live value's
+    /// lifetime through a closure would otherwise let it default to `'static`.
+    pub(crate) fn from_erased(value: Erased<T>, witness: W) -> Self {
+        Witnessed { value, witness }
     }
 
     /// Read the carrier: re-anchor it behind a **rank-2** (`for<'b>`) closure, so the fabricated
@@ -258,12 +263,71 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         }
     }
 
+    /// Re-anchor the carrier and hand it **out** bounded by the `&self` borrow. The borrow-bounded
+    /// sibling of [`Self::with`]: where `with`'s `for<'b>` brand forbids the carrier from escaping the
+    /// closure, `read` lets it escape *at the borrow lifetime itself* — the content lifetime is the
+    /// `&self` borrow, not a free `'b`, so the caller cannot widen it past the witness pin.
+    ///
+    /// This is sound for the exact reason the naive content-free reader is not: there, a free `'b`
+    /// could be inferred `'static` and outlive the witness (a Miri-proven use-after-free); here the
+    /// result is `T::At<'self>`, which the borrow checker keeps inside the `&self` borrow over which
+    /// the bundled witness holds the pointee live. `At<'static>: Copy` copies the erased carrier out
+    /// before re-anchoring.
+    pub fn read(&self) -> T::At<'_>
+    where
+        T::At<'static>: Copy,
+    {
+        // SAFETY: the bundled `witness` pins the pointee for the whole `&self` borrow (dropping it
+        // needs `&mut self`), and the returned carrier is bounded by that borrow, so it cannot
+        // outlive the pin. Lifetime-only retype of a single-lifetime family; the `Copy` bound copies
+        // the erased carrier out of `&self` before re-anchoring.
+        unsafe { retype::<T::At<'static>, T::At<'_>>(self.value.inner) }
+    }
+
     /// The bundled witness — the producer frame `Rc` (possibly wrapped in [`Option`]) that pins the
     /// carrier's pointee. Cloned out by the consumer-pull lift to keep the backing region alive
     /// while the value is copied into the consumer's frame.
     pub fn witness(&self) -> &W {
         &self.witness
     }
+}
+
+/// Re-anchor a **live** single-lifetime-family value to the `'w` a borrowed [`Witness`] pins — the
+/// witness-explicit replacement for a bare transient reattach. The value is erased and immediately
+/// re-anchored at `'w`; the witness borrow bounds `'w`, so the caller cannot pick a `'w` outliving
+/// the storage the witness pins.
+///
+/// The **signature is safe**: the caller supplies a witness whose region the value genuinely lives
+/// in (the call-site co-location invariant), and the target `'w` is bounded by the witness borrow
+/// `'b` (`'b: 'w`), so the re-anchored view cannot outrun the pin. `'w` is left free of `'b` so the
+/// caller can re-anchor to a lifetime *shorter* than the witness borrow (e.g. a step lifetime under a
+/// longer-held cart `Rc`). Call sites carry no `unsafe` of their own.
+pub(crate) fn reattach_with<'b, 'w, T: Reattachable, W: Witness>(
+    value: T::At<'_>,
+    _witness: &'b W,
+) -> T::At<'w>
+where
+    'b: 'w,
+{
+    // SAFETY: `'w` is bounded by the `witness` borrow `'b` (`'b: 'w`), which pins the value's region
+    // (the call-site co-location invariant), so the re-anchored view cannot escape the pin. Erase for
+    // storage then re-anchor at `'w`; lifetime-only retype of a single-lifetime family.
+    let erased = erase_to_static::<T>(value);
+    unsafe { retype::<T::At<'static>, T::At<'w>>(erased) }
+}
+
+/// Slice twin of [`reattach_with`]: re-anchor a shared slice's element content lifetime to the `'w`
+/// a borrowed witness pins, preserving the borrow `'i`.
+///
+/// The **signature is safe** for the same reason as [`reattach_with`]: `'w` is bounded by the
+/// witness borrow, so the elements the witness pins outlive the re-anchored view.
+pub(crate) fn reattach_slice_with<'i, 'w, T: Reattachable, W: Witness>(
+    slice: &'i [T::At<'_>],
+    _witness: &'w W,
+) -> &'i [T::At<'w>] {
+    // SAFETY: content re-anchored to the witnessed `'w`; the borrow `'i` is preserved. `&[_]` is a
+    // fat pointer, retyped lifetime-only; the elements live for `'w` (witness-pinned).
+    unsafe { retype::<&'i [T::At<'_>], &'i [T::At<'w>]>(slice) }
 }
 
 /// Transient lifetime-retype of an owned single-lifetime-family value — [`Erased::reattach`] for a
@@ -278,20 +342,9 @@ pub(crate) unsafe fn reattach_value<'a, 'b, T: Reattachable>(value: T::At<'a>) -
     unsafe { retype::<T::At<'a>, T::At<'b>>(value) }
 }
 
-/// Slice twin of [`reattach_ref`]: retype a shared slice's element content lifetime.
-///
-/// # Safety
-///
-/// As [`reattach_value`].
-pub(crate) unsafe fn reattach_slice<'i, 'o, 'a, 'b, T: Reattachable>(
-    slice: &'i [T::At<'a>],
-) -> &'o [T::At<'b>] {
-    // SAFETY: see the function contract; `&[_]` is a fat pointer, retyped lifetime-only.
-    unsafe { retype::<&'i [T::At<'a>], &'o [T::At<'b>]>(slice) }
-}
-
 /// Re-anchor a stored [`Erased`] one-shot inter-node carrier against a held frame `Rc` witness — the
-/// owned-witness predecessor of [`reattach_with`], kept while its call sites migrate.
+/// `Erased`-carrier sibling of [`reattach_with`], for the continuation / return-contract carriers the
+/// driver re-anchors once per step against the node's cart `Rc`.
 ///
 /// The **signature is safe** — `'w` is bounded by the `witness` borrow, so the frame the witness
 /// pins is live for all of `'w`, and the caller cannot pick a `'w` outliving it.

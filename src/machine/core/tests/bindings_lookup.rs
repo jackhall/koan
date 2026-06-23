@@ -5,7 +5,7 @@
 
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
-use crate::machine::core::{BindingIndex, Resolution, KoanRegion};
+use crate::machine::core::{BindingIndex, KoanRegion, Resolution};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };

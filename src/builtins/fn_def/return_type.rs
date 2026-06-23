@@ -108,10 +108,7 @@ pub(crate) fn classify_return_type<'a>(
                     Some(map) => verdict_for_deferred_type_expr(&te, map),
                     None => AdmissibleVerdict::Admissible,
                 };
-                return Ok((
-                    ReturnTypeState::Deferred(DeferredReturn::Type(te)),
-                    verdict,
-                ));
+                return Ok((ReturnTypeState::Deferred(DeferredReturn::Type(te)), verdict));
             }
             let name = te.render();
             // Gated to the FN's lexical position — a return type naming a later type is a

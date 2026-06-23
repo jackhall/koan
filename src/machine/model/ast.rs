@@ -171,8 +171,8 @@ impl<'a> ExpressionPart<'a> {
             return ArgValue::Type((*kt).clone());
         }
         if let (ExpressionPart::Type(t), KType::OfKind(KKind::ProperType)) = (self, slot) {
-            let kt =
-                KType::<'a>::from_type_identifier(t).unwrap_or_else(|_| KType::Unresolved(t.clone()));
+            let kt = KType::<'a>::from_type_identifier(t)
+                .unwrap_or_else(|_| KType::Unresolved(t.clone()));
             return ArgValue::Type(kt);
         }
         if let (ExpressionPart::SigiledTypeExpr(inner), KType::SigiledTypeExpr) = (self, slot) {

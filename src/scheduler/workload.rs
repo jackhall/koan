@@ -3,8 +3,8 @@ use std::rc::Rc;
 use super::Reattachable;
 
 /// The live (caller-lifetime) form of the inter-node value for a workload `W`, re-anchored from the
-/// scheduler's `Erased<W::Value>` store at the borrow under which the producer frame stays pinned.
-/// `Live<'node, W>` is what a slot read hands back and what `finalize` is given.
+/// scheduler's `Witnessed<W::Value, _>` slot at the borrow under which the producer frame stays
+/// pinned. `Live<'node, W>` is what a slot read hands back and what `finalize` is given.
 pub(crate) type Live<'node, W> = <<W as Workload>::Value as Reattachable>::At<'node>;
 
 /// A finalized terminal read together with the producer frame `Rc` backing it (`None` for a
@@ -21,9 +21,10 @@ pub(crate) trait Workload {
     /// The per-node name-resolution payload the scheduler stores, installs ambient, and hands back.
     type Payload: Clone;
     /// The inter-node value carried along dep edges. A one-lifetime [`Reattachable`] family: the
-    /// scheduler stores it erased (`Erased<Self::Value>`) in a finalized terminal and re-anchors it
-    /// to the read borrow, witnessed by the slot's co-stored frame `Rc`. `At<'static>: Copy` lets a
-    /// `&self` read copy the erased carrier out before re-anchoring it.
+    /// scheduler stores it in a finalized terminal's `Witnessed<Self::Value, _>` (the value erased,
+    /// bundled with the producer frame `Rc`) and re-anchors it to the read borrow through
+    /// `Witnessed::read`. `At<'static>: Copy` lets a `&self` read copy the erased carrier out before
+    /// re-anchoring it.
     type Value: Reattachable<At<'static>: Copy>;
     /// The terminal error type (stored in a finalized terminal; the scheduler only stores/borrows it).
     type Error;

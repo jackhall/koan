@@ -704,6 +704,7 @@ digraph {
     "koan::machine::execute::lift" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::parse" [label="uses", style="dashed"];
+    "koan::machine::execute::lift" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine" [label="uses", style="dashed"];
@@ -759,7 +760,6 @@ digraph {
     "koan::machine::execute::runtime::interpret" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::interpret" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::interpret" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
-    "koan::machine::execute::runtime::interpret" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::interpret" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::interpret" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::interpret" -> "koan::machine::model::ast" [label="uses", style="dashed"];
@@ -898,6 +898,7 @@ digraph {
     "koan::scheduler::lifecycle" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::scheduler::node_store" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::scheduler::node_store" -> "koan::scheduler::nodes" [label="uses", style="dashed"];
+    "koan::scheduler::node_store" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::scheduler::nodes" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::scheduler::splice" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::scheduler::workload" -> "koan::scheduler" [label="uses", style="dashed"];

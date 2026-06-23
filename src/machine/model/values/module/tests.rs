@@ -122,7 +122,9 @@ fn functor_per_call_module_lifts_correctly() {
         },
         Body::Builtin(|ctx| {
             crate::machine::core::kfunction::action::Action::Done(Ok(
-                crate::machine::model::Carried::Object(ctx.scope.region.alloc_object(KObject::Null)),
+                crate::machine::model::Carried::Object(
+                    ctx.scope.region.alloc_object(KObject::Null),
+                ),
             ))
         }),
         frame.scope(),

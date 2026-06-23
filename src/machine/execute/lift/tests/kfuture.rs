@@ -30,7 +30,9 @@ fn unanchored_kfuture_no_region_borrow_does_not_anchor() {
         },
         Body::Builtin(|ctx| {
             crate::machine::core::kfunction::action::Action::Done(Ok(
-                crate::machine::model::Carried::Object(ctx.scope.region.alloc_object(KObject::Null)),
+                crate::machine::model::Carried::Object(
+                    ctx.scope.region.alloc_object(KObject::Null),
+                ),
             ))
         }),
         dying.scope(),
@@ -71,7 +73,9 @@ fn unanchored_kfuture_with_region_borrow_does_anchor() {
         },
         Body::Builtin(|ctx| {
             crate::machine::core::kfunction::action::Action::Done(Ok(
-                crate::machine::model::Carried::Object(ctx.scope.region.alloc_object(KObject::Null)),
+                crate::machine::model::Carried::Object(
+                    ctx.scope.region.alloc_object(KObject::Null),
+                ),
             ))
         }),
         dying.scope(),

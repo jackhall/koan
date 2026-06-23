@@ -58,10 +58,6 @@ fn erased_roundtrip_and_helpers() {
     // SAFETY: as above.
     let viaref: &&u32 = unsafe { reattach_ref::<RefFamily>(by_ref) };
     assert_eq!(**viaref, 9);
-    let elems: &[&u32] = &[&backing[0], &backing[1]];
-    // SAFETY: as above.
-    let viaslice: &[&u32] = unsafe { reattach_slice::<RefFamily>(elems) };
-    assert_eq!(viaslice.iter().map(|r| **r).sum::<u32>(), 15);
 
     // Re-read the first borrow to catch a tree-borrows regression from the later helper calls.
     assert_eq!(*reattached, 7);
@@ -75,6 +71,35 @@ fn witness_borrowed_reattach() {
     let a: Erased<RefFamily> = Erased::erase(&backing[0]);
     let via_vend: &u32 = vend_carrier(a, &frame);
     assert_eq!(*via_vend, 11);
+}
+
+/// `Witnessed::read`: the carrier escapes the call bounded by the `&self` borrow, read after the
+/// original binding drops. The witness pins the pointee for the borrow the returned `&u32` rides.
+#[test]
+fn read_borrow_bounded_witness_only() {
+    let backing: Rc<Vec<u32>> = Rc::new(vec![5, 6, 7]);
+    let w: Witnessed<RefFamily, Rc<Vec<u32>>> = {
+        let borrow: &u32 = &backing[2];
+        Witnessed::new(borrow, Rc::clone(&backing))
+    };
+    drop(backing); // witness is sole owner.
+    let escaped: &u32 = w.read(); // hands the carrier OUT, bounded by `&w`.
+    assert_eq!(*escaped, 7);
+    // `w` stays borrowed while `escaped` is live, so the witness pin holds.
+    assert_eq!(*w.read(), 7);
+}
+
+/// `reattach_with` / `reattach_slice_with`: re-anchor a live value (and a slice) to a borrowed
+/// witness's lifetime — the witness-explicit transient re-anchor.
+#[test]
+fn reattach_with_live_value_and_slice() {
+    let frame: Rc<u32> = Rc::new(0);
+    let backing = [11u32, 22, 33];
+    let one: &u32 = reattach_with::<RefFamily, _>(&backing[0], &frame);
+    assert_eq!(*one, 11);
+    let elems: &[&u32] = &[&backing[1], &backing[2]];
+    let viaslice: &[&u32] = reattach_slice_with::<RefFamily, _>(elems, &frame);
+    assert_eq!(viaslice.iter().map(|r| **r).sum::<u32>(), 55);
 }
 
 /// Covariant carrier round-trips after the original borrow drops; the bundled witness keeps it live.

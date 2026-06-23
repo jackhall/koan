@@ -416,7 +416,10 @@ fn slot_admits_strict<'step>(
             // is shape-only. SigiledTypeExpr / RecordType still admit speculatively
             // (they sub-dispatch to a type-side carrier — e.g. the FN record-schema
             // overload's `ProperType` signature slot taking a `:{…}`).
-            if matches!(arg.ktype, KType::Identifier | KType::OfKind(KKind::ProperType)) {
+            if matches!(
+                arg.ktype,
+                KType::Identifier | KType::OfKind(KKind::ProperType)
+            ) {
                 if matches!(
                     part_value,
                     ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)

@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::values::{ArgValue, Held};
+use crate::machine::model::values::{ArgValue, CarriedFamily, Held};
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::{CallFrame, KFuture, KoanRegion};
+use crate::scheduler::reattach_value;
 
 use super::runtime::KoanRuntime;
 
@@ -18,25 +19,33 @@ use super::runtime::KoanRuntime;
 /// A Koan-typed workload hook: the generic scheduler ([`crate::scheduler`]) drives dep-edge
 /// delivery through this trait and names no Koan type itself.
 pub(in crate::machine::execute) trait NodeLift {
-    /// Copy `value` (alive in `src`'s region, viewed at the destination lifetime `'o`) into `dst`;
-    /// the result dies with `dst`. `'o` is the destination *node* region's lifetime — the consumer
-    /// scope's region, or the run region for the drain — never the run global by construction. The
-    /// caller re-anchors the producer read to `'o` before this, so the copy is single-lifetime.
-    fn lift<'o>(
+    /// Copy `value` (alive in `src`'s region, at any lifetime `'a`) into `dst`; the result dies with
+    /// `dst`. `'o` is the destination *node* region's lifetime — the consumer scope's region, or the
+    /// run region for the drain — never the run global by construction. `lift` owns the producer
+    /// read's re-anchor to `'o`: the value's `'a` need not match `'o` because the copy discards the
+    /// fabricated lifetime and `lift_kobject` re-anchors any surviving borrow via an embedded `Rc`.
+    fn lift<'a, 'o>(
         &self,
-        value: Carried<'o>,
+        value: Carried<'a>,
         src: &Rc<CallFrame>,
         dst: &'o KoanRegion,
     ) -> Carried<'o>;
 }
 
 impl NodeLift for KoanRuntime<'_> {
-    fn lift<'o>(
+    fn lift<'a, 'o>(
         &self,
-        value: Carried<'o>,
+        value: Carried<'a>,
         src: &Rc<CallFrame>,
         dst: &'o KoanRegion,
     ) -> Carried<'o> {
+        // Re-anchor the producer read to `dst`'s lifetime so the rebuild below allocs into `dst`.
+        // This is the one audited fabrication in the value-relocation path: there is no held witness
+        // for a value about to be copied out, but `src` heap-pins its region for the duration of this
+        // copy, and `lift_kobject` self-anchors any surviving borrow into `dst` via an embedded `Rc`.
+        // SAFETY: `src` pins the value's backing region across this copy; the carrier is invariant, so
+        // this is a lifetime-only reattach, consumed by the rebuild before `'o` is observed.
+        let value: Carried<'o> = unsafe { reattach_value::<CarriedFamily>(value) };
         match value {
             Carried::Object(v) => Carried::Object(dst.alloc_object(lift_kobject(v, src))),
             Carried::Type(t) => Carried::Type(dst.alloc_ktype(lift_ktype(t, src))),

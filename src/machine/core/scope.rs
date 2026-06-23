@@ -278,7 +278,9 @@ impl<'a> Scope<'a> {
         if self.bindings.is_borrowed() {
             return;
         }
-        self.bindings.get().type_identifier_memo_insert(te, cutoff, kt);
+        self.bindings
+            .get()
+            .type_identifier_memo_insert(te, cutoff, kt);
     }
 
     /// Call-site scope a `Borrowed` window forwards writes to. Panics if `Borrowed`

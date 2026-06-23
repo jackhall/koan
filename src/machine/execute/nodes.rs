@@ -9,7 +9,7 @@ use crate::machine::{CallFrame, KError, LexicalFrame, NodeId};
 /// The generic per-node state lives in [`crate::scheduler::nodes`]; re-exported here so the Koan
 /// execute tree has a single `nodes` surface combining them with the Koan-side [`NodeStep`] /
 /// [`NodePayload`] / [`NodeScope`].
-pub(super) use crate::scheduler::nodes::{NodeFrame, Node, NodeWork};
+pub(super) use crate::scheduler::nodes::{Node, NodeFrame, NodeWork};
 
 /// Outcome of a node's run. `Replace` is the tail-call path: rewrite the slot's work and
 /// re-enqueue the same index so it runs again with no fresh slot allocated, giving constant
