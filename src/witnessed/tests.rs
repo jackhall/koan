@@ -41,8 +41,8 @@ unsafe impl Reattachable for ScopeFamily {
     type At<'r> = ScopeAndPool<'r>;
 }
 
-/// The legacy primitives still routed by the value-carrier path: `Erased` storage and the transient
-/// `reattach_value` / `reattach_slice` / `reattach_ref` helpers, exercised over a real borrow.
+/// The witness-less primitives still routed by the value-carrier path: `Erased` storage and the
+/// transient `reattach_value` / `reattach_ref` helpers, exercised over a real borrow.
 #[test]
 fn erased_roundtrip_and_helpers() {
     let backing = [7u32, 8, 9];

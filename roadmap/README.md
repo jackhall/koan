@@ -99,13 +99,13 @@ What's shipped that the open items below build on:
   (`'o -> 'o`), a `Done` terminal is finalized at its step lifetime `'step` *within* the producing step
   (`NodeStep<'step>`; `run_step` owns the step start to finish — enter, run, finalize — over the cart clone that witnesses `'step`),
   and the consumer-pull / `Outcome::Forward` lift re-anchors through [`read_lifted`](../src/machine/execute/runtime.rs)
-  into the consumer scope region — so `pin_carried_to_run` survives only for the genuine run-global
-  root drain. The dispatch decide surface then collapsed onto that single cart-scale lifetime:
+  into the consumer scope region, with the run-global root drain re-anchoring through `lift` itself.
+  The dispatch decide surface then collapsed onto that single cart-scale lifetime:
   `NodeScope::Anchored` is gone (every slot scope is cart-witnessed), `Outcome` is single-lifetime
   (the `Outcome<'run, 's>` split retired along with the `shorten_outcome` / `deps_for_builtin` /
   `obj_for_builtin` up/down bridges), and the `run_step` continuation reattach targets the
-  step lifetime the held cart `Rc` witnesses — leaving `deps_at_step` and `pin_carried_to_run`
-  the only `outcome.rs` re-anchors. The dispatch decide functions then dropped their conflated
+  step lifetime the held cart `Rc` witnesses — leaving `deps_at_step` (now a safe
+  `reattach_slice_with`) the only `outcome.rs` re-anchor. The dispatch decide functions then dropped their conflated
   `'run` for a single cart lifetime `'step`: a decide reads scope and produces `Outcome` at `'step`,
   the picked `KFunction` is cart-scale (read from the `'step` scope), and the pristine-AST lifetime
   `'ast` (`'ast: 'step`) is named only at the submission boundary
@@ -116,16 +116,26 @@ What's shipped that the open items below build on:
 - *Unified erase/reattach carriers.* The hand-rolled erase-to-`'static` /
   reattach carriers (`ScopePtr`, the contract, the continuation, the scheduler's `Erased<W::Value>`)
   and the cluster of one-off `outcome.rs` reference reattaches now share one generic
-  [`Erased<T>`](../src/scheduler/erase.rs) owner over an `unsafe trait Reattachable { type
+  [`Erased<T>`](../src/witnessed.rs) owner over an `unsafe trait Reattachable { type
   At<'r>; }` lifetime-family. A single `retype` primitive (a `ManuallyDrop` `transmute_copy`) is the
   only lifetime-retype site; each carrier is a declarative `unsafe impl Reattachable` beside its own
   type (`ContractFamily`, `CarriedFamily`, `ContinuationFamily`, `KObjectFamily`, `ScopeFamily`, …)
   with no `transmute` of its own. The scheduler then took sole ownership of all three inter-node
   carrier reattaches: the continuation and contract — like the value channel before them — are
   stored `Erased` on the lifetime-free node and re-anchored only through
-  [`vend_carrier`](../src/scheduler/erase.rs), one safe-signature wrapper whose returned `'w` the
+  [`vend_carrier`](../src/witnessed.rs), one safe-signature wrapper whose returned `'w` the
   compiler bounds against a witness borrow `&Rc<W::Frame>` the driver passes, so the `run_loop.rs` /
   `finalize.rs` call sites carry no `unsafe` of their own. See
+  [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
+- *Witnessed value carrier.* The scattered `Reattachable` / `Erased` / `retype` machinery now lives
+  in the top-level [`witnessed`](../src/witnessed.rs) module (a sibling of `machine` / `scheduler`),
+  and a node's value slot stores a single [`Witnessed<Carried, Option<Rc<Cart>>>`](../src/witnessed.rs)
+  bundling the erased value with the producer frame `Rc` that pins it — the witness-pins-the-value
+  relationship is a type invariant, not a co-stored pair. Reads go through the safe `with` / `map` /
+  `read` accessors (the first two rank-2 `for<'b>` branded against escape, all three `compile_fail`-
+  and Miri-tested), retiring the open-coded `read_result` reattaches and `pin_carried_to_run`. The
+  one irreducible audited `unsafe` reattach left in the value path is `lift`'s value-relocation
+  re-anchor (no borrowed witness for a value about to be copied out). See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -273,7 +283,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
 - [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md)
-- [FrameStorage self-reference via ouroboros](refactor/framestorage-ouroboros.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
@@ -284,6 +293,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Unify the two argument binders](refactor/unify-argument-binders.md)
 - [Unify the value-name lookup outcomes](refactor/unify-name-lookup-outcome.md)
 - [Unify the type-name resolution path](refactor/unify-resolution-outcome.md)
+- [Witnessed carrier module for value lifetime-erasure](refactor/witnessed-carrier.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
@@ -381,10 +391,14 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
-- [FrameStorage self-reference via ouroboros](refactor/framestorage-ouroboros.md) — replace the
-  hand-rolled region↔child-scope `pin_deref` / `ScopePtr::reattach_unbounded` loop with an
-  `ouroboros #[self_referencing]` struct so the self-reference is compiler-generated, not audited
-  `unsafe`.
+- [Witnessed carrier module for value lifetime-erasure](refactor/witnessed-carrier.md) — consolidate
+  the scattered `Reattachable` / `Erased` / `retype` reattach machinery into one top-level `witnessed`
+  module whose `unsafe` is two rank-2 branded accessors (`with` / `map`), bundling each erased value
+  with its liveness witness.
+- [FrameStorage self-reference removal](refactor/framestorage-self-reference.md) — remove the
+  hand-rolled region↔child-scope `pin_deref` / `ScopePtr::reattach_unbounded` loop, preferring to
+  drop the `Scope.region` back-pointer outright (no dependency) over encapsulating it with
+  `self_cell` / `ouroboros`, and delete `ScopePtr`.
 - [Unify the two argument binders](refactor/unify-argument-binders.md) — stop the builtin
   dispatch path building a whole `KFuture` just to gut `future.args`; one arg-binding path
   instead of `bind` (`Record<ArgValue>`) beside `bind_by_name` (`Record<Carried>`).

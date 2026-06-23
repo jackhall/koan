@@ -18,7 +18,7 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{KKind, KType, ProjectedSchema, RecursiveSet};
-use koan::machine::{KoanRuntime, KoanRegion, Scope};
+use koan::machine::{KoanRegion, KoanRuntime, Scope};
 use koan::parse::parse;
 
 struct SharedBuf(Rc<RefCell<Vec<u8>>>);

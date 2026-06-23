@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{KObject, KType};
-use koan::machine::{KError, KErrorKind, KoanRuntime, KoanRegion, Scope};
+use koan::machine::{KError, KErrorKind, KoanRegion, KoanRuntime, Scope};
 use koan::parse::parse;
 
 struct SharedBuf(Rc<RefCell<Vec<u8>>>);
