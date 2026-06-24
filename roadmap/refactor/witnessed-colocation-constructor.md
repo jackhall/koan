@@ -28,23 +28,33 @@ a compile error.
   captured `&'x` cannot satisfy `'x: 'b` for every `'b`), so the lifted value's references are
   region-derived or owned / `'static` — never a smuggled foreign borrow. A `compile_fail` test pins
   this, mirroring the existing guards on [`Witnessed::with` / `map`](../../src/witnessed.rs).
-- Scope- and region-carrying values are bundled through the enforcing constructor; the free
-  `Witnessed::new` is reserved for carriers whose co-location is already structural (lifetime-free
-  carriers), or is removed where the enforcing form subsumes it.
+- A `merge` composition law combines two `Witnessed` carriers under one shared `for<'b>` brand, runs a
+  binding projection (e.g. a witnessed function bound into a witnessed scope), and re-seals under the
+  *descendant* witness — the one whose ancestor (`outer`) chain transitively pins both regions. It
+  rejects unrelated witnesses (`merge_pin` returns `None`) before the projection runs. A `compile_fail`
+  test pins the brand-escape guard, mirroring `yoke`.
+- The enforcing constructor and `merge` primitive are *available and proven* — exercised by Miri
+  stand-in round-trips and the `compile_fail` guards — and the free `Witnessed::new` /
+  `from_erased(_, None)` is reserved (documented) for carriers whose co-location is already structural
+  (lifetime-free carriers, or a value living in a region the witness pins). Migrating the production
+  bundle sites onto `yoke` is deferred to [`region.alloc` returns `Witnessed`](region-alloc-witnessed.md),
+  since the lone production site (`node_store::finalize`) receives its value already-produced and so
+  needs the FrameStorage-self-reference restructure first.
 
 **Directions.**
 
-- *Witness granularity — open.* Whether the closure is handed a region (`&'b Region<'b>`) or a scope
-  (`&'b Scope<'b>`, the interior-mutable binding-table case), and whether the bundled witness is the
-  region `Rc` or the cart `Rc<CallFrame>` (which pins the region *plus* its `outer` chain).
-  Recommended: a generic `yoke` over the witness's owned-region accessor, with a `Scope`-specialized
-  wrapper for the mutation sites.
+- *Witness granularity — decided.* `yoke` is generic over a `WitnessRegion` trait exposing the
+  witness's owned region (`type Region: ?Sized`); the scope cases route it by sourcing a
+  `Scope`-carrying carrier from that region, no `Scope`-specialized wrapper needed. The bundled witness
+  is whatever pins the region — the stand-in proofs use a cart `Rc` whose `outer` chain pins the region
+  plus its ancestors.
 - *Relationship to `map` — decided.* The enforcing constructor is the build-time twin of
   [`Witnessed::map`](../../src/witnessed.rs): both run a `for<'b>` closure and re-seal the result to
   `'static` storage, but where `map` transforms an *already-bundled* carrier, this **sources** the
   carrier from the witness's region — closing the co-location gap `new` leaves open.
-- *Adoption scope — open.* Whether to migrate every `Witnessed::new` scope/region site, or only the
-  new lift / continuation paths that motivate the constructor.
+- *Adoption scope — deferred.* No production `Witnessed::new` site is migrated here; the primitives
+  ship available + proven and the production migration rides
+  [`region.alloc` returns `Witnessed`](region-alloc-witnessed.md).
 
 ## Dependencies
 
@@ -58,3 +68,5 @@ Extends the consolidated [`witnessed` carrier module](witnessed-carrier.md) — 
 - [FrameStorage self-reference removal](framestorage-self-reference.md) — its continuation rework must
   lift scope-carrying values across the step boundary, which is sound only through a co-location-enforced
   bundle.
+- [`region.alloc` returns `Witnessed`](region-alloc-witnessed.md) — the production migration that wires
+  the shipped `yoke` constructor onto every allocated value.

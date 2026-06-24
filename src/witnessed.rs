@@ -7,9 +7,12 @@
 //! the borrow's lifetime to `'static` for storage and re-anchors it at a caller-chosen lifetime on
 //! read. The re-anchor is sound only while a *liveness witness* — the producer frame `Rc` that pins
 //! the pointee — is held. [`Witnessed<T, W>`] bundles the erased value with that witness `W` in one
-//! value, so "the witness keeps the value alive" is a type invariant, not a comment: its two
-//! accessors, [`Witnessed::with`] (borrow + read) and [`Witnessed::map`] (consume + transform), are
-//! rank-2 (`for<'b>`) branded so the fabricated content lifetime cannot escape the witness pin.
+//! value, so "the witness keeps the value alive" is a type invariant, not a comment. Its accessors
+//! are rank-2 (`for<'b>`) branded so a fabricated content lifetime cannot escape the witness pin:
+//! [`Witnessed::with`] (borrow + read) and [`Witnessed::map`] (consume + transform) re-anchor an
+//! already-bundled carrier, [`Witnessed::yoke`] *sources* one from the witness's own region so
+//! co-location holds by construction, and [`Witnessed::merge`] combines two under one brand and
+//! re-seals under the witness that pins both.
 //!
 //! The layout machinery underneath — the [`Reattachable`] family contract, the private [`retype`]
 //! primitive, [`erase_to_static`] and the storable [`Erased<T>`] — is the same single-lifetime
@@ -167,6 +170,55 @@ const _: fn() = || {
 // so no held pin is required. Either way the carrier's pointee outlives a read bounded by `&self`.
 unsafe impl<W: Witness> Witness for Option<W> {}
 
+/// A [`Witness`] that exposes the region it pins, so a value built *solely* from that region is
+/// co-located with the witness by construction. This is the seam [`Witnessed::yoke`] routes: the
+/// constructor hands `Self::region` to a `for<'b>` closure, so the only references the produced
+/// carrier can hold are reached through the pinned region.
+///
+/// # Safety
+///
+/// `region` returns a reference into the same storage `Self`'s [`Witness`] impl pins — i.e. a
+/// reference whose referent stays live and at a fixed address for as long as the witness is held.
+/// A value whose references are all derived from that reference is therefore pinned by the witness.
+pub unsafe trait WitnessRegion: Witness {
+    /// The region whose contents the witness pins.
+    type Region: ?Sized;
+    /// Borrow the pinned region.
+    fn region(&self) -> &Self::Region;
+}
+
+/// Which input of a [`Witnessed::merge`] carries the witness that pins **both** inputs' regions —
+/// the *descendant* cart, whose ancestor-chain pin transitively keeps the other's region live. See
+/// [`MergeWitness`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergePin {
+    /// The left input's witness pins both regions.
+    Left,
+    /// The right input's witness pins both regions.
+    Right,
+}
+
+/// A [`Witness`] whose values stand in an ancestry relation, so two of them can be reduced to the
+/// single one that pins both — the seam [`Witnessed::merge`] routes to seal a combined carrier under
+/// the tightest correct witness.
+///
+/// The motivating shape is the per-call cart: a descendant frame's storage holds its ancestors'
+/// storage alive (the `outer` chain), so holding the descendant keeps every ancestor region live.
+/// The descendant is therefore the shorter-lived but all-pinning witness; two carts with no ancestry
+/// relation pin nothing of each other's, so merging them is unsound and [`Self::merge_pin`] rejects
+/// it with `None`.
+///
+/// # Safety
+///
+/// When [`Self::merge_pin`] returns `Some(`[`MergePin::Left`]`)`, holding `left` must keep both
+/// `left`'s and `right`'s pinned regions live for as long as `left` is held (and symmetrically for
+/// [`MergePin::Right`]). `None` asserts neither pins the other — the only safe verdict when no such
+/// dominating witness exists.
+pub unsafe trait MergeWitness: Witness + Sized {
+    /// The input whose witness pins both regions, or `None` when neither does.
+    fn merge_pin(left: &Self, right: &Self) -> Option<MergePin>;
+}
+
 /// An erased carrier bundled with the liveness [`Witness`] that keeps its pointee alive — the
 /// consolidation of the old `(Erased<T>, witness)` pair into one value, so the witness-pins-the-value
 /// relationship is structural. Reads go through [`Self::with`]; an advance/transform that may
@@ -182,6 +234,12 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// Bundle a live carrier with the witness that pins it, erasing the carrier for storage. Safe:
     /// the erase cannot fabricate a lifetime, and the witness records the liveness obligation the
     /// later re-anchor relies on.
+    ///
+    /// Co-location — that the witness pins *this* value's references — is **caller-asserted** here: the
+    /// value and witness arrive independently. Reserve `new` for carriers whose co-location is already
+    /// structural (lifetime-free carriers, or a value already living in a region the witness pins);
+    /// prefer [`Self::yoke`], which sources the carrier from the witness's region and so discharges
+    /// co-location by construction.
     pub fn new(value: T::At<'_>, witness: W) -> Self {
         Self::from_erased(Erased::erase(value), witness)
     }
@@ -192,6 +250,57 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// lifetime through a closure would otherwise let it default to `'static`.
     pub(crate) fn from_erased(value: Erased<T>, witness: W) -> Self {
         Witnessed { value, witness }
+    }
+
+    /// Bundle a carrier **sourced from the witness's own region** — the co-location-enforcing
+    /// constructor, the build-time twin of [`Self::map`]. Where [`Self::new`] pairs an *arbitrary*
+    /// value with an *arbitrary* witness (co-location asserted in prose at the call site), `yoke`
+    /// hands the witness's pinned region to a **rank-2** (`for<'b>`) closure and bundles whatever it
+    /// builds: the only references the produced carrier can hold are ones reached through that region,
+    /// so the witness-pins-the-value invariant holds **by construction**.
+    ///
+    /// The `for<'b>` brand is what enforces it: a closure that tried to return a reference captured
+    /// from its environment (`&'x`) would need `'x: 'b` for every `'b`, which only `'static` borrows
+    /// satisfy — so the carrier's references are region-derived or owned / `'static`, never a smuggled
+    /// foreign borrow. The [`compile_fail`] guard below pins this, mirroring [`Self::with`] / [`Self::map`].
+    ///
+    /// Safe: the closure's result is erased to `'static` (forgetting the borrow of the region) before
+    /// `witness` moves into the bundle, and the [`WitnessRegion`] / [`Witness`] contracts guarantee the
+    /// region stays live and fixed-address under the held witness — so the later re-anchor cannot dangle.
+    ///
+    /// ```compile_fail
+    /// use koan::witnessed::{Reattachable, Witness, WitnessRegion, Witnessed};
+    /// use std::rc::Rc;
+    ///
+    /// struct RefFamily;
+    /// // SAFETY: `&'r u32` is one type generic only in `'r`.
+    /// unsafe impl Reattachable for RefFamily {
+    ///     type At<'r> = &'r u32;
+    /// }
+    /// struct Cart(Vec<u32>);
+    /// // SAFETY: `Rc<Cart>` is `StableDeref`; its region is the owned `Vec`.
+    /// unsafe impl Witness for Rc<Cart> {}
+    /// unsafe impl WitnessRegion for Rc<Cart> {
+    ///     type Region = [u32];
+    ///     fn region(&self) -> &[u32] { &self.0 }
+    /// }
+    ///
+    /// let outside: u32 = 7;
+    /// let cart: Rc<Cart> = Rc::new(Cart(vec![1, 2, 3]));
+    /// // Try to yoke a borrow of `outside` (not region-derived) — rejected by the `for<'b>` brand.
+    /// let _: Witnessed<RefFamily, Rc<Cart>> = Witnessed::yoke(cart, |_region| &outside);
+    /// ```
+    pub fn yoke<F>(witness: W, f: F) -> Self
+    where
+        W: WitnessRegion,
+        F: for<'b> FnOnce(&'b W::Region) -> T::At<'b>,
+    {
+        // The borrow of `witness` (through `region`) ends inside `erase`, which forgets the carrier's
+        // lifetime; `witness` is then free to move into the bundle. Safe for the same reason as
+        // `new` — the erase cannot fabricate a lifetime — but here the carrier is provably built from
+        // the witness's region, so co-location is structural rather than asserted.
+        let value = Erased::erase(f(witness.region()));
+        Self::from_erased(value, witness)
     }
 
     /// Read the carrier: re-anchor it behind a **rank-2** (`for<'b>`) closure, so the fabricated
@@ -280,6 +389,86 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
             value: Erased::erase(projected),
             witness,
         }
+    }
+
+    /// Combine two witnessed carriers under one brand and re-seal the result under the witness that
+    /// pins **both** — the composition law for [`Witnessed`]. The two carriers are re-anchored at a
+    /// shared `for<'b>` brand and handed to `f`, which may bind one into the other (e.g. a witnessed
+    /// `KFunction` into a witnessed `Scope`); the projection is then sealed under the *descendant*
+    /// witness, whose ancestor-chain pin keeps the other's region live after the other witness drops.
+    ///
+    /// Returns `None` when the two witnesses are **unrelated** — neither pins the other's region (see
+    /// [`MergeWitness::merge_pin`]) — because no single held witness would then keep the combined
+    /// carrier's references live. The relatedness verdict is taken *before* `f` runs, so an unsound
+    /// combination is never built.
+    ///
+    /// Sound for the same reason as [`Self::map`], doubled: both witnesses are held for the whole of
+    /// `f`, so re-anchoring both carriers to one brand `'b` cannot dangle; the `for<'b>` quantifier
+    /// keeps either branded carrier from escaping into the result type, and the surviving descendant
+    /// witness pins the sealed carrier's backing thereafter.
+    ///
+    /// ```compile_fail
+    /// use koan::witnessed::{MergePin, MergeWitness, Reattachable, Witness, Witnessed};
+    /// use std::marker::PhantomData;
+    /// use std::rc::Rc;
+    ///
+    /// struct RefFamily;
+    /// // SAFETY: `&'r u32` is one type generic only in `'r`.
+    /// unsafe impl Reattachable for RefFamily {
+    ///     type At<'r> = &'r u32;
+    /// }
+    /// // SAFETY: `Rc<Vec<u32>>` is `StableDeref`; ancestry is trivial (every cart pins itself).
+    /// unsafe impl MergeWitness for Rc<Vec<u32>> {
+    ///     fn merge_pin(_l: &Self, _r: &Self) -> Option<MergePin> { Some(MergePin::Left) }
+    /// }
+    ///
+    /// let a: Rc<Vec<u32>> = Rc::new(vec![1]);
+    /// let b: Rc<Vec<u32>> = Rc::new(vec![2]);
+    /// let wa: Witnessed<RefFamily, Rc<Vec<u32>>> = Witnessed::new(&a[0], Rc::clone(&a));
+    /// let wb: Witnessed<RefFamily, Rc<Vec<u32>>> = Witnessed::new(&b[0], Rc::clone(&b));
+    /// let mut stolen: Option<&u32> = None;
+    /// // Try to capture a branded `&'b u32` into a longer-lived slot — rejected by `for<'b>`.
+    /// let _ = wa.merge::<RefFamily, RefFamily>(wb, |l, _r, _brand: PhantomData<&_>| {
+    ///     stolen = Some(l);
+    ///     l
+    /// });
+    /// println!("{}", *stolen.unwrap());
+    /// ```
+    pub fn merge<B: Reattachable, P: Reattachable>(
+        self,
+        other: Witnessed<B, W>,
+        f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, PhantomData<&'b ()>) -> P::At<'b>,
+    ) -> Option<Witnessed<P, W>>
+    where
+        W: MergeWitness,
+    {
+        // Relatedness first: if neither witness pins the other's region there is no sound result, so
+        // bail before `f` builds a value that would reference a region no surviving witness keeps live.
+        let pin = W::merge_pin(&self.witness, &other.witness)?;
+        let Witnessed {
+            value: left,
+            witness: left_witness,
+        } = self;
+        let Witnessed {
+            value: right,
+            witness: right_witness,
+        } = other;
+        // SAFETY: both witnesses are held across `f`, each pinning its own carrier's backing; the two
+        // carriers are re-anchored to one existential brand the `for<'b>` closure cannot leak, and the
+        // projection is immediately re-erased to `'static` for storage. The retained descendant witness
+        // (`pin`) pins both regions thereafter. Lifetime-only retypes of single-lifetime families.
+        let live_left: T::At<'_> = unsafe { retype::<T::At<'static>, T::At<'_>>(left.inner) };
+        let live_right: B::At<'_> = unsafe { retype::<B::At<'static>, B::At<'_>>(right.inner) };
+        let projected = f(live_left, live_right, PhantomData);
+        // Keep the descendant (all-pinning) witness; drop the other.
+        let witness = match pin {
+            MergePin::Left => left_witness,
+            MergePin::Right => right_witness,
+        };
+        Some(Witnessed {
+            value: Erased::erase(projected),
+            witness,
+        })
     }
 
     /// Re-anchor the carrier and hand it **out** bounded by the `&self` borrow. The borrow-bounded

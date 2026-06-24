@@ -6,7 +6,7 @@ src/machine/core/reattach.rs: 2
 src/machine/core/scope_ptr.rs: 2
 src/machine/execute/lift.rs: 1
 src/machine/model/types/ktype_predicates.rs: 1
-src/witnessed.rs: 21
+src/witnessed.rs: 25
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -79,7 +79,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-31 tests, grouped by the unsafe site each pins down. Names below are the exact
+34 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -263,10 +263,15 @@ It runs the transmute defined in the group above, so `node_scope_yoked_child_era
 `transmute_copy` behind a `ManuallyDrop`, the one site `transmute`'s GAT size-proof can't cover),
 reached through `Erased<T>::erase` / `reattach`, the witness-borrowed `reattach_with` /
 `reattach_ref_with` / `reattach_slice_with` / `vend_carrier` helpers, the `reattach_value` /
-`reattach_ref` transient helpers, and through the three `Witnessed` accessors: the rank-2 branded `with` (borrow + read) and
-`map` (consume + transform), plus the borrow-bounded `read` that hands the carrier *out* at the
-`&self` borrow — sound because its content lifetime is the borrow itself (not a free `'b`), so the
-bundled `Witness` pins it for exactly that long. The `unsafe impl Reattachable` families declare
+`reattach_ref` transient helpers, and through the `Witnessed` accessors: the rank-2 branded `with`
+(borrow + read) and `map` (consume + transform), the borrow-bounded `read` that hands the carrier
+*out* at the `&self` borrow — sound because its content lifetime is the borrow itself (not a free
+`'b`), so the bundled `Witness` pins it for exactly that long — and the rank-2 branded `merge`, which
+re-anchors *two* carriers under one `'b`, runs a binding projection, and re-seals under the
+descendant witness (the one whose ancestor-chain pin keeps both regions live), rejecting unrelated
+carts. The co-location-enforcing constructor `yoke` sources its carrier from the witness's region
+through a `for<'b>` closure (no `unsafe` of its own — it routes the safe `erase`), so it is exercised
+for the brand discipline, not a retype. The `unsafe impl Reattachable` families declare
 layout-invariance and carry no runtime `unsafe` of their own — they are exercised through this
 primitive: `CarriedFamily` / `ResultCarriedFamily`
 ([src/machine/model/values/carried.rs](../src/machine/model/values/carried.rs)), `ContractFamily`,
@@ -275,8 +280,10 @@ re-anchor it through every entry point — the witness-less helpers, the borrow-
 after the original binding drops), and the `Witnessed` accessors that drop the *original* binding and
 read back only through the bundled witness (the load-bearing case for the invariant `Cell<&'r u32>`
 carrier) — plus `map`'s branded projection (binding a cart-coherent `&'b` value into the invariant
-scope slot, the write `with` rejects). The escape-can't-compile
-guards are `compile_fail` doctests on `with` / `map`.
+scope slot, the write `with` rejects). `yoke` sources a carrier from a stand-in cart's region, and
+`merge` binds an ancestor-cart ref into a descendant-cart scope at the shared brand and re-seals under
+the descendant (read back after both call handles drop), plus a `None`-on-unrelated-carts check. The
+escape-can't-compile guards are `compile_fail` doctests on `with` / `map` / `yoke` / `merge`.
 
 - `erased_roundtrip_and_helpers`
 - `witness_borrowed_reattach`
@@ -286,6 +293,9 @@ guards are `compile_fail` doctests on `with` / `map`.
 - `invariant_roundtrip_witness_only`
 - `continuation_binds_cart_coherent_value_via_map`
 - `invariant_same_brand_mutation`
+- `yoke_sources_carrier_from_witness_region`
+- `merge_binds_ancestor_ref_into_descendant_scope`
+- `merge_rejects_unrelated_carts`
 
 **`pin_deref` — raw heap-pin deref** ([src/machine/core/reattach.rs](../src/machine/core/reattach.rs))
 — the one audited raw heap-pin deref, materializing a `&'x T` from an `Rc`-pinned `*const T` (the
@@ -394,6 +404,7 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-24: 116s — 34 tests, 0 leaks, 0 UB
 - 2026-06-23: 104s — 30 tests, 0 leaks, 0 UB
 - 2026-06-23: 106s — 30 tests, 0 leaks, 0 UB
 - 2026-06-23: 103s — 30 tests, 0 leaks, 0 UB

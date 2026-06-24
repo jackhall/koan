@@ -1,9 +1,10 @@
 //! Miri slate (tree borrows) for the lifetime-erasure carrier. Every test carries a *real* borrow
 //! into the erased store and reads it back after the original binding drops, so the erase → reattach
 //! → read round-trip pins the lifetime-fabricated read under tree borrows. Names only stand-in
-//! families (a covariant `&'r u32`, an invariant `Cell<&'r u32>`, a mutable-scope-plus-pool family),
-//! never a koan type. Fails on UB, not values. The escape-can't-compile guards live as
-//! `compile_fail` doctests on [`Witnessed::with`] / [`Witnessed::map`].
+//! families (a covariant `&'r u32`, an invariant `Cell<&'r u32>`, a mutable-scope-plus-pool family)
+//! and a stand-in cart (`TestCart`: a region-backing `Vec` plus an `outer` ancestor chain), never a
+//! koan type. Fails on UB, not values. The escape-can't-compile guards live as `compile_fail`
+//! doctests on [`Witnessed::with`] / [`Witnessed::map`] / [`Witnessed::yoke`] / [`Witnessed::merge`].
 
 use std::cell::Cell;
 use std::marker::PhantomData;
@@ -34,6 +35,56 @@ reattachable! {
     RefFamily => &'r u32,
     InvFamily => Cell<&'r u32>,
     ScopeFamily => ScopeAndPool<'r>,
+}
+
+/// Cart stand-in for the witness-with-a-region cases (`yoke` / `merge`): a backing `Vec` (the
+/// "region") plus an `outer` link, mirroring `FrameStorage`'s region + ancestor-pin chain without
+/// naming a koan type. Held by `Rc`, so the backing's heap address is stable (a `StableDeref`); a
+/// descendant's `outer` chain keeps its ancestors' backings alive, exactly the relation `merge_pin`
+/// reads.
+struct TestCart {
+    backing: Vec<u32>,
+    outer: Option<Rc<TestCart>>,
+}
+
+// `Rc<TestCart>` is already a `Witness` (the blanket `Rc<F>` impl). Its region is the owned backing.
+// SAFETY: the backing lives inside the `Rc`-owned `TestCart` at a fixed heap address for the whole
+// life of the `Rc`, so a value built from `&backing` is pinned by the witness.
+unsafe impl WitnessRegion for Rc<TestCart> {
+    type Region = [u32];
+    fn region(&self) -> &[u32] {
+        &self.backing
+    }
+}
+
+/// Whether holding `holder` keeps `target`'s backing alive — true when `target` is `holder` itself or
+/// any of its `outer` ancestors (each pinned by the chain). The descendant test that `merge_pin` uses.
+fn pins(holder: &Rc<TestCart>, target: &Rc<TestCart>) -> bool {
+    let mut node: &TestCart = holder;
+    loop {
+        if std::ptr::eq(node, &**target) {
+            return true;
+        }
+        match &node.outer {
+            Some(o) => node = o,
+            None => return false,
+        }
+    }
+}
+
+// SAFETY: `Some(Left)` is returned only when `pins(left, right)` — holding `left` keeps `right`'s
+// backing alive via the `outer` chain (and symmetrically for `Right`); `None` only when neither pins
+// the other, the sole safe verdict for unrelated carts.
+unsafe impl MergeWitness for Rc<TestCart> {
+    fn merge_pin(left: &Self, right: &Self) -> Option<MergePin> {
+        if pins(left, right) {
+            Some(MergePin::Left)
+        } else if pins(right, left) {
+            Some(MergePin::Right)
+        } else {
+            None
+        }
+    }
 }
 
 /// The witness-less primitives still routed by the value-carrier path: `Erased` storage and the
@@ -172,4 +223,77 @@ fn invariant_same_brand_mutation() {
     assert_eq!(got, 100);
     drop(backing);
     assert_eq!(w.with(|c| *c.get()), 100);
+}
+
+/// `yoke`: the carrier is sourced from the witness's own region inside the `for<'b>` closure, so its
+/// reference is region-derived by construction. Read back after the original cart handle drops — the
+/// bundled witness pins the backing the reference points into.
+#[test]
+fn yoke_sources_carrier_from_witness_region() {
+    let cart: Rc<TestCart> = Rc::new(TestCart {
+        backing: vec![5, 6, 7],
+        outer: None,
+    });
+    let w: Witnessed<RefFamily, Rc<TestCart>> =
+        Witnessed::yoke(Rc::clone(&cart), |region| &region[2]);
+    drop(cart); // the bundled witness is now the sole owner of the backing.
+    assert_eq!(w.with(|r| **r), 7);
+    // Read again to catch a tree-borrows regression on the reattached view.
+    assert_eq!(w.with(|r| **r), 7);
+}
+
+/// `merge` as the function-into-scope composition: a witnessed `ScopeFamily` carrier in the
+/// *descendant* cart binds, at the shared brand, a witnessed `&u32` sourced from the *ancestor* cart.
+/// The result is sealed under the descendant, whose `outer` chain keeps the ancestor backing alive
+/// after both call handles drop. Miri must stay clean reading the bound ancestor ref back.
+#[test]
+fn merge_binds_ancestor_ref_into_descendant_scope() {
+    let ancestor: Rc<TestCart> = Rc::new(TestCart {
+        backing: vec![100, 200],
+        outer: None,
+    });
+    let descendant: Rc<TestCart> = Rc::new(TestCart {
+        backing: vec![1, 2, 3],
+        outer: Some(Rc::clone(&ancestor)),
+    });
+    // Scope carrier in the descendant: empty slot, pool = the descendant's own region.
+    let scope_w: Witnessed<ScopeFamily, Rc<TestCart>> =
+        Witnessed::yoke(Rc::clone(&descendant), |region| ScopeAndPool {
+            scope: Cell::new(None),
+            pool: region,
+        });
+    // Function stand-in: a reference sourced from the ancestor's region.
+    let fn_w: Witnessed<RefFamily, Rc<TestCart>> =
+        Witnessed::yoke(Rc::clone(&ancestor), |region| &region[1]);
+    // Bind the ancestor ref into the descendant scope at the shared brand, then re-seal.
+    let merged: Witnessed<ScopeFamily, Rc<TestCart>> = scope_w
+        .merge::<RefFamily, ScopeFamily>(fn_w, |scope, func, _brand: PhantomData<&_>| {
+            scope.scope.set(Some(func));
+            scope
+        })
+        .expect("descendant and ancestor carts are related");
+    // Drop both call handles. `merged`'s witness is the descendant clone; its `outer` chain still
+    // pins the ancestor backing the bound `&200` points into.
+    drop(descendant);
+    drop(ancestor);
+    assert_eq!(merged.with(|c| *c.scope.get().unwrap()), 200);
+}
+
+/// `merge` rejects unrelated carts: neither pins the other's backing, so no surviving witness would
+/// keep a combined carrier live — `merge_pin` returns `None` and the merge yields `None` before the
+/// closure builds an unsound value.
+#[test]
+fn merge_rejects_unrelated_carts() {
+    let a: Rc<TestCart> = Rc::new(TestCart {
+        backing: vec![1],
+        outer: None,
+    });
+    let b: Rc<TestCart> = Rc::new(TestCart {
+        backing: vec![2],
+        outer: None,
+    });
+    let wa: Witnessed<RefFamily, Rc<TestCart>> = Witnessed::yoke(Rc::clone(&a), |r| &r[0]);
+    let wb: Witnessed<RefFamily, Rc<TestCart>> = Witnessed::yoke(Rc::clone(&b), |r| &r[0]);
+    let merged = wa.merge::<RefFamily, RefFamily>(wb, |l, _r, _brand: PhantomData<&_>| l);
+    assert!(merged.is_none());
 }

@@ -151,7 +151,12 @@ What's shipped that the open items below build on:
   `read` accessors (the first two rank-2 `for<'b>` branded against escape, all three `compile_fail`-
   and Miri-tested), retiring the open-coded `read_result` reattaches and `pin_carried_to_run`. The
   one irreducible audited `unsafe` reattach left in the value path is `lift`'s value-relocation
-  re-anchor (no borrowed witness for a value about to be copied out). See
+  re-anchor (no borrowed witness for a value about to be copied out). The co-location-enforcing
+  constructor `yoke` (sourcing a carrier from the witness's own region behind a `for<'b>` brand, so
+  the witness-pins-the-value invariant holds by construction) and the `merge` composition law
+  (combining two carriers under one brand, re-sealed under the descendant witness whose `outer` chain
+  pins both regions) have also landed — available and Miri/`compile_fail`-proven, with production
+  adoption tracked by [`region.alloc` returns `Witnessed`](refactor/region-alloc-witnessed.md). See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -416,6 +421,10 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   add a constructor that *sources* a carrier from the witness's own region through a `for<'b>`
   closure, so the witness-pins-the-value (co-location) invariant `Witnessed::new` leaves as a
   per-call-site SAFETY note becomes structural and compile-checked.
+- [`region.alloc` returns `Witnessed`](refactor/region-alloc-witnessed.md) — wire the shipped `yoke`
+  constructor into production by making every region allocation return a value already bundled with
+  its owning frame's witness, replacing the constructor's stand-in cart with the live `Rc<CallFrame>`
+  `WitnessRegion` / `MergeWitness` impls.
 - [FrameStorage self-reference removal](refactor/framestorage-self-reference.md) — replace the
   hand-rolled region↔child-scope loop in `FrameStorage` with an `ouroboros #[self_referencing]`
   struct, deleting the three audited `unsafe` tokens that close it (the `reattach_witnessed`

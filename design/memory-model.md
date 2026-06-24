@@ -178,13 +178,20 @@ invariant rather than a co-stored field pair plus a SAFETY comment. `W` is a [`W
 — an `unsafe` marker asserting its pointee stays at a fixed address while held; `Rc<F>` qualifies
 (a static `StableDeref` assert records the obligation) and `Option<W>` lifts it for a frameless
 terminal whose backing region outlives the carrier (`None`). The carrier is re-anchored through one
-of three accessors, all sound by construction: `with` re-anchors behind a **rank-2** `for<'b>` brand
-so the fabricated content lifetime cannot escape the closure into the result (the generativity trick;
-the naive content-free reattach is a Miri-proven use-after-free); `map` consumes and re-projects
-under the same brand and witness (`yoke::map_project`'s shape); and `read` hands the carrier out
-bounded by the `&self` borrow itself, sound because the content lifetime *is* the borrow the bundled
-witness pins, not a free `'b` the caller could widen. All three keep their `unsafe` retype inside the
-module, so callers carry none.
+of three read/transform accessors, all sound by construction: `with` re-anchors behind a **rank-2**
+`for<'b>` brand so the fabricated content lifetime cannot escape the closure into the result (the
+generativity trick; the naive content-free reattach is a Miri-proven use-after-free); `map` consumes
+and re-projects under the same brand and witness (`yoke::map_project`'s shape); and `read` hands the
+carrier out bounded by the `&self` borrow itself, sound because the content lifetime *is* the borrow
+the bundled witness pins, not a free `'b` the caller could widen. Two build-time accessors close the
+co-location gap `new` leaves to caller assertion: `yoke` *sources* a carrier from the witness's own
+region behind a `for<'b>` brand (over the `WitnessRegion` trait), so the only references the carrier
+can hold are region-derived — the witness-pins-the-value invariant holds by construction rather than
+asserted; and `merge` combines two carriers under one shared brand, runs a binding projection, and
+re-seals under the *descendant* witness (the one whose `outer` ancestor chain transitively pins both
+regions, selected via the `MergeWitness` trait's `merge_pin`), rejecting unrelated witnesses before
+the projection runs. All keep their `unsafe` retype inside the module, so callers carry none; `yoke`
+in fact routes only the safe `erase`, carrying no retype of its own.
 
 The value channel is borrow-checked end to end. The scheduler stores a finalized terminal as a single
 `Witnessed<W::Value, Option<Rc<W::Cart>>>` ([`node_store.rs`](../src/scheduler/node_store.rs)),

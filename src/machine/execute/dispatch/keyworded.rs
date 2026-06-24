@@ -6,10 +6,10 @@ use crate::machine::core::kfunction::KFunctionRefFamily;
 use crate::machine::core::Scope;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Parseable;
-use crate::scheduler::reattach_with;
 use crate::machine::{
     BindingIndex, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, TraceFrame,
 };
+use crate::scheduler::reattach_with;
 
 use super::super::ignore_results;
 use super::super::nodes::NodeWork;
@@ -111,10 +111,8 @@ pub(super) fn initial<'step, 'b>(
     if staged_subs.is_empty() {
         // The synchronous (no-eager-subs) call — the common path for builtins and simple calls.
         // Re-anchor the picked function from `'b` to the cart `'step`, witnessed by the active region.
-        let function = reattach_with::<KFunctionRefFamily, _>(
-            resolved.function,
-            ctx.current_scope().region,
-        );
+        let function =
+            reattach_with::<KFunctionRefFamily, _>(resolved.function, ctx.current_scope().region);
         return super::exec::invoke_continue(function, new_expr);
     }
     let _ = resolved; // discard the speculative pick.

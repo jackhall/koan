@@ -94,4 +94,7 @@ construction — all on `master`; not on any open roadmap item.
   continuation rework must lift scope-carrying values across the step boundary soundly, which needs a
   bundle whose witness is guaranteed to pin the value.
 
-**Unblocks:** none.
+**Unblocks:**
+
+- [`region.alloc` returns `Witnessed`](region-alloc-witnessed.md) — its production bundle site needs a
+  witness handle to the value's owning frame, which this restructure supplies.

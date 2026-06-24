@@ -57,10 +57,12 @@ pub(super) fn bare_identifier<'step, 'b>(
     match s.resolve_with_chain(&name, ctx.chain_deref()) {
         // Re-anchor the `'b`-branded resolve result to the cart `'step`; see the witness note in
         // `scratch/framestorage-ouroboros-plan.md`.
-        Resolution::Value(obj) => Outcome::Done(Ok(crate::scheduler::reattach_with::<CarriedFamily, _>(
-            Carried::Object(obj),
-            ctx.current_scope().region,
-        ))),
+        Resolution::Value(obj) => {
+            Outcome::Done(Ok(crate::scheduler::reattach_with::<CarriedFamily, _>(
+                Carried::Object(obj),
+                ctx.current_scope().region,
+            )))
+        }
         Resolution::Placeholder(producer) => forward_to_producer(producer),
         Resolution::UnboundName => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name)))),
     }
@@ -72,12 +74,12 @@ pub(super) fn bare_type_leaf<'step, 'b>(
     t: &TypeIdentifier,
 ) -> Outcome<'step> {
     match resolve_type_leaf_carrier(s, t, ctx.active_chain()) {
-        TypeLeafCarrier::Resolved(kt) => Outcome::Done(Ok(crate::scheduler::reattach_with::<
-            CarriedFamily,
-            _,
-        >(
-            Carried::Type(kt), ctx.current_scope().region
-        ))),
+        TypeLeafCarrier::Resolved(kt) => {
+            Outcome::Done(Ok(crate::scheduler::reattach_with::<CarriedFamily, _>(
+                Carried::Type(kt),
+                ctx.current_scope().region,
+            )))
+        }
         TypeLeafCarrier::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS
         // through the bridge, so a bare leaf parks on exactly one producer; park on it and
@@ -105,7 +107,9 @@ pub(super) fn bare_type_leaf<'step, 'b>(
             park_resume(
                 vec![producer],
                 None,
-                Box::new(move |ctx, _idx| ctx.with_current_scope(|s| bare_type_leaf(ctx, s, &leaf))),
+                Box::new(move |ctx, _idx| {
+                    ctx.with_current_scope(|s| bare_type_leaf(ctx, s, &leaf))
+                }),
             )
         }
     }
