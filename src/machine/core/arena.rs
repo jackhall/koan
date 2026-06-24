@@ -299,7 +299,10 @@ impl CallFrame {
     /// Test-only [`CallFrame::new`] that derives the cycle-gate escape owner from `outer`'s
     /// recorded [`Scope::region_owner`] (set when the run root is built in a `FrameStorage`). Lets
     /// frame-construction tests stay at the two-argument call shape.
-    pub(crate) fn new_test(outer: &Scope<'_>, outer_frame: Option<Rc<FrameStorage>>) -> Rc<CallFrame> {
+    pub(crate) fn new_test(
+        outer: &Scope<'_>,
+        outer_frame: Option<Rc<FrameStorage>>,
+    ) -> Rc<CallFrame> {
         let owner = outer
             .region_owner()
             .upgrade()
@@ -432,7 +435,6 @@ impl CallFrame {
             non_dying: true,
         })
     }
-
 
     /// True only for the scheduler-owned run frame (see [`Self::adopting`]). The Done boundary
     /// reads this to skip the self-lift that a never-dying frame would otherwise perform.

@@ -2,9 +2,9 @@
 //! `List<T>`, `Dict<K, V>`, `Function<…>`, plus specificity tournaments.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::machine::core::FrameStorage;
 use crate::machine::core::KErrorKind;
 use crate::machine::execute::KoanRuntime;
-use crate::machine::core::FrameStorage;
 use crate::machine::model::types::KType;
 
 use super::capture_program_output;

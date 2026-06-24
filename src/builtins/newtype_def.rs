@@ -311,10 +311,10 @@ mod tests {
     use std::rc::Rc;
 
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::execute::KoanRuntime;
     use crate::machine::model::types::{KKind, NominalSchema, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
-    use crate::machine::core::FrameStorage;
     use crate::machine::{KErrorKind, Scope};
 
     /// `(set, record-fields)` of a sealed record-repr newtype, read raw off its `SetRef`

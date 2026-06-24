@@ -11,6 +11,7 @@
 use crate::builtins::default_scope;
 use crate::builtins::test_support::parse_one;
 use crate::machine::core::kfunction::action::{arg_object, Action, BodyCtx};
+use crate::machine::core::FrameStorage;
 use crate::machine::execute::dispatch::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
 };
@@ -21,7 +22,6 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::Held;
 use crate::machine::model::{Carried, KObject, Parseable};
-use crate::machine::core::FrameStorage;
 use crate::machine::{BindingIndex, KFunction, Scope};
 
 fn dispatch_one<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> &'run KObject<'run> {

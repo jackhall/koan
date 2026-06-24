@@ -18,7 +18,11 @@ use koan::parse::parse;
 /// Scaffolding: spin up a fresh region + default scope, run `source` end-to-end through
 /// the scheduler, and return both the captured PRINT output and the root scope so tests
 /// can assert on bindings post-run.
-fn run<'a>(region: &'a Rc<FrameStorage>, captured: Rc<RefCell<Vec<u8>>>, source: &str) -> &'a Scope<'a> {
+fn run<'a>(
+    region: &'a Rc<FrameStorage>,
+    captured: Rc<RefCell<Vec<u8>>>,
+    source: &str,
+) -> &'a Scope<'a> {
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);
     impl std::io::Write for SharedBuf {
         fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {

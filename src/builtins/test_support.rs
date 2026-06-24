@@ -4,7 +4,7 @@
 
 use std::cell::RefCell;
 use std::io::Write;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::FrameStorage;
@@ -15,7 +15,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KObject, Parseable};
-use crate::machine::{KError, KoanRegion, Scope};
+use crate::machine::{KError, Scope};
 use crate::parse::parse;
 use crate::scheduler::{reattach_with, NodeId};
 
@@ -59,22 +59,14 @@ pub(crate) fn run_root_silent<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scop
 }
 
 /// Run-root scope with no builtins registered, for tests that exercise scope machinery
-/// directly. Built on a bare region with no owning storage (`region_owner` empty) — such tests
-/// never reach the cycle-gate escape path, so they need no `FrameStorage`.
-pub(crate) fn run_root_bare<'a>(region: &'a KoanRegion) -> &'a Scope<'a> {
-    region.alloc_scope(Scope::run_root(region, None, Box::new(std::io::sink()), Weak::new()))
-}
-
-/// Like [`run_root_bare`] (no builtins) but **owner-backed**: built inside `run_storage` so its
-/// `region_owner` resolves. For no-builtins tests that still *drive dispatch*, which establishes a
-/// run frame via `ensure_run_frame` and therefore needs the run-root scope to carry an owner.
-pub(crate) fn run_root_bare_owned<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<'a> {
-    let region = run_storage.region();
-    region.alloc_scope(Scope::run_root(
-        region,
+/// directly. Built inside `run_storage` like every run root, so its `region_owner` resolves —
+/// tests that drive dispatch (establishing a run frame via `ensure_run_frame`) work the same as
+/// pure scope-machinery tests that never reach the escape path.
+pub(crate) fn run_root_bare<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<'a> {
+    run_storage.region().alloc_scope(Scope::run_root(
+        run_storage,
         None,
         Box::new(std::io::sink()),
-        Rc::downgrade(run_storage),
     ))
 }
 

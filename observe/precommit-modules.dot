@@ -688,7 +688,6 @@ digraph {
     "koan::machine::execute::dispatch::resolve_dispatch" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::resolve_dispatch" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::resolve_type_identifier" -> "koan::builtins" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::resolve_type_identifier" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::resolve_type_identifier" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::resolve_type_identifier" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::resolve_type_identifier" -> "koan::machine::execute" [label="uses", style="dashed"];

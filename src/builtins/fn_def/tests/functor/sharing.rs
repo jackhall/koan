@@ -15,18 +15,26 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     // Real signature so the slot's `sig.sig_id()` is the one modules `mark_satisfies`.
-    let sig_scope = region.region().alloc_scope(crate::machine::Scope::child_under_sig(
-        scope,
-        "OrderedSig".into(),
-    ));
-    let sig = region.region().alloc_signature(ModuleSignature::new("OrderedSig".into(), sig_scope));
+    let sig_scope = region
+        .region()
+        .alloc_scope(crate::machine::Scope::child_under_sig(
+            scope,
+            "OrderedSig".into(),
+        ));
+    let sig = region
+        .region()
+        .alloc_signature(ModuleSignature::new("OrderedSig".into(), sig_scope));
     let sig_id = sig.sig_id();
 
-    let child_a = region.region().alloc_scope(crate::machine::Scope::child_under_module(
-        scope,
-        "NumPinned".into(),
-    ));
-    let m_num: &Module<'_> = region.region().alloc_module(Module::new("NumPinned".into(), child_a));
+    let child_a = region
+        .region()
+        .alloc_scope(crate::machine::Scope::child_under_module(
+            scope,
+            "NumPinned".into(),
+        ));
+    let m_num: &Module<'_> = region
+        .region()
+        .alloc_module(Module::new("NumPinned".into(), child_a));
     m_num
         .type_members
         .borrow_mut()
@@ -37,11 +45,15 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         frame: None,
     });
 
-    let child_b = region.region().alloc_scope(crate::machine::Scope::child_under_module(
-        scope,
-        "StrPinned".into(),
-    ));
-    let m_str: &Module<'_> = region.region().alloc_module(Module::new("StrPinned".into(), child_b));
+    let child_b = region
+        .region()
+        .alloc_scope(crate::machine::Scope::child_under_module(
+            scope,
+            "StrPinned".into(),
+        ));
+    let m_str: &Module<'_> = region
+        .region()
+        .alloc_module(Module::new("StrPinned".into(), child_b));
     m_str
         .type_members
         .borrow_mut()
@@ -52,11 +64,15 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         frame: None,
     });
 
-    let child_c = region.region().alloc_scope(crate::machine::Scope::child_under_module(
-        scope,
-        "NoTypePin".into(),
-    ));
-    let m_none: &Module<'_> = region.region().alloc_module(Module::new("NoTypePin".into(), child_c));
+    let child_c = region
+        .region()
+        .alloc_scope(crate::machine::Scope::child_under_module(
+            scope,
+            "NoTypePin".into(),
+        ));
+    let m_none: &Module<'_> = region
+        .region()
+        .alloc_module(Module::new("NoTypePin".into(), child_c));
     m_none.mark_satisfies(sig_id);
     let m_none_obj = region.region().alloc_ktype(KType::Module {
         module: m_none,
@@ -75,11 +91,15 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     assert!(!slot.accepts_part(&ExpressionPart::Spliced(Carried::Type(m_str_obj))));
     assert!(!slot.accepts_part(&ExpressionPart::Spliced(Carried::Type(m_none_obj))));
 
-    let child_d = region.region().alloc_scope(crate::machine::Scope::child_under_module(
-        scope,
-        "Unascribed".into(),
-    ));
-    let m_unascribed: &Module<'_> = region.region().alloc_module(Module::new("Unascribed".into(), child_d));
+    let child_d = region
+        .region()
+        .alloc_scope(crate::machine::Scope::child_under_module(
+            scope,
+            "Unascribed".into(),
+        ));
+    let m_unascribed: &Module<'_> = region
+        .region()
+        .alloc_module(Module::new("Unascribed".into(), child_d));
     m_unascribed
         .type_members
         .borrow_mut()

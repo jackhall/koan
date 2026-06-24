@@ -25,8 +25,8 @@ use crate::machine::core::kfunction::action::{
 use crate::machine::core::kfunction::body::{
     split_body_statements, ContractFamily, ErasedContract,
 };
-use crate::machine::model::ast::KExpression;
 use crate::machine::core::FrameStorage;
+use crate::machine::model::ast::KExpression;
 use crate::machine::{CallFrame, KError, NodeId, Scope};
 
 use super::dispatch::{reattach_node_scope, DepRequest};

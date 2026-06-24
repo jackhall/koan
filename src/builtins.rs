@@ -146,14 +146,9 @@ pub fn default_scope<'a>(
     run_storage: &'a std::rc::Rc<crate::machine::core::FrameStorage>,
     out: Box<dyn std::io::Write + 'a>,
 ) -> &'a Scope<'a> {
-    // Region borrow and the run-root scope's `region_owner` both derive from the one run storage.
-    let region = run_storage.region();
-    let scope = region.alloc_scope(Scope::run_root(
-        region,
-        None,
-        out,
-        std::rc::Rc::downgrade(run_storage),
-    ));
+    let scope = run_storage
+        .region()
+        .alloc_scope(Scope::run_root(run_storage, None, out));
 
     scope.register_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
     scope.register_type("Str".into(), KType::Str, BindingIndex::BUILTIN);
@@ -214,5 +209,5 @@ pub fn default_scope<'a>(
     type_ops::register(scope);
     parameterized_types::register(scope);
 
-    region.alloc_scope(Scope::run_child(scope))
+    run_storage.region().alloc_scope(Scope::run_child(scope))
 }

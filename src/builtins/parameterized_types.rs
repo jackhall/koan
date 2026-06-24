@@ -266,8 +266,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run_one_type, run_root_silent};
-    use crate::machine::model::{KKind, KType, Record};
     use crate::machine::core::FrameStorage;
+    use crate::machine::model::{KKind, KType, Record};
     use crate::machine::Scope;
 
     #[test]

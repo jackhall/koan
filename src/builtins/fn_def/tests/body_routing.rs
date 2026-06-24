@@ -2,8 +2,8 @@
 //! variants on the dep-finish path, plus the Stage B param-name scan utility arms.
 
 use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, run, run_root_silent};
-use crate::machine::execute::KoanRuntime;
 use crate::machine::core::FrameStorage;
+use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KType, ReturnType};
 use crate::machine::KErrorKind;
 

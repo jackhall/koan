@@ -54,7 +54,11 @@ What's shipped that the open items below build on:
   arms (one [`check_declared_return`](../src/machine/execute/finalize.rs)
   parameterized over the lifted carrier's `matches_value`/`matches_type` predicate).
 - *Region unsafe consolidation.* Every captured/defining-scope re-attach is funnelled behind two
-  audited [`scope_ptr`](../src/machine/core/scope_ptr.rs) handles; `KoanRegion::escape` is `NonNull`.
+  audited [`scope_ptr`](../src/machine/core/scope_ptr.rs) handles, and `KoanRegion::escape` holds an
+  owning [`StorageProfile::EscapeOwner`](../src/machine/core/region.rs) (the Koan `FrameRegionPin`, an
+  `Rc<FrameStorage>` deref'd to its region) — its owner read off the captured scope's
+  `Scope::region_owner` — so the cycle-gate redirect is a borrow the compiler proves and
+  [`region.rs`](../src/machine/core/region.rs) carries no `unsafe`.
   The store-side erasure lives behind one `Stored` trait: all region-stored
   families route the scheduler's single audited `erase_to_static` (the safe direction of the
   one `retype` primitive the read-side re-anchor shares) and one gated `alloc` engine,

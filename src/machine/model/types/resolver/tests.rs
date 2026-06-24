@@ -58,7 +58,9 @@ fn recursive_group_member_lowers_to_recursive_ref() {
         NominalMember::pending("A".into(), parent.id, KKind::NewType),
         NominalMember::pending("B".into(), parent.id, KKind::NewType),
     ]));
-    let child = region.region().alloc_scope(Scope::child_recursive_group(parent, set));
+    let child = region
+        .region()
+        .alloc_scope(Scope::child_recursive_group(parent, set));
     let mut el = Elaborator::new(child);
     match elaborate_type_identifier(&mut el, &leaf("B")) {
         ElabResult::Done(KType::RecursiveRef(name)) => assert_eq!(name, "B"),

@@ -2,7 +2,7 @@
 //! returns a distinct labeled marker so a test can identify which overload won.
 //! Counterpart `resolve_dispatch`-only assertions live in `machine::core::tests::dispatch`.
 
-use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare_owned};
+use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::core::BindingIndex;
@@ -48,7 +48,7 @@ fn summarize_marker(obj: &KObject<'_>) -> String {
 #[test]
 fn dispatch_inner_scope_shadows_outer_more_specific() {
     let region = FrameStorage::run_root();
-    let outer = run_root_bare_owned(&region);
+    let outer = run_root_bare(&region);
     let outer_sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
@@ -104,7 +104,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
 fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     use crate::machine::KErrorKind;
     let region = FrameStorage::run_root();
-    let scope = run_root_bare_owned(&region);
+    let scope = run_root_bare(&region);
     register_builtin(
         scope,
         "any_first",
@@ -144,7 +144,7 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
 #[test]
 fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     let region = FrameStorage::run_root();
-    let scope = run_root_bare_owned(&region);
+    let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![

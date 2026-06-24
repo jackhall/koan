@@ -204,21 +204,28 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         set: tagged_set,
         index: 0,
     });
-    let struct_token: &KType<'_> =
-        region.region().alloc_ktype(record_newtype_setref("Point", ScopeId::SENTINEL));
+    let struct_token: &KType<'_> = region
+        .region()
+        .alloc_ktype(record_newtype_setref("Point", ScopeId::SENTINEL));
     assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(tagged_token))));
     assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(struct_token))));
-    let child = region.region().alloc_scope(crate::machine::Scope::child_under_module(
-        scope,
-        "IntMod".into(),
-    ));
-    let module = region.region().alloc_module(Module::new("IntMod".into(), child));
+    let child = region
+        .region()
+        .alloc_scope(crate::machine::Scope::child_under_module(
+            scope,
+            "IntMod".into(),
+        ));
+    let module = region
+        .region()
+        .alloc_module(Module::new("IntMod".into(), child));
     let kt_module: &KType<'_> = region.region().alloc_ktype(KType::Module {
         module,
         frame: None,
     });
     assert!(!t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_module))));
-    let sig = region.region().alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
+    let sig = region
+        .region()
+        .alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
     let kt_sig: &KType<'_> = region.region().alloc_ktype(KType::Signature {
         sig,
         pinned_slots: Vec::new(),
@@ -312,7 +319,9 @@ fn is_type_denoting_table() {
     use crate::machine::model::values::ModuleSignature;
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let sig = region.region().alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
+    let sig = region
+        .region()
+        .alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
     let sb = KType::Signature {
         sig,
         pinned_slots: Vec::new(),
@@ -367,16 +376,24 @@ fn is_more_specific_for_pinned_signature_bound() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     // Two distinct decl_scopes → two distinct `sig_id`s.
-    let ordered_scope = region.region().alloc_scope(crate::machine::Scope::child_under_sig(
-        scope,
-        "OrderedSig".into(),
-    ));
-    let hashed_scope = region.region().alloc_scope(crate::machine::Scope::child_under_sig(
-        scope,
-        "HashedSig".into(),
-    ));
-    let ordered = region.region().alloc_signature(ModuleSignature::new("OrderedSig".into(), ordered_scope));
-    let hashed = region.region().alloc_signature(ModuleSignature::new("HashedSig".into(), hashed_scope));
+    let ordered_scope = region
+        .region()
+        .alloc_scope(crate::machine::Scope::child_under_sig(
+            scope,
+            "OrderedSig".into(),
+        ));
+    let hashed_scope = region
+        .region()
+        .alloc_scope(crate::machine::Scope::child_under_sig(
+            scope,
+            "HashedSig".into(),
+        ));
+    let ordered = region
+        .region()
+        .alloc_signature(ModuleSignature::new("OrderedSig".into(), ordered_scope));
+    let hashed = region
+        .region()
+        .alloc_signature(ModuleSignature::new("HashedSig".into(), hashed_scope));
 
     let bare = KType::Signature {
         sig: ordered,

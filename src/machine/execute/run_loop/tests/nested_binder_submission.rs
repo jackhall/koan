@@ -8,8 +8,8 @@
 use std::io::Write;
 
 use crate::builtins::default_scope;
-use crate::machine::execute::KoanRuntime;
 use crate::machine::core::FrameStorage;
+use crate::machine::execute::KoanRuntime;
 use crate::machine::model::types::UntypedElement;
 use crate::parse::parse;
 

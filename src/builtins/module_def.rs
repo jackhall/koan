@@ -107,9 +107,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::values::Module;
     use crate::machine::model::{KObject, KType};
-    use crate::machine::core::FrameStorage;
     use crate::machine::{BindingIndex, KErrorKind, Scope};
 
     /// MODULE is type-only: the `&Module` rides the `KType::Module` identity in
@@ -227,11 +227,15 @@ mod tests {
     fn module_finalize_short_circuits_on_idempotent_state() {
         let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
-        let child = region.region().alloc_scope(crate::machine::Scope::child_under_module(
-            scope,
-            "Foo".into(),
-        ));
-        let module: &Module<'_> = region.region().alloc_module(Module::new("Foo".into(), child));
+        let child = region
+            .region()
+            .alloc_scope(crate::machine::Scope::child_under_module(
+                scope,
+                "Foo".into(),
+            ));
+        let module: &Module<'_> = region
+            .region()
+            .alloc_module(Module::new("Foo".into(), child));
         let identity = KType::Module {
             module,
             frame: None,

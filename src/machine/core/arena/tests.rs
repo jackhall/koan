@@ -230,26 +230,28 @@ fn alloc_object_redirects_self_anchored_value_to_escape_region() {
     // `Rc<FrameStorage>` pointing at `frame.region()`. The cycle gate only inspects the
     // carried `Rc`, so the placeholder `KFunction` body is irrelevant.
     let dummy_fn_obj = outer.region().alloc_object(KObject::KFunction(
-        outer.region().alloc_function(crate::machine::core::kfunction::KFunction::new(
-            crate::machine::model::types::ExpressionSignature {
-                return_type: crate::machine::model::types::ReturnType::Resolved(
-                    crate::machine::model::types::KType::Null,
-                ),
-                elements: vec![crate::machine::model::types::SignatureElement::Keyword(
-                    "DUMMY".into(),
-                )],
-            },
-            crate::machine::core::kfunction::Body::Builtin(|ctx| {
-                crate::machine::core::kfunction::action::Action::Done(Ok(
-                    crate::machine::model::Carried::Object(
-                        ctx.scope
-                            .region
-                            .alloc_object(crate::machine::model::KObject::Null),
+        outer
+            .region()
+            .alloc_function(crate::machine::core::kfunction::KFunction::new(
+                crate::machine::model::types::ExpressionSignature {
+                    return_type: crate::machine::model::types::ReturnType::Resolved(
+                        crate::machine::model::types::KType::Null,
                     ),
-                ))
-            }),
-            scope,
-        )),
+                    elements: vec![crate::machine::model::types::SignatureElement::Keyword(
+                        "DUMMY".into(),
+                    )],
+                },
+                crate::machine::core::kfunction::Body::Builtin(|ctx| {
+                    crate::machine::core::kfunction::action::Action::Done(Ok(
+                        crate::machine::model::Carried::Object(
+                            ctx.scope
+                                .region
+                                .alloc_object(crate::machine::model::KObject::Null),
+                        ),
+                    ))
+                }),
+                scope,
+            )),
         None,
     ));
     let f_ref = match dummy_fn_obj {

@@ -135,18 +135,18 @@ pub enum ScopeKind {
 
 impl<'a> Scope<'a> {
     pub fn run_root(
-        region: &'a KoanRegion,
+        storage: &'a Rc<FrameStorage>,
         outer: Option<&'a Scope<'a>>,
         out: Box<dyn Write + 'a>,
-        region_owner: Weak<FrameStorage>,
     ) -> Self {
         Self {
             outer: outer.map(BoundedScopePtr::erase),
             root: None,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(Some(out)),
-            region,
-            region_owner,
+            // Region borrow and owning `Weak` both derive from the one run `storage` handle.
+            region: storage.region(),
+            region_owner: Rc::downgrade(storage),
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Root,
@@ -175,21 +175,41 @@ impl<'a> Scope<'a> {
         child
     }
 
-    /// `outer` is the lexical parent — for FN bodies the captured definition scope,
-    /// not the call site.
-    pub fn child_under(outer: &Scope<'a>) -> Scope<'a> {
+    /// Shared skeleton for a **same-region** child of `outer`: inherits `outer`'s region, its
+    /// `region_owner`, and its `root` handle, and takes a fresh id. The five public same-region
+    /// constructors below differ only in what they pass here — the binding storage, the kind stamp,
+    /// and any recursive-set membership — so the inherit-from-`outer` field set lives in one place.
+    /// (The two cross-region constructors, [`Self::run_root`] and [`Self::child_for_frame`], do not
+    /// route this: they set `root`/`region`/`region_owner` from a fresh frame, not from `outer`.)
+    fn child_inheriting(
+        outer: &Scope<'a>,
+        bindings: ScopeBindings<'a>,
+        kind: ScopeKind,
+        recursive_set: Option<Rc<RecursiveSet<'a>>>,
+    ) -> Scope<'a> {
         Scope {
             outer: Some(BoundedScopePtr::erase(outer)),
             root: outer.root,
-            bindings: ScopeBindings::Owned(Bindings::new()),
+            bindings,
             out: RefCell::new(None),
             region: outer.region,
             region_owner: outer.region_owner.clone(),
             id: ScopeId::next(),
             pending: PendingQueue::new(),
-            kind: ScopeKind::Anonymous,
-            recursive_set: None,
+            kind,
+            recursive_set,
         }
+    }
+
+    /// `outer` is the lexical parent — for FN bodies the captured definition scope,
+    /// not the call site.
+    pub fn child_under(outer: &Scope<'a>) -> Scope<'a> {
+        Self::child_inheriting(
+            outer,
+            ScopeBindings::Owned(Bindings::new()),
+            ScopeKind::Anonymous,
+            None,
+        )
     }
 
     /// Per-call frame child: built against a **fresh** `region` whose lifetime `'a` is shorter than
@@ -222,35 +242,23 @@ impl<'a> Scope<'a> {
 
     /// `child_under`, stamped as a SIG decl_scope.
     pub fn child_under_sig(outer: &Scope<'a>, name: String) -> Scope<'a> {
-        Scope {
-            outer: Some(BoundedScopePtr::erase(outer)),
-            root: outer.root,
-            bindings: ScopeBindings::Owned(Bindings::new()),
-            out: RefCell::new(None),
-            region: outer.region,
-            region_owner: outer.region_owner.clone(),
-            id: ScopeId::next(),
-            pending: PendingQueue::new(),
-            kind: ScopeKind::Sig { name },
-            recursive_set: None,
-        }
+        Self::child_inheriting(
+            outer,
+            ScopeBindings::Owned(Bindings::new()),
+            ScopeKind::Sig { name },
+            None,
+        )
     }
 
     /// `child_under`, stamped as a MODULE body (also used for the per-ascription view
     /// minted by `:|`).
     pub fn child_under_module(outer: &Scope<'a>, name: String) -> Scope<'a> {
-        Scope {
-            outer: Some(BoundedScopePtr::erase(outer)),
-            root: outer.root,
-            bindings: ScopeBindings::Owned(Bindings::new()),
-            out: RefCell::new(None),
-            region: outer.region,
-            region_owner: outer.region_owner.clone(),
-            id: ScopeId::next(),
-            pending: PendingQueue::new(),
-            kind: ScopeKind::Module { name },
-            recursive_set: None,
-        }
+        Self::child_inheriting(
+            outer,
+            ScopeBindings::Owned(Bindings::new()),
+            ScopeKind::Module { name },
+            None,
+        )
     }
 
     /// Child scope for a `RECURSIVE TYPES` block body: carries the shared [`RecursiveSet`]
@@ -258,18 +266,12 @@ impl<'a> Scope<'a> {
     /// threads the group (a member name lowers to `RecursiveRef`). `outer` is the lexical
     /// parent; the sealed members are mirrored up into it at the block's dep-finish.
     pub fn child_recursive_group(outer: &Scope<'a>, set: Rc<RecursiveSet<'a>>) -> Scope<'a> {
-        Scope {
-            outer: Some(BoundedScopePtr::erase(outer)),
-            root: outer.root,
-            bindings: ScopeBindings::Owned(Bindings::new()),
-            out: RefCell::new(None),
-            region: outer.region,
-            region_owner: outer.region_owner.clone(),
-            id: ScopeId::next(),
-            pending: PendingQueue::new(),
-            kind: ScopeKind::Anonymous,
-            recursive_set: Some(set),
-        }
+        Self::child_inheriting(
+            outer,
+            ScopeBindings::Owned(Bindings::new()),
+            ScopeKind::Anonymous,
+            Some(set),
+        )
     }
 
     /// The shared [`RecursiveSet`] of the nearest enclosing `RECURSIVE TYPES` block, if any.
@@ -287,18 +289,12 @@ impl<'a> Scope<'a> {
     /// forward to `outer`. `region` is `outer.region` so block-body allocations outlive
     /// the block (forwarded binds are sound).
     pub fn child_transparent(outer: &Scope<'a>, module_bindings: &'a Bindings<'a>) -> Scope<'a> {
-        Scope {
-            outer: Some(BoundedScopePtr::erase(outer)),
-            root: outer.root,
-            bindings: ScopeBindings::Borrowed(module_bindings),
-            out: RefCell::new(None),
-            region: outer.region,
-            region_owner: outer.region_owner.clone(),
-            id: ScopeId::next(),
-            pending: PendingQueue::new(),
-            kind: ScopeKind::Anonymous,
-            recursive_set: None,
-        }
+        Self::child_inheriting(
+            outer,
+            ScopeBindings::Borrowed(module_bindings),
+            ScopeKind::Anonymous,
+            None,
+        )
     }
 
     pub fn bindings(&self) -> &Bindings<'a> {

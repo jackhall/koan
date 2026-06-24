@@ -113,9 +113,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 mod tests {
     use super::Carried;
     use crate::builtins::test_support::{parse_one, run_one_err, run_one_type, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::KType;
-    use crate::machine::core::FrameStorage;
     use crate::machine::{BindingIndex, KErrorKind, Scope};
 
     /// The projected (`SetLocal`s resolved) variant schema of a UNION member, by name.

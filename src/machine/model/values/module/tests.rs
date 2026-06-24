@@ -12,7 +12,9 @@ use std::ptr;
 fn module_child_scope_transmute_does_not_dangle() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(sink()));
-    let module = region.region().alloc_module(Module::new("Test".into(), scope));
+    let module = region
+        .region()
+        .alloc_module(Module::new("Test".into(), scope));
     let recovered = module.child_scope();
     assert!(ptr::eq(recovered, scope));
     // Re-borrow after a sibling alloc — tree borrows is sensitive to interleaved
