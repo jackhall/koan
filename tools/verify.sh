@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run the koan build-verification slate: instrumented unit tests (cargo
-# llvm-cov), lints, doclinks, and the modgraph fractal-complexity score.
+# llvm-cov), doctests (including `compile_fail` guards, which llvm-cov does not
+# run), lints, doclinks, and the modgraph fractal-complexity score.
 # Mirrors the `verify` skill (.claude/skills/verify/).
 #
 # The modgraph and coverage steps print current scores. They rebaseline
@@ -23,26 +24,32 @@ REBASELINE="${KOAN_REBASELINE:-}"
 
 step() { printf '\n=== %s ===\n' "$*"; }
 
-step "1/6 cargo llvm-cov (instrumented tests → $LCOV)"
+step "1/7 cargo llvm-cov (instrumented tests → $LCOV)"
 cargo llvm-cov --quiet --lcov --output-path "$LCOV"
 
-step "2/6 cargo clippy"
+# llvm-cov does not run doctests (instrumented doctests are nightly-only), so the
+# `compile_fail` escape guards on the lifetime-erasure accessors go unchecked above.
+# Run them here: a `compile_fail` doctest that *starts* compiling is a test failure.
+step "2/7 cargo test --doc (doctests + compile_fail guards)"
+cargo test --doc --quiet
+
+step "3/7 cargo clippy"
 if ! cargo clippy --all-targets -- -D warnings; then
     cargo clippy --fix --allow-dirty --allow-staged --all-targets
     cargo clippy --all-targets -- -D warnings
 fi
 
-step "3/6 doclinks check"
+step "4/7 doclinks check"
 python3 tools/doclinks.py check
 
-step "4/6 coverage delta (lcov: $LCOV)"
+step "5/7 coverage delta (lcov: $LCOV)"
 python3 tools/coverage.py --lcov "$LCOV" \
     ${REBASELINE:+--baseline observe/coverage.txt}
 
-step "5/6 modgraph tooling tests"
+step "6/7 modgraph tooling tests"
 python3 tools/modgraph/tests.py
 
-step "6/6 modgraph score (DOT: $DOT)"
+step "7/7 modgraph score (DOT: $DOT)"
 # `regen` runs cargo-modules, re-attributes uses edges to the written import
 # surface (re-export correction), refreshes observe/doc_graph.dot, then scores.
 python3 tools/modgraph regen --root koan --edges "$DOT" \
