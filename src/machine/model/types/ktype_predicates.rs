@@ -351,7 +351,14 @@ impl<'a> KType<'a> {
     /// containers compare their memoized carried type against the slot via
     /// `satisfied_by` — pure type-level, no element walk. Non-satisfying containers
     /// fall through the scope walk rather than failing the bind.
-    pub fn accepts_part(&self, part: &ExpressionPart<'a>) -> bool {
+    pub fn accepts_part<'e>(&self, part: &ExpressionPart<'e>) -> bool {
+        // SAFETY: read-only admission predicate. `ExpressionPart<'e>` and `ExpressionPart<'a>` share
+        // layout (the lifetime is phantom for a structural match); `part` is only read to compare
+        // against `self` — never mutated, no borrow escapes. Coercing once here lets the body's
+        // same-lifetime comparisons (`== self`, `satisfied_by`, `Rc::ptr_eq`) stand unchanged.
+        // Removal tracked by the structural-value-equality roadmap item (a lifetime-agnostic
+        // `KType` / part comparison).
+        let part: &ExpressionPart<'a> = unsafe { std::mem::transmute(part) };
         match self {
             KType::Any => true,
             KType::Number => matches!(

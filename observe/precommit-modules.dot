@@ -511,6 +511,7 @@ digraph {
     "koan::machine::core::kfunction" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
@@ -661,6 +662,8 @@ digraph {
     "koan::machine::execute::dispatch::head_deferred" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::head_deferred" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::keyworded" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::keyworded" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
@@ -668,6 +671,7 @@ digraph {
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::keyworded" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::machine::execute" [label="uses", style="dashed"];

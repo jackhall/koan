@@ -196,7 +196,7 @@ impl<'a> ReturnType<'a> {
 }
 
 impl<'a> ExpressionSignature<'a> {
-    pub fn matches(&self, expr: &KExpression<'a>) -> bool {
+    pub fn matches<'e>(&self, expr: &KExpression<'e>) -> bool {
         if self.elements.len() != expr.parts.len() {
             return false;
         }
@@ -310,7 +310,7 @@ pub struct Argument<'a> {
 }
 
 impl<'a> Argument<'a> {
-    pub fn matches(&self, part: &ExpressionPart<'a>) -> bool {
+    pub fn matches<'e>(&self, part: &ExpressionPart<'e>) -> bool {
         self.ktype.accepts_part(part)
     }
 }

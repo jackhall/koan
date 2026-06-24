@@ -95,11 +95,11 @@ impl<'step> Scope<'step> {
     /// dead unbound bare-name lean is the sole non-terminal — it is accumulated
     /// and surfaced post-walk only if no scope terminated, so an outer scope can
     /// still strict-Pick the bare name as an `:Identifier` / `:Any` slot.
-    pub fn resolve_dispatch(
+    pub fn resolve_dispatch<'e>(
         &self,
-        expr: &KExpression<'step>,
+        expr: &KExpression<'e>,
         chain: Option<&LexicalFrame>,
-        bare_outcomes: &[Option<NameOutcome<'step>>],
+        bare_outcomes: &[Option<NameOutcome<'e>>],
     ) -> ResolveOutcome<'step> {
         #[cfg(test)]
         RESOLVE_DISPATCH_ENTRIES.with(|c| c.set(c.get() + 1));
@@ -162,10 +162,10 @@ enum ScopeDecision<'step> {
 /// 3. A strict-Empty bucket runs the relaxed pass: leaned-parked ⇒ park,
 ///    else leaned-eager ⇒ defer, else leaned-dead ⇒ `DeadLean` (continue),
 ///    else `Continue`.
-fn decide_scope<'step>(
+fn decide_scope<'step, 'e>(
     lookup: &FunctionLookup<'step>,
-    expr: &KExpression<'step>,
-    bare_outcomes: &[Option<NameOutcome<'step>>],
+    expr: &KExpression<'e>,
+    bare_outcomes: &[Option<NameOutcome<'e>>],
 ) -> ScopeDecision<'step> {
     let bucket = OverloadBucket {
         candidates: &lookup.overloads,
@@ -206,10 +206,10 @@ fn decide_scope<'step>(
 /// it never parks, since an unbound name never arrives. A candidate that rejects
 /// on a hard already-resolved /
 /// literal / keyword slot does not admit even relaxed and contributes nothing.
-fn decide_relaxed<'step>(
+fn decide_relaxed<'step, 'e>(
     bucket: &OverloadBucket<'step, '_>,
-    expr: &KExpression<'step>,
-    bare_outcomes: &[Option<NameOutcome<'step>>],
+    expr: &KExpression<'e>,
+    bare_outcomes: &[Option<NameOutcome<'e>>],
 ) -> ScopeDecision<'step> {
     let mut parked: Vec<NodeId> = Vec::new();
     let mut any_eager_lean = false;
@@ -253,10 +253,10 @@ struct OverloadBucket<'step, 'b> {
 }
 
 impl<'step> OverloadBucket<'step, '_> {
-    fn pick_strict(
+    fn pick_strict<'e>(
         &self,
-        expr: &KExpression<'step>,
-        bare_outcomes: &[Option<NameOutcome<'step>>],
+        expr: &KExpression<'e>,
+        bare_outcomes: &[Option<NameOutcome<'e>>],
     ) -> PickPass<'step> {
         let survivors: Vec<&'step KFunction<'step>> = self
             .candidates
@@ -275,10 +275,10 @@ impl<'step> OverloadBucket<'step, '_> {
     /// Deduped `Parked` producers any candidate leans on under the relaxed pass.
     /// The caller unions these into a pending park so a single wake re-runs the
     /// full resolution.
-    fn relaxed_parked_producers(
+    fn relaxed_parked_producers<'e>(
         &self,
-        expr: &KExpression<'step>,
-        bare_outcomes: &[Option<NameOutcome<'step>>],
+        expr: &KExpression<'e>,
+        bare_outcomes: &[Option<NameOutcome<'e>>],
     ) -> Vec<NodeId> {
         let mut producers: Vec<NodeId> = Vec::new();
         for f in self.candidates.iter() {
@@ -317,10 +317,10 @@ enum Lean {
 
 /// Strict admission against the `bare_outcomes` cache. Rule table at
 /// [design/typing/elaboration.md § Strict admission rules](../../../../design/typing/elaboration.md#strict-admission-rules).
-fn signature_admits_strict<'step>(
-    sig: &ExpressionSignature<'step>,
-    expr: &KExpression<'step>,
-    bare_outcomes: &[Option<NameOutcome<'step>>],
+fn signature_admits_strict<'e>(
+    sig: &ExpressionSignature<'_>,
+    expr: &KExpression<'e>,
+    bare_outcomes: &[Option<NameOutcome<'e>>],
 ) -> bool {
     if sig.elements.len() != expr.parts.len() {
         return false;
@@ -349,10 +349,10 @@ fn signature_admits_strict<'step>(
 /// One per-candidate pass names every leaned-on kind — which arriving (`Eager` /
 /// `Parked`) slots, and any `Dead` blocker — so the caller decides park / defer /
 /// unbound at the scope rather than re-deriving it.
-fn relaxed_admits<'step>(
-    sig: &ExpressionSignature<'step>,
-    expr: &KExpression<'step>,
-    bare_outcomes: &[Option<NameOutcome<'step>>],
+fn relaxed_admits<'e>(
+    sig: &ExpressionSignature<'_>,
+    expr: &KExpression<'e>,
+    bare_outcomes: &[Option<NameOutcome<'e>>],
 ) -> Option<Vec<Lean>> {
     if sig.elements.len() != expr.parts.len() {
         return None;
@@ -401,12 +401,12 @@ fn has_lazy_kexpr_slot(sig: &ExpressionSignature<'_>, expr: &KExpression<'_>) ->
 /// Per-slot strict admission — the element walk body of
 /// [`signature_admits_strict`] and the per-slot gate the relaxed pass leans on
 /// when it rejects.
-fn slot_admits_strict<'step>(
-    el: &SignatureElement<'step>,
-    part_value: &ExpressionPart<'step>,
+fn slot_admits_strict<'e>(
+    el: &SignatureElement<'_>,
+    part_value: &ExpressionPart<'e>,
     i: usize,
     has_lazy_kexpr_slot: bool,
-    bare_outcomes: &[Option<NameOutcome<'step>>],
+    bare_outcomes: &[Option<NameOutcome<'e>>],
 ) -> bool {
     match (el, part_value) {
         (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
@@ -497,9 +497,9 @@ fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
 
 /// Sole producer of the embedded `slots`; disjointness lives in
 /// [`KFunction::classify_for_pick`].
-fn build_resolved<'step>(
+fn build_resolved<'step, 'e>(
     picked: &'step KFunction<'step>,
-    expr: &KExpression<'step>,
+    expr: &KExpression<'e>,
 ) -> Resolved<'step> {
     Resolved {
         function: picked,

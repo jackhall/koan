@@ -5,6 +5,7 @@ src/machine/core/arena.rs: 2
 src/machine/core/reattach.rs: 2
 src/machine/core/scope_ptr.rs: 2
 src/machine/execute/lift.rs: 1
+src/machine/model/types/ktype_predicates.rs: 1
 src/witnessed.rs: 21
 -->
 
@@ -78,7 +79,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-30 tests, grouped by the unsafe site each pins down. Names below are the exact
+31 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -209,6 +210,15 @@ call the identical `get` (their line-for-line equivalents run under plain `cargo
 `Scope::outer()` / `ancestors()` walk exercises it end-to-end.
 
 - `module_child_scope_transmute_does_not_dangle`
+
+**`KType::accepts_part` lifetime coercion** ([src/machine/model/types/ktype_predicates.rs](../src/machine/model/types/ktype_predicates.rs))
+— the read-only `transmute::<&ExpressionPart<'e>, &ExpressionPart<'a>>` at `accepts_part`'s entry,
+coercing a `'b`-branded part to the type's lifetime so the dispatch-resolution decouple (threading a
+scope at an independent `'b`) can structurally admit it. Sound because the predicate only *reads* the
+part — no mutation, no borrow escapes — and the part outlives the call. Interim until a
+lifetime-agnostic `KType` equality lands (the structural-value-equality roadmap item).
+
+- `accepts_part_lifetime_coercion_reads_soundly`
 
 **`ErasedScopePtr::reattach_witnessed` — the witness-bounded scope re-attach** ([src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs))
 — the scope-pointer analog of `reattach_with`: the two lifetime-free carriers re-anchor their child

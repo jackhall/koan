@@ -1,9 +1,24 @@
 use super::*;
 use crate::machine::core::ScopeId;
+use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{NominalSchema, RecursiveSet};
 use crate::machine::model::Carried;
 use crate::machine::model::Record;
 use std::rc::Rc;
+
+/// Miri coverage for the `accepts_part` entry transmute
+/// (`&ExpressionPart<'e> -> &ExpressionPart<'a>`) — the read-only lifetime coercion that lets the
+/// dispatch decouple admit a `'b`-branded part against a type at the type's lifetime. Pins that the
+/// coerced read is sound under tree borrows (no dangle, no disabled-tag) while the part is alive.
+#[test]
+fn accepts_part_lifetime_coercion_reads_soundly() {
+    let kt = KType::Number;
+    let part = ExpressionPart::Spliced(Carried::Type(&kt));
+    // Fires the entry transmute; the boolean value is irrelevant — soundness under Miri is the point.
+    let _ = kt.accepts_part(&part);
+    // The part is still valid and readable after the coerced read.
+    assert!(matches!(part, ExpressionPart::Spliced(_)));
+}
 
 /// A singleton-set `KType::SetRef` for a record-repr newtype (an ex-struct) named `name`
 /// (empty record repr is fine — the predicates key on `(set ptr, index)` + `kind`, never the
