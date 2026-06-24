@@ -83,8 +83,10 @@ What's shipped that the open items below build on:
   [`Scheduler::current_scope`](../src/machine/execute/run_loop.rs) through the witness-bounded
   [`CallFrame::scope_bounded`](../src/machine/core/arena.rs) brand (the post-step loop reads it
   through a `PostStep` token off the slot's returned frame). The sole surviving free re-exposure
-  is the region half of [`CallFrame::with_frame_interior`](../src/machine/core/arena.rs), the
-  C0-irreducible seed bind, and `KFunction::captured` now rides a `BoundedScopePtr`
+  is the region half of [`CallFrame::with_frame_interior`](../src/machine/core/arena.rs)'s seed
+  bind — its removal is tracked by
+  [FrameStorage self-reference removal](refactor/framestorage-self-reference.md) — and
+  `KFunction::captured` now rides a `BoundedScopePtr`
   (see [design/per-call-region/scope-handles.md § Slot-table scope handle](../design/per-call-region/scope-handles.md#slot-table-scope-handle)).
   See [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Shell-over-storage frame reuse.* `CallFrame` is now a thin shell over a refcounted
@@ -297,6 +299,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
 - [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md)
+- [FrameStorage self-reference removal](refactor/framestorage-self-reference.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
@@ -409,6 +412,11 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   the scattered `Reattachable` / `Erased` / `retype` reattach machinery into one top-level `witnessed`
   module whose `unsafe` is two rank-2 branded accessors (`with` / `map`), bundling each erased value
   with its liveness witness.
+- [FrameStorage self-reference removal](refactor/framestorage-self-reference.md) — replace the
+  hand-rolled region↔child-scope loop in `FrameStorage` with an `ouroboros #[self_referencing]`
+  struct, deleting the three audited `unsafe` tokens that close it (the `reattach_witnessed`
+  `as_ref`, the `with_frame_interior` `pin_deref`, and the `pin_deref` primitive); gated on
+  reworking the decide-layer scope reads that escape `&Scope` into continuations.
 - [Unify the two argument binders](refactor/unify-argument-binders.md) — stop the builtin
   dispatch path building a whole `KFuture` just to gut `future.args`; one arg-binding path
   instead of `bind` (`Record<ArgValue>`) beside `bind_by_name` (`Record<Carried>`).
