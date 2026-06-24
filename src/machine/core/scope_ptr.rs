@@ -46,14 +46,6 @@ pub struct ScopeFamily;
 
 reattachable!(ScopeFamily => Scope<'r>);
 
-/// `Reattachable` family for a **shared `Scope` reference** — the reference sibling of [`ScopeFamily`],
-/// for re-anchoring a `&'r Scope<'r>` by value (e.g. branding a continuation's `with_current_scope`
-/// handle to the cart `'step`). Layout-invariant: a `&'r Scope<'r>` is a thin pointer generic only in
-/// `'r`. Mirrors [`KFunctionRefFamily`](crate::machine::core::kfunction::KFunctionRefFamily).
-pub struct ScopeRefFamily;
-
-reattachable!(ScopeRefFamily => &'r Scope<'r>);
-
 /// A branded `Scope` pointer that can **only** be re-handed with a borrow bounded by the reader —
 /// never at a free/unbounded lifetime. The carrier owns a real `'a` (e.g. [`KFunction<'a>`], a
 /// frame-bounded child's [`Scope::outer`](super::scope::Scope)): the `_brand` records that `'a` and

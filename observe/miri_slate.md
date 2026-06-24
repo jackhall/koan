@@ -6,7 +6,7 @@ src/machine/core/reattach.rs: 2
 src/machine/core/scope_ptr.rs: 2
 src/machine/execute/lift.rs: 1
 src/machine/model/types/ktype_predicates.rs: 1
-src/witnessed.rs: 22
+src/witnessed.rs: 21
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -79,7 +79,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-32 tests, grouped by the unsafe site each pins down. Names below are the exact
+31 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -275,18 +275,13 @@ re-anchor it through every entry point — the witness-less helpers, the borrow-
 after the original binding drops), and the `Witnessed` accessors that drop the *original* binding and
 read back only through the bundled witness (the load-bearing case for the invariant `Cell<&'r u32>`
 carrier) — plus `map`'s branded projection (binding a cart-coherent `&'b` value into the invariant
-scope slot, the write `with` rejects). One further entry point, `reattach_branded`, re-anchors to a
-`'step` carried by a zero-sized `PhantomData<&'step ()>` brand rather than a borrowed witness — the
-parked-continuation case where no `'step`-lived borrow exists to hand `reattach_with` (`'view: 'step`
-is not assumable under a `for<'view>` continuation); its test brands a borrow out to the body
-lifetime that pins it, over both the covariant and invariant carriers. The escape-can't-compile
+scope slot, the write `with` rejects). The escape-can't-compile
 guards are `compile_fail` doctests on `with` / `map`.
 
 - `erased_roundtrip_and_helpers`
 - `witness_borrowed_reattach`
 - `read_borrow_bounded_witness_only`
 - `reattach_with_live_value_and_slice`
-- `reattach_branded_live_value`
 - `covariant_roundtrip_witness_only`
 - `invariant_roundtrip_witness_only`
 - `continuation_binds_cart_coherent_value_via_map`
@@ -399,7 +394,6 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
-- 2026-06-23: 114s — 32 tests, 0 leaks, 0 UB
 - 2026-06-23: 104s — 30 tests, 0 leaks, 0 UB
 - 2026-06-23: 106s — 30 tests, 0 leaks, 0 UB
 - 2026-06-23: 103s — 30 tests, 0 leaks, 0 UB
