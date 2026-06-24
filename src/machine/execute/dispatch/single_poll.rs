@@ -10,7 +10,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
+use crate::machine::core::Scope;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
 use crate::machine::{KError, KErrorKind, Resolution};
 use crate::source::Spanned;
@@ -47,26 +49,35 @@ pub(in crate::machine::execute) enum CtorKind<'step> {
 
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
-pub(super) fn bare_identifier<'step>(
+pub(super) fn bare_identifier<'step, 'b>(
     ctx: &SchedulerView<'step, '_>,
+    s: &'b Scope<'b>,
     name: String,
 ) -> Outcome<'step> {
-    match ctx
-        .current_scope()
-        .resolve_with_chain(&name, ctx.chain_deref())
-    {
-        Resolution::Value(obj) => Outcome::Done(Ok(Carried::Object(obj))),
+    match s.resolve_with_chain(&name, ctx.chain_deref()) {
+        // Re-anchor the `'b`-branded resolve result to the cart `'step`; see the witness note in
+        // `scratch/framestorage-ouroboros-plan.md`.
+        Resolution::Value(obj) => Outcome::Done(Ok(crate::scheduler::reattach_with::<CarriedFamily, _>(
+            Carried::Object(obj),
+            ctx.current_scope().region,
+        ))),
         Resolution::Placeholder(producer) => forward_to_producer(producer),
         Resolution::UnboundName => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name)))),
     }
 }
 
-pub(super) fn bare_type_leaf<'step>(
+pub(super) fn bare_type_leaf<'step, 'b>(
     ctx: &SchedulerView<'step, '_>,
+    s: &'b Scope<'b>,
     t: &TypeIdentifier,
 ) -> Outcome<'step> {
-    match resolve_type_leaf_carrier(ctx.current_scope(), t, ctx.active_chain()) {
-        TypeLeafCarrier::Resolved(kt) => Outcome::Done(Ok(Carried::Type(kt))),
+    match resolve_type_leaf_carrier(s, t, ctx.active_chain()) {
+        TypeLeafCarrier::Resolved(kt) => Outcome::Done(Ok(crate::scheduler::reattach_with::<
+            CarriedFamily,
+            _,
+        >(
+            Carried::Type(kt), ctx.current_scope().region
+        ))),
         TypeLeafCarrier::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS
         // through the bridge, so a bare leaf parks on exactly one producer; park on it and
@@ -84,7 +95,7 @@ pub(super) fn bare_type_leaf<'step>(
                 }
                 // Ready-and-bound: the referent finalized between resolve and this check, so
                 // re-resolve directly — the memoized bridge now admits.
-                return bare_type_leaf(ctx, t);
+                return bare_type_leaf(ctx, s, t);
             }
             // The producer's terminal is not the type carrier (a finalize-combine returns its own
             // value), so on wake `resume` re-resolves the leaf through the now-sealed memo rather
@@ -94,7 +105,7 @@ pub(super) fn bare_type_leaf<'step>(
             park_resume(
                 vec![producer],
                 None,
-                Box::new(move |ctx, _idx| bare_type_leaf(ctx, &leaf)),
+                Box::new(move |ctx, _idx| ctx.with_current_scope(|s| bare_type_leaf(ctx, s, &leaf))),
             )
         }
     }
@@ -145,6 +156,8 @@ pub(super) fn literal_pass_through<'step>(
         .next()
         .expect("LiteralPassThrough shape implies one part");
     match only.value {
+        // The literal is scope-independent (it comes from `expr`, not a scope resolve), so it stays
+        // on the cart region — no threaded scope needed.
         ExpressionPart::Literal(_) => {
             let allocated = ctx.current_scope().region.alloc_object(only.value.resolve());
             Outcome::Done(Ok(Carried::Object(allocated)))
@@ -185,8 +198,9 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
 ///
 /// A name with no producer and no binding is `UnboundName` (genuine absence only —
 /// pending names are already parked in step 1).
-pub(super) fn type_call<'step>(
+pub(super) fn type_call<'step, 'b>(
     ctx: &SchedulerView<'step, '_>,
+    s: &'b Scope<'b>,
     expr: KExpression<'step>,
 ) -> Outcome<'step> {
     let head_t = match &expr.parts[0].value {
@@ -201,10 +215,7 @@ pub(super) fn type_call<'step>(
     // or type alias), so a keyworded resume would wrongly fail. A producer that is
     // already terminal falls through — its placeholder is on its way out, so the
     // type-table read below is authoritative.
-    if let Resolution::Placeholder(producer) = ctx
-        .current_scope()
-        .resolve_with_chain(head_t.as_str(), chain)
-    {
+    if let Resolution::Placeholder(producer) = s.resolve_with_chain(head_t.as_str(), chain) {
         if !ctx.is_result_ready(producer) {
             // The original call expression is the deadlock-summary sample; the resume re-runs
             // the whole fast lane against it once the head binding finalizes.
@@ -212,7 +223,7 @@ pub(super) fn type_call<'step>(
             return park_resume(
                 vec![producer],
                 Some(carrier),
-                Box::new(move |ctx, _idx| type_call(ctx, expr)),
+                Box::new(move |ctx, _idx| ctx.with_current_scope(|s| type_call(ctx, s, expr))),
             );
         }
     }
@@ -220,11 +231,17 @@ pub(super) fn type_call<'step>(
     // a `SetRef` whose member carries the schema (filled at the member's finalize) — no
     // value-side carrier involved. A bound functor lives here too, carrying its callable
     // body on `KType::KFunctor { body: Some(f) }`.
-    let identity = match ctx
-        .current_scope()
-        .resolve_type_with_chain(head_t.as_str(), chain)
-    {
-        Some(kt) => kt,
+    let identity = match s.resolve_type_with_chain(head_t.as_str(), chain) {
+        // Re-anchor the `'b`-branded type to the cart `'step` (it feeds `apply_callable`'s outcome).
+        Some(kt) => {
+            let Carried::Type(kt) = crate::scheduler::reattach_with::<CarriedFamily, _>(
+                Carried::Type(kt),
+                ctx.current_scope().region,
+            ) else {
+                unreachable!("reattach preserves the Type variant")
+            };
+            kt
+        }
         None => {
             return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head_t.render()))));
         }

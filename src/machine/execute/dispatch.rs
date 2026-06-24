@@ -431,7 +431,7 @@ fn classify_dispatch<'step>(
                 ExpressionPart::Type(t) => t.clone(),
                 _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
             };
-            single_poll::bare_type_leaf(view, &t)
+            view.with_current_scope(|s| single_poll::bare_type_leaf(view, s, &t))
         }
         DispatchShape::BareIdentifier => {
             debug_assert!(pre_subs.is_empty());
@@ -439,7 +439,7 @@ fn classify_dispatch<'step>(
                 ExpressionPart::Identifier(n) => n.clone(),
                 _ => unreachable!("BareIdentifier shape implies single Identifier part"),
             };
-            single_poll::bare_identifier(view, name)
+            view.with_current_scope(|s| single_poll::bare_identifier(view, s, name))
         }
         DispatchShape::FunctionValueCall => {
             debug_assert!(pre_subs.is_empty());
@@ -447,7 +447,7 @@ fn classify_dispatch<'step>(
         }
         DispatchShape::TypeCall => {
             debug_assert!(pre_subs.is_empty());
-            single_poll::type_call(view, expr)
+            view.with_current_scope(|s| single_poll::type_call(view, s, expr))
         }
         DispatchShape::HeadDeferred => {
             debug_assert!(pre_subs.is_empty());
