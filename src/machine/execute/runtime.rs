@@ -25,9 +25,10 @@ use crate::machine::core::kfunction::action::{
 use crate::machine::core::kfunction::body::{
     split_body_statements, ContractFamily, ErasedContract,
 };
-use crate::machine::core::FrameStorage;
+use crate::machine::core::{FrameStorage, ScopeRefFamily};
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallFrame, KError, NodeId, Scope};
+use crate::scheduler::reattach_branded;
 
 use super::dispatch::{reattach_node_scope, DepRequest};
 use super::lift::NodeLift;
@@ -254,10 +255,13 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
             let park_count = park.len();
             park.extend(owned);
             let wrapped: DepFinish<'step> = Box::new(move |view, results| {
-                let fctx = FinishCtx {
-                    scope: view.current_scope(),
-                };
-                run_action(finish(&fctx, results))
+                // Open the child scope at a `for<'b>` brand and re-anchor the handle to the cart
+                // `'step` the boxed `finish` (and its `Action<'step>` result) is typed at.
+                view.with_current_scope(|s| {
+                    let scope = reattach_branded::<ScopeRefFamily>(s, PhantomData::<&'step ()>);
+                    let fctx = FinishCtx { scope };
+                    run_action(finish(&fctx, results))
+                })
             });
             Outcome::ParkThenContinue {
                 deps: park,
@@ -271,10 +275,11 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
             // `watched` is realized (and owned) at apply time — an `InScope` watched enters a
             // fresh single-statement block, distinct from a dep-finish body's fan-out.
             let wrapped: CatchFinish<'step> = Box::new(move |view, result| {
-                let fctx = FinishCtx {
-                    scope: view.current_scope(),
-                };
-                run_action(finish(&fctx, result))
+                view.with_current_scope(|s| {
+                    let scope = reattach_branded::<ScopeRefFamily>(s, PhantomData::<&'step ()>);
+                    let fctx = FinishCtx { scope };
+                    run_action(finish(&fctx, result))
+                })
             });
             Outcome::ParkThenContinue {
                 deps: Vec::new(),
