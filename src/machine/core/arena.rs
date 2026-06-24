@@ -477,6 +477,17 @@ impl CallFrame {
         self.scope_ptr_set().reattach_witnessed(&self.storage)
     }
 
+    /// Run `f` with this frame's child scope handed in at a **rank-2 (`for<'b>`)** brand, so the
+    /// borrow cannot escape the closure — the `ouroboros::with_child` shape, served today over the
+    /// witnessed [`Self::reattach_scope`]. The migration target: every child-scope read threads `s`
+    /// from one of these openings instead of a free `current_scope()`, so the flip to a
+    /// `#[self_referencing]` `FrameStorage` only re-points this one body. See
+    /// `scratch/framestorage-ouroboros-plan.md`.
+    #[allow(dead_code)]
+    pub fn with_scope<R>(&self, f: impl for<'b> FnOnce(&'b Scope<'b>) -> R) -> R {
+        f(self.reattach_scope())
+    }
+
     /// The child scope's [`ErasedScopePtr`], which is `Some` for the whole life of a
     /// constructed frame (`None` only transiently inside `new` / `try_reset_for_tail` before
     /// the child scope is allocated).

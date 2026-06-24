@@ -70,6 +70,38 @@ pub(in crate::machine::execute) fn current_scope<'step>(ambient: &AmbientContext
     reattach_node_scope(&payload.scope, ambient.active_frame_ref())
 }
 
+/// Closure (`for<'b>`) analog of [`reattach_node_scope`]: hand the node scope in at a rank-2 brand so
+/// the borrow cannot escape `f`. The `Yoked` arm routes [`CallFrame::with_scope`] (the
+/// `ouroboros::with_child` target); the `YokedChild` arm stays a witnessed reference (a cross-node
+/// erasure outside the per-call struct). Migration scaffold; see `scratch/framestorage-ouroboros-plan.md`.
+#[allow(dead_code)]
+pub(in crate::machine::execute) fn with_node_scope<R>(
+    node_scope: &NodeScope,
+    frame: Option<&Rc<CallFrame>>,
+    f: impl for<'b> FnOnce(&'b Scope<'b>) -> R,
+) -> R {
+    match node_scope {
+        NodeScope::YokedChild(ptr) => {
+            f(ptr.reattach_witnessed(frame.expect("a YokedChild slot keeps its active cart")))
+        }
+        NodeScope::Yoked => frame
+            .expect("a Yoked slot keeps its active cart")
+            .with_scope(f),
+    }
+}
+
+/// Closure analog of [`current_scope`]: open the active slot's scope at a `for<'b>` brand.
+#[allow(dead_code)]
+pub(in crate::machine::execute) fn with_current_scope<R>(
+    ambient: &AmbientContext,
+    f: impl for<'b> FnOnce(&'b Scope<'b>) -> R,
+) -> R {
+    let payload = ambient
+        .active_payload()
+        .expect("a slot step installs the ambient payload (and a Yoked slot keeps its frame)");
+    with_node_scope(&payload.scope, ambient.active_frame_ref(), f)
+}
+
 /// Read-only dispatch view — the decide-phase context. It holds only `&Scheduler`, never `&mut`.
 /// A shape handler decides against this and *returns* a
 /// [`Outcome`](super::Outcome); the harness reborrows the scheduler
@@ -107,6 +139,17 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     // `chain_deref`, `active_chain`) and the live reads of pre-existing producers
     // (`is_result_ready`, `would_create_cycle`, `read_result`) all forward to the borrowed
     // scheduler.
+
+    /// Open the active slot's scope at a `for<'b>` brand — the Option-2 migration accessor that
+    /// replaces `current_scope()` reads with a threaded `s` parameter (see
+    /// `scratch/framestorage-ouroboros-plan.md`).
+    #[allow(dead_code)]
+    pub(in crate::machine::execute) fn with_current_scope<R>(
+        &self,
+        f: impl for<'b> FnOnce(&'b Scope<'b>) -> R,
+    ) -> R {
+        with_current_scope(self.ambient, f)
+    }
 
     pub(in crate::machine::execute) fn current_scope(&self) -> &Scope<'step> {
         current_scope(self.ambient)
