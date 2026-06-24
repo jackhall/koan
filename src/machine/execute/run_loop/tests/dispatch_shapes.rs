@@ -21,7 +21,8 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::Held;
 use crate::machine::model::{Carried, KObject, Parseable};
-use crate::machine::{BindingIndex, KFunction, KoanRegion, Scope};
+use crate::machine::core::FrameStorage;
+use crate::machine::{BindingIndex, KFunction, Scope};
 
 fn dispatch_one<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> &'run KObject<'run> {
     sched_read_carried(scope, expr).object()
@@ -81,7 +82,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
 /// fast-lane handler routes through `resolve_type_leaf_carrier`.
 #[test]
 fn bare_type_leaf_short_circuits() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let expr = parse_one("(Number)");
     reset_resolve_dispatch_entry_count();
@@ -105,7 +106,7 @@ fn bare_type_leaf_short_circuits() {
 #[test]
 fn function_value_call_named_args_short_circuits() {
     use crate::builtins::test_support::{run, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "LET f = (FN (DOUBLE x :Number) -> Number = (x))");
     let expr = parse_one("f {x = 7}");
@@ -131,7 +132,7 @@ fn function_value_call_named_args_short_circuits() {
 #[test]
 fn function_value_call_named_args_out_of_order_short_circuits() {
     use crate::builtins::test_support::{run, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -160,7 +161,7 @@ fn function_value_call_named_args_out_of_order_short_circuits() {
 fn function_value_call_named_args_missing_short_circuits() {
     use crate::builtins::test_support::{run, run_root_silent};
     use crate::machine::KErrorKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -201,7 +202,7 @@ fn function_value_call_named_args_missing_short_circuits() {
 #[test]
 fn fast_lane_fn_callable_via_named_args() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "LET f = (FN (DOUBLE x :Number) -> Number = (x))");
     reset_resolve_dispatch_entry_count();
@@ -221,7 +222,7 @@ fn fast_lane_fn_callable_via_named_args() {
 #[test]
 fn fast_lane_weaves_internal_keyword() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -238,7 +239,7 @@ fn fast_lane_weaves_internal_keyword() {
 #[test]
 fn fast_lane_named_args_order_independent() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -257,7 +258,7 @@ fn fast_lane_named_args_order_independent() {
 #[test]
 fn fast_lane_extra_named_arg_dropped() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -276,7 +277,7 @@ fn fast_lane_extra_named_arg_dropped() {
 fn fast_lane_legacy_paren_args_rejected() {
     use crate::builtins::test_support::{run, run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "LET f = (FN (DOUBLE x :Number) -> Number = (x))");
     reset_resolve_dispatch_entry_count();
@@ -293,7 +294,7 @@ fn fast_lane_legacy_paren_args_rejected() {
 fn fast_lane_duplicate_named_arg() {
     use crate::builtins::test_support::{run, run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "LET f = (FN (DOUBLE x :Number) -> Number = (x))");
     reset_resolve_dispatch_entry_count();
@@ -313,7 +314,7 @@ fn fast_lane_duplicate_named_arg() {
 fn fast_lane_on_non_function_returns_error() {
     use crate::builtins::test_support::{run, run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "LET x = 42");
     reset_resolve_dispatch_entry_count();
@@ -340,7 +341,7 @@ fn fast_lane_on_non_function_returns_error() {
 #[test]
 fn fast_lane_on_tagged_union_constructs() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "UNION Maybe = (Some :Number None :Null)");
     reset_resolve_dispatch_entry_count();
@@ -372,7 +373,7 @@ fn fast_lane_on_tagged_union_constructs() {
 #[test]
 fn fast_lane_on_newtype_record_type_constructs() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "NEWTYPE Pt = :{x :Number, y :Number}");
     reset_resolve_dispatch_entry_count();
@@ -410,7 +411,7 @@ fn fast_lane_on_newtype_record_type_constructs() {
 #[test]
 fn literal_pass_through_routes_via_fast_lane() {
     use crate::builtins::test_support::{run_one, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     reset_resolve_dispatch_entry_count();
     let result = run_one(scope, parse_one("(99)"));
@@ -428,7 +429,7 @@ fn literal_pass_through_routes_via_fast_lane() {
 #[test]
 fn literal_pass_through_routes_list_literal_via_fast_lane() {
     use crate::builtins::test_support::{run_one, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     reset_resolve_dispatch_entry_count();
     let result = run_one(scope, parse_one("([1 2 3])"));
@@ -447,7 +448,7 @@ fn literal_pass_through_routes_list_literal_via_fast_lane() {
 fn fast_lane_unbound_returns_error() {
     use crate::builtins::test_support::{run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     reset_resolve_dispatch_entry_count();
     let err = run_one_err(scope, parse_one("undefined {foo = 7}"));
@@ -467,7 +468,7 @@ fn fast_lane_unbound_returns_error() {
 fn fast_lane_closure_escapes_outer_call_and_remains_invocable() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
     use crate::machine::model::Parseable;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -487,7 +488,7 @@ fn fast_lane_closure_escapes_outer_call_and_remains_invocable() {
 #[test]
 fn fast_lane_escaped_closure_with_param_returns_body_value() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -507,7 +508,7 @@ fn fast_lane_escaped_closure_with_param_returns_body_value() {
 fn fast_lane_list_of_closures_escapes_outer_call_with_rc_attached() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
     use crate::machine::model::Parseable;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -541,7 +542,7 @@ fn fast_lane_list_of_closures_escapes_outer_call_with_rc_attached() {
 /// finalize binds the name, which then resolves to a `Value`, not a `Placeholder`.)
 #[test]
 fn function_value_call_forward_ref_routes_via_placeholder() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
 
@@ -582,7 +583,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
 /// `resolve_dispatch` runs at least once to find the bucket.
 #[test]
 fn keyworded_unchanged() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let expr = parse_one("(PRINT 5)");
     reset_resolve_dispatch_entry_count();
@@ -661,7 +662,7 @@ fn classifier_legacy_positional_collapses_to_type_call() {
 /// - `(f IF x)`: lowercase Identifier head, keyword `IF` in body.
 #[test]
 fn keyworded_unchanged_with_keyword_in_body() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     bind_identity_fn(scope);
 
@@ -699,7 +700,7 @@ fn keyworded_unchanged_with_keyword_in_body() {
 /// splices `Spliced(1)` into the LET expression and re-resolves.
 #[test]
 fn stateful_keyworded_eager_subs_resumes_through_state() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     crate::builtins::test_support::run(scope, "FN (FIRST xs :(LIST OF Number)) -> Number = (1)");
     let mut sched = KoanRuntime::new();
@@ -723,7 +724,7 @@ fn stateful_keyworded_eager_subs_resumes_through_state() {
 /// `:(LIST OF Number)` arm.
 #[test]
 fn stateful_keyworded_deferred_resolves_after_eager_subs() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     crate::builtins::test_support::run(
         scope,
@@ -786,7 +787,7 @@ fn classifier_single_operator_stays_keyworded() {
 /// structured `DispatchFailed` naming the undeclared operators.
 #[test]
 fn operator_chain_undeclared_errors_cleanly() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("a + b + c"), scope);
@@ -812,7 +813,7 @@ fn operator_chain_registered_reaches_fold_seam() {
     use crate::machine::model::operators::{Associativity, OperatorEntry, OperatorGroup};
     use std::collections::HashMap;
 
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut members = HashMap::new();
     members.insert(
@@ -854,7 +855,7 @@ fn operator_chain_registered_reaches_fold_seam() {
 #[test]
 fn type_call_constructs_struct() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
     let out = run_one(scope, parse_one("Point {x = 1, y = 2}"));
@@ -866,7 +867,7 @@ fn type_call_constructs_struct() {
 #[test]
 fn head_deferred_calls_returned_function() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -887,7 +888,7 @@ fn head_deferred_calls_returned_function() {
 #[test]
 fn head_deferred_applies_returned_functor_to_module() {
     use crate::builtins::test_support::{run, run_one_type, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -907,7 +908,7 @@ fn head_deferred_applies_returned_functor_to_module() {
 #[test]
 fn head_deferred_constructs_from_returned_type_value() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
     // `(Point) {x = 1, y = 2}`: the nested-`Expression` head `(Point)` resolves the
@@ -922,7 +923,7 @@ fn head_deferred_constructs_from_returned_type_value() {
 fn head_deferred_non_callable_value_errors() {
     use crate::builtins::test_support::{run, run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (GET_NUM) -> Number = (42)");
     let err = run_one_err(scope, parse_one("(GET_NUM) {x = 1}"));
@@ -942,7 +943,7 @@ fn head_deferred_non_callable_value_errors() {
 fn type_head_deferred_non_type_value_type_mismatches() {
     use crate::builtins::test_support::{run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let err = run_one_err(scope, parse_one(":(Number) {x = 1}"));
     match &err.kind {
@@ -961,7 +962,7 @@ fn type_head_deferred_non_type_value_type_mismatches() {
 #[test]
 fn type_head_deferred_constructs_from_sigil_type() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
     let out = run_one(scope, parse_one(":(Point) {x = 1, y = 2}"));
@@ -976,7 +977,7 @@ fn type_head_deferred_constructs_from_sigil_type() {
 fn type_call_applies_let_bound_functor() {
     use crate::builtins::test_support::{run, run_one_type, run_root_silent};
     use crate::machine::model::KType;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -1008,7 +1009,7 @@ fn type_call_applies_let_bound_functor() {
 fn type_call_on_functor_annotation_type_mismatches() {
     use crate::builtins::test_support::{run, run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "LET FShape = :(FUNCTOR (x :Number) -> Module)");
     let err = run_one_err(scope, parse_one("FShape {x = 5}"));
@@ -1029,7 +1030,7 @@ fn type_call_on_functor_annotation_type_mismatches() {
 fn non_callable_list_head_errors() {
     use crate::builtins::test_support::run_root_silent;
     use crate::machine::KErrorKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let mut sched = KoanRuntime::new();
     let root = sched.dispatch_in_scope(parse_one("[1 2 3] x"), scope);
@@ -1055,7 +1056,7 @@ fn non_callable_list_head_errors() {
 #[test]
 fn type_call_and_head_deferred_skip_resolve_dispatch() {
     use crate::builtins::test_support::{run, run_root_silent};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
 

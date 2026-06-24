@@ -143,10 +143,17 @@ pub(crate) fn register_overload_at<'a>(
 /// Registration order does not affect dispatch — [`Scope::resolve_dispatch`] buckets by
 /// untyped signature shape and picks overloads by `KType` specificity.
 pub fn default_scope<'a>(
-    region: &'a crate::machine::core::KoanRegion,
+    run_storage: &'a std::rc::Rc<crate::machine::core::FrameStorage>,
     out: Box<dyn std::io::Write + 'a>,
 ) -> &'a Scope<'a> {
-    let scope = region.alloc_scope(Scope::run_root(region, None, out));
+    // Region borrow and the run-root scope's `region_owner` both derive from the one run storage.
+    let region = run_storage.region();
+    let scope = region.alloc_scope(Scope::run_root(
+        region,
+        None,
+        out,
+        std::rc::Rc::downgrade(run_storage),
+    ));
 
     scope.register_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
     scope.register_type("Str".into(), KType::Str, BindingIndex::BUILTIN);

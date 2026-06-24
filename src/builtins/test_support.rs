@@ -4,9 +4,10 @@
 
 use std::cell::RefCell;
 use std::io::Write;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::FrameStorage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
@@ -46,21 +47,35 @@ impl Write for SharedBuf {
 }
 
 pub(crate) fn run_root_with_buf<'a>(
-    region: &'a KoanRegion,
+    run_storage: &'a Rc<FrameStorage>,
 ) -> (&'a Scope<'a>, Rc<RefCell<Vec<u8>>>) {
     let buf = Rc::new(RefCell::new(Vec::new()));
-    let scope = default_scope(region, Box::new(SharedBuf(buf.clone())));
+    let scope = default_scope(run_storage, Box::new(SharedBuf(buf.clone())));
     (scope, buf)
 }
 
-pub(crate) fn run_root_silent<'a>(region: &'a KoanRegion) -> &'a Scope<'a> {
-    default_scope(region, Box::new(std::io::sink()))
+pub(crate) fn run_root_silent<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<'a> {
+    default_scope(run_storage, Box::new(std::io::sink()))
 }
 
 /// Run-root scope with no builtins registered, for tests that exercise scope machinery
-/// directly.
+/// directly. Built on a bare region with no owning storage (`region_owner` empty) — such tests
+/// never reach the cycle-gate escape path, so they need no `FrameStorage`.
 pub(crate) fn run_root_bare<'a>(region: &'a KoanRegion) -> &'a Scope<'a> {
-    region.alloc_scope(Scope::run_root(region, None, Box::new(std::io::sink())))
+    region.alloc_scope(Scope::run_root(region, None, Box::new(std::io::sink()), Weak::new()))
+}
+
+/// Like [`run_root_bare`] (no builtins) but **owner-backed**: built inside `run_storage` so its
+/// `region_owner` resolves. For no-builtins tests that still *drive dispatch*, which establishes a
+/// run frame via `ensure_run_frame` and therefore needs the run-root scope to carry an owner.
+pub(crate) fn run_root_bare_owned<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<'a> {
+    let region = run_storage.region();
+    region.alloc_scope(Scope::run_root(
+        region,
+        None,
+        Box::new(std::io::sink()),
+        Rc::downgrade(run_storage),
+    ))
 }
 
 /// Parse a source string expected to contain exactly one top-level expression.

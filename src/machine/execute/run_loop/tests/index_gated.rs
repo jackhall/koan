@@ -9,9 +9,10 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::builtins::default_scope;
+use crate::machine::core::FrameStorage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType, Parseable};
-use crate::machine::{KError, KErrorKind, KoanRegion, Scope};
+use crate::machine::{KError, KErrorKind, Scope};
 use crate::parse::parse;
 
 struct Sink;
@@ -35,7 +36,7 @@ impl Write for SharedBuf {
     }
 }
 
-fn run_scope<'run>(region: &'run KoanRegion, source: &str) -> &'run Scope<'run> {
+fn run_scope<'run>(region: &'run Rc<FrameStorage>, source: &str) -> &'run Scope<'run> {
     let scope = default_scope(region, Box::new(Sink));
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = KoanRuntime::new();
@@ -45,7 +46,7 @@ fn run_scope<'run>(region: &'run KoanRegion, source: &str) -> &'run Scope<'run> 
 }
 
 fn run_collect_err(source: &str) -> Option<KError> {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(Sink));
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = KoanRuntime::new();
@@ -82,7 +83,7 @@ fn later_sibling_reference_is_unbound_name() {
 
 #[test]
 fn backward_value_let_resolves() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_scope(&region, "LET z = 1\nLET y = z");
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 1.0));
 }
@@ -92,7 +93,7 @@ fn backward_value_let_resolves() {
 /// members regardless of their inner indices.
 #[test]
 fn returned_block_locals_visible_from_outer_chain() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_scope(
         &region,
         "MODULE Mo = ((LET inside = 7) (LET also = 9))\n\
@@ -109,7 +110,7 @@ fn returned_block_locals_visible_from_outer_chain() {
 /// and its own index, so an inner backward ref resolves against the inner producer.
 #[test]
 fn nested_block_cutoff_is_per_scope() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_scope(
         &region,
         "LET top = 1\n\
@@ -131,7 +132,7 @@ fn nested_block_cutoff_is_per_scope() {
 /// def index. UNION-tagged termination predicate bounds the recursion.
 #[test]
 fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let buf = Rc::new(RefCell::new(Vec::new()));
     let scope = default_scope(&region, Box::new(SharedBuf(buf.clone())));
     let exprs = parse(
@@ -165,7 +166,7 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
 /// references to Mo's members inside the block resolve.
 #[test]
 fn using_block_post_reference_visible() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_scope(
         &region,
         "MODULE Mo = ((LET hidden = 99))\n\
@@ -182,7 +183,7 @@ fn using_block_post_reference_visible() {
 /// overload from a consumer between two overloads.
 #[test]
 fn overload_pre_filter_hides_later_sibling_overload() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_scope(
         &region,
         "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
@@ -257,7 +258,7 @@ fn fn_return_type_forward_reference_is_position_error() {
 /// A backward return-type reference (the type is declared earlier) still resolves.
 #[test]
 fn fn_return_type_backward_reference_resolves() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_scope(
         &region,
         "NEWTYPE Early = :{n :Number}\n\

@@ -59,7 +59,8 @@ mod tests {
     use crate::machine::execute::KoanRuntime;
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{BindingIndex, KoanRegion, ScopeId};
+    use crate::machine::core::FrameStorage;
+    use crate::machine::{BindingIndex, ScopeId};
 
     /// Assert `kt` is a `TypeConstructor`-kind `SetRef` whose projected `param_names` equal
     /// `expected`; returns the member's name.
@@ -84,7 +85,7 @@ mod tests {
     /// Pins the template shape the builtin returns before opaque ascription re-mints it.
     #[test]
     fn type_constructor_builtin_returns_ktype_value() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one("TEMPLATE Type"));
         match result {
@@ -100,7 +101,7 @@ mod tests {
     /// Pins the LET-routing + `register_type` path for a higher-kinded SIG slot.
     #[test]
     fn sig_declares_higher_kinded_slot() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "SIG Monad = ((LET Wrap = (TEMPLATE Type)))");
         let s = match scope.resolve_type("Monad") {
@@ -116,7 +117,7 @@ mod tests {
     /// `ConstructorApply` carrier.
     #[test]
     fn fn_return_type_constructor_apply_root_scope() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         scope.register_type(
             "Wrap".into(),
@@ -153,7 +154,7 @@ mod tests {
     #[test]
     fn monad_signature_smoke() {
         use crate::parse::parse;
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let src = "SIG Monad = ((LET Wrap = (TEMPLATE Type)) \
              (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))";
@@ -204,7 +205,7 @@ mod tests {
     /// `type_members` to the per-call-minted constructor variant.
     #[test]
     fn module_attr_access_returns_type_constructor() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,

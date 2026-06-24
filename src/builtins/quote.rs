@@ -29,10 +29,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{run, run_root_with_buf};
-    use crate::machine::KoanRegion;
+    use crate::machine::core::FrameStorage;
 
     fn run_program(source: &str) -> Vec<u8> {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let (scope, captured) = run_root_with_buf(&region);
         run(scope, source);
         let bytes = captured.borrow().clone();

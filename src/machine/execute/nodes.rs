@@ -161,7 +161,7 @@ mod tests {
 
     use super::*;
     use crate::builtins::default_scope;
-    use crate::machine::core::KoanRegion;
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::KObject;
     use crate::machine::{BindingIndex, Scope};
 
@@ -172,9 +172,9 @@ mod tests {
     /// sibling pointer; fails on UB, not values.
     #[test]
     fn node_scope_yoked_child_erase_reattach_roundtrip() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = default_scope(&region, Box::new(std::io::sink()));
-        let v = region.alloc_object(KObject::Number(7.0));
+        let v = region.region().alloc_object(KObject::Number(7.0));
         scope
             .bind_value("k".to_string(), v, BindingIndex::BUILTIN)
             .unwrap();
@@ -185,9 +185,9 @@ mod tests {
         };
         // Reattach with a borrow bounded by the region witness; read a binding back, then mutate the
         // region through a sibling pointer while the reattached scope is still live.
-        let reattached: &Scope<'_> = ptr.reattach_witnessed(&region);
+        let reattached: &Scope<'_> = ptr.reattach_witnessed(region.region());
         assert!(matches!(reattached.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
-        let _other = region.alloc_object(KObject::Number(8.0));
+        let _other = region.region().alloc_object(KObject::Number(8.0));
         assert!(reattached.lookup("k").is_some());
     }
 }

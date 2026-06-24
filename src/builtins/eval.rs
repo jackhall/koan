@@ -30,8 +30,15 @@ pub fn body<'a>(
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("expr".to_string())))),
     };
     // Chain the call-site frame Rc onto the new frame (keeps the parent region alive past the
-    // new frame's `outer` pointer) — matching a normal call frame.
-    let frame: Rc<CallFrame> = CallFrame::new(ctx.scope, ctx.frame.map(|f| f.storage_rc()));
+    // new frame's `outer` pointer) — matching a normal call frame. The escape owner is the storage
+    // owning the call-site region (the new frame's redirect target), read off the call-site scope.
+    let escape_owner = ctx
+        .scope
+        .region_owner()
+        .upgrade()
+        .expect("EVAL: call-site scope's region owner is live");
+    let frame: Rc<CallFrame> =
+        CallFrame::new(ctx.scope, ctx.frame.map(|f| f.storage_rc()), escape_owner);
     Action::Tail {
         leading: vec![],
         tail: inner,
@@ -51,10 +58,11 @@ mod tests {
     use crate::builtins::test_support::{
         parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
     };
-    use crate::machine::{KErrorKind, KoanRegion};
+    use crate::machine::core::FrameStorage;
+    use crate::machine::KErrorKind;
 
     fn run_program(source: &str) -> Vec<u8> {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let (scope, captured) = run_root_with_buf(&region);
         run(scope, source);
         let bytes = captured.borrow().clone();
@@ -78,7 +86,7 @@ mod tests {
 
     #[test]
     fn eval_of_non_kexpression_errors_with_type_mismatch() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "LET x = 3");
         let err = run_one_err(scope, parse_one("$(x)"));

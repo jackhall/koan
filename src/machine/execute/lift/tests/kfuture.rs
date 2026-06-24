@@ -4,6 +4,7 @@ use super::*;
 use crate::builtins::default_scope;
 use crate::machine::model::types::Record;
 use crate::machine::model::values::ArgValue;
+use crate::machine::core::FrameStorage;
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::CallFrame;
@@ -19,9 +20,9 @@ fn unanchored_kfuture_no_region_borrow_does_not_anchor() {
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
     use crate::machine::{Body, KFunction};
 
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     // Defeat the `functions_is_empty()` fast path so the slow path runs.
     let kf = KFunction::new(
         ExpressionSignature {
@@ -62,9 +63,9 @@ fn unanchored_kfuture_with_region_borrow_does_anchor() {
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
     use crate::machine::{Body, KFunction};
 
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
 
     let kf = KFunction::new(
         ExpressionSignature {
@@ -110,9 +111,9 @@ fn unanchored_kfuture_with_region_borrow_does_anchor() {
 /// recursive borrow walk; the inner future borrows via its captured function.
 #[test]
 fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let inner_future = KFuture {
@@ -147,9 +148,9 @@ fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
 #[test]
 fn kfuture_bundle_arg_with_wrapped_field_anchors() {
     use crate::machine::ScopeId;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     use crate::machine::model::types::{KType, NominalSchema, RecursiveSet};
@@ -158,7 +159,7 @@ fn kfuture_bundle_arg_with_wrapped_field_anchors() {
         "f".to_string(),
         KObject::KFunction(kf_ref, None),
     )]));
-    let type_id: &KType = region.alloc_ktype(KType::SetRef {
+    let type_id: &KType = region.region().alloc_ktype(KType::SetRef {
         set: RecursiveSet::singleton(
             "S".into(),
             ScopeId::next(),
@@ -193,9 +194,9 @@ fn kfuture_bundle_arg_with_wrapped_field_anchors() {
 /// into the dying region must drive anchor.
 #[test]
 fn kfuture_parsed_expression_part_with_region_borrow_anchors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
@@ -227,9 +228,9 @@ fn kfuture_parsed_expression_part_with_region_borrow_anchors() {
 /// the dying region must drive anchor.
 #[test]
 fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
@@ -260,11 +261,11 @@ fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
 /// Pre-anchored KFuture preserves its anchor through lift.
 #[test]
 fn kfuture_with_existing_anchor_preserves_it() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
-    let other = CallFrame::new(scope, None);
+    let other = CallFrame::new_test(scope, None);
     let other_storage = other.storage_rc();
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
@@ -289,9 +290,9 @@ fn kfuture_with_existing_anchor_preserves_it() {
 /// bundle slot, must drive lift to anchor.
 #[test]
 fn kfuture_bundle_arg_with_local_kfunction_anchors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
@@ -319,9 +320,9 @@ fn kfuture_bundle_arg_with_local_kfunction_anchors() {
 /// without needing any borrowing payload in parts or bundle.
 #[test]
 fn kfuture_with_local_function_anchors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let future = KFuture {
@@ -347,9 +348,9 @@ fn kfuture_with_local_function_anchors() {
 /// composite-recursion arms (List/Dict/Tagged).
 #[test]
 fn kfuture_bundle_arg_with_list_of_kfunction_anchors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
@@ -378,9 +379,9 @@ fn kfuture_bundle_arg_with_list_of_kfunction_anchors() {
 #[test]
 fn kfuture_bundle_arg_with_local_kmodule_anchors() {
     use crate::machine::model::values::Module;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
 
     let module = Module::new("BundleMod".into(), dying.scope());
@@ -414,9 +415,9 @@ fn kfuture_bundle_arg_with_local_kmodule_anchors() {
 /// the dying region must drive anchor.
 #[test]
 fn kfuture_parsed_listliteral_with_region_borrow_anchors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
@@ -447,9 +448,9 @@ fn kfuture_parsed_listliteral_with_region_borrow_anchors() {
 /// `Spliced` part must drive anchor.
 #[test]
 fn kfuture_parsed_dictliteral_with_region_borrow_anchors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
 
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");

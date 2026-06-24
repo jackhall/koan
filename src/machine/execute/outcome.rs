@@ -234,7 +234,7 @@ mod erased_continuation_tests {
 
     use super::*;
     use crate::builtins::default_scope;
-    use crate::machine::core::{CallFrame, KoanRegion};
+    use crate::machine::core::{CallFrame, FrameStorage};
     use crate::scheduler::{vend_carrier, Erased, Scheduler};
     use std::rc::Rc;
 
@@ -246,12 +246,12 @@ mod erased_continuation_tests {
     /// (`run_step`); fails on UB, not values.
     #[test]
     fn erased_continuation_reattach_roundtrip() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = default_scope(&region, Box::new(std::io::sink()));
         // The captured value lives in the run region — the ancestor the cart's `outer` chain pins.
-        let captured: &KObject = region.alloc_object(KObject::Number(7.0));
+        let captured: &KObject = region.region().alloc_object(KObject::Number(7.0));
         // The cart `Rc` held live to the end of the test witnesses the reattach below.
-        let cart = Rc::new(CallFrame::new(scope, None));
+        let cart = Rc::new(CallFrame::new_test(scope, None));
 
         let continuation: NodeContinuation = Box::new(move |_view, _results, _idx| {
             // Read the run-lived capture through the reattached box.
@@ -270,7 +270,7 @@ mod erased_continuation_tests {
         let out = reattached(&view, &[], 0);
         assert!(matches!(out, Outcome::Done(Err(_))));
         // Mutate the region through a sibling pointer after the call to catch a stacked-borrow regression.
-        let _other = region.alloc_object(KObject::Number(8.0));
+        let _other = region.region().alloc_object(KObject::Number(8.0));
         assert!(matches!(captured, KObject::Number(n) if *n == 7.0));
     }
 }

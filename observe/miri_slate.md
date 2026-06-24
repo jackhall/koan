@@ -3,7 +3,6 @@
 <!-- slate-fingerprint
 src/machine/core/arena.rs: 2
 src/machine/core/reattach.rs: 2
-src/machine/core/region.rs: 1
 src/machine/core/scope_ptr.rs: 2
 src/machine/execute/lift.rs: 1
 src/witnessed.rs: 21
@@ -69,6 +68,12 @@ group just to silence the stale-anchor check.
   cart `Rc` as the explicit witness to `ErasedScopePtr::reattach_witnessed`, a **safe**
   call, so ctx.rs carries no `unsafe`. The group pins that boundary end-to-end (every
   scheduler-driving slate test); the `unsafe` it routes lives in `scope_ptr.rs`.
+- `src/machine/core/region.rs` — the cycle-gate redirect is now a safe owning deref of
+  `StorageProfile::EscapeOwner` (the Koan `FrameRegionPin`), so region.rs carries **no
+  `unsafe`**. Its two groups pin safe-code invariants tree borrows can still violate: the
+  alloc engine's `membership` `RefCell` `borrow_mut` under a live `&` (`region_alloc_while_prior_ref_live`),
+  and the cycle gate's owning child→parent escape edge routing + no-leak
+  (`alloc_object_redirects_self_anchored_value_to_escape_region`) — a shape no other test covers.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -106,9 +111,14 @@ tree-borrows shape over the engine `KoanRegion` (= `Region<KoanStorageProfile>`)
 
 **Cycle gate** ([src/machine/core/region.rs](../src/machine/core/region.rs)) — the generic `alloc`
 engine redirects a value whose family `anchors_to` answers true for `self` (a self-anchored
-`Rc<CallFrame>`) to the escape frame via the audited `pin_deref` on the escape pointer, breaking the
-storage cycle that closure-escape returns can otherwise produce. The Koan `anchors_to` walkers that drive the
-decision live in [src/machine/core/arena.rs](../src/machine/core/arena.rs).
+`Rc<CallFrame>`) to the escape frame, breaking the storage cycle that closure-escape returns can
+otherwise produce. The escape target is held as an owning [`StorageProfile::EscapeOwner`] (the Koan
+`FrameRegionPin`, an `Rc<FrameStorage>` deref'd to its region), so the redirect is a plain borrow
+with **no `unsafe`** — region.rs carries no raw deref. The memory shape this test pins under tree
+borrows is the owning child→parent escape edge: the per-call frame holds an `Rc` to the outer
+storage it redirects into, and that edge must route the value to the escape region (not the per-call
+region) and leave no leak. The Koan `anchors_to` walkers that drive the decision live in
+[src/machine/core/arena.rs](../src/machine/core/arena.rs).
 
 - `alloc_object_redirects_self_anchored_value_to_escape_region`
 

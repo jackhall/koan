@@ -14,17 +14,20 @@
 //! for the redirect `alloc` enforces.
 
 use std::cell::RefCell;
-use std::ptr::NonNull;
 
 use typed_arena::Arena;
 
-use super::reattach::pin_deref;
 use crate::scheduler::{erase_to_static, reattach_ref_with, Reattachable};
 
 /// A workload's declaration of what a [`Region`] stores for it. `Storage` is the bundle of
 /// typed sub-arenas the frame owns; the workload's [`Stored`] impls project each family out of it.
-pub trait StorageProfile {
+pub trait StorageProfile: Sized {
     type Storage: Default;
+    /// Owning handle to the cycle-gate redirect target — the region a self-anchoring value is
+    /// redirected into. It [`Deref`](std::ops::Deref)s to the target [`Region`] and keeps it pinned
+    /// for as long as the handle lives, so [`Region::alloc`]'s redirect is a plain borrow with no
+    /// `unsafe` raw-pointer deref: the owner outliving `&self` is what the borrow checker proves.
+    type EscapeOwner: std::ops::Deref<Target = Region<Self>>;
 }
 
 /// Per-family storage policy, implemented by the workload. The lifetime family itself comes from the
@@ -65,11 +68,11 @@ pub struct Region<W: StorageProfile> {
     /// [`owns_addr`](Self::owns_addr). `usize` rather than `*const _` keeps the field
     /// lifetime-erased and `Send`/`Sync`-neutral.
     membership: RefCell<Vec<usize>>,
-    /// Redirect target for the cycle gate. `None` on a run-root frame. Stable for `self`'s
-    /// lifetime: the per-call frame heap-pins the outer via `Rc` and the outer outlives this inner
-    /// per the lexical-scoping invariant. `NonNull` because a `Some` escape is always a live frame
-    /// address, never null.
-    escape: Option<NonNull<Region<W>>>,
+    /// Redirect target for the cycle gate. `None` on a run-root frame. An owning
+    /// [`StorageProfile::EscapeOwner`] (not a raw pointer): it keeps the target region pinned for
+    /// `self`'s whole life, so the redirect in [`alloc`](Self::alloc) is a safe borrow — the
+    /// outer-outlives-inner lexical invariant is now an owned fact rather than a raw-deref assumption.
+    escape: Option<W::EscapeOwner>,
 }
 
 impl<W: StorageProfile> Region<W> {
@@ -82,7 +85,7 @@ impl<W: StorageProfile> Region<W> {
     }
 
     /// `alloc` will redirect self-cyclic values to `escape`; see the cycle gate in [`alloc`](Self::alloc).
-    pub fn with_escape(escape: NonNull<Region<W>>) -> Self {
+    pub fn with_escape(escape: W::EscapeOwner) -> Self {
         Self {
             storage: W::Storage::default(),
             membership: RefCell::new(Vec::new()),
@@ -113,14 +116,13 @@ impl<W: StorageProfile> Region<W> {
     /// [`Stored::record_local`] on the final storing frame, and re-anchors the store to `'a`. The
     /// sole store path: `storage` is private, so this gate cannot be skipped.
     ///
-    /// SAFETY of the `escape_ptr.as_ref()`: `escape_ptr` was set by the frame constructor to an
-    /// outer frame's address that outlives `self` (the per-call frame nests inside it, heap-pinned
-    /// by `Rc`). So `'a` (bounded by `&self`) is a valid lifetime to attach to the dereferenced
-    /// escape pointer.
+    /// The redirect carries no `unsafe`: `escape` is an owning [`StorageProfile::EscapeOwner`], so
+    /// `&**escape` is a borrow the checker caps at `&'a self` — the owner keeps the target region
+    /// alive for at least `'a`, so no raw deref or fabricated lifetime is needed.
     pub(crate) fn alloc<'a, K: Stored<W>>(&'a self, value: K::At<'a>) -> &'a K::At<'a> {
-        if let Some(escape_ptr) = self.escape {
+        if let Some(escape) = self.escape.as_ref() {
             if K::anchors_to(&value, self as *const Region<W>) {
-                let escape_ref: &'a Region<W> = unsafe { pin_deref(escape_ptr.as_ptr()) };
+                let escape_ref: &'a Region<W> = escape;
                 return escape_ref.alloc::<K>(value);
             }
         }

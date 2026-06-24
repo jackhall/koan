@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::builtins::default_scope;
+use crate::machine::core::FrameStorage;
 use crate::machine::model::KObject;
 use crate::machine::CallFrame;
 
@@ -12,10 +13,10 @@ use super::{alloc_local_kf, defeat_fast_path};
 /// extend two regions' lives on one descendant.
 #[test]
 fn kfunction_with_existing_anchor_preserves_it() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
-    let other = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
+    let other = CallFrame::new_test(scope, None);
     // The anchor pins the frame's `FrameStorage`, not the shell, so the counts track storage.
     let other_storage = other.storage_rc();
     let dying_storage = dying.storage_rc();
@@ -54,9 +55,9 @@ fn kfunction_with_existing_anchor_preserves_it() {
 /// captured scope (which `dying`'s region doesn't own).
 #[test]
 fn kfunction_with_foreign_runtime_does_not_anchor() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
 
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
@@ -75,7 +76,7 @@ fn kfunction_with_foreign_runtime_does_not_anchor() {
         }),
         scope,
     );
-    let foreign_ref: &KFunction = region.alloc_function(foreign);
+    let foreign_ref: &KFunction = region.region().alloc_function(foreign);
     let obj = KObject::KFunction(foreign_ref, None);
     let before = Rc::strong_count(&dying.storage_rc());
 
@@ -96,9 +97,9 @@ fn kfunction_with_foreign_runtime_does_not_anchor() {
 #[test]
 fn kmodule_with_local_child_scope_anchors() {
     use crate::machine::model::values::Module;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
 
     let module = Module::new("LocalMod".into(), dying.scope());
@@ -126,13 +127,13 @@ fn kmodule_with_local_child_scope_anchors() {
 #[test]
 fn kmodule_with_foreign_child_scope_does_not_anchor() {
     use crate::machine::model::values::Module;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
 
     let module = Module::new("ForeignMod".into(), scope);
-    let m_ref: &Module = region.alloc_module(module);
+    let m_ref: &Module = region.region().alloc_module(module);
     let obj = KType::Module {
         module: m_ref,
         frame: None,
@@ -152,11 +153,11 @@ fn kmodule_with_foreign_child_scope_does_not_anchor() {
 #[test]
 fn kmodule_with_existing_anchor_preserves_it() {
     use crate::machine::model::values::Module;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
-    let other = CallFrame::new(scope, None);
+    let other = CallFrame::new_test(scope, None);
     let other_storage = other.storage_rc();
 
     let module = Module::new("Pre".into(), dying.scope());
@@ -183,9 +184,9 @@ fn kmodule_with_existing_anchor_preserves_it() {
 /// slow path. Defeats the fast path so the match is actually reached.
 #[test]
 fn primitive_lifts_via_deep_clone_on_slow_path() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
 
     let obj = KObject::Number(2.5);

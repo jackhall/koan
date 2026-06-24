@@ -4,6 +4,7 @@ use super::*;
 use crate::builtins::default_scope;
 use crate::machine::model::types::{KType, NominalSchema, Record, RecursiveSet};
 use crate::machine::model::values::Held;
+use crate::machine::core::FrameStorage;
 use crate::machine::model::KObject;
 use crate::machine::{CallFrame, ScopeId};
 
@@ -34,9 +35,9 @@ fn record_newtype_set<'run>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'r
 fn list_of_dict_with_kfunction_anchors_via_recursion() {
     use crate::machine::model::types::Serializable;
     use crate::machine::model::values::KKey;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let mut inner_map: HashMap<Box<dyn Serializable<'_>>, KObject> = HashMap::new();
@@ -67,9 +68,9 @@ fn list_of_dict_with_kfunction_anchors_via_recursion() {
 #[test]
 fn list_of_tagged_with_kfunction_anchors_via_recursion() {
     use crate::machine::ScopeId;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let tagged = KObject::Tagged {
@@ -103,11 +104,11 @@ fn list_of_tagged_with_kfunction_anchors_via_recursion() {
 #[test]
 fn list_with_pre_anchored_variants_skips_them() {
     use crate::machine::model::values::Module;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
-    let other = CallFrame::new(scope, None);
+    let other = CallFrame::new_test(scope, None);
     // Anchors pin the frame's `FrameStorage`, not the shell, so counts track storage.
     let other_storage = other.storage_rc();
     let dying_storage = dying.storage_rc();
@@ -150,9 +151,9 @@ fn list_with_pre_anchored_variants_skips_them() {
 /// drives the rebuild.
 #[test]
 fn list_with_unanchored_kfuture_anchors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let future = KFuture {
@@ -181,9 +182,9 @@ fn list_with_unanchored_kfuture_anchors() {
 #[test]
 fn list_with_unanchored_kmodule_anchors() {
     use crate::machine::model::values::Module;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
     let module = Module::new("LocalM".into(), dying.scope());
     let m_ref: &Module = dying.region().alloc_module(module);
@@ -212,13 +213,13 @@ fn list_with_unanchored_kmodule_anchors() {
 fn list_with_wrapped_and_kexpression_descendants_clones_rc() {
     use crate::machine::model::values::NonWrappedRef;
     use crate::machine::ScopeId;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
 
     let record = KObject::record(Record::new());
-    let type_id: &KType = region.alloc_ktype(KType::SetRef {
+    let type_id: &KType = region.region().alloc_ktype(KType::SetRef {
         set: record_newtype_set("S", ScopeId::next()),
         index: 0,
     });
@@ -244,9 +245,9 @@ fn list_with_wrapped_and_kexpression_descendants_clones_rc() {
 /// over-allocate.
 #[test]
 fn list_no_descendants_clones_rc() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
 
     let items = Rc::new(vec![
@@ -270,9 +271,9 @@ fn list_no_descendants_clones_rc() {
 
 #[test]
 fn list_with_local_kfunction_rebuilds_and_anchors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let list = KObject::list(vec![KObject::KFunction(kf_ref, None)]);
@@ -298,9 +299,9 @@ fn list_with_local_kfunction_rebuilds_and_anchors() {
 fn dict_no_descendants_clones_rc() {
     use crate::machine::model::types::Serializable;
     use crate::machine::model::values::KKey;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
 
     let mut map: HashMap<Box<dyn Serializable<'_>>, Held> = HashMap::new();
@@ -329,9 +330,9 @@ fn dict_no_descendants_clones_rc() {
 fn dict_with_local_kfunction_rebuilds_and_anchors() {
     use crate::machine::model::types::Serializable;
     use crate::machine::model::values::KKey;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let mut map: HashMap<Box<dyn Serializable<'_>>, KObject> = HashMap::new();
@@ -362,9 +363,9 @@ fn dict_with_local_kfunction_rebuilds_and_anchors() {
 #[test]
 fn tagged_no_borrow_clones_inner_rc() {
     use crate::machine::ScopeId;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
 
     let inner = Rc::new(KObject::Number(42.0));
@@ -408,9 +409,9 @@ fn tagged_no_borrow_clones_inner_rc() {
 #[test]
 fn tagged_with_local_kfunction_rebuilds_and_anchors() {
     use crate::machine::ScopeId;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
     let sid = ScopeId::next();
@@ -455,9 +456,9 @@ fn tagged_with_local_kfunction_rebuilds_and_anchors() {
 #[test]
 fn recursive_setref_type_value_lifts_by_rc_clone() {
     use crate::machine::model::types::{KKind, NominalMember, NominalSchema};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
 
     // A self-recursive `Tree` whose `children` field is `List(SetLocal(0))` — the shape a
@@ -520,9 +521,9 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
 fn recursive_newtype_value_lifts_and_navigates() {
     use crate::machine::model::types::{KKind, NominalMember, NominalSchema};
     use crate::machine::model::values::NonWrappedRef;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let dying = CallFrame::new(scope, None);
+    let dying = CallFrame::new_test(scope, None);
     defeat_fast_path(&dying);
 
     let member = NominalMember::pending("Tree".into(), ScopeId::next(), KKind::NewType);
@@ -537,7 +538,7 @@ fn recursive_newtype_value_lifts_and_navigates() {
         "children".to_string(),
         KObject::list(vec![]),
     )]));
-    let type_id: &KType = region.alloc_ktype(KType::SetRef {
+    let type_id: &KType = region.region().alloc_ktype(KType::SetRef {
         set: Rc::clone(&set),
         index: 0,
     });

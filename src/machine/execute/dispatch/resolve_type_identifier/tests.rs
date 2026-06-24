@@ -1,10 +1,10 @@
 use super::*;
 use crate::builtins::test_support::run_root_silent;
-use crate::machine::core::KoanRegion;
+use crate::machine::core::FrameStorage;
 
 #[test]
 fn resolve_type_expr_builtin_leaf_caches() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let te = TypeIdentifier::leaf("Number".into());
     let first = match scope.resolve_type_identifier(&te, None) {
@@ -24,7 +24,7 @@ fn resolve_type_expr_builtin_leaf_caches() {
 
 #[test]
 fn resolve_type_expr_unbound_returns_unbound() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let te = TypeIdentifier::leaf("NotABuiltin".into());
     match scope.resolve_type_identifier(&te, None) {
@@ -38,7 +38,7 @@ fn resolve_type_expr_unbound_returns_unbound() {
 #[test]
 fn resolve_type_expr_user_struct_caches_after_finalize() {
     use crate::builtins::test_support::run;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
     let te = TypeIdentifier::leaf("Point".into());

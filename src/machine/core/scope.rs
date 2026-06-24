@@ -1,12 +1,12 @@
 use std::cell::RefCell;
 use std::io::Write;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use crate::machine::model::types::RecursiveSet;
 
 use crate::machine::model::ast::KExpression;
 
-use super::arena::KoanRegion;
+use super::arena::{FrameStorage, KoanRegion};
 pub use super::bindings::Resolution;
 use super::bindings::{ApplyOutcome, BindingIndex, Bindings};
 use super::kerror::{KError, KErrorKind};
@@ -64,6 +64,15 @@ pub struct Scope<'a> {
     bindings: ScopeBindings<'a>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
     pub region: &'a KoanRegion,
+    /// Owning-on-upgrade handle to the [`FrameStorage`] whose region this scope lives in — the
+    /// "scope bundled with its storage." Read via [`Self::region_owner`] to recover the cycle-gate
+    /// escape owner (a frame redirecting into this scope's region) and a captured function's
+    /// region owner, without walking any frame chain. A [`Weak`] (the storage owns the region owns
+    /// this scope — an `Rc` back-edge would leak); upgrades whenever the region is live. Set at
+    /// construction: a region-boundary scope ([`Self::run_root`], [`Self::child_for_frame`]) takes
+    /// its frame's storage; a same-region child inherits its parent's. Empty (`Weak::new()`) for a
+    /// test scope built outside any `FrameStorage` — such scopes never reach the escape path.
+    region_owner: Weak<FrameStorage>,
     /// Position-independent origin id recorded on a sealed `NominalMember` (diagnostics)
     /// and on `KType::Signature { sig, .. }` (via `sig.sig_id()`) so dispatch on
     /// user-declared types compares ids rather than scope pointers.
@@ -129,6 +138,7 @@ impl<'a> Scope<'a> {
         region: &'a KoanRegion,
         outer: Option<&'a Scope<'a>>,
         out: Box<dyn Write + 'a>,
+        region_owner: Weak<FrameStorage>,
     ) -> Self {
         Self {
             outer: outer.map(BoundedScopePtr::erase),
@@ -136,11 +146,18 @@ impl<'a> Scope<'a> {
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(Some(out)),
             region,
+            region_owner,
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Root,
             recursive_set: None,
         }
+    }
+
+    /// The [`FrameStorage`] (cloned `Weak`) whose region this scope lives in — see [`Self::region`]'s
+    /// sibling field. Upgrades to the owning `Rc` whenever the region is live.
+    pub(crate) fn region_owner(&self) -> Weak<FrameStorage> {
+        self.region_owner.clone()
     }
 
     pub fn child_for_call(&'a self) -> Scope<'a> {
@@ -167,6 +184,7 @@ impl<'a> Scope<'a> {
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             region: outer.region,
+            region_owner: outer.region_owner.clone(),
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
@@ -183,13 +201,18 @@ impl<'a> Scope<'a> {
     /// with no construction-time lifetime fabrication. The frame `Rc` pins the real parent (via
     /// `FrameStorage.outer`) and the run-global root, so the shortened brands never out-claim a live
     /// pointee.
-    pub fn child_for_frame<'long: 'a>(outer: &Scope<'long>, region: &'a KoanRegion) -> Scope<'a> {
+    pub fn child_for_frame<'long: 'a>(
+        outer: &Scope<'long>,
+        storage: &'a Rc<FrameStorage>,
+    ) -> Scope<'a> {
         Scope {
             outer: Some(BoundedScopePtr::erase_shortened(outer)),
             root: outer.root.map(BoundedScopePtr::shortened),
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
-            region,
+            // Both the region borrow and the owning `Weak` come from the one `storage` handle.
+            region: storage.region(),
+            region_owner: Rc::downgrade(storage),
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
@@ -205,6 +228,7 @@ impl<'a> Scope<'a> {
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             region: outer.region,
+            region_owner: outer.region_owner.clone(),
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Sig { name },
@@ -221,6 +245,7 @@ impl<'a> Scope<'a> {
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             region: outer.region,
+            region_owner: outer.region_owner.clone(),
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Module { name },
@@ -239,6 +264,7 @@ impl<'a> Scope<'a> {
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             region: outer.region,
+            region_owner: outer.region_owner.clone(),
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
@@ -267,6 +293,7 @@ impl<'a> Scope<'a> {
             bindings: ScopeBindings::Borrowed(module_bindings),
             out: RefCell::new(None),
             region: outer.region,
+            region_owner: outer.region_owner.clone(),
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,

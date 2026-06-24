@@ -22,10 +22,10 @@ mod record_types;
 mod return_type;
 
 use crate::builtins::test_support::{run, run_root_with_buf};
-use crate::machine::KoanRegion;
+use crate::machine::core::FrameStorage;
 
 pub(super) fn capture_program_output(source: &str) -> Vec<u8> {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let (scope, captured) = run_root_with_buf(&region);
     run(scope, source);
     let bytes = captured.borrow().clone();

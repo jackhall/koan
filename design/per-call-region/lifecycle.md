@@ -150,26 +150,33 @@ machinery attaches the per-call frame's `Rc` to the closure, then a
 re-allocation of the composite (via `value_pass`, a dep-finish, etc.)
 lands the composite back in the per-call region.
 
-`KoanRegion` carries an `escape: Option<*const KoanRegion>` set by
-`CallFrame::new` to the outer scope's region address. `alloc_object`
-walks the incoming value's composite tree (`obj_anchors_to`, mirroring
-`KObject::deep_clone`'s shape) and, on finding any `Rc<FrameStorage>`
+`KoanRegion` carries an `escape: Option<EscapeOwner>` (the Koan `EscapeOwner`
+is `FrameRegionPin`, an owning `Rc<FrameStorage>` that derefs to its region),
+set by `CallFrame::new` to the `FrameStorage` owning the outer scope's region.
+`alloc_object` walks the incoming value's composite tree (`obj_anchors_to`,
+mirroring `KObject::deep_clone`'s shape) and, on finding any `Rc<FrameStorage>`
 whose `region()` is `self`, redirects the allocation up to the escape
 region — where the same `Rc` is no longer self-referential. The
 redirect is a single `Option`-check on every per-call `alloc_object`;
 run-root has `escape: None` and short-circuits, since the
 `Rc<FrameStorage>` shapes the gate looks for can only point at per-call
-regions by construction. The escape pointer is stable for the per-call
-region's life because `CallFrame::new` heap-pins the outer region via
-`Rc`, and the outer always outlives this inner per the lexical-scoping
-invariant.
+regions by construction. Because the escape is an **owning** handle, the
+redirect (`&**escape`) is a borrow the compiler proves — no raw deref: the
+owner keeps the outer region alive for at least the per-call region's borrow,
+and the outer always outlives this inner per the lexical-scoping invariant.
+The owner of the outer region is recovered from the called function's captured
+scope ([`Scope::region_owner`], set when the scope is built in its frame's
+storage) — the per-call frame redirects into the region its function was
+defined in.
 
 `alloc_object` is one of the named safe wrappers — alongside `alloc_ktype`,
 `alloc_function`, `alloc_scope`, `alloc_module`, `alloc_signature`, and
 `alloc_operator_group` — that route a single `alloc` engine where the gate
-lives. The engine and its `unsafe` erase-store machinery live generically in
-the `Region<W>` substrate (`src/machine/core/region.rs`), which
-names no Koan type; `KoanRegion` is the Koan instantiation
+lives. The engine lives generically in the `Region<W>` substrate
+(`src/machine/core/region.rs`), which names no Koan type and carries **no
+`unsafe`** of its own: its erase-store routes the scheduler's audited
+`erase_to_static` / `reattach_ref_with`, and the escape redirect is an owning
+deref; `KoanRegion` is the Koan instantiation
 `Region<KoanStorageProfile>`, with the per-family policy supplied by `Stored`
 impls in `core::region`. Every family implements `Stored`, and the engine runs
 the gate once for all of them. `KObject` and `KType` answer `anchors_to` by

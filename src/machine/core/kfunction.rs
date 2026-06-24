@@ -2,9 +2,12 @@
 //! a `Body` (an action `fn` pointer or captured user-defined `KExpression`), and the
 //! lexical scope captured at definition time.
 
+use std::rc::Rc;
+
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
+use crate::machine::core::arena::FrameStorage;
 use crate::machine::core::scope_ptr::BoundedScopePtr;
 use crate::machine::core::{KError, KErrorKind, KFuture, Scope};
 use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
@@ -30,16 +33,17 @@ pub use pick::ClassifiedSlots;
 pub struct KFunction<'a> {
     pub signature: ExpressionSignature<'a>,
     pub body: Body<'a>,
-    /// The captured definition scope, stored as a content-branded [`BoundedScopePtr<'a>`] (the
-    /// same reader-bounded handle [`Scope::outer`] uses): the FN may be defined inside a per-call
-    /// frame, so the capture borrow is frame-bounded while the scope *content* stays `'a`.
-    /// [`Self::captured_scope`] re-hands it behind a reader-bounded borrow; liveness past the
-    /// defining frame rides the `Rc<CallFrame>` that lift attaches to an escaping closure.
+    /// The captured definition scope, a content-branded [`BoundedScopePtr<'a>`] (the same
+    /// reader-bounded handle [`Scope::outer`] uses): the FN may be defined inside a per-call frame,
+    /// so the capture borrow is frame-bounded while the scope *content* stays `'a`.
+    /// [`Self::captured_scope`] re-hands it; the captured region's owner — needed at dispatch for the
+    /// cycle-gate escape — is read off the scope itself ([`Scope::region_owner`]), so no separate
+    /// handle rides here. Liveness past the defining frame rides the `Rc<CallFrame>` that lift
+    /// attaches to an escaping closure.
     ///
     /// **Variance-load-bearing.** `BoundedScopePtr<'a>` carries `'a` structurally (`Scope<'a>` is
-    /// invariant — it contains `RefCell`s), so `captured` is what keeps `KFunction<'a>` invariant
-    /// in `'a`. Do **not** weaken the brand to a covariant carrier — that would make `KFunction`
-    /// covariant in `'a` and silently reintroduce a soundness bug.
+    /// invariant — it holds `RefCell`s), so `captured` keeps `KFunction<'a>` invariant in `'a`. Do
+    /// **not** weaken the brand to a covariant carrier.
     captured: BoundedScopePtr<'a>,
     /// `Some(_)` for binder builtins (LET, FN, STRUCT, UNION, SIG, MODULE).
     pub binder_name: Option<BinderNameFn>,
@@ -89,12 +93,21 @@ impl<'a> KFunction<'a> {
         }
     }
 
-    /// Re-attach `'a` to the captured scope. The branded `captured` makes this a safe
-    /// re-attach: it was erased from a `&'a Scope<'a>` in [`Self::with_binder_and_functor`],
-    /// and points at a scope that outlives this `KFunction<'a>` by the broader runtime-region
-    /// argument.
+    /// Re-attach `'a` to the captured scope. The branded `captured` makes this a safe re-attach: it
+    /// was erased from a `&'a Scope<'a>` in [`Self::with_binder_and_functor`], and points at a scope
+    /// that outlives this `KFunction<'a>` by the broader runtime-region argument.
     pub fn captured_scope(&self) -> &Scope<'a> {
         self.captured.get()
+    }
+
+    /// The `FrameStorage` that owns the captured scope's region — the cycle-gate escape owner used
+    /// when a dispatch builds a per-call frame for this function. Read straight off the captured
+    /// scope ([`Scope::region_owner`]). `Some` whenever the captured region is live (it is, at any
+    /// live call site — we hold the function, so its captured scope is alive); `None` only for a
+    /// function defined in a scope built outside any `FrameStorage` (test fixtures), which never
+    /// reaches the escape path.
+    pub fn captured_region_owner(&self) -> Option<Rc<FrameStorage>> {
+        self.captured_scope().region_owner().upgrade()
     }
 
     pub fn summarize(&self) -> String {

@@ -14,9 +14,9 @@ use crate::machine::BindingIndex;
 /// `scope_bounded`'s `'step` borrow cannot widen to a free `'a`, and `Scope<'a>` is invariant.
 #[test]
 fn scope_bounded_reanchors_within_witness_borrow() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let frame: Rc<CallFrame> = CallFrame::new(scope, None);
+    let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
     let bounded: &Scope<'_> = frame.scope_bounded();
     // Same underlying child scope as the unbounded accessors, just a shorter borrow.
     assert_eq!(bounded.id, frame.scope().id);
@@ -28,9 +28,9 @@ fn scope_bounded_reanchors_within_witness_borrow() {
 /// must coexist soundly under tree borrows.
 #[test]
 fn call_frame_scope_survives_subsequent_alloc() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let frame = CallFrame::new(scope, None);
+    let frame = CallFrame::new_test(scope, None);
     let s = frame.scope();
     let _new = frame.region().alloc_object(KObject::Number(1.0));
     assert!(std::ptr::eq(s.region, frame.region()));
@@ -41,9 +41,9 @@ fn call_frame_scope_survives_subsequent_alloc() {
 /// stays live.
 #[test]
 fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let frame: Rc<CallFrame> = CallFrame::new(scope, None);
+    let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
     let region_ptr: *const KoanRegion = frame.region();
     let scope_ptr: *const Scope<'_> = frame.scope();
     let inner_region: &KoanRegion = unsafe { &*(region_ptr as *const _) };
@@ -59,9 +59,9 @@ fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
 /// concurrently readable.
 #[test]
 fn call_frame_scope_repeated_calls_alias() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let frame = CallFrame::new(scope, None);
+    let frame = CallFrame::new_test(scope, None);
     let s1 = frame.scope();
     let s2 = frame.scope();
     let s3 = frame.scope();
@@ -74,10 +74,10 @@ fn call_frame_scope_repeated_calls_alias() {
 /// keeping the outer region alive while we read through `inner.scope().outer`.
 #[test]
 fn call_frame_chained_outer_frame_walkable() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let run_scope = default_scope(&region, Box::new(std::io::sink()));
-    let outer = CallFrame::new(run_scope, None);
-    let inner = CallFrame::new(outer.scope(), Some(outer.storage_rc()));
+    let outer = CallFrame::new_test(run_scope, None);
+    let inner = CallFrame::new_test(outer.scope(), Some(outer.storage_rc()));
     drop(outer);
     let outer_scope = inner
         .scope()
@@ -99,10 +99,10 @@ fn call_frame_scope_re_anchored_into_struct_alongside_rc() {
         _f: Rc<CallFrame>,
     }
 
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let h = {
-        let f = CallFrame::new(scope, None);
+        let f = CallFrame::new_test(scope, None);
         let s: &Scope<'_> = unsafe { std::mem::transmute::<&Scope<'_>, &Scope<'_>>(f.scope()) };
         Holder { s, _f: f }
     };
@@ -136,13 +136,13 @@ fn alloc_ktype_returns_region_lifetime_ref_and_counts() {
 /// `region()` and a `bind_value` on `scope()` must coexist.
 #[test]
 fn call_frame_try_reset_for_tail_round_trip() {
-    let outer_region = KoanRegion::new();
+    let outer_region = FrameStorage::run_root();
     let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
-    let mut frame: Rc<CallFrame> = CallFrame::new(outer_scope, None);
+    let mut frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
     let _pre = frame.region().alloc_object(KObject::Number(1.0));
     assert!(frame.region().alloc_count() >= 1);
 
-    let did_reset = frame.try_reset_for_tail(outer_scope);
+    let did_reset = frame.try_reset_for_tail_test(outer_scope);
     assert!(did_reset, "Rc was unique, reset must succeed");
 
     // Fresh region: only the new child scope remains.
@@ -163,15 +163,15 @@ fn call_frame_try_reset_for_tail_round_trip() {
 /// [`call_frame_try_reset_for_tail_allows_reset_under_escaped_storage`].)
 #[test]
 fn call_frame_try_reset_for_tail_refuses_when_aliased() {
-    let outer_region = KoanRegion::new();
+    let outer_region = FrameStorage::run_root();
     let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
-    let mut frame: Rc<CallFrame> = CallFrame::new(outer_scope, None);
+    let mut frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
     let pre_region_addr = frame.region() as *const KoanRegion as usize;
 
     // A second shell holder (not an escape): clone the `Rc<CallFrame>` so strong_count > 1.
     let _alias = Rc::clone(&frame);
 
-    let did_reset = frame.try_reset_for_tail(outer_scope);
+    let did_reset = frame.try_reset_for_tail_test(outer_scope);
     assert!(!did_reset, "aliased frame must refuse reset");
 
     assert_eq!(
@@ -187,9 +187,9 @@ fn call_frame_try_reset_for_tail_refuses_when_aliased() {
 /// could not distinguish this from a live shell alias and would refuse it.
 #[test]
 fn call_frame_try_reset_for_tail_allows_reset_under_escaped_storage() {
-    let outer_region = KoanRegion::new();
+    let outer_region = FrameStorage::run_root();
     let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
-    let mut frame: Rc<CallFrame> = CallFrame::new(outer_scope, None);
+    let mut frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
     let _escaped = frame.region().alloc_object(KObject::Number(7.0));
     let pre_alloc_count = frame.region().alloc_count();
     let pre_storage_addr = frame.region() as *const KoanRegion as usize;
@@ -197,7 +197,7 @@ fn call_frame_try_reset_for_tail_allows_reset_under_escaped_storage() {
     // Simulate a closure escape: hold the frame's storage Rc (what an anchored value carries).
     let escaped_storage = frame.storage_rc();
 
-    let did_reset = frame.try_reset_for_tail(outer_scope);
+    let did_reset = frame.try_reset_for_tail_test(outer_scope);
     assert!(
         did_reset,
         "an escaped *storage* hold must not foreclose reuse"
@@ -223,14 +223,14 @@ fn call_frame_try_reset_for_tail_allows_reset_under_escaped_storage() {
 /// region's storage would hold an Rc to itself and never drop.
 #[test]
 fn alloc_object_redirects_self_anchored_value_to_escape_region() {
-    let outer = KoanRegion::new();
+    let outer = FrameStorage::run_root();
     let scope = default_scope(&outer, Box::new(std::io::sink()));
-    let frame: Rc<CallFrame> = CallFrame::new(scope, None);
+    let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
     // Build a List whose only element is a `KFunction` carrying an
     // `Rc<FrameStorage>` pointing at `frame.region()`. The cycle gate only inspects the
     // carried `Rc`, so the placeholder `KFunction` body is irrelevant.
-    let dummy_fn_obj = outer.alloc_object(KObject::KFunction(
-        outer.alloc_function(crate::machine::core::kfunction::KFunction::new(
+    let dummy_fn_obj = outer.region().alloc_object(KObject::KFunction(
+        outer.region().alloc_function(crate::machine::core::kfunction::KFunction::new(
             crate::machine::model::types::ExpressionSignature {
                 return_type: crate::machine::model::types::ReturnType::Resolved(
                     crate::machine::model::types::KType::Null,
@@ -262,7 +262,7 @@ fn alloc_object_redirects_self_anchored_value_to_escape_region() {
     let stored = frame.region().alloc_object(list);
     let stored_ptr = stored as *const KObject<'_>;
     assert!(
-        outer.owns_object(stored_ptr),
+        outer.region().owns_object(stored_ptr),
         "self-anchored alloc should redirect to the escape region (outer)",
     );
     assert!(

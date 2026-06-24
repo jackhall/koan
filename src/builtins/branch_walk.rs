@@ -59,7 +59,12 @@ pub(crate) fn arm_tail<'a>(
     use crate::machine::core::kfunction::action::{Action, FramePlacement};
     use crate::machine::core::kfunction::body::split_body_statements;
     use crate::machine::{BindingIndex, CallFrame};
-    let frame: Rc<CallFrame> = CallFrame::new(root, outer_frame);
+    // The arm frame redirects into `root`'s region; its owner is read off `root`.
+    let escape_owner = root
+        .region_owner()
+        .upgrade()
+        .expect("MATCH/TRY arm: outer-scope region owner is live");
+    let frame: Rc<CallFrame> = CallFrame::new(root, outer_frame, escape_owner);
     frame.with_frame_interior(|region, child| {
         let it_obj = region.alloc_object(it_value);
         let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));

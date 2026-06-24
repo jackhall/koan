@@ -3,13 +3,14 @@
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::machine::execute::KoanRuntime;
+use crate::machine::core::FrameStorage;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{KErrorKind, KoanRegion};
+use crate::machine::KErrorKind;
 use crate::parse::parse;
 
 #[test]
 fn functor_returns_a_module() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -41,7 +42,7 @@ fn functor_returns_a_module() {
 
 #[test]
 fn functor_body_reads_signature_typed_parameter() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -76,7 +77,7 @@ fn functor_body_reads_signature_typed_parameter() {
 /// require multi-statement-FN-body forward refs that don't share lexical bindings.
 #[test]
 fn functor_application_is_generative() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -116,7 +117,7 @@ fn functor_application_is_generative() {
 /// `Signature { sig, .. }` (constraint-role) slot.
 #[test]
 fn functor_rejects_unascribed_module_argument() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -151,7 +152,7 @@ fn functor_rejects_unascribed_module_argument() {
 /// (`OrderedSig` vs `HashedSig`); dispatch routes by the argument's satisfied sig.
 #[test]
 fn functor_overloads_dispatch_by_signature_bound_param() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -218,7 +219,7 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
 /// and the body still reads the underlying member through the view.
 #[test]
 fn transparent_ascription_satisfies_signature_bound_slot() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -252,7 +253,7 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
 /// just like the lowercase-identifier and parens-wrapped forms do.
 #[test]
 fn functor_argument_bare_type_token_auto_wraps() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -289,7 +290,7 @@ fn functor_argument_bare_type_token_auto_wraps() {
 #[test]
 fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     use crate::machine::model::types::KKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let src = "SIG MonadSig = ((LET Wrap = (TEMPLATE Type)))\n\
                MODULE IntList = ((LET Wrap = Number))\n\
@@ -362,7 +363,7 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
 /// survive subsequent region churn under tree borrows.
 #[test]
 fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     // Plain `LET` plus `LET = FN` so the re-bind walk hits both the `data` write
     // and the `KFunction → functions` mirror.

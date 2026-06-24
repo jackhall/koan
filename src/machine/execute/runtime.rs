@@ -26,6 +26,7 @@ use crate::machine::core::kfunction::body::{
     split_body_statements, ContractFamily, ErasedContract,
 };
 use crate::machine::model::ast::KExpression;
+use crate::machine::core::FrameStorage;
 use crate::machine::{CallFrame, KError, NodeId, Scope};
 
 use super::dispatch::{reattach_node_scope, DepRequest};
@@ -339,7 +340,10 @@ impl<'run> KoanRuntime<'run> {
         placement: FramePlacement<'x>,
     ) -> Option<Rc<CallFrame>> {
         match placement {
-            FramePlacement::ReuseReserve { outer } => Some(self.acquire_tail_frame(outer)),
+            FramePlacement::ReuseReserve {
+                outer,
+                escape_owner,
+            } => Some(self.acquire_tail_frame(outer, escape_owner)),
             FramePlacement::FreshChild { frame } => Some(frame),
             FramePlacement::Inherit => None,
         }
@@ -350,14 +354,18 @@ impl<'run> KoanRuntime<'run> {
     /// workload. The scheduler owns the reserve *slot* (rotation, lifecycle); this owns the
     /// `CallFrame` minting/reset, which names the run-lived `Scope`. `try_reset_for_tail`'s
     /// `Rc::get_mut` gate is the "no escape" uniqueness check (a cloned `Rc` forecloses reuse).
-    fn acquire_tail_frame(&mut self, outer: &Scope<'_>) -> Rc<CallFrame> {
+    fn acquire_tail_frame(
+        &mut self,
+        outer: &Scope<'_>,
+        escape_owner: Rc<FrameStorage>,
+    ) -> Rc<CallFrame> {
         if let Some(mut reserve) = self.take_active_reserve() {
-            if reserve.try_reset_for_tail(outer) {
+            if reserve.try_reset_for_tail(outer, Rc::clone(&escape_owner)) {
                 self.note_tail_reuse();
                 return reserve;
             }
         }
-        CallFrame::new(outer, None)
+        CallFrame::new(outer, None, escape_owner)
     }
 
     /// Interpret an [`Outcome`] into the scheduler effect it names and return the slot's

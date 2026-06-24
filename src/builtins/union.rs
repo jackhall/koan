@@ -115,7 +115,8 @@ mod tests {
     use crate::builtins::test_support::{parse_one, run_one_err, run_one_type, run_root_silent};
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::KType;
-    use crate::machine::{BindingIndex, KErrorKind, KoanRegion, Scope};
+    use crate::machine::core::FrameStorage;
+    use crate::machine::{BindingIndex, KErrorKind, Scope};
 
     /// The projected (`SetLocal`s resolved) variant schema of a UNION member, by name.
     fn tagged_schema<'a>(
@@ -141,7 +142,7 @@ mod tests {
 
     #[test]
     fn union_named_registers_type_in_scope() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         // UNION is type-only: the declaration yields a `SetRef` type whose Tagged
         // member carries the variant schema, registered into `types`.
@@ -171,7 +172,7 @@ mod tests {
     fn anonymous_union_fails_dispatch() {
         use crate::machine::execute::KoanRuntime;
 
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let mut sched = KoanRuntime::new();
         let root = sched.dispatch_in_scope(parse_one("UNION (Ok :Number Err :Str)"), scope);
@@ -190,7 +191,7 @@ mod tests {
 
     #[test]
     fn union_rejects_unknown_type_name() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("UNION Bad = (Some :Bogus)"));
         assert!(
@@ -201,7 +202,7 @@ mod tests {
 
     #[test]
     fn union_rejects_empty_schema() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("UNION Empty = ()"));
         assert!(
@@ -212,7 +213,7 @@ mod tests {
 
     #[test]
     fn union_rejects_duplicate_tag() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("UNION Dupe = (Some :Number Some :Str)"));
         assert!(
@@ -226,7 +227,7 @@ mod tests {
     /// (no value-side carrier) idempotency net.
     #[test]
     fn finalize_union_idempotent_after_seal_pre_install() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let scope_id = scope.id;
         // Pre-install a `SetRef` to a pending (unfilled) member, as the RECURSIVE TYPES
@@ -275,7 +276,7 @@ mod tests {
     fn union_rejects_odd_part_count() {
         // Typed variants parse as `[Identifier, Type]` pairs; odd-count parts are
         // rejected by the pair-list walker.
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("UNION Pair = (Some :Number None)"));
         assert!(

@@ -214,12 +214,15 @@ and `lift_kobject` self-anchors any surviving borrow into the destination via an
 same self-anchoring shape as `Erased::reattach`.
 
 A sibling primitive in [`reattach.rs`](../src/machine/core/reattach.rs), `pin_deref`, owns the
-*other* unsafe shape — re-borrowing a raw `*const T` whose pointee a heap pin holds fixed (the
-`Rc<FrameStorage>`-pinned region pointer, the storage engine's escape frame). Erase/reattach
-moves a value between lifetimes; `pin_deref` recovers a reference from a pointer the borrow checker
-never tracked, so it stays in `machine::core` (it recovers a pointer an region pins, not a value
-moving between nodes) as the one audited home for the `&*ptr` the region and storage engine would
-otherwise each open inline. The
+*other* unsafe shape — re-borrowing a raw `*const T` whose pointee a heap pin holds fixed. Its one
+caller is [`CallFrame::with_frame_interior`](../src/machine/core/arena.rs): the held frame `Rc`
+heap-pins the per-call region, which is re-exposed at a free `'a` for the seed binds (MATCH / TRY
+`it`, `KFunction::invoke` params). The storage engine's cycle-gate escape redirect needs no
+`pin_deref`: `Region` holds its escape target as an owning `StorageProfile::EscapeOwner` (the Koan
+`FrameRegionPin`, an `Rc<FrameStorage>` deref'd to its region), so the redirect is a borrow the
+checker proves. Erase/reattach moves a value between lifetimes; `pin_deref` recovers a reference from
+a pointer the borrow checker never tracked, so it stays in `machine::core` as the one audited home
+for that single frame-interior `&*ptr`. The
 store side carries no `unsafe` at all: each handle's `erase` builds its stored pointer with the safe
 `NonNull::from(scope).cast()`, deferring every fabrication hazard to the re-attach.
 

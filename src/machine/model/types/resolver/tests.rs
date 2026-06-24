@@ -1,8 +1,8 @@
 use super::*;
 use crate::builtins::test_support::run_root_silent;
+use crate::machine::core::FrameStorage;
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::BindingIndex;
-use crate::machine::KoanRegion;
 
 fn leaf(n: &str) -> TypeIdentifier {
     TypeIdentifier::leaf(n.into())
@@ -14,12 +14,12 @@ fn leaf(n: &str) -> TypeIdentifier {
 #[test]
 fn value_language_leaf_names_layering() {
     use crate::machine::model::values::KObject;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     scope
         .bind_value(
             "Gee".into(),
-            region.alloc_object(KObject::Number(7.0)),
+            region.region().alloc_object(KObject::Number(7.0)),
             BindingIndex::BUILTIN,
         )
         .expect("bind_value");
@@ -35,7 +35,7 @@ fn value_language_leaf_names_layering() {
 
 #[test]
 fn unbound_leaf_names_unknown_type() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(&mut el, &leaf("NopeType")) {
@@ -52,13 +52,13 @@ fn unbound_leaf_names_unknown_type() {
 /// A non-member falls through to ordinary resolution.
 #[test]
 fn recursive_group_member_lowers_to_recursive_ref() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let parent = run_root_silent(&region);
     let set = std::rc::Rc::new(RecursiveSet::new(vec![
         NominalMember::pending("A".into(), parent.id, KKind::NewType),
         NominalMember::pending("B".into(), parent.id, KKind::NewType),
     ]));
-    let child = region.alloc_scope(Scope::child_recursive_group(parent, set));
+    let child = region.region().alloc_scope(Scope::child_recursive_group(parent, set));
     let mut el = Elaborator::new(child);
     match elaborate_type_identifier(&mut el, &leaf("B")) {
         ElabResult::Done(KType::RecursiveRef(name)) => assert_eq!(name, "B"),

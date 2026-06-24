@@ -2,7 +2,7 @@
 //! returns a distinct labeled marker so a test can identify which overload won.
 //! Counterpart `resolve_dispatch`-only assertions live in `machine::core::tests::dispatch`.
 
-use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
+use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare_owned};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::core::BindingIndex;
@@ -13,7 +13,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
-use crate::machine::KoanRegion;
+use crate::machine::FrameStorage;
 use crate::source::Spanned;
 
 fn body_identifier<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
@@ -47,8 +47,8 @@ fn summarize_marker(obj: &KObject<'_>) -> String {
 /// consult overload buckets.
 #[test]
 fn dispatch_inner_scope_shadows_outer_more_specific() {
-    let region = KoanRegion::new();
-    let outer = run_root_bare(&region);
+    let region = FrameStorage::run_root();
+    let outer = run_root_bare_owned(&region);
     let outer_sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
@@ -69,7 +69,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         BindingIndex::value(1),
     );
 
-    let inner = region.alloc_scope(outer.child_for_call());
+    let inner = region.region().alloc_scope(outer.child_for_call());
     let inner_sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
@@ -103,8 +103,8 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
 #[test]
 fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     use crate::machine::KErrorKind;
-    let region = KoanRegion::new();
-    let scope = run_root_bare(&region);
+    let region = FrameStorage::run_root();
+    let scope = run_root_bare_owned(&region);
     register_builtin(
         scope,
         "any_first",
@@ -143,8 +143,8 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
 /// function. (Once monadic effects exist, this should also produce a warning effect.)
 #[test]
 fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
-    let region = KoanRegion::new();
-    let scope = run_root_bare(&region);
+    let region = FrameStorage::run_root();
+    let scope = run_root_bare_owned(&region);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![

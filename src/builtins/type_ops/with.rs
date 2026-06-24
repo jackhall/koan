@@ -82,12 +82,12 @@ pub fn body<'a>(
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
     use crate::machine::execute::KoanRuntime;
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::KType;
-    use crate::machine::KoanRegion;
 
     #[test]
     fn with_one_slot_pins_the_named_slot() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -113,7 +113,7 @@ mod tests {
     /// Pins land in record-literal order — `pinned_slots` is an ordered `Vec`.
     #[test]
     fn with_two_slots_preserve_order() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -137,7 +137,7 @@ mod tests {
     /// handler could not take (was `#[ignore]`d there).
     #[test]
     fn with_inner_module_attr_path_pins_abstract_type() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn with_rejects_unknown_slot() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn with_rejects_lowercase_slot_name() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,

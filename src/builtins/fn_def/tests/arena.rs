@@ -1,12 +1,12 @@
 //! Run-root region and scheduler-slot reclamation invariants for user FN calls.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
+use crate::machine::core::FrameStorage;
 use crate::machine::execute::KoanRuntime;
-use crate::machine::KoanRegion;
 
 #[test]
 fn chained_user_fn_tail_calls_reuse_one_slot() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -30,7 +30,7 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
 
 #[test]
 fn chained_tail_calls_reuse_frames() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -66,7 +66,7 @@ fn chained_tail_calls_reuse_frames() {
 /// the terminal first (`ok, a, b, c, d`).
 #[test]
 fn leading_statements_run_before_tail_across_chain() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -97,7 +97,7 @@ fn leading_statements_run_before_tail_across_chain() {
 /// climb to 5) and block reuse (`tail_reuse_count` would stay 0).
 #[test]
 fn chained_tail_calls_with_leading_stay_tco_flat() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
 
     run(
@@ -133,7 +133,7 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
 /// [per-call-region/frames.md § MATCH frame lifetime under tail recursion](../../../../design/per-call-region/frames.md#match-frame-lifetime-under-tail-recursion).
 #[test]
 fn match_driven_tail_recursion_completes() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -159,7 +159,7 @@ fn match_driven_tail_recursion_completes() {
 /// the recursion continues, giving `hop` (the One arm) then `done` (the Zero arm) in order.
 #[test]
 fn match_arm_leading_statement_runs_before_tail_recursion() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -189,7 +189,7 @@ fn match_arm_leading_statement_runs_before_tail_recursion() {
 fn tail_call_enforces_first_callers_return_contract() {
     use crate::machine::execute::KoanRuntime;
     use crate::machine::KErrorKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -218,7 +218,7 @@ fn tail_call_enforces_first_callers_return_contract() {
 #[test]
 fn tail_call_stamps_result_against_first_callers_return_contract() {
     use crate::machine::model::{KObject, KType};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -238,14 +238,14 @@ fn tail_call_stamps_result_against_first_callers_return_contract() {
 
 #[test]
 fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (ECHO v :Number) -> Number = (v)");
-    let baseline = region.alloc_count();
+    let baseline = region.region().alloc_count();
     for _ in 0..50 {
         let _ = run_one(scope, parse_one("ECHO 7"));
     }
-    let after = region.alloc_count();
+    let after = region.region().alloc_count();
     let growth = after - baseline;
     // Measured at 50 (one `KObject::Number(7)` per call); < 150 catches
     // any regression that re-introduces a per-call leak into run-root.
@@ -263,7 +263,7 @@ fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
 /// body's transient fanout (~5+ slots/call) behind.
 #[test]
 fn body_subexpression_slots_recycle_across_calls() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(

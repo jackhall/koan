@@ -74,7 +74,13 @@ impl<'run> KoanRuntime<'run> {
     /// owns the frame's lifecycle. Idempotent (guarded on `has_run_frame`).
     pub(in crate::machine::execute) fn ensure_run_frame<'a>(&mut self, scope: &'a Scope<'a>) {
         if !self.has_run_frame() {
-            self.set_run_frame(CallFrame::adopting(scope));
+            // The run-root scope records a `Weak` to the run storage as its `region_owner`; adopting
+            // it makes the run frame's region the run-root region (so top-level FN owners resolve).
+            let run_storage = scope
+                .region_owner()
+                .upgrade()
+                .expect("run-root scope has a live region owner");
+            self.set_run_frame(CallFrame::adopting(scope, run_storage));
         }
     }
 

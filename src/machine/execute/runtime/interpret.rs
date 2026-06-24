@@ -6,9 +6,10 @@
 
 use super::KoanRuntime;
 use crate::builtins::default_scope;
+use crate::machine::core::FrameStorage;
 use crate::machine::execute::lift::NodeLift;
 use crate::machine::model::ast::KExpression;
-use crate::machine::{KError, KErrorKind, KoanRegion, Scope};
+use crate::machine::{KError, KErrorKind, Scope};
 use crate::parse::{parse, parse_with_path};
 
 /// Parse Koan source and run it on a fresh `KoanRegion`; all values allocated by the
@@ -34,8 +35,12 @@ pub fn interpret_with_writer_path(
         Some(p) => parse_with_path(source, p)?,
         None => parse(source)?,
     };
-    let region = KoanRegion::new();
-    let root = default_scope(&region, out);
+    // The run region lives inside an `Rc<FrameStorage>` so the run-root scope's region has an
+    // owning handle: top-level-defined FNs resolve their captured-region owner to it (via
+    // `Scope::region_owner`), and per-call frames created under top level redirect into it through an
+    // owning escape pin (no `unsafe`). `run_storage` outlives `root`, which borrows it.
+    let run_storage = FrameStorage::run_root();
+    let root = default_scope(&run_storage, out);
     let mut runtime = KoanRuntime::new();
     runtime.run_program(root, exprs)
 }

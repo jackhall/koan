@@ -4,20 +4,22 @@
 //! single site. See [`design/memory-model.md`](../../../../../design/memory-model.md).
 use super::*;
 use crate::builtins::default_scope;
-use crate::machine::core::KoanRegion;
+use crate::machine::core::FrameStorage;
 use crate::machine::model::types::{AbstractSource, KType};
 use std::io::sink;
 use std::ptr;
 #[test]
 fn module_child_scope_transmute_does_not_dangle() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(sink()));
-    let module = region.alloc_module(Module::new("Test".into(), scope));
+    let module = region.region().alloc_module(Module::new("Test".into(), scope));
     let recovered = module.child_scope();
     assert!(ptr::eq(recovered, scope));
     // Re-borrow after a sibling alloc — tree borrows is sensitive to interleaved
     // mutation under live shared borrows.
-    let _other = region.alloc_object(crate::machine::model::values::KObject::Number(1.0));
+    let _other = region
+        .region()
+        .alloc_object(crate::machine::model::values::KObject::Number(1.0));
     let recovered2 = module.child_scope();
     assert!(ptr::eq(recovered2, scope));
 }
@@ -27,12 +29,16 @@ fn module_child_scope_transmute_does_not_dangle() {
 /// surface without the module path masking it.
 #[test]
 fn signature_decl_scope_transmute_does_not_dangle() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(sink()));
-    let sig = region.alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
+    let sig = region
+        .region()
+        .alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
     let recovered = sig.decl_scope();
     assert!(ptr::eq(recovered, scope));
-    let _other = region.alloc_object(crate::machine::model::values::KObject::Number(1.0));
+    let _other = region
+        .region()
+        .alloc_object(crate::machine::model::values::KObject::Number(1.0));
     let recovered2 = sig.decl_scope();
     assert!(ptr::eq(recovered2, scope));
 }
@@ -42,9 +48,9 @@ fn signature_decl_scope_transmute_does_not_dangle() {
 /// borrows is strict about interior mutation under a live shared borrow.
 #[test]
 fn module_type_members_refcell_mutation_with_held_module_ref() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(sink()));
-    let module = region.alloc_module(Module::new("M".into(), scope));
+    let module = region.region().alloc_module(Module::new("M".into(), scope));
     let scope_id = module.scope_id();
     {
         let mut tm = module.type_members.borrow_mut();
@@ -70,9 +76,9 @@ fn module_type_members_refcell_mutation_with_held_module_ref() {
 /// borrow. Pinned independently so a regression attributes to this map's site.
 #[test]
 fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(sink()));
-    let module = region.alloc_module(Module::new("M".into(), scope));
+    let module = region.region().alloc_module(Module::new("M".into(), scope));
     let scope_id = module.scope_id();
     {
         let mut tags = module.slot_type_tags.borrow_mut();
@@ -104,9 +110,9 @@ fn functor_per_call_module_lifts_correctly() {
     use crate::machine::model::values::KObject;
     use std::rc::Rc;
 
-    let outer_region = KoanRegion::new();
+    let outer_region = FrameStorage::run_root();
     let outer_scope = default_scope(&outer_region, Box::new(sink()));
-    let frame: Rc<CallFrame> = CallFrame::new(outer_scope, None);
+    let frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
 
     // Borrow into the per-call region via raw-pointer roundtrip so the borrow doesn't
     // outlive `frame` for the borrow-checker (the SAFETY invariant on `CallFrame` —

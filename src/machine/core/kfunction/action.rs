@@ -8,7 +8,7 @@
 use std::rc::Rc;
 
 use super::body::ReturnContract;
-use crate::machine::core::{CallFrame, LexicalFrame, Scope, ScopeId};
+use crate::machine::core::{CallFrame, FrameStorage, LexicalFrame, Scope, ScopeId};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::Held;
@@ -243,9 +243,15 @@ pub enum DepPlacement<'a> {
 
 /// The cart a `Tail` runs in.
 pub enum FramePlacement<'a> {
-    /// Reuse the slot's ping-pong reserve cart (`acquire_tail_frame(outer)`). The TCO tail-call
-    /// frame — FN-body invoke, deferred `PerCall` tails. The only harness-constructed cart.
-    ReuseReserve { outer: &'a Scope<'a> },
+    /// Reuse the slot's ping-pong reserve cart (`acquire_tail_frame(outer, escape_owner)`). The TCO
+    /// tail-call frame — FN-body invoke, deferred `PerCall` tails. The only harness-constructed cart.
+    /// `escape_owner` is the `FrameStorage` owning `outer`'s region (the called function's captured
+    /// region) — the cycle-gate redirect target, held as an owning pin so the redirect needs no
+    /// `unsafe`.
+    ReuseReserve {
+        outer: &'a Scope<'a>,
+        escape_owner: Rc<FrameStorage>,
+    },
     /// A **pre-built** fresh cart the builtin minted (`CallFrame::new`, never the reserve), handed
     /// to the harness to install. The builtin owns construction because it may seed the cart before
     /// the tail dispatches — MATCH/TRY bind `it` into it via `with_frame_interior`; EVAL builds it

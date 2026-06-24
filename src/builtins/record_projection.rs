@@ -114,14 +114,14 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::{KObject, KType};
-    use crate::machine::KoanRegion;
 
     /// `(x y) FROM r` re-tags the carried type to `{x, y}` while every field of `r`
     /// stays physically present on the `Rc`-shared backing record.
     #[test]
     fn from_narrows_carried_type_keeping_all_fields_present() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let result = run_one(scope, parse_one("(x y) FROM {x = 1, y = 2, z = 3}"));
         match result {
@@ -144,7 +144,7 @@ mod tests {
     /// admits it and no second overload is needed.
     #[test]
     fn from_single_field_projection() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let result = run_one(scope, parse_one("(x) FROM {x = 1, y = 2}"));
         match result {
@@ -161,7 +161,7 @@ mod tests {
     /// `() FROM r` projects to zero fields → the empty record `:{}`, not an error.
     #[test]
     fn from_empty_field_list_yields_empty_record() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let result = run_one(scope, parse_one("() FROM {x = 1}"));
         match result {
@@ -177,7 +177,7 @@ mod tests {
     /// Naming a field absent from the record is a `ShapeError`.
     #[test]
     fn from_unknown_field_errors() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("(x w) FROM {x = 1}"));
         let msg = format!("{err}");
@@ -190,7 +190,7 @@ mod tests {
     /// A duplicate name in the field list is a `ShapeError`.
     #[test]
     fn from_duplicate_field_errors() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("(x x) FROM {x = 1}"));
         let msg = format!("{err}");
@@ -213,7 +213,7 @@ mod tests {
         use crate::machine::core::KErrorKind;
         use crate::machine::execute::KoanRuntime;
 
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let mut sched = KoanRuntime::new();
         let root = sched.dispatch_in_scope(parse_one("(x y) FROM 5"), scope);
@@ -238,7 +238,7 @@ mod tests {
         use crate::machine::core::KErrorKind;
         use crate::machine::execute::KoanRuntime;
 
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,

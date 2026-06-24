@@ -5,8 +5,8 @@ use crate::builtins::default_scope;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::ReturnType;
+use crate::machine::core::FrameStorage;
 use crate::machine::model::{Carried, KObject};
-use crate::machine::KoanRegion;
 
 use super::let_expr;
 
@@ -15,7 +15,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
     // Pins that dep-finish waits on every dep before invoking finish and that
     // finish-returned Outcome::Done(Value) lands in the slot's result.
     use crate::machine::execute::DepFinish;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let dep_a = sched.dispatch_in_scope(let_expr("ca", 7.0), scope);
@@ -56,7 +56,7 @@ fn dep_finish_short_circuits_on_dep_error() {
     use crate::machine::{KError, KErrorKind};
     use std::cell::Cell;
     use std::rc::Rc;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
 
@@ -70,7 +70,7 @@ fn dep_finish_short_circuits_on_dep_error() {
     store.clear_node(dep_err);
     let _ = store.pop_next();
     let _ = store.pop_next();
-    let value = region.alloc_object(KObject::Number(99.0));
+    let value = region.region().alloc_object(KObject::Number(99.0));
     store.set_result(dep_ok, Ok(Carried::Object(value)));
     store.set_result(
         dep_err,
@@ -124,7 +124,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
         }
     }
 
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     register_builtin(
         scope,
@@ -154,7 +154,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
 fn tail_call_reuses_node_slot_in_place() {
     // Pins that an `Outcome::Continue` tail rewrites the caller's slot in place rather
     // than spawning a fresh one (verified via sched.len() == 1 below).
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let exprs = crate::parse::parse("MATCH true -> :Str WITH (true -> (\"hi\") false -> (\"no\"))")

@@ -1,7 +1,7 @@
 use super::*;
 use crate::builtins::test_support::{marker, run_root_bare};
 use crate::builtins::{default_scope, register_builtin};
-use crate::machine::core::{KoanRegion, Scope};
+use crate::machine::core::{FrameStorage, KoanRegion, Scope};
 use crate::machine::model::ast::{KLiteral, TypeIdentifier};
 use crate::machine::model::types::{Argument, ExpressionSignature, KType, ReturnType};
 use crate::machine::model::{KKind, KObject};
@@ -104,7 +104,7 @@ fn classify_returns_ref_name_indices_for_non_binder_function() {
 /// not a reference, and `classify_for_pick` must exclude it from `ref_name_indices`.
 #[test]
 fn classify_skips_ref_name_indices_for_binder_function() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("LET".into())),

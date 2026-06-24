@@ -2,13 +2,14 @@
 
 use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
 use crate::machine::execute::KoanRuntime;
+use crate::machine::core::FrameStorage;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{KErrorKind, KoanRegion};
+use crate::machine::KErrorKind;
 use crate::parse::parse;
 
 #[test]
 fn transparent_ascription_returns_module() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -29,7 +30,7 @@ fn transparent_ascription_returns_module() {
 
 #[test]
 fn ascription_missing_member_errors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -46,7 +47,7 @@ fn ascription_missing_member_errors() {
 
 #[test]
 fn opaque_ascription_mints_distinct_module_type_per_application() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let src = "MODULE IntOrd = (LET compare = 0)\n\
          SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
@@ -98,7 +99,7 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
 
 #[test]
 fn transparent_ascription_does_not_mint_module_types() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -119,7 +120,7 @@ fn transparent_ascription_does_not_mint_module_types() {
 /// End-to-end example from [design/typing/modules.md](../../../../design/typing/modules.md).
 #[test]
 fn roadmap_example_int_ord_with_ordered_sig() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,

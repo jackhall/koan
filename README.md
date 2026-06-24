@@ -196,7 +196,7 @@ src/
     ├── core.rs            module surface for core/
     ├── core/
     │   ├── arena.rs       KoanRegion (= Region<KoanStorageProfile>), FrameStorage, CallFrame — the Koan instantiation of the storage substrate plus the per-call frame
-    │   ├── region.rs  Region<W> — generic run-lifetime erase-store substrate (the irreducible unsafe + cycle gate), names no Koan type
+    │   ├── region.rs  Region<W> — generic run-lifetime erase-store substrate (the cycle gate; escape held as an owning EscapeOwner, no unsafe), names no Koan type
     │   ├── bindings.rs    Bindings façade — five-map (data/functions/placeholders/types/pending_overloads) with the validated try_apply write path, try_register_type for nominal type identity, and the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)])
     │   ├── bindings/pending.rs   per-binding pending-overload state
     │   ├── kerror.rs      KError, KErrorKind, TraceFrame — structured runtime errors

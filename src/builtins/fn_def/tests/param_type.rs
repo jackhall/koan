@@ -4,14 +4,15 @@ use crate::builtins::test_support::{
     fn_is_registered, lookup_fn, parse_one, run, run_one, run_root_silent,
 };
 use crate::machine::execute::KoanRuntime;
+use crate::machine::core::FrameStorage;
 use crate::machine::model::{Argument, KObject, KType, SignatureElement};
-use crate::machine::{KErrorKind, KoanRegion};
+use crate::machine::KErrorKind;
 
 use super::capture_program_output;
 
 #[test]
 fn fn_typed_param_records_ktype_on_signature() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
 
@@ -28,7 +29,7 @@ fn fn_typed_param_records_ktype_on_signature() {
 
 #[test]
 fn fn_typed_param_dispatches_on_matching_call() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
     let result = run_one(scope, parse_one("DOUBLE 7"));
@@ -39,7 +40,7 @@ fn fn_typed_param_dispatches_on_matching_call() {
 /// runs out, and the queue stalls — surfaces as `DispatchFailed` from `execute()` itself.
 #[test]
 fn fn_typed_param_rejects_mismatched_call() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
     let mut sched = KoanRuntime::new();
@@ -72,7 +73,7 @@ fn fn_overloads_dispatch_by_param_type() {
 
 #[test]
 fn fn_param_without_annotation_is_rejected() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("FN (DOUBLE x) -> Number = (x)"), scope);
@@ -95,7 +96,7 @@ fn fn_param_without_annotation_is_rejected() {
 
 #[test]
 fn fn_param_with_unknown_type_name_is_rejected() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("FN (DOUBLE x :Bogus) -> Number = (x)"), scope);

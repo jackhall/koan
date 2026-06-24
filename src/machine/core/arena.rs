@@ -13,7 +13,6 @@
 //! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
 
-use std::ptr::NonNull;
 use std::rc::Rc;
 
 use typed_arena::Arena;
@@ -48,6 +47,27 @@ pub struct KoanStorageProfile;
 
 impl StorageProfile for KoanStorageProfile {
     type Storage = KoanStorage;
+    type EscapeOwner = FrameRegionPin;
+}
+
+/// Owning handle to a cycle-gate redirect target: an `Rc<FrameStorage>` viewed as its backing
+/// [`KoanRegion`]. Holding it keeps the target region's arena pages pinned, so [`Region::alloc`]'s
+/// escape redirect (`&**escape`) is a plain borrow with no `unsafe` raw-pointer deref. The
+/// per-call frame stores this for the *outer* frame it redirects into — a child→parent owning edge,
+/// never a cycle (the parent never owns the child).
+pub struct FrameRegionPin(Rc<FrameStorage>);
+
+impl FrameRegionPin {
+    pub(crate) fn new(storage: Rc<FrameStorage>) -> Self {
+        FrameRegionPin(storage)
+    }
+}
+
+impl std::ops::Deref for FrameRegionPin {
+    type Target = KoanRegion;
+    fn deref(&self) -> &KoanRegion {
+        self.0.region()
+    }
 }
 
 /// Run-lifetime allocator. A [`Region`] carrying the Koan family set; lives for one program
@@ -274,6 +294,29 @@ impl Region<KoanStorageProfile> {
     }
 }
 
+#[cfg(test)]
+impl CallFrame {
+    /// Test-only [`CallFrame::new`] that derives the cycle-gate escape owner from `outer`'s
+    /// recorded [`Scope::region_owner`] (set when the run root is built in a `FrameStorage`). Lets
+    /// frame-construction tests stay at the two-argument call shape.
+    pub(crate) fn new_test(outer: &Scope<'_>, outer_frame: Option<Rc<FrameStorage>>) -> Rc<CallFrame> {
+        let owner = outer
+            .region_owner()
+            .upgrade()
+            .expect("test outer scope must carry a live region owner");
+        CallFrame::new(outer, outer_frame, owner)
+    }
+
+    /// Test-only [`CallFrame::try_reset_for_tail`] that derives the escape owner from `new_outer`.
+    pub(crate) fn try_reset_for_tail_test(self: &mut Rc<Self>, new_outer: &Scope<'_>) -> bool {
+        let owner = new_outer
+            .region_owner()
+            .upgrade()
+            .expect("test new_outer scope must carry a live region owner");
+        self.try_reset_for_tail(new_outer, owner)
+    }
+}
+
 /// A frame's refcounted storage: the per-call `KoanRegion` plus the `outer` link that keeps
 /// the lexical-ancestor frames' storage alive. An escaping value (a returned closure, a module
 /// frame) pins *this* — not the [`CallFrame`] shell — so the shell stays uniquely owned and the
@@ -289,6 +332,17 @@ pub struct FrameStorage {
 }
 
 impl FrameStorage {
+    /// The run-root storage: a fresh run region with no `outer` link and no escape (the run root
+    /// redirects nothing). Held by `run_program` (and the test harness) so the run-root scope's
+    /// region has an owning Rc; [`CallFrame::adopting`] reuses it as the run frame's storage and the
+    /// run-root scope records a `Weak` to it as its `region_owner`.
+    pub fn run_root() -> Rc<FrameStorage> {
+        Rc::new(FrameStorage {
+            region: KoanRegion::new(),
+            outer: None,
+        })
+    }
+
     /// The backing `KoanRegion`. Used for cycle-gate / lift identity comparisons by holders
     /// that pin storage but never name a `CallFrame`.
     pub(crate) fn region(&self) -> &KoanRegion {
@@ -320,26 +374,34 @@ pub struct CallFrame {
 impl CallFrame {
     /// Build a fresh per-call frame whose child `Scope` uses `outer` as its `outer` link.
     /// `outer_frame` must hold the parent frame's `FrameStorage` Rc when the parent is per-call;
-    /// `None` when the parent is run-root.
-    pub fn new(outer: &Scope<'_>, outer_frame: Option<Rc<FrameStorage>>) -> Rc<CallFrame> {
-        let escape = NonNull::from(outer.region);
+    /// `None` when the parent is run-root. `escape_owner` is the `FrameStorage` owning `outer`'s
+    /// region — the cycle-gate redirect target; held as an owning pin so the redirect needs no
+    /// `unsafe` deref.
+    pub fn new(
+        outer: &Scope<'_>,
+        outer_frame: Option<Rc<FrameStorage>>,
+        escape_owner: Rc<FrameStorage>,
+    ) -> Rc<CallFrame> {
+        debug_assert!(
+            std::ptr::eq(escape_owner.region(), outer.region as *const KoanRegion),
+            "escape_owner must own the redirect-target region (the outer scope's region)"
+        );
         // The region is born inside its own `Rc<FrameStorage>`, heap-pinned from this point on, so
         // the child-scope pointer below stays valid as the storage Rc moves into the shell.
         let storage = Rc::new(FrameStorage {
-            region: KoanRegion::with_escape(escape),
+            region: KoanRegion::with_escape(FrameRegionPin::new(escape_owner)),
             outer: outer_frame,
         });
-        // A real borrow of the heap-pinned region — no `'static` claim, no `pin_deref`. The child
-        // is built at this borrow's lifetime; `outer` (a longer-lived ancestor) is brand-shortened
-        // to it by `child_for_frame`, so the two need no common lifetime and the outer link needs
-        // no `reattach_ref`.
-        let region_ref: &KoanRegion = &storage.region;
-        let child = Scope::child_for_frame(outer, region_ref);
+        // The child is built from the heap-pinned `storage` handle — no `'static` claim, no
+        // `pin_deref`. It derives both the region borrow and the owning `Weak` from `storage`; `outer`
+        // (a longer-lived ancestor) is brand-shortened by `child_for_frame`, so the two need no
+        // common lifetime and the outer link needs no `reattach_ref`.
+        let child = Scope::child_for_frame(outer, &storage);
         // Stored at the region's real lifetime, then erased once through the safe `erase`. The
         // local borrow of `storage` ends here (the `ErasedScopePtr` holds no borrow), so `storage`
         // moves into the shell below; the `KoanRegion` stays at a fixed heap address behind the Rc,
         // keeping the erased pointer valid.
-        let scope_ptr = ErasedScopePtr::erase(region_ref.alloc_scope(child));
+        let scope_ptr = ErasedScopePtr::erase(storage.region().alloc_scope(child));
         Rc::new(CallFrame {
             storage,
             scope_ptr: Some(scope_ptr),
@@ -350,25 +412,27 @@ impl CallFrame {
     /// The scheduler-owned **run frame**: a frame that *carries an already-built run scope*
     /// rather than minting a child. Top-level execution runs against this frame so `active_frame`
     /// is never `None`, which makes a body's re-dispatch-against-its-own-scope uniformly framed
-    /// (Yoked) at every depth — top level included. The run scope keeps its own (run) region, so
-    /// this frame's `region` stays empty and unused; `escape` is `None` (a non-dying top frame has
-    /// nothing to redirect into). Marked `non_dying` so the Done boundary skips the (pointless)
-    /// self-lift of top-level results.
+    /// (Yoked) at every depth — top level included. Marked `non_dying` so the Done boundary skips
+    /// the (pointless) self-lift of top-level results.
     ///
-    /// The adopted run scope lives in the externally-owned run region, which outlives this
-    /// scheduler-owned frame; erasing its borrow for storage in `scope_ptr` is the same
-    /// re-anchored-on-read erasure every [`ErasedScopePtr`] carries. The store-side
-    /// [`ErasedScopePtr::erase`] is safe — the fabrication hazard is deferred to the re-attach.
-    pub fn adopting(scope: &Scope<'_>) -> Rc<CallFrame> {
+    /// `run_storage` is the `Rc<FrameStorage>` that owns the run region — the same storage `scope`
+    /// (the run root) lives in. Adopting it (rather than minting an empty region) makes this frame's
+    /// `region()` equal the run-root region, so a top-level-defined FN's captured-region owner
+    /// resolves to this frame's storage. `escape` is `None` (a non-dying top frame redirects
+    /// nothing). The adopted run scope's borrow is erased into `scope_ptr` exactly as every
+    /// [`ErasedScopePtr`] is — the fabrication hazard is deferred to the witness-bounded re-attach.
+    pub fn adopting(scope: &Scope<'_>, run_storage: Rc<FrameStorage>) -> Rc<CallFrame> {
+        debug_assert!(
+            std::ptr::eq(run_storage.region(), scope.region as *const KoanRegion),
+            "adopting run_storage must own the run-root scope's region"
+        );
         Rc::new(CallFrame {
-            storage: Rc::new(FrameStorage {
-                region: KoanRegion::new(),
-                outer: None,
-            }),
+            storage: run_storage,
             scope_ptr: Some(ErasedScopePtr::erase(scope)),
             non_dying: true,
         })
     }
+
 
     /// True only for the scheduler-owned run frame (see [`Self::adopting`]). The Done boundary
     /// reads this to skip the self-lift that a never-dying frame would otherwise perform.
@@ -465,23 +529,28 @@ impl CallFrame {
     /// while the shell reuses. Returns `false` (untouched) only when `Rc::get_mut` fails — another
     /// live `Rc<CallFrame>` (a shell clone, never an escape) foreclosing in-place reuse. See
     /// [per-call-region/frames.md § TCO frame reuse](../../../design/per-call-region/frames.md#tco-frame-reuse).
-    pub fn try_reset_for_tail(self: &mut Rc<Self>, new_outer: &Scope<'_>) -> bool {
+    pub fn try_reset_for_tail(
+        self: &mut Rc<Self>,
+        new_outer: &Scope<'_>,
+        escape_owner: Rc<FrameStorage>,
+    ) -> bool {
         if Rc::get_mut(self).is_none() {
             return false;
         }
-        let escape = NonNull::from(new_outer.region);
+        debug_assert!(
+            std::ptr::eq(escape_owner.region(), new_outer.region as *const KoanRegion),
+            "escape_owner must own the redirect-target region (the new outer scope's region)"
+        );
         // Build the fresh storage and its child scope before touching the shell, so the region is
         // heap-pinned by the new storage Rc when it lands in the shell.
         let storage = Rc::new(FrameStorage {
-            region: KoanRegion::with_escape(escape),
+            region: KoanRegion::with_escape(FrameRegionPin::new(escape_owner)),
             outer: None,
         });
-        // A real borrow of the heap-pinned region — no `'static` claim, no `pin_deref`; the child
-        // is built at this borrow's lifetime, with `new_outer` brand-shortened to it by
-        // `child_for_frame` (no `reattach_ref` on the outer link).
-        let region_ref: &KoanRegion = &storage.region;
-        let child = Scope::child_for_frame(new_outer, region_ref);
-        let scope_ptr = ErasedScopePtr::erase(region_ref.alloc_scope(child));
+        // The child is built from the heap-pinned `storage` handle (region borrow + owning `Weak`),
+        // with `new_outer` brand-shortened by `child_for_frame` (no `reattach_ref` on the outer link).
+        let child = Scope::child_for_frame(new_outer, &storage);
+        let scope_ptr = ErasedScopePtr::erase(storage.region().alloc_scope(child));
         // The local borrow of `storage` ends above, so it can move into the shell.
         let this = Rc::get_mut(self).expect("just-verified unique above");
         // Drops the old storage (and its region) unless an escapee still holds it.

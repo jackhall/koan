@@ -109,7 +109,8 @@ mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
     use crate::machine::model::values::Module;
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{BindingIndex, KErrorKind, KoanRegion, Scope};
+    use crate::machine::core::FrameStorage;
+    use crate::machine::{BindingIndex, KErrorKind, Scope};
 
     /// MODULE is type-only: the `&Module` rides the `KType::Module` identity in
     /// `bindings.types`. Recover it for inspection.
@@ -129,7 +130,7 @@ mod tests {
 
     #[test]
     fn module_binds_under_name_in_scope() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "MODULE Foo = (LET x = 1)");
         assert!(matches!(
@@ -144,7 +145,7 @@ mod tests {
 
     #[test]
     fn module_member_access_via_attr() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "MODULE Foo = (LET x = 1)");
         let result = run_one(scope, parse_one("Foo.x"));
@@ -153,7 +154,7 @@ mod tests {
 
     #[test]
     fn module_with_multiple_statements_in_parens() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "MODULE Foo = ((LET x = 1) (LET y = 2))");
         assert!(matches!(run_one(scope, parse_one("Foo.x")), KObject::Number(n) if *n == 1.0));
@@ -164,7 +165,7 @@ mod tests {
     fn module_member_function_via_let_fn() {
         // `LET <name> = (FN ...)` binds under a clean identifier; bare FN lands under
         // its signature key and isn't reachable as `Foo.<name>` via ATTR.
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -176,7 +177,7 @@ mod tests {
 
     #[test]
     fn module_unknown_member_errors() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "MODULE Foo = (LET x = 1)");
         let err = run_one_err(scope, parse_one("Foo.bogus"));
@@ -189,7 +190,7 @@ mod tests {
 
     #[test]
     fn nested_module_accessible_via_chained_attr() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "MODULE Outer =\n  MODULE Inner = (LET x = 7)");
         let result = run_one(scope, parse_one("Outer.Inner.x"));
@@ -200,7 +201,7 @@ mod tests {
     /// reference instead of erroring as `UnboundName`.
     #[test]
     fn module_body_parks_on_outer_placeholder() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "LET y = 7\nMODULE Foo = (LET x = y)");
         let result = run_one(scope, parse_one("Foo.x"));
@@ -210,7 +211,7 @@ mod tests {
     /// A failing body statement must not bind `Foo` in the parent scope.
     #[test]
     fn module_body_error_short_circuits_finalize() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "MODULE Foo = (LET x = nonexistent_name)");
         assert!(
@@ -224,13 +225,13 @@ mod tests {
     /// the pre-seeded `&Module` pointer intact.
     #[test]
     fn module_finalize_short_circuits_on_idempotent_state() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
-        let child = region.alloc_scope(crate::machine::Scope::child_under_module(
+        let child = region.region().alloc_scope(crate::machine::Scope::child_under_module(
             scope,
             "Foo".into(),
         ));
-        let module: &Module<'_> = region.alloc_module(Module::new("Foo".into(), child));
+        let module: &Module<'_> = region.region().alloc_module(Module::new("Foo".into(), child));
         let identity = KType::Module {
             module,
             frame: None,
@@ -248,7 +249,7 @@ mod tests {
     /// `child_scope: &'a Scope<'a>` and finalize writes under tree borrows.
     #[test]
     fn module_body_dispatch_does_not_dangle() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "LET y = 7\nMODULE Foo = ((LET x = y) (LET z = 11))");
         let foo = resolve_module(scope, "Foo");
