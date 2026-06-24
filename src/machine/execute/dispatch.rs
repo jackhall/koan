@@ -475,7 +475,9 @@ fn classify_dispatch<'step>(
             debug_assert!(pre_subs.is_empty());
             view.with_current_scope(|s| operator_chain::run(view, s, &expr))
         }
-        DispatchShape::Keyworded => keyworded::initial(view, expr, pre_subs, idx),
+        DispatchShape::Keyworded => {
+            view.with_current_scope(|s| keyworded::initial(view, s, expr, pre_subs, idx))
+        }
         DispatchShape::SigiledTypeExpr => {
             debug_assert!(pre_subs.is_empty());
             single_poll::sigiled_type_expr(expr)

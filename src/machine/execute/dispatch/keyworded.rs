@@ -2,8 +2,11 @@
 //! keyword present, or a head that isn't a fast-lane shape.
 
 use crate::machine::core::kfunction::action::FramePlacement;
+use crate::machine::core::kfunction::KFunctionRefFamily;
+use crate::machine::core::Scope;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Parseable;
+use crate::scheduler::reattach_with;
 use crate::machine::{
     BindingIndex, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, TraceFrame,
 };
@@ -16,8 +19,9 @@ use super::{bare_name_of, park_resume, propagate_dep_error, Outcome, PartWalkRes
 /// Entry from the dispatch router. Resolved-no-parks-no-subs terminates inline; all other
 /// outcomes install a park (an overload / bare-name producer wait, or eager subs) and re-enter
 /// through a [`park_resume`] closure that re-runs this function on wake.
-pub(super) fn initial<'step>(
+pub(super) fn initial<'step, 'b>(
     ctx: &SchedulerView<'step, '_>,
+    s: &'b Scope<'b>,
     expr: KExpression<'step>,
     pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
@@ -31,9 +35,9 @@ pub(super) fn initial<'step>(
         }
     }
     let chain = ctx.chain_deref();
-    let outcome = ctx
-        .current_scope()
-        .resolve_dispatch(&expr, chain, &bare_outcomes);
+    // Resolve dispatch through the threaded `'b` scope; the `Resolved` carries the picked function at
+    // `'b`, re-anchored to `'step` at `invoke_continue` (the only consumer that needs the cart life).
+    let outcome = s.resolve_dispatch(&expr, chain, &bare_outcomes);
     let resolved = match outcome {
         ResolveOutcome::Resolved(r) => r,
         // Dispatch failures are slot-terminal (TRY-catchable), uniform with the
@@ -72,18 +76,12 @@ pub(super) fn initial<'step>(
         .index;
     let bind_index = BindingIndex::value(lex_index);
     if let Some(name) = resolved.placeholder_name.as_ref() {
-        if let Err(e) =
-            ctx.current_scope()
-                .install_placeholder(name.clone(), NodeId(idx), bind_index)
-        {
+        if let Err(e) = s.install_placeholder(name.clone(), NodeId(idx), bind_index) {
             return Outcome::Done(Err(e));
         }
     }
     if let Some(bucket) = resolved.pending_overload_bucket.as_ref() {
-        if let Err(e) =
-            ctx.current_scope()
-                .install_pending_overload(bucket.clone(), NodeId(idx), bind_index)
-        {
+        if let Err(e) = s.install_pending_overload(bucket.clone(), NodeId(idx), bind_index) {
             return Outcome::Done(Err(e));
         }
     }
@@ -112,7 +110,12 @@ pub(super) fn initial<'step>(
     }
     if staged_subs.is_empty() {
         // The synchronous (no-eager-subs) call — the common path for builtins and simple calls.
-        return super::exec::invoke_continue(resolved.function, new_expr);
+        // Re-anchor the picked function from `'b` to the cart `'step`, witnessed by the active region.
+        let function = reattach_with::<KFunctionRefFamily, _>(
+            resolved.function,
+            ctx.current_scope().region,
+        );
+        return super::exec::invoke_continue(function, new_expr);
     }
     let _ = resolved; // discard the speculative pick.
     install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs)
@@ -209,7 +212,7 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
     park_resume(
         to_wait,
         Some(carrier),
-        Box::new(move |ctx, idx| initial(ctx, expr, pre_subs, idx)),
+        Box::new(move |ctx, idx| ctx.with_current_scope(|s| initial(ctx, s, expr, pre_subs, idx))),
     )
 }
 
@@ -243,7 +246,9 @@ fn install_bare_name_park<'step>(
     park_resume(
         producers,
         Some(carrier),
-        Box::new(move |ctx, idx| initial(ctx, working_expr, pre_subs, idx)),
+        Box::new(move |ctx, idx| {
+            ctx.with_current_scope(|s| initial(ctx, s, working_expr, pre_subs, idx))
+        }),
     )
 }
 
