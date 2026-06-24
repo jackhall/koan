@@ -105,6 +105,31 @@ fn reattach_with_live_value_and_slice() {
     assert_eq!(**reref, 11);
 }
 
+/// `reattach_branded`: re-anchor a live value to a `'step` carried by a zero-sized [`PhantomData`]
+/// brand rather than a borrowed witness. The brand's `'step` is the test body's own lifetime, over
+/// which `backing` stays live, so the brand-fabricated read is pinned under tree borrows. Covers both
+/// the covariant `&'r u32` and the load-bearing invariant `Cell<&'r u32>` (koan's `Scope`-slot shape).
+/// Mirrors a parked continuation branding a scope-derived value into its cart `'step` with no
+/// `'step`-lived witness available to borrow.
+#[test]
+fn reattach_branded_live_value() {
+    let backing = [11u32, 22];
+    // Produce the borrow in a narrower block, then brand it out to the test body's lifetime.
+    let branded: &u32 = {
+        let inner: &u32 = &backing[0];
+        reattach_branded::<RefFamily>(inner, PhantomData)
+    };
+    assert_eq!(*branded, 11);
+    // Invariant carrier: brand a `Cell<&u32>` and read it back through the brand.
+    let branded_cell: Cell<&u32> = {
+        let cell = Cell::new(&backing[1]);
+        reattach_branded::<InvFamily>(cell, PhantomData)
+    };
+    assert_eq!(*branded_cell.get(), 22);
+    // Re-read the first brand to catch a tree-borrows regression from the later brand.
+    assert_eq!(*branded, 11);
+}
+
 /// Covariant carrier round-trips after the original borrow drops; the bundled witness keeps it live.
 /// The rank-2 closure returns a copied scalar (`'b`-independent), so nothing escapes.
 #[test]

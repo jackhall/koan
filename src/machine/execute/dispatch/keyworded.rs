@@ -1,12 +1,14 @@
 //! Keyworded dispatch shape: the catch-all for any expression with a
 //! keyword present, or a head that isn't a fast-lane shape.
 
+use std::marker::PhantomData;
+
 use crate::machine::core::kfunction::action::FramePlacement;
 use crate::machine::core::kfunction::KFunctionRefFamily;
 use crate::machine::core::Scope;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Parseable;
-use crate::scheduler::reattach_with;
+use crate::scheduler::{reattach_branded, reattach_with};
 use crate::machine::{
     BindingIndex, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, TraceFrame,
 };
@@ -128,34 +130,40 @@ pub(super) fn finish<'step>(
     working_expr: KExpression<'step>,
     idx: usize,
 ) -> Outcome<'step> {
-    match ctx
-        .current_scope()
-        .resolve_dispatch(&working_expr, ctx.chain_deref(), &[])
-    {
-        // The post-eager-subs re-dispatch lands resolved calls here — fold the resolved call into
-        // the `Continue` that installs its frame and runs `invoke`.
-        ResolveOutcome::Resolved(r) => super::exec::invoke_continue(r.function, working_expr),
-        // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
-        // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
-        ResolveOutcome::Ambiguous(n) => {
-            Outcome::Done(Err(KError::new(KErrorKind::AmbiguousDispatch {
-                expr: working_expr.summarize(),
-                candidates: n,
-            })))
+    // Re-dispatch against the child scope opened at a `for<'b>` brand. Every arm consumes its
+    // `ResolveOutcome<'b>` inside the closure and returns the brand-free `Outcome<'step>`; the
+    // resolved function is re-anchored `'b -> 'step` for `invoke_continue`.
+    ctx.with_current_scope(|s| {
+        match s.resolve_dispatch(&working_expr, ctx.chain_deref(), &[]) {
+            // The post-eager-subs re-dispatch lands resolved calls here — fold the resolved call into
+            // the `Continue` that installs its frame and runs `invoke`.
+            ResolveOutcome::Resolved(r) => {
+                let function =
+                    reattach_branded::<KFunctionRefFamily>(r.function, PhantomData::<&'step ()>);
+                super::exec::invoke_continue(function, working_expr)
+            }
+            // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
+            // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
+            ResolveOutcome::Ambiguous(n) => {
+                Outcome::Done(Err(KError::new(KErrorKind::AmbiguousDispatch {
+                    expr: working_expr.summarize(),
+                    candidates: n,
+                })))
+            }
+            ResolveOutcome::Deferred | ResolveOutcome::Unmatched => {
+                Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
+                    expr: working_expr.summarize(),
+                    reason: "no matching function".to_string(),
+                })))
+            }
+            ResolveOutcome::ParkOnProducers(producers) => {
+                install_overload_park(ctx, producers, working_expr, Vec::new(), idx)
+            }
+            ResolveOutcome::UnboundName(name) => {
+                Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))))
+            }
         }
-        ResolveOutcome::Deferred | ResolveOutcome::Unmatched => {
-            Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-                expr: working_expr.summarize(),
-                reason: "no matching function".to_string(),
-            })))
-        }
-        ResolveOutcome::ParkOnProducers(producers) => {
-            install_overload_park(ctx, producers, working_expr, Vec::new(), idx)
-        }
-        ResolveOutcome::UnboundName(name) => {
-            Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))))
-        }
-    }
+    })
 }
 
 /// Fold the post-eager-subs re-resolve into a [`Outcome::Continue`]: a dep-free decide that re-runs

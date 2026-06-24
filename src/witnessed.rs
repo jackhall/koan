@@ -335,6 +335,41 @@ where
     unsafe { retype::<T::At<'static>, T::At<'w>>(erased) }
 }
 
+/// Re-anchor a **live** single-lifetime-family value to a `'step` carried by a zero-sized
+/// [`PhantomData`] brand rather than a borrowed [`Witness`]. Where [`reattach_with`] proves `'w` live
+/// by a runtime borrow of a held witness, this proves it by a *type-level* brand: the caller supplies
+/// the `'step` it is already operating at, so no runtime witness need be threaded. Both are zero-cost
+/// (the witness borrow is never read either); the difference is only where the liveness proof comes
+/// from.
+///
+/// This exists for the one place a borrowed witness cannot reach: a parked continuation holds only a
+/// `for<'view>` view whose `'view: 'step` is not assumable, so it has no `'step`-lived borrow to hand
+/// [`reattach_with`]; yet it must feed scope-derived values back into its `'step` `Outcome`. The
+/// `PhantomData<&'step ()>` is the cart lifetime the continuation already produces results at.
+///
+/// # Safety contract (caller-asserted, as in [`reattach_with`])
+///
+/// - **Co-location:** `value` genuinely lives in a region that outlives `'step` — the frame run region,
+///   which the cart keeps alive for the whole step. This is the same invariant [`reattach_with`]
+///   documents; here it is asserted by the brand rather than pinned by a held `Rc`.
+/// - **`'step` is a real cart lifetime, never widened to `'static`:** unlike a borrowed witness (which
+///   the borrow checker forbids fabricating), the brand is forgeable in principle, so the caller must
+///   pass the continuation's own cart lifetime. The Miri slate catches a brand that outlives its
+///   region; the explicit `'step` type parameter keeps the obligation greppable.
+///
+/// Removal is tracked by the FrameStorage self-reference removal roadmap item: once the storage flip
+/// hands continuations a `'step`-lived scope directly, these branded reattaches can collapse into a
+/// borrowed-witness (or no) re-anchor.
+pub(crate) fn reattach_branded<'step, T: Reattachable>(
+    value: T::At<'_>,
+    _brand: PhantomData<&'step ()>,
+) -> T::At<'step> {
+    // SAFETY: the caller asserts co-location and a real cart `'step` (see the contract); erase for
+    // storage then re-anchor at the branded `'step`. Lifetime-only retype of a single-lifetime family.
+    let erased = erase_to_static::<T>(value);
+    unsafe { retype::<T::At<'static>, T::At<'step>>(erased) }
+}
+
 /// Slice twin of [`reattach_with`]: re-anchor a shared slice's element content lifetime to the `'w`
 /// a borrowed witness pins, preserving the borrow `'i`.
 ///
