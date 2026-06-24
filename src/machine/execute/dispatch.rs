@@ -443,7 +443,7 @@ fn classify_dispatch<'step>(
         }
         DispatchShape::FunctionValueCall => {
             debug_assert!(pre_subs.is_empty());
-            fn_value::initial(view, expr)
+            view.with_current_scope(|s| fn_value::initial(view, s, expr))
         }
         DispatchShape::TypeCall => {
             debug_assert!(pre_subs.is_empty());

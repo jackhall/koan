@@ -4,7 +4,10 @@
 //! immediately, an unbound name errors, and a still-finalizing head placeholder parks via a
 //! [`park_resume`] closure that re-runs the fast lane on resume.
 
+use crate::machine::core::Scope;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::values::CarriedFamily;
+use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::Parseable;
 use crate::machine::{KError, KErrorKind, NodeId, Resolution};
@@ -13,8 +16,9 @@ use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
 use super::{park_resume, Outcome};
 
-pub(super) fn initial<'step>(
+pub(super) fn initial<'step, 'b>(
     ctx: &SchedulerView<'step, '_>,
+    s: &'b Scope<'b>,
     expr: KExpression<'step>,
 ) -> Outcome<'step> {
     let head = match &expr.parts[0].value {
@@ -22,8 +26,20 @@ pub(super) fn initial<'step>(
         _ => unreachable!("FunctionValueCall shape implies Identifier head"),
     };
     let chain = ctx.chain_deref();
-    match ctx.current_scope().resolve_with_chain(&head, chain) {
-        Resolution::Value(obj) => dispatch_callable_value(ctx, expr, obj),
+    match s.resolve_with_chain(&head, chain) {
+        // `obj` resolves at the threaded scope's `'b` brand; re-anchor it to the cart `'step`,
+        // witnessed by the active region (sourced over the old path during migration — it moves to
+        // the frame's own region at the ouroboros flip). The region pins `obj`'s storage for `'step`.
+        Resolution::Value(obj) => {
+            let carried = crate::scheduler::reattach_with::<CarriedFamily, _>(
+                Carried::Object(obj),
+                ctx.current_scope().region,
+            );
+            let Carried::Object(obj) = carried else {
+                unreachable!("reattach preserves the Object variant")
+            };
+            dispatch_callable_value(ctx, expr, obj)
+        }
         // A still-finalizing head placeholder parks and re-runs on resume. A placeholder whose
         // producer has *already* finalized splits two ways:
         // - `Err`: the binder errored before binding the head, so the name never became a value —
@@ -81,6 +97,6 @@ fn install_head_park<'step>(producer: NodeId, expr: KExpression<'step>) -> Outco
     park_resume(
         vec![producer],
         Some(carrier),
-        Box::new(move |ctx, _idx| initial(ctx, expr)),
+        Box::new(move |ctx, _idx| ctx.with_current_scope(|s| initial(ctx, s, expr))),
     )
 }
