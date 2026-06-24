@@ -473,7 +473,7 @@ fn classify_dispatch<'step>(
         }
         DispatchShape::OperatorChain => {
             debug_assert!(pre_subs.is_empty());
-            operator_chain::run(view, &expr)
+            view.with_current_scope(|s| operator_chain::run(view, s, &expr))
         }
         DispatchShape::Keyworded => keyworded::initial(view, expr, pre_subs, idx),
         DispatchShape::SigiledTypeExpr => {

@@ -15,6 +15,7 @@
 //! lands, so every chain misses and errors cleanly; the hit path is exercised only by
 //! test fixtures that register an `OperatorGroup`.
 
+use crate::machine::core::Scope;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Parseable;
 use crate::machine::{KError, KErrorKind};
@@ -29,18 +30,18 @@ use super::Outcome;
 /// This handler issues no scheduler write — every path is a terminal — so it decides
 /// against a read-only [`SchedulerView`] and returns a [`Outcome::Done`]; the
 /// router applies it through [`KoanRuntime::apply_outcome`](super::super::runtime::KoanRuntime).
-pub(in crate::machine::execute) fn run<'step>(
+pub(in crate::machine::execute) fn run<'step, 'b>(
     ctx: &SchedulerView<'step, '_>,
+    s: &'b Scope<'b>,
     expr: &KExpression<'step>,
 ) -> Outcome<'step> {
     let probe = expr
         .operator_probe()
         .expect("OperatorChain shape guarantees a cached operator probe");
     let chain = ctx.chain_deref();
-    match ctx
-        .current_scope()
-        .resolve_operator_group_with_chain(probe, chain)
-    {
+    // The resolved `group` is consumed transiently (`covers` / branch) — never placed in the
+    // returned `Outcome` — so no `'b -> 'step` re-anchor is needed.
+    match s.resolve_operator_group_with_chain(probe, chain) {
         None => Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
             expr: expr.summarize(),
             reason: undeclared_operator_reason(probe),
