@@ -299,7 +299,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
 - [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md)
-- [FrameStorage self-reference removal](refactor/framestorage-self-reference.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
@@ -311,6 +310,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Unify the value-name lookup outcomes](refactor/unify-name-lookup-outcome.md)
 - [Unify the type-name resolution path](refactor/unify-resolution-outcome.md)
 - [Witnessed carrier module for value lifetime-erasure](refactor/witnessed-carrier.md)
+- [Co-location-enforcing `Witnessed` constructor](refactor/witnessed-colocation-constructor.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
@@ -412,6 +412,10 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   the scattered `Reattachable` / `Erased` / `retype` reattach machinery into one top-level `witnessed`
   module whose `unsafe` is two rank-2 branded accessors (`with` / `map`), bundling each erased value
   with its liveness witness.
+- [Co-location-enforcing `Witnessed` constructor](refactor/witnessed-colocation-constructor.md) —
+  add a constructor that *sources* a carrier from the witness's own region through a `for<'b>`
+  closure, so the witness-pins-the-value (co-location) invariant `Witnessed::new` leaves as a
+  per-call-site SAFETY note becomes structural and compile-checked.
 - [FrameStorage self-reference removal](refactor/framestorage-self-reference.md) — replace the
   hand-rolled region↔child-scope loop in `FrameStorage` with an `ouroboros #[self_referencing]`
   struct, deleting the three audited `unsafe` tokens that close it (the `reattach_witnessed`

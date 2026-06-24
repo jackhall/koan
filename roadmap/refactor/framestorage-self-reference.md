@@ -59,36 +59,15 @@ substrate; the `Witness` marker axiom (arena.rs:82); and `lift`'s value-relocati
 - *Closure accessor `with_scope(|s| R)` — decided by the type system.* `Scope<'a>` is invariant,
   forcing ouroboros `#[not_covariant]`, so there is no free-borrow (`borrow_child`) option;
   child-scope access is always through the generated `with_child` closure.
-- *Reworking the decide/continuation layer's escaping scope reads — open.* The load-bearing
-  question. The child scope is read not only through the `.scope()` sites but through
-  `scope_bounded` → `reattach_node_scope` (`Yoked` arm) → `current_scope`, which fans out to ~34
-  decide-layer consumers — several of which capture the returned `&Scope<'step>` into a boxed
-  continuation (`DepFinish` / `CatchFinish`) that runs on a *later* step (`runtime.rs`,
-  `outcome.rs`). `#[not_covariant]` forbids any escaping borrow, so a closure-confined `with_child`
-  cannot serve a read whose result outlives the closure. The migration restructures those reads:
-  the unified `current_scope() -> &Scope` surface inverts to a closure form
-  (`with_current_scope(|s| …)`), and each scope-derived value that must escape into the step's
-  `Outcome<'step>` is re-anchored `'b → 'step` by `witnessed::reattach_branded` (a zero-sized
-  `PhantomData<&'step ()>` brand — see the dedicated direction below). The decide-path sites
-  (`fn_value`, `single_poll`, `operator_chain`, `keyworded`) and the first continuation
-  (`keyworded::finish`) are migrated this way; the remaining continuations
-  (`field_list`, `runtime` `FinishCtx`, `exec` `BodyCtx`, `build_bare_outcomes`) follow the same shape.
-- *Continuation re-anchor brand (`reattach_branded`) — decided, with a collapse obligation.* A parked
-  continuation holds only a `for<'view>` view whose `'view: 'step` is not assumable, so it has no
-  `'step`-lived borrow to hand the compile-enforced `reattach_with`. `reattach_branded` supplies the
-  cart `'step` through a zero-sized `PhantomData` brand instead — zero runtime cost (a witness borrow
-  is also never read), but *caller-asserted* (forgeable to `'static`) rather than borrow-bounded. It is
-  the single audited brand for this, slate-tested under the `retype` group. The flip must re-evaluate
-  it: collapse to a borrow-bounded `reattach_with` (or remove it entirely) if the `#[self_referencing]`
-  storage can hand continuations a `'step`-lived scope directly, so the net effect on `unsafe` is
-  negative rather than additive.
-- *Region re-exposure in `with_frame_interior` — open.* Routing the region through the ouroboros
-  owner accessor hands it at the accessor's borrow lifetime, not the free `'a` the seed binds use
-  today (an `'a`-typed value deep-cloned into a younger per-call region). Removing the `pin_deref`
-  therefore requires running the seed binds *inside* the region accessor closure and re-anchoring the
-  caller-`'a`-typed bind values down to that borrow before `bind_value` — the same closure-inversion
-  shape as the decide-layer rework. *Recommended: fold into the `with_*` accessor rework; re-anchor
-  the seed binds through the witnessed reattach.*
+- *Continuation scope reads — decided.* Scope access stays inside the `with_child(|s| …)` closure
+  (the closure is for binding-table mutation safety). A value that crosses the step boundary into
+  `Outcome<'step>` is lifted out through the co-location-enforcing
+  [`Witnessed` constructor](witnessed-colocation-constructor.md) (the `Requires` edge), not by widening
+  the scope's lifetime. A safe-signature scope lifetime brand (`reattach_branded`) was tried and
+  rejected as unsound.
+- *Region re-exposure in `with_frame_interior` — open.* The `pin_deref` removal runs the seed binds
+  *inside* the region accessor closure and lifts the bind values out through the same
+  [`Witnessed` constructor](witnessed-colocation-constructor.md) as the continuation reads.
 - *Keep `CallFrame` as the public shell over `Rc<FrameStorage>` — decided.* The `Rc` stays for
   shared ownership (escapees clone it; the TCO `Rc::get_mut` uniqueness check); ouroboros supplies
   intra-struct address stability. Both are needed.
@@ -109,6 +88,10 @@ Builds on the shipped arena unsafe-collapse substrate — the store-side `erase_
 witness-bounded `ErasedScopePtr::reattach_witnessed`, and the real-lifetime per-call child
 construction — all on `master`; not on any open roadmap item.
 
-**Requires:** none — builds on shipped arena unsafe-collapse substrate.
+**Requires:**
+
+- [Co-location-enforcing `Witnessed` constructor](witnessed-colocation-constructor.md) — the
+  continuation rework must lift scope-carrying values across the step boundary soundly, which needs a
+  bundle whose witness is guaranteed to pin the value.
 
 **Unblocks:** none.
