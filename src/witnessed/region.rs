@@ -1,23 +1,23 @@
 //! Generic run-lifetime storage substrate. Owns the cycle-redirect `escape` pointer and an address
-//! membership side-table, and routes its store-side lifetime-erasure through the scheduler's single
-//! audited [`erase_to_static`](crate::scheduler) primitive — it names no workload type. A
+//! membership side-table, and routes its store-side lifetime-erasure through its module's single
+//! audited [`erase_to_static`](super::erase_to_static) primitive — it names no workload type. A
 //! [`StorageProfile`] injects its storage families via [`Stored`]; the single [`Region::alloc`]
 //! engine runs the cycle gate uniformly. The gate is unbypassable because [`Region::storage`]
 //! is private and `alloc` is the only path that reaches it — no `&Arena` ever escapes, so no `Stored`
 //! impl can route a value around the redirect.
 //!
 //! The Koan instantiation (`KoanRegion = Region<KoanStorageProfile>`, the family `Stored` impls,
-//! the cycle-gate walkers) lives in [`super::arena`]. See
-//! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
+//! the cycle-gate walkers) lives in [`crate::machine::core::arena`]. See
+//! [memory-model.md § Arena lifetime erasure](../../design/memory-model.md#region-lifetime-erasure)
 //! for the lifetime-erasure soundness argument and
-//! [per-call-region/lifecycle.md § Cycle gate](../../../design/per-call-region/lifecycle.md#cycle-gate-on-alloc_object)
+//! [per-call-region/lifecycle.md § Cycle gate](../../design/per-call-region/lifecycle.md#cycle-gate-on-alloc_object)
 //! for the redirect `alloc` enforces.
 
 use std::cell::RefCell;
 
 use typed_arena::Arena;
 
-use crate::scheduler::{erase_to_static, reattach_ref_with, Reattachable};
+use super::{erase_to_static, reattach_ref_with, Reattachable};
 
 /// A workload's declaration of what a [`Region`] stores for it. `Storage` is the bundle of
 /// typed sub-arenas the frame owns; the workload's [`Stored`] impls project each family out of it.

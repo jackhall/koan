@@ -181,10 +181,10 @@ imposes none of this — it is the workload's call, which is why "per-node memor
 the carrier a node holds, not an arena the node owns.
 
 The construction surface (`yoke` / `merge` / `with` / `map`, the witness-borrow
-reattaches) is shipped; the `Sealed` carrier (`seal` / `open` / `attach` /
-`transfer_into`), the relocation of `Region<P>` into the `witnessed` module, and the
-broad call-site migration onto the sealed surface are tracked by the per-node-memory
-roadmap project below.
+reattaches) is shipped, as is the relocation of the generic `Region<P>` allocator
+beside its carrier in the `witnessed` module; the `Sealed` carrier (`seal` / `open` /
+`attach` / `transfer_into`) and the broad call-site migration onto the sealed surface
+are tracked by the per-node-memory roadmap project below.
 
 ## Open work
 
@@ -192,8 +192,6 @@ The [per-node-memory roadmap project](../roadmap/per-node-memory/) decomposes th
 single-PR items — the storage surface, then the carrier / allocation / read migrations onto
 it, then `attach`'s removal:
 
-- [Relocate `Region<P>` into the `witnessed` module](../roadmap/per-node-memory/region-relocation.md)
-  — re-homing the generic bump allocator beside its carrier.
 - [Sealed node-storage carrier and `open`](../roadmap/per-node-memory/sealed-open.md)
   — the opaque `Sealed<T, W>` / `open` storage form, with the result slot rerouted onto it.
 - [Externally-witnessed sealed form and `attach`](../roadmap/per-node-memory/externally-witnessed-attach.md)

@@ -55,10 +55,10 @@ What's shipped that the open items below build on:
   parameterized over the lifted carrier's `matches_value`/`matches_type` predicate).
 - *Region unsafe consolidation.* Every captured/defining-scope re-attach is funnelled behind two
   audited [`scope_ptr`](../src/machine/core/scope_ptr.rs) handles, and `KoanRegion::escape` holds an
-  owning [`StorageProfile::EscapeOwner`](../src/machine/core/region.rs) (the Koan `FrameRegionPin`, an
+  owning [`StorageProfile::EscapeOwner`](../src/witnessed/region.rs) (the Koan `FrameRegionPin`, an
   `Rc<FrameStorage>` deref'd to its region) — its owner read off the captured scope's
   `Scope::region_owner` — so the cycle-gate redirect is a borrow the compiler proves and
-  [`region.rs`](../src/machine/core/region.rs) carries no `unsafe`.
+  [`region.rs`](../src/witnessed/region.rs) carries no `unsafe`.
   The store-side erasure lives behind one `Stored` trait: all region-stored
   families route the scheduler's single audited `erase_to_static` (the safe direction of the
   one `retype` primitive the read-side re-anchor shares) and one gated `alloc` engine,
@@ -301,7 +301,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [Relocate `Region<P>` into the `witnessed` module](per-node-memory/region-relocation.md)
 - [Sealed node-storage carrier and `open`](per-node-memory/sealed-open.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
@@ -396,13 +395,13 @@ Grow the shipped `witnessed` carrier into a generic, Koan-free substrate for per
 scheduler memory — a sealed node-storage form, its access verbs, and the generic bump
 allocator — then migrate the engine's value, scope, continuation, and contract carriers
 onto it. The construction primitives (`yoke` / `merge` / `with` / `map`, the
-witness-borrow reattaches) are already shipped; these items add the storage surface and
-carry the call-site migration, each sized to a single PR. The design is captured in
+witness-borrow reattaches) are already shipped, as is the relocation of the generic
+`Region<P>` bump allocator beside its carrier in the `witnessed` module; these items add
+the storage surface and carry the call-site migration, each sized to a single PR. The
+design is captured in
 [design/per-node-memory.md](../design/per-node-memory.md). The surface lands first, then the
 carriers, allocations, and reads migrate onto it, and `attach` is retired last:
 
-- [Relocate `Region<P>` into the `witnessed` module](per-node-memory/region-relocation.md) —
-  re-home the generic bump allocator beside the carrier it feeds.
 - [Sealed node-storage carrier and `open`](per-node-memory/sealed-open.md) — the opaque
   `Sealed<T, W>` read through a rank-2 `open`, with the result slot's storage rerouted onto it.
 - [Externally-witnessed sealed form and `attach`](per-node-memory/externally-witnessed-attach.md) —

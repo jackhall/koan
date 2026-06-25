@@ -85,7 +85,7 @@ protocol sits on top of.
 Every sub-arena inside [`KoanRegion`](../src/machine/core/arena.rs) stores
 `T<'static>` rather than `T<'a>` — the `'static` is phantom so `KoanRegion`
 itself carries no lifetime parameter. The erase-store engine lives generically in
-the [`Region<W>`](../src/machine/core/region.rs) substrate (`KoanRegion`
+the [`Region<W>`](../src/witnessed/region.rs) substrate (`KoanRegion`
 is the Koan instantiation `Region<KoanStorageProfile>`). Each named `alloc*` wrapper
 takes input at the caller's `'a` and routes one `alloc<K: Stored>` engine: the engine
 erases the value into its `'static` lifetime family (`At<'static>`) for storage and
@@ -234,7 +234,7 @@ store side carries no `unsafe` at all: each handle's `erase` builds its stored p
 `NonNull::from(scope).cast()`, deferring every fabrication hazard to the re-attach.
 
 Every family implements the `Stored` trait and routes the one gated
-[`alloc`](../src/machine/core/region.rs) engine. `anchors_to` is a required trait
+[`alloc`](../src/witnessed/region.rs) engine. `anchors_to` is a required trait
 method, so each family declares its cycle behavior at its impl site: `KObject` and
 `KType` walk their composite tree for a self-targeting `Rc<FrameStorage>`, while the
 families that cannot hold one — `KFunction`, `Scope`, `Module`, `Signature`, and

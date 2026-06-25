@@ -47,7 +47,6 @@ digraph {
     "koan::machine::core::lexical_frame" [label="koan::machine::core::lexical_frame"];
     "koan::machine::core::pending" [label="koan::machine::core::pending"];
     "koan::machine::core::reattach" [label="koan::machine::core::reattach"];
-    "koan::machine::core::region" [label="koan::machine::core::region"];
     "koan::machine::core::scope" [label="koan::machine::core::scope"];
     "koan::machine::core::scope_id" [label="koan::machine::core::scope_id"];
     "koan::machine::core::scope_ptr" [label="koan::machine::core::scope_ptr"];
@@ -119,6 +118,7 @@ digraph {
     "koan::scheduler::workload" [label="koan::scheduler::workload"];
     "koan::source" [label="koan::source"];
     "koan::witnessed" [label="koan::witnessed"];
+    "koan::witnessed::region" [label="koan::witnessed::region"];
     "koan" -> "koan::builtins" [label="owns", style="solid"];
     "koan" -> "koan::machine" [label="owns", style="solid"];
     "koan" -> "koan::parse" [label="owns", style="solid"];
@@ -166,7 +166,6 @@ digraph {
     "koan::machine::core" -> "koan::machine::core::lexical_frame" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::pending" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::reattach" [label="owns", style="solid"];
-    "koan::machine::core" -> "koan::machine::core::region" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::scope" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::scope_id" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::scope_ptr" [label="owns", style="solid"];
@@ -238,6 +237,7 @@ digraph {
     "koan::scheduler" -> "koan::scheduler::splice" [label="owns", style="solid"];
     "koan::scheduler" -> "koan::scheduler::work_queues" [label="owns", style="solid"];
     "koan::scheduler" -> "koan::scheduler::workload" [label="owns", style="solid"];
+    "koan::witnessed" -> "koan::witnessed::region" [label="owns", style="solid"];
     "koan::builtins" -> "koan" [label="uses", style="dashed"];
     "koan::builtins" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -474,7 +474,6 @@ digraph {
     "koan::machine::core::arena" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::reattach" [label="uses", style="dashed"];
-    "koan::machine::core::arena" -> "koan::machine::core::region" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::scope" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::scope_ptr" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::operators" [label="uses", style="dashed"];
@@ -549,7 +548,6 @@ digraph {
     "koan::machine::core::pending" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::pending" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::pending" -> "koan::machine::model::values" [label="uses", style="dashed"];
-    "koan::machine::core::region" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::kerror" [label="uses", style="dashed"];
@@ -936,4 +934,5 @@ digraph {
     "koan::scheduler::workload" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::source" -> "koan" [label="uses", style="dashed"];
     "koan::witnessed" -> "koan" [label="uses", style="dashed"];
+    "koan::witnessed::region" -> "koan::witnessed" [label="uses", style="dashed"];
 }

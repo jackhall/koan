@@ -1,12 +1,12 @@
-//! The Koan instantiation of the generic [`Region`](super::region::Region)
+//! The Koan instantiation of the generic [`Region`](crate::witnessed::Region)
 //! storage substrate: `KoanRegion = Region<KoanStorageProfile>`, the per-family
-//! [`Stored`](super::region::Stored) impls (which sub-arena a family lands in, its cycle-gate
+//! [`Stored`](crate::witnessed::Stored) impls (which sub-arena a family lands in, its cycle-gate
 //! `anchors_to` answer), the cycle-gate walkers, and the Koan-typed `alloc_*` wrappers. `CallFrame`
 //! — the per-call frame shell over a refcounted `FrameStorage` (the `KoanRegion` plus the ancestor
 //! chain), holding the child `Scope` and resetting in place for TCO — also lives here.
 //!
 //! The generic erase-store engine and the cycle-redirect plumbing live in
-//! [`super::region`]; this file supplies the Koan policy it runs.
+//! [`crate::witnessed::region`]; this file supplies the Koan policy it runs.
 //!
 //! See [per-call-region/README.md](../../../design/per-call-region/README.md) for the carrier
 //! set, lift-time anchor decision, cycle gate, ancestor chain, and TCO frame reuse;
@@ -18,7 +18,7 @@ use std::rc::Rc;
 use typed_arena::Arena;
 
 use super::reattach::pin_deref;
-use super::region::{Region, StorageProfile, Stored};
+use crate::witnessed::{Region, StorageProfile, Stored};
 use super::scope::Scope;
 use super::scope_ptr::ErasedScopePtr;
 use crate::machine::core::kfunction::KFunction;
@@ -79,7 +79,7 @@ pub type KoanRegion = Region<KoanStorageProfile>;
 // region is borrowed, so a held `&Region` keeps any pointee alloc'd in it (or a strict ancestor it
 // roots) at a fixed address — the bound the consumer-pull lift's frameless re-anchor relies on to
 // witness the destination lifetime.
-unsafe impl<W: crate::machine::core::region::StorageProfile> crate::witnessed::Witness
+unsafe impl<W: crate::witnessed::StorageProfile> crate::witnessed::Witness
     for Region<W>
 {
 }

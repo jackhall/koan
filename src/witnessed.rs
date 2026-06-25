@@ -25,6 +25,9 @@ use std::rc::Rc;
 
 use stable_deref_trait::StableDeref;
 
+mod region;
+pub use region::{Region, StorageProfile, Stored};
+
 #[cfg(test)]
 mod tests;
 
