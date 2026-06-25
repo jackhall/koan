@@ -21,8 +21,10 @@ surface hands back a bare `&'a T` holding only `&KoanRegion`, with no handle to 
   witness.
 - `alloc_function` (~3 sites) and `alloc_scope` (~12 sites) invert so the value is built *inside*
   the witness closure and the call returns a `Witnessed`: region-pure parts through `yoke`, a
-  cross-region reference — a captured scope, a child scope's `outer`/`root` — through `merge`
-  against the already-witnessed referent. The two pilot families carry no `Witnessed::new`
+  reference to a pre-existing region-resident value — a captured scope, a child scope's
+  `outer`/`root` — through `merge` against the already-witnessed referent (the foreign borrow the
+  `for<'b>` brand rejects; `merge_pin` keeps the descendant frame witness, which already pins any
+  ancestor region via its `outer` chain). The two pilot families carry no `Witnessed::new`
   afterward, proving the plumbing end to end.
 - A scope or function an inverted site references is witnessed *before* that site (the bottom-up
   order), so no foreign `&'a` borrow is captured into a `for<'b>` closure.
@@ -30,10 +32,20 @@ surface hands back a bare `&'a T` holding only `&KoanRegion`, with no handle to 
 
 **Directions.**
 
-- *`yoke` for region-pure leaves, `merge` for cross-region — decided.* A value referencing another
-  region-resident value (a `Scope`'s parent, a `KFunction`'s capture) cannot be `yoke`d — the
-  `for<'b>` brand rejects the foreign borrow — so it is `merge`d against that referent's carrier;
-  `yoke` covers only owned / region-derived parts.
+- *`yoke` for region-pure leaves, `merge` for pre-existing region-resident references — decided.* A
+  value referencing another region-resident value (a `Scope`'s parent, a `KFunction`'s capture)
+  cannot be `yoke`d — the `for<'b>` brand rejects the foreign borrow — so it is `merge`d against that
+  referent's carrier, whether same-region (the common case, `merge_pin` trivial) or an ancestry-pinned
+  region (`merge_pin` keeps the descendant frame witness); `yoke` covers only owned / region-derived
+  parts.
+- *Capturing the externally-witnessed scope mints its merge operand — decided.* The per-call child
+  scope ([FrameStorage self-reference removal](framestorage-self-reference.md)) carries no bundled
+  witness, so a `KFunction` capturing it has nothing to `merge` against directly; the inverted site
+  mints a self-witnessed scope operand from the frame `Rc` it already holds — co-located (the scope
+  lives in that frame's region) and distinct from the frame's own external handle. This does not
+  regress TCO: `try_reset_for_tail` ([`arena.rs`](../../src/machine/core/arena.rs)) checks the
+  `Rc<CallFrame>` shell, while an escaping capture pins `FrameStorage` (a separate `Rc`), so a
+  captured frame is kept exactly when it should be.
 - *Construction inversion, not post-hoc bundling — decided.* Each site moves its build into the
   witness closure; `region.alloc_*` is not wrapped after the fact, because a `for<'b>` closure
   cannot accept an already-built `T<'a>`. `Witnessed::new` (pairing a built value with an asserted

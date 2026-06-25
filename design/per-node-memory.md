@@ -93,11 +93,18 @@ unstorable as a single node carrier. With it, the invariant holds:
 > that pins them all; the result seals as one unit. Wrapper count is O(1) per node,
 > not O(data size).
 
-In Koan: the cross-region case is a closure capturing a parent scope — a `KFunction`
-in one cart's region bound into a `Scope` in another, sealed under the descendant
-cart whose `FrameStorage.outer` chain keeps the ancestor region live. The
-same-region case (a list assembled in one call's arena) is the common one;
-`merge_pin` trivially keeps either witness and drops a redundant `Rc`.
+In Koan, `merge`'s trigger is *referencing a pre-existing region-resident value* — the
+foreign borrow a `yoke` closure would reject — and it is the **same-region** case almost
+always: a list assembled in one call's arena, or a closure capturing its defining scope (a
+`KFunction` is allocated *into that scope's region*, so the capture is co-located), where
+`merge_pin` trivially keeps either witness and drops a redundant `Rc`. The genuinely
+cross-region merges are *ancestry-related* — a scope or function in a per-call frame
+referencing the run-global root (or a lexical-ancestor scope) — where the descendant frame
+`Rc`'s `outer` chain already pins the ancestor region, so `merge_pin` keeps the frame witness
+and subsumes the ancestor's. The case `merge` *cannot* take — a value whose backing reaches an
+**independent, dying** region — is `transfer_into` (below) instead: there the dominating
+witness is the dying source, so `merge` would seal under a backing about to drop, and the
+witness must become the held *set* of both.
 
 **`map` — advance a value already witnessed.** Generic: `map` consumes a carrier,
 re-anchors it at a brand, transforms `T::At<'b> → P::At<'b>`, and re-seals under the
@@ -134,6 +141,17 @@ peg `FrameStorage`'s refcount and defeat the `Rc::get_mut` uniqueness check TCO 
 reuse depends on. So the scope-pointer handle — an erased scope recovered against the
 frame `Rc` — *is* the externally-witnessed sealed carrier, and collapses into this
 one substrate rather than a scope-specialized erasure.
+
+This split is what keeps self-witnessing cycle-free. A self-witnessed carrier's strong frame
+`Rc` rides the *carrier*, which a node holds *outside* the region it witnesses; `merge` folds
+every intermediate into that one carrier (the *one wrapper per node* invariant above), so no
+region-resident value strong-owns its own frame — the value in-region holds only non-owning
+pointers (a `BoundedScopePtr`, a `Weak` `region_owner`). The per-call scope is the one value held
+*inside* the frame, which is exactly why it stays externally-witnessed. A value that *captures*
+the scope therefore has no bundled scope witness to `merge` against: it mints its merge operand
+from the frame `Rc` the builder already holds — co-located, since the scope lives in that frame's
+region — so the capturing carrier's witness set gains that `Rc` and the escaping closure pins the
+frame exactly as a node result does.
 
 **Opening.** Generic: `open` is the one accessor — a rank-2
 `open<R>(&self, for<'b> FnOnce(Live<'b, T>) -> R) -> R`. Between calls the carrier is

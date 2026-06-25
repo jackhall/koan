@@ -49,6 +49,10 @@ about to be copied out.
   anchor — a separation `Witnessed<T, W>` preserves (`T` holds the structural scope reference, `W`
   the liveness set). The set must include **every** region a reached captured scope lives in, so
   `region_owner.upgrade()` still resolves; this subsumes lift's `existing.is_some()` re-anchor gate.
+  At this item's landing the walk still assembles the set — only the pilot families are inverted; once
+  [`alloc_object`](alloc-object-witnessed.md) / [`alloc_ktype`](alloc-ktype-witnessed.md) finish the
+  inversion, every reached region is already named by the carrier's witness set (folded in by `merge`
+  at construction), read off the carrier, retiring the structural walk entirely.
 - *Set representation — open.* The regions form a *tree* (a closure over closures branches lineages),
   flattened to the set by the walk; `SmallVec<[Rc<FrameStorage>; 1]>` inline (a singleton in the
   common single-lineage case), deduplicated by region pointer with `outer`-chain subsumption dropping

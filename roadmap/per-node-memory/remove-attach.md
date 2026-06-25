@@ -7,12 +7,15 @@ a single access verb.
 accessor that lets a re-anchored reference ride up the dispatcher call stack during migration. Once
 the carrier and read migrations land, its only remaining justification — escaping references — is
 gone, but the accessor and its externally-witnessed read path still exist as a second access verb
-alongside `open`.
+alongside `open`. (Its self-witnessed twin, the transitional `read`, is retired in parallel by
+[value-reads-to-open](value-reads-to-open.md); this item clears `attach`, so the two reach the
+single-access-verb end-state together.)
 
 **Acceptance criteria.**
 
-- `Sealed` exposes a single access verb, `open`; `attach` and the externally-witnessed
-  witness-borrow read path are deleted, and no call site references them.
+- `Sealed` exposes a single access verb, `open`: `attach` and the externally-witnessed
+  witness-borrow read path are deleted here, the self-witnessed `read` having been deleted by
+  [value-reads-to-open](value-reads-to-open.md), and no call site references either.
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` clean.
 
 **Directions.**

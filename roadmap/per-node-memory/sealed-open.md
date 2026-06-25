@@ -35,7 +35,8 @@ sealed boundary marking that nothing is borrowed between steps.
   would force every caller into CPS (the [value-reads-to-open](value-reads-to-open.md) work). The
   borrow-bounded `read` keeps the readers borrow-returning and the callers unchanged — the
   self-witnessed dual of [`attach`](externally-witnessed-attach.md), and like it retired once the
-  consumers move to `open`.
+  consumers move to `open` (by [value-reads-to-open](value-reads-to-open.md), as `attach` is by
+  [remove-attach](remove-attach.md)).
 - *Reroute storage, not callers — decided.* This item changes only the slot's storage type and
   the `read_result` internals; converting the result-slot *callers* to `open`-only is the
   separate [value-reads-to-open](value-reads-to-open.md) item, so this stays one PR.
