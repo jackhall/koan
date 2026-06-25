@@ -14,7 +14,10 @@ soundness rests on the prose invariant that the held `Rc` heap-pins the region:
 - **Child-scope recovery** — the child `Scope` is stored as an `ErasedScopePtr` and recovered
   through [`ErasedScopePtr::reattach_witnessed`](../../src/machine/core/scope_ptr.rs); the frame
   `Rc` is passed as the witness, so the re-anchored *lifetime* is compiler-bounded and the
-  residual `unsafe` is the `NonNull::as_ref` deref.
+  residual `unsafe` is the `NonNull::as_ref` deref. This `as_ref` is a read-side deref of a scope
+  that lives *in the arena* (the carrier holds a pointer, not the scope inline), and the same
+  `reattach_witnessed` serves the `YokedChild` reader — so retiring it is not a property of the
+  frame restructure alone (see Directions).
 - **Region re-exposure** — [`CallFrame::with_frame_interior`](../../src/machine/core/arena.rs)
   re-exposes the same region at a free `'a` for the seed binds through `pin_deref(self.region())`.
 - **The `pin_deref` primitive** — [`reattach.rs`](../../src/machine/core/reattach.rs), the
@@ -28,8 +31,13 @@ The ~73 scope-handle reads (`scope_for_bind` / `scope_bounded` / `current_scope`
 
 - The per-call child scope rides an externally-witnessed [`Sealed`](externally-witnessed-attach.md)
   carrier — erased into the frame's own region, re-anchored at access against the `CallFrame`'s held
-  `Rc` through `attach` — and the three `unsafe` tokens (the `reattach_witnessed` `as_ref`, the
-  `with_frame_interior` `pin_deref`, and the `pin_deref` primitive) are deleted.
+  `Rc` through `attach` — and the frame's own `reattach_witnessed` call (`arena.rs`) is gone.
+- The two `pin_deref` `unsafe` tokens — the `with_frame_interior` region re-exposure and the
+  `pin_deref` primitive it solely feeds — are deleted; the seed binds reach the region through the
+  witnessed carrier instead.
+- The `reattach_witnessed` `as_ref` is deleted: `ErasedScopePtr` stores a `&'static Scope` (via
+  `erase_to_static`) recovered through `reattach_ref_with`, retiring the token for the frame child
+  scope and the `YokedChild` reader that shares the carrier — so all three audited tokens are gone.
 - No `ouroboros` (or other self-referential-struct) dependency is added; the region↔child-scope loop
   dissolves into the substrate rather than being machine-generated.
 - TCO frame reuse preserves the `Rc::get_mut` uniqueness check — the child scope's carrier bundles no
@@ -39,11 +47,12 @@ The ~73 scope-handle reads (`scope_for_bind` / `scope_bounded` / `current_scope`
   `scope_for_bind`, `scope_bounded`, `current_scope`, and the scheduler-side `reattach_node_scope`.
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` are clean.
 
-**Out of scope.** This change reaches exactly the three tokens tied to the intra-`FrameStorage`
-region↔child-scope loop. It does **not** touch the cross-frame `BoundedScopePtr::get` `as_ref` and its
-sole-caller `reattach_ref`, which recover the outer/captured/root link a single struct's
-self-reference cannot subsume; `ErasedScopePtr` survives for `NodeScope::YokedChild`, a cross-node
-erasure outside this struct.
+**Out of scope.** This change targets the `FrameStorage` region↔child-scope loop. It does **not**
+touch the cross-frame `BoundedScopePtr::get` `as_ref` and its sole-caller `reattach_ref`, which
+recover the outer/captured/root link a single struct's self-reference cannot subsume. The
+`YokedChild` carrier stays an `ErasedScopePtr` (a cross-node erasure outside this struct), but the
+storage switch (`NonNull` → `&'static Scope`, see Directions) retires the shared `reattach_witnessed`
+`as_ref` for it too; migrating the `YokedChild` carrier itself to `Sealed` stays out of scope.
 
 **Directions.**
 
@@ -54,6 +63,15 @@ erasure outside this struct.
 - *Externally-witnessed, not bundled — decided.* The child scope's carrier supplies its witness at
   `attach` from the `CallFrame`'s `Rc`; bundling a clone would peg `FrameStorage`'s refcount and
   defeat the TCO uniqueness check `try_reset_for_tail` depends on.
+- *Retire the `reattach_witnessed` `as_ref` by storing `&'static Scope` — decided.* The `as_ref` is
+  a read-side deref of an arena-resident scope (the carrier holds a `NonNull`, not the scope inline),
+  shared with the `YokedChild` reader. No `&mut Scope` exists in the crate (mutation is interior
+  `RefCell`), so `ErasedScopePtr` stores a `&'static Scope` via the safe `erase_to_static` and
+  recovers it through `reattach_ref_with` — no `as_ref` — retiring the token for the frame child
+  scope *and* `YokedChild` at once (shared carrier storage). A proxy Miri spike — a `&'static` shared
+  ref stored into a `typed_arena`, the arena grown 512× and interior-mutated through the stored ref
+  under tree borrows — is clean (0 UB, 0 leaks), confirming the stored reference survives the arena's
+  later allocations; the implementation re-runs the real scope/lift slate to confirm in situ.
 - *Continuation / seed-bind reads — decided.* A value crossing the step boundary lifts through the
   shipped [`yoke`](../../src/witnessed.rs) / `merge` bundle (or
   [`transfer_into`](transfer-into-lift.md)), not by widening the scope's lifetime.

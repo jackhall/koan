@@ -133,6 +133,11 @@ impl<'a> BoundedScopePtr<'a> {
 /// the fabrication hazard is concentrated entirely in the single [`Self::reattach_witnessed`].
 #[derive(Clone, Copy)]
 pub struct ErasedScopePtr {
+    /// Raw `NonNull` into the arena, deref'd by `reattach_witnessed` (the lone `as_ref`) under a
+    /// held witness. The deref is removable: no `&mut Scope` exists (mutation is interior `RefCell`)
+    /// and a stored `&'static Scope` survives `typed_arena` growth under tree borrows, so the
+    /// carrier could hold a reference and recover it via `reattach_ref_with` with no `as_ref` — see
+    /// [framestorage-self-reference](../../../roadmap/per-node-memory/framestorage-self-reference.md).
     ptr: NonNull<Scope<'static>>,
 }
 

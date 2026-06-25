@@ -64,10 +64,17 @@ return a reference captured from its environment (a foreign `&'x` would need
 owned*, and co-location (the witness pins *this* value's references) holds by
 construction rather than by assertion. The witness enters here, as a parameter,
 because there is no prior carrier to inherit it from: `yoke` is the door through
-which a value first becomes witnessed. In Koan: the closure is an expression's
-allocation body — `region.alloc_object(…)`, building a `Scope`, constructing a
-`KFunction` that captures it — run into the call's own arena. `region.alloc` *is* a
-`yoke` whose closure is the single allocation.
+which a value first becomes witnessed. In Koan: an `alloc` site inverts so its
+construction runs *inside* the closure — a region-pure leaf
+(`region.alloc_object(…)` over owned or region-derived parts) is a `yoke` whose
+closure is the single allocation. A value that references *another* region-resident
+value — a `Scope` naming its parent, a `KFunction` capturing one — is folded by
+`merge` (below), not `yoke`: that reference arrives as a witnessed carrier bound in
+at the shared brand, never as a foreign borrow the `for<'b>` closure would reject.
+Because the construction body moves inside the carrier, the live `Witnessed` is the
+allocation's result; `Witnessed::new` — pairing an *already-built* value with an
+asserted-co-located witness — is the transitional rung each family climbs off as it
+inverts.
 
 **`merge` — fold many region-resident values into one.** Generic: a value built
 from references into *two* regions cannot be bundled with one witness by `yoke`
@@ -115,7 +122,7 @@ by where the witness lives. The **self-witnessed** form bundles `W` (the
 `Sealed<T, W>` above): for a value *minted* into a fresh region whose pin nothing
 else holds. The **externally-witnessed** form carries *no* bundled witness; the
 holder already pins the backing and supplies it at `attach`
-(`attach<'b, 'w>(&'w self, &'w W) -> Live<'b>`). Bundling a witness the carrier does
+(`attach<'w>(&'w self, &'w W) -> Live<'w>`, capped at the witness borrow). Bundling a witness the carrier does
 not need would be a redundant second owner — and, when the witness is
 reference-counted, an extra count the holder's own uniqueness checks must subtract.
 `yoke`, which moves `W` into the bundle, builds the self-witnessed form; the
@@ -137,13 +144,22 @@ like RAII while accessed — borrow-checked, references confined — but instead
 dropping, go opaque until the next access.* No `'b`, no access; a value that must
 outlive the window leaves it only as an owned copy or by transfer.
 
-**Transfer.** Generic: `transfer_into` is the safe relocation — it copies the
-sealed value into a *consumer's* storage, witnessed by the **destination** region,
-and hands it back at the destination's lifetime. The destination region is the
-witness, so the copy is borrow-checked end to end. This closes the one case `open`
-cannot: a value whose source backing is dying but whose consumer outlives it. In
-Koan: the consumer-pull lift across a dependency edge — recast as a borrow against
-the consumer's region rather than an audited relocation reattach.
+**Transfer.** Generic: `transfer_into` is the safe relocation — it moves the sealed
+value into a *consumer's* storage at the destination's lifetime, keeping every region
+the value still reaches alive by holding that region's frame `Rc`. Copying is not an
+option: a captured closure may reference anything reachable from its scope, and a
+region carries no per-value reachability map, so the source regions are *kept*, not
+rebuilt. The carrier is therefore witnessed by the **set** of regions the value
+reaches — the destination it was relocated into, plus each source region a retained
+closure still borrows. These regions form a tree, not a chain — a closure capturing
+closures branches into independent lineages — flattened into the set; a value with no
+cross-region reference is the degenerate singleton (the destination alone). This is **not** a `merge`: the source is a dying
+*descendant* of the destination (its ancestry pins the destination, not the reverse),
+so no single dominating witness exists — the set is held whole and composed by union,
+since splicing the source into the destination's `outer` chain to collapse it risks
+re-forming the `src`↔`dst` cycle. This closes the one case `open` cannot: a value
+whose source backing is dying but whose consumer outlives it. In Koan: the
+consumer-pull lift across a dependency edge.
 
 ## Why reads are safe — and where the one escape hatch sits
 
@@ -158,9 +174,9 @@ borrow outliving its window.
 One concession is retained for migration. `open`-only forces the entire per-step
 consumption to nest inside the closure; where a re-anchored reference would
 otherwise ride up the dispatcher call stack, that becomes either copy-out or a CPS
-rewrite. A borrow-bounded `attach<'b, 'w>(&'w self, &'w W) -> Live<'b> where 'b: 'w`
-accessor — re-anchoring at a lifetime *bounded by the witness borrow* rather than a
-free `'b` — is sound (the witness pin outlives the borrow, a fact the compiler
+rewrite. A borrow-bounded `attach<'w>(&'w self, &'w W) -> Live<'w>`
+accessor — re-anchoring *capped at the witness borrow* `'w` rather than at a
+free `'b` that could be widened past it — is sound (the witness pin outlives the borrow, a fact the compiler
 checks) and lets such a reference flow up the stack without a copy. It is a
 transitional accessor: the substrate's destination is a single access verb, and
 `attach` is slated for removal once the consumption paths are restructured onto
@@ -197,13 +213,14 @@ it, then `attach`'s removal:
 - [Externally-witnessed sealed form and `attach`](../roadmap/per-node-memory/externally-witnessed-attach.md)
   — the witness-supplied-at-access shape over the shipped witness-borrow reattaches.
 - [`transfer_into` and closing the lift relocation unsafe](../roadmap/per-node-memory/transfer-into-lift.md)
-  — the destination-witnessed relocation verb.
+  — the destination-witnessed relocation verb; the regions a relocated value still
+  reaches are pinned by the carrier's witness set, the per-value frame anchor retired
+  into it.
 - [FrameStorage self-reference removal](../roadmap/per-node-memory/framestorage-self-reference.md)
   — the per-call child scope as an externally-witnessed sealed carrier, dissolving the
   region↔child-scope `unsafe` tokens.
-- [Migrate `vend_carrier` sites onto `Sealed`](../roadmap/per-node-memory/migrate-vend-carrier.md)
-  and [`reattach_*_with` sites](../roadmap/per-node-memory/migrate-reattach-helpers.md)
-  — retiring the loose witness-borrow wrappers onto the access methods.
+- [Migrate the loose witness-borrow wrappers onto `Sealed`](../roadmap/per-node-memory/migrate-reattach-helpers.md)
+  — moving the `vend_carrier` and `reattach_*_with` sites onto the access methods.
 - [Production witness impls and the `alloc` plumbing](../roadmap/per-node-memory/alloc-witness-plumbing.md),
   then [`alloc_object`](../roadmap/per-node-memory/alloc-object-witnessed.md) and
   [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) returning `Witnessed`

@@ -27,10 +27,8 @@ alongside `open`.
 
 **Requires:**
 
-- [Migrate `vend_carrier` sites onto `Sealed`](migrate-vend-carrier.md) — clears the
-  continuation / contract consumers.
-- [Migrate `reattach_*_with` sites onto `Sealed`](migrate-reattach-helpers.md) — clears the
-  value-path reference reattaches.
+- [Migrate the loose witness-borrow wrappers onto `Sealed`](migrate-reattach-helpers.md) — clears
+  the continuation / contract and value-path reference reattaches.
 - [Migrate result-slot value reads to `open`](value-reads-to-open.md) — clears the value-read
   escapes.
 - [Migrate scope-handle reads to `open`](scope-reads-to-open.md) — clears the scope-read escapes.

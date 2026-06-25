@@ -413,10 +413,9 @@ carriers, allocations, and reads migrate onto it, and `attach` is retired last:
   dissolve the region↔child-scope loop by making the per-call child scope an
   externally-witnessed sealed carrier, deleting the three audited `unsafe` tokens without
   an `ouroboros` dependency.
-- [Migrate `vend_carrier` sites onto `Sealed`](per-node-memory/migrate-vend-carrier.md) — move
-  the continuation / contract carriers onto the access methods and delete the wrapper.
-- [Migrate `reattach_*_with` sites onto `Sealed`](per-node-memory/migrate-reattach-helpers.md) —
-  move the value-path reference reattaches onto the access methods and delete the helpers.
+- [Migrate the loose witness-borrow wrappers onto `Sealed`](per-node-memory/migrate-reattach-helpers.md) —
+  move the `vend_carrier` continuation / contract and the `reattach_*_with` sites onto the access
+  methods and delete the four wrappers.
 - [Production witness impls and the `alloc` witness plumbing](per-node-memory/alloc-witness-plumbing.md) —
   the production `WitnessRegion` / `MergeWitness` impls, owning-`Rc` threading, and a pilot family.
 - [`alloc_object` returns `Witnessed`](per-node-memory/alloc-object-witnessed.md) — convert the

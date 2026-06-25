@@ -15,8 +15,12 @@ on a sealed node-storage form.
 **Acceptance criteria.**
 
 - `Sealed<T, W>` has a witness-less form, built without moving a witness into the bundle, read
-  through `attach<'b, 'w>(&'w self, &'w W) -> Live<'b, T> where 'b: 'w` — re-anchoring at a
-  lifetime bounded by the witness borrow.
+  through `attach<'w>(&'w self, &'w W) -> Live<'w, T>` — re-anchoring **capped at** the witness
+  borrow `'w`, exactly as the shipped [`vend_carrier`](../../src/witnessed.rs) (`-> T::At<'w>`) and
+  [`Witnessed::read`](../../src/witnessed.rs) (`-> T::At<'_>`) do; a reference carrier returns the
+  `&'w T::At<'b>` form of [`reattach_ref_with`](../../src/witnessed.rs) (borrow `'w`, content `'b`
+  free). The content does **not** ride a free `'b: 'w` that outlives the witness — that escaping
+  shape is `open`'s rank-2 `for<'b>` brand, not `attach`'s.
 - `attach` carries a self-contained Miri tree-borrows proof (round-trip, and
   refuses-when-the-anchor-is-widened) distinct from `open`'s rank-2 brand.
 - The shipped `vend_carrier` / `reattach_*_with` functions are reimplemented as thin delegates
@@ -33,7 +37,7 @@ on a sealed node-storage form.
 - *`attach` is transitional — decided.* The substrate's destination is the single `open` verb;
   `attach` exists so a re-anchored reference can ride up the dispatcher call stack without a copy
   during migration, and is retired by [remove `attach`](remove-attach.md). The call-site
-  retirements ([vend](migrate-vend-carrier.md) / [helpers](migrate-reattach-helpers.md)) prefer
+  retirements (the [wrapper migration](migrate-reattach-helpers.md)) prefer
   `open` + copy-out and reach for `attach` only where a reference genuinely escapes, to minimize
   the double-touch before removal.
 
@@ -48,7 +52,5 @@ on a sealed node-storage form.
 
 - [FrameStorage self-reference removal](framestorage-self-reference.md) — the per-call child
   scope is its first production consumer.
-- [Migrate `vend_carrier` sites onto `Sealed`](migrate-vend-carrier.md) — retires one of the
-  wrappers this reimplements.
-- [Migrate `reattach_*_with` sites onto `Sealed`](migrate-reattach-helpers.md) — retires the
-  others.
+- [Migrate the loose witness-borrow wrappers onto `Sealed`](migrate-reattach-helpers.md) — retires
+  the wrappers this reimplements.
