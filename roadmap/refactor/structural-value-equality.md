@@ -30,7 +30,7 @@ Separately, `KType` impls `PartialEq` only *same-lifetime*
 ([`impl<'a> PartialEq for KType<'a>`](../../src/machine/model/types/ktype.rs)), so a `KType<'a>` cannot
 be compared to a `KType<'b>` without coercion. The dispatch-resolution decouple (threading a scope at
 an independent `'b` so `resolve_dispatch` no longer ties scope = expr = result; see
-[FrameStorage self-reference removal](framestorage-self-reference.md)) needs exactly this comparison,
+[FrameStorage self-reference removal](../per-node-memory/framestorage-self-reference.md)) needs exactly this comparison,
 and works around it with a read-only `unsafe` lifetime transmute in
 [`KType::accepts_part`](../../src/machine/model/types/ktype_predicates.rs) (coercing the matched part
 to the type's lifetime for the structural compare).

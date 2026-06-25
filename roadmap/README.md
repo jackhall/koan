@@ -85,7 +85,7 @@ What's shipped that the open items below build on:
   through a `PostStep` token off the slot's returned frame). The sole surviving free re-exposure
   is the region half of [`CallFrame::with_frame_interior`](../src/machine/core/arena.rs)'s seed
   bind — its removal is tracked by
-  [FrameStorage self-reference removal](refactor/framestorage-self-reference.md) — and
+  [FrameStorage self-reference removal](per-node-memory/framestorage-self-reference.md) — and
   `KFunction::captured` now rides a `BoundedScopePtr`
   (see [design/per-call-region/scope-handles.md § Slot-table scope handle](../design/per-call-region/scope-handles.md#slot-table-scope-handle)).
   See [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
@@ -156,7 +156,8 @@ What's shipped that the open items below build on:
   the witness-pins-the-value invariant holds by construction) and the `merge` composition law
   (combining two carriers under one brand, re-sealed under the descendant witness whose `outer` chain
   pins both regions) have also landed — available and Miri/`compile_fail`-proven, with production
-  adoption tracked by [`region.alloc` returns `Witnessed`](refactor/region-alloc-witnessed.md). See
+  adoption tracked by the [per-node-memory](per-node-memory/) project (the `alloc`-side bundle wiring
+  begins at [`alloc-witness-plumbing`](per-node-memory/alloc-witness-plumbing.md)). See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -300,6 +301,8 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
+- [Relocate `Region<P>` into the `witnessed` module](per-node-memory/region-relocation.md)
+- [Sealed node-storage carrier and `open`](per-node-memory/sealed-open.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
@@ -314,8 +317,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Unify the two argument binders](refactor/unify-argument-binders.md)
 - [Unify the value-name lookup outcomes](refactor/unify-name-lookup-outcome.md)
 - [Unify the type-name resolution path](refactor/unify-resolution-outcome.md)
-- [Witnessed carrier module for value lifetime-erasure](refactor/witnessed-carrier.md)
-- [Co-location-enforcing `Witnessed` constructor](refactor/witnessed-colocation-constructor.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
@@ -389,6 +390,47 @@ foundation:
 - [Two-phase execution: build-time with pegged inputs, run-time resume](editor_tooling/two-phase-execution.md)
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 
+### Per-node memory — [per-node-memory/](per-node-memory/)
+
+Grow the shipped `witnessed` carrier into a generic, Koan-free substrate for per-node
+scheduler memory — a sealed node-storage form, its access verbs, and the generic bump
+allocator — then migrate the engine's value, scope, continuation, and contract carriers
+onto it. The construction primitives (`yoke` / `merge` / `with` / `map`, the
+witness-borrow reattaches) are already shipped; these items add the storage surface and
+carry the call-site migration, each sized to a single PR. The design is captured in
+[design/per-node-memory.md](../design/per-node-memory.md). The surface lands first, then the
+carriers, allocations, and reads migrate onto it, and `attach` is retired last:
+
+- [Relocate `Region<P>` into the `witnessed` module](per-node-memory/region-relocation.md) —
+  re-home the generic bump allocator beside the carrier it feeds.
+- [Sealed node-storage carrier and `open`](per-node-memory/sealed-open.md) — the opaque
+  `Sealed<T, W>` read through a rank-2 `open`, with the result slot's storage rerouted onto it.
+- [Externally-witnessed sealed form and `attach`](per-node-memory/externally-witnessed-attach.md) —
+  the witness-supplied-at-access shape, reimplementing the shipped `vend_carrier` /
+  `reattach_*_with` reattaches as `Sealed` delegates.
+- [`transfer_into` and closing the lift relocation unsafe](per-node-memory/transfer-into-lift.md) —
+  the destination-witnessed relocation that retires the one irreducible value-path `unsafe`.
+- [FrameStorage self-reference removal](per-node-memory/framestorage-self-reference.md) —
+  dissolve the region↔child-scope loop by making the per-call child scope an
+  externally-witnessed sealed carrier, deleting the three audited `unsafe` tokens without
+  an `ouroboros` dependency.
+- [Migrate `vend_carrier` sites onto `Sealed`](per-node-memory/migrate-vend-carrier.md) — move
+  the continuation / contract carriers onto the access methods and delete the wrapper.
+- [Migrate `reattach_*_with` sites onto `Sealed`](per-node-memory/migrate-reattach-helpers.md) —
+  move the value-path reference reattaches onto the access methods and delete the helpers.
+- [Production witness impls and the `alloc` witness plumbing](per-node-memory/alloc-witness-plumbing.md) —
+  the production `WitnessRegion` / `MergeWitness` impls, owning-`Rc` threading, and a pilot family.
+- [`alloc_object` returns `Witnessed`](per-node-memory/alloc-object-witnessed.md) — convert the
+  object family onto `yoke`.
+- [`alloc_ktype` returns `Witnessed`](per-node-memory/alloc-ktype-witnessed.md) — convert the
+  type family onto `yoke`.
+- [Migrate result-slot value reads to `open`](per-node-memory/value-reads-to-open.md) —
+  restructure the value reads that escape a reference up-stack onto `open` + copy-out.
+- [Migrate scope-handle reads to `open`](per-node-memory/scope-reads-to-open.md) — restructure
+  the scope reads that escape an `&Scope` up-stack onto `open` + copy-out.
+- [Remove `attach`](per-node-memory/remove-attach.md) — delete the transitional accessor once
+  every consumer is on `open`.
+
 ### Refactor — [refactor/](refactor/)
 
 Cross-cutting cleanups that keep the engine legible and fast as it grows —
@@ -413,23 +455,6 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
-- [Witnessed carrier module for value lifetime-erasure](refactor/witnessed-carrier.md) — consolidate
-  the scattered `Reattachable` / `Erased` / `retype` reattach machinery into one top-level `witnessed`
-  module whose `unsafe` is two rank-2 branded accessors (`with` / `map`), bundling each erased value
-  with its liveness witness.
-- [Co-location-enforcing `Witnessed` constructor](refactor/witnessed-colocation-constructor.md) —
-  add a constructor that *sources* a carrier from the witness's own region through a `for<'b>`
-  closure, so the witness-pins-the-value (co-location) invariant `Witnessed::new` leaves as a
-  per-call-site SAFETY note becomes structural and compile-checked.
-- [`region.alloc` returns `Witnessed`](refactor/region-alloc-witnessed.md) — wire the shipped `yoke`
-  constructor into production by making every region allocation return a value already bundled with
-  its owning frame's witness, replacing the constructor's stand-in cart with the live `Rc<CallFrame>`
-  `WitnessRegion` / `MergeWitness` impls.
-- [FrameStorage self-reference removal](refactor/framestorage-self-reference.md) — replace the
-  hand-rolled region↔child-scope loop in `FrameStorage` with an `ouroboros #[self_referencing]`
-  struct, deleting the three audited `unsafe` tokens that close it (the `reattach_witnessed`
-  `as_ref`, the `with_frame_interior` `pin_deref`, and the `pin_deref` primitive); gated on
-  reworking the decide-layer scope reads that escape `&Scope` into continuations.
 - [Unify the two argument binders](refactor/unify-argument-binders.md) — stop the builtin
   dispatch path building a whole `KFuture` just to gut `future.args`; one arg-binding path
   instead of `bind` (`Record<ArgValue>`) beside `bind_by_name` (`Record<Carried>`).

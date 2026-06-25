@@ -1,0 +1,216 @@
+# Per-node memory: the witnessed substrate
+
+A scheduler node is a long-lived object that nevertheless eventually dies, and
+between birth and death it must hold values that *borrow* from memory it does not
+own. The `witnessed` substrate is the generic, workload-independent machinery that
+makes those borrow-carrying values safe to store, move, and read across a node's
+life — a bump allocator, a liveness witness, and a small carrier surface, naming
+no Koan type. `machine` and `scheduler` both depend on it; it depends on neither.
+
+The design goal is a single safe interface over per-node memory: every access is a
+borrow the compiler checks, and the substrate's own `unsafe` is confined to a
+handful of audited lifetime retypes no caller can reach.
+
+## The core: erase-store, witness, reattach
+
+**Generic.** A value of type `T<'a>` cannot be stored in a structure that outlives
+`'a`. The substrate stores its `'static`-erased form `T<'static>` instead — sound
+because a lifetime is zero-sized, so `T<'a>` and `T<'static>` share layout — and
+re-anchors a borrow on the way out. Three pieces carry the contract:
+
+- `Reattachable` — an `unsafe` trait marking a family `{ type At<'r>; }` whose
+  representation is identical across every choice of its one lifetime. `Erased<T>`
+  stores `T::At<'static>`.
+- `Witness` — an `unsafe` marker asserting its holder pins the value's backing at a
+  fixed address while held (`StableDeref`-backed). A re-anchor is sound only while
+  a witness is held.
+- A single private `retype<A, B>` lifetime-cast, guarded by a size assert, is the
+  only place a `T::At<'a> → T::At<'b>` retype is written. Every accessor routes it.
+
+**In Koan.** Every `KObject`, `Scope`, `KFunction`, … is born in a `KoanRegion`
+whose sub-arenas store `T<'static>`. The witness is the per-call `Rc<FrameStorage>`,
+whose held `Rc` heap-pins the region for its life. The region/frame/lift mechanics
+are owned by [memory-model.md](memory-model.md); this doc owns the substrate the
+mechanics instantiate.
+
+## The bump allocator
+
+**Generic.** `Region<P>` is the erase-store engine: a set of typed sub-arenas
+parameterized by a storage profile `P`, holding `At<'static>` and handing back an
+`&'a` tied to the caller's input borrow. It keeps the typed-arena Drop discipline —
+each stored value's `Drop` runs, and touches only owned contents, never a
+lifetime-parameterized reference (sub-arenas drop together, so any cross-arena `&`
+is dead before it could be observed). This is what makes a byte-bump allocator that
+forgoes Drop (`bumpalo`) the wrong fit: the Drop discipline *is* the soundness
+argument, and dropping it would mean re-proving every stored type leak-free by hand.
+
+**In Koan.** `KoanRegion` is `Region<KoanStorageProfile>` over seven sub-arenas. An
+allocation is the substrate's `alloc`, which — see *Construction* — returns the
+value already bundled with the region's own witness, so a region-resident value is
+born co-located rather than paired with an asserted witness downstream.
+
+## Construction: `yoke`, `merge`, `map`, and one wrapper per node
+
+The carrier `Witnessed<T, W>` bundles `Erased<T>` with the witness `W` that pins it,
+so "the witness keeps the value alive" is a type invariant, not a co-stored pair
+plus a comment. Three constructors build it; their division of labour is the heart
+of the design.
+
+**`yoke` — mint a value into a region.** Generic: `yoke` hands the witness's own
+region to a rank-2 `for<'b> FnOnce(&'b Region) -> T::At<'b>` closure and bundles
+whatever it builds. Because the closure is universally quantified in `'b`, it cannot
+return a reference captured from its environment (a foreign `&'x` would need
+`'x: 'b` for every `'b`) — so the produced value's references are *region-derived or
+owned*, and co-location (the witness pins *this* value's references) holds by
+construction rather than by assertion. The witness enters here, as a parameter,
+because there is no prior carrier to inherit it from: `yoke` is the door through
+which a value first becomes witnessed. In Koan: the closure is an expression's
+allocation body — `region.alloc_object(…)`, building a `Scope`, constructing a
+`KFunction` that captures it — run into the call's own arena. `region.alloc` *is* a
+`yoke` whose closure is the single allocation.
+
+**`merge` — fold many region-resident values into one.** Generic: a value built
+from references into *two* regions cannot be bundled with one witness by `yoke`
+alone. `merge` re-anchors two carriers at one shared brand, runs a projection that
+binds one into the other, and re-seals under the **descendant** witness — the one
+whose ancestry chain transitively pins *both* regions (chosen by
+`MergeWitness::merge_pin`, which returns `None`, rejecting the merge before the
+projection runs, when neither witness pins the other). This is what keeps
+witnessed-ness at the *boundary*: without it, an aggregate of independently-witnessed
+elements would nest `Witnessed<…Witnessed<…>>` wrappers with the data and be
+unstorable as a single node carrier. With it, the invariant holds:
+
+> **One wrapper per node.** A node stores exactly one carrier, regardless of value
+> complexity. `yoke` mints leaves into a region; `merge` folds region-resident
+> values — same-region or cross-region — into one aggregate under the single witness
+> that pins them all; the result seals as one unit. Wrapper count is O(1) per node,
+> not O(data size).
+
+In Koan: the cross-region case is a closure capturing a parent scope — a `KFunction`
+in one cart's region bound into a `Scope` in another, sealed under the descendant
+cart whose `FrameStorage.outer` chain keeps the ancestor region live. The
+same-region case (a list assembled in one call's arena) is the common one;
+`merge_pin` trivially keeps either witness and drops a redundant `Rc`.
+
+**`map` — advance a value already witnessed.** Generic: `map` consumes a carrier,
+re-anchors it at a brand, transforms `T::At<'b> → P::At<'b>`, and re-seals under the
+*same* witness. It differs from `yoke` in source (an existing carrier, not a region)
+and from `with` (below) in that the brand-flavoured result is *kept* — re-sealed —
+rather than forbidden from escaping. In Koan: stepping a witnessed continuation to
+its next witnessed state without changing which cart pins it.
+
+## Storage and access: `seal`, `open`, `transfer_into`
+
+A node holds its carrier *between* run-loop steps, when nothing is being read. The
+access surface models exactly that rhythm.
+
+**Sealing.** Generic: `seal` turns the live `Witnessed<T, W>` into a `Sealed<T, W>`
+— the node-storage form, opaque between accesses, exposing no construction or
+transform. Sealing is the same operation that lifts a finalized result into a slot:
+bundle the erased value with the witness that pins it. In Koan: `finalize` sealing a
+node's terminal under its producer frame `Rc`.
+
+**Two witness forms.** Generic: a sealed carrier comes in two shapes, distinguished
+by where the witness lives. The **self-witnessed** form bundles `W` (the
+`Sealed<T, W>` above): for a value *minted* into a fresh region whose pin nothing
+else holds. The **externally-witnessed** form carries *no* bundled witness; the
+holder already pins the backing and supplies it at `attach`
+(`attach<'b, 'w>(&'w self, &'w W) -> Live<'b>`). Bundling a witness the carrier does
+not need would be a redundant second owner — and, when the witness is
+reference-counted, an extra count the holder's own uniqueness checks must subtract.
+`yoke`, which moves `W` into the bundle, builds the self-witnessed form; the
+externally-witnessed form is built with the witness-less `erase` and read against an
+external pin. In Koan: a node result is self-witnessed under its producer frame `Rc`;
+the per-call child scope is externally-witnessed — it lives in the frame's own
+region, the `CallFrame` already holds the pinning `Rc`, and bundling a clone would
+peg `FrameStorage`'s refcount and defeat the `Rc::get_mut` uniqueness check TCO frame
+reuse depends on. So the scope-pointer handle — an erased scope recovered against the
+frame `Rc` — *is* the externally-witnessed sealed carrier, and collapses into this
+one substrate rather than a scope-specialized erasure.
+
+**Opening.** Generic: `open` is the one accessor — a rank-2
+`open<R>(&self, for<'b> FnOnce(Live<'b, T>) -> R) -> R`. Between calls the carrier is
+`Erased`: no live reference exists. Each `open` is a borrow-scoped window in which
+references go live, branded `'b`; `R` cannot name `'b`, so nothing branded escapes
+the window. This is the design's safety core, and the RAII analogy is exact: *behave
+like RAII while accessed — borrow-checked, references confined — but instead of
+dropping, go opaque until the next access.* No `'b`, no access; a value that must
+outlive the window leaves it only as an owned copy or by transfer.
+
+**Transfer.** Generic: `transfer_into` is the safe relocation — it copies the
+sealed value into a *consumer's* storage, witnessed by the **destination** region,
+and hands it back at the destination's lifetime. The destination region is the
+witness, so the copy is borrow-checked end to end. This closes the one case `open`
+cannot: a value whose source backing is dying but whose consumer outlives it. In
+Koan: the consumer-pull lift across a dependency edge — recast as a borrow against
+the consumer's region rather than an audited relocation reattach.
+
+## Why reads are safe — and where the one escape hatch sits
+
+The danger in any reattach is a *free, unbounded* content lifetime the caller can
+widen past the witness pin — the Miri-proven use-after-free the naive content-free
+reattach exhibits. `open`'s rank-2 brand forecloses it: the fabricated lifetime is
+universally quantified and un-nameable, so it cannot be widened or captured. Reads
+therefore lose no safety — a reference may escape the *call* (the value drives the
+step's work), but only as an owned copy or pin-bounded transfer, never as a branded
+borrow outliving its window.
+
+One concession is retained for migration. `open`-only forces the entire per-step
+consumption to nest inside the closure; where a re-anchored reference would
+otherwise ride up the dispatcher call stack, that becomes either copy-out or a CPS
+rewrite. A borrow-bounded `attach<'b, 'w>(&'w self, &'w W) -> Live<'b> where 'b: 'w`
+accessor — re-anchoring at a lifetime *bounded by the witness borrow* rather than a
+free `'b` — is sound (the witness pin outlives the borrow, a fact the compiler
+checks) and lets such a reference flow up the stack without a copy. It is a
+transitional accessor: the substrate's destination is a single access verb, and
+`attach` is slated for removal once the consumption paths are restructured onto
+`open` + copy-out.
+
+## Storage choice belongs to the workload
+
+**Generic.** The substrate is parametric over the witness `W`, and assumes nothing
+about which storage backs a given carrier. A carrier may witness a freshly-allocated
+region or borrow storage its creator already holds; the substrate routes both
+through the same surface.
+
+**In Koan.** The interpreter decides per node: a user-fn call installs a fresh
+per-call region and witnesses its values with that frame's `Rc`; a sub-expression
+node allocates into the *active* frame and witnesses with the caller's pin. A
+tail-call chain reuses one node across a sequence of fresh frames. The substrate
+imposes none of this — it is the workload's call, which is why "per-node memory" is
+the carrier a node holds, not an arena the node owns.
+
+The construction surface (`yoke` / `merge` / `with` / `map`, the witness-borrow
+reattaches) is shipped; the `Sealed` carrier (`seal` / `open` / `attach` /
+`transfer_into`), the relocation of `Region<P>` into the `witnessed` module, and the
+broad call-site migration onto the sealed surface are tracked by the per-node-memory
+roadmap project below.
+
+## Open work
+
+The [per-node-memory roadmap project](../roadmap/per-node-memory/) decomposes this into
+single-PR items — the storage surface, then the carrier / allocation / read migrations onto
+it, then `attach`'s removal:
+
+- [Relocate `Region<P>` into the `witnessed` module](../roadmap/per-node-memory/region-relocation.md)
+  — re-homing the generic bump allocator beside its carrier.
+- [Sealed node-storage carrier and `open`](../roadmap/per-node-memory/sealed-open.md)
+  — the opaque `Sealed<T, W>` / `open` storage form, with the result slot rerouted onto it.
+- [Externally-witnessed sealed form and `attach`](../roadmap/per-node-memory/externally-witnessed-attach.md)
+  — the witness-supplied-at-access shape over the shipped witness-borrow reattaches.
+- [`transfer_into` and closing the lift relocation unsafe](../roadmap/per-node-memory/transfer-into-lift.md)
+  — the destination-witnessed relocation verb.
+- [FrameStorage self-reference removal](../roadmap/per-node-memory/framestorage-self-reference.md)
+  — the per-call child scope as an externally-witnessed sealed carrier, dissolving the
+  region↔child-scope `unsafe` tokens.
+- [Migrate `vend_carrier` sites onto `Sealed`](../roadmap/per-node-memory/migrate-vend-carrier.md)
+  and [`reattach_*_with` sites](../roadmap/per-node-memory/migrate-reattach-helpers.md)
+  — retiring the loose witness-borrow wrappers onto the access methods.
+- [Production witness impls and the `alloc` plumbing](../roadmap/per-node-memory/alloc-witness-plumbing.md),
+  then [`alloc_object`](../roadmap/per-node-memory/alloc-object-witnessed.md) and
+  [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) returning `Witnessed`
+  — wiring `alloc` to return a co-located carrier in production.
+- [Migrate result-slot value reads](../roadmap/per-node-memory/value-reads-to-open.md) and
+  [scope-handle reads](../roadmap/per-node-memory/scope-reads-to-open.md) to `open`, then
+  [remove `attach`](../roadmap/per-node-memory/remove-attach.md)
+  — restructuring the consumption paths onto the single access verb.

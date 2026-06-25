@@ -1,0 +1,38 @@
+# Remove `attach`
+
+Delete the transitional `attach` accessor once every consumer is on `open`, leaving `Sealed` with
+a single access verb.
+
+**Problem.** [`attach`](externally-witnessed-attach.md) is the transitional borrow-bounded
+accessor that lets a re-anchored reference ride up the dispatcher call stack during migration. Once
+the carrier and read migrations land, its only remaining justification — escaping references — is
+gone, but the accessor and its externally-witnessed read path still exist as a second access verb
+alongside `open`.
+
+**Acceptance criteria.**
+
+- `Sealed` exposes a single access verb, `open`; `attach` and the externally-witnessed
+  witness-borrow read path are deleted, and no call site references them.
+- The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` clean.
+
+**Directions.**
+
+- *Open-only is the destination — decided.* A single access verb is the substrate's target
+  surface; this item is the cleanup that confirms no consumer still needs the transitional one.
+- *Gated on a clean residue — decided.* If a consumption path proved un-invertible and still holds
+  an `attach`, that is surfaced here rather than silently retaining the verb; the residue is closed
+  before deletion, not worked around.
+
+## Dependencies
+
+**Requires:**
+
+- [Migrate `vend_carrier` sites onto `Sealed`](migrate-vend-carrier.md) — clears the
+  continuation / contract consumers.
+- [Migrate `reattach_*_with` sites onto `Sealed`](migrate-reattach-helpers.md) — clears the
+  value-path reference reattaches.
+- [Migrate result-slot value reads to `open`](value-reads-to-open.md) — clears the value-read
+  escapes.
+- [Migrate scope-handle reads to `open`](scope-reads-to-open.md) — clears the scope-read escapes.
+
+**Unblocks:** none.

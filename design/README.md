@@ -22,6 +22,12 @@ Root concerns:
 - [memory-model.md](memory-model.md) — value ownership through
   `KoanRegion` / `CallFrame`, the storage shape, lexical scoping,
   region lifetime erasure, and the re-entrant-scope-write protocol.
+- [per-node-memory.md](per-node-memory.md) — the generic `witnessed`
+  substrate beneath the memory model: the erase-store bump allocator,
+  the liveness witness, the `yoke` / `merge` / `map` construction
+  surface with its one-wrapper-per-node invariant, and the
+  `seal` / `open` / `transfer_into` access surface for storing
+  borrow-carrying values in scheduler nodes.
 - [per-call-region/](per-call-region/README.md) — the
   single owner of the `Rc<CallFrame>` contract: anchor carriers,
   lift-time anchor decision, the `alloc_object` cycle gate, active-frame
