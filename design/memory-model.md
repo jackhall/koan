@@ -194,10 +194,13 @@ the projection runs. All keep their `unsafe` retype inside the module, so caller
 in fact routes only the safe `erase`, carrying no retype of its own.
 
 The value channel is borrow-checked end to end. The scheduler stores a finalized terminal as a single
-`Witnessed<W::Value, Option<Rc<W::Cart>>>` ([`node_store.rs`](../src/scheduler/node_store.rs)),
-bundling the erased value with its producer frame `Rc` inside `finalize` (the `None` arm is a
-frameless / run-region terminal). A read (`read_result` / `read` / `read_result_with_frame`) goes
-through `Witnessed::read`, re-anchoring to the read's own `&self` borrow — `Live<'node, W>`. Because
+`Sealed<W::Value, Option<Rc<W::Cart>>>` ([`node_store.rs`](../src/scheduler/node_store.rs)) — the
+opaque dormant form of a `Witnessed` carrier, which hides every transform (`with` / `map` / `yoke` /
+`merge`) and re-anchors only through the rank-2 destination verb `Sealed::open` or the transitional
+borrow-bounded `Sealed::read`. `finalize` bundles the erased value with its producer frame `Rc` and
+seals it (the `None` arm is a frameless / run-region terminal). A read (`read_result` / `read` /
+`read_result_with_frame`) goes through `Sealed::read` — which delegates to `Witnessed::read` —
+re-anchoring to the read's own `&self` borrow — `Live<'node, W>`. Because
 `free_one` / `finalize` need `&mut self`, the bundled frame `Rc` cannot drop while a read borrow is
 live, so the re-anchored `'node` lifetime cannot outlive the backing region: the pin-outlives-read
 fact is a borrow the compiler checks. The driver's transient reads

@@ -3,7 +3,7 @@
 Add the witness-supplied-at-access shape to `Sealed`, with its own Miri proof, and reimplement
 the shipped witness-borrow reattaches on top of it.
 
-**Problem.** A [`Sealed<T, W>`](sealed-open.md) bundles its witness `W`. A carrier whose backing
+**Problem.** A [`Sealed<T, W>`](../../src/witnessed.rs) bundles its witness `W`. A carrier whose backing
 the holder already pins (the per-call child scope; a continuation read against the frame `Rc`)
 has no way to be sealed *without* a redundant bundled witness — bundling a reference-counted
 clone would add an owner the holder's own uniqueness checks must subtract. The shipped
@@ -43,10 +43,7 @@ on a sealed node-storage form.
 
 ## Dependencies
 
-**Requires:**
-
-- [Sealed node-storage carrier and `open`](sealed-open.md) — the `Sealed` type and `open` this
-  extends.
+**Requires:** none — builds on the shipped `Sealed` / `open` substrate.
 
 **Unblocks:**
 

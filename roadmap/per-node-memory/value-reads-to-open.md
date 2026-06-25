@@ -3,9 +3,9 @@
 Restructure the result-slot value reads that escape a reference up-stack onto `open` + copy-out,
 so the value path no longer needs a returned borrow.
 
-**Problem.** With the result slot stored as [`Sealed`](sealed-open.md), `read_result` /
+**Problem.** With the result slot stored as [`Sealed`](../../src/witnessed.rs), `read_result` /
 `read_result_with_frame` are rerouted through the transitional self-witnessed
-[`read`](sealed-open.md) but still hand a re-anchored reference back to their callers, which carry
+[`read`](../../src/witnessed.rs) but still hand a re-anchored reference back to their callers, which carry
 it up the dispatcher call stack. That returned borrow is the shape `open`-only forbids; until each
 such caller copies out or inverts into a closure, the transitional `read` cannot be deleted, so
 `Sealed` keeps a second access verb on the value path.
@@ -15,8 +15,8 @@ such caller copies out or inverts into a closure, the transitional `read` cannot
 - Every result-slot value read that currently rides a re-anchored reference up-stack either copies
   the needed value out of the `open` closure or is restructured CPS so the consumption nests inside
   it; no value-path borrow escapes its access window.
-- With its callers inverted, the transitional self-witnessed `read` (added by
-  [sealed-open](sealed-open.md)) is deleted from `Sealed`, leaving the value path on `open` alone.
+- With its callers inverted, the transitional self-witnessed [`read`](../../src/witnessed.rs) is
+  deleted from `Sealed`, leaving the value path on `open` alone.
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` clean.
 
 **Directions.**
@@ -29,10 +29,7 @@ such caller copies out or inverts into a closure, the transitional `read` cannot
 
 ## Dependencies
 
-**Requires:**
-
-- [Sealed node-storage carrier and `open`](sealed-open.md) — supplies the `open` accessor and the
-  sealed result slot these reads convert onto.
+**Requires:** none — builds on the shipped `Sealed` / `open` substrate.
 
 **Unblocks:**
 

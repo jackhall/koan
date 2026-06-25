@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use super::nodes::{Node, NodeWork};
 use super::{Erased, FramedRead, Live, NodeId, Workload};
-use crate::witnessed::Witnessed;
+use crate::witnessed::{Sealed, Witnessed};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -57,17 +57,18 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
 }
 
 /// A finalized value terminal: the erased inter-node value bundled with the producer frame `Rc` that
-/// backs it (`None` for a frameless / run-region value). Read back through `Witnessed::read`.
-type FinalizedValue<W> = Witnessed<<W as Workload>::Value, Option<Rc<<W as Workload>::Cart>>>;
+/// backs it (`None` for a frameless / run-region value), held in its dormant [`Sealed`] form between
+/// steps and read back through [`Sealed::read`].
+type FinalizedValue<W> = Sealed<<W as Workload>::Value, Option<Rc<<W as Workload>::Cart>>>;
 
 enum SlotState<W: Workload> {
     PreRun(Node<W>),
     /// Node payload has been moved out by `take_for_run`. A matching
     /// `reinstall` / `finalize` / `free_one` exits this state.
     Running,
-    /// A finalized terminal: a [`Witnessed`] bundling the value (erased to `'static`) with the
+    /// A finalized terminal: a [`Sealed`] carrier bundling the value (erased to `'static`) with the
     /// producer frame `Rc` that backs it (`None` for a frameless / run-region value). A read
-    /// re-anchors the value to the read borrow through `Witnessed::read`, witnessed by the bundled
+    /// re-anchors the value to the read borrow through `Sealed::read`, witnessed by the bundled
     /// frame. Holding the frame `Rc` inside the carrier pins the producer's per-call memory until the
     /// slot is freed, so frame death moves from Done to free and a read's re-anchored lifetime cannot
     /// outlive the backing region. The pin is read by the consumer-pull lift, which copies the
@@ -160,7 +161,7 @@ impl<W: Workload> NodeStore<W> {
         self.slots[id] = SlotState::Done(
             output
                 .map(Erased::erase)
-                .map(|e| Witnessed::from_erased(e, None)),
+                .map(|e| Sealed::seal(Witnessed::from_erased(e, None))),
         );
     }
 
@@ -173,14 +174,14 @@ impl<W: Workload> NodeStore<W> {
         output: Result<Live<'_, W>, W::Error>,
         frame: Option<Rc<W::Cart>>,
     ) {
-        // Bundle the live terminal with its producer frame into a `Witnessed`: the value is erased to
-        // `'static` for storage and the co-stored frame `Rc` pins its backing region until the slot
-        // frees, so a later `read` can re-anchor it soundly. On `Err` the frame is dropped now — the
-        // error owns its data and needs no pin.
+        // Bundle the live terminal with its producer frame into a `Witnessed`, then seal it for
+        // dormant storage: the value is erased to `'static` and the co-stored frame `Rc` pins its
+        // backing region until the slot frees, so a later `read` / `open` can re-anchor it soundly.
+        // On `Err` the frame is dropped now — the error owns its data and needs no pin.
         self.slots[id] = SlotState::Done(
             output
                 .map(Erased::erase)
-                .map(|e| Witnessed::from_erased(e, frame)),
+                .map(|e| Sealed::seal(Witnessed::from_erased(e, frame))),
         );
     }
 
@@ -211,7 +212,7 @@ impl<W: Workload> NodeStore<W> {
     /// their parent. Raw — callers pass an already alias-resolved id.
     pub(super) fn read_result(&self, id: NodeId) -> Result<Live<'_, W>, &W::Error> {
         match &self.slots[id] {
-            // `Witnessed::read` re-anchors the carrier to this `&self` borrow, bounded by the bundled
+            // `Sealed::read` re-anchors the carrier to this `&self` borrow, bounded by the bundled
             // frame `Rc`: `free_one`/`finalize` need `&mut self`, so for the whole `&self` borrow the
             // frame cannot drop, so the read borrow cannot outlive the backing region.
             SlotState::Done(Ok(w), ..) => Ok(w.read()),
@@ -307,7 +308,7 @@ impl<W: Workload> NodeStore<W> {
         self.slots[id] = SlotState::Done(
             output
                 .map(Erased::erase)
-                .map(|e| Witnessed::from_erased(e, None)),
+                .map(|e| Sealed::seal(Witnessed::from_erased(e, None))),
         );
     }
 

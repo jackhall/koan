@@ -12,7 +12,9 @@
 //! [`Witnessed::with`] (borrow + read) and [`Witnessed::map`] (consume + transform) re-anchor an
 //! already-bundled carrier, [`Witnessed::yoke`] *sources* one from the witness's own region so
 //! co-location holds by construction, and [`Witnessed::merge`] combines two under one brand and
-//! re-seals under the witness that pins both.
+//! re-seals under the witness that pins both. For storage *between* accesses a carrier rests in a
+//! [`Sealed`], the opaque dormant form that hides every transform and re-anchors only through the
+//! rank-2 [`Sealed::open`].
 //!
 //! The layout machinery underneath — the [`Reattachable`] family contract, the private [`retype`]
 //! primitive, [`erase_to_static`] and the storable [`Erased<T>`] — is the same single-lifetime
@@ -500,6 +502,87 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// while the value is copied into the consumer's frame.
     pub fn witness(&self) -> &W {
         &self.witness
+    }
+}
+
+/// The dormant node-storage form of a [`Witnessed`] carrier: an opaque seal the inter-node value
+/// rests in between a node's steps, exposing neither construction nor transform — only the rank-2
+/// destination verb [`open`](Self::open) (plus a transitional borrow-bounded [`read`](Self::read)).
+/// Where [`Witnessed`] offers `with` / `map` / `yoke` / `merge` directly, `Sealed` hides them, so
+/// "this carrier is dormant — nothing is borrowed from it" is a type, not a convention. It wraps a
+/// [`Witnessed`] rather than re-storing the erased carrier, so [`retype`] stays the single audited
+/// reattach home and `Sealed` adds no `unsafe` of its own.
+pub struct Sealed<T: Reattachable, W> {
+    inner: Witnessed<T, W>,
+}
+
+impl<T: Reattachable, W: Witness> Sealed<T, W> {
+    /// Seal a live [`Witnessed`] into its dormant storage form — the only way in. `Sealed` exposes no
+    /// other constructor and no transform once sealed, so a value can re-enter circulation only
+    /// through an accessor below.
+    pub fn seal(witnessed: Witnessed<T, W>) -> Self {
+        Sealed { inner: witnessed }
+    }
+
+    /// Open the sealed carrier at a **rank-2** (`for<'b>`) brand — the destination verb. The value is
+    /// re-anchored and handed *by value* to a closure whose result `R` cannot mention the
+    /// universally-quantified `'b`, so nothing branded by the fabricated content lifetime escapes the
+    /// witness pin (the same generativity trick as [`Witnessed::with`]). The value arrives at the
+    /// `&self` borrow via [`Witnessed::read`] — witness-pinned for that borrow — and the `for<'b>`
+    /// quantifier is what forbids it leaving, so `open` carries no `unsafe` beyond the audited
+    /// [`Witnessed`] reattach. The `At<'static>: Copy` bound is the slot's value-channel bound, so the
+    /// result-slot readers can later route through `open` without strengthening it.
+    ///
+    /// The brand is load-bearing: returning the branded value out of the closure (`open(|live| live)`)
+    /// fails to compile, because `R` would have to name `'b`. This mirrors the [`Witnessed::with`] /
+    /// [`Witnessed::map`] guards.
+    ///
+    /// ```compile_fail
+    /// use koan::witnessed::{Reattachable, Sealed, Witnessed};
+    /// use std::rc::Rc;
+    ///
+    /// struct RefFamily;
+    /// // SAFETY: `&'r u32` is one type generic only in `'r`.
+    /// unsafe impl Reattachable for RefFamily {
+    ///     type At<'r> = &'r u32;
+    /// }
+    ///
+    /// let backing: Rc<Vec<u32>> = Rc::new(vec![42]);
+    /// let sealed: Sealed<RefFamily, Rc<Vec<u32>>> =
+    ///     Sealed::seal(Witnessed::new(&backing[0], Rc::clone(&backing)));
+    /// // Try to smuggle the branded value OUT of `open` — rejected by the `for<'b>` brand.
+    /// let escaped: &u32 = sealed.open(|live| live);
+    /// drop(sealed);
+    /// println!("{}", *escaped);
+    /// ```
+    pub fn open<R>(&self, f: impl for<'b> FnOnce(T::At<'b>) -> R) -> R
+    where
+        T::At<'static>: Copy,
+    {
+        // The value is read at the `&self` borrow — witness-pinned for its whole duration — and the
+        // `for<'b>` brand on `f` keeps anything content-branded from escaping into `R`. Same brand and
+        // same audited reattach as `Witnessed::with` / `read`, so `Sealed` introduces no `unsafe`.
+        f(self.inner.read())
+    }
+
+    /// Transitional borrow-bounded reader: re-anchor the value and hand it out bounded by the `&self`
+    /// borrow, delegating to [`Witnessed::read`]. Unlike [`open`](Self::open), the value *does* escape
+    /// — at the borrow lifetime, which the bundled witness keeps pinned — so the result-slot readers
+    /// stay borrow-returning and their callers unchanged. This is the self-witnessed dual of the
+    /// externally-witnessed `attach`, and like it is retired once those callers move onto `open`.
+    pub fn read(&self) -> T::At<'_>
+    where
+        T::At<'static>: Copy,
+    {
+        self.inner.read()
+    }
+
+    /// The bundled witness — the producer frame `Rc` (possibly wrapped in [`Option`]) that pins the
+    /// carrier's pointee. Cloned out by the consumer-pull lift to keep the backing region alive while
+    /// the value is copied into the consumer's frame. Hands back the witness, not the value, so it
+    /// does not weaken opacity.
+    pub fn witness(&self) -> &W {
+        self.inner.witness()
     }
 }
 

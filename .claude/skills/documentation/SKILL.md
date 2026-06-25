@@ -1,6 +1,6 @@
 ---
 name: documentation
-description: Use this skill for any work touching README.md, tutorial/, design/*.md, or roadmap/*.md (including the roadmap/README.md index) — including editing, adding, deleting, renaming, or auditing docs. Reach for it before deleting or renaming a doc, after editing one, when adding a roadmap item, when finishing a PR (to delete the now-shipped roadmap item), or when the user asks to "audit", "verify", or "fix" doc links / cross-references / roadmap dependencies. Pairs with the `tools/doclinks.py` CLI for cross-reference validation.
+description: Use this skill for any work touching README.md, tutorial/, design/*.md, or roadmap/*.md (including the roadmap/README.md index) — including editing, adding, deleting, renaming, or auditing docs. Reach for it before deleting or renaming a doc, after editing one, when adding a roadmap item, when a roadmap item's acceptance criteria are met (to delete it), or when the user asks to "audit", "verify", or "fix" doc links / cross-references / roadmap dependencies. Pairs with the `tools/doclinks.py` CLI for cross-reference validation.
 ---
 
 # documentation
@@ -62,7 +62,7 @@ These are the rules that don't survive on vibes; they need explicit tool gates.
 
 ### When a roadmap item ships
 
-The work item is no longer future work, so it leaves `roadmap/`.
+An item ships — and leaves `roadmap/` — the moment **all its acceptance criteria are met**. That is the sole trigger: it is decided by AC completion, not by which branch the work sits on, whether it is committed, or whether a PR has merged. The work item is no longer future work, so it leaves `roadmap/`.
 
 1. **Run `python3 tools/doclinks.py rm-roadmap roadmap/<item>.md`** (use `--dry-run` first if unsure). The tool deletes the file, prunes intra-roadmap dependency bullets, strips the entry from `roadmap/README.md`'s `## Open items` subsections, and regenerates the derived `## Next items` list from the graph — so dependents the delete just unblocked appear automatically. It does **not** touch design-doc prose, source comments, or the "What's shipped so far" paragraph — those are judgment calls.
 2. **Run `python3 tools/doclinks.py refs roadmap/<item>.md`** before the delete (or run `check` after) to surface the references the tool can't auto-handle: design-doc "Open work" entries, source-file `//` comments, prose mentions inside Dependencies sections.

@@ -12,7 +12,7 @@ about to be copied out.
 
 **Acceptance criteria.**
 
-- [`Sealed<T, W>`](sealed-open.md) has `transfer_into`: it relocates the value into the destination
+- [`Sealed<T, W>`](../../src/witnessed.rs) has `transfer_into`: it relocates the value into the destination
   while keeping each source region the value still reaches alive by that region's frame `Rc`
   (deep-clone is infeasible — a closure may reference anything reachable from its captured scope and
   Koan has no mechanic to compute the copy set), so the carrier is witnessed by the **set** of
@@ -61,15 +61,13 @@ about to be copied out.
   relocation seam, not an access seam — it shares only the `Sealed` type with
   [externally-witnessed-attach](externally-witnessed-attach.md) and does not use `attach`. It does
   pin with the unified set witness from
-  [alloc-witness-plumbing](alloc-witness-plumbing.md), so it sequences after that rather than
-  directly after `sealed-open`.
+  [alloc-witness-plumbing](alloc-witness-plumbing.md), so it sequences after that rather than on
+  the shipped `Sealed` substrate alone.
 
 ## Dependencies
 
 **Requires:**
 
-- [Sealed node-storage carrier and `open`](sealed-open.md) — the `Sealed` type this adds
-  `transfer_into` to.
 - [Production witness impls and the `alloc` witness plumbing](alloc-witness-plumbing.md) — the
   unified set witness this pins the relocated value with.
 
