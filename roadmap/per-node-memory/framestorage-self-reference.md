@@ -20,8 +20,8 @@ soundness rests on the prose invariant that the held `Rc` heap-pins the region:
   frame restructure alone (see Directions).
 - **Region re-exposure** — [`CallFrame::with_frame_interior`](../../src/machine/core/arena.rs)
   re-exposes the same region at a free `'a` for the seed binds through `pin_deref(self.region())`.
-- **The `pin_deref` primitive** — [`reattach.rs`](../../src/machine/core/reattach.rs), the
-  `&*ptr` home the region re-exposure routes; its sole caller is `with_frame_interior`.
+- **The `pin_deref` primitive** — `reattach.rs`, the `&*ptr` home the region re-exposure routes;
+  its sole caller is `with_frame_interior`.
 
 The ~73 scope-handle reads (`scope_for_bind` / `scope_bounded` / `current_scope` /
 `reattach_node_scope` / `reattach_witnessed`) and the ~65-site `ErasedScopePtr` /

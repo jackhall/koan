@@ -17,7 +17,6 @@ use std::rc::Rc;
 
 use typed_arena::Arena;
 
-use super::reattach::pin_deref;
 use super::scope::Scope;
 use super::scope_ptr::ErasedScopePtr;
 use crate::machine::core::kfunction::KFunction;
@@ -392,15 +391,15 @@ impl CallFrame {
             region: KoanRegion::with_escape(FrameRegionPin::new(escape_owner)),
             outer: outer_frame,
         });
-        // The child is built from the heap-pinned `storage` handle — no `'static` claim, no
-        // `pin_deref`. It derives both the region borrow and the owning `Weak` from `storage`; `outer`
-        // (a longer-lived ancestor) is brand-shortened by `child_for_frame`, so the two need no
-        // common lifetime and the outer link needs no `reattach_ref`.
+        // The child is built from the heap-pinned `storage` handle — no `'static` claim and no
+        // pointer fabrication. It derives both the region borrow and the owning `Weak` from
+        // `storage`; `outer` (a longer-lived ancestor) is brand-shortened by `child_for_frame`, so
+        // the two need no common lifetime and the outer link needs no `reattach_ref`.
         let child = Scope::child_for_frame(outer, &storage);
         // Stored at the region's real lifetime, then erased once through the safe `erase`. The
-        // local borrow of `storage` ends here (the `ErasedScopePtr` holds no borrow), so `storage`
-        // moves into the shell below; the `KoanRegion` stays at a fixed heap address behind the Rc,
-        // keeping the erased pointer valid.
+        // local borrow of `storage` ends here (the `ErasedScopePtr` holds a `&'static` reference, not
+        // a borrow of `storage`), so `storage` moves into the shell below; the `KoanRegion` stays at a
+        // fixed heap address behind the Rc, keeping the erased reference valid.
         let scope_ptr = ErasedScopePtr::erase(storage.region().alloc_scope(child));
         Rc::new(CallFrame {
             storage,
@@ -421,7 +420,7 @@ impl CallFrame {
     /// resolves to this frame's storage. `escape` is `None` (a non-dying top frame redirects
     /// nothing). The adopted run scope's borrow is erased into `scope_ptr` exactly as every
     /// [`ErasedScopePtr`] is — the fabrication hazard is deferred to the witness-bounded re-attach.
-    pub fn adopting(scope: &Scope<'_>, run_storage: Rc<FrameStorage>) -> Rc<CallFrame> {
+    pub fn adopting<'a>(scope: &'a Scope<'a>, run_storage: Rc<FrameStorage>) -> Rc<CallFrame> {
         debug_assert!(
             std::ptr::eq(run_storage.region(), scope.region as *const KoanRegion),
             "adopting run_storage must own the run-root scope's region"
@@ -494,31 +493,23 @@ impl CallFrame {
             .expect("scope_ptr is set after construction")
     }
 
-    /// Run `f` with this frame's per-call region re-exposed at a free `'a` and its child scope
-    /// re-handed at a bounded borrow. The single audited home for the *seed-side* re-anchor: the
+    /// Run `f` with this frame's per-call region and its child scope. The seed-side re-anchor: the
     /// MATCH / TRY arm and `KFunction::invoke` body seeds bind their `it` / parameters — values
     /// whose type carries the caller's `'a`, deep-cloned into this frame's region — into the child
     /// scope inside `f`.
     ///
-    /// The **region** is re-exposed at a free `'a`: this is the inherent region re-exposure the C0
-    /// verdict keeps (an `'a`-typed value must land in an `'a`-typed region, and no lifetime scheme
-    /// closes that — the frame `Rc` the caller holds heap-pins the region, so the seed's binds
-    /// outlive `f`). The **child scope** rides the bounded `scope_bounded` brand — borrow capped at
-    /// the `&Rc` receiver, content `'a` — so it is *not* fabricated free; `bind_value` matches on
-    /// the `'a` content.
-    ///
-    /// SAFETY (region re-borrow): the caller holds this frame's `Rc`, which heap-pins the region for
-    /// as long as any value `f` binds into the scope lives.
+    /// The **region** is reached through the child scope's own `region` field (`&'a KoanRegion`, a
+    /// `Copy` reference), so reading it back at the scope's content `'a` needs no separate re-borrow:
+    /// the same heap pin (this frame's `Rc`) that keeps the scope alive keeps the region it names
+    /// alive. The **child scope** rides the bounded `scope_bounded` brand — borrow capped at the
+    /// `&Rc` receiver, content `'a` — so it is *not* fabricated free; `bind_value` matches on the
+    /// `'a` content. Carries **no `unsafe`**.
     pub fn with_frame_interior<'a, R>(
         self: &Rc<Self>,
         f: impl FnOnce(&'a KoanRegion, &Scope<'a>) -> R,
     ) -> R {
-        // SAFETY: the held frame `Rc` heap-pins the region for all of `'a`, so re-borrowing the
-        // stable region pointer at `'a` is sound. This is a pointer re-borrow, not a value retype, so
-        // it routes the audited `pin_deref` rather than a bespoke `transmute`. `'a` is driven by the
-        // closure's parameter type, not a turbofish argument.
-        let region: &'a KoanRegion = unsafe { pin_deref(self.region() as *const KoanRegion) };
-        f(region, self.scope_bounded())
+        let scope: &Scope<'a> = self.scope_bounded();
+        f(scope.region, scope)
     }
 
     pub fn region(&self) -> &KoanRegion {

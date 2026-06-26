@@ -37,7 +37,7 @@ use std::ptr::NonNull;
 
 use super::scope::Scope;
 use crate::scheduler::{reattach_ref, reattach_ref_with};
-use crate::witnessed::{reattachable, Witness};
+use crate::witnessed::{erase_to_static, reattachable, Witness};
 
 /// `Reattachable` family for [`Scope`] — the family every scope-pointer re-attach (and the region's
 /// scope-erasure storage) routes through the single audited lifetime-retype. Layout-invariant: a
@@ -45,6 +45,16 @@ use crate::witnessed::{reattachable, Witness};
 pub struct ScopeFamily;
 
 reattachable!(ScopeFamily => Scope<'r>);
+
+/// `Reattachable` family for a **reference** to a [`Scope`] — `&'r Scope<'r>`. It lets a borrowed
+/// scope erase to a `&'static Scope` through the safe [`erase_to_static`] (the store side of the
+/// lifetime-free [`ErasedScopePtr`] and the frame's externally-witnessed scope carrier), so the
+/// erasure carries no `unsafe` cast. Layout-invariant: `&'r Scope<'r>` is a thin pointer independent
+/// of `'r`. Recovery routes [`ScopeFamily`] via [`reattach_ref_with`] (a `&'w Scope<'static>` →
+/// `&'w Scope<'b>`), the two families sharing one `'static`-erased representation.
+pub struct ScopeRefFamily;
+
+reattachable!(ScopeRefFamily => &'r Scope<'r>);
 
 /// A branded `Scope` pointer that can **only** be re-handed with a borrow bounded by the reader —
 /// never at a free/unbounded lifetime. The carrier owns a real `'a` (e.g. [`KFunction<'a>`], a
@@ -133,43 +143,38 @@ impl<'a> BoundedScopePtr<'a> {
 /// the fabrication hazard is concentrated entirely in the single [`Self::reattach_witnessed`].
 #[derive(Clone, Copy)]
 pub struct ErasedScopePtr {
-    /// Raw `NonNull` into the arena, deref'd by `reattach_witnessed` (the lone `as_ref`) under a
-    /// held witness. The deref is removable: no `&mut Scope` exists (mutation is interior `RefCell`)
-    /// and a stored `&'static Scope` survives `typed_arena` growth under tree borrows, so the
-    /// carrier could hold a reference and recover it via `reattach_ref_with` with no `as_ref` — see
-    /// [framestorage-self-reference](../../../roadmap/per-node-memory/framestorage-self-reference.md).
-    ptr: NonNull<Scope<'static>>,
+    /// A `&'static Scope` into the arena, erased once on the store side through the safe
+    /// [`erase_to_static`] and recovered through the witness-bounded [`reattach_ref_with`]. No
+    /// `&mut Scope` exists in the crate (mutation is interior `RefCell`) and a stored reference
+    /// survives `typed_arena` growth under tree borrows, so the carrier holds the reference outright
+    /// — the re-hand needs no `as_ref`, and the handle carries **no `unsafe`**.
+    stored: &'static Scope<'static>,
 }
 
 impl ErasedScopePtr {
-    /// Erase a live scope borrow to a storable `'static`-typed pointer for a lifetime-free carrier.
-    /// Safe to construct: it only casts a live reference to a `'static` pointer (`Scope` is
-    /// invariant, so the lifetime cannot coerce); forgetting the lifetime for storage cannot
+    /// Erase a live scope borrow to a storable `&'static Scope` for a lifetime-free carrier. Safe to
+    /// construct: [`erase_to_static`] only forgets the reference's lifetime for storage (`Scope` is
+    /// invariant, so the lifetime cannot coerce), and forgetting a lifetime for storage cannot
     /// fabricate one. The caller commits to recovering the content lifetime through
     /// [`Self::reattach_witnessed`], passing the carrier's pin as an explicit witness.
-    pub fn erase(scope: &Scope<'_>) -> Self {
+    pub fn erase<'a>(scope: &'a Scope<'a>) -> Self {
         ErasedScopePtr {
-            ptr: NonNull::from(scope).cast::<Scope<'static>>(),
+            stored: erase_to_static::<ScopeRefFamily>(scope),
         }
     }
 
     /// Re-attach bounded by a held [`Witness`] borrow — the scope-pointer analog of
     /// [`reattach_with`](crate::witnessed). The borrow `'w` is bounded by the witness `&'w W` and the
     /// scope content `'b` is left free (`'b: 'w`); the returned reference **cannot outlive `'w`**, so
-    /// it cannot escape the pin the witness holds. The unsafe `NonNull` deref is concentrated here
-    /// behind a safe signature, so call sites that hold the pinning witness (a frame `Rc`, the owning
-    /// region) carry **no `unsafe`** — the Witnessed discipline applied to a scope pointer.
+    /// it cannot escape the pin the witness holds. The stored `&'static Scope` is re-anchored through
+    /// the witness-bounded [`reattach_ref_with`], so call sites that hold the pinning witness (a
+    /// frame `Rc`, the owning region) — and this method itself — carry **no `unsafe`**: the Witnessed
+    /// discipline applied to a scope pointer.
     ///
-    /// The **signature is safe** for the same reason as
-    /// [`reattach_with`](crate::witnessed): the caller supplies a witness whose pin keeps the
-    /// pointee's region live — for a `YokedChild` the cart's `FrameStorage.outer` chain, for a
-    /// `CallFrame` its own storage `Rc` — and `'w` is bounded by the witness borrow, so the
-    /// re-anchored view cannot outrun the pin.
+    /// The witness keeps the pointee's region live — for a `YokedChild` the cart's
+    /// `FrameStorage.outer` chain, for a `CallFrame` its own storage `Rc` — and `'w` is bounded by
+    /// the witness borrow, so the re-anchored view cannot outrun the pin.
     pub fn reattach_witnessed<'w, 'b: 'w, W: Witness>(&'w self, witness: &'w W) -> &'w Scope<'b> {
-        // SAFETY: the `NonNull` points at a live `Scope` (set at construction, stable for the
-        // carrier's life); the deref is bounded to the `&'w self` receiver. The witness-bounded
-        // `reattach_ref_with` then caps the content claim at the witness pin.
-        let stored: &'w Scope<'static> = unsafe { self.ptr.as_ref() };
-        reattach_ref_with::<ScopeFamily, W>(stored, witness)
+        reattach_ref_with::<ScopeFamily, W>(self.stored, witness)
     }
 }

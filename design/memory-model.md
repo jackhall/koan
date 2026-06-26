@@ -223,18 +223,15 @@ the value path is `lift`'s own value-relocation re-anchor: a value about to be c
 and `lift_kobject` self-anchors any surviving borrow into the destination via an embedded `Rc` — the
 same self-anchoring shape as `Erased::reattach`.
 
-A sibling primitive in [`reattach.rs`](../src/machine/core/reattach.rs), `pin_deref`, owns the
-*other* unsafe shape — re-borrowing a raw `*const T` whose pointee a heap pin holds fixed. Its one
-caller is [`CallFrame::with_frame_interior`](../src/machine/core/arena.rs): the held frame `Rc`
-heap-pins the per-call region, which is re-exposed at a free `'a` for the seed binds (MATCH / TRY
-`it`, `KFunction::invoke` params). The storage engine's cycle-gate escape redirect needs no
-`pin_deref`: `Region` holds its escape target as an owning `StorageProfile::EscapeOwner` (the Koan
-`FrameRegionPin`, an `Rc<FrameStorage>` deref'd to its region), so the redirect is a borrow the
-checker proves. Erase/reattach moves a value between lifetimes; `pin_deref` recovers a reference from
-a pointer the borrow checker never tracked, so it stays in `machine::core` as the one audited home
-for that single frame-interior `&*ptr`. The
-store side carries no `unsafe` at all: each handle's `erase` builds its stored pointer with the safe
-`NonNull::from(scope).cast()`, deferring every fabrication hazard to the re-attach.
+The per-call frame's seed binds (MATCH / TRY `it`, `KFunction::invoke` params) reach the per-call
+region through the child scope's own `region` field — a `Copy` `&'a KoanRegion` reached via
+[`CallFrame::with_frame_interior`](../src/machine/core/arena.rs), pinned by the held frame `Rc` — so
+they fabricate no reference of their own. The storage engine's cycle-gate escape redirect likewise
+holds its escape target as an owning `StorageProfile::EscapeOwner` (the Koan `FrameRegionPin`, an
+`Rc<FrameStorage>` deref'd to its region), so the redirect is a borrow the checker proves. The store
+side carries no `unsafe` at all: a lifetime-free handle's `erase` forgets the scope reference's
+lifetime through the safe `erase_to_static`, and the branded `BoundedScopePtr::erase` casts a live
+reference, both deferring every fabrication hazard to the re-attach.
 
 Every family implements the `Stored` trait and routes the one gated
 [`alloc`](../src/witnessed/region.rs) engine. `anchors_to` is a required trait

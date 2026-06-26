@@ -1,9 +1,8 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena.rs: 2
-src/machine/core/reattach.rs: 2
-src/machine/core/scope_ptr.rs: 2
+src/machine/core/arena.rs: 1
+src/machine/core/scope_ptr.rs: 1
 src/machine/execute/lift.rs: 1
 src/machine/model/types/ktype_predicates.rs: 1
 src/witnessed.rs: 26
@@ -61,15 +60,15 @@ group just to silence the stale-anchor check.
   now `reattachable!`-generated.
 - `src/machine/execute/nodes.rs` — `node_scope_yoked_child_erase_reattach_roundtrip`
   pins the `NodeScope::YokedChild` erase → re-attach round-trip plus a sibling-pointer
-  region mutation — a `NonNull`-deref-then-retype shape through the scope carrier that no
-  value-family test reproduces. The re-attach now routes the safe-signature
-  `ErasedScopePtr::reattach_witnessed`, whose lone `unsafe` (the `NonNull` deref) lives in
-  `scope_ptr.rs`, so nodes.rs carries none of its own.
+  region mutation — an `erase_to_static` → `reattach_ref_with` shape through the scope carrier
+  that no value-family test reproduces. The re-attach routes the fully-safe
+  `ErasedScopePtr::reattach_witnessed` on a stored `&'static Scope`, whose only `unsafe` (the
+  shared `retype`) lives in `witnessed.rs`, so nodes.rs carries none of its own.
 - `src/machine/execute/dispatch/ctx.rs` — the `reattach_node_scope` read boundary is the
   sole production re-attach of a `YokedChild` pointer; it now passes the executing slot's
   cart `Rc` as the explicit witness to `ErasedScopePtr::reattach_witnessed`, a **safe**
   call, so ctx.rs carries no `unsafe`. The group pins that boundary end-to-end (every
-  scheduler-driving slate test); the `unsafe` it routes lives in `scope_ptr.rs`.
+  scheduler-driving slate test); the `unsafe` it routes lives in `witnessed.rs`.
 - `src/machine/core/region.rs` — the cycle-gate redirect is now a safe owning deref of
   `StorageProfile::EscapeOwner` (the Koan `FrameRegionPin`), so region.rs carries **no
   `unsafe`**. Its two groups pin safe-code invariants tree borrows can still violate: the
@@ -89,7 +88,7 @@ witness-bounded `ErasedScopePtr::reattach_witnessed`, the frame's own storage `R
 the `Rc<CallFrame>` chain that keeps per-call regions pinned across re-borrow. One test pins the
 re-attach surviving a sibling alloc; the other pins the `Rc<CallFrame>` chain keeping an outer region
 alive after its local handle drops. A third pins `ErasedScopePtr::reattach_witnessed` (via
-`CallFrame::scope_bounded`), which splits the stored erased pointer into a witness-bounded borrow
+`CallFrame::scope_bounded`), which splits the stored `&'static Scope` into a witness-bounded borrow
 and a free content lifetime — re-read alongside the collapsed `scope` / `scope_for_bind`
 accessors (`'b = 'step`) over the same child scope. `CallFrame::adopting` (the scheduler-owned run frame)
 carries the same `&Scope<'_>` erasure as `new`, over the run scope it adopts
@@ -169,8 +168,8 @@ because tree borrows catches a regression in the aliasing or rooting discipline.
 
 **MATCH on `Tagged` recursion** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — MATCH
 builds its per-call frame and seeds its `it` bind through `CallFrame::with_frame_interior`
-(region re-exposed free, child scope re-handed via the bounded `scope_bounded` brand); the
-`FrameStorage` ancestor chain keeps the call-site region alive across
+(the region reached through the child scope's `region` field, the scope re-handed via the bounded
+`scope_bounded` brand); the `FrameStorage` ancestor chain keeps the call-site region alive across
 TCO replace when a user-fn recurses through a `Tagged` parameter via MATCH.
 
 - `recursive_tagged_match_no_uaf`
@@ -192,9 +191,10 @@ unsafe site, covered under plain `cargo test`).
 - `unanchored_kfuture_with_region_borrow_does_anchor`
 
 **`KFunction::invoke` per-call frame re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
-seed bind routed through `CallFrame::with_frame_interior`: the per-call region re-exposed at a
-free `'a` (an `'a`-typed value must land in an `'a`-typed region) while the child scope rides the
-witness-bounded `scope_bounded` brand. Witnessed by the `Rc<CallFrame>` moved into
+seed bind routed through `CallFrame::with_frame_interior`: the per-call region reached through the
+child scope's `region` field at the scope's content `'a` (an `'a`-typed value must land in an
+`'a`-typed region) while the child scope rides the witness-bounded `scope_bounded` brand. Witnessed
+by the `Rc<CallFrame>` moved into
 `BodyResult::Tail`. Exercised by every user-fn invocation: repeated-call reclamation, type-op
 dispatch through a functor-call's per-call scope, and `MODULE_TYPE_OF` lift-out.
 
@@ -222,17 +222,19 @@ lifetime-agnostic `KType` equality lands (the structural-value-equality roadmap 
 - `accepts_part_lifetime_coercion_reads_soundly`
 
 **`ErasedScopePtr::reattach_witnessed` — the witness-bounded scope re-attach** ([src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs))
-— the scope-pointer analog of `reattach_with`: the two lifetime-free carriers re-anchor their child
-scope through a **safe-signature** method that takes the pinning `Rc`/region as an explicit `Witness`
-borrow, so its lone `unsafe` is the `NonNull` deref inside (the content retype routes the witnessed
-`reattach_ref_with`, whose `unsafe` is the shared `retype` in `witnessed.rs`). `CallFrame::scope` /
-`scope_for_bind` / `scope_bounded` (passing the frame's own storage `Rc`) and a scheduler node's
-`NodeScope::YokedChild` (passing the slot's cart `Rc`) both reach it — a borrow bounded by the
-witness, a free content lifetime, sound because the external witness (the frame `Rc`, which for a
-`YokedChild` pins the ancestor region via `FrameStorage.outer`) keeps the pointee live for the
-borrow. Call sites carry **no `unsafe`**. The store-side `ErasedScopePtr::erase` is the same raw-ptr
-cast as `BoundedScopePtr::erase` (trivially sound, from a reference). The `CallFrame` group exercises
-this through its own accessors; the YokedChild groups below pin it through the node carrier.
+— the scope-pointer analog of `reattach_with`: the lifetime-free `YokedChild` carrier re-anchors its
+child scope through a **fully safe** method that takes the pinning `Rc`/region as an explicit
+`Witness` borrow. The carrier holds a `&'static Scope` (erased once on the store side through the safe
+`erase_to_static::<ScopeRefFamily>`), so the re-hand is the witnessed `reattach_ref_with` on that
+stored reference with **no `unsafe`** of its own — the only `unsafe` it routes is the shared `retype`
+in `witnessed.rs`. `CallFrame::scope` / `scope_for_bind` / `scope_bounded` (passing the frame's own
+storage `Rc`) and a scheduler node's `NodeScope::YokedChild` (passing the slot's cart `Rc`) both
+reach it — a borrow bounded by the witness, a free content lifetime, sound because the external
+witness (the frame `Rc`, which for a `YokedChild` pins the ancestor region via `FrameStorage.outer`)
+keeps the pointee live for the borrow. Call sites carry **no `unsafe`**. The store-side
+`ErasedScopePtr::erase` forgets the reference's lifetime for storage through the safe
+`erase_to_static`. The `CallFrame` group exercises this through its own accessors; the YokedChild
+groups below pin it through the node carrier.
 
 **`NodeScope::YokedChild` lifetime fabrication** ([src/machine/execute/nodes.rs](../src/machine/execute/nodes.rs))
 — a cart-ancestor block scope evicted off a lifetime-free scheduler node (`NodeScope::YokedChild`) is
@@ -310,13 +312,6 @@ escape-can't-compile guards are `compile_fail` doctests on `with` / `map` / `yok
 - `sealed_extern_open_consumes_non_copy`
 - `sealed_extern_zip_opens_heterogeneous_at_one_brand`
 - `seal_option_none_opens_to_none`
-
-**`pin_deref` — raw heap-pin deref** ([src/machine/core/reattach.rs](../src/machine/core/reattach.rs))
-— the one audited raw heap-pin deref, materializing a `&'x T` from an `Rc`-pinned `*const T` (the
-self-referential region-pointer derefs the `Erased` retype can't express). Carries no minimal test of
-its own: the per-call frame's `with_frame_interior` region re-exposure routes it (the MATCH /
-TRY-WITH / `KFunction::invoke` groups), and the storage engine's escape redirect and `record_local`
-hook route it under the cycle gate and `region_alloc_while_prior_ref_live`.
 
 **`ReturnContract` re-attach — Done-boundary open** ([src/witnessed.rs](../src/witnessed.rs))
 — the contract opens at the run-loop step brand alongside the continuation (a `seal_option` optional

@@ -8,7 +8,6 @@ mod kerror;
 pub(crate) mod kfunction;
 mod lexical_frame;
 mod pending;
-mod reattach;
 mod scope;
 mod scope_id;
 mod scope_ptr;

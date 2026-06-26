@@ -678,6 +678,22 @@ impl<T: Reattachable> SealedExtern<T> {
     }
 }
 
+impl<T: Reattachable> Clone for SealedExtern<T>
+where
+    T::At<'static>: Clone,
+{
+    fn clone(&self) -> Self {
+        SealedExtern {
+            value: self.value.clone(),
+        }
+    }
+}
+
+/// A `SealedExtern` whose carrier value is `Copy` — a thin pointer family (a `&Scope`) — is itself
+/// `Copy`, so a holder can `open` a copied-out carrier each access without disturbing the stored
+/// field. The non-`Copy` carriers (a `Box<dyn FnOnce>` continuation) simply do not meet the bound.
+impl<T: Reattachable> Copy for SealedExtern<T> where T::At<'static>: Copy {}
+
 /// Seal an **optional** already-erased carrier into the externally-witnessed dormant form, folding the
 /// `Option` *inside* the seal as an [`OptionOf`] carrier — so an optional operand (the run-loop's
 /// frame-gated return contract) can [`zip`](SealedExtern::zip) into a combined open and arrive as

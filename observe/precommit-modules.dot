@@ -46,7 +46,6 @@ digraph {
     "koan::machine::core::kfunction::pick" [label="koan::machine::core::kfunction::pick"];
     "koan::machine::core::lexical_frame" [label="koan::machine::core::lexical_frame"];
     "koan::machine::core::pending" [label="koan::machine::core::pending"];
-    "koan::machine::core::reattach" [label="koan::machine::core::reattach"];
     "koan::machine::core::scope" [label="koan::machine::core::scope"];
     "koan::machine::core::scope_id" [label="koan::machine::core::scope_id"];
     "koan::machine::core::scope_ptr" [label="koan::machine::core::scope_ptr"];
@@ -165,7 +164,6 @@ digraph {
     "koan::machine::core" -> "koan::machine::core::kfunction" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::lexical_frame" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::pending" [label="owns", style="solid"];
-    "koan::machine::core" -> "koan::machine::core::reattach" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::scope" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::scope_id" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::scope_ptr" [label="owns", style="solid"];
@@ -473,7 +471,6 @@ digraph {
     "koan::machine::core::arena" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
-    "koan::machine::core::arena" -> "koan::machine::core::reattach" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::scope" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::scope_ptr" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::operators" [label="uses", style="dashed"];
