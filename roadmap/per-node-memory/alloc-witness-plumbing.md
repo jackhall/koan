@@ -10,6 +10,14 @@ surface hands back a bare `&'a T` holding only `&KoanRegion`, with no handle to 
 `Rc<FrameStorage>`, so it cannot bundle a witness even where an inverted construction would
 `yoke` or `merge` one in.
 
+Storing that owning `Rc` *on* `Region` instead — the `FrameRegionPin` cycle-gate escape `34343691`
+added to drop region.rs's last `unsafe` — is a **live leak**: an escaped closure pins its frame's
+`FrameStorage`, whose region owns the parent's `FrameStorage` back through the escape, so
+`parent → escaped closure → Rc<FrameStorage_child> → region.escape → parent` never drops. The full
+Miri slate reports it as a 1378-allocation process-exit leak (a native `Rc::strong_count` check
+confirms a real cycle, not a Miri artifact); threading the owner as a parameter here removes the
+stored back-edge rather than swapping it for a non-owning raw pointer (which would re-add the `unsafe`).
+
 **Acceptance criteria.**
 
 - `Rc<FrameStorage>` is the region-owner witness (see Directions), carrying production
@@ -28,6 +36,12 @@ surface hands back a bare `&'a T` holding only `&KoanRegion`, with no handle to 
   afterward, proving the plumbing end to end.
 - A scope or function an inverted site references is witnessed *before* that site (the bottom-up
   order), so no foreign `&'a` borrow is captured into a `for<'b>` closure.
+- The owning cycle-gate escape leaves `Region`: the redirect target is threaded as a parameter, not
+  stored as `Region`'s `FrameRegionPin` field, so an escaped closure pins only its own frame's arena
+  and no longer its parent's `FrameStorage`. This breaks the escaped-closure `run_storage` cycle (the
+  live leak in Problem) — a native `Rc::strong_count` check after an escaped-closure run shows the
+  run-root `FrameStorage` at zero strong refs once the runtime drops, and the full Miri slate clears
+  the 1378-allocation process-exit leak it reports today.
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` clean.
 
 **Directions.**
@@ -64,10 +78,12 @@ surface hands back a bare `&'a T` holding only `&KoanRegion`, with no handle to 
   `MergeWitness::merge_pin` (pick-the-descendant) generalizes to set union with `outer`-chain
   subsumption. This replaces `W::Cart = CallFrame` / `Option<Rc<CallFrame>>`; one global decision,
   landed here.
-- *Owning-`Rc` plumbing — open.* Whether `alloc_*` takes the owning `Rc<FrameStorage>` as a
-  parameter, or `Region` gains a back-reference to its frame. The former keeps `Region` free of
-  the cycle; the latter centralizes the handle. Recommended: parameter, decided per family in the
-  follow-on migrations.
+- *Owning-`Rc` plumbing — decided (parameter).* `alloc_*` takes the owning `Rc<FrameStorage>` as a
+  parameter; `Region` does **not** gain a back-reference to its frame. The parameter keeps `Region`
+  free of the cycle — and removes the stored `FrameRegionPin` escape that is the live leak above, so
+  the escaped-closure back-edge through `Region` is gone outright. Applied per family across the
+  follow-on migrations (the escape guards `alloc_object`, so the field is fully retired only once
+  [`alloc_object`](alloc-object-witnessed.md) threads it too).
 - *Pilot the smallest families — decided.* `alloc_function` / `alloc_scope` are the lowest-volume
   families, so they carry the plumbing proof; the high-volume families follow as their own items.
 
