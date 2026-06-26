@@ -499,7 +499,6 @@ digraph {
     "koan::machine::core::kerror" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::machine::core::kfunction" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::core::scope_ptr" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::model::ast" [label="uses", style="dashed"];
@@ -770,7 +769,6 @@ digraph {
     "koan::machine::execute::run_loop" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::runtime" -> "koan::machine" [label="uses", style="dashed"];
-    "koan::machine::execute::runtime" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::runtime" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::execute::runtime" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
     "koan::machine::execute::runtime" -> "koan::machine::execute" [label="uses", style="dashed"];

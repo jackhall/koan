@@ -54,10 +54,10 @@ What's shipped that the open items below build on:
   arms (one [`check_declared_return`](../src/machine/execute/finalize.rs)
   parameterized over the lifted carrier's `matches_value`/`matches_type` predicate).
 - *Region unsafe consolidation.* Every captured/defining-scope re-attach is funnelled behind two
-  audited [`scope_ptr`](../src/machine/core/scope_ptr.rs) handles, and `KoanRegion::escape` holds an
-  owning [`StorageProfile::EscapeOwner`](../src/witnessed/region.rs) (the Koan `FrameRegionPin`, an
-  `Rc<FrameStorage>` deref'd to its region) — its owner read off the captured scope's
-  `Scope::region_owner` — so the cycle-gate redirect is a borrow the compiler proves and
+  audited [`scope_ptr`](../src/machine/core/scope_ptr.rs) handles, and the cycle-gate redirect
+  recovers its target *from the value being stored* (the self-anchoring closure's captured scope
+  names its defining region, so the redirect region is reached by walking that scope's `outer` chain)
+  — so `Region` stores no escape owner, no allocation back-edge can form, and
   [`region.rs`](../src/witnessed/region.rs) carries no `unsafe`.
   The store-side erasure lives behind one `Stored` trait: all region-stored
   families route the scheduler's single audited `erase_to_static` (the safe direction of the
@@ -90,8 +90,7 @@ What's shipped that the open items below build on:
   [`CallFrame::with_frame_interior`](../src/machine/core/arena.rs)'s seed bind no longer re-exposes
   the region at a free `'a`: it reaches the region through the child scope's own `region` field
   (a `Copy` `&'a KoanRegion`), so the seed side carries no free re-exposure. The full Miri-slate
-  confirmation of the removed self-reference tokens is tracked by
-  [FrameStorage self-reference removal](per-node-memory/framestorage-self-reference.md). And
+  confirmation of the removed self-reference tokens has landed — the slate is green. And
   `KFunction::captured` now rides a `BoundedScopePtr`
   (see [design/per-call-region/scope-handles.md § Slot-table scope handle](../design/per-call-region/scope-handles.md#slot-table-scope-handle)).
   See [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
@@ -151,8 +150,8 @@ What's shipped that the open items below build on:
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Witnessed value carrier.* The scattered `Reattachable` / `Erased` / `retype` machinery now lives
   in the top-level [`witnessed`](../src/witnessed.rs) module (a sibling of `machine` / `scheduler`),
-  and a node's value slot stores a single [`Witnessed<Carried, Option<Rc<Cart>>>`](../src/witnessed.rs)
-  bundling the erased value with the producer frame `Rc` that pins it — the witness-pins-the-value
+  and a node's value slot stores a single [`Sealed<Carried, FrameSet>`](../src/witnessed.rs)
+  bundling the erased value with the producer-frame witness set that pins it — the witness-pins-the-value
   relationship is a type invariant, not a co-stored pair. Reads go through the safe `with` / `map` /
   `read` accessors (the first two rank-2 `for<'b>` branded against escape, all three `compile_fail`-
   and Miri-tested), retiring the open-coded `read_result` reattaches and `pin_carried_to_run`. The
@@ -161,10 +160,11 @@ What's shipped that the open items below build on:
   constructor `yoke` (sourcing a carrier from the witness's own region behind a `for<'b>` brand, so
   the witness-pins-the-value invariant holds by construction) and the `merge` composition law
   (combining two carriers under one brand, re-sealed under the union of their witness sets, with
-  `outer`-chain subsumption dropping a member another already pins) have also landed — available and
-  Miri/`compile_fail`-proven, with production
-  adoption tracked by the [per-node-memory](per-node-memory/) project (the `alloc`-side bundle wiring
-  begins at [`alloc-witness-plumbing`](per-node-memory/alloc-witness-plumbing.md)). See
+  `outer`-chain subsumption dropping a member another already pins) have also landed. The keystone
+  run-loop restructure and its consuming `open`, the production witness impls, the unified `FrameSet`
+  set-witness (result slot and scope handle on one region-owner type), and the value-recovered
+  cycle-gate redirect — which cleared the process-exit leak — have since landed too; the remaining
+  `alloc`-side carrier adoption is tracked by the [per-node-memory](per-node-memory/) project. See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -308,7 +308,10 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [Consuming externally-witnessed `open` and the run-loop step restructure](per-node-memory/runloop-cps-open.md)
+- [Migrate the loose witness-borrow wrappers onto `Sealed`](per-node-memory/migrate-reattach-helpers.md)
+- [Migrate scope-handle reads to `open`](per-node-memory/scope-reads-to-open.md)
+- [`transfer_into` and closing the lift relocation unsafe](per-node-memory/transfer-into-lift.md)
+- [Migrate result-slot value reads to `open`](per-node-memory/value-reads-to-open.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
@@ -411,24 +414,13 @@ migration, each sized to a single PR. The design is captured in
 consuming `open` verb are the keystone the rest rides on; carriers, allocations, and reads then
 migrate onto it, with `attach` a contingent fallback retired last:
 
-- [Consuming externally-witnessed `open` and the run-loop step restructure](per-node-memory/runloop-cps-open.md) —
-  the keystone: the consuming externally-witnessed rank-2 `open` and the run-loop step tail
-  restructured onto one universal brand (a spike proved it feasible and sound, witness collapsing to
-  the singleton start cart).
 - [Borrow-bounded `attach` fallback](per-node-memory/externally-witnessed-attach.md) —
   the borrow-bounded accessor, added only if a migration site proves it cannot nest under `open`.
 - [`transfer_into` and closing the lift relocation unsafe](per-node-memory/transfer-into-lift.md) —
   the destination-witnessed relocation that retires the one irreducible value-path `unsafe`.
-- [FrameStorage self-reference removal](per-node-memory/framestorage-self-reference.md) —
-  dissolve the region↔child-scope loop by making the per-call child scope an
-  externally-witnessed sealed carrier, deleting the three audited `unsafe` tokens without
-  an `ouroboros` dependency.
 - [Migrate the loose witness-borrow wrappers onto `Sealed`](per-node-memory/migrate-reattach-helpers.md) —
   move the `vend_carrier` continuation / contract and the `reattach_*_with` sites onto the access
   methods and delete the four wrappers.
-- [Production witness impls and the `alloc` witness plumbing](per-node-memory/alloc-witness-plumbing.md) —
-  the production `FrameSet` set-witness, owning-`Rc` threading to the `alloc_object` / `alloc_ktype`
-  surface, and the cycle-leak fix that threading enables.
 - [`alloc_object` returns `Witnessed`](per-node-memory/alloc-object-witnessed.md) — convert the
   object family onto `yoke`, retiring transfer-into-lift's structural walk.
 - [`alloc_ktype` returns `Witnessed`](per-node-memory/alloc-ktype-witnessed.md) — convert the

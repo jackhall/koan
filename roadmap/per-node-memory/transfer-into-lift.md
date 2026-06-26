@@ -59,19 +59,17 @@ about to be copied out.
   flattened to the set by the walk; `SmallVec<[Rc<FrameStorage>; 1]>` inline (a singleton in the
   common single-lineage case), deduplicated by region pointer with `outer`-chain subsumption dropping
   a member another already pins.
-- *Independent of `attach`, sequenced after the unification — decided.* `transfer_into` is a
+- *Independent of `attach`, builds on the shipped unification — decided.* `transfer_into` is a
   relocation seam, not an access seam — it shares only the `Sealed` type with
-  [externally-witnessed-attach](externally-witnessed-attach.md) and does not use `attach`. It does
-  pin with the unified set witness from
-  [alloc-witness-plumbing](alloc-witness-plumbing.md), so it sequences after that rather than on
-  the shipped `Sealed` substrate alone.
+  [externally-witnessed-attach](externally-witnessed-attach.md) and does not use `attach`. It pins
+  with the shipped unified `FrameSet` set witness (see
+  [memory-model.md § Region lifetime erasure](../../design/memory-model.md#region-lifetime-erasure)),
+  building on that rather than the shipped `Sealed` substrate alone.
 
 ## Dependencies
 
 **Requires:**
 
-- [Production witness impls and the `alloc` witness plumbing](alloc-witness-plumbing.md) — the
-  unified set witness this pins the relocated value with.
 
 **Unblocks:**
 

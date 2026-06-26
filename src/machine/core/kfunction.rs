@@ -2,12 +2,9 @@
 //! a `Body` (an action `fn` pointer or captured user-defined `KExpression`), and the
 //! lexical scope captured at definition time.
 
-use std::rc::Rc;
-
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
-use crate::machine::core::arena::FrameStorage;
 use crate::machine::core::scope_ptr::BoundedScopePtr;
 use crate::machine::core::{KError, KErrorKind, KFuture, Scope};
 use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
@@ -105,16 +102,6 @@ impl<'a> KFunction<'a> {
     /// that outlives this `KFunction<'a>` by the broader runtime-region argument.
     pub fn captured_scope(&self) -> &Scope<'a> {
         self.captured.get()
-    }
-
-    /// The `FrameStorage` that owns the captured scope's region — the cycle-gate escape owner used
-    /// when a dispatch builds a per-call frame for this function. Read straight off the captured
-    /// scope ([`Scope::region_owner`]). `Some` whenever the captured region is live (it is, at any
-    /// live call site — we hold the function, so its captured scope is alive); `None` only for a
-    /// function defined in a scope built outside any `FrameStorage` (test fixtures), which never
-    /// reaches the escape path.
-    pub fn captured_region_owner(&self) -> Option<Rc<FrameStorage>> {
-        self.captured_scope().region_owner().upgrade()
     }
 
     pub fn summarize(&self) -> String {

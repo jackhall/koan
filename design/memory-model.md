@@ -235,19 +235,21 @@ same self-anchoring shape as `Erased::reattach`.
 The per-call frame's seed binds (MATCH / TRY `it`, `KFunction::invoke` params) reach the per-call
 region through the child scope's own `region` field — a `Copy` `&'a KoanRegion` reached via
 [`CallFrame::with_frame_interior`](../src/machine/core/arena.rs), pinned by the held frame `Rc` — so
-they fabricate no reference of their own. The storage engine's cycle-gate escape redirect likewise
-holds its escape target as an owning `StorageProfile::EscapeOwner` (the Koan `FrameRegionPin`, an
-`Rc<FrameStorage>` deref'd to its region), so the redirect is a borrow the checker proves. The store
-side carries no `unsafe` at all: a lifetime-free handle's `erase` forgets the scope reference's
-lifetime through the safe `erase_to_static`, and the branded `BoundedScopePtr::erase` casts a live
-reference, both deferring every fabrication hazard to the re-attach.
+they fabricate no reference of their own. The storage engine's cycle-gate redirect recovers its
+target *from the value being stored* — the self-anchoring closure's captured scope names its defining
+region, so the redirect region is the `&'a KoanRegion` reached by walking that scope's `outer` chain
+out of the per-call region, branded by the value's own content lifetime. The frame stores no escape
+owner, so no allocation back-edge can form. The store side carries no `unsafe` at all: a lifetime-free
+handle's `erase` forgets the scope reference's lifetime through the safe `erase_to_static`, and the
+branded `BoundedScopePtr::erase` casts a live reference, both deferring every fabrication hazard to
+the re-attach.
 
 Every family implements the `Stored` trait and routes the one gated
-[`alloc`](../src/witnessed/region.rs) engine. `anchors_to` is a required trait
+[`alloc`](../src/witnessed/region.rs) engine. `escape_target` is a required trait
 method, so each family declares its cycle behavior at its impl site: `KObject` and
-`KType` walk their composite tree for a self-targeting `Rc<FrameStorage>`, while the
-families that cannot hold one — `KFunction`, `Scope`, `Module`, `Signature`, and
-`OperatorGroup` — declare `anchors_to => false`. The gate is therefore uniform and
+`KType` walk their composite tree for a self-targeting `Rc<FrameStorage>` and recover the redirect
+region from it, while the families that cannot hold one — `KFunction`, `Scope`, `Module`,
+`Signature`, and `OperatorGroup` — declare `escape_target => None`. The gate is therefore uniform and
 unbypassable by construction: `Stored` is unsealed (an in-crate extension point), but
 the substrate's `storage` bundle is private and `alloc` is the only path to it, so no
 impl can route a value around the redirect. A self-anchoring value redirects to the
@@ -373,17 +375,12 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   frame reuse, MATCH `FrameStorage.outer` chain) is enumerated in
   [per-call-region/scope-handles.md § Verification](per-call-region/scope-handles.md#verification).
 - The audit slate runs cycle-free across every unsafe site in the runtime
-  under `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB. One process-exit leak
-  remains — the cycle-gate escape's owning `Rc<FrameStorage>` back-edge through
-  `Region`, a 1378-allocation cycle that [`alloc-witness-plumbing`](../roadmap/per-node-memory/alloc-witness-plumbing.md)
-  clears by threading that owner as a parameter. The canonical
+  under `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB and zero process-exit
+  leaks, signing off the memory model as it stands today. The canonical
   slate list lives in [observe/miri_slate.md](../observe/miri_slate.md).
 
 ## Open work
 
-- [`alloc-witness-plumbing`](../roadmap/per-node-memory/alloc-witness-plumbing.md) — clears the
-  cycle-gate escape's process-exit leak (above) by threading the owning `Rc<FrameStorage>` as a
-  parameter, removing the stored back-edge through `Region`.
 - [`transfer_into` and closing the lift relocation unsafe](../roadmap/per-node-memory/transfer-into-lift.md)
   — recasts the consumer-pull lift as a borrow-checked copy, retiring the one irreducible value-path
   `unsafe` (the `reattach_value` re-anchor above).

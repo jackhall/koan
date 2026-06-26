@@ -37,12 +37,6 @@ pub(super) fn invoke_continue<'step>(
         Body::Builtin(_) => FramePlacement::Inherit,
         _ => FramePlacement::ReuseReserve {
             outer: picked.captured_scope(),
-            // The cycle-gate redirect target is `picked`'s captured region; its owner was recorded
-            // on `picked` at definition. It is live here — we hold `picked`, so its captured scope
-            // (hence its region's `FrameStorage`) is alive — so the upgrade cannot fail.
-            escape_owner: picked
-                .captured_region_owner()
-                .expect("a user FN's captured-region owner is live at its own call site"),
         },
     };
     Outcome::Continue {

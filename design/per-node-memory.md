@@ -231,31 +231,23 @@ project below.
 
 ## Open work
 
-The [per-node-memory roadmap project](../roadmap/per-node-memory/) decomposes the remaining
-work into single-PR items — the keystone run-loop restructure and its `open` verb, then the
-carrier / allocation / read migrations onto it, with `attach` a contingent fallback retired last:
+The [per-node-memory roadmap project](../roadmap/per-node-memory/) tracks the remaining migrations.
+The keystone run-loop restructure and its consuming `open`, the unified `FrameSet` set-witness, the
+production witness impls, and the value-recovered cycle-gate redirect have all landed (see [Region
+lifetime erasure](memory-model.md#region-lifetime-erasure)); what remains are the carrier,
+allocation, and read migrations onto them, with `attach` a contingent fallback retired last:
 
-- [Consuming externally-witnessed `open` and the run-loop step restructure](../roadmap/per-node-memory/runloop-cps-open.md)
-  — the keystone: the consuming externally-witnessed rank-2 `open`, and the run-loop step tail
-  restructured onto one universal brand (a spike proved it sound, the witness collapsing to the
-  singleton start cart).
-- [Borrow-bounded `attach` fallback](../roadmap/per-node-memory/externally-witnessed-attach.md)
-  — the borrow-bounded accessor, added only if a migration site cannot nest under `open`.
 - [`transfer_into` and closing the lift relocation unsafe](../roadmap/per-node-memory/transfer-into-lift.md)
   — the destination-witnessed relocation verb; the regions a relocated value still
   reaches are pinned by the carrier's witness set, the per-value frame anchor retired
   into it.
-- [FrameStorage self-reference removal](../roadmap/per-node-memory/framestorage-self-reference.md)
-  — the per-call child scope as an externally-witnessed sealed carrier, dissolving the
-  region↔child-scope `unsafe` tokens.
+- [`alloc_object`](../roadmap/per-node-memory/alloc-object-witnessed.md) and
+  [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) returning `Witnessed` — wiring
+  `alloc` to return a co-located carrier in production, retiring `transfer_into`'s structural walk.
 - [Migrate the loose witness-borrow wrappers onto `Sealed`](../roadmap/per-node-memory/migrate-reattach-helpers.md)
   — moving the remaining `reattach_with` / `reattach_ref_with` sites onto the access methods.
-- [Production witness impls and the `alloc` plumbing](../roadmap/per-node-memory/alloc-witness-plumbing.md)
-  — the production set-witness, the owning-`Rc` threading, and the cycle-leak fix — then
-  [`alloc_object`](../roadmap/per-node-memory/alloc-object-witnessed.md) and
-  [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) returning `Witnessed`, wiring
-  `alloc` to return a co-located carrier in production.
 - [Migrate result-slot value reads](../roadmap/per-node-memory/value-reads-to-open.md) and
   [scope-handle reads](../roadmap/per-node-memory/scope-reads-to-open.md) to `open`, then
-  [remove `attach`](../roadmap/per-node-memory/remove-attach.md)
-  — restructuring the consumption paths onto the `open` verb.
+  [remove `attach`](../roadmap/per-node-memory/remove-attach.md) — restructuring the consumption paths
+  onto the `open` verb, with [borrow-bounded `attach`](../roadmap/per-node-memory/externally-witnessed-attach.md)
+  the contingent fallback.

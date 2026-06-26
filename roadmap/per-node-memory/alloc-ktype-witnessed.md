@@ -27,14 +27,15 @@ construction.
 
 **Directions.**
 
-- *Reuses the plumbing — decided.* Built over
-  [alloc-witness-plumbing](alloc-witness-plumbing.md); this item is the type-family conversion.
+- *Reuses the shipped substrate — decided.* Built over the production witness impls and the unified
+  `FrameSet` set-witness (see
+  [memory-model.md § Region lifetime erasure](../../design/memory-model.md#region-lifetime-erasure));
+  this item is the type-family conversion.
 - *Separate from the object family — decided.* At ~38 sites the `ktype` conversion is its own PR
   rather than sharing one with [alloc-object](alloc-object-witnessed.md).
 - *Construction inversion, not post-hoc bundling — decided.* The type is built inside the witness
   closure; a `for<'b>` closure cannot accept an already-built `KType<'a>`. Most variants `yoke`
-  (owned / `Rc` data); a `KType::Module` `merge`s its child-scope carrier. See
-  [alloc-witness-plumbing](alloc-witness-plumbing.md).
+  (owned / `Rc` data); a `KType::Module` `merge`s its child-scope carrier.
 - *The scope witness rides the type, not `alloc_scope` — decided.* A `KType::Module`'s child scope is
   alloc'd via `alloc_scope`, but the witness that keeps its region alive rides the `KType::Module`
   carrier (the value), not the scope handle: so this inversion is the `KType` value's, and
@@ -49,8 +50,6 @@ construction.
 
 **Requires:**
 
-- [Production witness impls and the `alloc` witness plumbing](alloc-witness-plumbing.md) —
-  supplies the threaded `Rc` and production witness impls this family conversion needs.
 - [`transfer_into` and closing the lift relocation unsafe](transfer-into-lift.md) — lands the
   per-carrier witness set and the structural walk this inversion folds into and retires.
 

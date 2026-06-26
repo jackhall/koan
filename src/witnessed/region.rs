@@ -1,8 +1,10 @@
-//! Generic run-lifetime storage substrate. Owns the cycle-redirect `escape` pointer and an address
-//! membership side-table, and routes its store-side lifetime-erasure through its module's single
-//! audited [`erase_to_static`](super::erase_to_static) primitive — it names no workload type. A
+//! Generic run-lifetime storage substrate. Holds an address membership side-table and routes its
+//! store-side lifetime-erasure through its module's single audited
+//! [`erase_to_static`](super::erase_to_static) primitive — it names no workload type. A
 //! [`StorageProfile`] injects its storage families via [`Stored`]; the single [`Region::alloc`]
-//! engine runs the cycle gate uniformly. The gate is unbypassable because [`Region::storage`]
+//! engine runs the cycle gate uniformly, redirecting a self-cyclic value into the escape region
+//! [`Stored::escape_target`] recovers *from the value itself* — so the frame stores no redirect
+//! owner and no allocation back-edge can form. The gate is unbypassable because [`Region::storage`]
 //! is private and `alloc` is the only path that reaches it — no `&Arena` ever escapes, so no `Stored`
 //! impl can route a value around the redirect.
 //!
@@ -23,11 +25,6 @@ use super::{erase_to_static, reattach_ref_with, Reattachable};
 /// typed sub-arenas the frame owns; the workload's [`Stored`] impls project each family out of it.
 pub trait StorageProfile: Sized {
     type Storage: Default;
-    /// Owning handle to the cycle-gate redirect target — the region a self-anchoring value is
-    /// redirected into. It [`Deref`](std::ops::Deref)s to the target [`Region`] and keeps it pinned
-    /// for as long as the handle lives, so [`Region::alloc`]'s redirect is a plain borrow with no
-    /// `unsafe` raw-pointer deref: the owner outliving `&self` is what the borrow checker proves.
-    type EscapeOwner: std::ops::Deref<Target = Region<Self>>;
 }
 
 /// Per-family storage policy, implemented by the workload. The lifetime family itself comes from the
@@ -46,10 +43,14 @@ pub trait Stored<W: StorageProfile>: Reattachable + Sized + 'static {
     /// binding chokepoint: storing `At<'static>` into `Arena<Self::At<'static>>` only type-checks
     /// when the family is wired to the matching sub-arena.
     fn sub_arena(storage: &W::Storage) -> &Arena<Self::At<'static>>;
-    /// True iff any descendant of `value` carries an anchor back to the frame at `self_ptr` — i.e.
-    /// storing it there would form a self-referential cycle. Families that hold no anchor return
-    /// `false` as a deliberate declaration.
-    fn anchors_to(value: &Self::At<'_>, self_ptr: *const Region<W>) -> bool;
+    /// If any descendant of `value` carries an anchor back to the frame at `self_ptr` — storing it
+    /// there would form a self-referential cycle — return the region the allocation must redirect
+    /// into: the anchoring value's escape target, recovered *from the value itself* (the anchoring
+    /// closure's captured scope names its defining region). `None` when no descendant self-anchors;
+    /// families that hold no anchor return `None` as a deliberate declaration. The returned borrow is
+    /// tied to the value's own content lifetime `'v`, so the redirect pins its target through the
+    /// value being stored — no owner is held on the frame.
+    fn escape_target<'v>(value: &Self::At<'v>, self_ptr: *const Region<W>) -> Option<&'v Region<W>>;
     /// Post-store hook, run inside the engine on the *final* storing frame (after any escape
     /// redirect). Default no-op; a family overrides it to record the stored address for
     /// [`Region::owns_addr`] membership queries.
@@ -68,11 +69,6 @@ pub struct Region<W: StorageProfile> {
     /// [`owns_addr`](Self::owns_addr). `usize` rather than `*const _` keeps the field
     /// lifetime-erased and `Send`/`Sync`-neutral.
     membership: RefCell<Vec<usize>>,
-    /// Redirect target for the cycle gate. `None` on a run-root frame. An owning
-    /// [`StorageProfile::EscapeOwner`] (not a raw pointer): it keeps the target region pinned for
-    /// `self`'s whole life, so the redirect in [`alloc`](Self::alloc) is a safe borrow — the
-    /// outer-outlives-inner lexical invariant is now an owned fact rather than a raw-deref assumption.
-    escape: Option<W::EscapeOwner>,
 }
 
 impl<W: StorageProfile> Region<W> {
@@ -80,16 +76,6 @@ impl<W: StorageProfile> Region<W> {
         Self {
             storage: W::Storage::default(),
             membership: RefCell::new(Vec::new()),
-            escape: None,
-        }
-    }
-
-    /// `alloc` will redirect self-cyclic values to `escape`; see the cycle gate in [`alloc`](Self::alloc).
-    pub fn with_escape(escape: W::EscapeOwner) -> Self {
-        Self {
-            storage: W::Storage::default(),
-            membership: RefCell::new(Vec::new()),
-            escape: Some(escape),
         }
     }
 
@@ -111,20 +97,18 @@ impl<W: StorageProfile> Region<W> {
     }
 
     /// Single allocator engine for any family `K`. Runs the cycle gate — a value that would
-    /// self-cycle (its [`Stored::anchors_to`] is true for `self`) redirects to the escape frame —
-    /// then erases the live form to `'static`, stores it in the family's sub-arena, fires
+    /// self-cycle redirects into the escape region [`Stored::escape_target`] recovers from the
+    /// value — then erases the live form to `'static`, stores it in the family's sub-arena, fires
     /// [`Stored::record_local`] on the final storing frame, and re-anchors the store to `'a`. The
     /// sole store path: `storage` is private, so this gate cannot be skipped.
     ///
-    /// The redirect carries no `unsafe`: `escape` is an owning [`StorageProfile::EscapeOwner`], so
-    /// `&**escape` is a borrow the checker caps at `&'a self` — the owner keeps the target region
-    /// alive for at least `'a`, so no raw deref or fabricated lifetime is needed.
+    /// The redirect carries no `unsafe`: `escape` is a `&'a Region` recovered from the value's own
+    /// content (a scope reference branded `'a`), so it pins its target for `'a` through the value
+    /// being stored — no owner is held on the frame, so no allocation back-edge can form. A redirect
+    /// recurses, so a value reaching several ancestor regions is hoisted past each in turn.
     pub(crate) fn alloc<'a, K: Stored<W>>(&'a self, value: K::At<'a>) -> &'a K::At<'a> {
-        if let Some(escape) = self.escape.as_ref() {
-            if K::anchors_to(&value, self as *const Region<W>) {
-                let escape_ref: &'a Region<W> = escape;
-                return escape_ref.alloc::<K>(value);
-            }
+        if let Some(escape) = K::escape_target(&value, self as *const Region<W>) {
+            return escape.alloc::<K>(value);
         }
         let stored: &'a K::At<'static> =
             K::sub_arena(&self.storage).alloc(erase_to_static::<K>(value));

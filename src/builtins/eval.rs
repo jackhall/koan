@@ -30,15 +30,8 @@ pub fn body<'a>(
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("expr".to_string())))),
     };
     // Chain the call-site frame Rc onto the new frame (keeps the parent region alive past the
-    // new frame's `outer` pointer) — matching a normal call frame. The escape owner is the storage
-    // owning the call-site region (the new frame's redirect target), read off the call-site scope.
-    let escape_owner = ctx
-        .scope
-        .region_owner()
-        .upgrade()
-        .expect("EVAL: call-site scope's region owner is live");
-    let frame: Rc<CallFrame> =
-        CallFrame::new(ctx.scope, ctx.frame.map(|f| f.storage_rc()), escape_owner);
+    // new frame's `outer` pointer) — matching a normal call frame.
+    let frame: Rc<CallFrame> = CallFrame::new(ctx.scope, ctx.frame.map(|f| f.storage_rc()));
     Action::Tail {
         leading: vec![],
         tail: inner,

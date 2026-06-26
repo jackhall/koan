@@ -3,9 +3,9 @@
 Delete the transitional `attach` accessor once every consumer is on `open`, leaving `Sealed` with
 a single access verb.
 
-**Problem.** [`attach`](externally-witnessed-attach.md) exists:
-[framestorage-self-reference](framestorage-self-reference.md) landed a scope-specialized
-`SealedExtern<ScopeRefFamily>::attach` for the frame's un-nestable child-scope readers, and
+**Problem.** [`attach`](externally-witnessed-attach.md) exists: the shipped FrameStorage restructure
+landed a scope-specialized `SealedExtern<ScopeRefFamily>::attach` for the frame's un-nestable
+child-scope readers, and
 [externally-witnessed-attach](externally-witnessed-attach.md) may generalize it to a `Sealed<T>` verb.
 It is the transitional borrow-bounded accessor that lets a re-anchored reference ride up the
 dispatcher call stack. Once the carrier and read migrations invert those readers, its only remaining

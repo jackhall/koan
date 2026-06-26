@@ -150,40 +150,32 @@ machinery attaches the per-call frame's `Rc` to the closure, then a
 re-allocation of the composite (via `value_pass`, a dep-finish, etc.)
 lands the composite back in the per-call region.
 
-`KoanRegion` carries an `escape: Option<EscapeOwner>` (the Koan `EscapeOwner`
-is `FrameRegionPin`, an owning `Rc<FrameStorage>` that derefs to its region),
-set by `CallFrame::new` to the `FrameStorage` owning the outer scope's region.
-`alloc_object` walks the incoming value's composite tree (`obj_anchors_to`,
-mirroring `KObject::deep_clone`'s shape) and, on finding any `Rc<FrameStorage>`
-whose `region()` is `self`, redirects the allocation up to the escape
-region — where the same `Rc` is no longer self-referential. The
-redirect is a single `Option`-check on every per-call `alloc_object`;
-run-root has `escape: None` and short-circuits, since the
-`Rc<FrameStorage>` shapes the gate looks for can only point at per-call
-regions by construction. Because the escape is an **owning** handle, the
-redirect (`&**escape`) is a borrow the compiler proves — no raw deref: the
-owner keeps the outer region alive for at least the per-call region's borrow,
-and the outer always outlives this inner per the lexical-scoping invariant.
-The owner of the outer region is recovered from the called function's captured
-scope ([`Scope::region_owner`], set when the scope is built in its frame's
-storage) — the per-call frame redirects into the region its function was
-defined in.
+The gate recovers its redirect target *from the value being stored*. `alloc_object` walks the
+incoming value's composite tree (`obj_escape_target`, mirroring `KObject::deep_clone`'s shape) and,
+on finding any `Rc<FrameStorage>` whose `region()` is `self`, takes the self-anchoring closure's
+captured scope — which lives in `self`'s region by the `alloc_function` invariant — and walks its
+`outer` chain out of `self`. The first ancestor scope outside `self` names the redirect region (a
+per-call region is a child of the region its function was defined in; a run-root parent crosses into
+the run-root scope's region), so the allocation redirects there — where the same `Rc` is no longer
+self-referential. The redirect region is that ancestor scope's own `region` field, a `Copy`
+`&'a KoanRegion` branded by the value's content lifetime, so it pins the target for the allocation's
+output borrow with **no owner stored on the frame** — and thus no allocation back-edge to close the
+escaped-closure cycle. A value with no self-anchor (the common case) yields `None` and stores in
+place; a run-root allocation never self-anchors, since the `Rc<FrameStorage>` shapes the gate looks
+for can only point at per-call regions by construction.
 
-`alloc_object` is one of the named safe wrappers — alongside `alloc_ktype`,
-`alloc_function`, `alloc_scope`, `alloc_module`, `alloc_signature`, and
-`alloc_operator_group` — that route a single `alloc` engine where the gate
-lives. The engine lives generically in the `Region<W>` substrate
-(`src/machine/core/region.rs`), which names no Koan type and carries **no
-`unsafe`** of its own: its erase-store routes the scheduler's audited
-`erase_to_static` / `reattach_ref_with`, and the escape redirect is an owning
-deref; `KoanRegion` is the Koan instantiation
-`Region<KoanStorageProfile>`, with the per-family policy supplied by `Stored`
-impls in `core::region`. Every family implements `Stored`, and the engine runs
-the gate once for all of them. `KObject` and `KType` answer `anchors_to` by
-walking their composite tree; the families that cannot hold a self-targeting
-`Rc<FrameStorage>` — `KFunction`, `Scope`, `Module`, `Signature`, and
-`OperatorGroup` — declare `anchors_to => false`, so the redirect is uniform
-across the whole allocation surface. `Stored` is an open in-crate extension
+`alloc_object` is one of the named safe wrappers — alongside `alloc_ktype`, `alloc_function`,
+`alloc_scope`, `alloc_module`, `alloc_signature`, and `alloc_operator_group` — that route a single
+`alloc` engine where the gate lives. The engine lives generically in the `Region<W>` substrate
+(`src/witnessed/region.rs`), which names no Koan type and carries **no `unsafe`** of its own: its
+erase-store routes the scheduler's audited `erase_to_static` / `reattach_ref_with`, and the escape
+redirect is a value-derived borrow; `KoanRegion` is the Koan instantiation
+`Region<KoanStorageProfile>`, with the per-family policy supplied by `Stored` impls in `core::arena`.
+Every family implements `Stored`, and the engine runs the gate once for all of them. `KObject` and
+`KType` answer `escape_target` by walking their composite tree and recovering the redirect region;
+the families that cannot hold a self-targeting `Rc<FrameStorage>` — `KFunction`, `Scope`, `Module`,
+`Signature`, and `OperatorGroup` — declare `escape_target => None`, so the redirect is uniform across
+the whole allocation surface. `Stored` is an open in-crate extension
 point rather than sealed; unbypassability comes instead from the substrate's
 private `storage` field and that single store path — no `&Region` is ever
 exposed, so no `Stored` impl can route a value around the redirect.

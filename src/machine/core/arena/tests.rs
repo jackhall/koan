@@ -332,3 +332,34 @@ fn alloc_object_redirects_self_anchored_value_to_escape_region() {
         "self-anchored value must not land in the per-call region",
     );
 }
+
+/// Cycle-leak fix: a per-call frame whose parent is the run root holds **no** strong ref back to the
+/// run-root `FrameStorage`. The redirect target is now recovered from the value at alloc time, so
+/// `Region` stores no escape owner — the child→run-root back-edge that closed the escaped-closure
+/// cycle is gone. An escaped value (here, the frame's storage `Rc`) therefore cannot keep the run
+/// root alive past its own strong refs, so the run root drops once its own ref is released.
+#[test]
+fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
+    let run_root = FrameStorage::run_root();
+    let run_root_weak = Rc::downgrade(&run_root);
+    // Build a per-call frame under the run root, then keep only its storage `Rc` — the shape an
+    // escaped closure pins. The frame shell and the borrowing scope drop at the block boundary.
+    let escapee = {
+        let scope = default_scope(&run_root, Box::new(std::io::sink()));
+        let frame = CallFrame::new_test(scope, None);
+        frame.storage_rc()
+    };
+    assert_eq!(
+        Rc::strong_count(&run_root),
+        1,
+        "the per-call frame's storage must not strong-own its run-root escape target",
+    );
+    drop(run_root);
+    // `escapee` is still held here, yet the run root is gone — the old escape cycle would have kept
+    // it alive (the leak); without the stored back-edge it drops.
+    assert!(
+        run_root_weak.upgrade().is_none(),
+        "run root drops once its own strong ref is released — the escaped storage holds no cycle",
+    );
+    drop(escapee);
+}

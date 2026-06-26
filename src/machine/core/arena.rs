@@ -1,7 +1,7 @@
 //! The Koan instantiation of the generic [`Region`](crate::witnessed::Region)
 //! storage substrate: `KoanRegion = Region<KoanStorageProfile>`, the per-family
 //! [`Stored`](crate::witnessed::Stored) impls (which sub-arena a family lands in, its cycle-gate
-//! `anchors_to` answer), the cycle-gate walkers, and the Koan-typed `alloc_*` wrappers. `CallFrame`
+//! `escape_target` answer), the cycle-gate walkers, and the Koan-typed `alloc_*` wrappers. `CallFrame`
 //! — the per-call frame shell over a refcounted `FrameStorage` (the `KoanRegion` plus the ancestor
 //! chain), holding the child `Scope` and resetting in place for TCO — also lives here.
 //!
@@ -47,27 +47,6 @@ pub struct KoanStorageProfile;
 
 impl StorageProfile for KoanStorageProfile {
     type Storage = KoanStorage;
-    type EscapeOwner = FrameRegionPin;
-}
-
-/// Owning handle to a cycle-gate redirect target: an `Rc<FrameStorage>` viewed as its backing
-/// [`KoanRegion`]. Holding it keeps the target region's arena pages pinned, so [`Region::alloc`]'s
-/// escape redirect (`&**escape`) is a plain borrow with no `unsafe` raw-pointer deref. The
-/// per-call frame stores this for the *outer* frame it redirects into — a child→parent owning edge,
-/// never a cycle (the parent never owns the child).
-pub struct FrameRegionPin(Rc<FrameStorage>);
-
-impl FrameRegionPin {
-    pub(crate) fn new(storage: Rc<FrameStorage>) -> Self {
-        FrameRegionPin(storage)
-    }
-}
-
-impl std::ops::Deref for FrameRegionPin {
-    type Target = KoanRegion;
-    fn deref(&self) -> &KoanRegion {
-        self.0.region()
-    }
 }
 
 /// Run-lifetime allocator. A [`Region`] carrying the Koan family set; lives for one program
@@ -81,43 +60,73 @@ pub type KoanRegion = Region<KoanStorageProfile>;
 // witness the destination lifetime.
 unsafe impl<W: crate::witnessed::StorageProfile> crate::witnessed::Witness for Region<W> {}
 
-/// True iff any descendant of `obj` carries an `Rc<FrameStorage>` whose backing `KoanRegion`
-/// is `region_ptr`. Walks the composite shapes mirrored from `KObject::deep_clone`
-/// (`List`/`Dict`/`Tagged`/`Struct`) plus `KFunction`/`KFuture` anchors.
+/// True iff `rc`'s backing `KoanRegion` is `region_ptr`.
 fn rc_targets(rc: &Rc<FrameStorage>, region_ptr: *const KoanRegion) -> bool {
     // `rc.region()` coerces `&KoanRegion → *const` for the address compare — no explicit raw
     // cast, so the borrow stays lifetime-bounded right up to the comparison.
     std::ptr::eq(rc.region(), region_ptr)
 }
 
-fn obj_anchors_to(obj: &KObject<'_>, region_ptr: *const KoanRegion) -> bool {
+/// Walk `scope`'s `outer` chain out of the per-call region `self_region` and return the first
+/// ancestor scope's region — the cycle-gate redirect target. `scope` is the self-anchoring closure's
+/// captured scope, which lives in `self_region` by the `alloc_function` invariant, so the chain
+/// crosses out at the per-call child's `outer` link (a per-call region is a child of the region its
+/// function was defined in; a run-root parent crosses into the run-root scope's region). The returned
+/// `&'v KoanRegion` is the ancestor scope's own `region` field — a `Copy` borrow branded `'v` — so it
+/// pins the redirect target through the value being stored, with no owner held on the frame.
+fn escape_from_scope<'v>(scope: &Scope<'v>, self_region: *const KoanRegion) -> Option<&'v KoanRegion> {
+    if !std::ptr::eq(scope.region as *const KoanRegion, self_region) {
+        return Some(scope.region);
+    }
+    escape_from_scope(scope.outer()?, self_region)
+}
+
+/// If any descendant of `obj` carries an `Rc<FrameStorage>` whose backing `KoanRegion` is
+/// `region_ptr` (storing it there would self-cycle), return the region the allocation must redirect
+/// into — recovered by walking the anchoring closure's captured scope out of `region_ptr`
+/// ([`escape_from_scope`]). `None` when no descendant self-anchors. Walks the composite shapes
+/// mirrored from `KObject::deep_clone` (`List`/`Dict`/`Tagged`/`Record`) plus the `KFunction` /
+/// `KFuture` anchors.
+fn obj_escape_target<'v>(obj: &KObject<'v>, region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
     match obj {
-        KObject::KFunction(_, Some(rc)) => rc_targets(rc, region_ptr),
-        KObject::KFuture(_, Some(rc)) => rc_targets(rc, region_ptr),
-        KObject::List(items, _) => items.iter().any(|x| held_anchors_to(x, region_ptr)),
-        KObject::Dict(entries, _, _) => entries.values().any(|x| held_anchors_to(x, region_ptr)),
-        KObject::Tagged { value, .. } => obj_anchors_to(value, region_ptr),
-        KObject::Wrapped { inner, .. } => obj_anchors_to(inner.get(), region_ptr),
-        KObject::Record(values, _) => values.iter().any(|(_, x)| held_anchors_to(x, region_ptr)),
-        _ => false,
+        KObject::KFunction(f, Some(rc)) if rc_targets(rc, region_ptr) => {
+            escape_from_scope(f.captured_scope(), region_ptr)
+        }
+        KObject::KFuture(t, Some(rc)) if rc_targets(rc, region_ptr) => {
+            escape_from_scope(t.function.captured_scope(), region_ptr)
+        }
+        KObject::List(items, _) => items.iter().find_map(|x| held_escape_target(x, region_ptr)),
+        KObject::Dict(entries, _, _) => {
+            entries.values().find_map(|x| held_escape_target(x, region_ptr))
+        }
+        KObject::Tagged { value, .. } => obj_escape_target(value, region_ptr),
+        KObject::Wrapped { inner, .. } => obj_escape_target(inner.get(), region_ptr),
+        KObject::Record(values, _) => {
+            values.iter().find_map(|(_, x)| held_escape_target(x, region_ptr))
+        }
+        _ => None,
     }
 }
 
-/// An aggregate cell anchors to `region_ptr` iff its `Object` arm does, or its `Type` arm is
-/// a `Module` whose frame `Rc` backs that region.
-fn held_anchors_to(cell: &Held<'_>, region_ptr: *const KoanRegion) -> bool {
+/// An aggregate cell's redirect target: its `Object` arm via [`obj_escape_target`], or its `Type`
+/// arm's `Module` whose frame `Rc` backs `region_ptr` via [`ktype_escape_target`].
+fn held_escape_target<'v>(cell: &Held<'v>, region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
     match cell {
-        Held::Object(o) => obj_anchors_to(o, region_ptr),
-        Held::Type(t) => ktype_anchors_to(t, region_ptr),
+        Held::Object(o) => obj_escape_target(o, region_ptr),
+        Held::Type(t) => ktype_escape_target(t, region_ptr),
     }
 }
 
-fn ktype_anchors_to(t: &KType<'_>, region_ptr: *const KoanRegion) -> bool {
+fn ktype_escape_target<'v>(
+    t: &KType<'v>,
+    region_ptr: *const KoanRegion,
+) -> Option<&'v KoanRegion> {
     match t {
         KType::Module {
-            frame: Some(rc), ..
-        } => rc_targets(rc, region_ptr),
-        _ => false,
+            module,
+            frame: Some(rc),
+        } if rc_targets(rc, region_ptr) => escape_from_scope(module.child_scope(), region_ptr),
+        _ => None,
     }
 }
 
@@ -136,17 +145,18 @@ reattachable! {
     OperatorGroup => OperatorGroup,
 }
 
-// Per-family `Stored` policy. `KObject` and `KType` answer `anchors_to` by walking their composite
-// tree; the families that cannot hold a self-targeting `Rc<FrameStorage>` declare `anchors_to => false`,
-// so the cycle redirect is uniform across the whole allocation surface. `OperatorGroup` is
+// Per-family `Stored` policy. `KObject` and `KType` answer `escape_target` by walking their composite
+// tree for a self-anchoring `Rc<FrameStorage>` and recovering the redirect region from it; the
+// families that cannot hold a self-targeting `Rc<FrameStorage>` declare `escape_target => None`, so
+// the cycle redirect is uniform across the whole allocation surface. `OperatorGroup` is
 // lifetime-free and anchor-free, but routes the same engine for one uniform path.
 
 impl Stored<KoanStorageProfile> for KObject<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<KObject<'static>> {
         &s.objects
     }
-    fn anchors_to(value: &KObject<'_>, region_ptr: *const KoanRegion) -> bool {
-        obj_anchors_to(value, region_ptr)
+    fn escape_target<'v>(value: &Self::At<'v>, region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
+        obj_escape_target(value, region_ptr)
     }
     fn record_local(frame: &KoanRegion, stored: &KObject<'static>) {
         frame.record_addr(stored as *const _ as usize);
@@ -157,8 +167,8 @@ impl Stored<KoanStorageProfile> for KType<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<KType<'static>> {
         &s.ktypes
     }
-    fn anchors_to(value: &KType<'_>, region_ptr: *const KoanRegion) -> bool {
-        ktype_anchors_to(value, region_ptr)
+    fn escape_target<'v>(value: &Self::At<'v>, region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
+        ktype_escape_target(value, region_ptr)
     }
 }
 
@@ -166,8 +176,8 @@ impl Stored<KoanStorageProfile> for KFunction<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<KFunction<'static>> {
         &s.functions
     }
-    fn anchors_to(_value: &KFunction<'_>, _region_ptr: *const KoanRegion) -> bool {
-        false
+    fn escape_target<'v>(_value: &Self::At<'v>, _region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
+        None
     }
 }
 
@@ -175,8 +185,8 @@ impl Stored<KoanStorageProfile> for Scope<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<Scope<'static>> {
         &s.scopes
     }
-    fn anchors_to(_value: &Scope<'_>, _region_ptr: *const KoanRegion) -> bool {
-        false
+    fn escape_target<'v>(_value: &Self::At<'v>, _region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
+        None
     }
 }
 
@@ -184,8 +194,8 @@ impl Stored<KoanStorageProfile> for Module<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<Module<'static>> {
         &s.modules
     }
-    fn anchors_to(_value: &Module<'_>, _region_ptr: *const KoanRegion) -> bool {
-        false
+    fn escape_target<'v>(_value: &Self::At<'v>, _region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
+        None
     }
 }
 
@@ -193,8 +203,8 @@ impl Stored<KoanStorageProfile> for ModuleSignature<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<ModuleSignature<'static>> {
         &s.signatures
     }
-    fn anchors_to(_value: &ModuleSignature<'_>, _region_ptr: *const KoanRegion) -> bool {
-        false
+    fn escape_target<'v>(_value: &Self::At<'v>, _region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
+        None
     }
 }
 
@@ -202,8 +212,8 @@ impl Stored<KoanStorageProfile> for OperatorGroup {
     fn sub_arena(s: &KoanStorage) -> &Arena<OperatorGroup> {
         &s.operator_groups
     }
-    fn anchors_to(_value: &OperatorGroup, _region_ptr: *const KoanRegion) -> bool {
-        false
+    fn escape_target<'v>(_value: &Self::At<'v>, _region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
+        None
     }
 }
 
@@ -293,27 +303,18 @@ impl Region<KoanStorageProfile> {
 
 #[cfg(test)]
 impl CallFrame {
-    /// Test-only [`CallFrame::new`] that derives the cycle-gate escape owner from `outer`'s
-    /// recorded [`Scope::region_owner`] (set when the run root is built in a `FrameStorage`). Lets
-    /// frame-construction tests stay at the two-argument call shape.
+    /// Test alias for [`CallFrame::new`], kept so the many frame-construction tests share one
+    /// construction name distinct from production call sites.
     pub(crate) fn new_test(
         outer: &Scope<'_>,
         outer_frame: Option<Rc<FrameStorage>>,
     ) -> Rc<CallFrame> {
-        let owner = outer
-            .region_owner()
-            .upgrade()
-            .expect("test outer scope must carry a live region owner");
-        CallFrame::new(outer, outer_frame, owner)
+        CallFrame::new(outer, outer_frame)
     }
 
-    /// Test-only [`CallFrame::try_reset_for_tail`] that derives the escape owner from `new_outer`.
+    /// Test alias for [`CallFrame::try_reset_for_tail`].
     pub(crate) fn try_reset_for_tail_test(self: &mut Rc<Self>, new_outer: &Scope<'_>) -> bool {
-        let owner = new_outer
-            .region_owner()
-            .upgrade()
-            .expect("test new_outer scope must carry a live region owner");
-        self.try_reset_for_tail(new_outer, owner)
+        self.try_reset_for_tail(new_outer)
     }
 }
 
@@ -486,22 +487,14 @@ pub struct CallFrame {
 impl CallFrame {
     /// Build a fresh per-call frame whose child `Scope` uses `outer` as its `outer` link.
     /// `outer_frame` must hold the parent frame's `FrameStorage` Rc when the parent is per-call;
-    /// `None` when the parent is run-root. `escape_owner` is the `FrameStorage` owning `outer`'s
-    /// region — the cycle-gate redirect target; held as an owning pin so the redirect needs no
-    /// `unsafe` deref.
-    pub fn new(
-        outer: &Scope<'_>,
-        outer_frame: Option<Rc<FrameStorage>>,
-        escape_owner: Rc<FrameStorage>,
-    ) -> Rc<CallFrame> {
-        debug_assert!(
-            std::ptr::eq(escape_owner.region(), outer.region as *const KoanRegion),
-            "escape_owner must own the redirect-target region (the outer scope's region)"
-        );
+    /// `None` when the parent is run-root. The cycle-gate redirect target is recovered per-allocation
+    /// from the value being stored (see [`Stored::escape_target`](crate::witnessed::Stored)), so the
+    /// frame holds no escape owner.
+    pub fn new(outer: &Scope<'_>, outer_frame: Option<Rc<FrameStorage>>) -> Rc<CallFrame> {
         // The region is born inside its own `Rc<FrameStorage>`, heap-pinned from this point on, so
         // the child-scope pointer below stays valid as the storage Rc moves into the shell.
         let storage = Rc::new(FrameStorage {
-            region: KoanRegion::with_escape(FrameRegionPin::new(escape_owner)),
+            region: KoanRegion::new(),
             outer: outer_frame,
         });
         // The child is built from the heap-pinned `storage` handle — no `'static` claim and no
@@ -640,22 +633,14 @@ impl CallFrame {
     /// while the shell reuses. Returns `false` (untouched) only when `Rc::get_mut` fails — another
     /// live `Rc<CallFrame>` (a shell clone, never an escape) foreclosing in-place reuse. See
     /// [per-call-region/frames.md § TCO frame reuse](../../../design/per-call-region/frames.md#tco-frame-reuse).
-    pub fn try_reset_for_tail(
-        self: &mut Rc<Self>,
-        new_outer: &Scope<'_>,
-        escape_owner: Rc<FrameStorage>,
-    ) -> bool {
+    pub fn try_reset_for_tail(self: &mut Rc<Self>, new_outer: &Scope<'_>) -> bool {
         if Rc::get_mut(self).is_none() {
             return false;
         }
-        debug_assert!(
-            std::ptr::eq(escape_owner.region(), new_outer.region as *const KoanRegion),
-            "escape_owner must own the redirect-target region (the new outer scope's region)"
-        );
         // Build the fresh storage and its child scope before touching the shell, so the region is
         // heap-pinned by the new storage Rc when it lands in the shell.
         let storage = Rc::new(FrameStorage {
-            region: KoanRegion::with_escape(FrameRegionPin::new(escape_owner)),
+            region: KoanRegion::new(),
             outer: None,
         });
         // The child is built from the heap-pinned `storage` handle (region borrow + owning `Weak`),

@@ -31,9 +31,6 @@ such caller copies out or inverts into a closure, the transitional `read` cannot
 
 **Requires:**
 
-- [Consuming externally-witnessed `open` and the run-loop step restructure](runloop-cps-open.md) —
-  establishes the restructure shape (nest the consumption under a rank-2 brand) these value reads
-  follow, and the `open` verb they route.
 
 **Unblocks:**
 

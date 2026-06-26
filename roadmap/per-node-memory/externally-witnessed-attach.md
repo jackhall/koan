@@ -3,12 +3,11 @@
 Generalize the scope-specialized borrow-bounded `attach` that landed in framestorage into a generic
 `Sealed` verb — only if a further call-site migration proves it earns one.
 
-**Problem.** A **scope-specialized** `attach` already exists:
-[framestorage-self-reference](framestorage-self-reference.md) landed
-`SealedExtern<ScopeRefFamily>::attach` (a borrow-bounded `&'w Scope<'b>` re-anchor) because the
-frame's child-scope readers alloc into the cart region and return the result up-stack, which the
-keystone's [`open`](runloop-cps-open.md) forbids by construction — its `for<'b>` brand is un-nameable
-in the result, so an escaping site has no `open` route. That `attach` is scope-only; the generic
+**Problem.** A **scope-specialized** `attach` already exists: the shipped FrameStorage restructure
+landed `SealedExtern<ScopeRefFamily>::attach` (a borrow-bounded `&'w Scope<'b>` re-anchor) because
+the frame's child-scope readers alloc into the cart region and return the result up-stack, which the
+shipped keystone's `open` forbids by construction — its `for<'b>` brand is un-nameable in the result,
+so an escaping site has no `open` route. That `attach` is scope-only; the generic
 `Sealed<T>::attach<'w>(&'w self, &'w W) -> Live<'w, T>` the substrate would expose for *any* carrier
 is not built. Whether the broader migrations — [migrate-reattach-helpers](migrate-reattach-helpers.md),
 [value-reads-to-open](value-reads-to-open.md), [scope-reads-to-open](scope-reads-to-open.md) — surface
@@ -44,10 +43,6 @@ one into it), is unknown until they run.
 
 **Requires:**
 
-- [Consuming externally-witnessed `open` and the run-loop step restructure](runloop-cps-open.md) —
-  supplies the externally-witnessed sealed form and the `open` whose insufficiency `attach` backstops.
-- [FrameStorage self-reference removal](framestorage-self-reference.md) — landed the scope-specialized
-  `attach` this item generalizes (or records as the only one).
 - [Migrate the loose witness-borrow wrappers onto `Sealed`](migrate-reattach-helpers.md) — a call-site
   migration this surveys for a non-scope reference that cannot nest under `open`.
 - [Migrate result-slot value reads to `open`](value-reads-to-open.md) — surveyed for the same

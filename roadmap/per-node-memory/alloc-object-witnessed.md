@@ -26,13 +26,13 @@ at construction.
 
 **Directions.**
 
-- *Reuses the plumbing — decided.* The owning-`Rc` threading and `WitnessRegion` /
-  `MergeWitness` impls land in [alloc-witness-plumbing](alloc-witness-plumbing.md); this item is
-  the object-family conversion over that foundation.
+- *Reuses the shipped substrate — decided.* The production `WitnessRegion` / `MergeWitness` impls,
+  the unified `FrameSet` set-witness, and the value-recovered cycle-gate redirect shipped (see
+  [memory-model.md § Region lifetime erasure](../../design/memory-model.md#region-lifetime-erasure));
+  this item is the object-family conversion over that foundation.
 - *Construction inversion, not post-hoc bundling — decided.* The object is built inside the witness
   closure (`yoke` for region-pure parts, `merge` for a referenced witnessed value), not bundled
-  after the fact; a `for<'b>` closure cannot accept an already-built `KObject<'a>`. See
-  [alloc-witness-plumbing](alloc-witness-plumbing.md).
+  after the fact; a `for<'b>` closure cannot accept an already-built `KObject<'a>`.
 - *`alloc_function` rides this channel — decided.* A function value is a `KObject::KFunction`, and a
   closure capturing its defining scope mints a self-witnessed scope operand from the frame `Rc` it
   already holds and `merge`s it (the foreign `&'a` borrow a `yoke` closure rejects). So the
@@ -51,8 +51,6 @@ at construction.
 
 **Requires:**
 
-- [Production witness impls and the `alloc` witness plumbing](alloc-witness-plumbing.md) —
-  supplies the threaded `Rc` and production witness impls this family conversion needs.
 - [`transfer_into` and closing the lift relocation unsafe](transfer-into-lift.md) — lands the
   per-carrier witness set and the structural walk this inversion folds into and retires.
 
