@@ -1,53 +1,51 @@
-# Externally-witnessed sealed form and `attach`
+# Borrow-bounded `attach` fallback
 
-Add the witness-supplied-at-access shape to `Sealed`, with its own Miri proof, and reimplement
-the shipped witness-borrow reattaches on top of it.
+Add the borrow-bounded `attach` accessor over the externally-witnessed sealed form — only if a
+call-site migration proves it needs a re-anchored reference to escape up-stack where the keystone's
+`open` cannot nest.
 
-**Problem.** A [`Sealed<T, W>`](../../src/witnessed.rs) bundles its witness `W`. A carrier whose backing
-the holder already pins (the per-call child scope; a continuation read against the frame `Rc`)
-has no way to be sealed *without* a redundant bundled witness — bundling a reference-counted
-clone would add an owner the holder's own uniqueness checks must subtract. The shipped
-witness-borrow reattaches that serve these cases —
-[`vend_carrier`](../../src/witnessed.rs) and `reattach_with` / `reattach_ref_with` /
-[`reattach_slice_with`](../../src/witnessed.rs) — are loose functions over `Erased`, not a method
-on a sealed node-storage form.
+**Problem.** The [keystone](runloop-cps-open.md) adds the consuming externally-witnessed `open` and
+proves the run-loop step tail nests under it with no reference escaping the dispatcher call stack.
+The broader call-site migrations — [migrate-reattach-helpers](migrate-reattach-helpers.md),
+[value-reads-to-open](value-reads-to-open.md), [scope-reads-to-open](scope-reads-to-open.md) — sweep
+many more sites, and one may hold a re-anchored reference that genuinely must ride up the call stack
+and cannot fold into a closure. `open` forbids escape by construction (its `for<'b>` brand is
+un-nameable in the result), so such a site has no `open` route; a borrow-bounded accessor —
+re-anchoring **capped at** the witness borrow `'w` rather than a free `'b` widenable past the pin —
+would be the sound fallback. Whether any site actually needs it is unknown until the migrations run.
 
 **Acceptance criteria.**
 
-- `Sealed<T, W>` has a witness-less form, built without moving a witness into the bundle, read
-  through `attach<'w>(&'w self, &'w W) -> Live<'w, T>` — re-anchoring **capped at** the witness
-  borrow `'w`, exactly as the shipped [`vend_carrier`](../../src/witnessed.rs) (`-> T::At<'w>`) and
-  [`Witnessed::read`](../../src/witnessed.rs) (`-> T::At<'_>`) do; a reference carrier returns the
-  `&'w T::At<'b>` form of [`reattach_ref_with`](../../src/witnessed.rs) (borrow `'w`, content `'b`
-  free). The content does **not** ride a free `'b: 'w` that outlives the witness — that escaping
-  shape is `open`'s rank-2 `for<'b>` brand, not `attach`'s.
-- `attach` carries a self-contained Miri tree-borrows proof (round-trip, and
-  refuses-when-the-anchor-is-widened) distinct from `open`'s rank-2 brand.
-- The shipped `vend_carrier` / `reattach_*_with` functions are reimplemented as thin delegates
-  to `Sealed::attach`, so their call sites compile unchanged while the method becomes the single
-  witness-borrow primitive.
+- The call-site migrations are surveyed for any re-anchored reference that must escape the dispatcher
+  call stack and cannot nest under the keystone's `open`.
+- If any such site exists: `Sealed<T, W>` gains a borrow-bounded
+  `attach<'w>(&'w self, &'w W) -> Live<'w, T>` over the externally-witnessed sealed form —
+  re-anchoring capped at the witness borrow, the shape of the shipped
+  [`vend_carrier`](../../src/witnessed.rs) / [`reattach_ref_with`](../../src/witnessed.rs) — with its
+  own Miri tree-borrows proof (round-trip, and refuses-when-the-anchor-is-widened), and the
+  un-nestable site(s) are named with why they cannot fold.
+- If no such site exists: `attach` is not added, the survey's conclusion that every site nests under
+  `open` is recorded, and [remove `attach`](remove-attach.md) closes as a no-op.
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` clean.
 
 **Directions.**
 
-- *Primitive is the method form of a shipped wrapper — decided.* `attach` is the `Sealed`
-  method form of the shipped `vend_carrier` / `reattach_with` witness-borrow bound; the soundness
-  shape is proven, so this item is the sealed-form type plus the delegating reimplementation, not
-  a new `unsafe` argument.
-- *`attach` is transitional — decided.* The substrate's destination is the single `open` verb;
-  `attach` exists so a re-anchored reference can ride up the dispatcher call stack without a copy
-  during migration, and is retired by [remove `attach`](remove-attach.md). The call-site
-  retirements (the [wrapper migration](migrate-reattach-helpers.md)) prefer
-  `open` + copy-out and reach for `attach` only where a reference genuinely escapes, to minimize
-  the double-touch before removal.
+- *Necessity is contingent on the migrations — open.* The keystone proved the run-loop tail nests
+  without escape; whether any other site genuinely cannot is settled by the migrations.
+  Recommended: prefer `open` + copy-out everywhere and reach for `attach` only on a site that
+  demonstrably cannot nest, so the verb is added only if earned.
+- *Borrow-bounded, not free content — decided.* If added, `attach` re-anchors capped at the witness
+  borrow `'w` — the witness pin outlives it, a fact the compiler checks — never a free `'b`
+  widenable past the pin; that escaping shape is the keystone's rank-2 `open`, not `attach`.
 
 ## Dependencies
 
-**Requires:** none — builds on the shipped `Sealed` / `open` substrate.
+**Requires:**
+
+- [Consuming externally-witnessed `open` and the run-loop step restructure](runloop-cps-open.md) —
+  supplies the externally-witnessed sealed form and the `open` whose insufficiency `attach` backstops.
 
 **Unblocks:**
 
-- [FrameStorage self-reference removal](framestorage-self-reference.md) — the per-call child
-  scope is its first production consumer.
-- [Migrate the loose witness-borrow wrappers onto `Sealed`](migrate-reattach-helpers.md) — retires
-  the wrappers this reimplements.
+- [Remove `attach`](remove-attach.md) — if `attach` is added, its removal is the cleanup; if not,
+  that item closes as a no-op.

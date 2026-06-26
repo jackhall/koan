@@ -301,8 +301,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [Externally-witnessed sealed form and `attach`](per-node-memory/externally-witnessed-attach.md)
-- [Migrate result-slot value reads to `open`](per-node-memory/value-reads-to-open.md)
+- [Consuming externally-witnessed `open` and the run-loop step restructure](per-node-memory/runloop-cps-open.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
@@ -401,12 +400,16 @@ witness-borrow reattaches) are already shipped, as is the relocation of the gene
 [`Sealed`](../src/witnessed.rs) storage form (read through a rank-2 `open`, with the result
 slot rerouted onto it); these items carry the remaining access verbs and the call-site
 migration, each sized to a single PR. The design is captured in
-[design/per-node-memory.md](../design/per-node-memory.md). The carriers, allocations, and
-reads migrate onto the shipped surface, and `attach` is retired last:
+[design/per-node-memory.md](../design/per-node-memory.md). The run-loop step restructure and its
+consuming `open` verb are the keystone the rest rides on; carriers, allocations, and reads then
+migrate onto it, with `attach` a contingent fallback retired last:
 
-- [Externally-witnessed sealed form and `attach`](per-node-memory/externally-witnessed-attach.md) —
-  the witness-supplied-at-access shape, reimplementing the shipped `vend_carrier` /
-  `reattach_*_with` reattaches as `Sealed` delegates.
+- [Consuming externally-witnessed `open` and the run-loop step restructure](per-node-memory/runloop-cps-open.md) —
+  the keystone: the consuming externally-witnessed rank-2 `open` and the run-loop step tail
+  restructured onto one universal brand (a spike proved it feasible and sound, witness collapsing to
+  the singleton start cart).
+- [Borrow-bounded `attach` fallback](per-node-memory/externally-witnessed-attach.md) —
+  the borrow-bounded accessor, added only if a migration site proves it cannot nest under `open`.
 - [`transfer_into` and closing the lift relocation unsafe](per-node-memory/transfer-into-lift.md) —
   the destination-witnessed relocation that retires the one irreducible value-path `unsafe`.
 - [FrameStorage self-reference removal](per-node-memory/framestorage-self-reference.md) —

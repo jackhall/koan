@@ -29,9 +29,10 @@ The ~73 scope-handle reads (`scope_for_bind` / `scope_bounded` / `current_scope`
 
 **Acceptance criteria.**
 
-- The per-call child scope rides an externally-witnessed [`Sealed`](externally-witnessed-attach.md)
-  carrier — erased into the frame's own region, re-anchored at access against the `CallFrame`'s held
-  `Rc` through `attach` — and the frame's own `reattach_witnessed` call (`arena.rs`) is gone.
+- The per-call child scope rides an externally-witnessed [`Sealed`](runloop-cps-open.md) carrier —
+  erased into the frame's own region, re-anchored at access against the `CallFrame`'s held `Rc`
+  through the keystone's `open` (or [`attach`](externally-witnessed-attach.md) if a read cannot nest)
+  — and the frame's own `reattach_witnessed` call (`arena.rs`) is gone.
 - The two `pin_deref` `unsafe` tokens — the `with_frame_interior` region re-exposure and the
   `pin_deref` primitive it solely feeds — are deleted; the seed binds reach the region through the
   witnessed carrier instead.
@@ -61,7 +62,7 @@ storage switch (`NonNull` → `&'static Scope`, see Directions) retires the shar
   scope-pointer machinery into the substrate dissolves the tokens without the new dependency, so the
   substrate approach is chosen.
 - *Externally-witnessed, not bundled — decided.* The child scope's carrier supplies its witness at
-  `attach` from the `CallFrame`'s `Rc`; bundling a clone would peg `FrameStorage`'s refcount and
+  access from the `CallFrame`'s `Rc`; bundling a clone would peg `FrameStorage`'s refcount and
   defeat the TCO uniqueness check `try_reset_for_tail` depends on.
 - *Retire the `reattach_witnessed` `as_ref` by storing `&'static Scope` — decided.* The `as_ref` is
   a read-side deref of an arena-resident scope (the carrier holds a `NonNull`, not the scope inline),
@@ -83,8 +84,8 @@ storage switch (`NonNull` → `&'static Scope`, see Directions) retires the shar
 
 **Requires:**
 
-- [Externally-witnessed sealed form and `attach`](externally-witnessed-attach.md) — the per-call
-  child scope is its first production consumer.
+- [Consuming externally-witnessed `open` and the run-loop step restructure](runloop-cps-open.md) —
+  supplies the externally-witnessed sealed form and `open` the per-call child scope reads through.
 
 **Unblocks:**
 

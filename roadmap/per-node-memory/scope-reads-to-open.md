@@ -27,10 +27,12 @@ from the scope path.
 
 **Requires:**
 
+- [Consuming externally-witnessed `open` and the run-loop step restructure](runloop-cps-open.md) —
+  establishes the restructure shape and the `open` verb these scope reads route.
 - [FrameStorage self-reference removal](framestorage-self-reference.md) — makes the child scope an
   externally-witnessed `Sealed`, the form these reads convert onto.
 
 **Unblocks:**
 
-- [Remove `attach`](remove-attach.md) — clearing the scope-path escapes is one of the four
+- [Remove `attach`](remove-attach.md) — clearing the scope-path escapes is one of the
   migrations that must land before `attach` can be deleted.

@@ -29,9 +29,13 @@ such caller copies out or inverts into a closure, the transitional `read` cannot
 
 ## Dependencies
 
-**Requires:** none — builds on the shipped `Sealed` / `open` substrate.
+**Requires:**
+
+- [Consuming externally-witnessed `open` and the run-loop step restructure](runloop-cps-open.md) —
+  establishes the restructure shape (nest the consumption under a rank-2 brand) these value reads
+  follow, and the `open` verb they route.
 
 **Unblocks:**
 
-- [Remove `attach`](remove-attach.md) — clearing the value-path escapes is one of the four
+- [Remove `attach`](remove-attach.md) — clearing the value-path escapes is one of the
   migrations that must land before `attach` can be deleted.

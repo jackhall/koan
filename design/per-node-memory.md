@@ -128,8 +128,12 @@ node's terminal under its producer frame `Rc`.
 by where the witness lives. The **self-witnessed** form bundles `W` (the
 `Sealed<T, W>` above): for a value *minted* into a fresh region whose pin nothing
 else holds. The **externally-witnessed** form carries *no* bundled witness; the
-holder already pins the backing and supplies it at `attach`
-(`attach<'w>(&'w self, &'w W) -> Live<'w>`, capped at the witness borrow). Bundling a witness the carrier does
+holder already pins the backing and supplies it at the access, read through a
+**consuming, externally-witnessed `open`** — the witness handed in at the call and the
+carrier moved into the same rank-2 `for<'b>` brand, so a non-`Copy` carrier (a continuation)
+passes and nothing branded escapes. (A borrow-bounded `attach<'w>(&'w self, &'w W) -> Live<'w>`,
+re-anchoring capped at the witness borrow, is a contingent fallback for a site that cannot nest its
+consumption inside the brand.) Bundling a witness the carrier does
 not need would be a redundant second owner — and, when the witness is
 reference-counted, an extra count the holder's own uniqueness checks must subtract.
 `yoke`, which moves `W` into the bundle, builds the self-witnessed form; the
@@ -153,8 +157,10 @@ from the frame `Rc` the builder already holds — co-located, since the scope li
 region — so the capturing carrier's witness set gains that `Rc` and the escaping closure pins the
 frame exactly as a node result does.
 
-**Opening.** Generic: `open` is the one accessor — a rank-2
-`open<R>(&self, for<'b> FnOnce(Live<'b, T>) -> R) -> R`. Between calls the carrier is
+**Opening.** Generic: `open` is the access verb — a rank-2
+`open<R>(&self, for<'b> FnOnce(Live<'b, T>) -> R) -> R` for the self-witnessed form, with a
+consuming, witness-supplied twin for the externally-witnessed form (same brand, witness handed in
+at the call rather than bundled). Between calls the carrier is
 `Erased`: no live reference exists. Each `open` is a borrow-scoped window in which
 references go live, branded `'b`; `R` cannot name `'b`, so nothing branded escapes
 the window. This is the design's safety core, and the RAII analogy is exact: *behave
@@ -189,16 +195,15 @@ therefore lose no safety — a reference may escape the *call* (the value drives
 step's work), but only as an owned copy or pin-bounded transfer, never as a branded
 borrow outliving its window.
 
-One concession is retained for migration. `open`-only forces the entire per-step
-consumption to nest inside the closure; where a re-anchored reference would
-otherwise ride up the dispatcher call stack, that becomes either copy-out or a CPS
-rewrite. A borrow-bounded `attach<'w>(&'w self, &'w W) -> Live<'w>`
-accessor — re-anchoring *capped at the witness borrow* `'w` rather than at a
-free `'b` that could be widened past it — is sound (the witness pin outlives the borrow, a fact the compiler
-checks) and lets such a reference flow up the stack without a copy. It is a
-transitional accessor: the substrate's destination is a single access verb, and
-`attach` is slated for removal once the consumption paths are restructured onto
-`open` + copy-out.
+The rank-2 brand forces the entire per-step consumption to nest inside the closure; where a
+re-anchored reference would otherwise ride up the dispatcher call stack, that becomes either
+copy-out or a CPS rewrite of the step. The run-loop step nests its whole tail this way — the
+continuation run, the outcome apply, and the finalize all run inside one brand (the consuming
+externally-witnessed `open` above), so nothing branded crosses the step boundary. A borrow-bounded
+`attach<'w>(&'w self, &'w W) -> Live<'w>` accessor — re-anchoring *capped at the witness borrow*
+`'w` rather than at a free `'b` that could be widened past it — is sound (the witness pin outlives
+the borrow, a fact the compiler checks) and lets a reference flow up the stack without a copy; it is
+a **contingent fallback** for any site that cannot nest, not a verb every consumer needs.
 
 ## Storage choice belongs to the workload
 
@@ -218,18 +223,23 @@ The construction surface (`yoke` / `merge` / `with` / `map`, the witness-borrow
 reattaches) is shipped, as is the relocation of the generic `Region<P>` allocator
 beside its carrier in the `witnessed` module and the opaque [`Sealed`](../src/witnessed.rs)
 storage form (`seal` / `open`, plus a transitional `read`), with the node result slot
-rerouted onto it. The `Sealed` carrier's remaining access verbs (`attach` /
-`transfer_into`) and the broad call-site migration onto the sealed surface are tracked
-by the per-node-memory roadmap project below.
+rerouted onto it. The `Sealed` carrier's remaining access verbs (the consuming
+externally-witnessed `open`, the contingent `attach`, `transfer_into`) and the broad
+call-site migration onto the sealed surface are tracked by the per-node-memory roadmap
+project below.
 
 ## Open work
 
 The [per-node-memory roadmap project](../roadmap/per-node-memory/) decomposes the remaining
-work into single-PR items — the carrier / allocation / read migrations onto the shipped
-storage surface, then `attach`'s removal:
+work into single-PR items — the keystone run-loop restructure and its `open` verb, then the
+carrier / allocation / read migrations onto it, with `attach` a contingent fallback retired last:
 
-- [Externally-witnessed sealed form and `attach`](../roadmap/per-node-memory/externally-witnessed-attach.md)
-  — the witness-supplied-at-access shape over the shipped witness-borrow reattaches.
+- [Consuming externally-witnessed `open` and the run-loop step restructure](../roadmap/per-node-memory/runloop-cps-open.md)
+  — the keystone: the consuming externally-witnessed rank-2 `open`, and the run-loop step tail
+  restructured onto one universal brand (a spike proved it sound, the witness collapsing to the
+  singleton start cart).
+- [Borrow-bounded `attach` fallback](../roadmap/per-node-memory/externally-witnessed-attach.md)
+  — the borrow-bounded accessor, added only if a migration site cannot nest under `open`.
 - [`transfer_into` and closing the lift relocation unsafe](../roadmap/per-node-memory/transfer-into-lift.md)
   — the destination-witnessed relocation verb; the regions a relocated value still
   reaches are pinned by the carrier's witness set, the per-value frame anchor retired
@@ -246,4 +256,4 @@ storage surface, then `attach`'s removal:
 - [Migrate result-slot value reads](../roadmap/per-node-memory/value-reads-to-open.md) and
   [scope-handle reads](../roadmap/per-node-memory/scope-reads-to-open.md) to `open`, then
   [remove `attach`](../roadmap/per-node-memory/remove-attach.md)
-  — restructuring the consumption paths onto the single access verb.
+  — restructuring the consumption paths onto the `open` verb.
