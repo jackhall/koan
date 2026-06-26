@@ -18,8 +18,9 @@ pub(crate) struct NodeWork<W: Workload> {
     pub(crate) deps: Vec<NodeId>,
     pub(crate) park_count: usize,
     /// The slot's continuation, stored erased to `'static` (`Erased<W::Continuation>`) so the node it
-    /// sits on pins no borrow. Re-anchored once at step entry by the scheduler (via
-    /// [`vend_carrier`](super::vend_carrier)) and handed back to run once; never inspected.
+    /// sits on pins no borrow. Handed back to run once; never inspected — the workload re-anchors it
+    /// once per step via the consuming externally-witnessed
+    /// [`SealedExtern::open`](crate::witnessed::SealedExtern::open), against the held cart `Rc`.
     pub(crate) continuation: Erased<W::Continuation>,
     pub(crate) carrier: Option<String>,
 }
@@ -56,8 +57,10 @@ pub(crate) struct NodeFrame<W: Workload> {
     /// across iterations.
     pub(crate) reserve: Option<Rc<W::Cart>>,
     /// Return contract enforced at the Done boundary, stored erased to `'static`
-    /// (`Erased<W::Contract>`) and re-anchored against `cart` by the scheduler (via
-    /// [`vend_carrier`](super::vend_carrier)). `None` for slots with no declared-return obligation.
+    /// (`Erased<W::Contract>`). The workload re-anchors it against `cart` at the step brand — opened
+    /// alongside the continuation by the consuming externally-witnessed
+    /// [`SealedExtern::open`](crate::witnessed::SealedExtern::open). `None` for slots with no
+    /// declared-return obligation.
     pub(crate) contract: Option<Erased<W::Contract>>,
 }
 

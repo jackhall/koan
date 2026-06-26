@@ -762,7 +762,6 @@ digraph {
     "koan::machine::execute::run_loop" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::execute::finalize" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
-    "koan::machine::execute::run_loop" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::model::ast" [label="uses", style="dashed"];
@@ -772,6 +771,7 @@ digraph {
     "koan::machine::execute::run_loop" -> "koan::parse" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::execute::run_loop" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::runtime" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::runtime" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::runtime" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
@@ -860,7 +860,6 @@ digraph {
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::parse" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::source" [label="uses", style="dashed"];
-    "koan::machine::model::values::carried" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::model::values::carried" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::carried" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::carried" -> "koan::witnessed" [label="uses", style="dashed"];

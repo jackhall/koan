@@ -46,7 +46,12 @@ MIRIFLAGS = "-Zmiri-tree-borrows"
 RESULT_RE = re.compile(
     r"test result: \w+\. (\d+) passed; (\d+) failed; \d+ ignored"
 )
-LEAK_RE = re.compile(r"memory leaked: (\d+) allocations? \((\d+) bytes?\)")
+# Miri reports leaks in one of two forms depending on the toolchain: an aggregate
+# `memory leaked: N allocations (M bytes)` (older), or one `error: memory leaked: alloc<NN> (…)`
+# line per leaked allocation (current). Count both so a format change can't silently zero the count
+# (which would mask the leak abort behind a "0 leaks" summary while the process still exits non-zero).
+LEAK_AGG_RE = re.compile(r"memory leaked: (\d+) allocations? \(\d+ bytes?\)")
+LEAK_ONE_RE = re.compile(r"memory leaked: alloc\d+\b")
 UB_RE = re.compile(r"error: Undefined Behavior")
 DURATIONS_BLOCK = re.compile(
     r"(<!-- slate-durations:start -->\n)(.*?)(\n<!-- slate-durations:end -->)",
@@ -134,7 +139,9 @@ def _env() -> dict:
 def parse(output: str) -> dict:
     passed = sum(int(m.group(1)) for m in RESULT_RE.finditer(output))
     failed = sum(int(m.group(2)) for m in RESULT_RE.finditer(output))
-    leaks = sum(int(m.group(1)) for m in LEAK_RE.finditer(output))
+    leaks = sum(int(m.group(1)) for m in LEAK_AGG_RE.finditer(output)) + len(
+        LEAK_ONE_RE.findall(output)
+    )
     ub = len(UB_RE.findall(output))
     return {"passed": passed, "failed": failed, "leaks": leaks, "ub": ub}
 

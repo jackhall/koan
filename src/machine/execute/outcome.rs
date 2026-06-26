@@ -20,11 +20,9 @@
 use crate::machine::core::kfunction::action::{Dep, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::ScopeId;
-use crate::machine::model::values::{Carried, KObject, ResultCarriedFamily};
-use std::rc::Rc;
+use crate::machine::model::values::{Carried, KObject};
 
 use crate::machine::{KError, NodeId, TraceFrame};
-use crate::scheduler::reattach_slice_with;
 use crate::witnessed::reattachable;
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
@@ -153,15 +151,15 @@ pub(in crate::machine::execute) type NodeContinuation<'a> = Box<
 >;
 
 /// `Reattachable` family for the [`NodeContinuation`] continuation — the scheduler stores it erased
-/// (`Erased<ContinuationFamily>`) on a lifetime-free node and re-anchors it once at step entry via
-/// [`vend_carrier`](crate::scheduler::vend_carrier) before the single-shot run. The continuation
-/// captures run-lived data (the parked AST, a finish closure's captured scope) living in the run
-/// region or a strict ancestor of the slot's per-call cart, which the node's
-/// [`NodeFrame`](super::nodes::NodeFrame) cart `Rc` keeps live across the step — the liveness witness
-/// the scheduler's reattach is bounded by. Unlike the `Copy` value / contract carriers the
-/// continuation is a `Box<dyn FnOnce>` consumed once, so the family is not `Copy` and the vend takes
-/// the erased carrier by value. Layout-invariant: `NodeContinuation<'r>` is a `Box<dyn …>` fat pointer whose
-/// representation never depends on `'r`.
+/// (`Erased<ContinuationFamily>`) on a lifetime-free node and the workload opens it once per step via
+/// the consuming externally-witnessed [`SealedExtern::open`](crate::witnessed::SealedExtern::open)
+/// before the single-shot run. The continuation captures run-lived data (the parked AST, a finish
+/// closure's captured scope) living in the run region or a strict ancestor of the slot's per-call
+/// cart, which the node's [`NodeFrame`](super::nodes::NodeFrame) cart `Rc` keeps live across the step
+/// — the liveness witness the open is bounded by. Unlike the `Copy` value / contract carriers the
+/// continuation is a `Box<dyn FnOnce>` consumed once, so the family is not `Copy` and the open
+/// consumes the erased carrier by value. Layout-invariant: `NodeContinuation<'r>` is a `Box<dyn …>`
+/// fat pointer whose representation never depends on `'r`.
 pub(in crate::machine::execute) struct ContinuationFamily;
 
 // `NodeContinuation<'r>` is one type generic only in `'r` (a boxed trait object); its fat-pointer
@@ -215,42 +213,34 @@ pub(in crate::machine::execute) fn ignore_results<'a>(
     Box::new(move |view, _results, idx| resume(view, idx))
 }
 
-/// Reattach the consumer's pull-lifted dep terminals to the cart-scale lifetime `'w` the
-/// continuation runs at. Each value was just copied into this consumer's per-call frame and dies
-/// with it, so re-anchoring to the lifetime the cart `Rc` `witness` pins is sound — a safe
-/// `reattach_slice_with` whose `'w` cannot outrun the witness borrow.
-pub(in crate::machine::execute) fn deps_at_step<'b, 'w, F>(
-    results: &'b [Result<Carried<'_>, KError>],
-    witness: &'w Rc<F>,
-) -> &'b [Result<Carried<'w>, KError>] {
-    reattach_slice_with::<ResultCarriedFamily, _>(results, witness)
-}
-
 #[cfg(test)]
 mod erased_continuation_tests {
     //! Miri coverage for the [`ContinuationFamily`] continuation erasure: the test pins the
-    //! erase → reattach → invoke round-trip (`Erased::erase` + the scheduler's `vend_carrier`) under
-    //! tree borrows; logical assertions are minimal — it fails when Miri reports UB, not on values.
+    //! erase → open → invoke round-trip (`Erased::erase` + the consuming externally-witnessed
+    //! [`SealedExtern::open`]) under tree borrows; logical assertions are minimal — it fails when Miri
+    //! reports UB, not on values.
 
     use super::*;
     use crate::builtins::default_scope;
     use crate::machine::core::{CallFrame, FrameStorage};
-    use crate::scheduler::{vend_carrier, Erased, Scheduler};
+    use crate::scheduler::{Erased, Scheduler};
+    use crate::witnessed::SealedExtern;
     use std::rc::Rc;
 
     /// A continuation capturing cart-ancestor data (a `&KObject` in the run region — a strict
-    /// ancestor of the cart) is erased to `'static`, reattached against the cart `Rc` for one step,
-    /// and then *invoked*, so tree borrows checks the capture read through the lifetime-fabricated
-    /// box. The cart's `outer` chain pins the ancestor region, so the step-scale fabrication is
-    /// honest. Mirrors the erase → reattach transmute pair plus the single-shot call site
-    /// (`run_step`); fails on UB, not values.
+    /// ancestor of the cart) is erased to `'static`, **opened** against the cart `Rc` at a rank-2
+    /// brand, and *invoked* inside it, so tree borrows checks the capture read through the
+    /// lifetime-fabricated box. A boxed `dyn FnOnce` is opened by value (the consuming verb) and its
+    /// captured-environment read rides the fabricated brand `'b`. The cart's `outer` chain pins the
+    /// ancestor region, so the step-scale fabrication is honest. Mirrors the run-loop step's
+    /// continuation open + single-shot call (`run_step`); fails on UB, not values.
     #[test]
-    fn erased_continuation_reattach_roundtrip() {
+    fn erased_continuation_open_roundtrip() {
         let region = FrameStorage::run_root();
         let scope = default_scope(&region, Box::new(std::io::sink()));
         // The captured value lives in the run region — the ancestor the cart's `outer` chain pins.
         let captured: &KObject = region.region().alloc_object(KObject::Number(7.0));
-        // The cart `Rc` held live to the end of the test witnesses the reattach below.
+        // The cart `Rc` held live to the end of the test witnesses the open below.
         let cart = Rc::new(CallFrame::new_test(scope, None));
 
         let continuation: NodeContinuation = Box::new(move |_view, _results, _idx| {
@@ -261,15 +251,17 @@ mod erased_continuation_tests {
             ))))
         });
         let erased: Erased<ContinuationFamily> = Erased::erase(continuation);
-        // Vend the continuation reattached against the held cart `Rc`, then run the single shot — the
-        // same scheduler-side reattach (`vend_carrier`) the driver uses in `run_step`.
-        let reattached: NodeContinuation<'_> = vend_carrier(erased, &cart);
         let sched = Scheduler::new();
         let ambient = crate::machine::execute::ambient::AmbientContext::default();
-        let view = SchedulerView::new(&sched, &ambient);
-        let out = reattached(&view, &[], 0);
-        assert!(matches!(out, Outcome::Done(Err(_))));
-        // Mutate the region through a sibling pointer after the call to catch a stacked-borrow regression.
+        // Open the continuation against the held cart `Rc` at the brand and run the single shot inside
+        // it — the same consuming externally-witnessed open the driver uses in `run_step`. The branded
+        // `Outcome` is consumed in place; nothing leaves the brand.
+        SealedExtern::seal(erased).open(&cart, |continuation| {
+            let view = SchedulerView::new(&sched, &ambient);
+            let out = continuation(&view, &[], 0);
+            assert!(matches!(out, Outcome::Done(Err(_))));
+        });
+        // Mutate the region through a sibling pointer after the brand to catch a stacked-borrow regression.
         let _other = region.region().alloc_object(KObject::Number(8.0));
         assert!(matches!(captured, KObject::Number(n) if *n == 7.0));
     }

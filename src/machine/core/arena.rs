@@ -18,7 +18,6 @@ use std::rc::Rc;
 use typed_arena::Arena;
 
 use super::reattach::pin_deref;
-use crate::witnessed::{Region, StorageProfile, Stored};
 use super::scope::Scope;
 use super::scope_ptr::ErasedScopePtr;
 use crate::machine::core::kfunction::KFunction;
@@ -26,6 +25,7 @@ use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{Held, KObject, Module, ModuleSignature};
 use crate::witnessed::reattachable;
+use crate::witnessed::{Region, StorageProfile, Stored};
 
 /// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
 /// family's `'static` form (phantom); the [`Region`] engine re-anchors to the caller's `'a`
@@ -79,10 +79,7 @@ pub type KoanRegion = Region<KoanStorageProfile>;
 // region is borrowed, so a held `&Region` keeps any pointee alloc'd in it (or a strict ancestor it
 // roots) at a fixed address — the bound the consumer-pull lift's frameless re-anchor relies on to
 // witness the destination lifetime.
-unsafe impl<W: crate::witnessed::StorageProfile> crate::witnessed::Witness
-    for Region<W>
-{
-}
+unsafe impl<W: crate::witnessed::StorageProfile> crate::witnessed::Witness for Region<W> {}
 
 /// True iff any descendant of `obj` carries an `Rc<FrameStorage>` whose backing `KoanRegion`
 /// is `region_ptr`. Walks the composite shapes mirrored from `KObject::deep_clone`

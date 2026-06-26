@@ -586,6 +586,133 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
     }
 }
 
+/// The **externally-witnessed** dormant form: an erased carrier that bundles *no* witness, opened by
+/// supplying one at the access. Where [`Sealed`] bundles `W` (and so [`Sealed::open`] reads the pin
+/// from the bundle), `SealedExtern` carries the carrier alone — the holder already pins the backing
+/// and hands a borrow of the witness in at [`open`](Self::open). This is the form for a carrier whose
+/// witness the holder must *not* duplicate: bundling a clone of a reference-counted cart would peg the
+/// holder's own `Rc::get_mut` uniqueness check (the TCO frame-reuse gate). It wraps an [`Erased`]
+/// rather than re-storing the retype, so [`retype`] stays the single audited reattach home.
+///
+/// Its [`open`](Self::open) is **consuming** (takes `self`), so a non-`Copy` carrier — a
+/// `Box<dyn FnOnce>` continuation — passes where [`Sealed::open`]'s `At<'static>: Copy` excludes it;
+/// and several can be combined under one brand with [`zip`](Self::zip) so heterogeneous carriers
+/// witnessed by the same pin open together (the run-loop step's continuation / contract / region).
+pub struct SealedExtern<T: Reattachable> {
+    value: Erased<T>,
+}
+
+impl<T: Reattachable> SealedExtern<T> {
+    /// Seal an **already-erased** carrier into its externally-witnessed dormant form — the entry for a
+    /// carrier the node already stores erased (the continuation / contract). No witness is bundled.
+    pub(crate) fn seal(value: Erased<T>) -> Self {
+        SealedExtern { value }
+    }
+
+    /// Erase a **live** carrier directly into the dormant form — the entry for a value re-anchored at
+    /// the access rather than recovered from node storage (the run-loop `dest` region). Safe for the
+    /// same reason as [`Erased::erase`]: forgetting a lifetime for storage cannot fabricate one.
+    pub(crate) fn erase(live: T::At<'_>) -> Self {
+        SealedExtern {
+            value: Erased::erase(live),
+        }
+    }
+
+    /// Open the externally-witnessed carrier at a **rank-2** (`for<'b>`) brand — the **consuming,
+    /// externally-witnessed** destination verb, the witness-supplied twin of [`Sealed::open`]. The
+    /// carrier is re-anchored to a fresh existential `'b` and handed **by value** to a closure whose
+    /// result `R` cannot mention `'b`, so nothing branded by the fabricated content lifetime escapes
+    /// the pin (the same generativity trick as [`Witnessed::with`]). Two things distinguish it from
+    /// [`Sealed::open`]: the pin is supplied **at the call** (`witness`) rather than read from a
+    /// bundle, and the carrier is **consumed**, so a non-`Copy` `Box<dyn FnOnce>` passes — there is no
+    /// `At<'static>: Copy` bound.
+    ///
+    /// Soundness rests on the witness borrow: holding `&W` for the whole call keeps the carrier's
+    /// pointee live and fixed-address (the [`Witness`] contract), and the fresh `'b` lives only for
+    /// the synchronous `f(live)` call nested inside that borrow — so the re-anchored view cannot
+    /// outlive the pin, and the `for<'b>` quantifier keeps it from escaping into `R`. The one audited
+    /// reattach is [`Erased::reattach`]; this verb adds no `unsafe` of its own beyond it.
+    ///
+    /// The brand is load-bearing: returning the branded value out of the closure (`open(w, |live| live)`)
+    /// fails to compile, because `R` would have to name `'b`. This mirrors the [`Sealed::open`] guard
+    /// but over a **consumed**, externally-witnessed carrier.
+    ///
+    /// ```compile_fail
+    /// use koan::witnessed::{Reattachable, SealedExtern};
+    /// use std::rc::Rc;
+    ///
+    /// struct RefFamily;
+    /// // SAFETY: `&'r u32` is one type generic only in `'r`.
+    /// unsafe impl Reattachable for RefFamily {
+    ///     type At<'r> = &'r u32;
+    /// }
+    ///
+    /// let backing: Rc<Vec<u32>> = Rc::new(vec![42]);
+    /// let sealed: SealedExtern<RefFamily> = SealedExtern::erase(&backing[0]);
+    /// // Try to smuggle the branded value OUT of `open` — rejected by the `for<'b>` brand.
+    /// let escaped: &u32 = sealed.open(&backing, |live| live);
+    /// drop(sealed);
+    /// println!("{}", *escaped);
+    /// ```
+    pub fn open<W: Witness, R>(self, _witness: &W, f: impl for<'b> FnOnce(T::At<'b>) -> R) -> R {
+        // SAFETY: the borrowed `_witness` pins the carrier's pointee for the whole call (the `Witness`
+        // contract: the backing stays live and fixed-address while the witness is held — here borrowed
+        // for the call). The carrier is re-anchored to a fresh existential `'b` and handed by value to
+        // the `for<'b>` closure, whose result `R` cannot name `'b`, so nothing content-branded escapes
+        // the pin. Lifetime-only retype of a single-lifetime family (the `Reattachable` contract).
+        let live: T::At<'_> = unsafe { self.value.reattach() };
+        f(live)
+    }
+
+    /// Combine two externally-witnessed carriers into one, so they open together at a **single** brand
+    /// via [`open`](Self::open) — the way heterogeneous carriers pinned by the *same* witness reach one
+    /// step lifetime. The combined carrier is an [`And`] product of the two families; opening it hands
+    /// the closure a `(T::At<'b>, U::At<'b>)` pair at one `'b`. A pure-data combine of two already-erased
+    /// carriers, so it adds no `unsafe`: both halves are re-anchored together by the eventual `open`.
+    pub(crate) fn zip<U: Reattachable>(self, other: SealedExtern<U>) -> SealedExtern<And<T, U>> {
+        SealedExtern {
+            value: Erased {
+                inner: (self.value.inner, other.value.inner),
+            },
+        }
+    }
+}
+
+/// Seal an **optional** already-erased carrier into the externally-witnessed dormant form, folding the
+/// `Option` *inside* the seal as an [`OptionOf`] carrier — so an optional operand (the run-loop's
+/// frame-gated return contract) can [`zip`](SealedExtern::zip) into a combined open and arrive as
+/// `Option<T::At<'b>>` at the brand. A pure-data rewrap of `Option<Erased<T>>` into
+/// `Erased<OptionOf<T>>` (both are `'static`-erased), so it carries no `unsafe`.
+pub(crate) fn seal_option<T: Reattachable>(value: Option<Erased<T>>) -> SealedExtern<OptionOf<T>> {
+    SealedExtern {
+        value: Erased {
+            inner: value.map(|erased| erased.inner),
+        },
+    }
+}
+
+/// Product of two carrier families, re-anchored as one — the family [`SealedExtern::zip`] seals so
+/// heterogeneous carriers pinned by a shared witness open at a single brand. Layout-invariant in `'r`
+/// because a tuple of two layout-invariant families is itself layout-invariant.
+pub struct And<A, B>(PhantomData<(A, B)>);
+
+// SAFETY: `(A::At<'r>, B::At<'r>)` is one type up to `'r` when both `A` and `B` are (each component is
+// layout-invariant, so the tuple is too) — the `Reattachable` contract, discharged componentwise.
+unsafe impl<A: Reattachable, B: Reattachable> Reattachable for And<A, B> {
+    type At<'r> = (A::At<'r>, B::At<'r>);
+}
+
+/// `Option` of a carrier family, re-anchored as one — the family [`seal_option`] seals so an
+/// **optional** operand opens to `Option<T::At<'b>>` at the brand. Layout-invariant in `'r` because
+/// an `Option` of a layout-invariant family is itself layout-invariant.
+pub struct OptionOf<T>(PhantomData<T>);
+
+// SAFETY: `Option<T::At<'r>>` is one type up to `'r` when `T` is — the `Reattachable` contract,
+// discharged through the inner family.
+unsafe impl<T: Reattachable> Reattachable for OptionOf<T> {
+    type At<'r> = Option<T::At<'r>>;
+}
+
 /// Re-anchor a **live** single-lifetime-family value to the `'w` a borrowed [`Witness`] pins — the
 /// witness-explicit replacement for a bare transient reattach. The value is erased and immediately
 /// re-anchored at `'w`; the witness borrow bounds `'w`, so the caller cannot pick a `'w` outliving
@@ -608,20 +735,6 @@ where
     // storage then re-anchor at `'w`; lifetime-only retype of a single-lifetime family.
     let erased = erase_to_static::<T>(value);
     unsafe { retype::<T::At<'static>, T::At<'w>>(erased) }
-}
-
-/// Slice twin of [`reattach_with`]: re-anchor a shared slice's element content lifetime to the `'w`
-/// a borrowed witness pins, preserving the borrow `'i`.
-///
-/// The **signature is safe** for the same reason as [`reattach_with`]: `'w` is bounded by the
-/// witness borrow, so the elements the witness pins outlive the re-anchored view.
-pub(crate) fn reattach_slice_with<'i, 'w, T: Reattachable, W: Witness>(
-    slice: &'i [T::At<'_>],
-    _witness: &'w W,
-) -> &'i [T::At<'w>] {
-    // SAFETY: content re-anchored to the witnessed `'w`; the borrow `'i` is preserved. `&[_]` is a
-    // fat pointer, retyped lifetime-only; the elements live for `'w` (witness-pinned).
-    unsafe { retype::<&'i [T::At<'_>], &'i [T::At<'w>]>(slice) }
 }
 
 /// Reference twin of [`reattach_with`]: re-anchor a `&T::At<'static>` (an erased value read back in
@@ -654,22 +767,6 @@ pub(crate) fn reattach_ref_with<'w, 'b: 'w, T: Reattachable, W: Witness>(
 pub(crate) unsafe fn reattach_value<'a, 'b, T: Reattachable>(value: T::At<'a>) -> T::At<'b> {
     // SAFETY: see the function contract.
     unsafe { retype::<T::At<'a>, T::At<'b>>(value) }
-}
-
-/// Re-anchor a stored [`Erased`] one-shot inter-node carrier against a held frame `Rc` witness — the
-/// `Erased`-carrier sibling of [`reattach_with`], for the continuation / return-contract carriers the
-/// driver re-anchors once per step against the node's cart `Rc`.
-///
-/// The **signature is safe** — `'w` is bounded by the `witness` borrow, so the frame the witness
-/// pins is live for all of `'w`, and the caller cannot pick a `'w` outliving it.
-pub(crate) fn vend_carrier<'w, T: Reattachable, F>(
-    erased: Erased<T>,
-    _witness: &'w Rc<F>,
-) -> T::At<'w> {
-    // SAFETY: `'w` is pinned by the `witness` borrow (held across the vend's use); the carrier's
-    // captures live in the frame it pins (the structural co-location invariant). Lifetime-only
-    // retype of a single-lifetime family, per the `Reattachable` contract.
-    unsafe { erased.reattach() }
 }
 
 /// Borrowed shared-reference retype: re-expose a `&T::At<'a>` at a different content (and borrow)

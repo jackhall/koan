@@ -7,9 +7,10 @@ use crate::machine::{CallFrame, KError, KErrorKind};
 use super::runtime::KoanRuntime;
 
 /// The workload's Done-boundary contract hook: enforce a finished node's declared return contract,
-/// returning the slot's final terminal. The driver vends the slot's contract already re-anchored
-/// (the scheduler owns that reattach in `vend_carrier`) and hands this hook the live
-/// [`ReturnContract`] plus the (optional) per-call frame; the hook runs the declared-return check.
+/// returning the slot's final terminal. The driver opens the slot's contract at the step brand
+/// (alongside the continuation, via [`SealedExtern::open`](crate::witnessed::SealedExtern::open)) and
+/// hands this hook the live [`ReturnContract`] plus the (optional) per-call frame; the hook runs the
+/// declared-return check.
 /// The scheduler decides *when* (the Done boundary); this hook owns the `ReturnContract`-/
 /// `KType`-naming *how*, so the scheduler core names neither.
 ///

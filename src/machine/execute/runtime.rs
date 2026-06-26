@@ -29,7 +29,7 @@ use crate::machine::core::FrameStorage;
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallFrame, KError, NodeId, Scope};
 
-use super::dispatch::{reattach_node_scope, DepRequest};
+use super::dispatch::DepRequest;
 use super::lift::NodeLift;
 use super::nodes::{ChainOp, NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, Continuation, Outcome};
@@ -371,18 +371,15 @@ impl<'run> KoanRuntime<'run> {
     /// Interpret an [`Outcome`] into the scheduler effect it names and return the slot's
     /// [`NodeStep`]. This is the sole graph writer the dispatch side reaches — a decide handler
     /// never holds `&mut Scheduler`.
-    pub(in crate::machine::execute) fn apply_outcome<'step, 'w>(
+    pub(in crate::machine::execute) fn apply_outcome<'step>(
         &mut self,
         outcome: Outcome<'step>,
         idx: usize,
-        // The caller's step-held cart `Rc`, borrowed for the whole step (`'w: 'step`), so the
-        // `Outcome::Forward` node→step re-anchor below is a safe `reattach_with` rather than a
-        // fabrication: the cart pins the pulled value's region for all of `'step`.
-        witness: &'w Rc<CallFrame>,
-    ) -> NodeStep<'step>
-    where
-        'w: 'step,
-    {
+        // The consumer `dest` region opened at the step brand `'step`, into which an
+        // `Outcome::Forward` pull is lifted — so the pulled value is born at `'step` natively, no
+        // node→step value reattach. The non-Forward arms ignore it.
+        dest: &'step crate::machine::core::KoanRegion,
+    ) -> NodeStep<'step> {
         match outcome {
             // The terminal stays at the step lifetime `'s` — the run loop's `run_step` finalizes it
             // into the slot store (erasing it) before the step's frame witness drops, so it never
@@ -509,22 +506,13 @@ impl<'run> KoanRuntime<'run> {
                 // then this slot's consumers pull from here. Otherwise splice the slot out: move its
                 // consumers onto `producer`'s notify list and alias the slot to `producer`.
                 if self.sched.is_result_ready(producer) {
-                    // Pull `producer`'s terminal into this consumer's own scope region, at a *node*
-                    // lifetime bounded by the active cart — not a fabricated `'run`. `read_lifted`
-                    // does the same node-scale re-anchor the dep path uses: it lifts a framed
-                    // terminal into `dest` and forwards a frameless one as-is, with no `'run` step.
-                    let payload = self
-                        .ambient
-                        .active_payload()
-                        .expect("a slot step installs the ambient payload");
-                    let dest =
-                        reattach_node_scope(&payload.scope, self.ambient.active_frame_ref()).region;
-                    let pulled = self.read_lifted(producer, dest);
-                    // Shorten the node value to the uniform `NodeStep` step lifetime `'s`: it lives in
-                    // `dest`, which the caller's step-held cart `witness` pins for all of `'s` (`'w:
-                    // 's`), so this is a safe `reattach_with` — its signature bounds `'s` to the
-                    // witness borrow.
-                    NodeStep::Done(pulled.map(|v| reattach_with::<CarriedFamily, _>(v, witness)))
+                    // Pull `producer`'s terminal into the consumer `dest` region — opened at the step
+                    // brand `'step`, so the pulled value is born there natively (`read_lifted` lifts a
+                    // framed terminal into `dest` and forwards a frameless one as-is, both at `'step`).
+                    // No node→step value reattach: the realized `NodeStep::Done` is already at `'step`.
+                    // `dest` is the bare-name forward's own step scope region — unchanged across the
+                    // read-only forward decide, the same region the step's dep pull-lifts targeted.
+                    NodeStep::Done(self.read_lifted(producer, dest))
                 } else {
                     // Not ready: `NodeStep::Alias` drives `splice_forward` (move consumers onto the
                     // producer + alias the slot) in the execute loop.

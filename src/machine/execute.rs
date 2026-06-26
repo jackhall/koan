@@ -19,7 +19,6 @@ mod runtime;
 
 pub(in crate::machine::execute) use outcome::{
     catch_continuation, ignore_results, short_circuit, CatchFinish, ContinuationFamily, DepFinish,
-    NodeContinuation,
 };
 pub use runtime::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};
 
