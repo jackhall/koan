@@ -38,5 +38,7 @@ primitive.
 
 **Unblocks:**
 
+- [Borrow-bounded `attach` fallback](externally-witnessed-attach.md) — one of the call sites that
+  item surveys for an un-nestable non-scope reference.
 - [Remove `attach`](remove-attach.md) — one of the migrations that must land before `attach` can be
   deleted.

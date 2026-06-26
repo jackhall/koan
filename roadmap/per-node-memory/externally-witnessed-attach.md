@@ -48,6 +48,11 @@ one into it), is unknown until they run.
   supplies the externally-witnessed sealed form and the `open` whose insufficiency `attach` backstops.
 - [FrameStorage self-reference removal](framestorage-self-reference.md) — landed the scope-specialized
   `attach` this item generalizes (or records as the only one).
+- [Migrate the loose witness-borrow wrappers onto `Sealed`](migrate-reattach-helpers.md) — a call-site
+  migration this surveys for a non-scope reference that cannot nest under `open`.
+- [Migrate result-slot value reads to `open`](value-reads-to-open.md) — surveyed for the same
+  un-nestable non-scope reference.
+- [Migrate scope-handle reads to `open`](scope-reads-to-open.md) — surveyed for the same.
 
 **Unblocks:**
 
