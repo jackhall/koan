@@ -1,42 +1,44 @@
 # Borrow-bounded `attach` fallback
 
-Add the borrow-bounded `attach` accessor over the externally-witnessed sealed form — only if a
-call-site migration proves it needs a re-anchored reference to escape up-stack where the keystone's
-`open` cannot nest.
+Generalize the scope-specialized borrow-bounded `attach` that landed in framestorage into a generic
+`Sealed` verb — only if a further call-site migration proves it earns one.
 
-**Problem.** The [keystone](runloop-cps-open.md) adds the consuming externally-witnessed `open` and
-proves the run-loop step tail nests under it with no reference escaping the dispatcher call stack.
-The broader call-site migrations — [migrate-reattach-helpers](migrate-reattach-helpers.md),
-[value-reads-to-open](value-reads-to-open.md), [scope-reads-to-open](scope-reads-to-open.md) — sweep
-many more sites, and one may hold a re-anchored reference that genuinely must ride up the call stack
-and cannot fold into a closure. `open` forbids escape by construction (its `for<'b>` brand is
-un-nameable in the result), so such a site has no `open` route; a borrow-bounded accessor —
-re-anchoring **capped at** the witness borrow `'w` rather than a free `'b` widenable past the pin —
-would be the sound fallback. Whether any site actually needs it is unknown until the migrations run.
+**Problem.** A **scope-specialized** `attach` already exists:
+[framestorage-self-reference](framestorage-self-reference.md) landed
+`SealedExtern<ScopeRefFamily>::attach` (a borrow-bounded `&'w Scope<'b>` re-anchor) because the
+frame's child-scope readers alloc into the cart region and return the result up-stack, which the
+keystone's [`open`](runloop-cps-open.md) forbids by construction — its `for<'b>` brand is un-nameable
+in the result, so an escaping site has no `open` route. That `attach` is scope-only; the generic
+`Sealed<T>::attach<'w>(&'w self, &'w W) -> Live<'w, T>` the substrate would expose for *any* carrier
+is not built. Whether the broader migrations — [migrate-reattach-helpers](migrate-reattach-helpers.md),
+[value-reads-to-open](value-reads-to-open.md), [scope-reads-to-open](scope-reads-to-open.md) — surface
+a non-scope site that also cannot nest, warranting that generic verb (and folding the scope-specific
+one into it), is unknown until they run.
 
 **Acceptance criteria.**
 
-- The call-site migrations are surveyed for any re-anchored reference that must escape the dispatcher
-  call stack and cannot nest under the keystone's `open`.
-- If any such site exists: `Sealed<T, W>` gains a borrow-bounded
-  `attach<'w>(&'w self, &'w W) -> Live<'w, T>` over the externally-witnessed sealed form —
-  re-anchoring capped at the witness borrow, the shape of the shipped
-  [`vend_carrier`](../../src/witnessed.rs) / [`reattach_ref_with`](../../src/witnessed.rs) — with its
-  own Miri tree-borrows proof (round-trip, and refuses-when-the-anchor-is-widened), and the
-  un-nestable site(s) are named with why they cannot fold.
-- If no such site exists: `attach` is not added, the survey's conclusion that every site nests under
-  `open` is recorded, and [remove `attach`](remove-attach.md) closes as a no-op.
+- The call-site migrations are surveyed for any re-anchored reference (beyond the frame child scope)
+  that must escape the dispatcher call stack and cannot nest under `open`.
+- If any such site exists: `Sealed<T, W>` gains a generic borrow-bounded
+  `attach<'w>(&'w self, &'w W) -> Live<'w, T>` — re-anchoring capped at the witness borrow, the shape
+  of the shipped [`reattach_ref_with`](../../src/witnessed.rs) — with its own Miri tree-borrows proof
+  (round-trip, and refuses-when-the-anchor-is-widened); the framestorage scope-specialized `attach`
+  folds into it; and the un-nestable site(s) are named with why they cannot fold.
+- If no further such site exists: the generic verb is not added, the survey's conclusion is recorded,
+  and the framestorage scope-specialized `attach` is the only one — [remove `attach`](remove-attach.md)
+  removes it.
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` clean.
 
 **Directions.**
 
-- *Necessity is contingent on the migrations — open.* The keystone proved the run-loop tail nests
-  without escape; whether any other site genuinely cannot is settled by the migrations.
-  Recommended: prefer `open` + copy-out everywhere and reach for `attach` only on a site that
-  demonstrably cannot nest, so the verb is added only if earned.
-- *Borrow-bounded, not free content — decided.* If added, `attach` re-anchors capped at the witness
-  borrow `'w` — the witness pin outlives it, a fact the compiler checks — never a free `'b`
-  widenable past the pin; that escaping shape is the keystone's rank-2 `open`, not `attach`.
+- *A scope `attach` is already earned; the generic verb stays contingent — decided.* The frame child
+  scope demonstrably cannot nest, so its borrow-bounded `attach` shipped in framestorage; whether a
+  *generic* `Sealed<T>::attach` is earned beyond it is settled by the remaining migrations.
+  Recommended: prefer `open` + copy-out elsewhere and generalize only on a non-scope site that
+  demonstrably cannot nest.
+- *Borrow-bounded, not free content — decided.* `attach` re-anchors capped at the witness borrow `'w`
+  — the witness pin outlives it, a fact the compiler checks — never a free `'b` widenable past the
+  pin; that escaping shape is the keystone's rank-2 `open`, not `attach`.
 
 ## Dependencies
 
@@ -44,8 +46,10 @@ would be the sound fallback. Whether any site actually needs it is unknown until
 
 - [Consuming externally-witnessed `open` and the run-loop step restructure](runloop-cps-open.md) —
   supplies the externally-witnessed sealed form and the `open` whose insufficiency `attach` backstops.
+- [FrameStorage self-reference removal](framestorage-self-reference.md) — landed the scope-specialized
+  `attach` this item generalizes (or records as the only one).
 
 **Unblocks:**
 
-- [Remove `attach`](remove-attach.md) — if `attach` is added, its removal is the cleanup; if not,
-  that item closes as a no-op.
+- [Remove `attach`](remove-attach.md) — removes the `attach`(es) this item leaves, once the read
+  migrations clear their consumers.

@@ -3,14 +3,16 @@
 Delete the transitional `attach` accessor once every consumer is on `open`, leaving `Sealed` with
 a single access verb.
 
-**Problem.** [`attach`](externally-witnessed-attach.md), *if it was added* (a migration site proved
-un-nestable), is the transitional borrow-bounded accessor that lets a re-anchored reference ride up
-the dispatcher call stack. Once the carrier and read migrations land, its only remaining
+**Problem.** [`attach`](externally-witnessed-attach.md) exists:
+[framestorage-self-reference](framestorage-self-reference.md) landed a scope-specialized
+`SealedExtern<ScopeRefFamily>::attach` for the frame's un-nestable child-scope readers, and
+[externally-witnessed-attach](externally-witnessed-attach.md) may generalize it to a `Sealed<T>` verb.
+It is the transitional borrow-bounded accessor that lets a re-anchored reference ride up the
+dispatcher call stack. Once the carrier and read migrations invert those readers, its only remaining
 justification — escaping references — is gone, but the accessor and its externally-witnessed read
-path still exist as a second access verb alongside `open`. If no site needed `attach`, this item
-closes as a no-op. (Its self-witnessed twin, the transitional `read`, is retired in parallel by
-[value-reads-to-open](value-reads-to-open.md); this item clears `attach`, so the two reach the
-single-access-verb end-state together.)
+path still exist as a second access verb alongside `open`. (Its self-witnessed twin, the transitional
+`read`, is retired in parallel by [value-reads-to-open](value-reads-to-open.md); this item clears
+`attach`, so the two reach the single-access-verb end-state together.)
 
 **Acceptance criteria.**
 
@@ -31,8 +33,8 @@ single-access-verb end-state together.)
 
 **Requires:**
 
-- [Borrow-bounded `attach` fallback](externally-witnessed-attach.md) — the verb this removes; if it
-  was never added (no site needed it), this item closes as a no-op.
+- [Borrow-bounded `attach` fallback](externally-witnessed-attach.md) — the verb this removes;
+  framestorage already landed a scope-specialized one, so this is no longer a no-op.
 - [Migrate the loose witness-borrow wrappers onto `Sealed`](migrate-reattach-helpers.md) — clears
   the continuation / contract and value-path reference reattaches.
 - [Migrate result-slot value reads to `open`](value-reads-to-open.md) — clears the value-read
