@@ -37,7 +37,7 @@ use std::ptr::NonNull;
 
 use super::scope::Scope;
 use crate::scheduler::{reattach_ref, reattach_ref_with};
-use crate::witnessed::{erase_to_static, reattachable, Witness};
+use crate::witnessed::{erase_to_static, reattachable, SealedExtern, Witness};
 
 /// `Reattachable` family for [`Scope`] — the family every scope-pointer re-attach (and the region's
 /// scope-erasure storage) routes through the single audited lifetime-retype. Layout-invariant: a
@@ -176,5 +176,25 @@ impl ErasedScopePtr {
     /// the witness borrow, so the re-anchored view cannot outrun the pin.
     pub fn reattach_witnessed<'w, 'b: 'w, W: Witness>(&'w self, witness: &'w W) -> &'w Scope<'b> {
         reattach_ref_with::<ScopeFamily, W>(self.stored, witness)
+    }
+}
+
+/// The frame's per-call child scope rides the substrate's externally-witnessed
+/// [`SealedExtern`] over [`ScopeRefFamily`] (a `&'static Scope`, erased once through the safe
+/// `erase_to_static`). [`Self::attach`] is the borrow-bounded re-anchor it reads through — the
+/// scope-pointer twin of [`reattach_with`](crate::witnessed), distinct from the carrier's rank-2
+/// `open` because the child scope is *alloc'd-and-returned* at the cart's content lifetime (a free
+/// `'b`), which the `for<'b>`-branded `open` cannot hand back. The `YokedChild` carrier stays an
+/// [`ErasedScopePtr`] (a cross-node erasure outside the per-call struct); only the frame rides the
+/// substrate form.
+impl SealedExtern<ScopeRefFamily> {
+    /// Re-attach the frame's child scope bounded by a held [`Witness`] borrow: the borrow `'w` is
+    /// capped at the witness `&'w W` while the scope content `'b` is left free (`'b: 'w`), so the
+    /// returned reference **cannot outlive `'w`** and a value alloc'd into its region rides the cart
+    /// the witness pins. Routes the witness-bounded [`reattach_ref_with`] over the carrier's stored
+    /// `&'static Scope`, so it carries **no `unsafe`** — the externally-witnessed `attach` the frame
+    /// reads its child scope through instead of the bundled-witness `reattach_witnessed`.
+    pub fn attach<'w, 'b: 'w, W: Witness>(&'w self, witness: &'w W) -> &'w Scope<'b> {
+        reattach_ref_with::<ScopeFamily, W>(self.static_carrier(), witness)
     }
 }

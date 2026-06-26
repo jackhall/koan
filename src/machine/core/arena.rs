@@ -18,12 +18,13 @@ use std::rc::Rc;
 use typed_arena::Arena;
 
 use super::scope::Scope;
-use super::scope_ptr::ErasedScopePtr;
+use super::scope_ptr::ScopeRefFamily;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{Held, KObject, Module, ModuleSignature};
 use crate::witnessed::reattachable;
+use crate::witnessed::SealedExtern;
 use crate::witnessed::{Region, StorageProfile, Stored};
 
 /// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
@@ -353,7 +354,7 @@ impl FrameStorage {
 /// so the scheduler manages the frame by `Rc<CallFrame>`; an escaping closure extends only the
 /// *storage* (via [`Self::storage_rc`]), not the shell, so tail reuse can reset the shell's storage
 /// without foreclosing on the escapee. Field order is load-bearing: `storage` drops before
-/// `scope_ptr`, so the region tears down before the now-dangling child pointer.
+/// `scope_carrier`, so the region tears down before the now-dangling child reference.
 ///
 /// See [per-call-region/README.md](../../../design/per-call-region/README.md) for the
 /// carrier set, lift-time anchor decision, cycle gate, ancestor chain, and TCO
@@ -361,7 +362,9 @@ impl FrameStorage {
 /// for the heap-pinning / drop-order invariants.
 pub struct CallFrame {
     storage: Rc<FrameStorage>,
-    scope_ptr: Option<ErasedScopePtr>,
+    /// The per-call child scope on the substrate's externally-witnessed [`SealedExtern`] carrier
+    /// (a `&'static Scope`); read back through [`SealedExtern::attach`] against `storage` as the pin.
+    scope_carrier: Option<SealedExtern<ScopeRefFamily>>,
     /// True only for the scheduler-owned run frame, which carries the top-level run scope and
     /// never drops mid-run. Its `region` is empty (top-level values live in the externally-owned
     /// run region, reached via `scope.region`), so there is nothing to lift out of it: the Done
@@ -396,14 +399,14 @@ impl CallFrame {
         // `storage`; `outer` (a longer-lived ancestor) is brand-shortened by `child_for_frame`, so
         // the two need no common lifetime and the outer link needs no `reattach_ref`.
         let child = Scope::child_for_frame(outer, &storage);
-        // Stored at the region's real lifetime, then erased once through the safe `erase`. The
-        // local borrow of `storage` ends here (the `ErasedScopePtr` holds a `&'static` reference, not
-        // a borrow of `storage`), so `storage` moves into the shell below; the `KoanRegion` stays at a
+        // Stored at the region's real lifetime, then erased once through the safe `SealedExtern::erase`.
+        // The local borrow of `storage` ends here (the carrier holds a `&'static` reference, not a
+        // borrow of `storage`), so `storage` moves into the shell below; the `KoanRegion` stays at a
         // fixed heap address behind the Rc, keeping the erased reference valid.
-        let scope_ptr = ErasedScopePtr::erase(storage.region().alloc_scope(child));
+        let scope_carrier = SealedExtern::erase(storage.region().alloc_scope(child));
         Rc::new(CallFrame {
             storage,
-            scope_ptr: Some(scope_ptr),
+            scope_carrier: Some(scope_carrier),
             non_dying: false,
         })
     }
@@ -418,8 +421,8 @@ impl CallFrame {
     /// (the run root) lives in. Adopting it (rather than minting an empty region) makes this frame's
     /// `region()` equal the run-root region, so a top-level-defined FN's captured-region owner
     /// resolves to this frame's storage. `escape` is `None` (a non-dying top frame redirects
-    /// nothing). The adopted run scope's borrow is erased into `scope_ptr` exactly as every
-    /// [`ErasedScopePtr`] is — the fabrication hazard is deferred to the witness-bounded re-attach.
+    /// nothing). The adopted run scope's borrow is erased into `scope_carrier` exactly as every
+    /// per-call child scope is — the fabrication hazard is deferred to the witness-bounded re-attach.
     pub fn adopting<'a>(scope: &'a Scope<'a>, run_storage: Rc<FrameStorage>) -> Rc<CallFrame> {
         debug_assert!(
             std::ptr::eq(run_storage.region(), scope.region as *const KoanRegion),
@@ -427,7 +430,7 @@ impl CallFrame {
         );
         Rc::new(CallFrame {
             storage: run_storage,
-            scope_ptr: Some(ErasedScopePtr::erase(scope)),
+            scope_carrier: Some(SealedExtern::erase(scope)),
             non_dying: true,
         })
     }
@@ -466,31 +469,28 @@ impl CallFrame {
 
     /// The sole re-attach of the frame's child scope: borrow bounded by the `&'s self` receiver,
     /// content `'b` free (`'b: 's`). The three public accessors above are safe wrappers that only
-    /// pick the lifetimes. Carries **no `unsafe`** of its own — it re-anchors through the
-    /// witness-bounded [`ErasedScopePtr::reattach_witnessed`], passing this frame's own storage `Rc`
-    /// as the pin, so the returned borrow cannot outlive the region that `Rc` keeps alive.
+    /// pick the lifetimes. Carries **no `unsafe`** of its own — it re-anchors through the carrier's
+    /// witness-bounded [`SealedExtern::attach`], passing this frame's own storage `Rc` as the pin, so
+    /// the returned borrow cannot outlive the region that `Rc` keeps alive.
     fn reattach_scope<'s, 'b: 's>(&'s self) -> &'s Scope<'b> {
-        self.scope_ptr_set().reattach_witnessed(&self.storage)
+        self.scope_carrier_set().attach(&self.storage)
     }
 
     /// Run `f` with this frame's child scope handed in at a **rank-2 (`for<'b>`)** brand, so the
-    /// borrow cannot escape the closure — the `ouroboros::with_child` shape, served today over the
-    /// witnessed [`Self::reattach_scope`]. The migration target: every child-scope read threads `s`
-    /// from one of these openings instead of a free `current_scope()`, so the flip to a
-    /// `#[self_referencing]` `FrameStorage` only re-points this one body. See
-    /// `scratch/framestorage-ouroboros-plan.md`.
-    #[allow(dead_code)]
+    /// borrow cannot escape the closure. The dispatch handlers that consume their scope in place
+    /// (e.g. `fn_value::initial`, `single_poll::type_call`) read it through this instead of cashing a
+    /// free `current_scope()`, so the re-anchored borrow lives only inside `f`.
     pub fn with_scope<R>(&self, f: impl for<'b> FnOnce(&'b Scope<'b>) -> R) -> R {
         f(self.reattach_scope())
     }
 
-    /// The child scope's [`ErasedScopePtr`], which is `Some` for the whole life of a
-    /// constructed frame (`None` only transiently inside `new` / `try_reset_for_tail` before
-    /// the child scope is allocated).
-    fn scope_ptr_set(&self) -> &ErasedScopePtr {
-        self.scope_ptr
+    /// The child scope's externally-witnessed [`SealedExtern`] carrier, which is `Some` for the whole
+    /// life of a constructed frame (`None` only transiently inside `new` / `try_reset_for_tail`
+    /// before the child scope is allocated).
+    fn scope_carrier_set(&self) -> &SealedExtern<ScopeRefFamily> {
+        self.scope_carrier
             .as_ref()
-            .expect("scope_ptr is set after construction")
+            .expect("scope_carrier is set after construction")
     }
 
     /// Run `f` with this frame's per-call region and its child scope. The seed-side re-anchor: the
@@ -551,12 +551,12 @@ impl CallFrame {
         // The child is built from the heap-pinned `storage` handle (region borrow + owning `Weak`),
         // with `new_outer` brand-shortened by `child_for_frame` (no `reattach_ref` on the outer link).
         let child = Scope::child_for_frame(new_outer, &storage);
-        let scope_ptr = ErasedScopePtr::erase(storage.region().alloc_scope(child));
+        let scope_carrier = SealedExtern::erase(storage.region().alloc_scope(child));
         // The local borrow of `storage` ends above, so it can move into the shell.
         let this = Rc::get_mut(self).expect("just-verified unique above");
         // Drops the old storage (and its region) unless an escapee still holds it.
         this.storage = storage;
-        this.scope_ptr = Some(scope_ptr);
+        this.scope_carrier = Some(scope_carrier);
         true
     }
 }

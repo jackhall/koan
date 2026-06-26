@@ -83,11 +83,11 @@ group just to silence the stale-anchor check.
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
-child-scope `Option<ErasedScopePtr>` (re-attached to an `&self`-bounded borrow via the
-witness-bounded `ErasedScopePtr::reattach_witnessed`, the frame's own storage `Rc` as the pin) plus
+child-scope `Option<SealedExtern<ScopeRefFamily>>` (re-attached to an `&self`-bounded borrow via the
+witness-bounded `SealedExtern::attach`, the frame's own storage `Rc` as the pin) plus
 the `Rc<CallFrame>` chain that keeps per-call regions pinned across re-borrow. One test pins the
 re-attach surviving a sibling alloc; the other pins the `Rc<CallFrame>` chain keeping an outer region
-alive after its local handle drops. A third pins `ErasedScopePtr::reattach_witnessed` (via
+alive after its local handle drops. A third pins `SealedExtern::attach` (via
 `CallFrame::scope_bounded`), which splits the stored `&'static Scope` into a witness-bounded borrow
 and a free content lifetime — re-read alongside the collapsed `scope` / `scope_for_bind`
 accessors (`'b = 'step`) over the same child scope. `CallFrame::adopting` (the scheduler-owned run frame)
@@ -127,13 +127,15 @@ region) and leave no leak. The Koan `anchors_to` walkers that drive the decision
 frame reuse installs a fresh refcounted `FrameStorage` (a new `KoanRegion`) and
 re-allocates the child `Scope` through the safe `Scope::child_for_frame`: the new
 outer link and root are brand-shortened to the fresh region's lifetime, so the
-child is built at real lifetimes and erased once via `ErasedScopePtr::erase` with
+child is built at real lifetimes and erased once via `SealedExtern::erase` with
 no construction-time transmute. The re-attach these tests pin is the read-side
-`ErasedScopePtr::reattach_witnessed` on the re-installed child plus the swap's drop
+`SealedExtern::attach` on the re-installed child plus the swap's drop
 discipline: the `Rc::get_mut` gate refuses only when another `Rc<CallFrame>`
 *shell* holder still exists; an escaped value pins the `FrameStorage`, not the
 shell, so it does not foreclose reuse — the swap drops the shell's reference to the
-old storage while the escapee's clone keeps that snapshot alive and aliased.
+old storage while the escapee's clone keeps that snapshot alive and aliased. The
+carrier bundles no `Rc` clone (it holds a `&'static Scope`), so it does not peg the
+`Rc::get_mut` uniqueness check the reset depends on.
 
 - `call_frame_try_reset_for_tail_round_trip`
 - `call_frame_try_reset_for_tail_refuses_when_aliased`
@@ -221,20 +223,22 @@ lifetime-agnostic `KType` equality lands (the structural-value-equality roadmap 
 
 - `accepts_part_lifetime_coercion_reads_soundly`
 
-**`ErasedScopePtr::reattach_witnessed` — the witness-bounded scope re-attach** ([src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs))
-— the scope-pointer analog of `reattach_with`: the lifetime-free `YokedChild` carrier re-anchors its
-child scope through a **fully safe** method that takes the pinning `Rc`/region as an explicit
-`Witness` borrow. The carrier holds a `&'static Scope` (erased once on the store side through the safe
-`erase_to_static::<ScopeRefFamily>`), so the re-hand is the witnessed `reattach_ref_with` on that
-stored reference with **no `unsafe`** of its own — the only `unsafe` it routes is the shared `retype`
-in `witnessed.rs`. `CallFrame::scope` / `scope_for_bind` / `scope_bounded` (passing the frame's own
-storage `Rc`) and a scheduler node's `NodeScope::YokedChild` (passing the slot's cart `Rc`) both
-reach it — a borrow bounded by the witness, a free content lifetime, sound because the external
-witness (the frame `Rc`, which for a `YokedChild` pins the ancestor region via `FrameStorage.outer`)
-keeps the pointee live for the borrow. Call sites carry **no `unsafe`**. The store-side
-`ErasedScopePtr::erase` forgets the reference's lifetime for storage through the safe
-`erase_to_static`. The `CallFrame` group exercises this through its own accessors; the YokedChild
-groups below pin it through the node carrier.
+**Witness-bounded scope re-attach — `SealedExtern::attach` / `ErasedScopePtr::reattach_witnessed`** ([src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs))
+— the scope-pointer analog of `reattach_with`: the two lifetime-free scope carriers re-anchor their
+child scope through a **fully safe** accessor that takes the pinning `Rc`/region as an explicit
+`Witness` borrow. Each holds a `&'static Scope` (erased once on the store side through the safe
+`erase_to_static::<ScopeRefFamily>`), so the re-hand is the witnessed `reattach_ref_with::<ScopeFamily>`
+on that stored reference with **no `unsafe`** of its own — the only `unsafe` it routes is the shared
+`retype` in `witnessed.rs`. The per-call frame's child scope rides the substrate's
+`SealedExtern<ScopeRefFamily>` and re-anchors through `SealedExtern::attach` (`CallFrame::scope` /
+`scope_for_bind` / `scope_bounded` pass the frame's own storage `Rc`); a scheduler node's
+`NodeScope::YokedChild` rides an `ErasedScopePtr` and re-anchors through `ErasedScopePtr::reattach_witnessed`
+(passing the slot's cart `Rc`). Both yield a borrow bounded by the witness with a free content lifetime,
+sound because the external witness (the frame `Rc`, which for a `YokedChild` pins the ancestor region via
+`FrameStorage.outer`) keeps the pointee live for the borrow. Call sites carry **no `unsafe`**. The store
+side (`SealedExtern::erase` / `ErasedScopePtr::erase`) forgets the reference's lifetime for storage
+through the safe `erase_to_static`. The `CallFrame` group exercises `attach` through its own accessors;
+the YokedChild groups below pin `reattach_witnessed` through the node carrier.
 
 **`NodeScope::YokedChild` lifetime fabrication** ([src/machine/execute/nodes.rs](../src/machine/execute/nodes.rs))
 — a cart-ancestor block scope evicted off a lifetime-free scheduler node (`NodeScope::YokedChild`) is

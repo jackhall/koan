@@ -71,10 +71,9 @@ pub(in crate::machine::execute) fn current_scope<'step>(ambient: &AmbientContext
 }
 
 /// Closure (`for<'b>`) analog of [`reattach_node_scope`]: hand the node scope in at a rank-2 brand so
-/// the borrow cannot escape `f`. The `Yoked` arm routes [`CallFrame::with_scope`] (the
-/// `ouroboros::with_child` target); the `YokedChild` arm stays a witnessed reference (a cross-node
-/// erasure outside the per-call struct). Migration scaffold; see `scratch/framestorage-ouroboros-plan.md`.
-#[allow(dead_code)]
+/// the borrow cannot escape `f`. The `Yoked` arm routes [`CallFrame::with_scope`]; the `YokedChild`
+/// arm stays a witnessed reference (a cross-node erasure outside the per-call struct). The handlers
+/// that consume their scope in place read it through this instead of the escaping `current_scope()`.
 pub(in crate::machine::execute) fn with_node_scope<R>(
     node_scope: &NodeScope,
     frame: Option<&Rc<CallFrame>>,
@@ -91,7 +90,6 @@ pub(in crate::machine::execute) fn with_node_scope<R>(
 }
 
 /// Closure analog of [`current_scope`]: open the active slot's scope at a `for<'b>` brand.
-#[allow(dead_code)]
 pub(in crate::machine::execute) fn with_current_scope<R>(
     ambient: &AmbientContext,
     f: impl for<'b> FnOnce(&'b Scope<'b>) -> R,
@@ -140,10 +138,8 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     // (`is_result_ready`, `would_create_cycle`, `read_result`) all forward to the borrowed
     // scheduler.
 
-    /// Open the active slot's scope at a `for<'b>` brand — the Option-2 migration accessor that
-    /// replaces `current_scope()` reads with a threaded `s` parameter (see
-    /// `scratch/framestorage-ouroboros-plan.md`).
-    #[allow(dead_code)]
+    /// Open the active slot's scope at a `for<'b>` brand — the closure-threaded read the dispatch
+    /// handlers that consume their scope in place use instead of the escaping [`Self::current_scope`].
     pub(in crate::machine::execute) fn with_current_scope<R>(
         &self,
         f: impl for<'b> FnOnce(&'b Scope<'b>) -> R,
