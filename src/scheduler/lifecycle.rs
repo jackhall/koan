@@ -2,8 +2,6 @@
 //! workload's driver calls at a step's Done boundary. See
 //! [design/execution/scheduler.md § Dependency graph invariants](../../design/execution/scheduler.md#dependency-graph-invariants).
 
-use std::rc::Rc;
-
 use super::{Live, NodeId, Scheduler, Workload};
 
 impl<W: Workload> Scheduler<W> {
@@ -17,10 +15,10 @@ impl<W: Workload> Scheduler<W> {
         &mut self,
         idx: usize,
         output: Result<Live<'_, W>, W::Error>,
-        frame: Option<Rc<W::Cart>>,
+        witness: W::Witness,
     ) {
         let id = NodeId(idx);
-        self.store.finalize(id, output, frame);
+        self.store.finalize(id, output, witness);
         let drained = self.deps.drain_notify(idx);
         let mut woken: Vec<usize> = Vec::new();
         for (consumer, hit_zero) in drained {

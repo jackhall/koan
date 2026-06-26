@@ -26,7 +26,7 @@ fn kfunction_with_existing_anchor_preserves_it() {
     let other_before = Rc::strong_count(&other_storage);
     let dying_before = Rc::strong_count(&dying_storage);
 
-    let lifted = lift_kobject(&pre_anchored, &dying);
+    let lifted = lift_kobject(&pre_anchored, &dying.storage_rc());
     let other_after = Rc::strong_count(&other_storage);
     let dying_after = Rc::strong_count(&dying_storage);
     match lifted {
@@ -80,7 +80,7 @@ fn kfunction_with_foreign_runtime_does_not_anchor() {
     let obj = KObject::KFunction(foreign_ref, None);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&obj, &dying);
+    let lifted = lift_kobject(&obj, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match lifted {
         KObject::KFunction(_, frame) => assert!(
@@ -110,7 +110,7 @@ fn kmodule_with_local_child_scope_anchors() {
     };
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_ktype(&obj, &dying);
+    let lifted = lift_ktype(&obj, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match lifted {
         KType::Module { module: _, frame } => assert!(
@@ -140,7 +140,7 @@ fn kmodule_with_foreign_child_scope_does_not_anchor() {
     };
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_ktype(&obj, &dying);
+    let lifted = lift_ktype(&obj, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match lifted {
         KType::Module { module: _, frame } => assert!(frame.is_none()),
@@ -168,7 +168,7 @@ fn kmodule_with_existing_anchor_preserves_it() {
     };
     let other_before = Rc::strong_count(&other_storage);
 
-    let lifted = lift_ktype(&obj, &dying);
+    let lifted = lift_ktype(&obj, &dying.storage_rc());
     let other_after = Rc::strong_count(&other_storage);
     match lifted {
         KType::Module { module: _, frame } => {
@@ -190,7 +190,7 @@ fn primitive_lifts_via_deep_clone_on_slow_path() {
     defeat_fast_path(&dying);
 
     let obj = KObject::Number(2.5);
-    let lifted = lift_kobject(&obj, &dying);
+    let lifted = lift_kobject(&obj, &dying.storage_rc());
     match lifted {
         KObject::Number(n) => assert_eq!(n, 2.5),
         other => panic!("expected Number, got {:?}", other.ktype()),

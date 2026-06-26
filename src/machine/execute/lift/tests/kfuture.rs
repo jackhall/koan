@@ -47,7 +47,7 @@ fn unanchored_kfuture_no_region_borrow_does_not_anchor() {
 
     let strong_before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&kf_obj, &dying);
+    let lifted = lift_kobject(&kf_obj, &dying.storage_rc());
 
     match lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_none()),
@@ -96,7 +96,7 @@ fn unanchored_kfuture_with_region_borrow_does_anchor() {
     let kf_obj = KObject::KFuture(future, None);
 
     let strong_before = Rc::strong_count(&dying.storage_rc());
-    let lifted = lift_kobject(&kf_obj, &dying);
+    let lifted = lift_kobject(&kf_obj, &dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
         other => panic!("expected lifted KFuture, got {:?}", other.ktype()),
@@ -132,7 +132,7 @@ fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
     let obj = KObject::KFuture(outer, None);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&obj, &dying);
+    let lifted = lift_kobject(&obj, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
@@ -179,7 +179,7 @@ fn kfuture_bundle_arg_with_wrapped_field_anchors() {
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&obj, &dying);
+    let lifted = lift_kobject(&obj, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
@@ -213,7 +213,7 @@ fn kfuture_parsed_expression_part_with_region_borrow_anchors() {
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&obj, &dying);
+    let lifted = lift_kobject(&obj, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
@@ -247,7 +247,7 @@ fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&obj, &dying);
+    let lifted = lift_kobject(&obj, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
@@ -274,7 +274,7 @@ fn kfuture_with_existing_anchor_preserves_it() {
     let obj = KObject::KFuture(future, Some(Rc::clone(&other_storage)));
     let other_before = Rc::strong_count(&other_storage);
 
-    let lifted = lift_kobject(&obj, &dying);
+    let lifted = lift_kobject(&obj, &dying.storage_rc());
     let other_after = Rc::strong_count(&other_storage);
     match lifted {
         KObject::KFuture(_, frame) => {
@@ -305,7 +305,7 @@ fn kfuture_bundle_arg_with_local_kfunction_anchors() {
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&obj, &dying);
+    let lifted = lift_kobject(&obj, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
@@ -333,7 +333,7 @@ fn kfuture_with_local_function_anchors() {
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&obj, &dying);
+    let lifted = lift_kobject(&obj, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
@@ -363,7 +363,7 @@ fn kfuture_bundle_arg_with_list_of_kfunction_anchors() {
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&obj, &dying);
+    let lifted = lift_kobject(&obj, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
@@ -400,7 +400,7 @@ fn kfuture_bundle_arg_with_local_kmodule_anchors() {
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&obj, &dying);
+    let lifted = lift_kobject(&obj, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
@@ -433,7 +433,7 @@ fn kfuture_parsed_listliteral_with_region_borrow_anchors() {
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&obj, &dying);
+    let lifted = lift_kobject(&obj, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),
@@ -467,7 +467,7 @@ fn kfuture_parsed_dictliteral_with_region_borrow_anchors() {
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&obj, &dying);
+    let lifted = lift_kobject(&obj, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::KFuture(_, frame) => assert!(frame.is_some()),

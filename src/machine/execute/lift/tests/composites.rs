@@ -48,7 +48,7 @@ fn list_of_dict_with_kfunction_anchors_via_recursion() {
     let outer = KObject::list(vec![KObject::dict(inner_map)]);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&outer, &dying);
+    let lifted = lift_kobject(&outer, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::List(items, _) => match &items[0] {
@@ -83,7 +83,7 @@ fn list_of_tagged_with_kfunction_anchors_via_recursion() {
     let outer = KObject::list(vec![tagged]);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&outer, &dying);
+    let lifted = lift_kobject(&outer, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::List(items, _) => match &items[0] {
@@ -132,7 +132,7 @@ fn list_with_pre_anchored_variants_skips_them() {
     let list = KObject::list_with_type(Rc::clone(&items), KType::Any);
     let before = Rc::strong_count(&dying_storage);
 
-    let lifted = lift_kobject(&list, &dying);
+    let lifted = lift_kobject(&list, &dying.storage_rc());
     let dying_after = Rc::strong_count(&dying_storage);
     match &lifted {
         KObject::List(out, _) => assert!(
@@ -164,7 +164,7 @@ fn list_with_unanchored_kfuture_anchors() {
     let list = KObject::list(vec![KObject::KFuture(future, None)]);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&list, &dying);
+    let lifted = lift_kobject(&list, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::List(out, _) => {
@@ -195,7 +195,7 @@ fn list_with_unanchored_kmodule_anchors() {
     })]);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&list, &dying);
+    let lifted = lift_kobject(&list, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match &lifted {
         KObject::List(out, _) => assert!(matches!(
@@ -232,7 +232,7 @@ fn list_with_wrapped_and_kexpression_descendants_clones_rc() {
     let list = KObject::list_with_type(Rc::clone(&items), KType::Any);
     let before = Rc::strong_count(&items);
 
-    let lifted = lift_kobject(&list, &dying);
+    let lifted = lift_kobject(&list, &dying.storage_rc());
     let count_after = Rc::strong_count(&items);
     match &lifted {
         KObject::List(out, _) => assert!(Rc::ptr_eq(out, &items)),
@@ -257,7 +257,7 @@ fn list_no_descendants_clones_rc() {
     let list = KObject::list_with_type(Rc::clone(&items), KType::Any);
     let before = Rc::strong_count(&items);
 
-    let lifted = lift_kobject(&list, &dying);
+    let lifted = lift_kobject(&list, &dying.storage_rc());
     let count_after = Rc::strong_count(&items);
     match lifted {
         KObject::List(out, _) => assert!(
@@ -279,7 +279,7 @@ fn list_with_local_kfunction_rebuilds_and_anchors() {
     let list = KObject::list(vec![KObject::KFunction(kf_ref, None)]);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&list, &dying);
+    let lifted = lift_kobject(&list, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match lifted {
         KObject::List(out, _) => match &out[0] {
@@ -313,7 +313,7 @@ fn dict_no_descendants_clones_rc() {
     let dict = KObject::dict_with_type(Rc::clone(&entries), KType::Any, KType::Any);
     let before = Rc::strong_count(&entries);
 
-    let lifted = lift_kobject(&dict, &dying);
+    let lifted = lift_kobject(&dict, &dying.storage_rc());
     let count_after = Rc::strong_count(&entries);
     match lifted {
         KObject::Dict(out, _, _) => assert!(
@@ -343,7 +343,7 @@ fn dict_with_local_kfunction_rebuilds_and_anchors() {
     let dict = KObject::dict(map);
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&dict, &dying);
+    let lifted = lift_kobject(&dict, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match lifted {
         KObject::Dict(out, _, _) => {
@@ -380,7 +380,7 @@ fn tagged_no_borrow_clones_inner_rc() {
     };
     let before = Rc::strong_count(&inner);
 
-    let lifted = lift_kobject(&tagged, &dying);
+    let lifted = lift_kobject(&tagged, &dying.storage_rc());
     let count_after = Rc::strong_count(&inner);
     match lifted {
         KObject::Tagged {
@@ -425,7 +425,7 @@ fn tagged_with_local_kfunction_rebuilds_and_anchors() {
     };
     let before = Rc::strong_count(&dying.storage_rc());
 
-    let lifted = lift_kobject(&tagged, &dying);
+    let lifted = lift_kobject(&tagged, &dying.storage_rc());
     let count_after = Rc::strong_count(&dying.storage_rc());
     match lifted {
         KObject::Tagged {
@@ -477,7 +477,7 @@ fn recursive_setref_type_value_lifts_by_rc_clone() {
     };
     let before = Rc::strong_count(&set);
 
-    let lifted = lift_ktype(&type_value, &dying);
+    let lifted = lift_ktype(&type_value, &dying.storage_rc());
 
     // Lift `Rc::clone`d the set — the strong count rose, and the lifted value's set is the
     // same allocation, so the recursive group travels as one unit.
@@ -547,7 +547,7 @@ fn recursive_newtype_value_lifts_and_navigates() {
         type_id,
     };
 
-    let lifted = lift_kobject(&tree_value, &dying);
+    let lifted = lift_kobject(&tree_value, &dying.storage_rc());
 
     match &lifted {
         KObject::Wrapped {

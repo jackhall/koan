@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ErasedContract;
 use crate::machine::model::Carried;
-use crate::machine::{KError, KErrorKind, KoanRegion, NodeId};
+use crate::machine::{FrameSet, KError, KErrorKind, KoanRegion, NodeId};
 use crate::witnessed::{reattachable, seal_option, SealedExtern};
 
 use super::dispatch::{reattach_node_scope, SchedulerView};
@@ -197,8 +197,14 @@ impl<'run> KoanRuntime<'run> {
                         // readable until every consumer has pulled it; a frameless / run-frame producer
                         // pins nothing (its value already lives in the run region). Hand the scheduler
                         // the live `'s` terminal; it erases it for storage internally — severing `'s`
-                        // before `consumer_frame` drops at return.
-                        self.sched.finalize(idx, result, frame.cloned());
+                        // before `consumer_frame` drops at return. The witness is the singleton set of
+                        // the producer's `FrameStorage` (empty for a frameless / run-frame producer,
+                        // whose value already lives in the run region).
+                        let witness = match frame {
+                            Some(producer) => FrameSet::singleton(producer.storage_rc()),
+                            None => FrameSet::empty(),
+                        };
+                        self.sched.finalize(idx, result, witness);
                     }
                     NodeStep::Replace {
                         work: new_work,

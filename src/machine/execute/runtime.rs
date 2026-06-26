@@ -27,7 +27,7 @@ use crate::machine::core::kfunction::body::{
 };
 use crate::machine::core::FrameStorage;
 use crate::machine::model::ast::KExpression;
-use crate::machine::{CallFrame, KError, NodeId, Scope};
+use crate::machine::{CallFrame, FrameSet, KError, NodeId, Scope};
 
 use super::dispatch::DepRequest;
 use super::lift::NodeLift;
@@ -56,6 +56,7 @@ impl Workload for KoanWorkload {
     type Cart = CallFrame;
     type Contract = ContractFamily;
     type Continuation = ContinuationFamily;
+    type Witness = FrameSet;
 }
 
 /// The write harness: the sole holder of `&mut Scheduler` across the execute tree. It owns the
@@ -124,11 +125,21 @@ impl<'run> KoanRuntime<'run> {
         match self.sched.read_result_with_frame(dep) {
             // Framed: copy the producer-frame value into `dest`; `lift` owns the re-anchor (the copy
             // discards the producer read's lifetime, `src` pins it for the copy) — no caller reattach.
-            Ok((value, Some(frame))) => Ok(self.lift(value, &frame, dest)),
-            // Frameless: the value already lives in a run region that outlives `'o` — a strict
-            // ancestor of `dest` — so re-anchor it to `dest`'s lifetime witnessed by the `dest`
-            // borrow, no copy. `reattach_with`'s safe signature bounds `'o` to that borrow.
-            Ok((value, None)) => Ok(reattach_with::<CarriedFamily, _>(value, dest)),
+            // A finalized terminal is produced in exactly one frame, so its witness is a singleton.
+            Ok((value, witness)) => match witness.sole() {
+                Some(frame) => Ok(self.lift(value, frame, dest)),
+                // Frameless: the empty witness set means the value already lives in a run region that
+                // outlives `'o` — a strict ancestor of `dest` — so re-anchor it to `dest`'s lifetime
+                // witnessed by the `dest` borrow, no copy. `reattach_with` bounds `'o` to that borrow.
+                None => {
+                    debug_assert!(
+                        witness.is_empty(),
+                        "a multi-region witness in the singleton lift path is a transfer-into-lift \
+                         concern, not produced by this item",
+                    );
+                    Ok(reattach_with::<CarriedFamily, _>(value, dest))
+                }
+            },
             Err(e) => Err(e.clone()),
         }
     }

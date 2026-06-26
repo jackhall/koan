@@ -64,13 +64,16 @@ impl<'run> KoanRuntime<'run> {
         // the root lives run-long and its per-call frame is released. A frameless / run-region or
         // errored terminal needs no lift.
         for &id in &top_level {
-            if let Ok((value, Some(frame))) = self.sched.read_result_with_frame(id) {
+            if let Ok((value, witness)) = self.sched.read_result_with_frame(id) {
                 // The scheduler hands back the value re-anchored to this `&self` borrow. A
                 // consumer-less root has no pull-lift to node-scale it, so this `'run` re-home copies
                 // it into the run-global root region via `lift` (which owns the read's re-anchor). The
-                // lifted root is handed back live — the scheduler re-erases it for storage.
-                let lifted = self.lift(value, &frame, root.region);
-                self.sched.rehome_terminal(id, Ok(lifted));
+                // lifted root is handed back live — the scheduler re-erases it for storage. A frameless
+                // root (empty witness) already lives in a surviving region, so it needs no re-home.
+                if let Some(frame) = witness.sole() {
+                    let lifted = self.lift(value, frame, root.region);
+                    self.sched.rehome_terminal(id, Ok(lifted));
+                }
             }
         }
         // A bare top-level expression is an untyped resolution boundary: an unstamped

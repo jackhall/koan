@@ -12,7 +12,6 @@
 //!   `DepGraph`.
 
 use std::ops::{Index, IndexMut};
-use std::rc::Rc;
 
 use super::nodes::{Node, NodeWork};
 use super::{Erased, FramedRead, Live, NodeId, Workload};
@@ -56,10 +55,10 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
     }
 }
 
-/// A finalized value terminal: the erased inter-node value bundled with the producer frame `Rc` that
-/// backs it (`None` for a frameless / run-region value), held in its dormant [`Sealed`] form between
-/// steps and read back through [`Sealed::read`].
-type FinalizedValue<W> = Sealed<<W as Workload>::Value, Option<Rc<<W as Workload>::Cart>>>;
+/// A finalized value terminal: the erased inter-node value bundled with the [`Workload::Witness`] set
+/// pinning its backing (empty for a frameless / run-region value), held in its dormant [`Sealed`] form
+/// between steps and read back through [`Sealed::read`].
+type FinalizedValue<W> = Sealed<<W as Workload>::Value, <W as Workload>::Witness>;
 
 enum SlotState<W: Workload> {
     PreRun(Node<W>),
@@ -161,27 +160,27 @@ impl<W: Workload> NodeStore<W> {
         self.slots[id] = SlotState::Done(
             output
                 .map(Erased::erase)
-                .map(|e| Sealed::seal(Witnessed::from_erased(e, None))),
+                .map(|e| Sealed::seal(Witnessed::from_erased(e, W::Witness::default()))),
         );
     }
 
     /// Callers must pair this with the dep-graph notify-walk so consumers
-    /// wake atomically with the write. `frame` is the producer's per-call frame, pinned in the
-    /// slot until it is freed (`None` for a frameless / run-region terminal).
+    /// wake atomically with the write. `witness` is the producer frame's witness set, pinned in the
+    /// slot until it is freed (the empty set for a frameless / run-region terminal).
     pub(super) fn finalize(
         &mut self,
         id: NodeId,
         output: Result<Live<'_, W>, W::Error>,
-        frame: Option<Rc<W::Cart>>,
+        witness: W::Witness,
     ) {
-        // Bundle the live terminal with its producer frame into a `Witnessed`, then seal it for
-        // dormant storage: the value is erased to `'static` and the co-stored frame `Rc` pins its
+        // Bundle the live terminal with its producer-frame witness into a `Witnessed`, then seal it
+        // for dormant storage: the value is erased to `'static` and the co-stored witness set pins its
         // backing region until the slot frees, so a later `read` / `open` can re-anchor it soundly.
-        // On `Err` the frame is dropped now — the error owns its data and needs no pin.
+        // On `Err` the witness is dropped now — the error owns its data and needs no pin.
         self.slots[id] = SlotState::Done(
             output
                 .map(Erased::erase)
-                .map(|e| Sealed::seal(Witnessed::from_erased(e, frame))),
+                .map(|e| Sealed::seal(Witnessed::from_erased(e, witness))),
         );
     }
 
@@ -221,12 +220,13 @@ impl<W: Workload> NodeStore<W> {
         }
     }
 
-    /// Read a finalized terminal together with the producer frame `Rc` that backs it (`None` for a
+    /// Read a finalized terminal together with the witness set that backs it (empty for a
     /// frameless / run-region value, which is already in a surviving region). The consumer-pull lift
-    /// copies the value out of that frame into the consumer's region before the producer slot frees.
+    /// copies the value out of the producer frame the set names into the consumer's region before the
+    /// producer slot frees.
     pub(super) fn read_result_with_frame(&self, id: NodeId) -> FramedRead<'_, W> {
         match &self.slots[id] {
-            // `read` re-anchors to the `&self` read borrow; the bundled frame `Rc` (cloned out here
+            // `read` re-anchors to the `&self` read borrow; the bundled witness set (cloned out here
             // for the consumer-pull lift) pins the backing region over that borrow.
             SlotState::Done(Ok(w), ..) => Ok((w.read(), w.witness().clone())),
             SlotState::Done(Err(e), ..) => Err(e),
@@ -308,7 +308,7 @@ impl<W: Workload> NodeStore<W> {
         self.slots[id] = SlotState::Done(
             output
                 .map(Erased::erase)
-                .map(|e| Sealed::seal(Witnessed::from_erased(e, None))),
+                .map(|e| Sealed::seal(Witnessed::from_erased(e, W::Witness::default()))),
         );
     }
 
@@ -347,6 +347,8 @@ impl<W: Workload> NodeStore<W> {
 mod tests {
     use super::*;
 
+    use std::rc::Rc;
+
     use crate::witnessed::reattachable;
 
     /// A lifetime-free `Reattachable` family for the trivial test value.
@@ -370,6 +372,9 @@ mod tests {
         type Cart = ();
         type Contract = UnitCarrier;
         type Continuation = UnitCarrier;
+        // A trivial finalized-value witness: `Option<Rc<()>>` is a `Witness` (the blanket `Rc<F>` /
+        // `Option<W>` impls), `Clone`, and `Default` (`None` = the empty / frameless witness).
+        type Witness = Option<Rc<()>>;
     }
 
     fn sample_wait(carrier: Option<String>) -> NodeWork<TestWorkload> {

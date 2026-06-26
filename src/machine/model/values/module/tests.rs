@@ -152,7 +152,7 @@ fn functor_per_call_module_lifts_correctly() {
     };
 
     let strong_before = Rc::strong_count(&frame.storage_rc());
-    let lifted = lift_ktype_for_test(&m_type, &frame);
+    let lifted = lift_ktype_for_test(&m_type, &frame.storage_rc());
     match &lifted {
         KType::Module { frame: anchor, .. } => assert!(
             anchor.is_some(),

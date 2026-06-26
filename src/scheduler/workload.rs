@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use super::Reattachable;
 
 /// The live (caller-lifetime) form of the inter-node value for a workload `W`, re-anchored from the
@@ -7,13 +5,13 @@ use super::Reattachable;
 /// pinned. `Live<'node, W>` is what a slot read hands back and what `finalize` is given.
 pub(crate) type Live<'node, W> = <<W as Workload>::Value as Reattachable>::At<'node>;
 
-/// A finalized terminal read together with the producer frame `Rc` backing it (`None` for a
+/// A finalized terminal read together with the [`Workload::Witness`] set backing it (empty for a
 /// frameless / run-region value): the `read_result_with_frame` return shape, aliased so the
 /// associated-type projection nest stays out of the method signatures. The value is re-anchored to
 /// the `'node` read borrow; the error is borrowed — the scheduler hands back a reference into the
 /// slot, never an owned error.
 pub(crate) type FramedRead<'node, W> =
-    Result<(Live<'node, W>, Option<Rc<<W as Workload>::Cart>>), &'node <W as Workload>::Error>;
+    Result<(Live<'node, W>, <W as Workload>::Witness), &'node <W as Workload>::Error>;
 
 /// The Koan-agnostic interface the generic DAG scheduler is parameterized over: the workload types
 /// it stores opaquely and never inspects. The Koan instantiation is `machine::execute::KoanWorkload`.
@@ -30,6 +28,12 @@ pub(crate) trait Workload {
     type Error;
     /// The per-node memory frame the scheduler manages by `Rc` (minted by the workload; never calls a method on it).
     type Cart;
+    /// The finalized-value witness: the set of region owners pinning a stored terminal's backing
+    /// (empty for a frameless / run-region value, which is already in a surviving region). The result
+    /// slot stores `Sealed<Self::Value, Self::Witness>`; a `Default` empty value re-homes a drained
+    /// root that needs no pin, and `Clone` hands the set out to the consumer-pull lift. The Koan
+    /// instantiation is `FrameSet`.
+    type Witness: crate::witnessed::Witness + Clone + Default;
     /// The per-node return contract: a one-lifetime [`Reattachable`] family the scheduler stores
     /// erased (`Erased<Self::Contract>`) on a slot's frame and hands back at the Done boundary; the
     /// workload re-anchors it, witnessed by the frame `Rc`. Never inspected. `At<'static>: Copy` lets

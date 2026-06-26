@@ -141,7 +141,7 @@ pub(super) fn invoke<'step>(
                     // Re-home the per-call type in the captured-scope (frame-outer) region — a strict
                     // ancestor the cart keeps live — so the erased contract's `ret` borrow stays
                     // valid past the dying frame, mirroring an `Arm`'s `ret`.
-                    let ret_ref = outer.region.alloc_ktype(lift_ktype(&kt, &frame));
+                    let ret_ref = outer.region.alloc_ktype(lift_ktype(&kt, &frame.storage_rc()));
                     ReturnContract::PerCall {
                         func: picked,
                         ret: ret_ref,
@@ -231,7 +231,7 @@ pub(super) fn invoke<'step>(
                 let ret_ref = picked
                     .captured_scope()
                     .region
-                    .alloc_ktype(lift_ktype(kt, &call_frame));
+                    .alloc_ktype(lift_ktype(kt, &call_frame.storage_rc()));
                 let contract = ReturnContract::PerCall {
                     func: picked,
                     ret: ret_ref,
