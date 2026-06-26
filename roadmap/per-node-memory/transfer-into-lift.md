@@ -32,9 +32,11 @@ about to be copied out.
   mechanic to compute a copy set, so each retained source region is kept alive by its frame `Rc`
   rather than copied. A lifted value can reach several regions (the destination allocation plus each
   retained closure's source), so the carrier is witnessed by a *set* of `Rc<FrameStorage>`. This is
-  **not** the ancestral `merge` (which keeps one descendant — here the *dying* source); composition
-  is set *union*, a member dropped only when another's `outer` chain already pins it. It must **not**
-  be collapsed by splicing `src` into `dst`'s `outer`/escape chain, which risks an `src`↔`dst` cycle
+  **not** `merge`'s subsumption (which drops a member another's `outer` chain already pins): here the
+  source is a *dying descendant* of the destination — its ancestry pins `dst`, not the reverse — so
+  neither member subsumes the other and the set is held whole by union, a member dropped only when
+  another **retained** member's `outer` chain already pins it. It must **not** be collapsed by
+  splicing `src` into `dst`'s `outer`/escape chain, which risks an `src`↔`dst` cycle
   (`FrameStorage.outer` is an owning `Rc`, so when `src`'s ancestry already reaches `dst` the splice
   closes a loop).
 - *Hoist-and-remove the per-value anchor — decided.* The witness lives on the carrier, not in the
@@ -49,9 +51,9 @@ about to be copied out.
   anchor — a separation `Witnessed<T, W>` preserves (`T` holds the structural scope reference, `W`
   the liveness set). The set must include **every** region a reached captured scope lives in, so
   `region_owner.upgrade()` still resolves; this subsumes lift's `existing.is_some()` re-anchor gate.
-  At this item's landing the walk still assembles the set — only the pilot families are inverted; once
-  [`alloc_object`](alloc-object-witnessed.md) / [`alloc_ktype`](alloc-ktype-witnessed.md) finish the
-  inversion, every reached region is already named by the carrier's witness set (folded in by `merge`
+  At this item's landing the walk assembles the set — no `alloc` family returns `Witnessed` yet; once
+  [`alloc_object`](alloc-object-witnessed.md) / [`alloc_ktype`](alloc-ktype-witnessed.md) invert,
+  every reached region is already named by the carrier's witness set (folded in by `merge`
   at construction), read off the carrier, retiring the structural walk entirely.
 - *Set representation — open.* The regions form a *tree* (a closure over closures branches lineages),
   flattened to the set by the walk; `SmallVec<[Rc<FrameStorage>; 1]>` inline (a singleton in the
@@ -71,4 +73,9 @@ about to be copied out.
 - [Production witness impls and the `alloc` witness plumbing](alloc-witness-plumbing.md) — the
   unified set witness this pins the relocated value with.
 
-**Unblocks:** none.
+**Unblocks:**
+
+- [`alloc_object` returns `Witnessed`](alloc-object-witnessed.md) — the structural walk this lands is
+  what `alloc_object`'s construction-time `merge` retires.
+- [`alloc_ktype` returns `Witnessed`](alloc-ktype-witnessed.md) — same walk, retired by
+  `alloc_ktype`'s construction-time `merge`.

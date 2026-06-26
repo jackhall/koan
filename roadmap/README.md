@@ -160,8 +160,9 @@ What's shipped that the open items below build on:
   re-anchor (no borrowed witness for a value about to be copied out). The co-location-enforcing
   constructor `yoke` (sourcing a carrier from the witness's own region behind a `for<'b>` brand, so
   the witness-pins-the-value invariant holds by construction) and the `merge` composition law
-  (combining two carriers under one brand, re-sealed under the descendant witness whose `outer` chain
-  pins both regions) have also landed — available and Miri/`compile_fail`-proven, with production
+  (combining two carriers under one brand, re-sealed under the union of their witness sets, with
+  `outer`-chain subsumption dropping a member another already pins) have also landed — available and
+  Miri/`compile_fail`-proven, with production
   adoption tracked by the [per-node-memory](per-node-memory/) project (the `alloc`-side bundle wiring
   begins at [`alloc-witness-plumbing`](per-node-memory/alloc-witness-plumbing.md)). See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
@@ -426,9 +427,10 @@ migrate onto it, with `attach` a contingent fallback retired last:
   move the `vend_carrier` continuation / contract and the `reattach_*_with` sites onto the access
   methods and delete the four wrappers.
 - [Production witness impls and the `alloc` witness plumbing](per-node-memory/alloc-witness-plumbing.md) —
-  the production `WitnessRegion` / `MergeWitness` impls, owning-`Rc` threading, and a pilot family.
+  the production `FrameSet` set-witness, owning-`Rc` threading to the `alloc_object` / `alloc_ktype`
+  surface, and the cycle-leak fix that threading enables.
 - [`alloc_object` returns `Witnessed`](per-node-memory/alloc-object-witnessed.md) — convert the
-  object family onto `yoke`.
+  object family onto `yoke`, retiring transfer-into-lift's structural walk.
 - [`alloc_ktype` returns `Witnessed`](per-node-memory/alloc-ktype-witnessed.md) — convert the
   type family onto `yoke`.
 - [Migrate result-slot value reads to `open`](per-node-memory/value-reads-to-open.md) —

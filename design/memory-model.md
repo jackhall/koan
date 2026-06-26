@@ -164,14 +164,14 @@ private `retype<A, B>` — a `transmute_copy` through a `ManuallyDrop` (plain `t
 two opaque GAT projections share a size), guarded by a `const` size assert that restores the check
 `transmute` would emit — is the only place a
 `T::At<'a> → T::At<'b>` lifetime retype is written; `Erased::erase` / `Erased::reattach`, the
-transient `reattach_value` / `reattach_ref` / `reattach_slice_with` helpers, the witness-borrowed
-`reattach_with` / `reattach_ref_with` / `vend_carrier`, the `Witnessed` accessors, and the region's
+transient `reattach_value` / `reattach_ref` helpers, the witness-borrowed
+`reattach_with` / `reattach_ref_with`, the `Witnessed` accessors, and the region's
 store-side `erase_to_static` all route it. The carrier families live beside their own
 types as declarative `unsafe impl Reattachable` instantiations — `ContractFamily` for the
 node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` /
 `ContinuationFamily` for the scheduler value (`Workload::Value`) and continuation
-(`Workload::Continuation`), `ResultCarriedFamily` for the transient step-lifetime re-anchor
-(`deps_at_step`) in `outcome.rs`, and `ScopeFamily` so the scope-pointer handles re-attach and the
+(`Workload::Continuation`), `RegionRefFamily` for the consumer region the run-loop step opens its
+tail against, and `ScopeFamily` so the scope-pointer handles re-attach and the
 region's `&Scope → &Scope<'static>` storage erasures route the same primitive — so `witnessed.rs`
 names no concrete Koan type and the scheduler stays workload-independent (the workload depends on
 the substrate for the machinery, not the reverse).
@@ -180,8 +180,9 @@ the substrate for the machinery, not the reverse).
 witness `W` that pins its pointee in one value, so "the witness keeps the value alive" is a type
 invariant rather than a co-stored field pair plus a SAFETY comment. `W` is a [`Witness`](../src/witnessed.rs)
 — an `unsafe` marker asserting its pointee stays at a fixed address while held; `Rc<F>` qualifies
-(a static `StableDeref` assert records the obligation) and `Option<W>` lifts it for a frameless
-terminal whose backing region outlives the carrier (`None`). The carrier is re-anchored through one
+(a static `StableDeref` assert records the obligation), and a *set* of them — the Koan result-slot
+and lift witness [`FrameSet`](../src/machine/core/arena.rs) — pins every region a value reaches at
+once, an empty set being a frameless / run-region terminal whose backing outlives the carrier. The carrier is re-anchored through one
 of three read/transform accessors, all sound by construction: `with` re-anchors behind a **rank-2**
 `for<'b>` brand so the fabricated content lifetime cannot escape the closure into the result (the
 generativity trick; the naive content-free reattach is a Miri-proven use-after-free); `map` consumes
@@ -192,34 +193,38 @@ co-location gap `new` leaves to caller assertion: `yoke` *sources* a carrier fro
 region behind a `for<'b>` brand (over the `WitnessRegion` trait), so the only references the carrier
 can hold are region-derived — the witness-pins-the-value invariant holds by construction rather than
 asserted; and `merge` combines two carriers under one shared brand, runs a binding projection, and
-re-seals under the *descendant* witness (the one whose `outer` ancestor chain transitively pins both
-regions, selected via the `MergeWitness` trait's `merge_pin`), rejecting unrelated witnesses before
-the projection runs. All keep their `unsafe` retype inside the module, so callers carry none; `yoke`
+re-seals under the *combined* witness — the union of both operands' regions, with `outer`-chain
+subsumption dropping a region another already pins (the `MergeWitness` trait's `merge`), returning
+`None` only when a single-region witness cannot represent two unrelated regions. All keep their `unsafe` retype inside the module, so callers carry none; `yoke`
 in fact routes only the safe `erase`, carrying no retype of its own.
 
 The value channel is borrow-checked end to end. The scheduler stores a finalized terminal as a single
-`Sealed<W::Value, Option<Rc<W::Cart>>>` ([`node_store.rs`](../src/scheduler/node_store.rs)) — the
+`Sealed<W::Value, W::Witness>` ([`node_store.rs`](../src/scheduler/node_store.rs)) — the
 opaque dormant form of a `Witnessed` carrier, which hides every transform (`with` / `map` / `yoke` /
 `merge`) and re-anchors only through the rank-2 destination verb `Sealed::open` or the transitional
-borrow-bounded `Sealed::read`. `finalize` bundles the erased value with its producer frame `Rc` and
-seals it (the `None` arm is a frameless / run-region terminal). A read (`read_result` / `read` /
+borrow-bounded `Sealed::read`. `finalize` bundles the erased value with its producer frame's witness
+(a singleton `FrameSet`) and seals it (an empty set is a frameless / run-region terminal). A read (`read_result` / `read` /
 `read_result_with_frame`) goes through `Sealed::read` — which delegates to `Witnessed::read` —
 re-anchoring to the read's own `&self` borrow — `Live<'node, W>`. Because
-`free_one` / `finalize` need `&mut self`, the bundled frame `Rc` cannot drop while a read borrow is
+`free_one` / `finalize` need `&mut self`, the bundled witness cannot drop while a read borrow is
 live, so the re-anchored `'node` lifetime cannot outlive the backing region: the pin-outlives-read
 fact is a borrow the compiler checks. The driver's transient reads
 ([`KoanRuntime::read_result`](../src/machine/execute/runtime.rs), the
 [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) forwarder) consume that `'node` value with
 no `unsafe` of their own. The continuation and contract carriers — stored `Erased` on the
-lifetime-free node — re-anchor through [`vend_carrier`](../src/witnessed.rs), whose returned `'w` the
-compiler bounds against a witness borrow `&'w Rc<W::Frame>` the driver passes (the slot's cart for
-the continuation in `run_step`, the producer frame for the contract at the Done boundary), so those
-call sites carry no `unsafe` either. The consumer-pull lift and the `Outcome::Forward` ready pull
-re-anchor their reads at a *node* lifetime, not a fabricated `'run`: `read_lifted` forwards a
-frameless terminal through the witness-borrowed `reattach_with` and copies a framed terminal into the
-consumer's region through [`lift`](../src/machine/execute/lift.rs), and the node→step re-anchors
-(`deps_at_step`, the `Outcome::Forward` shorten) are safe `reattach_slice_with` / `reattach_with`
-bounded by the step-held cart `Rc`. The consumer-less root drain in
+lifetime-free node — re-anchor through the run-loop step's **consuming, externally-witnessed**
+`Sealed::open`: [`run_step`](../src/machine/execute/run_loop.rs) zips the continuation, the contract,
+and the consumer region and opens them at one rank-2 `for<'b>` brand standing in for the step
+lifetime, witnessed by the held start cart `Rc` (whose `outer` chain subsumes the contract's home),
+so the whole tail nests inside the brand and carries no loose witness-borrow reattach. The
+consumer-pull lift and the `Outcome::Forward` ready pull re-anchor their reads at a *node* lifetime,
+not a fabricated `'run`: inside that brand each dep's
+[`read_lifted`](../src/machine/execute/runtime.rs) splits on its
+[`FrameSet`](../src/machine/core/arena.rs) witness — a singleton frame copies the terminal into the
+consumer region through [`lift`](../src/machine/execute/lift.rs), an empty set forwards a frameless
+terminal through the witness-borrowed `reattach_with` bounded by the consumer borrow — and the
+`Outcome::Forward` pull is lifted into that same region at the brand, so every dep value is born at
+`'b` with no slice reattach of its own. The consumer-less root drain in
 [`run_program`](../src/machine/execute/runtime/interpret.rs) lifts each top-level terminal into the
 run-global root region directly through `lift`. The single irreducible audited `unsafe` reattach in
 the value path is `lift`'s own value-relocation re-anchor: a value about to be copied out has no
@@ -368,10 +373,17 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   frame reuse, MATCH `FrameStorage.outer` chain) is enumerated in
   [per-call-region/scope-handles.md § Verification](per-call-region/scope-handles.md#verification).
 - The audit slate runs cycle-free across every unsafe site in the runtime
-  under `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB and zero process-exit
-  leaks, signing off the memory model as it stands today. The canonical
+  under `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB. One process-exit leak
+  remains — the cycle-gate escape's owning `Rc<FrameStorage>` back-edge through
+  `Region`, a 1378-allocation cycle that [`alloc-witness-plumbing`](../roadmap/per-node-memory/alloc-witness-plumbing.md)
+  clears by threading that owner as a parameter. The canonical
   slate list lives in [observe/miri_slate.md](../observe/miri_slate.md).
 
 ## Open work
 
-- *(none currently tracked)*
+- [`alloc-witness-plumbing`](../roadmap/per-node-memory/alloc-witness-plumbing.md) — clears the
+  cycle-gate escape's process-exit leak (above) by threading the owning `Rc<FrameStorage>` as a
+  parameter, removing the stored back-edge through `Region`.
+- [`transfer_into` and closing the lift relocation unsafe](../roadmap/per-node-memory/transfer-into-lift.md)
+  — recasts the consumer-pull lift as a borrow-checked copy, retiring the one irreducible value-path
+  `unsafe` (the `reattach_value` re-anchor above).
