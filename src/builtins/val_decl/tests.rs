@@ -150,10 +150,7 @@ fn val_slot_satisfied_by_module_let_member() {
     // module identity lives in `types`.
     assert!(matches!(
         scope.resolve_type("Ord"),
-        Some(KType::Module {
-            module: _,
-            frame: _
-        })
+        Some(KType::Module { module: _ })
     ));
 }
 

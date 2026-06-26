@@ -76,7 +76,7 @@ fn dispatch_callable_value<'step>(
     head_obj: &'step KObject<'step>,
 ) -> Outcome<'step> {
     let callable = match head_obj {
-        KObject::KFunction(f, _) => ResolvedCallable::Function(f),
+        KObject::KFunction(f) => ResolvedCallable::Function(f),
         other => {
             return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),

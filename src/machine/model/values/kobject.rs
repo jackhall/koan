@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::{FrameStorage, KFuture};
+use crate::machine::core::KFuture;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     KKind, KType, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
@@ -43,8 +43,9 @@ impl<'a> NonWrappedRef<'a> {
 /// mutable-list builtin would need `Rc::make_mut` at the mutation site. `Struct.fields`
 /// uses `IndexMap` so iteration matches declaration order.
 ///
-/// `KFunction` and `KFuture` carry an `Option<Rc<FrameStorage>>` lifecycle anchor; see
-/// [per-call-region/lifecycle.md § Carriers](../../../../design/per-call-region/lifecycle.md#carriers).
+/// A `KFunction` / `KFuture` is a bare borrow into its defining region; the regions an escaping
+/// closure reaches are pinned by its carrier's witness set ([`FrameSet`](crate::machine::FrameSet)),
+/// not a per-value anchor. See [per-call-region/lifecycle.md § Carriers](../../../../design/per-call-region/lifecycle.md#carriers).
 pub enum KObject<'a> {
     Number(f64),
     KString(String),
@@ -65,8 +66,8 @@ pub enum KObject<'a> {
         Box<KType<'a>>,
     ),
     KExpression(KExpression<'a>),
-    KFuture(KFuture<'a>, Option<Rc<FrameStorage>>),
-    KFunction(&'a KFunction<'a>, Option<Rc<FrameStorage>>),
+    KFuture(KFuture<'a>),
+    KFunction(&'a KFunction<'a>),
     /// Tagged-union value. `(set, index)` references the union's sealed `RecursiveSet`
     /// member; `ktype()` synthesizes `KType::SetRef { set, index }` so dispatch on type
     /// identity sees the declared union, and lift shares the set by `Rc::clone`.
@@ -247,8 +248,8 @@ impl<'a> KObject<'a> {
             KObject::Null => KType::Null,
             KObject::List(_, elem) => KType::List(elem.clone()),
             KObject::Dict(_, k, v) => KType::Dict(k.clone(), v.clone()),
-            KObject::KFunction(f, _) => function_value_ktype(f),
-            KObject::KFuture(t, _) => function_value_ktype(t.function),
+            KObject::KFunction(f) => function_value_ktype(f),
+            KObject::KFuture(t) => function_value_ktype(t.function),
             KObject::KExpression(_) => KType::KExpression,
             // A user-`UNION` (`Tagged` kind) value reports its *variant* refinement, so a
             // slot typed `:(Maybe Some)` dispatches on it. A `TypeConstructor` value
@@ -291,8 +292,8 @@ impl<'a> KObject<'a> {
     }
 
     /// Independent-but-cheap clone: composite payloads `Rc::clone` under the
-    /// immutable-value contract; `KFunction`/`KFuture` preserve their `Rc<FrameStorage>`
-    /// anchor.
+    /// immutable-value contract; `KFunction`/`KFuture` copy their bare defining-region
+    /// borrow.
     pub fn deep_clone(&self) -> KObject<'a> {
         match self {
             KObject::Number(n) => KObject::Number(*n),
@@ -302,8 +303,8 @@ impl<'a> KObject<'a> {
             KObject::List(items, elem) => KObject::List(Rc::clone(items), elem.clone()),
             KObject::Dict(entries, k, v) => KObject::Dict(Rc::clone(entries), k.clone(), v.clone()),
             KObject::KExpression(e) => KObject::KExpression(e.clone()),
-            KObject::KFuture(t, frame) => KObject::KFuture(t.deep_clone(), frame.clone()),
-            KObject::KFunction(f, frame) => KObject::KFunction(f, frame.clone()),
+            KObject::KFuture(t) => KObject::KFuture(t.deep_clone()),
+            KObject::KFunction(f) => KObject::KFunction(f),
             KObject::Tagged {
                 tag,
                 value,
@@ -336,7 +337,7 @@ impl<'a> KObject<'a> {
 
     pub fn as_function(&self) -> Option<&'a KFunction<'a>> {
         match self {
-            KObject::KFunction(f, _) => Some(*f),
+            KObject::KFunction(f) => Some(*f),
             _ => None,
         }
     }
@@ -409,8 +410,8 @@ impl<'a> Parseable<'a> for KObject<'a> {
                 format!("{{{}}}", parts.join(", "))
             }
             KObject::KExpression(e) => e.summarize(),
-            KObject::KFuture(t, _) => t.parsed.summarize(),
-            KObject::KFunction(f, _) => f.summarize(),
+            KObject::KFuture(t) => t.parsed.summarize(),
+            KObject::KFunction(f) => f.summarize(),
             KObject::Tagged { tag, value, .. } => format!("{}({})", tag, value.summarize()),
             // Round-trips the `{x = 1, y = "a"}` value surface (`=` pairs).
             KObject::Record(fields, _) => {

@@ -412,7 +412,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             .alloc_function(KFunction::new(pick_num, Body::Builtin(body_a), scope));
     let pick_num_obj = region
         .region()
-        .alloc_object(KObject::KFunction(pick_num_fn, None));
+        .alloc_object(KObject::KFunction(pick_num_fn));
     scope
         .register_function(
             "pick_num".to_string(),
@@ -461,9 +461,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         Body::Builtin(super::body_no_op),
         scope,
     ));
-    let sibling_obj = region
-        .region()
-        .alloc_object(KObject::KFunction(sibling, None));
+    let sibling_obj = region.region().alloc_object(KObject::KFunction(sibling));
     scope
         .register_function(
             "pick_str".to_string(),

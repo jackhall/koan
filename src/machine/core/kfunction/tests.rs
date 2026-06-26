@@ -170,7 +170,7 @@ fn function_value_ktype_projects_kfunctor_when_flagged() {
         ],
     };
     let plain = KFunction::with_binder_name(make_sig(), Body::Builtin(body_any), scope, None);
-    let plain_obj = KObject::KFunction(region.region().alloc_function(plain), None);
+    let plain_obj = KObject::KFunction(region.region().alloc_function(plain));
     assert!(matches!(plain_obj.ktype(), KType::KFunction { .. }));
     let functor = KFunction::with_binder_and_functor(
         make_sig(),
@@ -180,7 +180,7 @@ fn function_value_ktype_projects_kfunctor_when_flagged() {
         None,
         true,
     );
-    let functor_obj = KObject::KFunction(region.region().alloc_function(functor), None);
+    let functor_obj = KObject::KFunction(region.region().alloc_function(functor));
     match functor_obj.ktype() {
         KType::KFunctor { params, ret, body } => {
             assert_eq!(params.get("x"), Some(&KType::Number));
@@ -222,7 +222,7 @@ fn functor_ktype_identity_ignores_body() {
             None,
             true,
         );
-        KObject::KFunction(region.region().alloc_function(f), None)
+        KObject::KFunction(region.region().alloc_function(f))
     };
     let a = mk_functor().ktype();
     let b = mk_functor().ktype();

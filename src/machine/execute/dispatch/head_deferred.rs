@@ -100,8 +100,8 @@ fn classify_head<'step>(
         // function arm. A plain function is admitted only in the non-type mode; under
         // `TypeHeadDeferred` it is the pruned arm and falls through to the `TypeMismatch`.
         Carried::Object(obj) => match obj {
-            KObject::KFunction(f, _) if f.is_functor => Ok(ResolvedCallable::Function(f)),
-            KObject::KFunction(f, _) if !type_only => Ok(ResolvedCallable::Function(f)),
+            KObject::KFunction(f) if f.is_functor => Ok(ResolvedCallable::Function(f)),
+            KObject::KFunction(f) if !type_only => Ok(ResolvedCallable::Function(f)),
             other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "Type".to_string(),

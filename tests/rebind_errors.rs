@@ -127,10 +127,7 @@ fn cross_scope_shadowing_succeeds() {
     assert!(matches!(scope.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
     // Module's x is 99. MODULE is type-only — its `&Module` rides the identity in `types`.
     let m = match scope.resolve_type("Mod") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("Mod should be a module identity in types"),
     };
     let x = m.child_scope().lookup("x");

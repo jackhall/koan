@@ -252,10 +252,7 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     assert!(
         matches!(
             scope.resolve_type("AResult"),
-            Some(KType::Module {
-                module: _,
-                frame: _
-            })
+            Some(KType::Module { module: _ })
         ),
         "AResult should bind to a Module identity (type-only) after replay-park on \
          forward-declared MODULE / SIG",

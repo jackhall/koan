@@ -23,7 +23,8 @@ pub(in crate::machine::execute) use outcome::{
 pub use runtime::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};
 
 pub(crate) use dispatch::{defer_field_list_action, resolve_type_leaf_carrier, TypeLeafCarrier};
+// Production callers reach `reached_frame` within `execute`; this re-export is for the test harness's
+// `extract_terminal` read-out boundary (`builtins::test_support`).
 pub use dispatch::{NameOutcome, ResolveOutcome, Resolved, TypeIdentifierResolution};
-
 #[cfg(test)]
-pub use lift::lift_ktype_for_test;
+pub(crate) use lift::reached_frame;

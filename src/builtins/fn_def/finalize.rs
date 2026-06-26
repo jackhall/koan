@@ -242,7 +242,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     ));
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame.
-    let obj: &'a KObject<'a> = region.alloc_object(KObject::KFunction(f, None));
+    let obj: &'a KObject<'a> = region.alloc_object(KObject::KFunction(f));
     // An anonymous FN registers nothing — its only handle is the returned value
     // (LET-bound or dropped into a function-typed slot). A keyworded FN / FUNCTOR
     // registers under its lead keyword.

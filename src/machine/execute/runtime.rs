@@ -29,14 +29,16 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::{CallFrame, FrameSet, KError, NodeId, Scope};
 
 use super::dispatch::DepRequest;
-use super::lift::NodeLift;
+use super::lift::relocate_carried;
 use super::nodes::{ChainOp, NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, Continuation, Outcome};
+use super::run_loop::RegionRefFamily;
 use super::{
     catch_continuation, ignore_results, short_circuit, CatchFinish, ContinuationFamily, DepFinish,
 };
 use crate::machine::model::values::CarriedFamily;
-use crate::scheduler::{reattach_with, Scheduler, Workload};
+use crate::scheduler::{Scheduler, Workload};
+use crate::witnessed::Witnessed;
 
 mod interpret;
 mod submit;
@@ -111,36 +113,31 @@ impl<'run> KoanRuntime<'run> {
         self.sched.read(id)
     }
 
-    /// Pull a dep's terminal lifted into `dest` (consumer-pull): a framed terminal is copied out of
-    /// its producer frame by `lift` (which owns the producer read's re-anchor — see its docs), a
-    /// frameless / run-region terminal is re-anchored to `dest` and forwarded as-is. Both are safe
-    /// here: the frameless re-anchor is a `reattach_with` witnessed by the `dest` borrow, and the
-    /// framed copy delegates its one audited fabrication to `lift`.
-    pub(in crate::machine::execute) fn read_lifted<'o>(
+    /// Relocate `producer`'s terminal into `dest` and re-seal it under the set union of every region
+    /// it reaches and `dest`'s `dest_witness` — routing the merge-form
+    /// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into), so the relocation re-anchors
+    /// with **no fabricated lifetime** at this call site. The spine is copied into `dest` natively at
+    /// the merge brand; the surviving closure / module borrows ride the producer's own witness, folded
+    /// into the result set by the merge. `dest_witness` pins `dest`'s backing — the consuming slot's
+    /// frame for a `Forward`-ready pull, the empty set for the run region a drained root re-homes into.
+    ///
+    /// This is the storage-bound relocation (`Forward`-ready, drain): the value lands as a re-sealed
+    /// [`Witnessed`], not at a step brand. The consumer-pull dep slice does not route this — it opens
+    /// in-band at the step brand in [`run_step`](Self::run_step), where the continuation needs the
+    /// values live at `'b`.
+    pub(in crate::machine::execute) fn relocate_terminal(
         &self,
-        dep: NodeId,
-        dest: &'o crate::machine::core::KoanRegion,
-    ) -> Result<crate::machine::model::Carried<'o>, KError> {
-        match self.sched.read_result_with_frame(dep) {
-            // Framed: copy the producer-frame value into `dest`; `lift` owns the re-anchor (the copy
-            // discards the producer read's lifetime, `src` pins it for the copy) — no caller reattach.
-            // A finalized terminal is produced in exactly one frame, so its witness is a singleton.
-            Ok((value, witness)) => match witness.sole() {
-                Some(frame) => Ok(self.lift(value, frame, dest)),
-                // Frameless: the empty witness set means the value already lives in a run region that
-                // outlives `'o` — a strict ancestor of `dest` — so re-anchor it to `dest`'s lifetime
-                // witnessed by the `dest` borrow, no copy. `reattach_with` bounds `'o` to that borrow.
-                None => {
-                    debug_assert!(
-                        witness.is_empty(),
-                        "a multi-region witness in the singleton lift path is a transfer-into-lift \
-                         concern, not produced by this item",
-                    );
-                    Ok(reattach_with::<CarriedFamily, _>(value, dest))
-                }
-            },
-            Err(e) => Err(e.clone()),
-        }
+        producer: NodeId,
+        dest: &crate::machine::core::KoanRegion,
+        dest_witness: FrameSet,
+    ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+        let dest = Witnessed::<RegionRefFamily, FrameSet>::new(dest, dest_witness);
+        self.sched
+            .transfer_lifted(producer, dest, |value, region, _brand| {
+                relocate_carried(value, region)
+            })
+            .map(|opt| opt.expect("a FrameSet union always represents"))
+            .map_err(|e| e.clone())
     }
 
     pub fn len(&self) -> usize {
@@ -378,15 +375,10 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         outcome: Outcome<'step>,
         idx: usize,
-        // The consumer `dest` region opened at the step brand `'step`, into which an
-        // `Outcome::Forward` pull is lifted — so the pulled value is born at `'step` natively, no
-        // node→step value reattach. The non-Forward arms ignore it.
-        dest: &'step crate::machine::core::KoanRegion,
     ) -> NodeStep<'step> {
         match outcome {
-            // The terminal stays at the step lifetime `'s` — the run loop's `run_step` finalizes it
-            // into the slot store (erasing it) before the step's frame witness drops, so it never
-            // needs a fabricated `'run` to cross the step-guard exit.
+            // The terminal stays live at `'step`; `run_step` contract-checks it (value and contract
+            // share `'step`) and only then bundles it with its witness set and finalizes.
             Outcome::Done(output) => NodeStep::Done(output),
             Outcome::Continue {
                 work,
@@ -509,13 +501,10 @@ impl<'run> KoanRuntime<'run> {
                 // then this slot's consumers pull from here. Otherwise splice the slot out: move its
                 // consumers onto `producer`'s notify list and alias the slot to `producer`.
                 if self.sched.is_result_ready(producer) {
-                    // Pull `producer`'s terminal into the consumer `dest` region — opened at the step
-                    // brand `'step`, so the pulled value is born there natively (`read_lifted` lifts a
-                    // framed terminal into `dest` and forwards a frameless one as-is, both at `'step`).
-                    // No node→step value reattach: the realized `NodeStep::Done` is already at `'step`.
-                    // `dest` is the bare-name forward's own step scope region — unchanged across the
-                    // read-only forward decide, the same region the step's dep pull-lifts targeted.
-                    NodeStep::Done(self.read_lifted(producer, dest))
+                    // The forwarded terminal *is* this slot's; `run_step` relocates it into this
+                    // slot's region carrying its own witness (the forwarded terminal already enforced
+                    // its own contract, so no re-check). `Alias` is the not-ready twin below.
+                    NodeStep::ForwardReady(producer)
                 } else {
                     // Not ready: `NodeStep::Alias` drives `splice_forward` (move consumers onto the
                     // producer + alias the slot) in the execute loop.

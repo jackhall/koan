@@ -119,10 +119,7 @@ fn module_body_backward_value_reference_resolves() {
     let scope = run(&region, captured, "MODULE Mod = ((LET x = 1) (LET y = x))");
     // MODULE is type-only — the `&Module` rides the identity in `types`.
     let m = match scope.resolve_type("Mod") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("Mod should be a module identity in types"),
     };
     let y = m.child_scope().lookup("y");

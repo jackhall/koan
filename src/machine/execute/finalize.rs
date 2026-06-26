@@ -1,8 +1,10 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ReturnContract;
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType};
-use crate::machine::{CallFrame, KError, KErrorKind};
+use crate::machine::{CallFrame, FrameSet, KError, KErrorKind};
+use crate::witnessed::{MergeWitness, Witnessed};
 
 use super::runtime::KoanRuntime;
 
@@ -14,26 +16,30 @@ use super::runtime::KoanRuntime;
 /// The scheduler decides *when* (the Done boundary); this hook owns the `ReturnContract`-/
 /// `KType`-naming *how*, so the scheduler core names neither.
 ///
-/// Peer of [`NodeLift`](super::lift::NodeLift): both are workload hooks the Done boundary calls. Lift
-/// relocates a value across a dep edge; finalize enforces the return contract. They stay separate —
-/// the contract layer is never folded into the lift (see [`lift`](super::lift)).
+/// Peer of [`relocate_carried`](super::lift::relocate_carried): both are workload hooks the Done
+/// boundary calls. The lift relocates a value across a dep edge; finalize enforces the return
+/// contract and bundles the terminal with its witness set. They stay separate — the contract layer
+/// is never folded into the lift (see [`lift`](super::lift)).
 ///
 /// A Koan-typed workload hook: the generic scheduler ([`crate::scheduler`]) drives the Done
-/// boundary through this trait (alongside `NodeLift`) and names no Koan type itself.
+/// boundary through this trait and names no Koan type itself.
 ///
-/// Single-lifetime (`'o -> 'o`): the value arrives already at its destination node lifetime `'o`
-/// (the step lifetime the producer ran against), so the hook re-anchors only the contract — never
-/// the value — and the coarsening re-tag homes into the contract's own region at the same `'o`.
+/// The value arrives live at the step lifetime `'o` (the same lifetime the contract is opened at), so
+/// the declared-return check and coarsening re-tag run while value and contract share `'o`; the
+/// checked terminal is then erased into a [`Witnessed`] under its witness set, severing `'o`.
 pub(in crate::machine::execute) trait NodeFinalize {
-    /// Enforce the declared return on `output` against the already-vended live `contract`. A `None`
-    /// frame (a frameless slot or the non-dying run frame) passes the value through untouched — and
-    /// the driver vends no contract for such a producer, so `contract` is `None` there too.
+    /// Enforce the declared return on `output` against the already-vended live `contract`, then bundle
+    /// the checked terminal with the witness set of every region it reaches: `dep_reached` (the
+    /// step's accumulated dep sources) ∪ the producer `frame`. A `None` frame (a frameless slot or the
+    /// non-dying run frame) passes the value through untouched, vends no contract, and folds in no
+    /// frame — the terminal's backing already outlives the carrier (the dep sources alone pin it).
     fn finalize_terminal<'o>(
         &self,
         output: Result<Carried<'o>, KError>,
         frame: Option<&Rc<CallFrame>>,
         contract: Option<ReturnContract<'o>>,
-    ) -> Result<Carried<'o>, KError>;
+        dep_reached: FrameSet,
+    ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError>;
 }
 
 impl NodeFinalize for KoanRuntime<'_> {
@@ -42,8 +48,21 @@ impl NodeFinalize for KoanRuntime<'_> {
         output: Result<Carried<'o>, KError>,
         frame: Option<&Rc<CallFrame>>,
         contract: Option<ReturnContract<'o>>,
-    ) -> Result<Carried<'o>, KError> {
-        enforce_return_contract(output, frame, contract)
+        dep_reached: FrameSet,
+    ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+        // Check / coarsen while the value is still live at `'o`, then erase it into a `Witnessed`
+        // under its witness set. The producer's own `FrameStorage` joins the dep sources — and, by its
+        // `outer` chain, pins the coarsening home region (a strict ancestor) too; a frameless / run
+        // producer folds in nothing, leaving the surviving dep sources (or the empty set) as the pin.
+        let checked = enforce_return_contract(output, frame, contract)?;
+        let witness = match frame {
+            Some(producer) => {
+                FrameSet::merge(&dep_reached, &FrameSet::singleton(producer.storage_rc()))
+                    .expect("a set witness always represents the union")
+            }
+            None => dep_reached,
+        };
+        Ok(Witnessed::new(checked, witness))
     }
 }
 

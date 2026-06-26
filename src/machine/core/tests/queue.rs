@@ -49,13 +49,13 @@ fn drain_debug_asserts_on_invariant_violation() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj1 = region.region().alloc_object(KObject::KFunction(kfn1, None));
+    let obj1 = region.region().alloc_object(KObject::KFunction(kfn1));
     let kfn2 = region.region().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj2 = region.region().alloc_object(KObject::KFunction(kfn2, None));
+    let obj2 = region.region().alloc_object(KObject::KFunction(kfn2));
 
     let snapshot = scope.bindings().data();
     scope
@@ -80,7 +80,7 @@ fn register_function_defers_and_drains_through_function_arm() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = region.region().alloc_object(KObject::KFunction(kfn, None));
+    let obj = region.region().alloc_object(KObject::KFunction(kfn));
     let key = kfn.signature.untyped_key();
     {
         let snapshot = scope.bindings().functions();
@@ -128,7 +128,7 @@ fn drain_requeues_function_on_persistent_borrow_conflict() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = region.region().alloc_object(KObject::KFunction(kfn, None));
+    let obj = region.region().alloc_object(KObject::KFunction(kfn));
     let key = kfn.signature.untyped_key();
 
     let snapshot = scope.bindings().functions();
@@ -173,13 +173,13 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj1 = region.region().alloc_object(KObject::KFunction(kfn1, None));
+    let obj1 = region.region().alloc_object(KObject::KFunction(kfn1));
     let kfn2 = region.region().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj2 = region.region().alloc_object(KObject::KFunction(kfn2, None));
+    let obj2 = region.region().alloc_object(KObject::KFunction(kfn2));
 
     let snapshot = scope.bindings().functions();
     scope

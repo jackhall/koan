@@ -117,7 +117,7 @@ fn nested_block_cutoff_is_per_scope() {
          MODULE Mo = ((LET a = 2) (LET b = a))",
     );
     let m = match scope.resolve_type("Mo") {
-        Some(KType::Module { module, frame: _ }) => *module,
+        Some(KType::Module { module }) => *module,
         _ => panic!("Mo should be a module identity in types"),
     };
     let data = m.child_scope().bindings().data();

@@ -11,11 +11,16 @@
 //!   orchestrates the notify-walk and cascade-free across this store and
 //!   `DepGraph`.
 
+use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 
 use super::nodes::{Node, NodeWork};
-use super::{Erased, FramedRead, Live, NodeId, Workload};
-use crate::witnessed::{Sealed, Witnessed};
+use super::{Live, NodeId, Workload};
+use crate::witnessed::{MergeWitness, Reattachable, Sealed, Witnessed};
+// `Erased` re-anchors a test-only result through `set_result`; the production store path takes a
+// pre-built `Witnessed`, so the import is test-scoped.
+#[cfg(test)]
+use super::Erased;
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -152,36 +157,69 @@ impl<W: Workload> NodeStore<W> {
     /// Replace a finalized terminal in place, dropping any pinned producer frame. The drain
     /// boundary uses this to re-home a consumer-less root into a surviving region (`output` already
     /// lifted there), releasing the per-call frame the producer kept it in.
-    pub(super) fn rehome_terminal(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {
+    pub(super) fn rehome_terminal(
+        &mut self,
+        id: NodeId,
+        output: Result<Witnessed<W::Value, W::Witness>, W::Error>,
+    ) {
         debug_assert!(
             matches!(self.slots[id], SlotState::Done(..)),
             "rehome_terminal expects a finalized slot",
         );
-        self.slots[id] = SlotState::Done(
-            output
-                .map(Erased::erase)
-                .map(|e| Sealed::seal(Witnessed::from_erased(e, W::Witness::default()))),
-        );
+        // The terminal arrives already relocated and re-sealed under its surviving-source witness set
+        // (the run region drops out of the union), so just store the seal.
+        self.slots[id] = SlotState::Done(output.map(Sealed::seal));
     }
 
-    /// Callers must pair this with the dep-graph notify-walk so consumers
-    /// wake atomically with the write. `witness` is the producer frame's witness set, pinned in the
-    /// slot until it is freed (the empty set for a frameless / run-region terminal).
+    /// Callers must pair this with the dep-graph notify-walk so consumers wake atomically with the
+    /// write. The terminal arrives already bundled with its witness set (built by the workload's
+    /// finalize hook: the producer frame ∪ every region the value reaches; the empty set for a
+    /// frameless / run-region terminal), so this just seals it for dormant storage. On `Err` the
+    /// erased error owns its data and carries no witness.
     pub(super) fn finalize(
         &mut self,
         id: NodeId,
-        output: Result<Live<'_, W>, W::Error>,
-        witness: W::Witness,
+        output: Result<Witnessed<W::Value, W::Witness>, W::Error>,
     ) {
-        // Bundle the live terminal with its producer-frame witness into a `Witnessed`, then seal it
-        // for dormant storage: the value is erased to `'static` and the co-stored witness set pins its
-        // backing region until the slot frees, so a later `read` / `open` can re-anchor it soundly.
-        // On `Err` the witness is dropped now — the error owns its data and needs no pin.
-        self.slots[id] = SlotState::Done(
-            output
-                .map(Erased::erase)
-                .map(|e| Sealed::seal(Witnessed::from_erased(e, witness))),
-        );
+        self.slots[id] = SlotState::Done(output.map(Sealed::seal));
+    }
+
+    /// Relocate a finalized terminal into `dest` and re-seal it under the set union of the regions it
+    /// reaches and `dest` — the [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into) the
+    /// `Forward`-ready pull and the drain re-home route (the consumer-pull dep slice opens in-band at
+    /// the step brand instead). `dest` is the destination region wrapped as a witnessed carrier;
+    /// `relocate` is the workload's structural copy into it. The stored seal is left untouched (the
+    /// producer keeps its terminal for other consumers). `None` only if the witness union is not
+    /// representable — never for a set witness.
+    // The rank-2 `relocate` closure plus the witnessed-`Result` return is irreducibly nested.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn transfer_lifted<B: Reattachable>(
+        &self,
+        id: NodeId,
+        dest: Witnessed<B, W::Witness>,
+        relocate: impl for<'b> FnOnce(
+            <W::Value as Reattachable>::At<'b>,
+            B::At<'b>,
+            PhantomData<&'b ()>,
+        ) -> <W::Value as Reattachable>::At<'b>,
+    ) -> Result<Option<Witnessed<W::Value, W::Witness>>, &W::Error>
+    where
+        W::Witness: MergeWitness,
+    {
+        match &self.slots[id] {
+            SlotState::Done(Ok(sealed), ..) => Ok(sealed.transfer_into(dest, relocate)),
+            SlotState::Done(Err(e), ..) => Err(e),
+            _ => panic!("result must be ready by the time it's transferred"),
+        }
+    }
+
+    /// The finalized terminal's witness set (cloned), or the empty set for a frameless / run-region
+    /// or errored slot — the consumer-pull lift's `pin` accumulation reads it before relocating.
+    pub(super) fn dep_witness(&self, id: NodeId) -> W::Witness {
+        match &self.slots[id] {
+            SlotState::Done(Ok(sealed), ..) => sealed.witness().clone(),
+            _ => W::Witness::default(),
+        }
     }
 
     /// Idempotent on already-`Free` slots when paired with the cascade-free
@@ -215,20 +253,6 @@ impl<W: Workload> NodeStore<W> {
             // frame `Rc`: `free_one`/`finalize` need `&mut self`, so for the whole `&self` borrow the
             // frame cannot drop, so the read borrow cannot outlive the backing region.
             SlotState::Done(Ok(w), ..) => Ok(w.read()),
-            SlotState::Done(Err(e), ..) => Err(e),
-            _ => panic!("result must be ready by the time it's read"),
-        }
-    }
-
-    /// Read a finalized terminal together with the witness set that backs it (empty for a
-    /// frameless / run-region value, which is already in a surviving region). The consumer-pull lift
-    /// copies the value out of the producer frame the set names into the consumer's region before the
-    /// producer slot frees.
-    pub(super) fn read_result_with_frame(&self, id: NodeId) -> FramedRead<'_, W> {
-        match &self.slots[id] {
-            // `read` re-anchors to the `&self` read borrow; the bundled witness set (cloned out here
-            // for the consumer-pull lift) pins the backing region over that borrow.
-            SlotState::Done(Ok(w), ..) => Ok((w.read(), w.witness().clone())),
             SlotState::Done(Err(e), ..) => Err(e),
             _ => panic!("result must be ready by the time it's read"),
         }

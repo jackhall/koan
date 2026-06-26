@@ -6,6 +6,7 @@ use super::*;
 use crate::builtins::default_scope;
 use crate::machine::model::types::KType;
 use crate::machine::BindingIndex;
+use std::cell::RefCell;
 
 /// A child `FrameStorage` whose `outer` chains `parent` — the ancestry shape `FrameSet`
 /// subsumption walks. Region escape is irrelevant to the `outer`-chain test, so a plain region.
@@ -13,6 +14,7 @@ fn child_storage(parent: &Rc<FrameStorage>) -> Rc<FrameStorage> {
     Rc::new(FrameStorage {
         region: KoanRegion::new(),
         outer: Some(Rc::clone(parent)),
+        retained: RefCell::new(FrameSet::empty()),
     })
 }
 
@@ -22,9 +24,18 @@ fn child_storage(parent: &Rc<FrameStorage>) -> Rc<FrameStorage> {
 fn pins_region_walks_outer_chain() {
     let root = FrameStorage::run_root();
     let child = child_storage(&root);
-    assert!(child.pins_region(child.region()), "self pins its own region");
-    assert!(child.pins_region(root.region()), "descendant pins its ancestor");
-    assert!(!root.pins_region(child.region()), "ancestor does not pin descendant");
+    assert!(
+        child.pins_region(child.region()),
+        "self pins its own region"
+    );
+    assert!(
+        child.pins_region(root.region()),
+        "descendant pins its ancestor"
+    );
+    assert!(
+        !root.pins_region(child.region()),
+        "ancestor does not pin descendant"
+    );
 }
 
 /// `FrameSet::merge` over related carts collapses to the descendant singleton (the ancestor's region
@@ -36,7 +47,8 @@ fn frameset_merge_subsumes_ancestor() {
     let descendant = FrameSet::singleton(Rc::clone(&child));
     let ancestor = FrameSet::singleton(Rc::clone(&root));
 
-    let merged = FrameSet::merge(&descendant, &ancestor).expect("a set always represents the union");
+    let merged =
+        FrameSet::merge(&descendant, &ancestor).expect("a set always represents the union");
     assert_eq!(merged.frames.len(), 1, "ancestor subsumed by descendant");
     assert!(std::ptr::eq(merged.frames[0].region(), child.region()));
 
@@ -276,61 +288,6 @@ fn call_frame_try_reset_for_tail_allows_reset_under_escaped_storage() {
         pre_storage_addr as *const KoanRegion
     ));
     assert_eq!(escaped_storage.region().alloc_count(), pre_alloc_count);
-}
-
-/// Cycle gate: alloc'ing a value that anchors back at the receiving region via an
-/// `Rc<CallFrame>` redirects to the escape region. Without the redirect the per-call
-/// region's storage would hold an Rc to itself and never drop.
-#[test]
-fn alloc_object_redirects_self_anchored_value_to_escape_region() {
-    let outer = FrameStorage::run_root();
-    let scope = default_scope(&outer, Box::new(std::io::sink()));
-    let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
-    // Build a List whose only element is a `KFunction` carrying an
-    // `Rc<FrameStorage>` pointing at `frame.region()`. The cycle gate only inspects the
-    // carried `Rc`, so the placeholder `KFunction` body is irrelevant.
-    let dummy_fn_obj = outer.region().alloc_object(KObject::KFunction(
-        outer
-            .region()
-            .alloc_function(crate::machine::core::kfunction::KFunction::new(
-                crate::machine::model::types::ExpressionSignature {
-                    return_type: crate::machine::model::types::ReturnType::Resolved(
-                        crate::machine::model::types::KType::Null,
-                    ),
-                    elements: vec![crate::machine::model::types::SignatureElement::Keyword(
-                        "DUMMY".into(),
-                    )],
-                },
-                crate::machine::core::kfunction::Body::Builtin(|ctx| {
-                    crate::machine::core::kfunction::action::Action::Done(Ok(
-                        crate::machine::model::Carried::Object(
-                            ctx.scope
-                                .region
-                                .alloc_object(crate::machine::model::KObject::Null),
-                        ),
-                    ))
-                }),
-                scope,
-            )),
-        None,
-    ));
-    let f_ref = match dummy_fn_obj {
-        KObject::KFunction(f, _) => *f,
-        _ => unreachable!(),
-    };
-    let cyclic_kfn = KObject::KFunction(f_ref, Some(frame.storage_rc()));
-    let list = KObject::list(vec![cyclic_kfn]);
-
-    let stored = frame.region().alloc_object(list);
-    let stored_ptr = stored as *const KObject<'_>;
-    assert!(
-        outer.region().owns_object(stored_ptr),
-        "self-anchored alloc should redirect to the escape region (outer)",
-    );
-    assert!(
-        !frame.region().owns_object(stored_ptr),
-        "self-anchored value must not land in the per-call region",
-    );
 }
 
 /// Cycle-leak fix: a per-call frame whose parent is the run root holds **no** strong ref back to the

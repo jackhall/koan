@@ -43,17 +43,8 @@ pub trait Stored<W: StorageProfile>: Reattachable + Sized + 'static {
     /// binding chokepoint: storing `At<'static>` into `Arena<Self::At<'static>>` only type-checks
     /// when the family is wired to the matching sub-arena.
     fn sub_arena(storage: &W::Storage) -> &Arena<Self::At<'static>>;
-    /// If any descendant of `value` carries an anchor back to the frame at `self_ptr` — storing it
-    /// there would form a self-referential cycle — return the region the allocation must redirect
-    /// into: the anchoring value's escape target, recovered *from the value itself* (the anchoring
-    /// closure's captured scope names its defining region). `None` when no descendant self-anchors;
-    /// families that hold no anchor return `None` as a deliberate declaration. The returned borrow is
-    /// tied to the value's own content lifetime `'v`, so the redirect pins its target through the
-    /// value being stored — no owner is held on the frame.
-    fn escape_target<'v>(value: &Self::At<'v>, self_ptr: *const Region<W>) -> Option<&'v Region<W>>;
-    /// Post-store hook, run inside the engine on the *final* storing frame (after any escape
-    /// redirect). Default no-op; a family overrides it to record the stored address for
-    /// [`Region::owns_addr`] membership queries.
+    /// Post-store hook, run inside the engine on the storing frame. Default no-op; a family overrides
+    /// it to record the stored address for [`Region::owns_addr`] membership queries.
     fn record_local(_frame: &Region<W>, _stored: &Self::At<'static>) {}
 }
 
@@ -96,20 +87,14 @@ impl<W: StorageProfile> Region<W> {
         self.membership.borrow_mut().push(addr);
     }
 
-    /// Single allocator engine for any family `K`. Runs the cycle gate — a value that would
-    /// self-cycle redirects into the escape region [`Stored::escape_target`] recovers from the
-    /// value — then erases the live form to `'static`, stores it in the family's sub-arena, fires
-    /// [`Stored::record_local`] on the final storing frame, and re-anchors the store to `'a`. The
-    /// sole store path: `storage` is private, so this gate cannot be skipped.
+    /// Single allocator engine for any family `K`: erase the live form to `'static`, store it in the
+    /// family's sub-arena, fire [`Stored::record_local`], and re-anchor the store to `'a`. The sole
+    /// store path — `storage` is private, so every allocation routes here.
     ///
-    /// The redirect carries no `unsafe`: `escape` is a `&'a Region` recovered from the value's own
-    /// content (a scope reference branded `'a`), so it pins its target for `'a` through the value
-    /// being stored — no owner is held on the frame, so no allocation back-edge can form. A redirect
-    /// recurses, so a value reaching several ancestor regions is hoisted past each in turn.
+    /// No cycle gate: a stored value holds no owning `Rc` back to a region (a closure / future /
+    /// module is a bare borrow into its defining region, kept alive by its carrier's witness set), so
+    /// storing it where requested can never form an allocation back-edge.
     pub(crate) fn alloc<'a, K: Stored<W>>(&'a self, value: K::At<'a>) -> &'a K::At<'a> {
-        if let Some(escape) = K::escape_target(&value, self as *const Region<W>) {
-            return escape.alloc::<K>(value);
-        }
         let stored: &'a K::At<'static> =
             K::sub_arena(&self.storage).alloc(erase_to_static::<K>(value));
         // The post-store hook fires on the final storing frame (this one, after any redirect

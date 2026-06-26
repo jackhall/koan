@@ -62,9 +62,7 @@ pub fn body<'a>(
             };
             type_for_types_map = Some(match rhs {
                 Held::Type(kt) => kt.clone(),
-                Held::Object(o) if matches!(o, KObject::KFunction(f, _) if f.is_functor) => {
-                    o.ktype()
-                }
+                Held::Object(o) if matches!(o, KObject::KFunction(f) if f.is_functor) => o.ktype(),
                 Held::Object(o) => {
                     return done_err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                         name: resolved_name,
@@ -114,7 +112,7 @@ pub fn body<'a>(
         let value = rhs
             .as_object()
             .expect("value-route LET RHS is the Object arm");
-        if matches!(value, KObject::KFunction(f, _) if f.is_functor) {
+        if matches!(value, KObject::KFunction(f) if f.is_functor) {
             return done_err(KError::new(KErrorKind::ShapeError(format!(
                 "a functor must be bound to a Type-class (capitalized) name; `{name}` \
                  is value-class — rebind under a Type-classified identifier instead \

@@ -96,7 +96,7 @@ unsafe impl MergeWitness for Rc<TestCart> {
 }
 
 /// The witness-less primitives still routed by the value-carrier path: `Erased` storage and the
-/// transient `reattach_value` / `reattach_ref` helpers, exercised over a real borrow.
+/// transient `reattach_ref` helper, exercised over a real borrow.
 #[test]
 fn erased_roundtrip_and_helpers() {
     let backing = [7u32, 8, 9];
@@ -105,9 +105,6 @@ fn erased_roundtrip_and_helpers() {
     let reattached: &u32 = unsafe { erased.reattach() };
     assert_eq!(*reattached, 7);
 
-    // SAFETY: as above; the value genuinely lives for the read.
-    let owned: &u32 = unsafe { reattach_value::<RefFamily>(&backing[1]) };
-    assert_eq!(*owned, 8);
     let by_ref: &&u32 = &&backing[2];
     // SAFETY: as above.
     let viaref: &&u32 = unsafe { reattach_ref::<RefFamily>(by_ref) };

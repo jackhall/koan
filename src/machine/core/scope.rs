@@ -819,7 +819,7 @@ impl<'a> Scope<'a> {
 
     pub fn lookup_kfunction(&self, name: &str) -> Option<&'a KFunction<'a>> {
         match self.lookup(name)? {
-            KObject::KFunction(f, _) => Some(*f),
+            KObject::KFunction(f) => Some(*f),
             _ => None,
         }
     }

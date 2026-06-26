@@ -38,11 +38,8 @@ pub fn body<'a>(
     };
     use crate::machine::model::values::Held;
 
-    let (module, module_frame) = match arg_held(ctx.args, "m") {
-        Some(Held::Type(KType::Module {
-            module: m,
-            frame: anchor,
-        })) => (*m, anchor.clone()),
+    let module = match arg_held(ctx.args, "m") {
+        Some(Held::Type(KType::Module { module: m })) => *m,
         Some(Held::Type(other)) => {
             return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "m".to_string(),
@@ -60,14 +57,9 @@ pub fn body<'a>(
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("m".to_string())))),
     };
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "USING", "body"));
-    // Root the frame `Rc` in the call-site region so the borrowed window outlives the eager `m`
-    // arg and any escaping closure. No-op for top-level modules.
-    if module_frame.is_some() {
-        ctx.scope.region.alloc_ktype(KType::Module {
-            module,
-            frame: module_frame,
-        });
-    }
+    // The borrowed window outlives the eager `m` arg and any escaping closure because the module
+    // arrives as a consumer-pulled dep, its defining region pinned by this step's witness set — no
+    // per-value frame anchor to re-root.
     // Transparent scope lives in the call-site region so forwarded binds and block-defined
     // functions outlive the block.
     let module_bindings = module.child_scope().bindings();

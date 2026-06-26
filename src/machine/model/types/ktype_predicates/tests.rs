@@ -233,10 +233,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let module = region
         .region()
         .alloc_module(Module::new("IntMod".into(), child));
-    let kt_module: &KType<'_> = region.region().alloc_ktype(KType::Module {
-        module,
-        frame: None,
-    });
+    let kt_module: &KType<'_> = region.region().alloc_ktype(KType::Module { module });
     assert!(!t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_module))));
     let sig = region
         .region()

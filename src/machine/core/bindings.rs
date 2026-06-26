@@ -512,7 +512,7 @@ impl<'a> Bindings<'a> {
         index: BindingIndex,
     ) -> Result<(), KError> {
         if let Some((existing, _)) = self.data.borrow().get(&name).copied() {
-            if matches!(existing, KObject::KFunction(_, _)) {
+            if matches!(existing, KObject::KFunction(_)) {
                 return Ok(());
             }
             return Err(KError::new(KErrorKind::Rebind { name }));
@@ -651,7 +651,7 @@ impl<'a> Bindings<'a> {
                         }))
                     }
                     Some(_) => {
-                        if !matches!(existing, KObject::KFunction(_, _)) {
+                        if !matches!(existing, KObject::KFunction(_)) {
                             return Err(KError::new(KErrorKind::Rebind {
                                 name: name.to_string(),
                             }));

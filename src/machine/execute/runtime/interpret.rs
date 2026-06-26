@@ -7,9 +7,9 @@
 use super::KoanRuntime;
 use crate::builtins::default_scope;
 use crate::machine::core::FrameStorage;
-use crate::machine::execute::lift::NodeLift;
+use crate::machine::execute::lift::reached_frame;
 use crate::machine::model::ast::KExpression;
-use crate::machine::{KError, KErrorKind, Scope};
+use crate::machine::{FrameSet, KError, KErrorKind, Scope};
 use crate::parse::{parse, parse_with_path};
 
 /// Parse Koan source and run it on a fresh `KoanRegion`; all values allocated by the
@@ -64,15 +64,29 @@ impl<'run> KoanRuntime<'run> {
         // the root lives run-long and its per-call frame is released. A frameless / run-region or
         // errored terminal needs no lift.
         for &id in &top_level {
-            if let Ok((value, witness)) = self.sched.read_result_with_frame(id) {
-                // The scheduler hands back the value re-anchored to this `&self` borrow. A
-                // consumer-less root has no pull-lift to node-scale it, so this `'run` re-home copies
-                // it into the run-global root region via `lift` (which owns the read's re-anchor). The
-                // lifted root is handed back live — the scheduler re-erases it for storage. A frameless
-                // root (empty witness) already lives in a surviving region, so it needs no re-home.
-                if let Some(frame) = witness.sole() {
-                    let lifted = self.lift(value, frame, root.region);
-                    self.sched.rehome_terminal(id, Ok(lifted));
+            // A root that reaches a per-call region (a non-empty witness set) is relocated into the
+            // run-global root region carrying exactly those sources, so the root lives run-long and its
+            // per-call frame is released. A fully-surviving root (empty witness) — already in a region
+            // that outlives the run — and an errored terminal need no re-home.
+            let pin = self.sched.dep_witness(id);
+            if !pin.is_empty() {
+                // A closure / module read out of the scheduler as a top-level result (e.g. a returned
+                // module the caller inspects) borrows back into its per-call region. The rehomed
+                // terminal's witness pins that region only while its slot lives, so retain it on the
+                // persistent run-root frame too — the read then survives the scheduler's teardown.
+                if let (Some(home), Ok(value)) =
+                    (root.region_owner().upgrade(), self.read_result(id))
+                {
+                    if let Some(reached) = reached_frame(value) {
+                        home.retain(reached);
+                    }
+                }
+                // Relocate into the surviving run region via the merge-form transfer: the spine is
+                // copied there and the result re-sealed under the root's own reached sources (the run
+                // region's `dest_witness` is empty — it outlives the run, so needs no held pin),
+                // dropping the per-call frame the producer kept the terminal in.
+                if let Ok(witnessed) = self.relocate_terminal(id, root.region, FrameSet::empty()) {
+                    self.sched.rehome_terminal(id, Ok(witnessed));
                 }
             }
         }

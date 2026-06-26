@@ -36,10 +36,10 @@ mod workload;
 // The lifetime-erasure carrier substrate lives in the top-level `witnessed` module (below both
 // `machine` and `scheduler`); re-exported here so the scheduler's carriers name it unqualified.
 pub(crate) use crate::witnessed::{
-    reattach_ref, reattach_ref_with, reattach_value, reattach_with, Erased, Reattachable,
+    reattach_ref, reattach_ref_with, reattach_with, Erased, MergeWitness, Reattachable, Witnessed,
 };
 pub use node_id::NodeId;
-pub(crate) use workload::{FramedRead, Live, Workload};
+pub(crate) use workload::{Live, Workload};
 
 /// Re-exported for the driver's white-box reclaim tests (the only cross-module user of the edge
 /// kind); production driver code never names it.
@@ -125,16 +125,48 @@ impl<W: Workload> Scheduler<W> {
         self.store.read(self.resolve_alias(id))
     }
 
-    /// Read a terminal with the producer frame `Rc` backing it, for the consumer-pull lift. Follows
-    /// a bare-name-forward alias to the real producer (which holds the value in its own frame).
-    pub(crate) fn read_result_with_frame(&self, id: NodeId) -> FramedRead<'_, W> {
-        self.store.read_result_with_frame(self.resolve_alias(id))
+    /// The finalized terminal's witness set — the regions it reaches, cloned out for the consumer-pull
+    /// lift's `pin` accumulation (the empty set for a frameless / run-region terminal, or for an
+    /// errored slot). Follows a bare-name-forward alias to the real producer.
+    pub(crate) fn dep_witness(&self, id: NodeId) -> W::Witness {
+        self.store.dep_witness(self.resolve_alias(id))
     }
 
-    /// Re-home a finalized terminal (already lifted into a surviving region), dropping the pinned
-    /// producer frame. The drain boundary uses this for consumer-less roots. Resolves a bare-name
-    /// alias so the real producer's frame — not the alias slot — is released.
-    pub(crate) fn rehome_terminal(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {
+    /// Relocate a finalized terminal into a destination region (the `Forward`-ready pull / drain
+    /// re-home) and re-seal it under the set union of the regions it reaches and `dest` — routing
+    /// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into), which owns the audited
+    /// retype (via [`Witnessed::merge`]). `dest` is the destination region wrapped as a witnessed
+    /// carrier; `relocate` is the workload's structural copy into it (it names the value type; the
+    /// scheduler does not). Follows a bare-name-forward alias to the real producer (which holds the
+    /// value). `None` only if the witness union is not representable — never for a set witness.
+    // The rank-2 `relocate` closure plus the witnessed-`Result` return is irreducibly nested.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn transfer_lifted<B: Reattachable>(
+        &self,
+        id: NodeId,
+        dest: Witnessed<B, W::Witness>,
+        relocate: impl for<'b> FnOnce(
+            <W::Value as Reattachable>::At<'b>,
+            B::At<'b>,
+            std::marker::PhantomData<&'b ()>,
+        ) -> <W::Value as Reattachable>::At<'b>,
+    ) -> Result<Option<Witnessed<W::Value, W::Witness>>, &W::Error>
+    where
+        W::Witness: MergeWitness,
+    {
+        self.store
+            .transfer_lifted(self.resolve_alias(id), dest, relocate)
+    }
+
+    /// Re-home a finalized terminal (relocated into a surviving region, bundled with the witness set
+    /// of any per-call source it still reaches), dropping the pinned producer frame. The drain
+    /// boundary uses this for consumer-less roots. Resolves a bare-name alias so the real producer's
+    /// frame — not the alias slot — is released.
+    pub(crate) fn rehome_terminal(
+        &mut self,
+        id: NodeId,
+        output: Result<Witnessed<W::Value, W::Witness>, W::Error>,
+    ) {
         let target = self.resolve_alias(id);
         self.store.rehome_terminal(target, output);
     }

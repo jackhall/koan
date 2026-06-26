@@ -157,7 +157,7 @@ fn fn_def_returns_the_registered_kfunction() {
     let scope = run_root_silent(&region);
     let result = run_one(scope, parse_one("FN (DOUBLE x :Number) -> Number = (x)"));
     assert!(
-        matches!(result, KObject::KFunction(_, _)),
+        matches!(result, KObject::KFunction(_)),
         "FN should return its registered KFunction",
     );
 }

@@ -32,7 +32,7 @@ fn functor_carrier_ktype_projects_to_kfunctor() {
          FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1))",
     );
     let f = lookup_fn(scope, "MAKESET");
-    let obj = KObject::KFunction(f, None);
+    let obj = KObject::KFunction(f);
     match obj.ktype() {
         KType::KFunctor { .. } => {}
         other => panic!("expected KFunctor projection, got {}", other.name()),

@@ -59,7 +59,7 @@ fn register_function_dedupes_exact_signature() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj1 = region.region().alloc_object(KObject::KFunction(f1, None));
+    let obj1 = region.region().alloc_object(KObject::KFunction(f1));
     scope
         .register_function("FOO".to_string(), f1, obj1, BindingIndex::BUILTIN)
         .unwrap();
@@ -68,7 +68,7 @@ fn register_function_dedupes_exact_signature() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj2 = region.region().alloc_object(KObject::KFunction(f2, None));
+    let obj2 = region.region().alloc_object(KObject::KFunction(f2));
     let err = scope
         .register_function("FOO".to_string(), f2, obj2, BindingIndex::BUILTIN)
         .unwrap_err();
@@ -90,7 +90,7 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj1 = region.region().alloc_object(KObject::KFunction(f1, None));
+    let obj1 = region.region().alloc_object(KObject::KFunction(f1));
     scope
         .register_function("FOO".to_string(), f1, obj1, BindingIndex::BUILTIN)
         .unwrap();
@@ -99,7 +99,7 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj2 = region.region().alloc_object(KObject::KFunction(f2, None));
+    let obj2 = region.region().alloc_object(KObject::KFunction(f2));
     let err = scope
         .bind_value("OTHER_NAME".to_string(), obj2, BindingIndex::BUILTIN)
         .unwrap_err();
@@ -121,8 +121,8 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj1 = region.region().alloc_object(KObject::KFunction(f, None));
-    let obj2 = region.region().alloc_object(KObject::KFunction(f, None));
+    let obj1 = region.region().alloc_object(KObject::KFunction(f));
+    let obj2 = region.region().alloc_object(KObject::KFunction(f));
     scope
         .bind_value("FIRST".to_string(), obj1, BindingIndex::BUILTIN)
         .unwrap();
@@ -163,8 +163,8 @@ fn register_function_allows_overload_with_different_arg_types() {
         region
             .region()
             .alloc_function(KFunction::new(sig_str, Body::Builtin(body_no_op), scope));
-    let obj1 = region.region().alloc_object(KObject::KFunction(f1, None));
-    let obj2 = region.region().alloc_object(KObject::KFunction(f2, None));
+    let obj1 = region.region().alloc_object(KObject::KFunction(f1));
+    let obj2 = region.region().alloc_object(KObject::KFunction(f2));
     scope
         .register_function("BAR".to_string(), f1, obj1, BindingIndex::BUILTIN)
         .unwrap();
@@ -188,7 +188,7 @@ fn register_function_coexists_with_same_name_value() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = region.region().alloc_object(KObject::KFunction(f, None));
+    let obj = region.region().alloc_object(KObject::KFunction(f));
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::BUILTIN)
         .expect("bare FN registration must not collide with a same-name value");

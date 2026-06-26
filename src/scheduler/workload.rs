@@ -5,14 +5,6 @@ use super::Reattachable;
 /// pinned. `Live<'node, W>` is what a slot read hands back and what `finalize` is given.
 pub(crate) type Live<'node, W> = <<W as Workload>::Value as Reattachable>::At<'node>;
 
-/// A finalized terminal read together with the [`Workload::Witness`] set backing it (empty for a
-/// frameless / run-region value): the `read_result_with_frame` return shape, aliased so the
-/// associated-type projection nest stays out of the method signatures. The value is re-anchored to
-/// the `'node` read borrow; the error is borrowed — the scheduler hands back a reference into the
-/// slot, never an owned error.
-pub(crate) type FramedRead<'node, W> =
-    Result<(Live<'node, W>, <W as Workload>::Witness), &'node <W as Workload>::Error>;
-
 /// The Koan-agnostic interface the generic DAG scheduler is parameterized over: the workload types
 /// it stores opaquely and never inspects. The Koan instantiation is `machine::execute::KoanWorkload`.
 pub(crate) trait Workload {

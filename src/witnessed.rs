@@ -489,6 +489,20 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         unsafe { retype::<T::At<'static>, T::At<'_>>(self.value.inner) }
     }
 
+    /// Duplicate the carrier: copy the erased value (a `Copy` carrier family — a thin/fat reference)
+    /// and clone the witness. The seam [`Sealed::transfer_into`] uses to relocate a value out of a
+    /// `&self` seal without consuming it, so the producer keeps its terminal for other consumers.
+    fn duplicate(&self) -> Self
+    where
+        Erased<T>: Copy,
+        W: Clone,
+    {
+        Witnessed {
+            value: self.value,
+            witness: self.witness.clone(),
+        }
+    }
+
     /// The bundled witness — the producer frame `Rc` (possibly wrapped in [`Option`]) that pins the
     /// carrier's pointee. Cloned out by the consumer-pull lift to keep the backing region alive
     /// while the value is copied into the consumer's frame.
@@ -567,6 +581,32 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
         T::At<'static>: Copy,
     {
         self.inner.read()
+    }
+
+    /// Relocate the sealed carrier into a destination region and re-seal it under the witness that
+    /// pins **both** — the borrow-checked replacement for the consumer-pull lift's one open-coded
+    /// reattach. Built from [`Witnessed::merge`]: the bundled carrier is [`duplicated`](Witnessed::duplicate)
+    /// (the `&self` seal is left intact for other consumers), re-anchored at a shared `for<'b>` brand
+    /// with `dest`, and handed to `relocate` — the workload's structural copy, which allocs into
+    /// `dest` at the brand **natively** (no fabricated lifetime); the projection is then re-sealed
+    /// under [`MergeWitness::merge`] of this carrier's witness and `dest`'s — the set union of every
+    /// region the relocated value reaches (its retained sources ∪ the destination).
+    ///
+    /// Returns `None` only when that union is not representable in `W` (see [`MergeWitness::merge`]);
+    /// a set witness always succeeds. Because it routes `merge`'s already-audited retype it **adds no
+    /// `unsafe`**, and because the value lands at the destination region's own lifetime there is **no
+    /// fabricated lifetime** at the call site — a soundness the type system enforces, not one a
+    /// hand-written reattach must assert in prose.
+    pub fn transfer_into<B: Reattachable, P: Reattachable>(
+        &self,
+        dest: Witnessed<B, W>,
+        relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, PhantomData<&'b ()>) -> P::At<'b>,
+    ) -> Option<Witnessed<P, W>>
+    where
+        W: MergeWitness + Clone,
+        T::At<'static>: Copy,
+    {
+        self.inner.duplicate().merge::<B, P>(dest, relocate)
     }
 
     /// The bundled witness — the producer frame `Rc` (possibly wrapped in [`Option`]) that pins the
@@ -778,18 +818,6 @@ pub(crate) fn reattach_ref_with<'w, 'b: 'w, T: Reattachable, W: Witness>(
     // invariant); the output borrow is capped at `'w`, so the free content `'b` is never cashed past
     // the pin. A reference is a thin pointer, retyped lifetime-only (the `Reattachable` contract).
     unsafe { retype::<&'w T::At<'static>, &'w T::At<'b>>(reference) }
-}
-
-/// Transient lifetime-retype of an owned single-lifetime-family value — [`Erased::reattach`] for a
-/// value re-exposed at a different lifetime in place rather than recovered from storage.
-///
-/// # Safety
-///
-/// As [`Erased::reattach`]: the value genuinely lives for the target lifetime (frame-pinned) and is
-/// viewed only transiently; the retype is needed because the family is invariant.
-pub(crate) unsafe fn reattach_value<'a, 'b, T: Reattachable>(value: T::At<'a>) -> T::At<'b> {
-    // SAFETY: see the function contract.
-    unsafe { retype::<T::At<'a>, T::At<'b>>(value) }
 }
 
 /// Borrowed shared-reference retype: re-expose a `&T::At<'a>` at a different content (and borrow)

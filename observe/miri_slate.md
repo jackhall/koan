@@ -3,9 +3,8 @@
 <!-- slate-fingerprint
 src/machine/core/arena.rs: 4
 src/machine/core/scope_ptr.rs: 1
-src/machine/execute/lift.rs: 1
 src/machine/model/types/ktype_predicates.rs: 1
-src/witnessed.rs: 26
+src/witnessed.rs: 24
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -69,17 +68,19 @@ group just to silence the stale-anchor check.
   cart `Rc` as the explicit witness to `ErasedScopePtr::reattach_witnessed`, a **safe**
   call, so ctx.rs carries no `unsafe`. The group pins that boundary end-to-end (every
   scheduler-driving slate test); the `unsafe` it routes lives in `witnessed.rs`.
-- `src/machine/core/region.rs` — the cycle-gate redirect is now a safe owning deref of
-  `StorageProfile::EscapeOwner` (the Koan `FrameRegionPin`), so region.rs carries **no
-  `unsafe`**. Its two groups pin safe-code invariants tree borrows can still violate: the
-  alloc engine's `membership` `RefCell` `borrow_mut` under a live `&` (`region_alloc_while_prior_ref_live`),
-  and the cycle gate's owning child→parent escape edge routing + no-leak
-  (`alloc_object_redirects_self_anchored_value_to_escape_region`) — a shape no other test covers.
+- `src/witnessed/region.rs` — the generic `alloc` engine routes a safe-signature `reattach_ref_with`
+  (the only `unsafe` it reaches is the shared `retype` in `witnessed.rs`), so region.rs carries **no
+  `unsafe`**. The group pins a safe-code invariant tree borrows can still violate: the alloc engine's
+  `membership` `RefCell` `borrow_mut` under a live `&` (`region_alloc_while_prior_ref_live`).
+- `src/machine/execute/lift.rs` — `relocate_carried` and `reached_frame` are safe (the value-relocation
+  `unsafe` was deleted with the per-value anchor; the copy now allocs at the step brand). The group
+  pins the escaping-value **retention** discipline — a surviving closure / module borrow kept alive by
+  the consumer frame's `retained` `FrameSet` — which tree borrows catches if it regresses.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
 
-37 tests, grouped by the unsafe site each pins down. Names below are the exact
+36 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -101,7 +102,7 @@ end-to-end — the run scope outlives the frame, so no separate minimal test.
 - `call_frame_chained_outer_frame_walkable`
 - `scope_bounded_reanchors_within_witness_borrow`
 
-**`Region` alloc engine under live borrows** ([src/machine/core/region.rs](../src/machine/core/region.rs)) — the
+**`Region` alloc engine under live borrows** ([src/witnessed/region.rs](../src/witnessed/region.rs)) — the
 generic `alloc` engine erases the value to `'static` (the move-through-union `erase_store`),
 stores it, records its address into the `membership` `RefCell` via `borrow_mut`, and re-anchors
 the `'static` store to `'a` through the witness-bounded `reattach_ref_with` (the region itself as the
@@ -109,19 +110,6 @@ pin, a **safe** call) — all while a prior `&` from the same frame is shared-bo
 tree-borrows shape over the engine `KoanRegion` (= `Region<KoanStorageProfile>`) routes.
 
 - `region_alloc_while_prior_ref_live`
-
-**Cycle gate** ([src/machine/core/region.rs](../src/machine/core/region.rs)) — the generic `alloc`
-engine redirects a value whose family `anchors_to` answers true for `self` (a self-anchored
-`Rc<CallFrame>`) to the escape frame, breaking the storage cycle that closure-escape returns can
-otherwise produce. The escape target is held as an owning [`StorageProfile::EscapeOwner`] (the Koan
-`FrameRegionPin`, an `Rc<FrameStorage>` deref'd to its region), so the redirect is a plain borrow
-with **no `unsafe`** — region.rs carries no raw deref. The memory shape this test pins under tree
-borrows is the owning child→parent escape edge: the per-call frame holds an `Rc` to the outer
-storage it redirects into, and that edge must route the value to the escape region (not the per-call
-region) and leave no leak. The Koan `anchors_to` walkers that drive the decision live in
-[src/machine/core/arena.rs](../src/machine/core/arena.rs).
-
-- `alloc_object_redirects_self_anchored_value_to_escape_region`
 
 **`CallFrame::try_reset_for_tail`** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — TCO
 frame reuse installs a fresh refcounted `FrameStorage` (a new `KoanRegion`) and
@@ -182,15 +170,6 @@ TCO replace when a user-fn recurses through a `Tagged` parameter via MATCH.
 tail-calls back through the enclosing user-fn.
 
 - `try_inside_tco_position_preserves_frame_chain`
-
-**KFuture anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — a KFuture with a
-`Future(&KObject)` allocated in the dying region anchors with `frame: Some(rc)`.
-Test source lives in [src/machine/execute/lift.rs](../src/machine/execute/lift.rs);
-the unsafe site it pins is the `Rc<CallFrame>` heap-pinning that backs the
-anchored case (the `frame: None` non-anchor branch is a logic case with no
-unsafe site, covered under plain `cargo test`).
-
-- `unanchored_kfuture_with_region_borrow_does_anchor`
 
 **`KFunction::invoke` per-call frame re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
 seed bind routed through `CallFrame::with_frame_interior`: the per-call region reached through the
@@ -269,7 +248,7 @@ It runs the transmute defined in the group above, so `node_scope_yoked_child_era
 — the single audited lifetime-retype every carrier family routes: `retype<A, B>` (a
 `transmute_copy` behind a `ManuallyDrop`, the one site `transmute`'s GAT size-proof can't cover),
 reached through `Erased<T>::erase` / `reattach`, the witness-borrowed `reattach_with` /
-`reattach_ref_with` helpers, the `reattach_value` / `reattach_ref` transient helpers, the
+`reattach_ref_with` helpers, the `reattach_ref` transient helper, the
 consuming externally-witnessed `SealedExtern::open` (which reattaches a witness-less carrier — or a
 `zip`-combined product / `seal_option` optional of carriers — at a generative `for<'b>` brand the
 supplied witness pins), and through the `Witnessed` accessors: the rank-2 branded `with`
@@ -402,14 +381,20 @@ contract's scope, re-read after the run drains the root into the run region.
 
 - `tail_call_stamps_result_against_first_callers_return_contract`
 
-**`Carried` re-attach — value relocation fabrication** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
-— `NodeLift::lift` owns the one audited fabrication in the value-relocation path: it re-anchors the
-producer read to the destination region's lifetime so the rebuild allocs into `dest`. There is no
-held witness for a value about to be copied out, but the producer frame `Rc` (`src`) heap-pins the
-value's region across the copy, and `lift_kobject` self-anchors any surviving borrow into `dest` via
-an embedded `Rc`, so the fabricated lifetime is discarded by the copy. Exercised end-to-end by the
-lift/park slate tests (`lift_park_minimal_program_for_miri`, `recursive_tagged_match_no_uaf`, …) —
-every consumer-pull dep delivery and the consumer-less root drain route it. No separate minimal test.
+**`Carried` relocation + escaping-value retention** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
+— `relocate_carried` structurally copies a `Carried` into the consumer `dest` region at the brand the
+step `open` supplies (a safe alloc — the former value-relocation `unsafe`/fabrication is **deleted**):
+the composite spine shares its `Rc` payloads, and a closure / `KFuture` / `Module` rides a *bare*
+borrow into its defining region, never copied. That surviving borrow outlives the producer's frame
+only because `reached_frame` recovers the region (via the value's scope `region_owner`) and the
+consumer frame `retain`s it into `FrameStorage.retained` — at the three read-out boundaries (the
+`run_step` relocate, the root drain, and the `extract_terminal` test harness). Safe code; pinned
+because tree borrows catches a regression in the retention discipline that would dangle an escaped
+closure / module past its per-call frame's drop. The closure shape rides the `KFunction`
+captured-scope group above; the test below pins the **module** shape — a functor-minted module
+surviving the run that built it.
+
+- `functor_application_is_generative`
 
 ## Adding tests to the slate
 

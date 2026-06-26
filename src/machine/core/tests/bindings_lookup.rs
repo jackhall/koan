@@ -98,7 +98,7 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = region.region().alloc_object(KObject::KFunction(f, None));
+    let obj = region.region().alloc_object(KObject::KFunction(f));
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(99))
         .unwrap();
@@ -145,12 +145,8 @@ fn lookup_function_filters_per_overload_visibility() {
         region
             .region()
             .alloc_function(KFunction::new(sig_str, Body::Builtin(body_no_op), scope));
-    let obj_early = region
-        .region()
-        .alloc_object(KObject::KFunction(f_early, None));
-    let obj_late = region
-        .region()
-        .alloc_object(KObject::KFunction(f_late, None));
+    let obj_early = region.region().alloc_object(KObject::KFunction(f_early));
+    let obj_late = region.region().alloc_object(KObject::KFunction(f_late));
     scope
         .register_function(
             "BAR".to_string(),
@@ -202,7 +198,7 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = region.region().alloc_object(KObject::KFunction(f, None));
+    let obj = region.region().alloc_object(KObject::KFunction(f));
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(2))
         .unwrap();
@@ -226,7 +222,7 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = region.region().alloc_object(KObject::KFunction(f, None));
+    let obj = region.region().alloc_object(KObject::KFunction(f));
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(9))
         .unwrap();

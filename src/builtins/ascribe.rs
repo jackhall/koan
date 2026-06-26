@@ -118,10 +118,7 @@ pub fn body_opaque<'a>(
 
     new_module.mark_satisfies(s.sig_id());
 
-    let module_obj: &'a KType<'a> = region.alloc_ktype(KType::Module {
-        module: new_module,
-        frame: None,
-    });
+    let module_obj: &'a KType<'a> = region.alloc_ktype(KType::Module { module: new_module });
     Action::Done(Ok(Carried::Type(module_obj)))
 }
 
@@ -143,10 +140,7 @@ pub fn body_transparent<'a>(
         m.child_scope(),
     ));
     new_module.mark_satisfies(s.sig_id());
-    let module_obj: &'a KType<'a> = region.alloc_ktype(KType::Module {
-        module: new_module,
-        frame: None,
-    });
+    let module_obj: &'a KType<'a> = region.alloc_ktype(KType::Module { module: new_module });
     Action::Done(Ok(Carried::Type(module_obj)))
 }
 

@@ -21,10 +21,7 @@ fn transparent_ascription_returns_module() {
     // in `types`.
     assert!(matches!(
         scope.resolve_type("IntOrdView"),
-        Some(KType::Module {
-            module: _,
-            frame: _
-        }),
+        Some(KType::Module { module: _ }),
     ));
 }
 
@@ -66,17 +63,11 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
         }
     }
     let a = match scope.resolve_type("FirstAbstract") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("FirstAbstract should be a module identity in types"),
     };
     let b = match scope.resolve_type("SecondAbstract") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("SecondAbstract should be a module identity in types"),
     };
     let a_t = a.type_members.borrow().get("Carrier").cloned();
@@ -108,10 +99,7 @@ fn transparent_ascription_does_not_mint_module_types() {
          LET ViewMod = (IntOrd :! OrderedSig)",
     );
     let v = match scope.resolve_type("ViewMod") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("ViewMod should be a module identity in types"),
     };
     assert!(v.type_members.borrow().is_empty());
@@ -130,10 +118,7 @@ fn roadmap_example_int_ord_with_ordered_sig() {
     );
 
     let abstract_mod = match scope.resolve_type("IntOrdAbstract") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("IntOrdAbstract should be a module identity in types"),
     };
     let minted = abstract_mod

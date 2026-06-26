@@ -136,7 +136,7 @@ mod tests {
         }
         let pure = scope.bindings().expect_value("pure");
         let f = match pure {
-            KObject::KFunction(f, _) => *f,
+            KObject::KFunction(f) => *f,
             other => panic!("pure not KFunction: {:?}", other.ktype()),
         };
         use crate::machine::model::ReturnType;

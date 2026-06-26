@@ -32,7 +32,6 @@ pub fn body<'a>(
         .scope
         .region
         .alloc_scope(Scope::child_under_module(ctx.scope, name.clone()));
-    let active_frame = ctx.frame.map(|f| f.storage_rc());
     let bind_index = ctx.bind_index();
     let name_for_finish = name;
     let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
@@ -57,10 +56,7 @@ pub fn body<'a>(
                 tm.insert(member, kt.clone());
             }
         }
-        let identity = KType::Module {
-            module,
-            frame: active_frame.clone(),
-        };
+        let identity = KType::Module { module };
         match fctx
             .scope
             .register_type_upsert(name_for_finish.clone(), identity, bind_index)
@@ -236,10 +232,7 @@ mod tests {
         let module: &Module<'_> = region
             .region()
             .alloc_module(Module::new("Foo".into(), child));
-        let identity = KType::Module {
-            module,
-            frame: None,
-        };
+        let identity = KType::Module { module };
         // Pre-seed the type-only identity, then re-run `MODULE Foo = ...`. The finalize
         // guard reads `types`, finds the pre-seeded identity, and short-circuits without
         // re-binding — the original `&Module` pointer survives.

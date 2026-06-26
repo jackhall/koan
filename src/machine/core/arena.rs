@@ -13,6 +13,7 @@
 //! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use typed_arena::Arena;
@@ -22,7 +23,7 @@ use super::scope_ptr::ScopeRefFamily;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::KType;
-use crate::machine::model::values::{Held, KObject, Module, ModuleSignature};
+use crate::machine::model::values::{KObject, Module, ModuleSignature};
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
 use crate::witnessed::{MergeWitness, Region, StorageProfile, Stored, Witness, WitnessRegion};
@@ -60,76 +61,6 @@ pub type KoanRegion = Region<KoanStorageProfile>;
 // witness the destination lifetime.
 unsafe impl<W: crate::witnessed::StorageProfile> crate::witnessed::Witness for Region<W> {}
 
-/// True iff `rc`'s backing `KoanRegion` is `region_ptr`.
-fn rc_targets(rc: &Rc<FrameStorage>, region_ptr: *const KoanRegion) -> bool {
-    // `rc.region()` coerces `&KoanRegion → *const` for the address compare — no explicit raw
-    // cast, so the borrow stays lifetime-bounded right up to the comparison.
-    std::ptr::eq(rc.region(), region_ptr)
-}
-
-/// Walk `scope`'s `outer` chain out of the per-call region `self_region` and return the first
-/// ancestor scope's region — the cycle-gate redirect target. `scope` is the self-anchoring closure's
-/// captured scope, which lives in `self_region` by the `alloc_function` invariant, so the chain
-/// crosses out at the per-call child's `outer` link (a per-call region is a child of the region its
-/// function was defined in; a run-root parent crosses into the run-root scope's region). The returned
-/// `&'v KoanRegion` is the ancestor scope's own `region` field — a `Copy` borrow branded `'v` — so it
-/// pins the redirect target through the value being stored, with no owner held on the frame.
-fn escape_from_scope<'v>(scope: &Scope<'v>, self_region: *const KoanRegion) -> Option<&'v KoanRegion> {
-    if !std::ptr::eq(scope.region as *const KoanRegion, self_region) {
-        return Some(scope.region);
-    }
-    escape_from_scope(scope.outer()?, self_region)
-}
-
-/// If any descendant of `obj` carries an `Rc<FrameStorage>` whose backing `KoanRegion` is
-/// `region_ptr` (storing it there would self-cycle), return the region the allocation must redirect
-/// into — recovered by walking the anchoring closure's captured scope out of `region_ptr`
-/// ([`escape_from_scope`]). `None` when no descendant self-anchors. Walks the composite shapes
-/// mirrored from `KObject::deep_clone` (`List`/`Dict`/`Tagged`/`Record`) plus the `KFunction` /
-/// `KFuture` anchors.
-fn obj_escape_target<'v>(obj: &KObject<'v>, region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
-    match obj {
-        KObject::KFunction(f, Some(rc)) if rc_targets(rc, region_ptr) => {
-            escape_from_scope(f.captured_scope(), region_ptr)
-        }
-        KObject::KFuture(t, Some(rc)) if rc_targets(rc, region_ptr) => {
-            escape_from_scope(t.function.captured_scope(), region_ptr)
-        }
-        KObject::List(items, _) => items.iter().find_map(|x| held_escape_target(x, region_ptr)),
-        KObject::Dict(entries, _, _) => {
-            entries.values().find_map(|x| held_escape_target(x, region_ptr))
-        }
-        KObject::Tagged { value, .. } => obj_escape_target(value, region_ptr),
-        KObject::Wrapped { inner, .. } => obj_escape_target(inner.get(), region_ptr),
-        KObject::Record(values, _) => {
-            values.iter().find_map(|(_, x)| held_escape_target(x, region_ptr))
-        }
-        _ => None,
-    }
-}
-
-/// An aggregate cell's redirect target: its `Object` arm via [`obj_escape_target`], or its `Type`
-/// arm's `Module` whose frame `Rc` backs `region_ptr` via [`ktype_escape_target`].
-fn held_escape_target<'v>(cell: &Held<'v>, region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
-    match cell {
-        Held::Object(o) => obj_escape_target(o, region_ptr),
-        Held::Type(t) => ktype_escape_target(t, region_ptr),
-    }
-}
-
-fn ktype_escape_target<'v>(
-    t: &KType<'v>,
-    region_ptr: *const KoanRegion,
-) -> Option<&'v KoanRegion> {
-    match t {
-        KType::Module {
-            module,
-            frame: Some(rc),
-        } if rc_targets(rc, region_ptr) => escape_from_scope(module.child_scope(), region_ptr),
-        _ => None,
-    }
-}
-
 // The lifetime family of each stored type, keyed on its `'static` form — the GAT the
 // `Region` engine erases to `'static` for storage and re-anchors to the caller's `'a` on read.
 // Each family is one type generic only in a single lifetime, so its layout is identical for every
@@ -145,18 +76,15 @@ reattachable! {
     OperatorGroup => OperatorGroup,
 }
 
-// Per-family `Stored` policy. `KObject` and `KType` answer `escape_target` by walking their composite
-// tree for a self-anchoring `Rc<FrameStorage>` and recovering the redirect region from it; the
-// families that cannot hold a self-targeting `Rc<FrameStorage>` declare `escape_target => None`, so
-// the cycle redirect is uniform across the whole allocation surface. `OperatorGroup` is
-// lifetime-free and anchor-free, but routes the same engine for one uniform path.
+// Per-family `Stored` policy: which sub-arena each family lands in, plus `KObject`'s allocation
+// address side-table hook. No stored family carries a self-targeting `Rc<FrameStorage>` — a stored
+// closure / future / module is a bare borrow into its defining region, kept alive by its carrier's
+// witness set rather than an owned anchor — so no allocation can self-cycle and the engine needs no
+// cycle gate.
 
 impl Stored<KoanStorageProfile> for KObject<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<KObject<'static>> {
         &s.objects
-    }
-    fn escape_target<'v>(value: &Self::At<'v>, region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
-        obj_escape_target(value, region_ptr)
     }
     fn record_local(frame: &KoanRegion, stored: &KObject<'static>) {
         frame.record_addr(stored as *const _ as usize);
@@ -167,17 +95,11 @@ impl Stored<KoanStorageProfile> for KType<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<KType<'static>> {
         &s.ktypes
     }
-    fn escape_target<'v>(value: &Self::At<'v>, region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
-        ktype_escape_target(value, region_ptr)
-    }
 }
 
 impl Stored<KoanStorageProfile> for KFunction<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<KFunction<'static>> {
         &s.functions
-    }
-    fn escape_target<'v>(_value: &Self::At<'v>, _region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
-        None
     }
 }
 
@@ -185,17 +107,11 @@ impl Stored<KoanStorageProfile> for Scope<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<Scope<'static>> {
         &s.scopes
     }
-    fn escape_target<'v>(_value: &Self::At<'v>, _region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
-        None
-    }
 }
 
 impl Stored<KoanStorageProfile> for Module<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<Module<'static>> {
         &s.modules
-    }
-    fn escape_target<'v>(_value: &Self::At<'v>, _region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
-        None
     }
 }
 
@@ -203,17 +119,11 @@ impl Stored<KoanStorageProfile> for ModuleSignature<'static> {
     fn sub_arena(s: &KoanStorage) -> &Arena<ModuleSignature<'static>> {
         &s.signatures
     }
-    fn escape_target<'v>(_value: &Self::At<'v>, _region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
-        None
-    }
 }
 
 impl Stored<KoanStorageProfile> for OperatorGroup {
     fn sub_arena(s: &KoanStorage) -> &Arena<OperatorGroup> {
         &s.operator_groups
-    }
-    fn escape_target<'v>(_value: &Self::At<'v>, _region_ptr: *const KoanRegion) -> Option<&'v KoanRegion> {
-        None
     }
 }
 
@@ -330,6 +240,15 @@ pub struct FrameStorage {
     /// storage outlives this child's `outer` scope pointer — and the link [`FrameStorage::pins_region`]
     /// walks for [`FrameSet`] subsumption. Drop tears down the chain in order.
     outer: Option<Rc<FrameStorage>>,
+    /// Per-call regions a value *bound into this frame's region* still borrows into. A returned
+    /// closure / module rides a bare borrow into its defining (descendant) frame, whose `Rc` is held
+    /// only by the producing scheduler's nodes and would drop when that scheduler tears down. Binding
+    /// the value retains that frame here — the persistent pin a region-referencing value needs once
+    /// its producer is gone, recovered from the value's scope `region_owner` at bind time. No cycle
+    /// forms: a dispatched frame's `outer` is `None`, so a retained descendant never strong-refs back
+    /// up the chain. Declared after `region` so this frame's borrowers drop before the regions they
+    /// borrow into; `RefCell` because binds accrue after construction.
+    retained: RefCell<FrameSet>,
 }
 
 impl FrameStorage {
@@ -341,6 +260,7 @@ impl FrameStorage {
         Rc::new(FrameStorage {
             region: KoanRegion::new(),
             outer: None,
+            retained: RefCell::new(FrameSet::empty()),
         })
     }
 
@@ -365,6 +285,17 @@ impl FrameStorage {
                 None => return false,
             }
         }
+    }
+
+    /// Pin `frame`'s region under this frame so a value bound here that still borrows into it
+    /// outlives `frame`'s producing scheduler. A no-op when this frame's own `outer` chain already
+    /// keeps the region alive (self or an ancestor); the [`FrameSet`] dedups by region, so repeated
+    /// binds reaching one region pin it once.
+    pub(crate) fn retain(&self, frame: Rc<FrameStorage>) {
+        if self.pins_region(frame.region() as *const KoanRegion) {
+            return;
+        }
+        self.retained.borrow_mut().insert(frame);
     }
 }
 
@@ -496,6 +427,7 @@ impl CallFrame {
         let storage = Rc::new(FrameStorage {
             region: KoanRegion::new(),
             outer: outer_frame,
+            retained: RefCell::new(FrameSet::empty()),
         });
         // The child is built from the heap-pinned `storage` handle — no `'static` claim and no
         // pointer fabrication. It derives both the region borrow and the owning `Weak` from
@@ -642,6 +574,7 @@ impl CallFrame {
         let storage = Rc::new(FrameStorage {
             region: KoanRegion::new(),
             outer: None,
+            retained: RefCell::new(FrameSet::empty()),
         });
         // The child is built from the heap-pinned `storage` handle (region borrow + owning `Weak`),
         // with `new_outer` brand-shortened by `child_for_frame` (no `reattach_ref` on the outer link).

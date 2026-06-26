@@ -11,11 +11,12 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ErasedContract;
 use crate::machine::model::Carried;
-use crate::machine::{FrameSet, KError, KErrorKind, KoanRegion, NodeId};
-use crate::witnessed::{reattachable, seal_option, SealedExtern};
+use crate::machine::{FrameSet, FrameStorage, KError, KErrorKind, KoanRegion, NodeId};
+use crate::witnessed::{reattachable, seal_option, MergeWitness, SealedExtern};
 
 use super::dispatch::{reattach_node_scope, SchedulerView};
 use super::finalize::NodeFinalize;
+use super::lift::{reached_frame, relocate_carried};
 use super::nodes::{Node, NodeFrame, NodePayload, NodeScope, NodeStep, NodeWork};
 use super::runtime::{KoanRuntime, KoanWorkload};
 
@@ -30,12 +31,28 @@ mod tests;
 /// scope's storage, which the step's start-cart `Rc` pins; sealing it (witness-less, via
 /// [`SealedExtern::erase`]) and opening it against that cart at the brand re-anchors the reference,
 /// not its referent. Layout-invariant: `&'r KoanRegion` is a thin pointer whose representation never
-/// depends on `'r`.
-struct RegionRefFamily;
+/// depends on `'r`. Also the destination-region carrier `read_lifted` feeds to
+/// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into).
+pub(in crate::machine::execute) struct RegionRefFamily;
 
 // `&'r KoanRegion` is one type generic only in `'r` (a thin reference); its layout is identical for
 // every `'r`, so the shared `reattachable!` macro discharges the obligation.
 reattachable!(RegionRefFamily => &'r KoanRegion);
+
+/// `Reattachable` family for the step's **dep slice** — the producer terminals read out, erased, and
+/// zipped into the step `open` so they arrive at the brand `'b` alongside the continuation. This is
+/// the only sound route to the unbounded `'b`: a value opened in-band rides the audited
+/// [`Erased::reattach`](crate::witnessed) the open already owns, where a witness-bounded reattach
+/// (`reattach_with`) cannot — capping the produced lifetime at the witness borrow, it would demand the
+/// step pin outlive a *universally* quantified `'b`, i.e. be `'static`. The held step witness keeps the
+/// sources alive across the open; the brand confines the values to it. Layout-invariant: a
+/// `Vec<Result<Carried<'r>, KError>>` is a `Vec` of two-pointer-or-error cells whose representation
+/// never depends on `'r`.
+pub(in crate::machine::execute) struct DepResultsFamily;
+
+// `Vec<Result<Carried<'r>, KError>>` is one type generic only in `'r` (a `Vec` of layout-invariant
+// cells; `KError` is lifetime-free), so the shared `reattachable!` macro discharges the obligation.
+reattachable!(DepResultsFamily => Vec<Result<Carried<'r>, KError>>);
 
 impl<'run> KoanRuntime<'run> {
     /// On `Done` with a frame, the return `Value` references the per-call region that's
@@ -126,169 +143,236 @@ impl<'run> KoanRuntime<'run> {
         // lifetime `'s` bounded by the cart `Rc` cloned into `consumer_frame` — not the run global.
         // `read_lifted` re-anchors each producer read to it.
         let consumer_frame = self.ambient.active_frame_ref().cloned();
-        let dest: &KoanRegion = {
+        // `dest` is the consumer scope's region; `dest_frame` is the `FrameStorage` that owns it — the
+        // retention home for a relocated closure / module's defining region (see `reached_frame`). The
+        // consumer frame outlives every value relocated into its region this step, so retaining there
+        // keeps an escaped borrow alive for as long as the binding / spliced expr that holds it.
+        let (dest, dest_frame): (&KoanRegion, Option<Rc<FrameStorage>>) = {
             let payload = self
                 .ambient
                 .active_payload()
                 .expect("a slot step installs the ambient payload");
-            reattach_node_scope(&payload.scope, consumer_frame.as_ref()).region
+            let scope = reattach_node_scope(&payload.scope, consumer_frame.as_ref());
+            (scope.region, scope.region_owner().upgrade())
         };
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
-        // Open the step's three externally-witnessed carriers — the continuation, the (frame-gated)
-        // return contract, and the consumer `dest` region — together at a single rank-2 `for<'b>`
-        // brand standing in for the step lifetime `'s`, witnessed by the held start cart. The brand
-        // is generative: nothing outside is at `'b`, so every value the tail consumes is either opened
-        // here (continuation / contract / region) or born at `'b` from the opened region (the dep
-        // slice, an `Outcome::Forward` pull). The closure's result cannot name `'b`, so the
-        // `Outcome<'b>` the continuation returns and the finalized `Carried<'b>` are consumed in place
-        // — erased into the slot store before return — and nothing branded crosses the step boundary.
-        // This is what lets the tail carry **no** loose witness-borrow reattach: the continuation, the
-        // dep slice, the `Outcome::Forward` producer value, and the contract all route this one open.
+        // The consumer-step **pin**: the set union of every region this step's deps reach, assembled
+        // *before* the open so it outlives the brand `'b`. It is the dep half of the finalized
+        // terminal's witness set, and — unioned with the cart into `combined` below — the witness the
+        // step open re-anchors its carriers against; it keeps every dep source alive past
+        // `reclaim_deps`. (Over-approximation: every read dep, not only those reaching the output;
+        // retired to exact when `alloc_*` returns `Witnessed`.)
+        let pin: FrameSet = deps.iter().fold(FrameSet::empty(), |acc, d| {
+            FrameSet::merge(&acc, &self.sched.dep_witness(*d))
+                .expect("a set witness always represents the union")
+        });
+        // The step's open witness: the start cart (which pins the continuation, the contract, and the
+        // consumer `dest` region — and, via its `outer` chain, their run / ancestor backings) unioned
+        // with `pin` (which pins every dep source). Held across the whole open, so re-anchoring the
+        // zipped carriers — including the dep slice — to `'b` cannot dangle.
+        let combined: FrameSet = FrameSet::merge(
+            &FrameSet::singleton(continuation_witness.storage_rc()),
+            &pin,
+        )
+        .expect("a set witness always represents the union");
+        // Open the step's externally-witnessed carriers — the continuation, the (frame-gated) return
+        // contract, the consumer `dest` region, and the dep slice — together at a single rank-2
+        // `for<'b>` brand standing in for the step lifetime `'s`, witnessed by `combined`. The brand is
+        // generative: nothing outside is at `'b`, so every value the tail consumes is opened here. The
+        // closure's result cannot name `'b`, so the `Outcome<'b>` the continuation returns and the
+        // finalized `Carried<'b>` are consumed in place — erased into the slot store before return —
+        // and nothing branded crosses the step boundary. This is what lets the tail carry **no** loose
+        // witness-borrow reattach: continuation, dep slice, and contract all route this one open.
         let continuation = SealedExtern::seal(erased_continuation);
         let contract = seal_option(prev_contract);
         let region = SealedExtern::<RegionRefFamily>::erase(dest);
-        continuation.zip(contract).zip(region).open(
-            &continuation_witness,
-            |((continuation, live_contract), region)| {
-                // Consumer-pull at the brand: each dep terminal is lifted into the consumer `dest`
-                // region (`read_lifted`) and so born at `'b` natively — no slice reattach. The
-                // pull-lifted values die with this consumer's frame; deliver them at that `'s`.
-                let results: Vec<Result<Carried<'_>, KError>> =
-                    deps.iter().map(|d| self.read_lifted(*d, region)).collect();
-                let outcome = continuation(
-                    &SchedulerView::new(&self.sched, &self.ambient),
-                    &results,
-                    idx,
-                );
-                self.sched.reclaim_deps(idx, owned_indices);
-                // `apply_outcome` realizes the outcome into a `NodeStep<'b>`; an `Outcome::Forward`
-                // pull is lifted into this same `region` at the brand, so it too is born at `'b`.
-                let step = self.apply_outcome(outcome, idx, region);
-                // The post-step token owns the slot's frame at step end and is the *only* source of the
-                // step scope (via `post.payload()`), so the wrong-frame read that ambient `active_frame`
-                // allowed is unspellable here.
-                let post = self.exit_slot_step(guard);
-                self.ambient.active_in_contract_chain = false;
-                // Drain re-entrant writes against the step scope (re-anchored at the workload boundary
-                // from the slot's raw handle and the authoritative post-step frame).
-                reattach_node_scope(&post.payload().scope, Some(&post.prev_frame)).drain_pending();
-                match step {
-                    NodeStep::Done(output) => {
-                        let frame = (!post.prev_frame.non_dying()).then_some(&post.prev_frame);
-                        // The return contract opened at the brand alongside the continuation, so it is
-                        // already a live `ReturnContract<'b>` — no separate reattach. The `frame` gate
-                        // drops it for a frameless / run-frame producer (which carries no per-call
-                        // return obligation), matching the prior frame-gated vend.
-                        let live_contract = frame.and(live_contract);
-                        // Contract layer (the `NodeFinalize` workload hook): check the declared return
-                        // and — when the declared type coarsens the value (e.g. `List<Number>` through
-                        // `:(LIST OF Any)`) — re-tag it into the contract's own home region so the
-                        // terminal survives to every consumer's pull-lift and the top-level read even
-                        // when the producer frame is reused/freed. A non-coarsened terminal stays in
-                        // the producer's own frame (pinned below); the producer does **not** lift it at
-                        // Done. The whole finalize runs at `'s`.
-                        let result = self.finalize_terminal(output, frame, live_contract);
-                        if result.is_err() {
-                            reattach_node_scope(&post.payload().scope, Some(&post.prev_frame))
-                                .clear_placeholders_for_producer(id);
-                        }
-                        // Pin the producer's per-call frame in the slot's terminal: a dying frame is
-                        // held until the slot is freed (frame death Done->free), keeping the terminal
-                        // readable until every consumer has pulled it; a frameless / run-frame producer
-                        // pins nothing (its value already lives in the run region). Hand the scheduler
-                        // the live `'s` terminal; it erases it for storage internally — severing `'s`
-                        // before `consumer_frame` drops at return. The witness is the singleton set of
-                        // the producer's `FrameStorage` (empty for a frameless / run-frame producer,
-                        // whose value already lives in the run region).
-                        let witness = match frame {
-                            Some(producer) => FrameSet::singleton(producer.storage_rc()),
-                            None => FrameSet::empty(),
-                        };
-                        self.sched.finalize(idx, result, witness);
-                    }
-                    NodeStep::Replace {
-                        work: new_work,
-                        frame: new_frame,
-                        contract: new_contract,
-                        chain,
-                    } => {
-                        let prev_frame = post.prev_frame;
-                        let post_step_reserve = post.post_step_reserve;
-                        // Keep the **first** contract of a tail chain: once a contract is set, a nested
-                        // tail call does not overwrite it, so the chain checks the original caller's
-                        // declared return — not the tail-most callee's. Both contracts are already
-                        // erased (the new one by `apply_outcome`), so this is a plain keep-first with no
-                        // narrowing here. `prev_contract` is `Copy`, so opening it above into
-                        // `live_contract` left the erased original intact for this keep-first.
-                        let next_contract: Option<ErasedContract> = prev_contract.or(new_contract);
-                        // The frame the body runs in: a freshly installed cart, else the slot's current
-                        // one (a `FramePlacement::Inherit` FN-body re-enters the cart a prior `Continue`
-                        // already installed — the folded `invoke`). The `ChainOp` reads it (for an
-                        // `AssembleBody`) to walk the body scope's lexical chain.
-                        let body_frame: &crate::machine::core::CallFrame =
-                            new_frame.as_deref().unwrap_or(&prev_frame);
-                        let new_chain = chain.apply(prev_chain_carrier, body_frame);
-                        match new_frame {
-                            Some(f) => {
-                                // Rotate the ping-pong reserve: the post-step reserve is superseded by
-                                // today's post-step frame (which we park as the new reserve).
-                                drop(post_step_reserve);
-                                // The non-dying run frame is not a reusable per-call region; parking it
-                                // as the ping-pong reserve would defer (and mis-time) a real frame's
-                                // drop. Treat it as no reserve — the run scope is re-reached through the
-                                // scheduler's `run_frame`, never a reset reserve.
-                                let new_reserve = (!prev_frame.non_dying()).then_some(prev_frame);
-                                // The tail-replace slot's scope is always this `f` cart's own child, so
-                                // store a payload-less `NodeScope::Yoked` re-projected from the
-                                // co-located cart at the read boundary — no persisted `&'run` to dangle
-                                // across a TCO reset. This Yoked payload is the Koan workload's, built
-                                // here off the scheduler.
-                                self.sched.replace(
-                                    id,
-                                    Node {
-                                        work: new_work,
-                                        payload: NodePayload {
-                                            scope: NodeScope::Yoked,
-                                            chain: new_chain,
-                                        },
-                                        frame: NodeFrame {
-                                            cart: f,
-                                            reserve: new_reserve,
-                                            contract: next_contract,
-                                        },
-                                    },
-                                );
+        // Read each producer terminal out (borrow-bounded) and erase the slice into one carrier, so it
+        // opens **in-band** at `'b` alongside the continuation — the audited reattach, the only sound
+        // route to the unbounded brand (see `DepResultsFamily`). The sources stay pinned by `combined`.
+        let dep_sources: Vec<Result<Carried<'_>, KError>> = deps
+            .iter()
+            .map(|d| self.sched.read_result(*d).map_err(|e| e.clone()))
+            .collect();
+        let dep_carrier = SealedExtern::<DepResultsFamily>::erase(dep_sources);
+        continuation
+            .zip(contract)
+            .zip(region)
+            .zip(dep_carrier)
+            .open(
+                &combined,
+                |(((continuation, live_contract), region), dep_sources)| {
+                    // Consumer-pull at the brand: each dep arrived live at `'b` from the opened carrier, so
+                    // relocate it into the consumer `dest` region with a plain `'b -> 'b` structural copy —
+                    // the spine copied, surviving closures riding their `&'b` borrows into the source
+                    // regions `combined` pins. No fabricated lifetime; the only reattach is the open above.
+                    let results: Vec<Result<Carried<'_>, KError>> = dep_sources
+                        .into_iter()
+                        .map(|r| {
+                            r.map(|c| {
+                                let relocated = relocate_carried(c, region);
+                                // A relocated closure / module borrows back into its producer's per-call
+                                // region; retain that region on the consumer frame so the borrow survives
+                                // the producer's frame drop (`reclaim_deps` below, or scheduler teardown).
+                                if let (Some(home), Some(reached)) =
+                                    (&dest_frame, reached_frame(relocated))
+                                {
+                                    home.retain(reached);
+                                }
+                                relocated
+                            })
+                        })
+                        .collect();
+                    let outcome = continuation(
+                        &SchedulerView::new(&self.sched, &self.ambient),
+                        &results,
+                        idx,
+                    );
+                    self.sched.reclaim_deps(idx, owned_indices);
+                    // The dep half of the finalized terminal's witness set is `pin` itself.
+                    let dep_reached = pin.clone();
+                    // `apply_outcome` realizes the outcome into a `NodeStep`; a ready `Outcome::Forward`
+                    // becomes a `ForwardReady` relocated below at the brand into this same `region`.
+                    let step = self.apply_outcome(outcome, idx);
+                    // The post-step token owns the slot's frame at step end and is the *only* source of the
+                    // step scope (via `post.payload()`), so the wrong-frame read that ambient `active_frame`
+                    // allowed is unspellable here.
+                    let post = self.exit_slot_step(guard);
+                    self.ambient.active_in_contract_chain = false;
+                    // Drain re-entrant writes against the step scope (re-anchored at the workload boundary
+                    // from the slot's raw handle and the authoritative post-step frame).
+                    reattach_node_scope(&post.payload().scope, Some(&post.prev_frame))
+                        .drain_pending();
+                    // The producer's per-call frame, gated to a dying producer: it is the frame folded into
+                    // a `Done` terminal's witness (a frameless / run-frame producer folds in nothing) and
+                    // the destination pin for a `ForwardReady` relocation.
+                    let frame = (!post.prev_frame.non_dying()).then_some(&post.prev_frame);
+                    match step {
+                        NodeStep::Done(output) => {
+                            // The return contract opened at the brand alongside the continuation, so it is
+                            // already a live `ReturnContract<'b>` — no separate reattach. The `frame` gate
+                            // drops it for a frameless / run-frame producer (which carries no per-call
+                            // return obligation), matching the prior frame-gated vend.
+                            let live_contract = frame.and(live_contract);
+                            // Contract layer (the `NodeFinalize` workload hook): check the declared return
+                            // and — when the declared type coarsens the value (e.g. `List<Number>` through
+                            // `:(LIST OF Any)`) — re-tag it into the contract's own home region so the
+                            // terminal survives to every consumer's pull and the top-level read even when
+                            // the producer frame is reused/freed. A non-coarsened terminal stays in the
+                            // producer's own frame; the producer does **not** lift it at Done. The hook
+                            // then bundles the terminal with its witness set — the producer's own
+                            // `FrameStorage` folded into the dep sources accumulated above — so a dying
+                            // frame is held until the slot is freed (keeping the terminal readable until
+                            // every consumer has pulled it) while a frameless / run-frame producer pins
+                            // only the surviving sources. The scheduler erases the bundle for storage,
+                            // severing `'s` before the frame drops.
+                            let result =
+                                self.finalize_terminal(output, frame, live_contract, dep_reached);
+                            if result.is_err() {
+                                reattach_node_scope(&post.payload().scope, Some(&post.prev_frame))
+                                    .clear_placeholders_for_producer(id);
                             }
-                            None => {
-                                // A frameless Replace keeps the prior cart — an invoke reuses the
-                                // reserve, never the active cart, so the slot's cart is always present.
-                                self.sched.replace(
-                                    id,
-                                    Node {
-                                        work: new_work,
-                                        payload: NodePayload {
-                                            scope: node_scope,
-                                            chain: new_chain,
+                            self.sched.finalize(idx, result);
+                        }
+                        NodeStep::ForwardReady(producer) => {
+                            // Relocate `producer`'s terminal into this slot's region via the merge-form
+                            // transfer — re-sealed under the producer's own reached sources ∪ this slot's
+                            // frame (the `dest_witness` pinning `region`); no contract re-check (the
+                            // producer enforced its own). A ready-but-errored producer relocates to an
+                            // `Err`, clearing this slot's placeholders as the `Done` error path does.
+                            let dest_witness = frame
+                                .map_or(FrameSet::empty(), |f| FrameSet::singleton(f.storage_rc()));
+                            let result = self.relocate_terminal(producer, region, dest_witness);
+                            if result.is_err() {
+                                reattach_node_scope(&post.payload().scope, Some(&post.prev_frame))
+                                    .clear_placeholders_for_producer(id);
+                            }
+                            self.sched.finalize(idx, result);
+                        }
+                        NodeStep::Replace {
+                            work: new_work,
+                            frame: new_frame,
+                            contract: new_contract,
+                            chain,
+                        } => {
+                            let prev_frame = post.prev_frame;
+                            let post_step_reserve = post.post_step_reserve;
+                            // Keep the **first** contract of a tail chain: once a contract is set, a nested
+                            // tail call does not overwrite it, so the chain checks the original caller's
+                            // declared return — not the tail-most callee's. Both contracts are already
+                            // erased (the new one by `apply_outcome`), so this is a plain keep-first with no
+                            // narrowing here. `prev_contract` is `Copy`, so opening it above into
+                            // `live_contract` left the erased original intact for this keep-first.
+                            let next_contract: Option<ErasedContract> =
+                                prev_contract.or(new_contract);
+                            // The frame the body runs in: a freshly installed cart, else the slot's current
+                            // one (a `FramePlacement::Inherit` FN-body re-enters the cart a prior `Continue`
+                            // already installed — the folded `invoke`). The `ChainOp` reads it (for an
+                            // `AssembleBody`) to walk the body scope's lexical chain.
+                            let body_frame: &crate::machine::core::CallFrame =
+                                new_frame.as_deref().unwrap_or(&prev_frame);
+                            let new_chain = chain.apply(prev_chain_carrier, body_frame);
+                            match new_frame {
+                                Some(f) => {
+                                    // Rotate the ping-pong reserve: the post-step reserve is superseded by
+                                    // today's post-step frame (which we park as the new reserve).
+                                    drop(post_step_reserve);
+                                    // The non-dying run frame is not a reusable per-call region; parking it
+                                    // as the ping-pong reserve would defer (and mis-time) a real frame's
+                                    // drop. Treat it as no reserve — the run scope is re-reached through the
+                                    // scheduler's `run_frame`, never a reset reserve.
+                                    let new_reserve =
+                                        (!prev_frame.non_dying()).then_some(prev_frame);
+                                    // The tail-replace slot's scope is always this `f` cart's own child, so
+                                    // store a payload-less `NodeScope::Yoked` re-projected from the
+                                    // co-located cart at the read boundary — no persisted `&'run` to dangle
+                                    // across a TCO reset. This Yoked payload is the Koan workload's, built
+                                    // here off the scheduler.
+                                    self.sched.replace(
+                                        id,
+                                        Node {
+                                            work: new_work,
+                                            payload: NodePayload {
+                                                scope: NodeScope::Yoked,
+                                                chain: new_chain,
+                                            },
+                                            frame: NodeFrame {
+                                                cart: f,
+                                                reserve: new_reserve,
+                                                contract: next_contract,
+                                            },
                                         },
-                                        frame: NodeFrame {
-                                            cart: prev_frame,
-                                            reserve: post_step_reserve,
-                                            contract: next_contract,
+                                    );
+                                }
+                                None => {
+                                    // A frameless Replace keeps the prior cart — an invoke reuses the
+                                    // reserve, never the active cart, so the slot's cart is always present.
+                                    self.sched.replace(
+                                        id,
+                                        Node {
+                                            work: new_work,
+                                            payload: NodePayload {
+                                                scope: node_scope,
+                                                chain: new_chain,
+                                            },
+                                            frame: NodeFrame {
+                                                cart: prev_frame,
+                                                reserve: post_step_reserve,
+                                                contract: next_contract,
+                                            },
                                         },
-                                    },
-                                );
+                                    );
+                                }
                             }
                         }
+                        NodeStep::Alias(producer) => {
+                            // The slot spliced itself out as a bare-name forward: move its consumers onto
+                            // `producer` and alias it for reads. The slot is not re-queued; `producer`'s
+                            // fire wakes the moved consumers, and late parkers resolve the alias when they
+                            // wire in. See `scheduler::splice`.
+                            self.sched.splice_forward(id, producer);
+                        }
                     }
-                    NodeStep::Alias(producer) => {
-                        // The slot spliced itself out as a bare-name forward: move its consumers onto
-                        // `producer` and alias it for reads. The slot is not re-queued; `producer`'s
-                        // fire wakes the moved consumers, and late parkers resolve the alias when they
-                        // wire in. See `scheduler::splice`.
-                        self.sched.splice_forward(id, producer);
-                    }
-                }
-            },
-        );
+                },
+            );
     }
 }

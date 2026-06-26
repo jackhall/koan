@@ -40,10 +40,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .borrow_mut()
         .insert("Type".into(), KType::Number);
     m_num.mark_satisfies(sig_id);
-    let m_num_obj = region.region().alloc_ktype(KType::Module {
-        module: m_num,
-        frame: None,
-    });
+    let m_num_obj = region.region().alloc_ktype(KType::Module { module: m_num });
 
     let child_b = region
         .region()
@@ -59,10 +56,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .borrow_mut()
         .insert("Type".into(), KType::Str);
     m_str.mark_satisfies(sig_id);
-    let m_str_obj = region.region().alloc_ktype(KType::Module {
-        module: m_str,
-        frame: None,
-    });
+    let m_str_obj = region.region().alloc_ktype(KType::Module { module: m_str });
 
     let child_c = region
         .region()
@@ -74,10 +68,9 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .region()
         .alloc_module(Module::new("NoTypePin".into(), child_c));
     m_none.mark_satisfies(sig_id);
-    let m_none_obj = region.region().alloc_ktype(KType::Module {
-        module: m_none,
-        frame: None,
-    });
+    let m_none_obj = region
+        .region()
+        .alloc_ktype(KType::Module { module: m_none });
 
     let slot = KType::Signature {
         sig,
@@ -108,7 +101,6 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     // before the pin comparison.
     let m_unascribed_obj = region.region().alloc_ktype(KType::Module {
         module: m_unascribed,
-        frame: None,
     });
     assert!(!slot.accepts_part(&ExpressionPart::Spliced(Carried::Type(m_unascribed_obj))));
 }

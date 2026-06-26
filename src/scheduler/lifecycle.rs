@@ -2,7 +2,7 @@
 //! workload's driver calls at a step's Done boundary. See
 //! [design/execution/scheduler.md § Dependency graph invariants](../../design/execution/scheduler.md#dependency-graph-invariants).
 
-use super::{Live, NodeId, Scheduler, Workload};
+use super::{NodeId, Scheduler, Witnessed, Workload};
 
 impl<W: Workload> Scheduler<W> {
     /// Invariant: every consumer drained here is parked with a non-zero counter;
@@ -10,15 +10,15 @@ impl<W: Workload> Scheduler<W> {
     /// producer drains.
     ///
     /// Wakes must all land before any queue push: a later wake re-reading the
-    /// slot must observe the prior transition.
+    /// slot must observe the prior transition. The terminal arrives already bundled with its witness
+    /// set (the producer frame ∪ the regions it reaches), built by the workload's finalize hook.
     pub(crate) fn finalize(
         &mut self,
         idx: usize,
-        output: Result<Live<'_, W>, W::Error>,
-        witness: W::Witness,
+        output: Result<Witnessed<W::Value, W::Witness>, W::Error>,
     ) {
         let id = NodeId(idx);
-        self.store.finalize(id, output, witness);
+        self.store.finalize(id, output);
         let drained = self.deps.drain_notify(idx);
         let mut woken: Vec<usize> = Vec::new();
         for (consumer, hit_zero) in drained {

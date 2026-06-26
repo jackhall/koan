@@ -30,10 +30,7 @@ fn functor_body_module_dispatch_does_not_dangle() {
     run(scope, "LET OtherSet = (MAKESET (IntOrdA))");
 
     let m = match scope.resolve_type("HeldSet") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         other => panic!("HeldSet should be a module identity in types, got {other:?}"),
     };
     let inner = m

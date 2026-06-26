@@ -19,10 +19,27 @@ use crate::machine::core::kfunction::bind_by_name::CallArgs;
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
 use crate::machine::core::kfunction::{Body, KFunction};
-use crate::machine::execute::lift::lift_ktype;
+use crate::machine::core::KoanRegion;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::{Carried, Parseable};
+use crate::machine::model::{Carried, KType, Parseable};
 use crate::machine::{KError, KErrorKind};
+
+/// Home a deferred FN's resolved return *type* in `region` (a strict ancestor the cart keeps live), so
+/// the erased `PerCall` contract's `ret` borrow outlives the dying call frame. Non-module types are
+/// owned / `Rc` data the clone re-homes safely. A concrete first-class **module is rejected**: a
+/// module value's identity is not a return type (return a signature or the `:Module` kind), and it is
+/// the one return type that would borrow the dying frame — so erroring here is what lets the value
+/// carrier hold no per-value region anchor. (A module returned as a *value* is unaffected — it rides
+/// the value channel's witness set like a returned closure.)
+fn home_return_type<'a>(kt: &KType<'a>, region: &'a KoanRegion) -> Result<&'a KType<'a>, KError> {
+    if matches!(kt, KType::Module { .. }) {
+        return Err(KError::new(KErrorKind::ShapeError(
+            "a module cannot be a function's return type; return a signature or the `:Module` kind"
+                .to_string(),
+        )));
+    }
+    Ok(region.alloc_ktype(kt.clone()))
+}
 
 /// Fold a resolved call into a [`Outcome::Continue`]: the producer installs the per-call cart and
 /// `invoke` runs against it on the next pop. A user fn's `Continue` carries
@@ -134,8 +151,12 @@ pub(super) fn invoke<'step>(
                 PerCallReturn::Resolved(kt) => {
                     // Re-home the per-call type in the captured-scope (frame-outer) region — a strict
                     // ancestor the cart keeps live — so the erased contract's `ret` borrow stays
-                    // valid past the dying frame, mirroring an `Arm`'s `ret`.
-                    let ret_ref = outer.region.alloc_ktype(lift_ktype(&kt, &frame.storage_rc()));
+                    // valid past the dying frame, mirroring an `Arm`'s `ret`. A concrete module return
+                    // type is rejected here (see `home_return_type`).
+                    let ret_ref = match home_return_type(&kt, outer.region) {
+                        Ok(r) => r,
+                        Err(e) => return Outcome::Done(Err(e)),
+                    };
                     ReturnContract::PerCall {
                         func: picked,
                         ret: ret_ref,
@@ -202,7 +223,7 @@ pub(super) fn invoke<'step>(
             // Capture the body scope id before `frame` moves into the `BodyBlock` dep; the finish
             // re-enters that already-installed cart with `Inherit`.
             let block_entry = frame.scope().id;
-            let finish: DepFinish<'step> = Box::new(move |view, results| {
+            let finish: DepFinish<'step> = Box::new(move |_view, results| {
                 // The return-type expression is the last body statement, so its resolved value is
                 // the last result.
                 let kt = match results[results.len() - 1] {
@@ -215,17 +236,13 @@ pub(super) fn invoke<'step>(
                     }
                 };
                 // The per-call type rides the captured-scope (frame-outer) region, a strict ancestor
-                // the cart keeps live — same home as the `Type` form's `PerCall.ret`. `kt` was
-                // pull-lifted into this node's call frame, which the captured scope outlives, so
-                // relocate it with `lift_ktype` (re-anchoring any per-call `Module` frame onto the
-                // call frame) rather than a bare clone that would dangle once the frame frees.
-                let call_frame = view
-                    .current_frame()
-                    .expect("a deferred-return finish runs against a per-call frame");
-                let ret_ref = picked
-                    .captured_scope()
-                    .region
-                    .alloc_ktype(lift_ktype(kt, &call_frame.storage_rc()));
+                // the cart keeps live — same home as the `Type` form's `PerCall.ret`. A concrete
+                // module return type is rejected (see `home_return_type`); every other resolved type
+                // is owned / `Rc` data the clone re-homes past the dying frame.
+                let ret_ref = match home_return_type(kt, picked.captured_scope().region) {
+                    Ok(r) => r,
+                    Err(e) => return Outcome::Done(Err(e)),
+                };
                 let contract = ReturnContract::PerCall {
                     func: picked,
                     ret: ret_ref,

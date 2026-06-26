@@ -72,7 +72,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
         crate::machine::core::kfunction::Body::Builtin(body_identity),
         scope,
     ));
-    let obj = scope.region.alloc_object(KObject::KFunction(f, None));
+    let obj = scope.region.alloc_object(KObject::KFunction(f));
     scope
         .bind_value("f".to_string(), obj, BindingIndex::BUILTIN)
         .expect("bind_value should succeed");
@@ -459,11 +459,10 @@ fn fast_lane_unbound_returns_error() {
     );
 }
 
-/// A closure returned out of its defining call remains invocable. The lifted
-/// `KObject::KFunction` carries an `Rc<CallFrame>` keeping the per-call region
-/// (where the inner function's storage and captured scope live) alive past
-/// frame drop. The fast lane's `KObject::KFunction(f, _)` pattern matches
-/// regardless of whether the second field is `Some(rc)` or `None`.
+/// A closure returned out of its defining call remains invocable. The escaped
+/// `KObject::KFunction` rides a bare `&KFunction` borrow into the per-call region (where the
+/// inner function's storage and captured scope live); the result carrier's witness set keeps
+/// that region alive past frame drop, so the later invocation does not dangle.
 #[test]
 fn fast_lane_closure_escapes_outer_call_and_remains_invocable() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
@@ -499,13 +498,13 @@ fn fast_lane_escaped_closure_with_param_returns_body_value() {
     assert!(matches!(result, KObject::Number(n) if *n == 42.0));
 }
 
-/// `lift_kobject` must recurse through the `List` variant to attach the dying
-/// frame's `Rc<CallFrame>` to embedded `KFunction(_, None)` elements; otherwise
-/// the inner function's `&KFunction` reference would dangle into the freed
-/// per-call region. Asserting the lifted closure's frame field is `Some` verifies
-/// the recursion fired.
+/// A list-borne escaping closure survives leaving the per-call region that built it: `MAKE`
+/// returns a `List` holding an inner `KFunction` whose captured scope lived in `MAKE`'s now-freed
+/// call region. The closure rides a bare `&KFunction` borrow into that region; the result
+/// carrier's witness set keeps the region alive, so reading the element does not dangle. (Under
+/// Miri this is the load-bearing no-use-after-free check.)
 #[test]
-fn fast_lane_list_of_closures_escapes_outer_call_with_rc_attached() {
+fn fast_lane_list_of_closures_escapes_outer_call() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
     use crate::machine::model::Parseable;
     let region = FrameStorage::run_root();
@@ -520,17 +519,10 @@ fn fast_lane_list_of_closures_escapes_outer_call_with_rc_attached() {
         other => panic!("expected MAKE to return a List, got {}", other.summarize()),
     };
     assert_eq!(items.len(), 1, "list should hold the single inner closure");
-    match &items[0] {
-        Held::Object(KObject::KFunction(_, frame)) => assert!(
-            frame.is_some(),
-            "list-borne escaping closure must have an :(Rc CallFrame) attached by \
-             lift_kobject's recursion through the List variant",
-        ),
-        other => panic!(
-            "list element should be a KFunction, got {}",
-            other.summarize()
-        ),
-    }
+    assert!(
+        matches!(&items[0], Held::Object(KObject::KFunction(_))),
+        "list element should be the escaped inner closure, intact after its call region freed",
+    );
 }
 
 /// `f {x = 7}` submitted as a forward reference: `f` is installed as a `Placeholder`

@@ -219,23 +219,23 @@ impl<'a> KType<'a> {
                 _ => false,
             },
             KType::KFunction { params, ret } => match obj {
-                KObject::KFunction(f, _) => {
+                KObject::KFunction(f) => {
                     if f.is_functor {
                         return false;
                     }
                     function_compat(&f.signature, params, ret, false)
                 }
-                KObject::KFuture(_, _) => true,
+                KObject::KFuture(_) => true,
                 _ => false,
             },
             KType::KFunctor { params, ret, .. } => match obj {
-                KObject::KFunction(f, _) => {
+                KObject::KFunction(f) => {
                     if !f.is_functor {
                         return false;
                     }
                     function_compat(&f.signature, params, ret, true)
                 }
-                KObject::KFuture(_, _) => true,
+                KObject::KFuture(_) => true,
                 _ => false,
             },
             // Constraint role: a `Signature { .. }` slot is satisfied by a *module*, which
@@ -409,23 +409,23 @@ impl<'a> KType<'a> {
                 _ => false,
             },
             KType::KFunction { params, ret } => match part {
-                ExpressionPart::Spliced(Carried::Object(KObject::KFunction(f, _))) => {
+                ExpressionPart::Spliced(Carried::Object(KObject::KFunction(f))) => {
                     if f.is_functor {
                         return false;
                     }
                     function_compat(&f.signature, params, ret, false)
                 }
-                ExpressionPart::Spliced(Carried::Object(KObject::KFuture(_, _))) => true,
+                ExpressionPart::Spliced(Carried::Object(KObject::KFuture(_))) => true,
                 _ => false,
             },
             KType::KFunctor { params, ret, .. } => match part {
-                ExpressionPart::Spliced(Carried::Object(KObject::KFunction(f, _))) => {
+                ExpressionPart::Spliced(Carried::Object(KObject::KFunction(f))) => {
                     if !f.is_functor {
                         return false;
                     }
                     function_compat(&f.signature, params, ret, true)
                 }
-                ExpressionPart::Spliced(Carried::Object(KObject::KFuture(_, _))) => true,
+                ExpressionPart::Spliced(Carried::Object(KObject::KFuture(_))) => true,
                 _ => false,
             },
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),

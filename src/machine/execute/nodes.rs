@@ -26,13 +26,16 @@ pub(super) use crate::scheduler::nodes::{Node, NodeFrame, NodeWork};
 // path to balance the variants is the wrong trade — the imbalance is inherent.
 #[allow(clippy::large_enum_variant)]
 pub(super) enum NodeStep<'step> {
-    /// The terminal value is born at the step lifetime `'step` (the consumer frame the step ran
-    /// against): it is finalized *within* the step that produced it (the run loop's `run_step` erases
-    /// it into the slot store before the step's frame witness drops), so it never crosses the
-    /// step-guard exit as a fabricated `'run`. The only lifetime-bearing arm — `Replace`'s contract
-    /// is erased and its chain reshape lowered to a [`ChainOp`] in `apply_outcome`, so it carries no
-    /// `'run`.
+    /// The finalized terminal, live at the step lifetime `'step`. `run_step` checks it against the
+    /// declared return contract (while value and contract share `'step`), then bundles it with the
+    /// witness set ([`FrameSet`]) of every region it reaches — the producer frame ∪ the dep sources
+    /// accumulated over the step — and finalizes it into the slot store, erasing `'step` before the
+    /// frame drops.
     Done(Result<Carried<'step>, KError>),
+    /// A ready bare-name forward: this slot's terminal *is* `producer`'s. `run_step` relocates
+    /// `producer`'s terminal into this slot's region (carrying its own witness) and finalizes — no
+    /// re-check, the producer already enforced its own contract. (`Alias` is the not-yet-ready twin.)
+    ForwardReady(NodeId),
     Replace {
         work: NodeWork<KoanWorkload>,
         frame: Option<Rc<CallFrame>>,
