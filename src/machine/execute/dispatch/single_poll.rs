@@ -55,8 +55,8 @@ pub(super) fn bare_identifier<'step, 'b>(
     name: String,
 ) -> Outcome<'step> {
     match s.resolve_with_chain(&name, ctx.chain_deref()) {
-        // Re-anchor the `'b`-branded resolve result to the cart `'step`; see the witness note in
-        // `scratch/framestorage-ouroboros-plan.md`.
+        // Re-anchor the `'b`-branded resolve result to the cart `'step`, witnessed by the active
+        // region (which pins the resolved object's storage for `'step`).
         Resolution::Value(obj) => {
             Outcome::Done(Ok(crate::scheduler::reattach_with::<CarriedFamily, _>(
                 Carried::Object(obj),

@@ -33,9 +33,10 @@ honest across a TCO `try_reset_for_tail`: nothing persisted points into the rese
 
 The read boundary hands a slot's scope back on demand, not as a stored free `&'run`:
 [`reattach_node_scope`](../../src/machine/execute/dispatch/ctx.rs) materializes it per use — a
-`YokedChild` slot re-attaches its erased `ErasedScopePtr` through the `unsafe` `reattach`
-(borrow bounded by the frame `Rc`, content lifetime free, sound because the cart pins the ancestor
-region); a `Yoked` slot re-reads from the live
+`YokedChild` slot re-attaches its stored `&'static Scope` through the witness-bounded
+`ErasedScopePtr::reattach_witnessed` (borrow bounded by the frame `Rc`, content lifetime free, sound
+because the cart pins the ancestor region; the re-hand carries no `unsafe` of its own); a `Yoked`
+slot re-reads from the live
 `active_frame` cart via [`CallFrame::scope_bounded`](../../src/machine/core/arena.rs), a
 **witness-bounded** brand whose borrow is capped at the `&Rc<CallFrame>` receiver (content `'a`
 free, `'a: 'p`). Because the borrow cannot outlive the frame `Rc` it reads from, storing it past
@@ -57,11 +58,11 @@ primitives, lifting to the run `'a` only at the `lift_kobject` Done boundary.
 The MATCH / TRY arm seeds and [`run_user_fn`](../../src/machine/core/kfunction/exec.rs)
 bind their `it` / parameters — values whose type carries the caller's `'a`, allocated into the
 frame region — inside [`CallFrame::with_frame_interior`](../../src/machine/core/arena.rs), the
-single audited home for that re-anchor. The closure receives the frame's region re-exposed at a
-free `'a` (the C0-irreducible re-exposure: an `'a`-typed value must land in an `'a`-typed region,
-and the frame `Rc` the caller holds heap-pins it) and its child scope re-handed through the
-witness-bounded `scope_bounded` brand — so the scope half is *not* fabricated free, only the
-region half is. This is the sole surviving free re-exposure in the protocol.
+home for that re-anchor. The closure receives the frame's region reached through the child scope's
+own `region` field (a `Copy` `&'a KoanRegion`, read at the scope's content `'a`) and the child scope
+re-handed through the witness-bounded `scope_bounded` brand — the same held frame `Rc` that pins the
+scope pins the region it names, so neither half fabricates a free reference and the whole re-anchor
+carries no `unsafe`.
 Arm and body statements then dispatch through the framed scheduler write primitives
 (`dispatch_in_active_frame`, `dispatch_body`), which
 derive the scope from the active frame and store `Yoked`, so the seed itself persists no

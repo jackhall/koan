@@ -44,8 +44,11 @@ The ~73 scope-handle reads (`scope_for_bind` / `scope_bounded` / `current_scope`
 - TCO frame reuse preserves the `Rc::get_mut` uniqueness check — the child scope's carrier bundles no
   `Rc` clone — and `try_reset_for_tail` still passes its three Miri tests (round-trip,
   refuses-when-aliased, allows-reset-under-escaped-storage).
-- Every read of the child scope routes the `Sealed` accessor, not a returned `&Scope`:
-  `scope_for_bind`, `scope_bounded`, `current_scope`, and the scheduler-side `reattach_node_scope`.
+- Every read of the child scope re-anchors through the externally-witnessed `Sealed` accessor
+  (`SealedExtern::attach`, the frame's storage `Rc` as the witness) rather than a free `pin_deref` /
+  `as_ref`-backed handle: `scope_for_bind`, `scope_bounded`, `current_scope`, and the scheduler-side
+  `reattach_node_scope`. (Those readers still hand a re-anchored `&Scope` back up-stack; converting
+  each to copy-out-or-CPS so no scope-path borrow escapes is [scope-reads-to-open](scope-reads-to-open.md).)
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` are clean.
 
 **Out of scope.** This change targets the `FrameStorage` region↔child-scope loop. It does **not**

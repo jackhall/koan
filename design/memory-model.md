@@ -127,25 +127,29 @@ Narrowing the brand *under-claims* the pointee's real life (`get` only ever re-h
 per-call region's lifetime while brand-shortening the longer-lived lexical parent and run-global root
 to that lifetime, so the child needs no common lifetime with its parent. That is what lets
 `CallFrame::new` / `try_reset_for_tail` construct the per-call child at real (non-`'static`)
-lifetimes and erase it once through the safe `ErasedScopePtr::erase` — the per-call frame builds with
+lifetimes and erase it once through the safe `SealedExtern::erase` — the per-call frame builds with
 no construction-time lifetime fabrication, leaving only the read-side re-attach, which takes the
 pinning `Rc` as an explicit witness so it carries no in-situ `unsafe` either.
 
-The remaining [`ErasedScopePtr`](../src/machine/core/scope_ptr.rs) backs the two carriers that hold
-*no* lifetime and so cannot brand `'a`: `CallFrame`'s per-call child scope (non-generic — it backs
-`Rc<CallFrame>`) and a scheduler slot's `NodeScope::YokedChild` (a cart-ancestor block scope evicted
-off the lifetime-free node). Both store through the safe `erase(&Scope<'_>)` (forgetting a lifetime
-for storage cannot fabricate one) and recover the content lifetime on read through the
-**safe-signature** `reattach_witnessed<'w, 'b: 'w, W: Witness>(&'w self, &'w W) -> &'w Scope<'b>` —
-the scope-pointer analog of [`reattach_with`](../src/witnessed.rs). The witness is **external** (the
-frame `Rc`, which for a `YokedChild` pins the ancestor region through its `FrameStorage.outer` chain)
-and not expressible in the *carrier's* type, so rather than fabricate the lifetime in-situ the
+Two further carriers hold *no* lifetime and so cannot brand `'a`: `CallFrame`'s per-call child scope
+(non-generic — it backs `Rc<CallFrame>`) and a scheduler slot's `NodeScope::YokedChild` (a
+cart-ancestor block scope evicted off the lifetime-free node). The frame's child scope rides the
+substrate's externally-witnessed [`SealedExtern<ScopeRefFamily>`](../src/witnessed.rs) carrier; the
+`YokedChild` carrier stays an [`ErasedScopePtr`](../src/machine/core/scope_ptr.rs) (a cross-node
+erasure outside the per-call struct). Both store a `&'static Scope` erased once on the store side
+through the safe `erase_to_static::<ScopeRefFamily>` (forgetting a reference's lifetime for storage
+cannot fabricate one), so the handle holds the reference outright and carries **no `unsafe`** — there
+is no `NonNull` deref. Each recovers the content lifetime on read through a **fully safe**
+witness-bounded accessor — `SealedExtern::attach` for the frame, `ErasedScopePtr::reattach_witnessed`
+for `YokedChild`, both of signature `<'w, 'b: 'w, W: Witness>(&'w self, &'w W) -> &'w Scope<'b>` and
+both the scope-pointer analog of [`reattach_with`](../src/witnessed.rs). The witness is **external**
+(the frame `Rc`, which for a `YokedChild` pins the ancestor region through its `FrameStorage.outer`
+chain) and not expressible in the *carrier's* type, so rather than fabricate the lifetime in-situ the
 re-attach takes it as an explicit `Witness` borrow: `'w` is bounded by that borrow, content `'b` is
-free, and the lone `unsafe` is the `NonNull` deref inside the one method (the content retype routes
-the witnessed `reattach_ref_with`). The `CallFrame` accessors (`scope` / `scope_for_bind` /
-`scope_bounded`) are thin **safe** wrappers that pass the frame's own storage `Rc` as the witness, so
-every frame-scope fabrication funnels through the one `reattach_witnessed` and call sites carry no
-`unsafe`.
+free, and the only `unsafe` it routes is the shared `retype` inside the witnessed `reattach_ref_with`
+(in `witnessed.rs`). The `CallFrame` accessors (`scope` / `scope_for_bind` / `scope_bounded`) are
+thin **safe** wrappers that pass the frame's own storage `Rc` as the witness, so every frame-scope
+fabrication funnels through the one `attach` and call sites carry no `unsafe`.
 
 Beyond the store-side erasure and the branded scope pointers, a handful of carriers store a
 borrow-carrying *value* on a structure the borrow checker cannot lifetime-track — a scheduler
@@ -246,7 +250,7 @@ escape region no matter which wrapper stored it.
 
 A [`CallFrame`](../src/machine/core/arena.rs) is a thin shell over a refcounted
 [`FrameStorage`](../src/machine/core/arena.rs): the shell carries a `Rc<FrameStorage>` and an
-`Option<ErasedScopePtr>` (the child scope; `None` only transiently during construction), while
+`Option<SealedExtern<ScopeRefFamily>>` (the child scope; `None` only transiently during construction), while
 `FrameStorage` bundles the `KoanRegion` and an `Option<Rc<FrameStorage>>` for the parent-frame
 chain. The shell/storage split lets an escaping value pin only the storage, leaving the shell
 uniquely owned for tail reuse (see
@@ -255,15 +259,15 @@ invariants make the ownership unit coherent:
 
 - **Heap-pinning via `Rc`.** `CallFrame::new` builds the region inside its own
   `Rc<FrameStorage>` and only ever exposes the frame as `Rc<CallFrame>`, so the inner
-  region's heap address is stable for the storage Rc's life and `scope_ptr` (a raw
-  pointer into `region.scopes`) stays valid alongside it. Accessors re-attach lifetimes
+  region's heap address is stable for the storage Rc's life and `scope_carrier` (a
+  `&'static Scope` into `region.scopes`) stays valid alongside it. Accessors re-attach lifetimes
   anchored to `&self`. A tail reset installs a *fresh* `FrameStorage`, so the region
   address changes across a reset — no accessor captures it across one, and the borrow
   checker forbids safe code from doing so.
 - **Field declaration order encodes drop order.** On `FrameStorage`, `region` is declared
   before `outer` so the auto-derived `Drop` tears down this frame's region *before*
-  releasing the parent storage Rc; on the shell, `storage` is declared before `scope_ptr`.
-  Inner pointers die before the outer storage they may reference, ruling out a dangling
+  releasing the parent storage Rc; on the shell, `storage` is declared before `scope_carrier`.
+  Inner references die before the outer storage they may reference, ruling out a dangling
   `outer` during drop.
 
 A scheduler slot's scope handle is lifetime-free, so the node carries no `'run` through its scope.

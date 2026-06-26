@@ -28,8 +28,7 @@ pub(super) fn initial<'step, 'b>(
     let chain = ctx.chain_deref();
     match s.resolve_with_chain(&head, chain) {
         // `obj` resolves at the threaded scope's `'b` brand; re-anchor it to the cart `'step`,
-        // witnessed by the active region (sourced over the old path during migration — it moves to
-        // the frame's own region at the ouroboros flip). The region pins `obj`'s storage for `'step`.
+        // witnessed by the active region, which pins `obj`'s storage for `'step`.
         Resolution::Value(obj) => {
             let carried = crate::scheduler::reattach_with::<CarriedFamily, _>(
                 Carried::Object(obj),

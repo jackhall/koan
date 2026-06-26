@@ -65,13 +65,17 @@ What's shipped that the open items below build on:
   replacing the per-type `T<'a> → T<'static>` transmute pairs with one. The scope-pointer surface
   split on whether the carrier can brand the scope's `'a`: the safe `BoundedScopePtr<'a>` makes
   `Module::child_scope`, `Signature::decl_scope`, `KFunction::captured` and a `Scope`'s `outer`
-  reader-bounded re-hands carrying no `unsafe`, while the two lifetime-free carriers (`CallFrame`'s
-  per-call child scope and a node's `NodeScope::YokedChild`) collapse to the single audited
-  `unsafe ErasedScopePtr::reattach`. The per-call child's construction-time lifetime erasure (the
-  region `pin_deref` and outer-link re-attach in `CallFrame::new` / `try_reset_for_tail`) has since
-  been removed: `Scope::child_for_frame` builds the child at real lifetimes, brand-shortening the
-  longer-lived lexical parent and run-global root to the fresh per-call region's lifetime, so the
-  read-side `ErasedScopePtr::reattach` is the only `unsafe` the per-call child touches. The
+  reader-bounded re-hands carrying no `unsafe`. The two lifetime-free carriers each store a
+  `&'static Scope` erased once through the safe `erase_to_static::<ScopeRefFamily>`, so the handle
+  itself holds no `unsafe`: `CallFrame`'s per-call child scope rides the substrate's externally-witnessed
+  `SealedExtern<ScopeRefFamily>` carrier (read back through the witness-bounded `SealedExtern::attach`),
+  and a node's `NodeScope::YokedChild` rides an `ErasedScopePtr` (read back through the witness-bounded
+  `ErasedScopePtr::reattach_witnessed`) — both fully-safe accessors taking the pinning `Rc` as an
+  explicit `Witness`, the only routed `unsafe` being the shared `retype` in `witnessed.rs`. The
+  per-call child's construction-time lifetime erasure (the region `pin_deref` and outer-link re-attach
+  in `CallFrame::new` / `try_reset_for_tail`) is removed: `Scope::child_for_frame` builds the child at
+  real lifetimes, brand-shortening the longer-lived lexical parent and run-global root to the fresh
+  per-call region's lifetime, so the per-call child touches no `unsafe` at all. The
   `unsafe impl Reattachable` obligation is discharged once through a shared `reattachable!` macro
   instead of per-carrier.
   Honest slot storage landed for per-call frame scopes: a frame scope rides its slot as a
@@ -82,10 +86,12 @@ What's shipped that the open items below build on:
   `run_dispatch`/`SchedulerView`/`BuiltinFn`, and a slot's scope is now read on demand via
   [`Scheduler::current_scope`](../src/machine/execute/run_loop.rs) through the witness-bounded
   [`CallFrame::scope_bounded`](../src/machine/core/arena.rs) brand (the post-step loop reads it
-  through a `PostStep` token off the slot's returned frame). The sole surviving free re-exposure
-  is the region half of [`CallFrame::with_frame_interior`](../src/machine/core/arena.rs)'s seed
-  bind — its removal is tracked by
-  [FrameStorage self-reference removal](per-node-memory/framestorage-self-reference.md) — and
+  through a `PostStep` token off the slot's returned frame).
+  [`CallFrame::with_frame_interior`](../src/machine/core/arena.rs)'s seed bind no longer re-exposes
+  the region at a free `'a`: it reaches the region through the child scope's own `region` field
+  (a `Copy` `&'a KoanRegion`), so the seed side carries no free re-exposure. The full Miri-slate
+  confirmation of the removed self-reference tokens is tracked by
+  [FrameStorage self-reference removal](per-node-memory/framestorage-self-reference.md). And
   `KFunction::captured` now rides a `BoundedScopePtr`
   (see [design/per-call-region/scope-handles.md § Slot-table scope handle](../design/per-call-region/scope-handles.md#slot-table-scope-handle)).
   See [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).

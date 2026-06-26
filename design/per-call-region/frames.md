@@ -76,8 +76,8 @@ is load-bearing: `region` is declared before `outer`, so the
 auto-derived `Drop` tears down this frame's region *before* releasing
 the parent storage Rc — inner pointers die before the outer storage they
 may reference. The shell's own field order mirrors this: `storage` drops
-before `scope_ptr`, so the region tears down before the now-dangling
-child pointer.
+before `scope_carrier`, so the region tears down before the now-dangling
+child reference.
 
 ## TCO frame reuse
 
@@ -120,10 +120,10 @@ Two structural invariants make the reset sound:
 `CallFrame::region()` returns an `&self`-bounded `&KoanRegion`, while
 `try_reset_for_tail` takes `&mut Rc<CallFrame>`, so a live region borrow
 cannot span that frame's reset — a captured pointer across the reset is
-a compile error, not a discipline the code must remember. The sole
-lifetime-erased region exposure is `with_frame_interior`'s seed-bind
-re-exposure (the C0-irreducible site witnessed by the held frame `Rc` —
-see [§ Seed-side re-anchor](scope-handles.md#seed-side-re-anchor)).
+a compile error, not a discipline the code must remember.
+`with_frame_interior`'s seed binds reach the region through the child
+scope's own `region` field (`&'a KoanRegion`), pinned by the held frame
+`Rc` — see [§ Seed-side re-anchor](scope-handles.md#seed-side-re-anchor)).
 
 Frame reuse is what makes deep tail recursion truly constant-memory —
 both in the scheduler's slot table (the `Tail` rewrite alone) and on
