@@ -25,7 +25,7 @@ use crate::machine::model::types::KType;
 use crate::machine::model::values::{Held, KObject, Module, ModuleSignature};
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
-use crate::witnessed::{Region, StorageProfile, Stored};
+use crate::witnessed::{MergeWitness, Region, StorageProfile, Stored, Witness, WitnessRegion};
 
 /// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
 /// family's `'static` form (phantom); the [`Region`] engine re-anchors to the caller's `'a`
@@ -325,9 +325,9 @@ impl CallFrame {
 /// before `outer`, so inner pointers die before the outer storage they may reference.
 pub struct FrameStorage {
     region: KoanRegion,
-    /// Liveness pin only — held so the ancestor frames' storage outlives this child's `outer`
-    /// scope pointer, dropped (never read) when this storage drops. The drop *is* the use.
-    #[allow(dead_code)]
+    /// The parent per-call frame's storage: both a liveness pin — held so the ancestor frames'
+    /// storage outlives this child's `outer` scope pointer — and the link [`FrameStorage::pins_region`]
+    /// walks for [`FrameSet`] subsumption. Drop tears down the chain in order.
     outer: Option<Rc<FrameStorage>>,
 }
 
@@ -347,6 +347,116 @@ impl FrameStorage {
     /// that pin storage but never name a `CallFrame`.
     pub(crate) fn region(&self) -> &KoanRegion {
         &self.region
+    }
+
+    /// True iff holding `self`'s `Rc` keeps the region at `region_ptr` alive — `self`'s own region or
+    /// any of its `outer` ancestors (each pinned by the chain). The subsumption test [`FrameSet`]'s
+    /// [`MergeWitness::merge`] uses: a member whose region another member already pins is redundant.
+    pub(crate) fn pins_region(&self, region_ptr: *const KoanRegion) -> bool {
+        let mut node = self;
+        loop {
+            // `node.region()` coerces `&KoanRegion → *const` for the address compare (as `rc_targets`).
+            if std::ptr::eq(node.region(), region_ptr) {
+                return true;
+            }
+            match &node.outer {
+                Some(outer) => node = outer,
+                None => return false,
+            }
+        }
+    }
+}
+
+/// The unified region-owner witness: the set of `Rc<FrameStorage>` whose regions a carrier's value
+/// reaches. A singleton for a single-region value (a scope, a same-region value, a producer frame) —
+/// the common case — and larger for a multi-region value (a lifted closure reaching several source
+/// regions, once [`transfer_into`](crate::witnessed) lands). Holding it pins every member region; the
+/// empty set pins nothing — a frameless / run-region terminal is backed by a region that outlives the
+/// carrier, so no held pin is required (the role the result slot's `None` played).
+///
+/// Composition ([`MergeWitness::merge`]) is set **union** with `outer`-chain subsumption: a member is
+/// dropped when another member's [`FrameStorage::pins_region`] chain already keeps its region alive, so
+/// the set stays an antichain of the deepest frames (a singleton whenever the members are co-lineal).
+///
+/// Backed by a `Vec` (a singleton in the common case); the inline `SmallVec` representation is the
+/// open optimization [`transfer_into`](crate::witnessed)'s item owns.
+#[derive(Clone, Default)]
+pub struct FrameSet {
+    frames: Vec<Rc<FrameStorage>>,
+}
+
+impl FrameSet {
+    /// The empty witness — a frameless / run-region terminal that needs no held pin.
+    pub fn empty() -> Self {
+        FrameSet { frames: Vec::new() }
+    }
+
+    /// A single region owner — the common case (a scope, a same-region value, a producer frame).
+    pub fn singleton(owner: Rc<FrameStorage>) -> Self {
+        FrameSet {
+            frames: vec![owner],
+        }
+    }
+
+    /// Whether this set holds no region owner (the frameless / run-region terminal).
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    /// The sole region owner of a singleton set, or `None` for empty / multi-member sets — the hook
+    /// the consumer-pull lift uses to recover the producer `FrameStorage` from a finalized terminal's
+    /// witness (a finalized value is produced in exactly one frame, so its witness is a singleton).
+    pub fn sole(&self) -> Option<&Rc<FrameStorage>> {
+        match self.frames.as_slice() {
+            [only] => Some(only),
+            _ => None,
+        }
+    }
+
+    /// Insert `owner` under `outer`-chain subsumption: skip it when an existing member already pins
+    /// its region (dedup + the newcomer-is-an-ancestor case), else drop every existing member the
+    /// newcomer subsumes and add it. Keeps the set an antichain of the deepest frames.
+    fn insert(&mut self, owner: Rc<FrameStorage>) {
+        let owner_region = owner.region() as *const KoanRegion;
+        if self.frames.iter().any(|f| f.pins_region(owner_region)) {
+            return;
+        }
+        self.frames
+            .retain(|f| !owner.pins_region(f.region() as *const KoanRegion));
+        self.frames.push(owner);
+    }
+}
+
+// SAFETY: each member `Rc<FrameStorage>` keeps its `KoanRegion` — and the arena pages a value lives in
+// — at a fixed heap address for the whole life of the `Rc` (`Rc` is `StableDeref`), so holding the set
+// pins every member region. The empty set carries no pin: a frameless value is backed by a region (the
+// run region) that outlives the carrier, so no held pin is required — the `Option<W>::None` role.
+unsafe impl Witness for FrameSet {}
+
+// SAFETY: `region()` returns the first member's `KoanRegion`, a reference into storage this set's
+// `Witness` impl pins (the member's `Rc` keeps it live and fixed-address), so a value built solely from
+// that region is pinned by the set. `yoke` calls this on a singleton (a single-region construction) in
+// this item's pilot; an empty set has no region to expose and panics — a `yoke` needs a region owner.
+unsafe impl WitnessRegion for FrameSet {
+    type Region = KoanRegion;
+    fn region(&self) -> &KoanRegion {
+        self.frames
+            .first()
+            .expect("WitnessRegion::region on an empty FrameSet — yoke needs a region owner")
+            .region()
+    }
+}
+
+// SAFETY: `merge` returns the set union (deduplicated by region pointer, a member dropped only when
+// another member's `outer` chain already pins its region), so holding the result keeps every region
+// either input pinned alive. Always `Some` — a set can always represent the union.
+unsafe impl MergeWitness for FrameSet {
+    fn merge(left: &Self, right: &Self) -> Option<Self> {
+        let mut result = left.clone();
+        for owner in &right.frames {
+            result.insert(Rc::clone(owner));
+        }
+        Some(result)
     }
 }
 

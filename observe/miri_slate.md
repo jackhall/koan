@@ -1,7 +1,7 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena.rs: 1
+src/machine/core/arena.rs: 4
 src/machine/core/scope_ptr.rs: 1
 src/machine/execute/lift.rs: 1
 src/machine/model/types/ktype_predicates.rs: 1
@@ -301,6 +301,16 @@ original drops), a **non-`Copy`** `Box<&'r u32>` consumed by the open (the boxed
 `seal_option` optional + a reference opened together at one brand (plus the `None`-optional arm). The
 escape-can't-compile guards are `compile_fail` doctests on `with` / `map` / `yoke` / `merge` /
 `SealedExtern::open`.
+
+The **production** realisation of these `unsafe trait` impls — `Witness` / `WitnessRegion` /
+`MergeWitness` for `FrameSet`, the unified region-owner witness in
+[src/machine/core/arena.rs](../src/machine/core/arena.rs) — is covered here cross-file: its
+region-plus-`outer`-ancestry shape is exactly what the `Rc<TestCart>` stand-in mirrors, so
+`yoke_sources_carrier_from_witness_region` and `merge_binds_ancestor_ref_into_descendant_scope`
+pin its yoke / merge / subsumption (drop-an-ancestor-still-pinned-by-the-chain) UB shapes, and
+`merge_rejects_unrelated_carts` the no-common-pin verdict. `FrameSet::merge`'s antichain logic
+(union with `outer`-chain subsumption) is pinned by the `frameset_*` / `pins_region_walks_outer_chain`
+unit tests in [arena/tests.rs](../src/machine/core/arena/tests.rs).
 
 - `erased_roundtrip_and_helpers`
 - `read_borrow_bounded_witness_only`

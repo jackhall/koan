@@ -192,36 +192,26 @@ pub unsafe trait WitnessRegion: Witness {
     fn region(&self) -> &Self::Region;
 }
 
-/// Which input of a [`Witnessed::merge`] carries the witness that pins **both** inputs' regions —
-/// the *descendant* cart, whose ancestor-chain pin transitively keeps the other's region live. See
-/// [`MergeWitness`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MergePin {
-    /// The left input's witness pins both regions.
-    Left,
-    /// The right input's witness pins both regions.
-    Right,
-}
-
-/// A [`Witness`] whose values stand in an ancestry relation, so two of them can be reduced to the
-/// single one that pins both — the seam [`Witnessed::merge`] routes to seal a combined carrier under
-/// the tightest correct witness.
+/// A [`Witness`] whose values compose to the one that pins **both** operands' regions — the seam
+/// [`Witnessed::merge`] routes to seal a combined carrier under the tightest correct witness.
 ///
-/// The motivating shape is the per-call cart: a descendant frame's storage holds its ancestors'
-/// storage alive (the `outer` chain), so holding the descendant keeps every ancestor region live.
-/// The descendant is therefore the shorter-lived but all-pinning witness; two carts with no ancestry
-/// relation pin nothing of each other's, so merging them is unsound and [`Self::merge_pin`] rejects
-/// it with `None`.
+/// The motivating shape is a *set* of region owners: a value can reach several regions, so its
+/// witness is the set of frame `Rc`s pinning them, and two witnesses compose by **set union** —
+/// dropping a member whose region another member's ancestor (`outer`) chain already pins
+/// (subsumption). A single-region witness is the degenerate case: the union of two *related* carts
+/// collapses to the descendant (whose `outer` chain pins the ancestor), while two *unrelated*
+/// single-region carts have no common representable pin, so [`Self::merge`] returns `None`. A set
+/// witness can always represent the union, so it never returns `None`.
 ///
 /// # Safety
 ///
-/// When [`Self::merge_pin`] returns `Some(`[`MergePin::Left`]`)`, holding `left` must keep both
-/// `left`'s and `right`'s pinned regions live for as long as `left` is held (and symmetrically for
-/// [`MergePin::Right`]). `None` asserts neither pins the other — the only safe verdict when no such
-/// dominating witness exists.
+/// When [`Self::merge`] returns `Some(w)`, holding `w` must keep both `left`'s and `right`'s pinned
+/// regions live for as long as `w` is held. `None` asserts no value of `Self` pins both — the only
+/// safe verdict when this witness type cannot represent the combined pin.
 pub unsafe trait MergeWitness: Witness + Sized {
-    /// The input whose witness pins both regions, or `None` when neither does.
-    fn merge_pin(left: &Self, right: &Self) -> Option<MergePin>;
+    /// The witness pinning both `left`'s and `right`'s regions (set union with `outer`-chain
+    /// subsumption), or `None` when this witness type cannot represent a value pinning both.
+    fn merge(left: &Self, right: &Self) -> Option<Self>;
 }
 
 /// An erased carrier bundled with the liveness [`Witness`] that keeps its pointee alive — the
@@ -399,21 +389,21 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// Combine two witnessed carriers under one brand and re-seal the result under the witness that
     /// pins **both** — the composition law for [`Witnessed`]. The two carriers are re-anchored at a
     /// shared `for<'b>` brand and handed to `f`, which may bind one into the other (e.g. a witnessed
-    /// `KFunction` into a witnessed `Scope`); the projection is then sealed under the *descendant*
-    /// witness, whose ancestor-chain pin keeps the other's region live after the other witness drops.
+    /// `KFunction` into a witnessed `Scope`); the projection is then sealed under
+    /// [`MergeWitness::merge`] of the two witnesses — the set union (with `outer`-chain subsumption)
+    /// that keeps every region the combined carrier reaches live.
     ///
-    /// Returns `None` when the two witnesses are **unrelated** — neither pins the other's region (see
-    /// [`MergeWitness::merge_pin`]) — because no single held witness would then keep the combined
-    /// carrier's references live. The relatedness verdict is taken *before* `f` runs, so an unsound
-    /// combination is never built.
+    /// Returns `None` only when that union is **not representable** in `W` — a single-region witness
+    /// whose two operands are unrelated (see [`MergeWitness::merge`]); a set witness always succeeds.
+    /// The composability verdict is taken *before* `f` runs, so an unsound combination is never built.
     ///
-    /// Sound for the same reason as [`Self::map`], doubled: both witnesses are held for the whole of
-    /// `f`, so re-anchoring both carriers to one brand `'b` cannot dangle; the `for<'b>` quantifier
-    /// keeps either branded carrier from escaping into the result type, and the surviving descendant
+    /// Sound for the same reason as [`Self::map`], doubled: both source witnesses are held for the
+    /// whole of `f`, so re-anchoring both carriers to one brand `'b` cannot dangle; the `for<'b>`
+    /// quantifier keeps either branded carrier from escaping into the result type, and the combined
     /// witness pins the sealed carrier's backing thereafter.
     ///
     /// ```compile_fail
-    /// use koan::witnessed::{MergePin, MergeWitness, Reattachable, Witness, Witnessed};
+    /// use koan::witnessed::{MergeWitness, Reattachable, Witness, Witnessed};
     /// use std::marker::PhantomData;
     /// use std::rc::Rc;
     ///
@@ -422,9 +412,10 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// unsafe impl Reattachable for RefFamily {
     ///     type At<'r> = &'r u32;
     /// }
-    /// // SAFETY: `Rc<Vec<u32>>` is `StableDeref`; ancestry is trivial (every cart pins itself).
+    /// // SAFETY: `Rc<Vec<u32>>` is `StableDeref`; ancestry is trivial (every cart pins itself), so
+    /// // the combined witness is just a clone of the left operand.
     /// unsafe impl MergeWitness for Rc<Vec<u32>> {
-    ///     fn merge_pin(_l: &Self, _r: &Self) -> Option<MergePin> { Some(MergePin::Left) }
+    ///     fn merge(left: &Self, _right: &Self) -> Option<Self> { Some(Rc::clone(left)) }
     /// }
     ///
     /// let a: Rc<Vec<u32>> = Rc::new(vec![1]);
@@ -447,9 +438,10 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     where
         W: MergeWitness,
     {
-        // Relatedness first: if neither witness pins the other's region there is no sound result, so
-        // bail before `f` builds a value that would reference a region no surviving witness keeps live.
-        let pin = W::merge_pin(&self.witness, &other.witness)?;
+        // Composability first: the combined witness must pin both regions, or there is no sound
+        // result — so compute it before `f` builds a value that would reference a region no surviving
+        // witness keeps live. The source witnesses below stay held across `f`.
+        let witness = W::merge(&self.witness, &other.witness)?;
         let Witnessed {
             value: left,
             witness: left_witness,
@@ -458,18 +450,18 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
             value: right,
             witness: right_witness,
         } = other;
-        // SAFETY: both witnesses are held across `f`, each pinning its own carrier's backing; the two
-        // carriers are re-anchored to one existential brand the `for<'b>` closure cannot leak, and the
-        // projection is immediately re-erased to `'static` for storage. The retained descendant witness
-        // (`pin`) pins both regions thereafter. Lifetime-only retypes of single-lifetime families.
+        // SAFETY: both source witnesses are held across `f`, each pinning its own carrier's backing;
+        // the two carriers are re-anchored to one existential brand the `for<'b>` closure cannot leak,
+        // and the projection is immediately re-erased to `'static` for storage. The combined `witness`
+        // (set union with subsumption) pins both regions thereafter. Lifetime-only retypes of
+        // single-lifetime families.
         let live_left: T::At<'_> = unsafe { retype::<T::At<'static>, T::At<'_>>(left.inner) };
         let live_right: B::At<'_> = unsafe { retype::<B::At<'static>, B::At<'_>>(right.inner) };
         let projected = f(live_left, live_right, PhantomData);
-        // Keep the descendant (all-pinning) witness; drop the other.
-        let witness = match pin {
-            MergePin::Left => left_witness,
-            MergePin::Right => right_witness,
-        };
+        // The source witnesses pinned both backings across `f`; drop them now — the combined `witness`
+        // computed above carries both pins forward.
+        drop(left_witness);
+        drop(right_witness);
         Some(Witnessed {
             value: Erased::erase(projected),
             witness,

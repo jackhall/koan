@@ -7,6 +7,66 @@ use crate::builtins::default_scope;
 use crate::machine::model::types::KType;
 use crate::machine::BindingIndex;
 
+/// A child `FrameStorage` whose `outer` chains `parent` — the ancestry shape `FrameSet`
+/// subsumption walks. Region escape is irrelevant to the `outer`-chain test, so a plain region.
+fn child_storage(parent: &Rc<FrameStorage>) -> Rc<FrameStorage> {
+    Rc::new(FrameStorage {
+        region: KoanRegion::new(),
+        outer: Some(Rc::clone(parent)),
+    })
+}
+
+/// `FrameStorage::pins_region` walks `self` + its `outer` chain: a descendant pins every ancestor's
+/// region, never the reverse.
+#[test]
+fn pins_region_walks_outer_chain() {
+    let root = FrameStorage::run_root();
+    let child = child_storage(&root);
+    assert!(child.pins_region(child.region()), "self pins its own region");
+    assert!(child.pins_region(root.region()), "descendant pins its ancestor");
+    assert!(!root.pins_region(child.region()), "ancestor does not pin descendant");
+}
+
+/// `FrameSet::merge` over related carts collapses to the descendant singleton (the ancestor's region
+/// is already pinned by the descendant's `outer` chain), regardless of operand order.
+#[test]
+fn frameset_merge_subsumes_ancestor() {
+    let root = FrameStorage::run_root();
+    let child = child_storage(&root);
+    let descendant = FrameSet::singleton(Rc::clone(&child));
+    let ancestor = FrameSet::singleton(Rc::clone(&root));
+
+    let merged = FrameSet::merge(&descendant, &ancestor).expect("a set always represents the union");
+    assert_eq!(merged.frames.len(), 1, "ancestor subsumed by descendant");
+    assert!(std::ptr::eq(merged.frames[0].region(), child.region()));
+
+    // Order-independent: the antichain is the same either way.
+    let merged_rev = FrameSet::merge(&ancestor, &descendant).expect("union always represents");
+    assert_eq!(merged_rev.frames.len(), 1);
+    assert!(std::ptr::eq(merged_rev.frames[0].region(), child.region()));
+}
+
+/// `FrameSet::merge` over unrelated carts keeps both — neither `outer` chain pins the other.
+#[test]
+fn frameset_merge_keeps_unrelated() {
+    let a = FrameStorage::run_root();
+    let b = FrameStorage::run_root();
+    let merged = FrameSet::merge(&FrameSet::singleton(a), &FrameSet::singleton(b))
+        .expect("a set always represents the union");
+    assert_eq!(merged.frames.len(), 2, "unrelated regions both kept");
+}
+
+/// A singleton set exposes its sole owner's region (the `yoke` seam) and its sole frame.
+#[test]
+fn frameset_singleton_exposes_region_and_sole() {
+    let root = FrameStorage::run_root();
+    let set = FrameSet::singleton(Rc::clone(&root));
+    assert!(std::ptr::eq(set.region(), root.region()));
+    assert!(set.sole().is_some());
+    assert!(FrameSet::empty().sole().is_none());
+    assert!(FrameSet::empty().is_empty());
+}
+
 /// `scope_bounded` re-anchors the child scope with a borrow bounded by the `&Rc` witness.
 /// The good path: read it within the witness borrow. The over-anchor and covariance
 /// compile-error properties were confirmed by the C0 spike (see

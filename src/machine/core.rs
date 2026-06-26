@@ -15,7 +15,7 @@ mod scope_ptr;
 #[cfg(test)]
 mod tests;
 
-pub use arena::{CallFrame, FrameStorage, KoanRegion};
+pub use arena::{CallFrame, FrameSet, FrameStorage, KoanRegion};
 pub use bindings::{
     ApplyOutcome, BindingIndex, Bindings, FunctionLookup, PendingBinderGuard, PendingTypeEntry,
     Resolution,

@@ -47,7 +47,7 @@ reattachable! {
 /// Cart stand-in for the witness-with-a-region cases (`yoke` / `merge`): a backing `Vec` (the
 /// "region") plus an `outer` link, mirroring `FrameStorage`'s region + ancestor-pin chain without
 /// naming a koan type. Held by `Rc`, so the backing's heap address is stable (a `StableDeref`); a
-/// descendant's `outer` chain keeps its ancestors' backings alive, exactly the relation `merge_pin`
+/// descendant's `outer` chain keeps its ancestors' backings alive, exactly the relation `merge`
 /// reads.
 struct TestCart {
     backing: Vec<u32>,
@@ -65,7 +65,7 @@ unsafe impl WitnessRegion for Rc<TestCart> {
 }
 
 /// Whether holding `holder` keeps `target`'s backing alive — true when `target` is `holder` itself or
-/// any of its `outer` ancestors (each pinned by the chain). The descendant test that `merge_pin` uses.
+/// any of its `outer` ancestors (each pinned by the chain). The descendant test that `merge` uses.
 fn pins(holder: &Rc<TestCart>, target: &Rc<TestCart>) -> bool {
     let mut node: &TestCart = holder;
     loop {
@@ -79,15 +79,16 @@ fn pins(holder: &Rc<TestCart>, target: &Rc<TestCart>) -> bool {
     }
 }
 
-// SAFETY: `Some(Left)` is returned only when `pins(left, right)` — holding `left` keeps `right`'s
-// backing alive via the `outer` chain (and symmetrically for `Right`); `None` only when neither pins
-// the other, the sole safe verdict for unrelated carts.
+// SAFETY: `Some(Rc::clone(left))` is returned only when `pins(left, right)` — holding `left` keeps
+// `right`'s backing alive via the `outer` chain (and symmetrically for `right`); `None` only when
+// neither pins the other, the sole safe verdict for unrelated carts. A single-region witness, so the
+// union of two related carts collapses to the descendant — there is no multi-member set here.
 unsafe impl MergeWitness for Rc<TestCart> {
-    fn merge_pin(left: &Self, right: &Self) -> Option<MergePin> {
+    fn merge(left: &Self, right: &Self) -> Option<Self> {
         if pins(left, right) {
-            Some(MergePin::Left)
+            Some(Rc::clone(left))
         } else if pins(right, left) {
-            Some(MergePin::Right)
+            Some(Rc::clone(right))
         } else {
             None
         }
@@ -274,8 +275,8 @@ fn merge_binds_ancestor_ref_into_descendant_scope() {
 }
 
 /// `merge` rejects unrelated carts: neither pins the other's backing, so no surviving witness would
-/// keep a combined carrier live — `merge_pin` returns `None` and the merge yields `None` before the
-/// closure builds an unsound value.
+/// keep a combined carrier live — [`MergeWitness::merge`] returns `None` and the carrier merge yields
+/// `None` before the closure builds an unsound value.
 #[test]
 fn merge_rejects_unrelated_carts() {
     let a: Rc<TestCart> = Rc::new(TestCart {
