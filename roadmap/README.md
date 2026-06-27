@@ -322,10 +322,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [`alloc_object` embedding sites return `Witnessed`](per-node-memory/alloc-object-embedding-sites.md)
-- [Migrate the loose witness-borrow wrappers onto `Sealed`](per-node-memory/migrate-reattach-helpers.md)
-- [Migrate scope-handle reads to `open`](per-node-memory/scope-reads-to-open.md)
-- [Migrate result-slot value reads to `open`](per-node-memory/value-reads-to-open.md)
+- [Per-scope sealed reach-set](per-node-memory/scope-reach-set.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
@@ -419,31 +416,31 @@ Grow the shipped `witnessed` carrier into a generic, Koan-free substrate for per
 scheduler memory — a sealed node-storage form, its access verbs, and the generic bump
 allocator — then migrate the engine's value, scope, continuation, and contract carriers
 onto it. The construction primitives (`yoke` / `merge` / `with` / `map`, the
-witness-borrow reattaches) are already shipped, as is the relocation of the generic
-`Region<P>` bump allocator beside its carrier in the `witnessed` module and the opaque
-[`Sealed`](../src/witnessed.rs) storage form (read through a rank-2 `open`, with the result
-slot rerouted onto it); these items carry the remaining access verbs and the call-site
-migration, each sized to a single PR. The design is captured in
-[design/per-node-memory.md](../design/per-node-memory.md). The run-loop step restructure and its
-consuming `open` verb are the keystone the rest rides on; carriers, allocations, and reads then
-migrate onto it, with `attach` a contingent fallback retired last:
+witness-borrow reattaches), the generic `Region<P>` bump allocator beside its carrier in
+the `witnessed` module, the opaque [`Sealed`](../src/witnessed.rs) storage form (read
+through a rank-2 `open`, result slot rerouted onto it), the run-loop step restructure and
+its consuming `open`, and the region-pure / aggregate construction inversions are all
+shipped. The design is captured in
+[design/per-node-memory.md](../design/per-node-memory.md). What remains migrates as one
+linear chain: reach lives on the carrier and, for scope bindings, on a per-scope sealed
+reach-set, so the single-frame `reached_frame` / `FrameStorage.retained` reconstruction is
+retired — then the consumption reads converge on a single `open` verb:
 
-- [Borrow-bounded `attach` fallback](per-node-memory/externally-witnessed-attach.md) —
-  the borrow-bounded accessor, added only if a migration site proves it cannot nest under `open`.
-- [Migrate the loose witness-borrow wrappers onto `Sealed`](per-node-memory/migrate-reattach-helpers.md) —
-  move the `vend_carrier` continuation / contract and the `reattach_*_with` sites onto the access
-  methods and delete the four wrappers.
+- [Per-scope sealed reach-set](per-node-memory/scope-reach-set.md) — the foundation: a
+  mutable-then-sealed reach-set that folds each bound value's full witness (fixing the single-frame
+  approximation), omits its home frame until lift, and seals when the scope closes — with `Scope` made
+  close-aware as the opening spike.
 - [`alloc_object` embedding sites return `Witnessed`](per-node-memory/alloc-object-embedding-sites.md) —
-  convert the remaining value-embedding object sites (a bound value, a captured scope, `alloc_function`)
-  onto `merge`, retiring the object path's dependence on `reached_frame` / `FrameStorage.retained`.
-- [`alloc_ktype` returns `Witnessed`](per-node-memory/alloc-ktype-witnessed.md) — convert the
-  type family onto `yoke`.
-- [Migrate result-slot value reads to `open`](per-node-memory/value-reads-to-open.md) —
-  restructure the value reads that escape a reference up-stack onto `open` + copy-out.
-- [Migrate scope-handle reads to `open`](per-node-memory/scope-reads-to-open.md) — restructure
-  the scope reads that escape an `&Scope` up-stack onto `open` + copy-out.
-- [Remove `attach`](per-node-memory/remove-attach.md) — delete the transitional accessor once
-  every consumer is on `open`.
+  convert the value-embedding object sites and `alloc_function` onto `merge`, and fold scope binds into
+  the reach-set, retiring the object path's dependence on the reconstruction.
+- [`alloc_ktype` returns `Witnessed`](per-node-memory/alloc-ktype-witnessed.md) — convert the type
+  family onto `yoke`; the last `KType::Module` user converted, `reached_frame` and the per-frame
+  `retained` field are deleted and the step `pin` becomes exact.
+- [Migrate the consumption reads onto `open`](per-node-memory/reads-to-open.md) — restructure the
+  result-slot value reads, scope-handle reads, and ~40 loose `reattach_*` sites onto `open` + copy-out /
+  CPS, deleting the transitional self-witnessed `read` and both wrappers.
+- [`Sealed`: a single access verb](per-node-memory/single-open-verb.md) — delete the transitional
+  `attach` and the externally-witnessed read path, leaving `Sealed` with `open` alone.
 
 ### Refactor — [refactor/](refactor/)
 
