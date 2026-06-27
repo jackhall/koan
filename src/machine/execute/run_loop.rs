@@ -10,12 +10,11 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ErasedContract;
-use crate::machine::{FrameSet, FrameStorage, KError, KErrorKind, KoanRegion, NodeId};
+use crate::machine::{FrameSet, KError, KErrorKind, KoanRegion, NodeId};
 use crate::witnessed::{reattachable, seal_option, MergeWitness, SealedExtern};
 
 use super::dispatch::{reattach_node_scope, SchedulerView};
 use super::finalize::NodeFinalize;
-use super::lift::{reached_frame, relocate_carried};
 use super::outcome::DepTerminal;
 use super::nodes::{Node, NodeFrame, NodePayload, NodeScope, NodeStep, NodeWork};
 use super::runtime::{KoanRuntime, KoanWorkload};
@@ -146,17 +145,16 @@ impl<'run> KoanRuntime<'run> {
         // lifetime `'s` bounded by the cart `Rc` cloned into `consumer_frame` — not the run global.
         // `read_lifted` re-anchors each producer read to it.
         let consumer_frame = self.ambient.active_frame_ref().cloned();
-        // `dest` is the consumer scope's region; `dest_frame` is the `FrameStorage` that owns it — the
-        // retention home for a relocated closure / module's defining region (see `reached_frame`). The
-        // consumer frame outlives every value relocated into its region this step, so retaining there
-        // keeps an escaped borrow alive for as long as the binding / spliced expr that holds it.
-        let (dest, dest_frame): (&KoanRegion, Option<Rc<FrameStorage>>) = {
+        // `dest` is the consumer scope's region. The relocation that copies each dep into it — and the
+        // `reached_frame` retention that keeps a relocated closure / module's defining region alive on
+        // the consumer frame — now runs inside the consuming continuation (`short_circuit` / `catch`),
+        // not here: the lift delivers deps un-relocated so a construction finish can fold the carriers.
+        let dest: &KoanRegion = {
             let payload = self
                 .ambient
                 .active_payload()
                 .expect("a slot step installs the ambient payload");
-            let scope = reattach_node_scope(&payload.scope, consumer_frame.as_ref());
-            (scope.region, scope.region_owner().upgrade())
+            reattach_node_scope(&payload.scope, consumer_frame.as_ref()).region
         };
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
         // Read each producer terminal out (borrow-bounded) into the dep slice — the resolved value
@@ -221,36 +219,15 @@ impl<'run> KoanRuntime<'run> {
             .open(
                 &combined,
                 |(((continuation, live_contract), region), dep_sources)| {
-                    // Consumer-pull at the brand: each dep arrived live at `'b` from the opened carrier, so
-                    // relocate it into the consumer `dest` region with a plain `'b -> 'b` structural copy —
-                    // the spine copied, surviving closures riding their `&'b` borrows into the source
-                    // regions `combined` pins. No fabricated lifetime; the only reattach is the open above.
-                    let results: Vec<Result<DepTerminal<'_>, KError>> = dep_sources
-                        .into_iter()
-                        .map(|r| {
-                            r.map(|DepTerminal { value, reach }| {
-                                let relocated = relocate_carried(value, region);
-                                // A relocated closure / module borrows back into its producer's per-call
-                                // region; retain that region on the consumer frame so the borrow survives
-                                // the producer's frame drop (`reclaim_deps` below, or scheduler teardown).
-                                // `reach` (the dep's pre-relocate set) rides through to the construction
-                                // site; the retention here stays `reached_frame`-recovered because a
-                                // deep-copied value no longer reaches its producer.
-                                if let (Some(home), Some(reached)) =
-                                    (&dest_frame, reached_frame(relocated))
-                                {
-                                    home.retain(reached);
-                                }
-                                DepTerminal {
-                                    value: relocated,
-                                    reach,
-                                }
-                            })
-                        })
-                        .collect();
+                    // Deps arrive un-relocated at `'b` from the opened carrier (read out of their producer
+                    // slots, which `combined` pins across the open). The consuming continuation relocates
+                    // each into the consumer `dest` region — `short_circuit` / `catch` for a value-copy
+                    // finish, the construction inversion's `transfer_into` fold for an aggregate (which
+                    // relocates once and names every reached region on the carrier). The lift itself no
+                    // longer pre-relocates.
                     let outcome = continuation(
                         &SchedulerView::new(&self.sched, &self.ambient),
-                        &results,
+                        &dep_sources,
                         idx,
                     );
                     self.sched.reclaim_deps(idx, owned_indices);

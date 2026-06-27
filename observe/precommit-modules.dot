@@ -746,6 +746,7 @@ digraph {
     "koan::machine::execute::outcome" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
+    "koan::machine::execute::outcome" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::model::values" [label="uses", style="dashed"];
@@ -760,7 +761,6 @@ digraph {
     "koan::machine::execute::run_loop" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::execute::finalize" [label="uses", style="dashed"];
-    "koan::machine::execute::run_loop" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];

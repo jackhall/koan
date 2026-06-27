@@ -27,6 +27,7 @@ use crate::witnessed::Witnessed;
 use crate::witnessed::reattachable;
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
+use super::lift::{reached_frame, relocate_carried};
 use super::nodes::NodeWork;
 use super::runtime::KoanWorkload;
 
@@ -143,21 +144,18 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
         + 'a,
 >;
 
-/// A resolved dep terminal as the continuation receives it: the [`Carried`] value plus `reach` — the
-/// set of regions that value still reaches. `reach` is the dep's own witness set, read off its slot
-/// carrier ([`Scheduler::dep_witness`](crate::scheduler::Scheduler)) at read-out rather than
-/// recovered structurally; it is the operand the [`alloc` construction
-/// inversion](../../../../roadmap/per-node-memory/alloc-object-witnessed.md) `merge`s so an aggregate
-/// built from these deps is born naming every region it reaches. The relocation that precedes the
-/// continuation keeps using [`reached_frame`](super::lift::reached_frame) for frame retention — a
-/// deep-copied value no longer reaches its producer, so its *post-relocate* reach is not this
-/// *pre-relocate* set — so `reach` rides through to construction, the only site whose value reaches
-/// exactly this set.
+/// A resolved dep terminal as the continuation receives it, **un-relocated**: the [`Carried`] value
+/// read out of its producer slot (pinned by the step open) plus `reach` — the set of regions that
+/// value reaches, its own witness set read off its slot carrier
+/// ([`Scheduler::dep_witness`](crate::scheduler::Scheduler)) rather than recovered structurally. The
+/// consuming continuation relocates it into the consumer region: a value-copy finish via
+/// [`relocate_dep_into_consumer`] (which retains a surviving closure / module borrow through
+/// [`reached_frame`](super::lift::reached_frame)), or the [`alloc` construction
+/// inversion](../../../../roadmap/per-node-memory/alloc-object-witnessed.md), which folds each dep
+/// carrier via `transfer_into` so the aggregate is born naming every region it reaches. `reach` is the
+/// operand that fold `merge`s, and is unioned into the consumer-step `pin` before the open.
 pub(in crate::machine::execute) struct DepTerminal<'a> {
     pub(in crate::machine::execute) value: Carried<'a>,
-    // The dep's reach set, read off its slot carrier. Folded into the consumer-step `pin` today; the
-    // alloc construction inversion will additionally `merge` it so an aggregate built from these deps
-    // names every region it reaches. See the type doc above.
     pub(in crate::machine::execute) reach: FrameSet,
 }
 
@@ -192,9 +190,27 @@ pub(in crate::machine::execute) struct ContinuationFamily;
 // layout is identical for every `'r`, so the shared `reattachable!` macro discharges the obligation.
 reattachable!(ContinuationFamily => NodeContinuation<'r>);
 
+/// Relocate a dep terminal into the consumer scope's region, retaining a surviving closure / module
+/// borrow on the consumer frame. The consumer-pull lift delivers each dep un-relocated (read at the
+/// step brand from its producer slot); a value-copy finish calls this to copy the value into its own
+/// region so it dies with the consumer, while [`reached_frame`] retention keeps a relocated closure's
+/// defining region alive past the producer's frame drop. The construction inversion's `transfer_into`
+/// fold relocates instead, naming every reached region on the carrier.
+fn relocate_dep_into_consumer<'b>(view: &SchedulerView<'b, '_>, value: Carried<'b>) -> Carried<'b> {
+    let relocated = relocate_carried(value, view.current_scope().region);
+    if let (Some(home), Some(reached)) = (
+        view.current_scope().region_owner().upgrade(),
+        reached_frame(relocated),
+    ) {
+        home.retain(reached);
+    }
+    relocated
+}
+
 /// Dep-finish continuation: short-circuit on the first errored dep (labelled with `dep_error_frame`),
-/// else hand the resolved [`Carried`] values to a value-only [`DepFinish`]. The short-circuit
-/// the handler used to do is now this combinator's job, so the node stays uniform.
+/// else relocate each resolved dep into the consumer region and hand the values to a value-only
+/// [`DepFinish`]. The short-circuit and the per-dep relocation are this combinator's job, so the node
+/// stays uniform.
 pub(in crate::machine::execute) fn short_circuit<'a>(
     dep_error_frame: Option<TraceFrame>,
     finish: DepFinish<'a>,
@@ -203,14 +219,12 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
         let mut values: Vec<Carried<'_>> = Vec::with_capacity(results.len());
         for r in results {
             match r {
-                Ok(t) => values.push(t.value),
+                Ok(t) => values.push(relocate_dep_into_consumer(view, t.value)),
                 Err(e) => {
                     return Outcome::Done(Err(propagate_dep_error(e, dep_error_frame.clone())))
                 }
             }
         }
-        // The deps were pull-lifted into this node's frame at the same cart-scale lifetime the
-        // finish runs at — no re-exposure across the boundary, the splice slot and value share `'a`.
         finish(view, &values)
     })
 }
@@ -222,8 +236,9 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
 ) -> NodeContinuation<'a> {
     Box::new(move |view, results, _idx| {
         let result = match &results[0] {
-            // The watched terminal shares the cart-scale `'a` lifetime the finish runs at.
-            Ok(t) => Ok(t.value.object()),
+            // Relocate the watched terminal into the consumer region (the lift delivers it
+            // un-relocated), so the recovered value outlives the watched producer's frame.
+            Ok(t) => Ok(relocate_dep_into_consumer(view, t.value).object()),
             // Frameless: the recovery-site dispatch attaches its own frame.
             Err(e) => Err(propagate_dep_error(e, None)),
         };
