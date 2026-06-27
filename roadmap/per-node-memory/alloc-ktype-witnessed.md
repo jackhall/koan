@@ -12,7 +12,11 @@ named not on its carrier but by the same two transitional mechanisms the object 
 read-out recovery from the module's child-scope `region_owner`
 ([`reached_frame`](../../src/machine/execute/lift.rs)) and the consumer-frame accumulator
 ([`FrameStorage.retained`](../../src/machine/core/arena.rs)). `KType::Module` is the **last** user of
-both — once it is converted, the recovery and the accumulator have no callers left.
+both, and the only value whose slot witness does not *already* name its reach: its child scope lives in
+a region distinct from the module's producer frame, so — unlike a `KObject::KFunction`, whose defining
+frame *is* its producer frame and whose reach the dep-result currency already carries — the uniform
+retain at the [`relocate`](../../src/machine/execute/run_loop.rs) cannot drop to the carried set until
+`KType::Module`'s construction folds the child-scope frame onto its carrier.
 
 **Acceptance criteria.**
 
@@ -20,8 +24,8 @@ both — once it is converted, the recovery and the accumulator have no callers 
   witness closure — most `KType`s are owned / `Rc`-shared and `yoke` directly, while a
   region-referencing variant (a `KType::Module` naming its child scope) folds in via `merge` against
   that scope's frame — so a region-resident type is born co-located by construction.
-- The type family carries no `Witnessed::new`: a variant referencing another witnessed value merges
-  it rather than re-asserting co-location in prose.
+- The type family carries no *prose-asserted* `Witnessed::new`: a variant referencing a witnessed
+  value merges it rather than pairing an arbitrary value with an arbitrary witness.
 - A lifted `KType::Module`'s reached region is read off its carrier's witness set. With its last user
   converted, the read-out `reached_frame` recovery and the `FrameStorage.retained` accumulator are
   both **deleted** — every reached region is named on the carrier itself.
@@ -49,9 +53,11 @@ both — once it is converted, the recovery and the accumulator have no callers 
   is settled on [alloc-object](alloc-object-witnessed.md): the set is built at construction by
   `yoke` / `merge` (operand recovered via `region_owner`), composed onward by `merge` /
   `transfer_into`, with the dep-result plumbing carrying the set rather than dropping it at the
-  `relocate`. `KType::Module` is the last value reaching a foreign region through the read-out
-  recovery; converting it leaves `reached_frame` and `FrameStorage.retained` with no callers, so both
-  are deleted here.
+  `relocate`. The retain at the `relocate` is a *single uniform* call site; once `KType::Module`'s
+  carrier names its child-scope reach, every relocated value carries its reach on its dep currency, so
+  the call site drops to reading that set and `reached_frame` loses its last caller. `KType::Module` is
+  the last value whose slot witness did not already name its reach; converting it leaves `reached_frame`
+  and `FrameStorage.retained` with no callers, so both are deleted here.
 
 ## Dependencies
 

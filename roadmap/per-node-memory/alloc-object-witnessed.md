@@ -5,10 +5,10 @@ comes back already bundled with the set of regions it reaches.
 
 **Problem.** [`region.alloc_object`](../../src/machine/core/arena.rs) (~25 call sites) returns a
 bare `&'a KObject` that is not witnessed at all: the co-location invariant — that the witness pins
-*this* value's references — stays implicit in the region machinery, and a transitional
-`Witnessed::new` bundle would assert it in prose rather than guarantee it by construction, even
-though the [`Witnessed::yoke`](../../src/witnessed.rs) / `merge` constructors and the production
-witness plumbing now exist. The regions an object reaches are not named on its carrier at all; two
+*this* value's references — stays implicit in the region machinery, and the transitional bare path
+bundles it with a *prose-asserted* `Witnessed::new` over an over-approximate witness rather than the
+exact reach a constructed carrier would name, even though the [`Witnessed::yoke`](../../src/witnessed.rs)
+/ `merge` constructors and the production witness plumbing now exist. The regions an object reaches are not named on its carrier at all; two
 transitional mechanisms stand in. The consumer-pull lift drops each dep to a bare
 [`Carried`](../../src/machine/model/values/carried.rs) at the
 [`relocate`](../../src/machine/execute/run_loop.rs) — *discarding* the dep `Sealed` carrier's witness
@@ -20,19 +20,25 @@ carrier could have named at construction.
 
 **Acceptance criteria.**
 
-- `alloc_object` returns a `KObject` bundled with the set of regions it reaches, the object built
-  inside the witness closure — region-pure parts via `yoke`, a referenced region-resident value (a
-  list/dict element, a captured scope) folded in via `merge` against its carrier — so a
-  region-resident object is born co-located by construction.
-- The object family carries no `Witnessed::new`: a site referencing another witnessed value merges
-  it rather than re-asserting co-location in prose.
+- `alloc_object` returns a `KObject` bundled with the set of regions it reaches, built inside the
+  witness closure where it can be — region-pure parts via `yoke`, dep element carriers folded in via
+  `merge` — and adopted under its exact `FrameSet::singleton(F)` via structural `Witnessed::new`
+  where the `for<'b>` brand cannot rebuild it (a quoted AST expression, a tagged / wrapped
+  registry id, a captured scope). Either way a region-resident object is born co-located by
+  construction, its reach named on the carrier.
+- The object family carries no *prose-asserted* `Witnessed::new` — no arbitrary value paired with an
+  arbitrary witness. A site referencing a witnessed dep `merge`s it; a site embedding a borrow `yoke`
+  cannot reproduce seals under its exact `singleton(F)` via *structural* `new` (the value provably
+  lives in the region the witness pins), the form the substrate's `new` rustdoc blesses.
 - A construction finish receives its deps as witnessed carriers, not bare `Carried`: the
   consumer-pull lift hands each dep's witness set through to the construction site so `merge`
   composes it, rather than discarding it at the `relocate`.
-- A lifted object's reached regions are read off its carrier's witness set; the object family routes
-  neither the read-out `reached_frame` recovery nor the `FrameStorage.retained` accumulator. (Both
-  are *deleted* when [`alloc_ktype`](alloc-ktype-witnessed.md) takes `KType::Module` — their last
-  user — off them.)
+- A lifted object's reached regions are read off its carrier's witness set: the object path no longer
+  *depends on* the read-out `reached_frame` recovery or the `FrameStorage.retained` accumulator to
+  reconstruct reach — the carrier names it end-to-end. (The two mechanisms are not deleted here:
+  `KType::Module` still rides them on the type channel, its child scope living in a region its own slot
+  witness does not name. [`alloc_ktype`](alloc-ktype-witnessed.md) converts that last user and deletes
+  both.)
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` clean.
 
 **Directions.**
@@ -44,19 +50,29 @@ carrier could have named at construction.
   [memory-model.md § Region lifetime erasure](../../design/memory-model.md#region-lifetime-erasure));
   this item is the object-family conversion over that foundation.
 - *Construction inversion, not post-hoc bundling — decided.* The object is built inside the witness
-  closure (`yoke` for region-pure parts, `merge` for a referenced witnessed value), not bundled
-  after the fact; a `for<'b>` closure cannot accept an already-built `KObject<'a>`.
-- *`alloc_function` rides this item — decided.* A function value is a `KObject::KFunction`, and a
-  closure capturing its defining scope `yoke`s with the witness `FrameSet::singleton(F)` for its
-  defining frame `F` (recovered as `scope.region_owner()`, which the builder holds). So the ~3-site
-  `alloc_function` inversion is part of the object-family conversion, carrying no `Witnessed::new`
-  either.
-- *The set is built at construction, not recovered after — decided.* `yoke` / `merge` at the alloc
-  site builds the reached-region set directly: a closure / module's operand is its captured scope's
-  defining frame (`scope.region_owner()`); an aggregate's operands are its elements' carrier sets,
+  closure — `yoke` for region-pure parts, `merge` for dep element carriers — so its reach is named on
+  the carrier, not asserted after the fact. Where a `for<'b>` closure cannot reproduce the
+  construction (it captures a borrow that is neither region-derived nor owned / `'static`), the value
+  is adopted under its exact `singleton(F)` via *structural* `Witnessed::new`, never the prose-asserted
+  bundle — a `for<'b>` closure cannot accept an already-built `KObject<'a>`.
+- *The yoke-unreachable sites seal via structural `new` — decided.* Four constructions capture a
+  borrow the `for<'b>` brand rejects, so they cannot `yoke`: `alloc_function` (a `KObject::KFunction`
+  over `&'ast` signature / body and its captured `&'a Scope`), `quote` (a `KObject::KExpression`
+  wrapping a raw `&'run` AST node — the unevaluated arg, *not* a spliced dep), `catch`'s `Tagged`, and
+  the `Wrapped` newtype (both over declaration-stable registry references). Each is region-resident in
+  its producing frame `F`, so it seals under `FrameSet::singleton(F)` via *structural* `new` (`F` =
+  `scope.region_owner()` or the producing frame, which the builder holds). The captured borrow either
+  lives inside `F` (the scope) or outlives it as an ancestor backing dropped by `outer`-chain
+  subsumption (the `&'run` AST / registry node), so `singleton(F)` is the whole reach and the long
+  lifetime never propagates through a `merge` — quote needs no deep copy. All ride `DoneWitnessed`;
+  none carries a prose-asserted bundle.
+- *The set is built at construction, not recovered after — decided.* `yoke` / `merge` / structural
+  `new` at the alloc site builds the reached-region set directly: a closure's witness is its captured
+  scope's defining frame (`scope.region_owner()`); an aggregate's is its elements' carrier sets,
   flattened by `merge` (a closure capturing closures branches into independent lineages — the reach
-  is a tree, folded into one set). The `region_owner` walk survives **only** as this leaf
-  constructor; the standalone read-out `reached_frame` recovery is deleted.
+  is a tree, folded into one set). The `region_owner` walk survives **only** as this construction-site
+  witness source; the standalone read-out `reached_frame` recovery is retired by
+  [`alloc_ktype`](alloc-ktype-witnessed.md), once `KType::Module` is the last value still riding it.
 - *Operands ride the carriers already in hand — no new channel — decided.* The dep `Sealed` carriers
   the consumer-pull lift already opens carry the sets; the plumbing **keeps** them to the
   construction finish instead of discarding them at the `relocate`. Nothing new threads through
@@ -67,8 +83,9 @@ carrier could have named at construction.
   the reach is never stacked `Witnessed`-in-`Witnessed` and never duplicated in a side accumulator.
 - *`frame.retained` retires together with `reached_frame` — decided.* The accumulator's only job is
   covering the window between the set-dropping `relocate` and the construction that rebuilds the
-  reach; once the carrier names the reach end-to-end (the dep set is no longer dropped), it is
-  redundant — it was "the per-step over-approximation the alloc inversions retire" (see
+  reach; once every carrier names its reach end-to-end it is redundant. It becomes redundant for the
+  object path here, but is deleted with `reached_frame` by [`alloc_ktype`](alloc-ktype-witnessed.md),
+  whose `KType::Module` is the last value whose slot witness does not already name its own reach (see
   [per-node-memory.md § Transfer](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into)).
 - *Lands the shared dep-result plumbing — decided.* The "keep the dep set to the finish" wiring and
   the carrier-reads-its-own-reach read-out boundaries are family-agnostic, so they land here and the
