@@ -11,11 +11,17 @@ use super::{arg, kw, sig};
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{require_kexpression, Action};
+    use crate::machine::core::kfunction::action::{require_kexpression, scope_frame, Action};
     use crate::machine::model::Carried;
+    use crate::machine::FrameSet;
+    use crate::witnessed::Witnessed;
     let expr = crate::try_action!(require_kexpression(ctx.args, "QUOTE", "expr"));
+    // `KObject::KExpression` wraps the raw `&'run` AST — an ancestor backing the producing frame's
+    // `outer` chain pins (subsumed in the witness) that the `for<'b>` `yoke` brand cannot rebuild. So
+    // the value is adopted under its exact `singleton(F)` via structural `Witnessed::new`.
     let obj = ctx.scope.region.alloc_object(KObject::KExpression(expr));
-    Action::Done(Ok(Carried::Object(obj)))
+    let witness = FrameSet::singleton(scope_frame(ctx.scope));
+    Action::DoneWitnessed(Witnessed::new(Carried::Object(obj), witness))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

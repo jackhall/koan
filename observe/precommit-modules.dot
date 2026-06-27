@@ -377,6 +377,7 @@ digraph {
     "koan::builtins::quote" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::quote" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::builtins::quote" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::quote" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::builtins::record_projection" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::record_projection" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::record_projection" -> "koan::machine::core" [label="uses", style="dashed"];
