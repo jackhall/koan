@@ -276,6 +276,35 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::Spliced(c) => c.object().deep_clone(),
         }
     }
+
+    /// The owned [`KObject`] a **region-pure** part denotes, at *any* lifetime — the lifetime-generic
+    /// peer of [`resolve`](Self::resolve) for the aggregate static-cell sites that `yoke` (build the
+    /// value inside the witness closure rather than bundling it via `Witnessed::new`). The borrow-free
+    /// variants (keyword, bare identifier, type name, literal) own their data, so the value is
+    /// constructible at the caller's `yoke` brand — where [`resolve`]'s `KObject<'a>` cannot go, the
+    /// type being invariant in `'a`. The borrow-bearing variants (`Expression`, `Spliced`, the
+    /// structured literals) carry the ambient `'a` and are classified to owned sub-dispatches *before*
+    /// any static cell, so they never reach here.
+    pub fn resolve_region_pure<'b>(&self) -> KObject<'b> {
+        match self {
+            ExpressionPart::Keyword(s) | ExpressionPart::Identifier(s) => {
+                KObject::KString(s.clone())
+            }
+            ExpressionPart::Type(t) => KObject::KString(t.render()),
+            ExpressionPart::Literal(lit) => lit.to_kobject(),
+            ExpressionPart::Expression(_)
+            | ExpressionPart::SigiledTypeExpr(_)
+            | ExpressionPart::RecordType(_)
+            | ExpressionPart::ListLiteral(_)
+            | ExpressionPart::DictLiteral(_)
+            | ExpressionPart::RecordLiteral(_)
+            | ExpressionPart::Spliced(_) => unreachable!(
+                "resolve_region_pure is only called on a region-pure static-cell part \
+                 (keyword / bare identifier / type name / literal); borrow-bearing parts are \
+                 classified to owned sub-dispatches before any static cell"
+            ),
+        }
+    }
 }
 
 impl<'a> Clone for ExpressionPart<'a> {

@@ -245,16 +245,19 @@ impl<'step> KoanRuntime<'step> {
                 self.resolve_aggregate_bare_name(p, deps, park_producers)
             }
             other => {
-                // A static literal: resolve to an owned value, alloc it into the classify region, and
-                // wrap it as a witnessed carrier at its source — so the cell is lifetime-free and
-                // folds uniformly with the dep cells, its reach named on the carrier.
-                let scope = current_scope(&self.ambient);
-                let obj = Carried::Object(scope.region.alloc_object(other.resolve()));
-                let witness = scope
+                // A static literal (keyword / bare identifier / type name / literal): region-pure owned
+                // data, so the cell is built **inside** the witness closure — `yoke`d into the classify
+                // scope's frame, born co-located with that frame as its reach rather than resolved at
+                // the ambient lifetime and bundled via `Witnessed::new`. The cell is then lifetime-free
+                // and folds uniformly with the dep cells.
+                let frame = current_scope(&self.ambient)
                     .region_owner()
                     .upgrade()
-                    .map_or_else(FrameSet::empty, FrameSet::singleton);
-                Slot::Static(Sealed::seal(Witnessed::new(obj, witness)))
+                    .expect("the classify scope's region owner is held for the step");
+                let carrier = KoanRegion::alloc_witnessed(FrameSet::singleton(frame), move |region| {
+                    Carried::Object(region.alloc_object(other.resolve_region_pure()))
+                });
+                Slot::Static(Sealed::seal(carrier))
             }
         }
     }

@@ -166,12 +166,12 @@ pub(super) fn literal_pass_through<'step>(
         // is scope-independent — it comes from `expr`, not a scope resolve — so it stays on the cart
         // region.)
         ExpressionPart::Literal(lit) => {
-            let scope = ctx.current_scope();
-            let witness = scope
+            let frame = ctx
+                .current_scope()
                 .region_owner()
                 .upgrade()
-                .map_or_else(FrameSet::empty, FrameSet::singleton);
-            let carrier = KoanRegion::alloc_witnessed(witness, move |region| {
+                .expect("the dispatching scope's region owner is held for the step");
+            let carrier = KoanRegion::alloc_witnessed(FrameSet::singleton(frame), move |region| {
                 Carried::Object(region.alloc_object(lit.to_kobject()))
             });
             Outcome::DoneWitnessed(carrier)
