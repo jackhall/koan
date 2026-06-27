@@ -22,6 +22,24 @@ pub enum KLiteral {
     Null,
 }
 
+impl KLiteral {
+    /// The owned [`KObject`] this literal denotes — region-pure (no borrow), so a construction site can
+    /// build it **inside** a [`yoke`](crate::witnessed::Witnessed::yoke) closure rather than resolving
+    /// it at the ambient lifetime and bundling it via `Witnessed::new`. Generic in `'a` (rather than
+    /// `'static`) because [`KObject`] is invariant in its lifetime: every arm owns its data (a copied
+    /// `f64` / `bool`, a cloned `String`, `Null`), so the value is constructible at *any* lifetime — in
+    /// particular the `yoke` brand the caller hands it to. The region-pure peer of
+    /// [`ExpressionPart::resolve`]'s `Literal` arms, which carry the enclosing `resolve`'s `'a`.
+    pub fn to_kobject<'a>(&self) -> KObject<'a> {
+        match self {
+            KLiteral::Number(n) => KObject::Number(*n),
+            KLiteral::String(s) => KObject::KString(s.clone()),
+            KLiteral::Boolean(b) => KObject::Bool(*b),
+            KLiteral::Null => KObject::Null,
+        }
+    }
+}
+
 /// A bare type identifier as written in source (`Number`, `Point`, `T`, `Mo.Ty`) — a single
 /// name token, never compound syntax.
 ///

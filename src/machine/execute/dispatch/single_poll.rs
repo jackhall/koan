@@ -10,11 +10,11 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
-use crate::machine::core::Scope;
+use crate::machine::core::{KoanRegion, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
-use crate::machine::{KError, KErrorKind, Resolution};
+use crate::machine::{FrameSet, KError, KErrorKind, Resolution};
 use crate::source::Spanned;
 
 use super::super::DepFinish;
@@ -160,11 +160,21 @@ pub(super) fn literal_pass_through<'step>(
         .next()
         .expect("LiteralPassThrough shape implies one part");
     match only.value {
-        // The literal is scope-independent (it comes from `expr`, not a scope resolve), so it stays
-        // on the cart region — no threaded scope needed.
-        ExpressionPart::Literal(_) => {
-            let allocated = ctx.current_scope().region.alloc_object(only.value.resolve());
-            Outcome::Done(Ok(Carried::Object(allocated)))
+        // A literal is region-pure owned data, so the `KObject` is built **inside** the witness
+        // closure — `yoke`d into this scope's frame, born co-located with that frame as its sole reach
+        // rather than resolved at the ambient lifetime and bundled via `Witnessed::new`. (The literal
+        // is scope-independent — it comes from `expr`, not a scope resolve — so it stays on the cart
+        // region.)
+        ExpressionPart::Literal(lit) => {
+            let scope = ctx.current_scope();
+            let witness = scope
+                .region_owner()
+                .upgrade()
+                .map_or_else(FrameSet::empty, FrameSet::singleton);
+            let carrier = KoanRegion::alloc_witnessed(witness, move |region| {
+                Carried::Object(region.alloc_object(lit.to_kobject()))
+            });
+            Outcome::DoneWitnessed(carrier)
         }
         ExpressionPart::Spliced(c) => Outcome::Done(Ok(c)),
         ExpressionPart::Expression(boxed) => become_dispatch(*boxed),
