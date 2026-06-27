@@ -155,15 +155,19 @@ What's shipped that the open items below build on:
   relationship is a type invariant, not a co-stored pair. Reads go through the safe `with` / `map` /
   `read` accessors (the first two rank-2 `for<'b>` branded against escape, all three `compile_fail`-
   and Miri-tested), retiring the open-coded `read_result` reattaches and `pin_carried_to_run`. The
-  one irreducible audited `unsafe` reattach left in the value path is `lift`'s value-relocation
-  re-anchor (no borrowed witness for a value about to be copied out). The co-location-enforcing
+  consumer-pull lift is now a borrow-checked relocation (`relocate_carried`, a safe `deep_clone` +
+  `alloc` at the step brand, wrapped as the `Sealed::transfer_into` `merge`), so **no value-path
+  `unsafe` reattach remains**. The co-location-enforcing
   constructor `yoke` (sourcing a carrier from the witness's own region behind a `for<'b>` brand, so
   the witness-pins-the-value invariant holds by construction) and the `merge` composition law
   (combining two carriers under one brand, re-sealed under the union of their witness sets, with
   `outer`-chain subsumption dropping a member another already pins) have also landed. The keystone
   run-loop restructure and its consuming `open`, the production witness impls, the unified `FrameSet`
-  set-witness (result slot and scope handle on one region-owner type), and the value-recovered
-  cycle-gate redirect — which cleared the process-exit leak — have since landed too; the remaining
+  set-witness (result slot and scope handle on one region-owner type), and the per-value frame
+  anchor's removal — a stored value now holds no owning `Rc` back to a region, so the allocation
+  engine needs no cycle gate, and an escaping closure / module is kept alive by its carrier's witness
+  set while it rides a slot and retained onto the consumer frame when relocated out; this closed the
+  lift-relocation `unsafe` and cleared the process-exit leak — have since landed too; the remaining
   `alloc`-side carrier adoption is tracked by the [per-node-memory](per-node-memory/) project. See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
@@ -308,9 +312,10 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
+- [`alloc_ktype` returns `Witnessed`](per-node-memory/alloc-ktype-witnessed.md)
+- [`alloc_object` returns `Witnessed`](per-node-memory/alloc-object-witnessed.md)
 - [Migrate the loose witness-borrow wrappers onto `Sealed`](per-node-memory/migrate-reattach-helpers.md)
 - [Migrate scope-handle reads to `open`](per-node-memory/scope-reads-to-open.md)
-- [`transfer_into` and closing the lift relocation unsafe](per-node-memory/transfer-into-lift.md)
 - [Migrate result-slot value reads to `open`](per-node-memory/value-reads-to-open.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
@@ -416,8 +421,6 @@ migrate onto it, with `attach` a contingent fallback retired last:
 
 - [Borrow-bounded `attach` fallback](per-node-memory/externally-witnessed-attach.md) —
   the borrow-bounded accessor, added only if a migration site proves it cannot nest under `open`.
-- [`transfer_into` and closing the lift relocation unsafe](per-node-memory/transfer-into-lift.md) —
-  the destination-witnessed relocation that retires the one irreducible value-path `unsafe`.
 - [Migrate the loose witness-borrow wrappers onto `Sealed`](per-node-memory/migrate-reattach-helpers.md) —
   move the `vend_carrier` continuation / contract and the `reattach_*_with` sites onto the access
   methods and delete the four wrappers.

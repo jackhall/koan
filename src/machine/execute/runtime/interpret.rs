@@ -37,8 +37,8 @@ pub fn interpret_with_writer_path(
     };
     // The run region lives inside an `Rc<FrameStorage>` so the run-root scope's region has an
     // owning handle: top-level-defined FNs resolve their captured-region owner to it (via
-    // `Scope::region_owner`), and per-call frames created under top level redirect into it through an
-    // owning escape pin (no `unsafe`). `run_storage` outlives `root`, which borrows it.
+    // `Scope::region_owner`), and an escaping value bound at top level retains its per-call region on
+    // this run-root frame (the drain below). `run_storage` outlives `root`, which borrows it.
     let run_storage = FrameStorage::run_root();
     let root = default_scope(&run_storage, out);
     let mut runtime = KoanRuntime::new();

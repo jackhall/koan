@@ -2,18 +2,18 @@
 //! store-side lifetime-erasure through its module's single audited
 //! [`erase_to_static`](super::erase_to_static) primitive — it names no workload type. A
 //! [`StorageProfile`] injects its storage families via [`Stored`]; the single [`Region::alloc`]
-//! engine runs the cycle gate uniformly, redirecting a self-cyclic value into the escape region
-//! [`Stored::escape_target`] recovers *from the value itself* — so the frame stores no redirect
-//! owner and no allocation back-edge can form. The gate is unbypassable because [`Region::storage`]
-//! is private and `alloc` is the only path that reaches it — no `&Arena` ever escapes, so no `Stored`
-//! impl can route a value around the redirect.
+//! engine erases each value to `'static`, stores it, and re-anchors the store to the requested
+//! lifetime. No cycle gate: a stored value holds no owning `Rc` back to a region (a closure /
+//! future / module is a bare borrow into its defining region, kept alive by its carrier's witness
+//! set), so storing it where requested can never form an allocation back-edge. [`Region::storage`]
+//! is private and `alloc` is the only path that reaches it — no `&Arena` ever escapes.
 //!
-//! The Koan instantiation (`KoanRegion = Region<KoanStorageProfile>`, the family `Stored` impls,
-//! the cycle-gate walkers) lives in [`crate::machine::core::arena`]. See
+//! The Koan instantiation (`KoanRegion = Region<KoanStorageProfile>`, the family `Stored` impls)
+//! lives in [`crate::machine::core::arena`]. See
 //! [memory-model.md § Arena lifetime erasure](../../design/memory-model.md#region-lifetime-erasure)
 //! for the lifetime-erasure soundness argument and
-//! [per-call-region/lifecycle.md § Cycle gate](../../design/per-call-region/lifecycle.md#cycle-gate-on-alloc_object)
-//! for the redirect `alloc` enforces.
+//! [per-call-region/lifecycle.md § Escaping-value retention](../../design/per-call-region/lifecycle.md#escaping-value-retention)
+//! for how an escaped value's region stays alive.
 
 use std::cell::RefCell;
 
@@ -37,7 +37,7 @@ pub trait StorageProfile: Sized {
 ///
 /// Not sealed: this is the workload's extension point. Unbypassability comes from elsewhere — the
 /// engine is the only path to the private [`Region::storage`], so an impl can supply policy
-/// but cannot route a value around the cycle gate.
+/// but cannot route a value past the single store engine.
 pub trait Stored<W: StorageProfile>: Reattachable + Sized + 'static {
     /// Project this family's sub-arena out of the workload storage bundle. This return type is the
     /// binding chokepoint: storing `At<'static>` into `Arena<Self::At<'static>>` only type-checks
@@ -53,8 +53,8 @@ pub trait Stored<W: StorageProfile>: Reattachable + Sized + 'static {
 /// on the way out.
 pub struct Region<W: StorageProfile> {
     /// The workload's typed sub-arena bundle. PRIVATE and never exposed by reference: the only
-    /// path in is [`alloc`](Self::alloc), which runs the cycle gate, so the gate is unbypassable
-    /// by construction.
+    /// path in is [`alloc`](Self::alloc), the sole store engine, so storage is never reachable by
+    /// reference.
     storage: W::Storage,
     /// Stable addresses of values a family opts to record (via [`Stored::record_local`]), backing
     /// [`owns_addr`](Self::owns_addr). `usize` rather than `*const _` keeps the field
@@ -97,8 +97,8 @@ impl<W: StorageProfile> Region<W> {
     pub(crate) fn alloc<'a, K: Stored<W>>(&'a self, value: K::At<'a>) -> &'a K::At<'a> {
         let stored: &'a K::At<'static> =
             K::sub_arena(&self.storage).alloc(erase_to_static::<K>(value));
-        // The post-store hook fires on the final storing frame (this one, after any redirect
-        // above), so a recorded address tracks its true owner.
+        // The post-store hook fires on the storing frame (this one — `alloc` stores where called),
+        // so a recorded address tracks its true owner.
         K::record_local(self, stored);
         // Re-anchor the `'static` store to the frame-bounded `'a` through the witness-bounded
         // `reattach_ref_with`, with `self` (the region the value now lives in) as the pin. Carries no

@@ -34,10 +34,10 @@ pub struct KFunction<'a> {
     /// The captured definition scope, a content-branded [`BoundedScopePtr<'a>`] (the same
     /// reader-bounded handle [`Scope::outer`] uses): the FN may be defined inside a per-call frame,
     /// so the capture borrow is frame-bounded while the scope *content* stays `'a`.
-    /// [`Self::captured_scope`] re-hands it; the captured region's owner — needed at dispatch for the
-    /// cycle-gate escape — is read off the scope itself ([`Scope::region_owner`]), so no separate
-    /// handle rides here. Liveness past the defining frame rides the `Rc<CallFrame>` that lift
-    /// attaches to an escaping closure.
+    /// [`Self::captured_scope`] re-hands it; the captured region's owner is read off the scope itself
+    /// ([`Scope::region_owner`]), so no separate handle rides here. Liveness past the defining frame:
+    /// when the closure escapes, the consumer frame retains the captured region (recovered via
+    /// `region_owner`) in its witness set.
     ///
     /// **Variance-load-bearing.** `BoundedScopePtr<'a>` carries `'a` structurally (`Scope<'a>` is
     /// invariant — it holds `RefCell`s), so `captured` keeps `KFunction<'a>` invariant in `'a`. Do

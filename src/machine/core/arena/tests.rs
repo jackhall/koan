@@ -290,11 +290,11 @@ fn call_frame_try_reset_for_tail_allows_reset_under_escaped_storage() {
     assert_eq!(escaped_storage.region().alloc_count(), pre_alloc_count);
 }
 
-/// Cycle-leak fix: a per-call frame whose parent is the run root holds **no** strong ref back to the
-/// run-root `FrameStorage`. The redirect target is now recovered from the value at alloc time, so
-/// `Region` stores no escape owner — the child→run-root back-edge that closed the escaped-closure
-/// cycle is gone. An escaped value (here, the frame's storage `Rc`) therefore cannot keep the run
-/// root alive past its own strong refs, so the run root drops once its own ref is released.
+/// A per-call frame whose parent is the run root holds **no** strong ref back to the run-root
+/// `FrameStorage`: a dispatched frame's `outer` is `None`, so no child→run-root back-edge exists. An
+/// escaped value (here, the frame's storage `Rc`) therefore cannot keep the run root alive past its
+/// own strong refs, so the run root drops once its own ref is released — which is also what lets a
+/// consumer frame retain an escapee's region without forming a cycle.
 #[test]
 fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
     let run_root = FrameStorage::run_root();

@@ -8,9 +8,9 @@ highest-volume family) returns a bare `&'a KType` that is not witnessed at all; 
 path, a transitional `Witnessed::new` would assert co-location in prose rather than guarantee it by
 construction, even though the `yoke` / `merge` constructors and the production witness plumbing now
 exist. The one region-referencing variant — a `KType::Module` naming its child scope — has its
-liveness named only at a node boundary, by [transfer-into-lift](transfer-into-lift.md)'s structural
-walk (the `KType::Module { frame }` per-value anchor), rather than folded onto its carrier at
-construction.
+liveness named only at the relocation read-out boundary, recovered per-value from the module's child
+scope `region_owner` ([`reached_frame`](../../src/machine/execute/lift.rs)) and retained onto the
+consumer frame, rather than folded onto its carrier at construction.
 
 **Acceptance criteria.**
 
@@ -20,9 +20,9 @@ construction.
   carrier — so a region-resident type is born co-located by construction.
 - The type family carries no `Witnessed::new`: a variant referencing another witnessed value merges
   it rather than re-asserting co-location in prose.
-- A lifted `KType::Module`'s reached region is read off its carrier's witness set, retiring the type
-  arm of [transfer-into-lift](transfer-into-lift.md)'s structural walk (its `KType::Module { frame }`
-  per-value anchor).
+- A lifted `KType::Module`'s reached region is read off its carrier's witness set, retiring the
+  per-value `reached_frame` recovery the relocation read-out boundaries run today for the module
+  variant.
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` clean.
 
 **Directions.**
@@ -43,14 +43,14 @@ construction.
   module's frame `Rc`, the same shape as the object channel's captured-scope merge.
 - *The within-node value channel must carry the witness set — open.* As with
   [alloc-object](alloc-object-witnessed.md), `alloc_ktype`'s `merge` has a carrier operand only once
-  the `KType` channel threads the `FrameSet` rather than the bare `&'a` plus per-value anchor.
-  Recommended: settle the channel before scheduling.
+  the `KType` channel threads the `FrameSet`. The per-value anchor is already gone — a `KType::Module`
+  rides a bare `&'a` and its region is recovered at the relocation read-out boundary (`reached_frame`),
+  not on the channel — so the open question is purely *arriving* a referenced value as a carrier, not
+  retiring an anchor. Recommended: settle the channel before scheduling.
 
 ## Dependencies
 
 **Requires:**
 
-- [`transfer_into` and closing the lift relocation unsafe](transfer-into-lift.md) — lands the
-  per-carrier witness set and the structural walk this inversion folds into and retires.
 
 **Unblocks:** none.

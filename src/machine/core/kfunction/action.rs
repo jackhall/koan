@@ -244,9 +244,8 @@ pub enum DepPlacement<'a> {
 /// The cart a `Tail` runs in.
 pub enum FramePlacement<'a> {
     /// Reuse the slot's ping-pong reserve cart (`acquire_tail_frame(outer)`). The TCO tail-call
-    /// frame — FN-body invoke, deferred `PerCall` tails. The only harness-constructed cart. The
-    /// cycle-gate redirect target is recovered per-allocation from the value being stored (see
-    /// [`Stored::escape_target`](crate::witnessed::Stored)), so no escape owner is carried here.
+    /// frame — FN-body invoke, deferred `PerCall` tails. The only harness-constructed cart; the
+    /// minted frame strong-owns no ancestor, so it carries no back-edge.
     ReuseReserve { outer: &'a Scope<'a> },
     /// A **pre-built** fresh cart the builtin minted (`CallFrame::new`, never the reserve), handed
     /// to the harness to install. The builtin owns construction because it may seed the cart before

@@ -1,74 +1,30 @@
 # Region lifecycle: allocation and lift
 
-Which carriers anchor a per-call region, the lift-time anchor decision, the
-consumer-pull node-output lift, and the `alloc_object` cycle gate. Part of the
-[per-call region protocol](README.md).
+Which frame pins a per-call region, the consumer-pull node-output lift, and how a relocated escaping
+value is retained. Part of the [per-call region protocol](README.md).
 
 ## Carriers
 
-The lifecycle anchor is a `Rc<FrameStorage>`, not a `Rc<CallFrame>`.
+The lifecycle pin is a `Rc<FrameStorage>`, not a `Rc<CallFrame>`.
 `CallFrame` is a thin shell over a refcounted [`FrameStorage`](../../src/machine/core/arena.rs)
 — the per-call `KoanRegion` plus the `outer` link that keeps the
 lexical-ancestor frames' storage alive. An escaping value pins the
 *storage*, leaving the shell uniquely owned so TCO reuse can reset it
 (see [§ TCO frame reuse](frames.md#tco-frame-reuse)).
 
-Three `KObject` variants embed an `Option<Rc<FrameStorage>>` lifecycle
-anchor:
+A value-side reference into a per-call region is a *bare borrow*: a `KObject::KFunction(&'a
+KFunction<'a>)` or `KObject::KFuture(KFuture<'a>)` reaches the per-call region that owns its captured
+scope only through that reference, and a `KType::Module { module }` reaches its child scope's region
+the same way. None of these carries an owning `Rc<FrameStorage>` on the value. The region such a value
+reaches is kept alive by the value's *carrier* — a producer slot's `FrameSet` witness while the value
+rides the scheduler, and the consumer frame's `retained` set once the value is relocated out (below) —
+never by an anchor embedded in the value. Because the in-region value strong-owns no frame, no
+allocation can close a region↔value cycle, so the allocation engine carries no cycle gate.
 
-- `KObject::KFunction(&'a KFunction<'a>, Option<Rc<FrameStorage>>)` — a
-  closure value. Anchor is `Some(_)` when the captured definition
-  scope lives in a per-call region, `None` when it lives in run-root.
-- `KObject::KFuture(KFuture<'a>, Option<Rc<FrameStorage>>)` — a future
-  value. The `KFuture` embeds `&KFunction`, a bundle, and a parsed
-  `KExpression` whose `Future(&KObject)` parts can independently
-  borrow into per-call storage; the anchor pins the per-call region
-  alive when any of those borrows points there.
-- `KType::Module { module, frame }` (in the value channel's `Type` arm) — a
-  first-class module value. `frame` is the per-call `Rc<FrameStorage>`
-  of the functor call that minted the module; `None` for top-level
-  `MODULE` declarations.
-
-A fourth participant lives on `FrameStorage` itself: `outer:
-Option<Rc<FrameStorage>>` chains the parent per-call frame's storage
-when a builtin-built frame's child scope's `outer` points into per-call
-memory (MATCH / TRY / EVAL / MODULE under a functor call). The two
-anchor positions are distinct: the `KObject` anchor keeps the region
-alive for an *escaped value*; `outer` keeps it alive for an
-*outer-scope lookup* the new frame's child scope performs at run time.
-
-Future carriers that need to extend the lifetime of a per-call region
-join the list by growing the same `Option<Rc<FrameStorage>>` field.
-
-## Lift-time anchor decision
-
-`lift_kobject` runs when a per-call value is extracted into a
-destination region — typically a closure returned from its defining
-frame, a module value flowing out of a functor body, or a future
-referencing per-call state. Per carrier:
-
-- **`KFunction`.** Compare `f.captured_scope().region` to the dying
-  frame's region pointer. Match → clone the dying frame's `Rc` onto the
-  lifted value; mismatch → no `Rc`.
-- **`Type`-arm `KType::Module`** (lifted by `lift_ktype`, not `lift_kobject`).
-  Compare `m.child_scope().region` to the dying frame's region pointer; same rule.
-- **`KFuture`.** Run a targeted membership walk
-  (`kfuture_borrows_dying_region`) that asks the dying region's
-  `owns_object` side-table whether each embedded `Future(&KObject)`
-  borrow points into it, recursing through nested expressions,
-  list/dict literals, and bundle arg values; the embedded function
-  reference is checked via the same captured-scope-region equality test
-  the `KFunction` arm uses. Anchor only fires when at least one
-  descendant actually borrows into the dying region. `KoanRegion`
-  records every allocated `KObject`'s stable address (typed-arena
-  allocations don't move) in an addresses-only `Vec<usize>` so the
-  membership query is a single linear scan with no deref or borrow.
-
-Composite variants (`List`, `Dict`) recurse with a `needs_lift`
-short-circuit: when no descendant needs anchoring, the existing
-`Rc<Vec>` / `Rc<HashMap>` is cloned in place rather than rebuilt.
-Koan's collection-immutability contract is what makes the structural
-sharing safe.
+`FrameStorage` itself carries `outer: Option<Rc<FrameStorage>>`, which chains the parent per-call
+frame's storage when a builtin-built frame's child scope's `outer` points into per-call memory (MATCH
+/ TRY / EVAL / MODULE under a functor call). This is distinct from escaping-value liveness: `outer`
+keeps a region alive for an *outer-scope lookup* the new frame's child scope performs at run time.
 
 ## Consumer-pull node-output lift
 
@@ -113,70 +69,46 @@ relocates it across each dep edge — never the producer.
 
 Because `KObject` / `Carried` / `Scope` are invariant in their lifetime, none
 of these transitions can be a coercion — each cross-frame move is a genuine
-`NodeLift` copy (or the held-Rc re-exposure at storage). The consumer-pull dep
-re-anchor in [outcome.rs](../../src/machine/execute/outcome.rs), `deps_at_step`,
-is a **safe** `reattach_slice_with` bounded by the cart `Rc` the continuation
-runs under, and the run-global root drain re-anchors through `lift` directly
-rather than a standalone primitive. (The single-lifetime `Outcome` makes the
-up/down decide-surface bridges unnecessary — the splice slot and dep value share
-one lifetime.) The seam is pinned in the Miri slate by
-`tail_call_stamps_result_against_first_callers_return_contract`.
+`NodeLift` copy (or the held-Rc re-exposure at storage). The consumer-pull dep relocation runs
+*in-band* at the run-loop step brand: each dep terminal is read out borrow-bounded, erased into one
+slice carrier, opened alongside the continuation, and copied into the consumer `dest` region by
+[`relocate_carried`](../../src/machine/execute/lift.rs) with a plain `'b → 'b` structural alloc — the
+spine sharing its `Rc` payloads, a closure / future / module riding its bare borrow. The
+storage-bound drain / forward path wraps the same copy as
+[`relocate_terminal`](../../src/machine/execute/runtime.rs) over `Sealed::transfer_into`. There is no
+fabricated lifetime and no value-path `unsafe`: the value lands at the destination region's own
+lifetime. (The single-lifetime `Outcome` makes the up/down decide-surface bridges unnecessary — the
+splice slot and dep value share one lifetime.) The seam is pinned in the Miri slate by
+`tail_call_stamps_result_against_first_callers_return_contract` and `functor_application_is_generative`.
 
-### Fast path
+## Escaping-value retention
 
-If a dying region allocated zero `KFunction`s (`functions_is_empty`),
-no descendant `&KFunction` can point into it, and `lift_kobject`
-collapses to a plain `deep_clone`. The gate is sufficient *because*
-KFutures do not escape as values today: every borrow into the dying
-region that the slow path checks (KFunction captured-scope,
-KFuture-embedded function ref and parsed-expression
-`Future(&KObject)` parts, Module child-scope) traces back to a
-KFunction, so "no KFunction allocated here" implies "no descendant
-borrows into here." Once KFutures become first-class values that can
-ride through `Future(&KObject)` parts independently of any KFunction,
-the gate must add a no-unanchored-KFuture-descendant clause; the slow
-path's KFuture arm already carries the membership-walk machinery the
-fast path would defer to.
+A relocated closure / future / module rides a *bare* borrow into the per-call region that owns its
+defining scope. The copy keeps that borrow verbatim — a closure may reference anything reachable from
+its captured scope, and Koan has no reachability mechanic to compute a copy set, so the source region
+is *kept alive*, not rebuilt. While the value rides a scheduler slot its producer terminal's `FrameSet`
+witness pins that region; once it is relocated out of the scheduler — bound into a persistent scope,
+spliced into a working expr and re-dispatched, or read out as a top-level result — the producer slot
+is gone, so the *consumer frame* takes over the pin.
 
-## Cycle gate on `alloc_object`
+[`reached_frame`](../../src/machine/execute/lift.rs) recovers the defining frame from the value's
+scope `region_owner` — a `KFunction` / `KFuture` via its captured scope, a `KType::Module` via its
+child scope — and the consumer frame `retain`s it into `FrameStorage.retained` (a `FrameSet`) at the
+three read-out boundaries where the consumer frame is known: the `run_step` relocate loop (covering
+the splice/redispatch and binding paths), the [`run_program`](../../src/machine/execute/runtime/interpret.rs)
+root drain, and the `extract_terminal` test harness. `retain` is guarded by `pins_region`, so a frame
+whose region the consumer or an ancestor already pins is not re-added, and the set dedups by region.
+No cycle forms: a dispatched frame's `outer` is `None`, so a retained descendant never strong-refs
+back into the chain that would close a loop.
 
-The anchor mechanism creates a self-referential shape if a composite
-carrying an escaping closure is re-allocated into the same per-call
-region it already anchors to: the region's storage holds the composite,
-the composite holds the `Rc<FrameStorage>`, and the `Rc` holds the region.
-Neither side can drop. The case shows up when a body returns a
-List / Dict / Tagged / Struct holding a closure — the lift-on-return
-machinery attaches the per-call frame's `Rc` to the closure, then a
-re-allocation of the composite (via `value_pass`, a dep-finish, etc.)
-lands the composite back in the per-call region.
-
-The gate recovers its redirect target *from the value being stored*. `alloc_object` walks the
-incoming value's composite tree (`obj_escape_target`, mirroring `KObject::deep_clone`'s shape) and,
-on finding any `Rc<FrameStorage>` whose `region()` is `self`, takes the self-anchoring closure's
-captured scope — which lives in `self`'s region by the `alloc_function` invariant — and walks its
-`outer` chain out of `self`. The first ancestor scope outside `self` names the redirect region (a
-per-call region is a child of the region its function was defined in; a run-root parent crosses into
-the run-root scope's region), so the allocation redirects there — where the same `Rc` is no longer
-self-referential. The redirect region is that ancestor scope's own `region` field, a `Copy`
-`&'a KoanRegion` branded by the value's content lifetime, so it pins the target for the allocation's
-output borrow with **no owner stored on the frame** — and thus no allocation back-edge to close the
-escaped-closure cycle. A value with no self-anchor (the common case) yields `None` and stores in
-place; a run-root allocation never self-anchors, since the `Rc<FrameStorage>` shapes the gate looks
-for can only point at per-call regions by construction.
-
-`alloc_object` is one of the named safe wrappers — alongside `alloc_ktype`, `alloc_function`,
-`alloc_scope`, `alloc_module`, `alloc_signature`, and `alloc_operator_group` — that route a single
-`alloc` engine where the gate lives. The engine lives generically in the `Region<W>` substrate
-(`src/witnessed/region.rs`), which names no Koan type and carries **no `unsafe`** of its own: its
-erase-store routes the scheduler's audited `erase_to_static` / `reattach_ref_with`, and the escape
-redirect is a value-derived borrow; `KoanRegion` is the Koan instantiation
-`Region<KoanStorageProfile>`, with the per-family policy supplied by `Stored` impls in `core::arena`.
-Every family implements `Stored`, and the engine runs the gate once for all of them. `KObject` and
-`KType` answer `escape_target` by walking their composite tree and recovering the redirect region;
-the families that cannot hold a self-targeting `Rc<FrameStorage>` — `KFunction`, `Scope`, `Module`,
-`Signature`, and `OperatorGroup` — declare `escape_target => None`, so the redirect is uniform across
-the whole allocation surface. `Stored` is an open in-crate extension
-point rather than sealed; unbypassability comes instead from the substrate's
-private `storage` field and that single store path — no `&Region` is ever
-exposed, so no `Stored` impl can route a value around the redirect.
+The allocation engine therefore needs **no cycle gate**. A stored value holds no owning `Rc` back to
+a region, so storing a composite that carries an escaping closure into any region — including the one
+the closure's scope lives in — can never close a region↔value back-edge. The named safe wrappers
+(`alloc_object`, `alloc_ktype`, `alloc_function`, `alloc_scope`, `alloc_module`, `alloc_signature`,
+`alloc_operator_group`) each route the single [`alloc`](../../src/witnessed/region.rs) engine, which
+erases the value to `'static`, stores it, and re-anchors the store to `'a` with no redirect step. The
+engine lives generically in the `Region<W>` substrate (`src/witnessed/region.rs`), names no Koan type,
+and carries **no `unsafe`** of its own: its erase-store routes the scheduler's audited
+`erase_to_static` / `reattach_ref_with`. It stays unbypassable by construction — the substrate's
+private `storage` bundle and that single store path mean no `Stored` impl can route around the engine.
 

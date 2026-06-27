@@ -1,15 +1,15 @@
 //! The Koan instantiation of the generic [`Region`](crate::witnessed::Region)
 //! storage substrate: `KoanRegion = Region<KoanStorageProfile>`, the per-family
-//! [`Stored`](crate::witnessed::Stored) impls (which sub-arena a family lands in, its cycle-gate
-//! `escape_target` answer), the cycle-gate walkers, and the Koan-typed `alloc_*` wrappers. `CallFrame`
+//! [`Stored`](crate::witnessed::Stored) impls (which sub-arena a family lands in), and the
+//! Koan-typed `alloc_*` wrappers. `CallFrame`
 //! — the per-call frame shell over a refcounted `FrameStorage` (the `KoanRegion` plus the ancestor
 //! chain), holding the child `Scope` and resetting in place for TCO — also lives here.
 //!
-//! The generic erase-store engine and the cycle-redirect plumbing live in
-//! [`crate::witnessed::region`]; this file supplies the Koan policy it runs.
+//! The generic erase-store engine lives in [`crate::witnessed::region`]; this file supplies the
+//! Koan policy it runs.
 //!
 //! See [per-call-region/README.md](../../../design/per-call-region/README.md) for the carrier
-//! set, lift-time anchor decision, cycle gate, ancestor chain, and TCO frame reuse;
+//! set, escaping-value retention, ancestor chain, and TCO frame reuse;
 //! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
 
@@ -128,17 +128,16 @@ impl Stored<KoanStorageProfile> for OperatorGroup {
 }
 
 /// Koan-typed allocation surface on the run-lifetime region. Each wrapper routes the single
-/// [`Region::alloc`] engine, which runs the cycle gate; these named wrappers are the public
-/// entry points.
+/// [`Region::alloc`] engine; these named wrappers are the public entry points.
 impl Region<KoanStorageProfile> {
-    /// Store a [`KObject`] into the run-lifetime region, routing through the cycle gate (a
-    /// self-anchoring value redirects to the escape region).
+    /// Store a [`KObject`] into the run-lifetime region; the value lands in this region (no value
+    /// holds an owning `Rc` back to a region, so the store forms no back-edge).
     pub fn alloc_object<'a>(&'a self, o: KObject<'a>) -> &'a KObject<'a> {
         self.alloc::<KObject<'static>>(o)
     }
 
-    /// Store a [`KType`] into the run-lifetime region, routing through the cycle gate (a `Module`
-    /// frame anchoring back at `self` redirects to the escape region).
+    /// Store a [`KType`] into the run-lifetime region (a `Module` rides a bare borrow into its
+    /// child scope's region — held alive by the carrier's witness set, not an embedded anchor).
     pub fn alloc_ktype<'a>(&'a self, t: KType<'a>) -> &'a KType<'a> {
         self.alloc::<KType<'static>>(t)
     }
@@ -252,10 +251,10 @@ pub struct FrameStorage {
 }
 
 impl FrameStorage {
-    /// The run-root storage: a fresh run region with no `outer` link and no escape (the run root
-    /// redirects nothing). Held by `run_program` (and the test harness) so the run-root scope's
-    /// region has an owning Rc; [`CallFrame::adopting`] reuses it as the run frame's storage and the
-    /// run-root scope records a `Weak` to it as its `region_owner`.
+    /// The run-root storage: a fresh run region with no `outer` link. Held by `run_program` (and the
+    /// test harness) so the run-root scope's region has an owning Rc; [`CallFrame::adopting`] reuses
+    /// it as the run frame's storage and the run-root scope records a `Weak` to it as its
+    /// `region_owner`.
     pub fn run_root() -> Rc<FrameStorage> {
         Rc::new(FrameStorage {
             region: KoanRegion::new(),
@@ -264,8 +263,8 @@ impl FrameStorage {
         })
     }
 
-    /// The backing `KoanRegion`. Used for cycle-gate / lift identity comparisons by holders
-    /// that pin storage but never name a `CallFrame`.
+    /// The backing `KoanRegion`. Used for region-identity comparisons (e.g. [`FrameSet`]
+    /// subsumption) by holders that pin storage but never name a `CallFrame`.
     pub(crate) fn region(&self) -> &KoanRegion {
         &self.region
     }
@@ -399,7 +398,7 @@ unsafe impl MergeWitness for FrameSet {
 /// `scope_carrier`, so the region tears down before the now-dangling child reference.
 ///
 /// See [per-call-region/README.md](../../../design/per-call-region/README.md) for the
-/// carrier set, lift-time anchor decision, cycle gate, ancestor chain, and TCO
+/// carrier set, escaping-value retention, ancestor chain, and TCO
 /// frame reuse; [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 /// for the heap-pinning / drop-order invariants.
 pub struct CallFrame {
@@ -418,9 +417,8 @@ pub struct CallFrame {
 impl CallFrame {
     /// Build a fresh per-call frame whose child `Scope` uses `outer` as its `outer` link.
     /// `outer_frame` must hold the parent frame's `FrameStorage` Rc when the parent is per-call;
-    /// `None` when the parent is run-root. The cycle-gate redirect target is recovered per-allocation
-    /// from the value being stored (see [`Stored::escape_target`](crate::witnessed::Stored)), so the
-    /// frame holds no escape owner.
+    /// `None` when the parent is run-root — a dispatched frame strong-owns no ancestor, so an
+    /// escaping value retained on a consumer frame forms no back-edge.
     pub fn new(outer: &Scope<'_>, outer_frame: Option<Rc<FrameStorage>>) -> Rc<CallFrame> {
         // The region is born inside its own `Rc<FrameStorage>`, heap-pinned from this point on, so
         // the child-scope pointer below stays valid as the storage Rc moves into the shell.
@@ -455,9 +453,9 @@ impl CallFrame {
     /// `run_storage` is the `Rc<FrameStorage>` that owns the run region — the same storage `scope`
     /// (the run root) lives in. Adopting it (rather than minting an empty region) makes this frame's
     /// `region()` equal the run-root region, so a top-level-defined FN's captured-region owner
-    /// resolves to this frame's storage. `escape` is `None` (a non-dying top frame redirects
-    /// nothing). The adopted run scope's borrow is erased into `scope_carrier` exactly as every
-    /// per-call child scope is — the fabrication hazard is deferred to the witness-bounded re-attach.
+    /// resolves to this frame's storage. The adopted run scope's borrow is erased into
+    /// `scope_carrier` exactly as every per-call child scope is — the fabrication hazard is deferred
+    /// to the witness-bounded re-attach.
     pub fn adopting<'a>(scope: &'a Scope<'a>, run_storage: Rc<FrameStorage>) -> Rc<CallFrame> {
         debug_assert!(
             std::ptr::eq(run_storage.region(), scope.region as *const KoanRegion),

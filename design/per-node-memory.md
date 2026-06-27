@@ -184,7 +184,15 @@ so no single dominating witness exists — the set is held whole and composed by
 since splicing the source into the destination's `outer` chain to collapse it risks
 re-forming the `src`↔`dst` cycle. This closes the one case `open` cannot: a value
 whose source backing is dying but whose consumer outlives it. In Koan: the
-consumer-pull lift across a dependency edge.
+consumer-pull lift across a dependency edge — `relocate_carried` copies the dep into the consumer
+`dest` region at the step brand (the spine sharing its `Rc` payloads, a closure / future / module
+riding its bare borrow), and `transfer_into` re-seals it under the set union of its retained sources
+and `dest`. Because a per-call region carries no `Rc` clone *on the value*, a relocated escaping value
+is kept alive by the **consumer frame**, not the carrier alone: `reached_frame` recovers the value's
+defining frame from its scope `region_owner`, and the consumer frame `retain`s it into
+`FrameStorage.retained` (a `FrameSet`) at each read-out boundary — the per-step over-approximation the
+[`alloc` inversions](../roadmap/per-node-memory/alloc-object-witnessed.md) retire once every reached
+region is named on the carrier itself.
 
 ## Why reads are safe — and where the one escape hatch sits
 
@@ -200,7 +208,10 @@ The rank-2 brand forces the entire per-step consumption to nest inside the closu
 re-anchored reference would otherwise ride up the dispatcher call stack, that becomes either
 copy-out or a CPS rewrite of the step. The run-loop step nests its whole tail this way — the
 continuation run, the outcome apply, and the finalize all run inside one brand (the consuming
-externally-witnessed `open` above), so nothing branded crosses the step boundary. A borrow-bounded
+externally-witnessed `open` above), so nothing branded crosses the step boundary. The step's dep
+slice is opened *in-band* at that same brand — each producer terminal read out borrow-bounded, erased
+into one slice carrier, and zipped alongside the continuation — so every dep value is born at `'b`
+through the one step `open`, with no separate slice reattach. A borrow-bounded
 `attach<'w>(&'w self, &'w W) -> Live<'w>` accessor — re-anchoring *capped at the witness borrow*
 `'w` rather than at a free `'b` that could be widened past it — is sound (the witness pin outlives
 the borrow, a fact the compiler checks) and lets a reference flow up the stack without a copy; it is
@@ -233,14 +244,12 @@ project below.
 
 The [per-node-memory roadmap project](../roadmap/per-node-memory/) tracks the remaining migrations.
 The keystone run-loop restructure and its consuming `open`, the unified `FrameSet` set-witness, the
-production witness impls, and the value-recovered cycle-gate redirect have all landed (see [Region
-lifetime erasure](memory-model.md#region-lifetime-erasure)); what remains are the carrier,
-allocation, and read migrations onto them, with `attach` a contingent fallback retired last:
+production witness impls, the `transfer_into` relocation verb, and the per-value frame anchor's
+removal (a stored value holds no owning `Rc` back to a region, so the allocation engine needs no
+cycle gate) have all landed (see [Region lifetime
+erasure](memory-model.md#region-lifetime-erasure)); what remains are the carrier, allocation, and read
+migrations onto them, with `attach` a contingent fallback retired last:
 
-- [`transfer_into` and closing the lift relocation unsafe](../roadmap/per-node-memory/transfer-into-lift.md)
-  — the destination-witnessed relocation verb; the regions a relocated value still
-  reaches are pinned by the carrier's witness set, the per-value frame anchor retired
-  into it.
 - [`alloc_object`](../roadmap/per-node-memory/alloc-object-witnessed.md) and
   [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) returning `Witnessed` — wiring
   `alloc` to return a co-located carrier in production, retiring `transfer_into`'s structural walk.
