@@ -39,6 +39,9 @@ pub fn body<'a>(
     let bind_index = ctx.bind_index();
     let name_for_finish = name;
     let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
+        // The body's VAL/FN binds into `decl_scope` are all resolved (AwaitDeps), and nothing below
+        // binds into it — so seal its reach-set before the signature captures it.
+        decl_scope.close();
         let sig: &'a ModuleSignature<'a> = fctx
             .scope
             .region

@@ -211,19 +211,31 @@ aggregate and region-pure inversions — folds the dep carrier via `transfer_int
 named on the carrier and never reconstructed. The **bare value-copy** finishes — the type channel,
 and the object value-embedding sites not yet inverted — instead read the live value out, dropping
 its set, and reconstruct the reach with a transitional mechanism: [`reached_frame`](../src/machine/execute/lift.rs)
-recovers a *single* `Rc<FrameStorage>` from the value's scope `region_owner`, which the consumer frame
-`retain`s into the per-frame `FrameStorage.retained`. This is a single-frame approximation — a value
+recovers a *single* `Rc<FrameStorage>` from the value's scope `region_owner`. At the relocate-into-consumer
+seam this single frame folds onto the consumer **scope's reach-set** (below); the run-root drain still
+`retain`s it onto the per-frame `FrameStorage.retained`. This is a single-frame approximation — a value
 reaching several regions (a list of closures, a closure capturing several closures) is mis-recorded —
 and exists *only* for the values whose carried set is dropped and re-derived. The remaining
 [`alloc` inversions](../roadmap/per-node-memory/alloc-object-embedding-sites.md) build the reach on the
-carrier at construction (`yoke` / `merge`) and carry it through the lift; a value *bound into a scope*,
-whose reach must outlive the binding node, instead folds its full carried `FrameSet` into the scope's
-own reach-set — a set that is mutable while the scope is active, seals when the scope closes, and omits
-the scope's home frame until the value is lifted out (so no region-resident value witnesses its own
-frame). With construction carried and binds folded,
+carrier at construction (`yoke` / `merge`) and carry it through the lift.
+
+A value *bound into a scope*, whose reach must outlive the binding node, deposits its reach on the
+scope's own **reach-set**: a `FrameSet` held on the [`Scope`](../src/machine/core/scope.rs) that folds
+each deposited value's reach (via `fold_reach`), omits the scope's home frame so no region-resident
+value witnesses the frame it lives in (the `region → scope → set → frame` cycle the omission breaks
+keeps the `Rc::get_mut` TCO frame-reuse gate intact), and seals when the scope closes — `close` is the
+seal point, fired at the owning node's finalize and routed per scope kind (a per-call frame at its body
+slot's `Done` / tail-`Continue`; `MODULE` / `SIG` at the block finish; the run root at run end). The
+deposit is **transitional**: the relocate-into-consumer seam folds the single `reached_frame` of the
+relocated value, so a multi-region value is still under-recorded there. The full carried `FrameSet`
+folds in once binds witness their construction —
+[`alloc_object` embedding sites](../roadmap/per-node-memory/alloc-object-embedding-sites.md) fold a
+`let`-bound value's carrier union, replacing this single-frame relocate-seam fold for the object
+channel. With construction carried and binds folded,
 [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) takes the last `KType::Module` user
-off `reached_frame` and deletes it together with the per-frame `retained` field: reach then lives on the
-node carrier and, for bindings, on the per-scope sealed reach-set.
+off `reached_frame` and deletes it together with the per-frame `retained` field, retiring the
+relocate-seam fold entirely: reach then lives on the node carrier and, for bindings, on the per-scope
+sealed reach-set.
 
 ## Why reads are safe — and where the one escape hatch sits
 
@@ -275,19 +287,17 @@ project below.
 
 The [per-node-memory roadmap project](../roadmap/per-node-memory/) tracks the remaining migrations.
 The keystone run-loop restructure and its consuming `open`, the unified `FrameSet` set-witness, the
-production witness impls, the `transfer_into` relocation verb, and the per-value frame anchor's
+production witness impls, the `transfer_into` relocation verb, the per-value frame anchor's
 removal (a stored value holds no owning `Rc` back to a region, so the allocation engine needs no
-cycle gate) have all landed (see [Region lifetime
+cycle gate), and the per-scope sealed reach-set with its scope-close seal (the *Transfer* section
+above) have all landed (see [Region lifetime
 erasure](memory-model.md#region-lifetime-erasure)); what remains is one linear chain:
 
-- [Per-scope sealed reach-set](../roadmap/per-node-memory/scope-reach-set.md) — the foundation: a
-  mutable-then-sealed reach-set that folds each bound value's full witness (retiring the single-frame
-  approximation), omits its home frame until lift, and seals at scope close, with `Scope` made
-  close-aware as the opening spike.
 - [`alloc_object` embedding sites](../roadmap/per-node-memory/alloc-object-embedding-sites.md) and
   [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) returning `Witnessed` — wiring
-  the remaining `alloc` sites onto `yoke` / `merge` and folding scope binds into the reach-set, then
-  deleting `reached_frame` and the per-frame `retained` with the last `KType::Module` user.
+  the remaining `alloc` sites onto `yoke` / `merge`, folding scope binds' full carriers into the
+  reach-set (replacing the transitional single-frame relocate-seam fold), then deleting `reached_frame`
+  and the per-frame `retained` with the last `KType::Module` user.
 - [Migrate the consumption reads onto `open`](../roadmap/per-node-memory/reads-to-open.md), then
   [a single access verb](../roadmap/per-node-memory/single-open-verb.md) — restructuring the value-,
   scope-, and wrapper reads onto `open` and deleting the transitional `read` / `attach`.

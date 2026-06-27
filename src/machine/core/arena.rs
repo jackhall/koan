@@ -425,6 +425,24 @@ impl FrameSet {
             .retain(|f| !owner.pins_region(f.region() as *const KoanRegion));
         self.frames.push(owner);
     }
+
+    /// Fold every member of `other` into `self` under the same `outer`-chain subsumption as
+    /// [`Self::insert`], **omitting** any member whose region `home` already pins (its own region or
+    /// an ancestor on the `outer` chain). The per-scope reach-set folds a bound value's carrier
+    /// witness through this: a scope must not witness its own home frame — the `region → scope → set →
+    /// frame` cycle — and the home frame's `outer` chain already keeps every ancestor region alive, so
+    /// only genuinely foreign reach lands in the set. A same-region value's singleton witness drops to
+    /// nothing. `home` is `None` for a frameless scope owning no escapable region (test-only), where
+    /// there is no home frame to omit. This is the structural form of [`FrameStorage::retain`]'s
+    /// self-no-op, redirected from the per-frame accumulator into a scope-owned builder.
+    pub(crate) fn fold_foreign(&mut self, other: &FrameSet, home: Option<&Rc<FrameStorage>>) {
+        for owner in &other.frames {
+            if home.is_some_and(|h| h.pins_region(owner.region() as *const KoanRegion)) {
+                continue;
+            }
+            self.insert(Rc::clone(owner));
+        }
+    }
 }
 
 // SAFETY: each member `Rc<FrameStorage>` keeps its `KoanRegion` — and the arena pages a value lives in

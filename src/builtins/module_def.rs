@@ -35,6 +35,11 @@ pub fn body<'a>(
     let bind_index = ctx.bind_index();
     let name_for_finish = name;
     let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
+        // The body's binds into `child_scope` are all resolved (AwaitDeps), and nothing below binds
+        // into it (the mirror reads it; `register_type_upsert` writes the outer scope) — so seal its
+        // reach-set here, before the module captures it: the sealed foreign reach rides the escaping
+        // module value.
+        child_scope.close();
         // Idempotent-finalize guard: a re-bound name short-circuits.
         if let Some(kt) = fctx.scope.bindings().lookup_type(&name_for_finish, None) {
             return Action::Done(Ok(Carried::Type(fctx.scope.region.alloc_ktype(kt.clone()))));

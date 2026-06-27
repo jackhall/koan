@@ -22,15 +22,20 @@ dep-result currency already carries — the uniform retain at the
 - `alloc_ktype` returns a `KType` bundled with the set of regions it reaches, built inside the witness
   closure — most `KType`s are owned / `Rc`-shared and `yoke` directly, while a region-referencing
   variant (a `KType::Module` naming its child scope) witnesses that child scope's sealed
-  [reach-set](scope-reach-set.md) — so a region-resident type is born co-located by construction.
+  [reach-set](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into) — so a
+  region-resident type is born co-located by construction.
 - The type family carries no `Witnessed::new`: most `KType`s `yoke` directly, while the one
   region-referencing variant (`KType::Module`) folds its child-scope reach — co-location enforced by
   the brand, never asserted.
 - A lifted `KType::Module`'s reached region is read off its carrier's witness set. With its last user
   converted, the read-out [`reached_frame`](../../src/machine/execute/lift.rs) reconstruction **and**
   the per-frame [`FrameStorage.retained`](../../src/machine/core/arena.rs) field are both **deleted** —
-  binding reach now lives on the per-scope [reach-set](scope-reach-set.md), and no value remains on the
-  bare-copy relocation path, so the over-approximated step `pin` becomes exact.
+  binding reach now lives on the per-scope
+  [reach-set](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into). With both
+  channels witnessed, the transitional single-frame relocate-seam fold (the `reached_frame` fold in
+  `relocate_dep_into_consumer`) is **removed entirely**: transient reach rides the output carriers, and
+  only bound deposits use the scope set, so no value remains on the bare-copy relocation path and the
+  over-approximated step `pin` becomes exact.
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` clean.
 
 **Directions.**
@@ -44,7 +49,9 @@ dep-result currency already carries — the uniform retain at the
 - *The scope witness rides the type, not `alloc_scope` — decided.* A `KType::Module`'s child scope is
   alloc'd via `alloc_scope`, but the witness that keeps its region alive rides the `KType::Module`
   carrier (the value), not the scope handle, so `alloc_scope` itself stays bare `&'a`. The operand is
-  the child scope's sealed [reach-set](scope-reach-set.md) plus its home frame added on lift.
+  the child scope's sealed
+  [reach-set](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into) plus its home
+  frame added on lift.
 - *Completes the single-frame reconstruction's deletion — decided.* The object path's last dependence
   on `reached_frame` is retired by
   [`alloc-object-embedding-sites`](alloc-object-embedding-sites.md); this item takes the final

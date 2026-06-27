@@ -90,6 +90,9 @@ impl<'run> KoanRuntime<'run> {
                 }
             }
         }
+        // The scheduler is quiescent and every top-level statement has bound into the run root — seal
+        // its reach-set at run end. The run root is run-global (never reopens), so this is its close.
+        root.close();
         // A bare top-level expression is an untyped resolution boundary: an unstamped
         // empty `[]` / `{}` reaching it has no element type to infer, so reject rather
         // than silently resolve to `List<Any>` / `Dict<Any, Any>`.

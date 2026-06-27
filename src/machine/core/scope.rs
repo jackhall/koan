@@ -6,7 +6,7 @@ use crate::machine::model::types::RecursiveSet;
 
 use crate::machine::model::ast::KExpression;
 
-use super::arena::{FrameStorage, KoanRegion};
+use super::arena::{FrameSet, FrameStorage, KoanRegion};
 pub use super::bindings::Resolution;
 use super::bindings::{ApplyOutcome, BindingIndex, Bindings};
 use super::kerror::{KError, KErrorKind};
@@ -89,6 +89,16 @@ pub struct Scope<'a> {
     /// already rejected; this also rejects *new* binds). The seal point for its reach-set. `Cell`
     /// because it flips once, late, outside the bind hot path.
     closed: Cell<bool>,
+    /// The scope's **reach-set**: the foreign per-call regions its bound values still borrow into,
+    /// folded as each bind lands ([`Self::fold_reach`]). Each bound value's full carrier [`FrameSet`]
+    /// folds in via [`FrameSet::fold_foreign`], which omits the scope's own home frame so a resident
+    /// value never witnesses the frame it lives in (the `region → scope → set → frame` cycle). The
+    /// set is a mutable builder while the scope is open and frozen once [`closed`](Self::closed) flips
+    /// — `close` is the seal point (folds past it are rejected like binds are). Held inside the
+    /// region-resident `Scope`, so a closure capturing the scope keeps every foreign region the scope's
+    /// bindings reach alive for its life. `RefCell` because folds accrue between scheduler steps; a
+    /// read (once frozen) never overlaps a fold. Empty until a region-referencing value is bound.
+    reach: RefCell<FrameSet>,
 }
 
 /// A scope's binding storage. `Owned` is the default. `Borrowed` is the
@@ -156,6 +166,7 @@ impl<'a> Scope<'a> {
             kind: ScopeKind::Root,
             recursive_set: None,
             closed: Cell::new(false),
+            reach: RefCell::new(FrameSet::empty()),
         }
     }
 
@@ -165,8 +176,8 @@ impl<'a> Scope<'a> {
         self.region_owner.clone()
     }
 
-    /// Mark this scope closed: its defining block / frame has finished, so no further bind is legal.
-    /// Idempotent. This is the point the scope's reach-set would seal.
+    /// Mark this scope closed: its defining block / frame has finished, so no further bind is legal and
+    /// its reach-set freezes — `close` is the reach-set's seal point. Idempotent.
     pub fn close(&self) {
         self.closed.set(true);
     }
@@ -184,6 +195,25 @@ impl<'a> Scope<'a> {
             "bind `{name}` into closed scope {:?}",
             self.id,
         );
+    }
+
+    /// Fold a value's reach (a [`FrameSet`]) into this scope's reach-set, omitting any frame the home
+    /// frame already pins (its own region or an ancestor) — see [`FrameSet::fold_foreign`]. Called as a
+    /// value is relocated / bound under the scope, so the foreign regions it borrows into stay alive for
+    /// the scope's life. The relocate seam folds a single frame recovered from the value via
+    /// [`reached_frame`](crate::machine::execute::reached_frame); a witnessed bind folds the value's
+    /// full carried union, so a multi-region value then contributes *every* region it reaches rather
+    /// than one frame. A fold past the seal ([`Self::close`]) is the same invariant violation as a bind
+    /// past close, so it mirrors [`Self::assert_open`]'s `debug_assert`.
+    pub(crate) fn fold_reach(&self, witness: &FrameSet) {
+        debug_assert!(
+            !self.closed.get(),
+            "fold_reach into sealed scope {:?}",
+            self.id,
+        );
+        self.reach
+            .borrow_mut()
+            .fold_foreign(witness, self.region_owner.upgrade().as_ref());
     }
 
     pub fn child_for_call(&'a self) -> Scope<'a> {
@@ -225,6 +255,7 @@ impl<'a> Scope<'a> {
             kind,
             recursive_set,
             closed: Cell::new(false),
+            reach: RefCell::new(FrameSet::empty()),
         }
     }
 
@@ -265,6 +296,7 @@ impl<'a> Scope<'a> {
             kind: ScopeKind::Anonymous,
             recursive_set: None,
             closed: Cell::new(false),
+            reach: RefCell::new(FrameSet::empty()),
         }
     }
 

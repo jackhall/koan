@@ -1,8 +1,9 @@
 # `alloc_object` embedding sites return `Witnessed`
 
 Convert the value-embedding object-construction sites onto `yoke` / `merge`, and route scope binds
-through the [per-scope reach-set](scope-reach-set.md), so the object channel names its reach on the
-carrier and the bindings on the scope set — never reconstructed.
+through the [per-scope reach-set](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into),
+so the object channel names its reach on the carrier and the bindings on the scope set — never
+reconstructed.
 
 **Problem.** The region-pure and aggregate object constructions are built inside the witness closure —
 a region-pure leaf [`yoke`s](../../src/witnessed.rs), and a list / dict / record folds its dep
@@ -28,10 +29,14 @@ accumulator) to recover reach — the mechanism the rest of the object family no
   or bound value (`catch`'s `Tagged`, `attr`'s `Wrapped`, `FROM`'s `Record`, a `NEWTYPE` / tagged
   param) `merge`s the one carrier it embeds, and a captured scope (`alloc_function`'s `KFunction`, its
   body via `alloc_witnessed_embedding`) witnesses the defining scope's sealed
-  [reach-set](scope-reach-set.md) — never an arbitrary value paired with an asserted witness.
+  [reach-set](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into) — never an
+  arbitrary value paired with an asserted witness.
 - A `let`-bound value is a **deposit**, not a construction: `let_binding` folds the bound value's
-  carrier `FrameSet` into the [per-scope reach-set](scope-reach-set.md), so a bound list-of-closures
-  contributes every region it reaches.
+  carrier `FrameSet` into the [per-scope reach-set](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into),
+  so a bound list-of-closures contributes every region it reaches. This bind-precise fold **replaces**
+  the transitional single-frame relocate-seam fold (the TCO-safe `reached_frame` patch in
+  `relocate_dep_into_consumer`) for the object channel: the object value-copy finish stops folding at
+  the relocate seam once its bind folds the full carrier, so the two never double-fold the same value.
 - The object family carries no `Witnessed::new`: the
   [`literal.rs`](../../src/machine/execute/dispatch/literal.rs) Resolved arm and every bare value-copy
   object site are converted, so a grep for object-family `Witnessed::new` is empty.
@@ -50,8 +55,9 @@ accumulator) to recover reach — the mechanism the rest of the object family no
   threads through `Carried` / `Held` / `ArgValue`" constraint. Route (b) — *mint the merge operand from
   the captured scope frame `{F}`* — is **dead for binds and for foreign-reaching embeds**: `{F}` names
   the scope's frame, not the bound value's foreign reach (the multi-region case the
-  [reach-set](scope-reach-set.md) exists to capture), so only a value provably region-local to the
-  body's frame may use it. Recommended: route (a) wherever the embedded value can reach another region.
+  [reach-set](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into) exists to
+  capture), so only a value provably region-local to the body's frame may use it. Recommended: route
+  (a) wherever the embedded value can reach another region.
 - *AC `Witnessed::new` scope — open.* Two non-object-value `Witnessed::new` sites remain after the
   object values convert: [`finalize.rs`](../../src/machine/execute/finalize.rs)'s `ContractHomeFamily`
   operand (the declared-return re-stamp's `(home, declared)` pair, consumed inside a `merge`) and
@@ -64,6 +70,13 @@ accumulator) to recover reach — the mechanism the rest of the object family no
   splice-free [`KExpression`](../../src/machine/model/ast.rs), so it yokes via the shipped
   [`alloc_witnessed_embedding`](../../src/machine/core/arena.rs) exactly as `quote` does; the captured
   scope's reach rides the scope's sealed reach-set, the signature refs fold in via `merge`.
+- *Seal the ascribe per-ascription module view — decided.* Folding binds into the scope reach-set must
+  also close [`ascribe`](../../src/builtins/ascribe.rs)'s `child_under_module` `new_scope`: it escapes
+  via `new_module` like a MODULE body, so once a bound member folds its carrier into that scope's set
+  the set must seal. The finalize-time, owner-routed closes shipped with the reach-set (per-call frame /
+  `MODULE` / `SIG` / run root) do not cover it — ascribe binds via a synchronous `try_bulk_install_from`
+  rather than a dispatched body, so its view stays open. Add a `new_scope.close()` at the ascription
+  finish, before `new_module` captures the scope, mirroring the `MODULE` / `SIG` close.
 
 ## Dependencies
 
@@ -72,10 +85,8 @@ its deps' `Sealed` carriers) and the region-pure leaf and aggregate construction
 [per-node-memory.md § Construction](../../design/per-node-memory.md#construction-yoke-merge-map-and-one-wrapper-per-node)).
 The value-embedding sites need the carrier-delivery mechanism decided above before they can `merge`.
 
-**Requires:**
-
-- [Per-scope sealed reach-set](scope-reach-set.md) — binds fold carriers into it and `alloc_function`'s
-  closure witnesses its sealed form.
+**Requires:** none — the [per-scope reach-set](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into)
+foundation it folds binds into has shipped.
 
 **Unblocks:**
 

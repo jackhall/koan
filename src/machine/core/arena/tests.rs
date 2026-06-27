@@ -461,3 +461,42 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     });
     assert_eq!(got, vec![1.0, 2.0]); // both foreign elements survived the fold and every handle drop.
 }
+
+/// [`FrameSet::fold_foreign`] is the per-scope reach-set's fold: it merges a bound value's carrier
+/// witness into the builder but **omits** any frame the scope's home frame already pins, so a resident
+/// value never witnesses its own home frame — the `region → scope → set → frame` cycle the reach-set
+/// forbids (and the source of the `let rec` self-bind no-op). A same-region (home) singleton folds to
+/// nothing; a foreign frame is kept; `None` (a frameless scope with no home to omit) keeps everything.
+#[test]
+fn fold_foreign_omits_the_home_frame_and_keeps_foreign_reach() {
+    let home = FrameStorage::run_root();
+    let foreign = FrameStorage::run_root();
+
+    // A same-region value's witness names the home frame itself — folding it contributes no foreign
+    // reach (the self-bind / home-frame omission).
+    let mut set = FrameSet::empty();
+    set.fold_foreign(&FrameSet::singleton(Rc::clone(&home)), Some(&home));
+    assert!(set.is_empty(), "the home frame must be omitted from the reach-set");
+
+    // A foreign frame is kept — the region a bound closure / module borrows into.
+    set.fold_foreign(&FrameSet::singleton(Rc::clone(&foreign)), Some(&home));
+    assert!(
+        set.sole().is_some_and(|f| Rc::ptr_eq(f, &foreign)),
+        "a foreign frame must fold into the reach-set",
+    );
+
+    // Re-folding the same foreign frame is idempotent (subsumption dedups by region).
+    set.fold_foreign(&FrameSet::singleton(Rc::clone(&foreign)), Some(&home));
+    assert!(
+        set.sole().is_some(),
+        "a duplicate fold stays a singleton, not a double entry",
+    );
+
+    // With no home frame (a frameless scope owning no escapable region), nothing is omitted.
+    let mut frameless = FrameSet::empty();
+    frameless.fold_foreign(&FrameSet::singleton(Rc::clone(&home)), None);
+    assert!(
+        !frameless.is_empty(),
+        "with no home frame to omit, the full witness folds in",
+    );
+}

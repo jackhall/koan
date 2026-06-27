@@ -322,7 +322,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [Per-scope sealed reach-set](per-node-memory/scope-reach-set.md)
+- [`alloc_object` embedding sites return `Witnessed`](per-node-memory/alloc-object-embedding-sites.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
@@ -419,20 +419,21 @@ onto it. The construction primitives (`yoke` / `merge` / `with` / `map`, the
 witness-borrow reattaches), the generic `Region<P>` bump allocator beside its carrier in
 the `witnessed` module, the opaque [`Sealed`](../src/witnessed.rs) storage form (read
 through a rank-2 `open`, result slot rerouted onto it), the run-loop step restructure and
-its consuming `open`, and the region-pure / aggregate construction inversions are all
+its consuming `open`, the region-pure / aggregate construction inversions, and the
+per-scope sealed reach-set (a `FrameSet` on `Scope` that folds a deposited value's reach,
+omits the home frame, and seals at scope close — `close` wired finalize-time and
+owner-routed for per-call frames, `MODULE` / `SIG`, and the run root) are all
 shipped. The design is captured in
 [design/per-node-memory.md](../design/per-node-memory.md). What remains migrates as one
-linear chain: reach lives on the carrier and, for scope bindings, on a per-scope sealed
-reach-set, so the single-frame `reached_frame` / `FrameStorage.retained` reconstruction is
-retired — then the consumption reads converge on a single `open` verb:
+linear chain: the reach-set's deposit is still the transitional single-frame relocate-seam
+fold, so the remaining `alloc` inversions fold each bound value's full carrier and retire
+the single-frame `reached_frame` / `FrameStorage.retained` reconstruction — then the
+consumption reads converge on a single `open` verb:
 
-- [Per-scope sealed reach-set](per-node-memory/scope-reach-set.md) — the foundation: a
-  mutable-then-sealed reach-set that folds each bound value's full witness (fixing the single-frame
-  approximation), omits its home frame until lift, and seals when the scope closes — with `Scope` made
-  close-aware as the opening spike.
 - [`alloc_object` embedding sites return `Witnessed`](per-node-memory/alloc-object-embedding-sites.md) —
-  convert the value-embedding object sites and `alloc_function` onto `merge`, and fold scope binds into
-  the reach-set, retiring the object path's dependence on the reconstruction.
+  convert the value-embedding object sites and `alloc_function` onto `merge`, and fold a `let`-bound
+  value's full carrier into the reach-set (replacing the single-frame relocate-seam fold for the object
+  channel), retiring the object path's dependence on the reconstruction.
 - [`alloc_ktype` returns `Witnessed`](per-node-memory/alloc-ktype-witnessed.md) — convert the type
   family onto `yoke`; the last `KType::Module` user converted, `reached_frame` and the per-frame
   `retained` field are deleted and the step `pin` becomes exact.
