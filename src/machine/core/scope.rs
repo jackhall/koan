@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::rc::{Rc, Weak};
 
@@ -85,6 +85,10 @@ pub struct Scope<'a> {
     /// cross-references inside the block resolve regardless of lexical order — the block is
     /// the one cross-order resolution that survives strict source-order type-name lookup.
     recursive_set: Option<Rc<RecursiveSet<'a>>>,
+    /// Set once the scope's defining block / frame finishes: no further bind is legal (rebinds are
+    /// already rejected; this also rejects *new* binds). The seal point for its reach-set. `Cell`
+    /// because it flips once, late, outside the bind hot path.
+    closed: Cell<bool>,
 }
 
 /// A scope's binding storage. `Owned` is the default. `Borrowed` is the
@@ -151,6 +155,7 @@ impl<'a> Scope<'a> {
             pending: PendingQueue::new(),
             kind: ScopeKind::Root,
             recursive_set: None,
+            closed: Cell::new(false),
         }
     }
 
@@ -158,6 +163,27 @@ impl<'a> Scope<'a> {
     /// sibling field. Upgrades to the owning `Rc` whenever the region is live.
     pub(crate) fn region_owner(&self) -> Weak<FrameStorage> {
         self.region_owner.clone()
+    }
+
+    /// Mark this scope closed: its defining block / frame has finished, so no further bind is legal.
+    /// Idempotent. This is the point the scope's reach-set would seal.
+    pub fn close(&self) {
+        self.closed.set(true);
+    }
+
+    /// Whether [`Self::close`] has run — a bind past this point is an invariant violation.
+    pub fn is_closed(&self) -> bool {
+        self.closed.get()
+    }
+
+    /// Spike guard: a bind after [`Self::close`] means the scope's defining block finished yet a
+    /// write still arrived. `debug_assert` so release builds pay nothing.
+    fn assert_open(&self, name: &str) {
+        debug_assert!(
+            !self.closed.get(),
+            "bind `{name}` into closed scope {:?}",
+            self.id,
+        );
     }
 
     pub fn child_for_call(&'a self) -> Scope<'a> {
@@ -198,6 +224,7 @@ impl<'a> Scope<'a> {
             pending: PendingQueue::new(),
             kind,
             recursive_set,
+            closed: Cell::new(false),
         }
     }
 
@@ -237,6 +264,7 @@ impl<'a> Scope<'a> {
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
             recursive_set: None,
+            closed: Cell::new(false),
         }
     }
 
@@ -431,6 +459,7 @@ impl<'a> Scope<'a> {
             }
             return self.write_target().bind_value(name, obj, index);
         }
+        self.assert_open(&name);
         match self.bindings.get().try_bind_value(&name, obj, index)? {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
@@ -458,6 +487,7 @@ impl<'a> Scope<'a> {
                 .write_target()
                 .register_function(name, fn_ref, obj, index);
         }
+        self.assert_open(&name);
         // A user overload may not join a builtin's bucket — builtins are immutable and
         // unshadowable. The root registers its own builtins at `BUILTIN`, so only a
         // non-`BUILTIN` index is gated.
@@ -493,6 +523,7 @@ impl<'a> Scope<'a> {
             self.write_target().register_type(name, ktype, index);
             return;
         }
+        self.assert_open(&name);
         let kt_ref: &'a crate::machine::model::types::KType<'a> = self.region.alloc_ktype(ktype);
         match self.bindings.get().try_register_type(&name, kt_ref, index) {
             Ok(ApplyOutcome::Applied) => {}

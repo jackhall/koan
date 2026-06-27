@@ -26,8 +26,9 @@ down. Binding cannot consume the `FrameSet` that already expresses the union.
   refcount is not pegged — TCO frame reuse (`try_reset_for_tail`) keeps its three Miri tests.
 - A `Scope` is aware of its own close: after close it rejects further binds (rebinds are already
   rejected — see [`bind_value`](../../src/machine/core/scope.rs)), and the close event is where the
-  reach-set seals. The reject-after-close assertion never fires across the suite, confirming close is a
-  single identifiable event.
+  reach-set seals. Close fires at the **owning node's finalize**, routed per scope kind — for a
+  per-call frame, at the body slot's `Done` / tail-`Continue`; the reject-after-close assertion never
+  fires across the suite.
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` clean.
 
 **Directions.**
@@ -43,9 +44,13 @@ down. Binding cannot consume the `FrameSet` that already expresses the union.
   frame joins the witness at the lift boundary [`transfer_into`](../../src/witnessed.rs) already marks
   (in-region → held-outside). This is the structural form of the
   [`retain`](../../src/machine/core/arena.rs) self-no-op and subsumes it.
-- *Scope close-awareness lands first, as a spike — decided.* Teaching `Scope` to reject post-close
-  binds both validates that close is a clean event and is permanent safety; it is the opening move of
-  this item, ahead of rewiring reach.
+- *Close is finalize-time and owner-routed — decided.* `close()` fires at the owning node's finalize,
+  not at frame drop (which lands after consumers have already read the carrier). A per-call frame
+  stamps its owner slot at install, and [`apply_outcome`](../../src/machine/execute/runtime.rs) closes
+  that frame's scope at the owner slot's `Done` / tail-`Continue` — exact, before any consumer pull; a
+  `Yoked` sub-expression slot owns no frame, so it does not close the shared scope. The `YokedChild`
+  block scopes (`MODULE` / `SIG` / `USING` / `TRY`) and the run-root close at their own construct's
+  completion (the block's result finalize; run end), wired next.
 - *Where the set lives — open.* On `Scope` (beside the bindings it describes) vs. keyed off the frame
   `region_owner`. Recommended: on `Scope`, since reach is a property of the scope's bindings and the
   scope is what a closure captures.

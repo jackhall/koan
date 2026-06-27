@@ -371,6 +371,18 @@ impl<'run> KoanRuntime<'run> {
         CallFrame::new(outer, None)
     }
 
+    /// Close the active frame's scope iff this slot owns it: the per-call frame's body has finished
+    /// (a `Done` / `DoneWitnessed` return, or a tail `Continue` retiring this iteration), so the scope
+    /// takes no further binds and its reach-set seals. A `Yoked` sub-expression slot owns no frame
+    /// (its `owner` never names this slot), so its `Done` is a no-op here.
+    fn close_owned_scope(&self, idx: usize) {
+        if let Some(frame) = self.ambient.active_frame_ref() {
+            if frame.owner() == Some(NodeId(idx)) {
+                frame.scope().close();
+            }
+        }
+    }
+
     /// Interpret an [`Outcome`] into the scheduler effect it names and return the slot's
     /// [`NodeStep`]. This is the sole graph writer the dispatch side reaches — a decide handler
     /// never holds `&mut Scheduler`.
@@ -382,10 +394,16 @@ impl<'run> KoanRuntime<'run> {
         match outcome {
             // The terminal stays live at `'step`; `run_step` contract-checks it (value and contract
             // share `'step`) and only then bundles it with its witness set and finalizes.
-            Outcome::Done(output) => NodeStep::Done(output),
+            Outcome::Done(output) => {
+                self.close_owned_scope(idx);
+                NodeStep::Done(output)
+            }
             // The object-family carrier rides straight through to the Done boundary, where the
             // workload hook seals it (a declared-return re-stamp aside, untouched).
-            Outcome::DoneWitnessed(carrier) => NodeStep::DoneWitnessed(carrier),
+            Outcome::DoneWitnessed(carrier) => {
+                self.close_owned_scope(idx);
+                NodeStep::DoneWitnessed(carrier)
+            }
             Outcome::Continue {
                 work,
                 frame,
@@ -396,7 +414,16 @@ impl<'run> KoanRuntime<'run> {
                 // The body's leading statements are never dispatched here — a producer with leading
                 // statements parks on them as owned `BodyBlock` deps and emits this `Continue` only
                 // from the resolving finish (see `dispatch/exec.rs` and `run_action`).
+                // A tail iteration (`ReuseReserve`) retires this scope before the cart is reused for
+                // the next; other placements keep the current scope live.
+                if matches!(frame, FramePlacement::ReuseReserve { .. }) {
+                    self.close_owned_scope(idx);
+                }
                 let frame = self.resolve_frame_placement(frame);
+                // The body re-dispatched into a freshly installed frame finalizes that frame's scope.
+                if let Some(installed) = frame.as_ref() {
+                    installed.set_owner(NodeId(idx));
+                }
                 // Decide the chain reshape from the still-live contract variant, then erase the
                 // contract — so the `Replace` step carries no `'run` (the variant is frozen into the
                 // lifetime-free [`ChainOp`]). The run loop assembles the chain against the post-step

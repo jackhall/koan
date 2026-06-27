@@ -51,6 +51,48 @@ fn bind_value_allows_shadowing_in_child_scope() {
 }
 
 #[test]
+fn close_marks_scope_and_is_idempotent_reads_still_work() {
+    let region = FrameStorage::run_root();
+    let scope = run_root_bare(&region);
+    let v = region.region().alloc_object(KObject::Number(1.0));
+    scope
+        .bind_value("x".to_string(), v, BindingIndex::BUILTIN)
+        .unwrap();
+    assert!(!scope.is_closed());
+    scope.close();
+    assert!(scope.is_closed());
+    scope.close(); // idempotent
+    assert!(scope.is_closed());
+    // Reads stay legal after close — only binds are rejected.
+    assert!(matches!(scope.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "closed scope")]
+fn bind_after_close_panics() {
+    let region = FrameStorage::run_root();
+    let scope = run_root_bare(&region);
+    scope.close();
+    let v = region.region().alloc_object(KObject::Number(1.0));
+    let _ = scope.bind_value("x".to_string(), v, BindingIndex::BUILTIN);
+}
+
+#[test]
+fn close_is_per_scope_open_child_still_binds() {
+    let region = FrameStorage::run_root();
+    let outer = run_root_bare(&region);
+    outer.close();
+    let inner = region.region().alloc_scope(outer.child_for_call());
+    let v = region.region().alloc_object(KObject::Number(2.0));
+    inner
+        .bind_value("x".to_string(), v, BindingIndex::BUILTIN)
+        .unwrap();
+    assert!(matches!(inner.lookup("x"), Some(KObject::Number(n)) if *n == 2.0));
+    assert!(!inner.is_closed());
+}
+
+#[test]
 fn register_function_dedupes_exact_signature() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
