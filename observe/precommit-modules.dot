@@ -377,7 +377,6 @@ digraph {
     "koan::builtins::quote" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::quote" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::builtins::quote" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins::quote" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::builtins::record_projection" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::record_projection" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::record_projection" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -475,6 +474,7 @@ digraph {
     "koan::machine::core::arena" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::scope" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::scope_ptr" [label="uses", style="dashed"];
+    "koan::machine::core::arena" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::operators" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::values" [label="uses", style="dashed"];
@@ -812,6 +812,7 @@ digraph {
     "koan::machine::model::ast" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::model::ast" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::model::types::ktraits" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];

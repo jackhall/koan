@@ -12,16 +12,19 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, scope_frame, Action};
+    use crate::machine::core::KoanRegion;
     use crate::machine::model::Carried;
     use crate::machine::FrameSet;
-    use crate::witnessed::Witnessed;
     let expr = crate::try_action!(require_kexpression(ctx.args, "QUOTE", "expr"));
-    // `KObject::KExpression` wraps the raw `&'run` AST — an ancestor backing the producing frame's
-    // `outer` chain pins (subsumed in the witness) that the `for<'b>` `yoke` brand cannot rebuild. So
-    // the value is adopted under its exact `singleton(F)` via structural `Witnessed::new`.
-    let obj = ctx.scope.region.alloc_object(KObject::KExpression(expr));
+    // A quoted expression is raw, unevaluated AST — splice-free, so borrow-free owned data. It embeds
+    // into the `KObject::KExpression` through the yoke's `for<'b>` brand: the object is alloc'd into
+    // this scope's region natively, co-located by construction (its sole reach is that region's
+    // frame), rather than asserted over an already-built value via `Witnessed::new`.
     let witness = FrameSet::singleton(scope_frame(ctx.scope));
-    Action::DoneWitnessed(Witnessed::new(Carried::Object(obj), witness))
+    let carrier = KoanRegion::alloc_witnessed_embedding(witness, expr, move |region, expr_at| {
+        Carried::Object(region.alloc_object(KObject::KExpression(expr_at)))
+    });
+    Action::DoneWitnessed(carrier)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

@@ -9,6 +9,7 @@ use std::rc::Rc;
 use crate::machine::model::{
     ArgValue, Carried, KKey, KObject, Parseable, Record, Serializable, UntypedElement, UntypedKey,
 };
+use crate::witnessed::reattachable;
 
 #[cfg(test)]
 mod tests;
@@ -116,6 +117,28 @@ impl<'a> ExpressionPart<'a> {
         ExpressionPart::Expression(Box::new(KExpression::new(
             parts.into_iter().map(Spanned::bare).collect(),
         )))
+    }
+
+    /// True when neither this part nor any part nested beneath it is a `Spliced(Carried)` — the only
+    /// variant carrying a live `'a` borrow. See [`KExpression::is_splice_free`].
+    fn is_splice_free(&self) -> bool {
+        match self {
+            ExpressionPart::Spliced(_) => false,
+            ExpressionPart::Expression(e)
+            | ExpressionPart::SigiledTypeExpr(e)
+            | ExpressionPart::RecordType(e) => e.is_splice_free(),
+            ExpressionPart::ListLiteral(items) => items.iter().all(ExpressionPart::is_splice_free),
+            ExpressionPart::DictLiteral(pairs) => pairs
+                .iter()
+                .all(|(k, v)| k.is_splice_free() && v.is_splice_free()),
+            ExpressionPart::RecordLiteral(pairs) => {
+                pairs.iter().all(|(_, v)| v.is_splice_free())
+            }
+            ExpressionPart::Keyword(_)
+            | ExpressionPart::Identifier(_)
+            | ExpressionPart::Type(_)
+            | ExpressionPart::Literal(_) => true,
+        }
     }
 
     /// Per-part subset of `KExpression::summarize`.
@@ -434,6 +457,14 @@ pub struct KExpression<'a> {
     operator_probe: Option<String>,
 }
 
+// The `'a` of a `KExpression` is borne **only** by `ExpressionPart::Spliced(Carried<'a>)` — every
+// other part is owned (keywords, identifiers, literals, boxed sub-expressions). The layout is
+// therefore identical for every `'a` (a splice rides the layout-invariant `Carried` carrier), so the
+// family routes the single audited lifetime-retype. A splice-free expression — raw, unevaluated AST —
+// binds no live borrow at all, the precondition `alloc_witnessed_embedding` re-anchors under (see
+// [`KExpression::is_splice_free`]).
+reattachable! { KExpression<'static> => KExpression<'r> }
+
 impl<'a> KExpression<'a> {
     /// Spanless constructor; `span`/`file` populated by later phases. Fills the
     /// structural cache from `parts`.
@@ -459,6 +490,17 @@ impl<'a> KExpression<'a> {
         };
         expr.fill_cache();
         expr
+    }
+
+    /// True when no part anywhere in the tree is a `Spliced(Carried)`, i.e. the expression is
+    /// borrow-free owned data — its `'a` parameter is a phantom that binds nothing. Raw, unevaluated
+    /// AST (a quoted expression, an FN body) is splice-free: splices appear only when the scheduler
+    /// folds a resolved dep value into a parent's parts. This is the precondition
+    /// [`alloc_witnessed_embedding`](crate::machine::core::KoanRegion::alloc_witnessed_embedding)
+    /// re-anchors a moved-in expression under — a splice-free expression re-anchored to a fresh
+    /// lifetime fabricates no borrow.
+    pub fn is_splice_free(&self) -> bool {
+        self.parts.iter().all(|p| p.value.is_splice_free())
     }
 
     /// Recompute the structural cache from the current `parts`. Called by every

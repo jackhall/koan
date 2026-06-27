@@ -21,13 +21,15 @@ use typed_arena::Arena;
 use super::scope::Scope;
 use super::scope_ptr::ScopeRefFamily;
 use crate::machine::core::kfunction::KFunction;
+use crate::machine::model::ast::KExpression;
 use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{CarriedFamily, KObject, Module, ModuleSignature};
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
 use crate::witnessed::{
-    MergeWitness, Reattachable, Region, StorageProfile, Stored, Witness, WitnessRegion, Witnessed,
+    reattach_with, MergeWitness, Reattachable, Region, StorageProfile, Stored, Witness,
+    WitnessRegion, Witnessed,
 };
 
 /// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
@@ -187,6 +189,42 @@ impl Region<KoanStorageProfile> {
         // enough to check `build`'s `-> T::At<'b>` bound, so it sees `<_ as Reattachable>::At` and fails
         // to match the projection.
         Witnessed::<CarriedFamily, FrameSet>::yoke(witness, build)
+    }
+
+    /// [`alloc_witnessed`](Self::alloc_witnessed) for a construction that **embeds one owned,
+    /// splice-free [`KExpression`]** — a quoted expression or an FN body. The owned `embed` is moved
+    /// into the closure (its phantom lifetime forgotten for storage) and re-anchored to the yoke
+    /// brand, then handed to `build`, which allocs the object **into the witness region natively** at
+    /// the brand. So the object's region is co-located *by construction* — the same `for<'b>`
+    /// enforcement [`alloc_witnessed`](Self::alloc_witnessed) gives — rather than asserted over an
+    /// already-built value via [`Witnessed::new`]; the embedded expression contributes no region of
+    /// its own.
+    ///
+    /// The embed must be **splice-free** ([`KExpression::is_splice_free`]): a `Spliced(Carried)` part
+    /// carries a live `'a` region reference that re-anchoring to the brand would dangle. A value that
+    /// references another region composes through [`Witnessed::merge`] of that region's carrier
+    /// instead. The `debug_assert` pins the precondition at the call site. **No `unsafe` here** — the
+    /// re-anchor routes the safe-signature `reattach_with`, whose audited retype lives once in
+    /// `witnessed.rs`.
+    pub(crate) fn alloc_witnessed_embedding(
+        witness: FrameSet,
+        embed: KExpression<'_>,
+        build: impl for<'b> FnOnce(&'b KoanRegion, KExpression<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
+    ) -> Witnessed<CarriedFamily, FrameSet> {
+        debug_assert!(
+            embed.is_splice_free(),
+            "alloc_witnessed_embedding requires a splice-free KExpression: a Spliced(Carried) part \
+             holds a live region reference that re-anchoring to the yoke brand would dangle"
+        );
+        Witnessed::<CarriedFamily, FrameSet>::yoke(witness, move |region| {
+            // The owned, splice-free `embed` carries no live borrow, so re-anchoring its phantom
+            // lifetime to the yoke brand is the soundest case of the **safe-signature** `reattach_with`
+            // — the yoke region itself the witness, bounding the result to the brand `'b` — after which
+            // `build` moves it natively into `region`. The object's region is co-located by the yoke's
+            // `for<'b>` brand; the only obligation is splice-freeness, asserted above.
+            let embed_at = reattach_with::<KExpression<'static>, _>(embed, region);
+            build(region, embed_at)
+        })
     }
 
     pub fn alloc_scope<'a>(&'a self, s: Scope<'a>) -> &'a Scope<'a> {
