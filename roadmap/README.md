@@ -312,7 +312,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [`alloc_ktype` returns `Witnessed`](per-node-memory/alloc-ktype-witnessed.md)
 - [`alloc_object` returns `Witnessed`](per-node-memory/alloc-object-witnessed.md)
 - [Migrate the loose witness-borrow wrappers onto `Sealed`](per-node-memory/migrate-reattach-helpers.md)
 - [Migrate scope-handle reads to `open`](per-node-memory/scope-reads-to-open.md)

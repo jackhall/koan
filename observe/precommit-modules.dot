@@ -757,6 +757,7 @@ digraph {
     "koan::machine::execute::run_loop" -> "koan::machine::execute::finalize" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
+    "koan::machine::execute::run_loop" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::model::ast" [label="uses", style="dashed"];

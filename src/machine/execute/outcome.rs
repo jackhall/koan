@@ -22,7 +22,7 @@ use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::ScopeId;
 use crate::machine::model::values::{Carried, KObject};
 
-use crate::machine::{KError, NodeId, TraceFrame};
+use crate::machine::{FrameSet, KError, NodeId, TraceFrame};
 use crate::witnessed::reattachable;
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
@@ -135,6 +135,24 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
         + 'a,
 >;
 
+/// A resolved dep terminal as the continuation receives it: the [`Carried`] value plus `reach` — the
+/// set of regions that value still reaches. `reach` is the dep's own witness set, read off its slot
+/// carrier ([`Scheduler::dep_witness`](crate::scheduler::Scheduler)) at read-out rather than
+/// recovered structurally; it is the operand the [`alloc` construction
+/// inversion](../../../../roadmap/per-node-memory/alloc-object-witnessed.md) `merge`s so an aggregate
+/// built from these deps is born naming every region it reaches. The relocation that precedes the
+/// continuation keeps using [`reached_frame`](super::lift::reached_frame) for frame retention — a
+/// deep-copied value no longer reaches its producer, so its *post-relocate* reach is not this
+/// *pre-relocate* set — so `reach` rides through to construction, the only site whose value reaches
+/// exactly this set.
+pub(in crate::machine::execute) struct DepTerminal<'a> {
+    pub(in crate::machine::execute) value: Carried<'a>,
+    // The dep's reach set, read off its slot carrier. Folded into the consumer-step `pin` today; the
+    // alloc construction inversion will additionally `merge` it so an aggregate built from these deps
+    // names every region it reaches. See the type doc above.
+    pub(in crate::machine::execute) reach: FrameSet,
+}
+
 /// The one continuation every node runs when its deps resolve — the unified currency
 /// [`NodeWork`](super::nodes::NodeWork) carries. It receives the dep terminals in submission order
 /// as `Result`s (an errored dep is *not* short-circuited by the handler — the continuation decides),
@@ -144,7 +162,7 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
 pub(in crate::machine::execute) type NodeContinuation<'a> = Box<
     dyn for<'view> FnOnce(
             &SchedulerView<'a, 'view>,
-            &[Result<Carried<'a>, KError>],
+            &[Result<DepTerminal<'a>, KError>],
             usize,
         ) -> Outcome<'a>
         + 'a,
@@ -177,7 +195,7 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
         let mut values: Vec<Carried<'_>> = Vec::with_capacity(results.len());
         for r in results {
             match r {
-                Ok(c) => values.push(*c),
+                Ok(t) => values.push(t.value),
                 Err(e) => {
                     return Outcome::Done(Err(propagate_dep_error(e, dep_error_frame.clone())))
                 }
@@ -197,7 +215,7 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
     Box::new(move |view, results, _idx| {
         let result = match &results[0] {
             // The watched terminal shares the cart-scale `'a` lifetime the finish runs at.
-            Ok(c) => Ok(c.object()),
+            Ok(t) => Ok(t.value.object()),
             // Frameless: the recovery-site dispatch attaches its own frame.
             Err(e) => Err(propagate_dep_error(e, None)),
         };

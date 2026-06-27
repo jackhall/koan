@@ -10,13 +10,13 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ErasedContract;
-use crate::machine::model::Carried;
 use crate::machine::{FrameSet, FrameStorage, KError, KErrorKind, KoanRegion, NodeId};
 use crate::witnessed::{reattachable, seal_option, MergeWitness, SealedExtern};
 
 use super::dispatch::{reattach_node_scope, SchedulerView};
 use super::finalize::NodeFinalize;
 use super::lift::{reached_frame, relocate_carried};
+use super::outcome::DepTerminal;
 use super::nodes::{Node, NodeFrame, NodePayload, NodeScope, NodeStep, NodeWork};
 use super::runtime::{KoanRuntime, KoanWorkload};
 
@@ -45,14 +45,17 @@ reattachable!(RegionRefFamily => &'r KoanRegion);
 /// [`Erased::reattach`](crate::witnessed) the open already owns, where a witness-bounded reattach
 /// (`reattach_with`) cannot — capping the produced lifetime at the witness borrow, it would demand the
 /// step pin outlive a *universally* quantified `'b`, i.e. be `'static`. The held step witness keeps the
-/// sources alive across the open; the brand confines the values to it. Layout-invariant: a
-/// `Vec<Result<Carried<'r>, KError>>` is a `Vec` of two-pointer-or-error cells whose representation
-/// never depends on `'r`.
+/// sources alive across the open; the brand confines the values to it. Each cell is a
+/// [`DepTerminal`](super::outcome::DepTerminal) — the resolved value plus its `reach` set — so the
+/// reach rides the slice to the construction site without a parallel channel. Layout-invariant: a
+/// `Vec<Result<DepTerminal<'r>, KError>>` is a `Vec` of cells (two pointers + a lifetime-free
+/// `FrameSet`, or an error) whose representation never depends on `'r`.
 pub(in crate::machine::execute) struct DepResultsFamily;
 
-// `Vec<Result<Carried<'r>, KError>>` is one type generic only in `'r` (a `Vec` of layout-invariant
-// cells; `KError` is lifetime-free), so the shared `reattachable!` macro discharges the obligation.
-reattachable!(DepResultsFamily => Vec<Result<Carried<'r>, KError>>);
+// `Vec<Result<DepTerminal<'r>, KError>>` is one type generic only in `'r` (a `Vec` of layout-invariant
+// cells; `FrameSet` / `KError` are lifetime-free), so the shared `reattachable!` macro discharges the
+// obligation.
+reattachable!(DepResultsFamily => Vec<Result<DepTerminal<'r>, KError>>);
 
 impl<'run> KoanRuntime<'run> {
     /// On `Done` with a frame, the return `Value` references the per-call region that's
@@ -156,16 +159,40 @@ impl<'run> KoanRuntime<'run> {
             (scope.region, scope.region_owner().upgrade())
         };
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
-        // The consumer-step **pin**: the set union of every region this step's deps reach, assembled
-        // *before* the open so it outlives the brand `'b`. It is the dep half of the finalized
-        // terminal's witness set, and — unioned with the cart into `combined` below — the witness the
-        // step open re-anchors its carriers against; it keeps every dep source alive past
+        // Read each producer terminal out (borrow-bounded) into the dep slice — the resolved value
+        // plus its `reach` set (its slot witness). The slice erases into one carrier that opens
+        // **in-band** at `'b` alongside the continuation (the only sound route to the unbounded brand,
+        // see `DepResultsFamily`); the sources stay pinned by `combined` across the open.
+        let dep_sources: Vec<Result<DepTerminal<'_>, KError>> = deps
+            .iter()
+            .map(|d| {
+                self.sched
+                    .read_result(*d)
+                    .map(|value| DepTerminal {
+                        value,
+                        reach: self.sched.dep_witness(*d),
+                    })
+                    .map_err(|e| e.clone())
+            })
+            .collect();
+        // The consumer-step **pin**: the set union of every region this step's deps reach, read off
+        // the dep terminals' `reach` above (an errored dep has no `DepTerminal`, so its witness is
+        // re-read). Assembled *before* the open so it outlives the brand `'b`; it is the dep half of the
+        // finalized terminal's witness set, and — unioned with the cart into `combined` below — the
+        // witness the step open re-anchors its carriers against, keeping every dep source alive past
         // `reclaim_deps`. (Over-approximation: every read dep, not only those reaching the output;
         // retired to exact when `alloc_*` returns `Witnessed`.)
-        let pin: FrameSet = deps.iter().fold(FrameSet::empty(), |acc, d| {
-            FrameSet::merge(&acc, &self.sched.dep_witness(*d))
-                .expect("a set witness always represents the union")
-        });
+        let pin: FrameSet =
+            dep_sources
+                .iter()
+                .zip(deps.iter())
+                .fold(FrameSet::empty(), |acc, (src, d)| {
+                    match src {
+                        Ok(t) => FrameSet::merge(&acc, &t.reach),
+                        Err(_) => FrameSet::merge(&acc, &self.sched.dep_witness(*d)),
+                    }
+                    .expect("a set witness always represents the union")
+                });
         // The step's open witness: the start cart (which pins the continuation, the contract, and the
         // consumer `dest` region — and, via its `outer` chain, their run / ancestor backings) unioned
         // with `pin` (which pins every dep source). Held across the whole open, so re-anchoring the
@@ -186,13 +213,6 @@ impl<'run> KoanRuntime<'run> {
         let continuation = SealedExtern::seal(erased_continuation);
         let contract = seal_option(prev_contract);
         let region = SealedExtern::<RegionRefFamily>::erase(dest);
-        // Read each producer terminal out (borrow-bounded) and erase the slice into one carrier, so it
-        // opens **in-band** at `'b` alongside the continuation — the audited reattach, the only sound
-        // route to the unbounded brand (see `DepResultsFamily`). The sources stay pinned by `combined`.
-        let dep_sources: Vec<Result<Carried<'_>, KError>> = deps
-            .iter()
-            .map(|d| self.sched.read_result(*d).map_err(|e| e.clone()))
-            .collect();
         let dep_carrier = SealedExtern::<DepResultsFamily>::erase(dep_sources);
         continuation
             .zip(contract)
@@ -205,20 +225,26 @@ impl<'run> KoanRuntime<'run> {
                     // relocate it into the consumer `dest` region with a plain `'b -> 'b` structural copy —
                     // the spine copied, surviving closures riding their `&'b` borrows into the source
                     // regions `combined` pins. No fabricated lifetime; the only reattach is the open above.
-                    let results: Vec<Result<Carried<'_>, KError>> = dep_sources
+                    let results: Vec<Result<DepTerminal<'_>, KError>> = dep_sources
                         .into_iter()
                         .map(|r| {
-                            r.map(|c| {
-                                let relocated = relocate_carried(c, region);
+                            r.map(|DepTerminal { value, reach }| {
+                                let relocated = relocate_carried(value, region);
                                 // A relocated closure / module borrows back into its producer's per-call
                                 // region; retain that region on the consumer frame so the borrow survives
                                 // the producer's frame drop (`reclaim_deps` below, or scheduler teardown).
+                                // `reach` (the dep's pre-relocate set) rides through to the construction
+                                // site; the retention here stays `reached_frame`-recovered because a
+                                // deep-copied value no longer reaches its producer.
                                 if let (Some(home), Some(reached)) =
                                     (&dest_frame, reached_frame(relocated))
                                 {
                                     home.retain(reached);
                                 }
-                                relocated
+                                DepTerminal {
+                                    value: relocated,
+                                    reach,
+                                }
                             })
                         })
                         .collect();

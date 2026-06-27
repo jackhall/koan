@@ -1,28 +1,30 @@
 # `alloc_ktype` returns `Witnessed`
 
 Migrate the type allocation family onto `yoke`, so every `KType` born in a per-call region comes
-back already bundled with its owning frame's witness.
+back already bundled with the set of regions it reaches.
 
 **Problem.** [`region.alloc_ktype`](../../src/machine/core/arena.rs) (~38 call sites — the
 highest-volume family) returns a bare `&'a KType` that is not witnessed at all; like the object
 path, a transitional `Witnessed::new` would assert co-location in prose rather than guarantee it by
 construction, even though the `yoke` / `merge` constructors and the production witness plumbing now
-exist. The one region-referencing variant — a `KType::Module` naming its child scope — has its
-liveness named only at the relocation read-out boundary, recovered per-value from the module's child
-scope `region_owner` ([`reached_frame`](../../src/machine/execute/lift.rs)) and retained onto the
-consumer frame, rather than folded onto its carrier at construction.
+exist. The one region-referencing variant — a `KType::Module` naming its child scope — has its reach
+named not on its carrier but by the same two transitional mechanisms the object family uses: a
+read-out recovery from the module's child-scope `region_owner`
+([`reached_frame`](../../src/machine/execute/lift.rs)) and the consumer-frame accumulator
+([`FrameStorage.retained`](../../src/machine/core/arena.rs)). `KType::Module` is the **last** user of
+both — once it is converted, the recovery and the accumulator have no callers left.
 
 **Acceptance criteria.**
 
-- `alloc_ktype` returns a `KType` bundled with its owning frame's witness, built inside the witness
-  closure — most `KType`s are owned / `Rc`-shared and `yoke` directly, while a region-referencing
-  variant (a `KType::Module` naming its child scope) folds in via `merge` against that scope's
-  carrier — so a region-resident type is born co-located by construction.
+- `alloc_ktype` returns a `KType` bundled with the set of regions it reaches, built inside the
+  witness closure — most `KType`s are owned / `Rc`-shared and `yoke` directly, while a
+  region-referencing variant (a `KType::Module` naming its child scope) folds in via `merge` against
+  that scope's frame — so a region-resident type is born co-located by construction.
 - The type family carries no `Witnessed::new`: a variant referencing another witnessed value merges
   it rather than re-asserting co-location in prose.
-- A lifted `KType::Module`'s reached region is read off its carrier's witness set, retiring the
-  per-value `reached_frame` recovery the relocation read-out boundaries run today for the module
-  variant.
+- A lifted `KType::Module`'s reached region is read off its carrier's witness set. With its last user
+  converted, the read-out `reached_frame` recovery and the `FrameStorage.retained` accumulator are
+  both **deleted** — every reached region is named on the carrier itself.
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` clean.
 
 **Directions.**
@@ -31,26 +33,32 @@ consumer frame, rather than folded onto its carrier at construction.
   `FrameSet` set-witness (see
   [memory-model.md § Region lifetime erasure](../../design/memory-model.md#region-lifetime-erasure));
   this item is the type-family conversion.
-- *Separate from the object family — decided.* At ~38 sites the `ktype` conversion is its own PR
-  rather than sharing one with [alloc-object](alloc-object-witnessed.md).
+- *Its own PR, after the object family — decided.* At ~38 sites the `ktype` conversion is its own PR;
+  it lands *after* [alloc-object](alloc-object-witnessed.md), reusing the shared dep-result plumbing
+  that item lands (the lift handing each finish its deps' witness sets).
 - *Construction inversion, not post-hoc bundling — decided.* The type is built inside the witness
   closure; a `for<'b>` closure cannot accept an already-built `KType<'a>`. Most variants `yoke`
   (owned / `Rc` data); a `KType::Module` `merge`s its child-scope carrier.
 - *The scope witness rides the type, not `alloc_scope` — decided.* A `KType::Module`'s child scope is
   alloc'd via `alloc_scope`, but the witness that keeps its region alive rides the `KType::Module`
   carrier (the value), not the scope handle: so this inversion is the `KType` value's, and
-  `alloc_scope` itself stays bare `&'a`. The merge operand is the scope carrier minted from the
-  module's frame `Rc`, the same shape as the object channel's captured-scope merge.
-- *The within-node value channel must carry the witness set — open.* As with
-  [alloc-object](alloc-object-witnessed.md), `alloc_ktype`'s `merge` has a carrier operand only once
-  the `KType` channel threads the `FrameSet`. The per-value anchor is already gone — a `KType::Module`
-  rides a bare `&'a` and its region is recovered at the relocation read-out boundary (`reached_frame`),
-  not on the channel — so the open question is purely *arriving* a referenced value as a carrier, not
-  retiring an anchor. Recommended: settle the channel before scheduling.
+  `alloc_scope` itself stays bare `&'a`. The merge operand is the module's defining frame
+  (`FrameSet::singleton(F)`, `F` recovered as the child scope's `region_owner`), the same shape as
+  the object family's captured-scope merge.
+- *Completes the `reached_frame` / `FrameStorage.retained` deletion — decided.* The channel decision
+  is settled on [alloc-object](alloc-object-witnessed.md): the set is built at construction by
+  `yoke` / `merge` (operand recovered via `region_owner`), composed onward by `merge` /
+  `transfer_into`, with the dep-result plumbing carrying the set rather than dropping it at the
+  `relocate`. `KType::Module` is the last value reaching a foreign region through the read-out
+  recovery; converting it leaves `reached_frame` and `FrameStorage.retained` with no callers, so both
+  are deleted here.
 
 ## Dependencies
 
 **Requires:**
 
+- [`alloc_object` returns `Witnessed`](alloc-object-witnessed.md) — lands the shared dep-result
+  plumbing this reuses, and the object-family half of the `reached_frame` / `FrameStorage.retained`
+  retirement this completes.
 
 **Unblocks:** none.

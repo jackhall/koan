@@ -5,8 +5,11 @@
 use super::*;
 use crate::builtins::default_scope;
 use crate::machine::model::types::KType;
+use crate::machine::model::values::{Carried, CarriedFamily, KObject};
 use crate::machine::BindingIndex;
+use crate::witnessed::Witnessed;
 use std::cell::RefCell;
+use std::marker::PhantomData;
 
 /// A child `FrameStorage` whose `outer` chains `parent` — the ancestry shape `FrameSet`
 /// subsumption walks. Region escape is irrelevant to the `outer`-chain test, so a plain region.
@@ -319,4 +322,58 @@ fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
         "run root drops once its own strong ref is released — the escaped storage holds no cycle",
     );
     drop(escapee);
+}
+
+/// Spike for the [`alloc_witnessed`](super::Region::alloc_witnessed) construction inversion: a value
+/// `yoke`d into a frame's region comes back bundled with that frame as its reach witness, co-located
+/// by construction. Read back after the original frame handle drops — the bundled witness is the sole
+/// owner of the region the carrier's reference points into. This is the region-pure / single-frame
+/// shape the object and type families' common case takes.
+#[test]
+fn alloc_witnessed_yokes_a_co_located_value() {
+    let frame = FrameStorage::run_root();
+    let w: Witnessed<CarriedFamily, FrameSet> = KoanRegion::alloc_witnessed(
+        FrameSet::singleton(Rc::clone(&frame)),
+        |region| Carried::Object(region.alloc_object(KObject::Number(7.0))),
+    );
+    drop(frame); // the bundled witness now solely owns the region the value lives in.
+    let got = w.with(|c| match *c {
+        Carried::Object(KObject::Number(n)) => *n,
+        _ => panic!("expected a Number object"),
+    });
+    assert_eq!(got, 7.0);
+}
+
+/// Spike for the cross-region `merge` the construction inversion folds a *foreign* region-resident
+/// element with (a list/dict element borrowing into another frame's region). The foreign value is
+/// `yoke`d in an unrelated frame; merging it into a carrier built here succeeds because `FrameSet` is
+/// a *set* witness — it represents the union of two unrelated regions (where a single-region witness
+/// returns `None`, cf. `merge_rejects_unrelated_carts` in `witnessed/tests.rs`). After both call
+/// handles drop, the merged carrier's witness still pins the foreign backing the bound value points
+/// into.
+#[test]
+fn alloc_witnessed_merge_folds_an_independent_foreign_value() {
+    let here_frame = FrameStorage::run_root();
+    let foreign_frame = FrameStorage::run_root(); // unrelated — a sibling producer's frame.
+    let foreign: Witnessed<CarriedFamily, FrameSet> = KoanRegion::alloc_witnessed(
+        FrameSet::singleton(Rc::clone(&foreign_frame)),
+        |r| Carried::Object(r.alloc_object(KObject::Number(1.0))),
+    );
+    let here: Witnessed<CarriedFamily, FrameSet> = KoanRegion::alloc_witnessed(
+        FrameSet::singleton(Rc::clone(&here_frame)),
+        |r| Carried::Object(r.alloc_object(KObject::Number(2.0))),
+    );
+    // Fold the foreign element in at the shared brand; re-seal under the union of both regions.
+    let merged: Witnessed<CarriedFamily, FrameSet> = here
+        .merge::<CarriedFamily, CarriedFamily>(foreign, |_here, foreign, _brand: PhantomData<&_>| {
+            foreign
+        })
+        .expect("a FrameSet set witness always represents the union of unrelated regions");
+    drop(here_frame);
+    drop(foreign_frame); // `merged` holds its own clones of both frames.
+    let got = merged.with(|c| match *c {
+        Carried::Object(KObject::Number(n)) => *n,
+        _ => panic!("expected a Number object"),
+    });
+    assert_eq!(got, 1.0); // the foreign element survived the merge and both handle drops.
 }

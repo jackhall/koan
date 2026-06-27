@@ -23,10 +23,12 @@ use super::scope_ptr::ScopeRefFamily;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::operators::OperatorGroup;
 use crate::machine::model::types::KType;
-use crate::machine::model::values::{KObject, Module, ModuleSignature};
+use crate::machine::model::values::{CarriedFamily, KObject, Module, ModuleSignature};
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
-use crate::witnessed::{MergeWitness, Region, StorageProfile, Stored, Witness, WitnessRegion};
+use crate::witnessed::{
+    MergeWitness, Reattachable, Region, StorageProfile, Stored, Witness, WitnessRegion, Witnessed,
+};
 
 /// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
 /// family's `'static` form (phantom); the [`Region`] engine re-anchors to the caller's `'a`
@@ -158,6 +160,33 @@ impl Region<KoanStorageProfile> {
              that owns its captured scope"
         );
         self.alloc::<KFunction<'static>>(f)
+    }
+
+    /// The alloc-witnessed construction inversion's region-pure primitive: build a value into the
+    /// witness frame's region *inside* the `yoke` closure, returning it bundled with `witness` (the set
+    /// of regions it reaches) so it is co-located by construction rather than paired with an asserted
+    /// witness. One primitive for both value families — the closure returns a `Carried::Object` (an
+    /// [`alloc_object`](Self::alloc_object)) or a `Carried::Type` (an
+    /// [`alloc_ktype`](Self::alloc_ktype)). A value that *references* another region's resident value
+    /// folds that in with [`Witnessed::merge`] instead, unioning its reach; this primitive covers the
+    /// case whose references are all region-derived or owned, so the `for<'b>` brand admits them.
+    ///
+    /// `build`'s return is spelled `<CarriedFamily as Reattachable>::At<'b>`, not the concrete
+    /// `Carried<'b>`: the two are equal by the family's definition, but under the `for<'b>` binder the
+    /// compiler does not normalize the projection lazily, so a `build` typed `-> Carried<'b>` fails to
+    /// satisfy `yoke`'s `-> T::At<'b>` bound. Naming the projection makes the bounds syntactically
+    /// identical. An inline closure returning a `Carried` still unifies fine at the call site.
+    // First production caller is the alloc-object construction inversion
+    // (roadmap/per-node-memory/alloc-object-witnessed.md); exercised now by the arena spike test.
+    #[allow(dead_code)]
+    pub(crate) fn alloc_witnessed(
+        witness: FrameSet,
+        build: impl for<'b> FnOnce(&'b KoanRegion) -> <CarriedFamily as Reattachable>::At<'b>,
+    ) -> Witnessed<CarriedFamily, FrameSet> {
+        // Turbofish `T` explicitly: inference does not drive `yoke`'s `T` from the return type early
+        // enough to check `build`'s `-> T::At<'b>` bound, so it sees `<_ as Reattachable>::At` and fails
+        // to match the projection.
+        Witnessed::<CarriedFamily, FrameSet>::yoke(witness, build)
     }
 
     pub fn alloc_scope<'a>(&'a self, s: Scope<'a>) -> &'a Scope<'a> {

@@ -186,13 +186,17 @@ re-forming the `src`↔`dst` cycle. This closes the one case `open` cannot: a va
 whose source backing is dying but whose consumer outlives it. In Koan: the
 consumer-pull lift across a dependency edge — `relocate_carried` copies the dep into the consumer
 `dest` region at the step brand (the spine sharing its `Rc` payloads, a closure / future / module
-riding its bare borrow), and `transfer_into` re-seals it under the set union of its retained sources
-and `dest`. Because a per-call region carries no `Rc` clone *on the value*, a relocated escaping value
-is kept alive by the **consumer frame**, not the carrier alone: `reached_frame` recovers the value's
-defining frame from its scope `region_owner`, and the consumer frame `retain`s it into
-`FrameStorage.retained` (a `FrameSet`) at each read-out boundary — the per-step over-approximation the
-[`alloc` inversions](../roadmap/per-node-memory/alloc-object-witnessed.md) retire once every reached
-region is named on the carrier itself.
+riding its bare borrow), and `transfer_into` re-seals it under the set union of its reached sources
+and `dest`. Today the relocated value carries no witness set of its own: the lift **drops** the dep's
+set to a bare `Carried` at the relocate, then reconstructs the reach with two transitional mechanisms
+— `reached_frame` recovers the value's defining frame from its scope `region_owner`, and the consumer
+frame `retain`s it into `FrameStorage.retained` (a `FrameSet`) at each read-out boundary. Both exist
+*only* because the set is dropped and re-derived; the
+[`alloc` inversions](../roadmap/per-node-memory/alloc-object-witnessed.md) build the reach on the
+carrier at construction (`yoke` / `merge`, the operand recovered from the captured scope's
+`region_owner`) and carry it through the lift, retiring the read-out recovery and the frame
+accumulator together — every reached region named on the one node carrier, the composition law's
+*one wrapper per node*.
 
 ## Why reads are safe — and where the one escape hatch sits
 
@@ -252,7 +256,8 @@ migrations onto them, with `attach` a contingent fallback retired last:
 
 - [`alloc_object`](../roadmap/per-node-memory/alloc-object-witnessed.md) and
   [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) returning `Witnessed` — wiring
-  `alloc` to return a co-located carrier in production, retiring `transfer_into`'s structural walk.
+  `alloc` to build the reached-region set on the carrier at construction, so the read-out
+  `reached_frame` recovery and the `FrameStorage.retained` accumulator both retire.
 - [Migrate the loose witness-borrow wrappers onto `Sealed`](../roadmap/per-node-memory/migrate-reattach-helpers.md)
   — moving the remaining `reattach_with` / `reattach_ref_with` sites onto the access methods.
 - [Migrate result-slot value reads](../roadmap/per-node-memory/value-reads-to-open.md) and
