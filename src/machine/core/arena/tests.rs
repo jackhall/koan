@@ -5,9 +5,9 @@
 use super::*;
 use crate::builtins::default_scope;
 use crate::machine::model::types::KType;
-use crate::machine::model::values::{Carried, CarriedFamily, KObject};
+use crate::machine::model::values::{Carried, CarriedFamily, Held, KObject};
 use crate::machine::BindingIndex;
-use crate::witnessed::Witnessed;
+use crate::witnessed::{Sealed, Witnessed};
 use std::cell::RefCell;
 use std::marker::PhantomData;
 
@@ -376,4 +376,81 @@ fn alloc_witnessed_merge_folds_an_independent_foreign_value() {
         _ => panic!("expected a Number object"),
     });
     assert_eq!(got, 1.0); // the foreign element survived the merge and both handle drops.
+}
+
+/// Workload-level accumulator carrier for the aggregate construction fold: the dest region the
+/// finished aggregate node lands in, paired with the partial element cells built so far. The
+/// production family the object-family construction inversion uses lives in the execute layer; this
+/// is the spike stand-in that proves the carrier round-trips and the fold composition is sound.
+struct AggBuildFamily;
+crate::witnessed::reattachable!(AggBuildFamily => (&'r KoanRegion, Vec<Held<'r>>));
+
+/// Spike for the **aggregate** construction inversion: a list / dict / record built from several dep
+/// producers — the shape `alloc-object-witnessed` folds with shipped verbs only (no new substrate
+/// primitive). The accumulator is `yoke`d empty over the dest frame's region; each foreign dep's
+/// `Sealed` carrier is folded in with [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into),
+/// which re-anchors it at the shared brand, binds it into the cells, and re-seals under the union of
+/// every reached region (a `FrameSet` set witness — the multi-foreign case a single-region witness
+/// cannot represent); a final [`map`](Witnessed::map) allocates the list node into the carried region.
+/// After every producer handle drops, the folded witness is the sole owner of all three regions the
+/// list reaches, so reading the cells back is sound — the proof the construction site does not need a
+/// `reached_frame` recovery or a `FrameStorage.retained` accumulator: the reach is named on the one
+/// carrier. Mirrors the production fold; fails on UB / leaks, not values.
+#[test]
+fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
+    // Two unrelated producer frames, each holding one element — sibling producers whose terminals
+    // this consumer aggregates.
+    let frame_a = FrameStorage::run_root();
+    let frame_b = FrameStorage::run_root();
+    let dep_a: Sealed<CarriedFamily, FrameSet> = Sealed::seal(KoanRegion::alloc_witnessed(
+        FrameSet::singleton(Rc::clone(&frame_a)),
+        |r| Carried::Object(r.alloc_object(KObject::Number(1.0))),
+    ));
+    let dep_b: Sealed<CarriedFamily, FrameSet> = Sealed::seal(KoanRegion::alloc_witnessed(
+        FrameSet::singleton(Rc::clone(&frame_b)),
+        |r| Carried::Object(r.alloc_object(KObject::Number(2.0))),
+    ));
+    // The consumer's own frame: the region the finished list node lands in.
+    let dest_frame = FrameStorage::run_root();
+    // `yoke` the empty accumulator (the dest region + no cells yet) into the dest frame's region.
+    let acc0: Witnessed<AggBuildFamily, FrameSet> =
+        Witnessed::<AggBuildFamily, FrameSet>::yoke(FrameSet::singleton(Rc::clone(&dest_frame)), |region| {
+            (region, Vec::new())
+        });
+    // Fold each dep in: bind its re-anchored carrier into the cells (a list element borrows into the
+    // foreign region exactly as a surviving closure rides its bare borrow); the witness accumulates
+    // the union. `transfer_into` borrows the dep's seal (does not consume it — other consumers keep
+    // reading the producer terminal).
+    let acc1 = dep_a
+        .transfer_into::<AggBuildFamily, AggBuildFamily>(acc0, |dep, (region, mut cells), _brand| {
+            cells.push(Held::from_carried(dep));
+            (region, cells)
+        })
+        .expect("a FrameSet set witness always represents the union");
+    let acc2 = dep_b
+        .transfer_into::<AggBuildFamily, AggBuildFamily>(acc1, |dep, (region, mut cells), _brand| {
+            cells.push(Held::from_carried(dep));
+            (region, cells)
+        })
+        .expect("a FrameSet set witness always represents the union");
+    // Allocate the list node from the carried dest region; the cells ride borrows into both foreign
+    // regions, all three now named on this one carrier's witness.
+    let list: Witnessed<CarriedFamily, FrameSet> = acc2.map(|(region, cells), _brand| {
+        Carried::Object(region.alloc_object(KObject::list_of_held(cells)))
+    });
+    // Drop every producer handle: the folded witness solely owns all three regions the list reaches.
+    drop(frame_a);
+    drop(frame_b);
+    drop(dest_frame);
+    let got = list.with(|c| match c.object() {
+        KObject::List(items, _) => items
+            .iter()
+            .map(|h| match h.object() {
+                KObject::Number(n) => *n,
+                _ => panic!("expected a Number element"),
+            })
+            .collect::<Vec<_>>(),
+        _ => panic!("expected a List object"),
+    });
+    assert_eq!(got, vec![1.0, 2.0]); // both foreign elements survived the fold and every handle drop.
 }
