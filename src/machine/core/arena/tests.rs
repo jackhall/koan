@@ -386,7 +386,7 @@ struct AggBuildFamily;
 crate::witnessed::reattachable!(AggBuildFamily => (&'r KoanRegion, Vec<Held<'r>>));
 
 /// Spike for the **aggregate** construction inversion: a list / dict / record built from several dep
-/// producers — the shape `alloc-object-witnessed` folds with shipped verbs only (no new substrate
+/// producers — the shape the object family folds with shipped verbs only (no new substrate
 /// primitive). The accumulator is `yoke`d empty over the dest frame's region; each foreign dep's
 /// `Sealed` carrier is folded in with [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into),
 /// which re-anchors it at the shared brand, binds it into the cells, and re-seals under the union of

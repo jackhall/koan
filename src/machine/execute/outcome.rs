@@ -149,7 +149,7 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
 /// keeps its terminal for other consumers), so a **construction finish** folds the dep *witnessed* via
 /// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into), its reach named on the carrier
 /// by construction (the [`alloc` construction
-/// inversion](../../../../roadmap/per-node-memory/alloc-object-witnessed.md)). `value` is the same
+/// inversion](../../../../design/per-node-memory.md#construction-yoke-merge-map-and-one-wrapper-per-node)). `value` is the same
 /// value re-anchored **live at the step brand** (read out of the producer slot, pinned by the step
 /// open) for the **value-copy** finishes still on the bare channel (the type channel), which relocate
 /// it into the consumer region via [`relocate_dep_into_consumer`] (retaining a surviving closure /

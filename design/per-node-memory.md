@@ -84,11 +84,15 @@ witness the type encodes.
 
 What `yoke` cannot mint composes through `merge`: an aggregate folds its *element carriers* (deps
 arriving witnessed from the lift); a closure folds the captured-scope operand minted from its frame
-`Rc`. The target is `yoke` and `merge` throughout — co-location the `for<'b>` brand enforces, never
-asserted. `Witnessed::new`, which pairs an *already-built* value with an asserted witness, is the
-transitional rung the remaining alloc inversions ([`alloc_object`](../roadmap/per-node-memory/alloc-object-witnessed.md),
-[`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md)) climb off as their constructions
-invert.
+`Rc`. The object family's region-pure leaves and aggregates are built this way — a single-part
+literal and a static aggregate cell `yoke` their owned data, and a list / dict / record folds its
+dep carriers via `transfer_into` ([dispatch/literal.rs](../src/machine/execute/dispatch/literal.rs)
+/ [single_poll.rs](../src/machine/execute/dispatch/single_poll.rs)) — co-location the `for<'b>`
+brand enforces, never asserted. `Witnessed::new`, which pairs an *already-built* value with an
+asserted witness, is the transitional rung the remaining alloc inversions climb off as their
+constructions invert: the value-embedding object sites (a bound value, a captured scope, a
+deep-cloned dep — [`alloc-object-embedding-sites`](../roadmap/per-node-memory/alloc-object-embedding-sites.md))
+and the type family ([`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md)).
 
 **`merge` — fold many region-resident values into one.** Generic: a value built
 from references into *two* regions cannot be bundled with one witness by `yoke`
@@ -201,16 +205,21 @@ whose source backing is dying but whose consumer outlives it. In Koan: the
 consumer-pull lift across a dependency edge — `relocate_carried` copies the dep into the consumer
 `dest` region at the step brand (the spine sharing its `Rc` payloads, a closure / future / module
 riding its bare borrow), and `transfer_into` re-seals it under the set union of its reached sources
-and `dest`. Today the relocated value carries no witness set of its own: the lift **drops** the dep's
-set to a bare `Carried` at the relocate, then reconstructs the reach with two transitional mechanisms
-— `reached_frame` recovers the value's defining frame from its scope `region_owner`, and the consumer
-frame `retain`s it into `FrameStorage.retained` (a `FrameSet`) at each read-out boundary. Both exist
-*only* because the set is dropped and re-derived; the
-[`alloc` inversions](../roadmap/per-node-memory/alloc-object-witnessed.md) build the reach on the
-carrier at construction (`yoke` / `merge`, the operand recovered from the captured scope's
+and `dest`. The lift delivers each dep **both** as a live bare `Carried` and as its producer slot's
+own `Sealed` carrier (a `duplicate`): a **witnessed construction finish** — the object family's
+aggregate and region-pure inversions — folds the dep carrier via `transfer_into`, so its reach is
+named on the carrier and never reconstructed. The **bare value-copy** finishes — the type channel,
+and the object value-embedding sites not yet inverted — instead read the live value out, dropping
+its set, and reconstruct the reach with two transitional mechanisms: `reached_frame` recovers the
+value's defining frame from its scope `region_owner`, and the consumer frame `retain`s it into
+`FrameStorage.retained` (a `FrameSet`) at each read-out boundary. Both exist *only* for the values
+whose set is dropped and re-derived; the remaining
+[`alloc` inversions](../roadmap/per-node-memory/alloc-object-embedding-sites.md) build the reach on
+the carrier at construction (`yoke` / `merge`, the operand recovered from the captured scope's
 `region_owner`) and carry it through the lift, retiring the read-out recovery and the frame
 accumulator together — every reached region named on the one node carrier, the composition law's
-*one wrapper per node*.
+*one wrapper per node*. [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) takes
+the last `KType::Module` user off both and deletes them.
 
 ## Why reads are safe — and where the one escape hatch sits
 
@@ -268,10 +277,11 @@ cycle gate) have all landed (see [Region lifetime
 erasure](memory-model.md#region-lifetime-erasure)); what remains are the carrier, allocation, and read
 migrations onto them, with `attach` a contingent fallback retired last:
 
-- [`alloc_object`](../roadmap/per-node-memory/alloc-object-witnessed.md) and
+- [`alloc_object` embedding sites](../roadmap/per-node-memory/alloc-object-embedding-sites.md) and
   [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) returning `Witnessed` — wiring
-  `alloc` to build the reached-region set on the carrier at construction, so the read-out
-  `reached_frame` recovery and the `FrameStorage.retained` accumulator both retire.
+  the remaining `alloc` sites (a bound value, a captured scope, `KType::Module`) to build the
+  reached-region set on the carrier at construction, so the read-out `reached_frame` recovery and
+  the `FrameStorage.retained` accumulator both retire.
 - [Migrate the loose witness-borrow wrappers onto `Sealed`](../roadmap/per-node-memory/migrate-reattach-helpers.md)
   — moving the remaining `reattach_with` / `reattach_ref_with` sites onto the access methods.
 - [Migrate result-slot value reads](../roadmap/per-node-memory/value-reads-to-open.md) and

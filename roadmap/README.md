@@ -171,8 +171,14 @@ What's shipped that the open items below build on:
   anchor's removal — a stored value now holds no owning `Rc` back to a region, so the allocation
   engine needs no cycle gate, and an escaping closure / module is kept alive by its carrier's witness
   set while it rides a slot and retained onto the consumer frame when relocated out; this closed the
-  lift-relocation `unsafe` and cleared the process-exit leak — have since landed too; the remaining
-  `alloc`-side carrier adoption is tracked by the [per-node-memory](per-node-memory/) project. See
+  lift-relocation `unsafe` and cleared the process-exit leak — have since landed too. The
+  `alloc`-side carrier adoption has begun: the consumer-pull lift now hands each construction finish
+  its deps as their producer slots' own `Sealed` carriers (`Sealed::duplicate` / `Scheduler::dep_carrier`,
+  the `DepTerminal` carrier), and the object family's region-pure leaves and aggregates are born
+  witnessed by `yoke` / `transfer_into` — a single-part literal, a static aggregate cell, and the
+  dep-carrier-fed list / dict / record fold, no longer paired with an asserted `Witnessed::new`. The
+  remaining value-embedding object sites and the type family are tracked by the
+  [per-node-memory](per-node-memory/) project. See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -316,7 +322,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [`alloc_object` returns `Witnessed`](per-node-memory/alloc-object-witnessed.md)
+- [`alloc_object` embedding sites return `Witnessed`](per-node-memory/alloc-object-embedding-sites.md)
 - [Migrate the loose witness-borrow wrappers onto `Sealed`](per-node-memory/migrate-reattach-helpers.md)
 - [Migrate scope-handle reads to `open`](per-node-memory/scope-reads-to-open.md)
 - [Migrate result-slot value reads to `open`](per-node-memory/value-reads-to-open.md)
@@ -427,8 +433,9 @@ migrate onto it, with `attach` a contingent fallback retired last:
 - [Migrate the loose witness-borrow wrappers onto `Sealed`](per-node-memory/migrate-reattach-helpers.md) —
   move the `vend_carrier` continuation / contract and the `reattach_*_with` sites onto the access
   methods and delete the four wrappers.
-- [`alloc_object` returns `Witnessed`](per-node-memory/alloc-object-witnessed.md) — convert the
-  object family onto `yoke` / `merge`, retiring transfer-into-lift's structural walk.
+- [`alloc_object` embedding sites return `Witnessed`](per-node-memory/alloc-object-embedding-sites.md) —
+  convert the remaining value-embedding object sites (a bound value, a captured scope, `alloc_function`)
+  onto `merge`, retiring the object path's dependence on `reached_frame` / `FrameStorage.retained`.
 - [`alloc_ktype` returns `Witnessed`](per-node-memory/alloc-ktype-witnessed.md) — convert the
   type family onto `yoke`.
 - [Migrate result-slot value reads to `open`](per-node-memory/value-reads-to-open.md) —

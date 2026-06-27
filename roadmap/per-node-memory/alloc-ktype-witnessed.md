@@ -39,8 +39,10 @@ retain at the [`relocate`](../../src/machine/execute/run_loop.rs) cannot drop to
   [memory-model.md § Region lifetime erasure](../../design/memory-model.md#region-lifetime-erasure));
   this item is the type-family conversion.
 - *Its own PR, after the object family — decided.* At ~38 sites the `ktype` conversion is its own PR;
-  it lands *after* [alloc-object](alloc-object-witnessed.md), reusing the shared dep-result plumbing
-  that item lands (the lift handing each finish its deps' witness sets).
+  it reuses the shipped dep-result plumbing (the lift hands each finish its deps' `Sealed` carriers;
+  see [per-node-memory.md § Transfer](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into))
+  and lands *after* the object family's
+  [embedding-site inversions](alloc-object-embedding-sites.md).
 - *Construction inversion, not post-hoc bundling — decided.* The type is built inside the witness
   closure; a `for<'b>` closure cannot accept an already-built `KType<'a>`. Most variants `yoke`
   (owned / `Rc` data); a `KType::Module` `merge`s its child-scope carrier.
@@ -51,10 +53,12 @@ retain at the [`relocate`](../../src/machine/execute/run_loop.rs) cannot drop to
   (`FrameSet::singleton(F)`, `F` recovered as the child scope's `region_owner`), the same shape as
   the object family's captured-scope merge.
 - *Completes the `reached_frame` / `FrameStorage.retained` deletion — decided.* The channel decision
-  is settled on [alloc-object](alloc-object-witnessed.md): the set is built at construction by
-  `yoke` / `merge` (operand recovered via `region_owner`), composed onward by `merge` /
-  `transfer_into`, with the dep-result plumbing carrying the set rather than dropping it at the
-  `relocate`. The retain at the `relocate` is a *single uniform* call site; once `KType::Module`'s
+  is settled (see [per-node-memory.md § Construction](../../design/per-node-memory.md#construction-yoke-merge-map-and-one-wrapper-per-node)):
+  the set is built at construction by `yoke` / `merge` (operand recovered via `region_owner`),
+  composed onward by `merge` / `transfer_into`, with the dep-result plumbing carrying the set rather
+  than dropping it at the `relocate`. The object path's last dependence on the two mechanisms is
+  retired by [`alloc-object-embedding-sites`](alloc-object-embedding-sites.md); this item takes the
+  final `KType::Module` user off them too. The retain at the `relocate` is a *single uniform* call site; once `KType::Module`'s
   carrier names its child-scope reach, every relocated value carries its reach on its dep currency, so
   the call site drops to reading that set and `reached_frame` loses its last caller. `KType::Module` is
   the last value whose slot witness did not already name its reach; converting it leaves `reached_frame`
@@ -64,8 +68,8 @@ retain at the [`relocate`](../../src/machine/execute/run_loop.rs) cannot drop to
 
 **Requires:**
 
-- [`alloc_object` returns `Witnessed`](alloc-object-witnessed.md) — lands the shared dep-result
-  plumbing this reuses, and the object-family half of the `reached_frame` / `FrameStorage.retained`
-  retirement this completes.
+- [`alloc_object` embedding sites return `Witnessed`](alloc-object-embedding-sites.md) — retires the
+  object path's last dependence on `reached_frame` / `FrameStorage.retained`, the retirement this
+  item completes by taking the final `KType::Module` user off them.
 
 **Unblocks:** none.

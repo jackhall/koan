@@ -178,9 +178,8 @@ impl Region<KoanStorageProfile> {
     /// compiler does not normalize the projection lazily, so a `build` typed `-> Carried<'b>` fails to
     /// satisfy `yoke`'s `-> T::At<'b>` bound. Naming the projection makes the bounds syntactically
     /// identical. An inline closure returning a `Carried` still unifies fine at the call site.
-    // First production caller is the alloc-object construction inversion
-    // (roadmap/per-node-memory/alloc-object-witnessed.md); exercised now by the arena spike test.
-    #[allow(dead_code)]
+    // Drives the object-family construction inversion
+    // (design/per-node-memory.md): a region-pure leaf builds its `KObject` inside this closure.
     pub(crate) fn alloc_witnessed(
         witness: FrameSet,
         build: impl for<'b> FnOnce(&'b KoanRegion) -> <CarriedFamily as Reattachable>::At<'b>,
