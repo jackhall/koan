@@ -21,15 +21,13 @@ carrier could have named at construction.
 **Acceptance criteria.**
 
 - `alloc_object` returns a `KObject` bundled with the set of regions it reaches, built inside the
-  witness closure where it can be — region-pure parts via `yoke`, dep element carriers folded in via
-  `merge` — and adopted under its exact `FrameSet::singleton(F)` via structural `Witnessed::new`
-  where the `for<'b>` brand cannot rebuild it (a quoted AST expression, a tagged / wrapped
-  registry id, a captured scope). Either way a region-resident object is born co-located by
-  construction, its reach named on the carrier.
-- The object family carries no *prose-asserted* `Witnessed::new` — no arbitrary value paired with an
-  arbitrary witness. A site referencing a witnessed dep `merge`s it; a site embedding a borrow `yoke`
-  cannot reproduce seals under its exact `singleton(F)` via *structural* `new` (the value provably
-  lives in the region the witness pins), the form the substrate's `new` rustdoc blesses.
+  witness closure: region-pure parts via `yoke`, and dep element carriers, a captured scope, or the
+  run-region AST carrier (a quoted expression, an FN body) folded in via `merge`. A region-resident
+  object is born co-located by construction, its reach named on the carrier — co-location enforced by
+  the `for<'b>` brand, not asserted.
+- The object family carries no `Witnessed::new`: every construction is `yoke` (region-pure parts) or
+  `merge` (witnessed deps, a captured scope, the run-region AST carrier, a single embedded dep / bound
+  value), never an arbitrary value paired with an asserted witness.
 - A construction finish receives its deps as witnessed carriers, not bare `Carried`: the
   consumer-pull lift hands each dep's witness set through to the construction site so `merge`
   composes it, rather than discarding it at the `relocate`.
@@ -55,17 +53,14 @@ carrier could have named at construction.
   construction (it captures a borrow that is neither region-derived nor owned / `'static`), the value
   is adopted under its exact `singleton(F)` via *structural* `Witnessed::new`, never the prose-asserted
   bundle — a `for<'b>` closure cannot accept an already-built `KObject<'a>`.
-- *The yoke-unreachable sites seal via structural `new` — decided.* Four constructions capture a
-  borrow the `for<'b>` brand rejects, so they cannot `yoke`: `alloc_function` (a `KObject::KFunction`
-  over `&'ast` signature / body and its captured `&'a Scope`), `quote` (a `KObject::KExpression`
-  wrapping a raw `&'run` AST node — the unevaluated arg, *not* a spliced dep), `catch`'s `Tagged`, and
-  the `Wrapped` newtype (both over declaration-stable registry references). Each is region-resident in
-  its producing frame `F`, so it seals under `FrameSet::singleton(F)` via *structural* `new` (`F` =
-  `scope.region_owner()` or the producing frame, which the builder holds). The captured borrow either
-  lives inside `F` (the scope) or outlives it as an ancestor backing dropped by `outer`-chain
-  subsumption (the `&'run` AST / registry node), so `singleton(F)` is the whole reach and the long
-  lifetime never propagates through a `merge` — quote needs no deep copy. All ride `DoneWitnessed`;
-  none carries a prose-asserted bundle.
+- *AST-embedding and single-dep sites `merge`, not `new` — decided.* `alloc_function` (a
+  `KObject::KFunction` over an FN body) and `quote` (a `KObject::KExpression` over a quoted expression)
+  cannot `yoke` — the `for<'b>` brand can't capture the `&'run` AST — so they `merge` the run-region AST
+  carrier ([yoke-ast](yoke-ast-to-run-region.md)); `catch`'s `Tagged` and the `Wrapped` newtype each
+  embed a single dep / bound value and `merge` that one carrier (a single-dep fold). None carries a
+  `Witnessed::new`. *Transitionally*, until the AST carrier lands, `alloc_function` / `quote` may ride a
+  structural `new` under `singleton(F)` — the asserted rung they climb off when
+  [yoke-ast](yoke-ast-to-run-region.md) lands.
 - *The set is built at construction, not recovered after — decided.* `yoke` / `merge` / structural
   `new` at the alloc site builds the reached-region set directly: a closure's witness is its captured
   scope's defining frame (`scope.region_owner()`); an aggregate's is its elements' carrier sets,
@@ -95,11 +90,15 @@ carrier could have named at construction.
 
 ## Dependencies
 
-This item lands the shared dep-result plumbing (the lift hands each finish its deps' witness sets)
-that the type family reuses; the substrate it builds on (`yoke` / `merge`, `FrameSet`,
-`transfer_into`) is shipped, so it has no roadmap prerequisite.
+This item lands the shared dep-result plumbing (the lift hands each finish its deps' carriers) that the
+type family reuses. Its aggregate and leaf inversions build on the shipped substrate (`yoke` / `merge`
+/ `transfer_into`); its AST-embedding inversions (`alloc_function`, `quote`) `merge` an AST carrier the
+keystone below lands first.
 
-**Requires:** none — the witness substrate is shipped.
+**Requires:**
+
+- [Yoke the program AST into the run region](yoke-ast-to-run-region.md) — the `alloc_function` / `quote`
+  inversions `merge` the AST carrier it lands, rather than asserting co-location via `Witnessed::new`.
 
 **Unblocks:**
 

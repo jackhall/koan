@@ -67,20 +67,19 @@ because there is no prior carrier to inherit it from: `yoke` is the door through
 which a value first becomes witnessed. In Koan: an `alloc` site inverts so its
 construction runs *inside* the closure — a region-pure leaf
 (`region.alloc_object(…)` over owned or region-derived parts) is a `yoke` whose
-closure is the single allocation. What `yoke` cannot mint composes through two
-further doors. An aggregate folds its *element carriers* — deps arriving witnessed
-from the lift — together by `merge` (below). A value that captures or embeds a borrow
-the `for<'b>` brand rejects turns to **structural `Witnessed::new`**, which adopts a
-value *already* region-resident in a frame `F` under `singleton(F)`, the frame `Rc`
-the builder already holds — co-location holding because the value provably lives in
-the region the witness pins, not because the call site asserts it. A closure mints
-its captured scope this way and `merge`s it in; a quoted expression (a non-`'static`
-`&'run` AST node) or a tagged / wrapped type id (a declaration-stable registry
-reference) seals wholesale, the embedded borrow outliving `F` so needing no witness
-of its own. This *structural* `new` — the value's reach is exactly `singleton(F)` —
-is distinct from the *prose-asserted* bundle, an arbitrary value paired with an
-arbitrary witness, which is the transitional rung each family climbs off as it
-inverts.
+closure is the single allocation. What `yoke` cannot mint composes through `merge`: an
+aggregate folds its *element carriers* (deps arriving witnessed from the lift); a closure
+folds the captured-scope operand minted from its frame `Rc`; a value embedding an AST
+reference — a quoted expression, an FN body — folds the AST carrier. That last needs the
+program AST to *be* a carrier rather than a bare `&'run` borrow, which the `for<'b>` brand
+could never capture: the parsed program is [yoked into the run
+region](../roadmap/per-node-memory/yoke-ast-to-run-region.md) at the run boundary, so every
+FN body and quoted sub-expression is a run-region carrier the construction `merge`s, the run
+frame subsumed under the producing frame. The target is `yoke` and `merge` throughout —
+co-location the `for<'b>` brand enforces, never asserted. `Witnessed::new`, which pairs an
+*already-built* value with an asserted witness, is the transitional rung each family climbs
+off as its constructions invert — the AST-embedding sites climb off once the AST carrier
+above lands.
 
 **`merge` — fold many region-resident values into one.** Generic: a value built
 from references into *two* regions cannot be bundled with one witness by `yoke`

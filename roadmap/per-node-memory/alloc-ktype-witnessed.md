@@ -24,8 +24,9 @@ retain at the [`relocate`](../../src/machine/execute/run_loop.rs) cannot drop to
   witness closure — most `KType`s are owned / `Rc`-shared and `yoke` directly, while a
   region-referencing variant (a `KType::Module` naming its child scope) folds in via `merge` against
   that scope's frame — so a region-resident type is born co-located by construction.
-- The type family carries no *prose-asserted* `Witnessed::new`: a variant referencing a witnessed
-  value merges it rather than pairing an arbitrary value with an arbitrary witness.
+- The type family carries no `Witnessed::new`: most `KType`s are owned / `Rc`-shared and `yoke`
+  directly, while the one region-referencing variant (`KType::Module`) `merge`s its child-scope
+  carrier — co-location enforced by the brand, never asserted.
 - A lifted `KType::Module`'s reached region is read off its carrier's witness set. With its last user
   converted, the read-out `reached_frame` recovery and the `FrameStorage.retained` accumulator are
   both **deleted** — every reached region is named on the carrier itself.

@@ -312,10 +312,10 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [`alloc_object` returns `Witnessed`](per-node-memory/alloc-object-witnessed.md)
 - [Migrate the loose witness-borrow wrappers onto `Sealed`](per-node-memory/migrate-reattach-helpers.md)
 - [Migrate scope-handle reads to `open`](per-node-memory/scope-reads-to-open.md)
 - [Migrate result-slot value reads to `open`](per-node-memory/value-reads-to-open.md)
+- [Yoke the program AST into the run region](per-node-memory/yoke-ast-to-run-region.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
@@ -423,8 +423,11 @@ migrate onto it, with `attach` a contingent fallback retired last:
 - [Migrate the loose witness-borrow wrappers onto `Sealed`](per-node-memory/migrate-reattach-helpers.md) —
   move the `vend_carrier` continuation / contract and the `reattach_*_with` sites onto the access
   methods and delete the four wrappers.
+- [Yoke the program AST into the run region](per-node-memory/yoke-ast-to-run-region.md) — make the
+  parsed program region-resident as a carrier, so AST-embedding constructions `merge` it instead of
+  asserting co-location via `Witnessed::new`; the keystone the `alloc_object` AST sites ride.
 - [`alloc_object` returns `Witnessed`](per-node-memory/alloc-object-witnessed.md) — convert the
-  object family onto `yoke`, retiring transfer-into-lift's structural walk.
+  object family onto `yoke` / `merge`, retiring transfer-into-lift's structural walk.
 - [`alloc_ktype` returns `Witnessed`](per-node-memory/alloc-ktype-witnessed.md) — convert the
   type family onto `yoke`.
 - [Migrate result-slot value reads to `open`](per-node-memory/value-reads-to-open.md) —
