@@ -40,19 +40,38 @@ fn cart_chain_reaches_region(cart_scope: &Scope<'_>, target: &KoanRegion) -> boo
 use super::super::nodes::NodePayload;
 use super::super::nodes::{NodeScope, NodeWork};
 use super::super::outcome::dep_error_frame;
+use super::super::{short_circuit_witnessed, WitnessedDepFinish};
+#[cfg(test)]
 use super::super::{short_circuit, DepFinish};
 use super::{KoanRuntime, KoanWorkload};
 
-/// A dep-finish node built for direct submission (not via `apply_outcome`): the path shared by
-/// [`KoanRuntime::submit_dep_finish_in_own_scope`] and the test fixture. Waits on `deps` (a
+/// A bare dep-finish node built for direct submission (not via `apply_outcome`): waits on `deps` (a
 /// `park_count`-long park prefix, owned suffix), short-circuits on the first errored dep under the
-/// [`dep_error_frame`] label, else hands the resolved values to `finish`. Workload-side: it names the
-/// erased continuation, so it lives here rather than on the generic `NodeWork`.
+/// [`dep_error_frame`] label, else hands the resolved values to a value-only `finish`. Used only by
+/// the test fixture below; the run path's construction finishes route the witnessed
+/// [`awaiting_witnessed`].
+#[cfg(test)]
 fn awaiting(deps: Vec<NodeId>, park_count: usize, finish: DepFinish<'_>) -> NodeWork<KoanWorkload> {
     NodeWork::new(
         deps,
         park_count,
         short_circuit(Some(dep_error_frame()), finish),
+        None,
+    )
+}
+
+/// Witnessed sibling of [`awaiting`]: builds a dep-finish node whose continuation folds the resolved
+/// deps into a witnessed aggregate carrier ([`short_circuit_witnessed`]) instead of handing bare
+/// values to a value-only finish.
+fn awaiting_witnessed(
+    deps: Vec<NodeId>,
+    park_count: usize,
+    finish: WitnessedDepFinish<'_>,
+) -> NodeWork<KoanWorkload> {
+    NodeWork::new(
+        deps,
+        park_count,
+        short_circuit_witnessed(Some(dep_error_frame()), finish),
         None,
     )
 }
@@ -268,19 +287,21 @@ impl<'run> KoanRuntime<'run> {
         ids
     }
 
-    /// Schedule a `AwaitDeps` against the executing slot's own scope handle. `owned_subs` are
-    /// cascade-freed on success; `park_producers` are existing siblings the combine reads but does
-    /// not own. The finish sees results as `[park_producers..., owned_subs...]`.
-    pub(in crate::machine::execute) fn submit_dep_finish_in_own_scope<'a>(
+    /// Schedule an `AwaitDeps` against the executing slot's own scope handle whose finish folds the
+    /// resolved deps into a witnessed aggregate carrier (the construction inversion), naming every
+    /// region the result reaches on its carrier. `owned_subs` are cascade-freed on success;
+    /// `park_producers` are existing siblings the combine reads but does not own. The finish sees
+    /// results as `[park_producers..., owned_subs...]`.
+    pub(in crate::machine::execute) fn submit_dep_finish_witnessed_in_own_scope<'a>(
         &mut self,
         owned_subs: Vec<NodeId>,
         park_producers: Vec<NodeId>,
-        finish: DepFinish<'a>,
+        finish: WitnessedDepFinish<'a>,
     ) -> NodeId {
         let park_count = park_producers.len();
         let mut deps = park_producers;
         deps.extend(owned_subs);
-        self.submit_in_own_scope(awaiting(deps, park_count, finish))
+        self.submit_in_own_scope(awaiting_witnessed(deps, park_count, finish))
     }
 }
 

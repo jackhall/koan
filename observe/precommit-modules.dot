@@ -677,7 +677,9 @@ digraph {
     "koan::machine::execute::dispatch::literal" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::literal" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::literal" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::operator_chain" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::operator_chain" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::operator_chain" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];

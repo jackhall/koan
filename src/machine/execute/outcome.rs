@@ -229,6 +229,45 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
     })
 }
 
+/// Host-side closure for a **witnessed** dep-finish — the construction-inversion analog of
+/// [`DepFinish`]. Receives the resolved dep terminals (value + reach, un-relocated) and folds them
+/// — together with the finish's captured static-cell carriers — into the aggregate's witnessed
+/// carrier, so the result names every region it reaches by construction. Returns `Result` so a finish
+/// that hits a shape error (a non-scalar dict key) short-circuits to [`Outcome::Done`].
+pub(in crate::machine::execute) type WitnessedDepFinish<'a> = Box<
+    dyn for<'view> FnOnce(
+            &SchedulerView<'a, 'view>,
+            &[&DepTerminal<'a>],
+        ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError>
+        + 'a,
+>;
+
+/// Witnessed dep-finish continuation: short-circuit on the first errored dep, else hand the resolved
+/// dep terminals (un-relocated, value + reach) to a [`WitnessedDepFinish`] that folds them into a
+/// witnessed aggregate carrier. The fold relocates each dep once (`transfer_into`) and names the union
+/// of their reaches on the carrier, so neither per-dep relocation nor `reached_frame` retention runs
+/// on this path. A finish error becomes a bare [`Outcome::Done`] error.
+pub(in crate::machine::execute) fn short_circuit_witnessed<'a>(
+    dep_error_frame: Option<TraceFrame>,
+    finish: WitnessedDepFinish<'a>,
+) -> NodeContinuation<'a> {
+    Box::new(move |view, results, _idx| {
+        let mut deps: Vec<&DepTerminal<'_>> = Vec::with_capacity(results.len());
+        for r in results {
+            match r {
+                Ok(t) => deps.push(t),
+                Err(e) => {
+                    return Outcome::Done(Err(propagate_dep_error(e, dep_error_frame.clone())))
+                }
+            }
+        }
+        match finish(view, &deps) {
+            Ok(carrier) => Outcome::DoneWitnessed(carrier),
+            Err(e) => Outcome::Done(Err(e)),
+        }
+    })
+}
+
 /// Catch continuation: hand the single watched dep's terminal (Value or Err) to a [`CatchFinish`]
 /// without short-circuiting, so the closure can recover or re-raise.
 pub(in crate::machine::execute) fn catch_continuation<'a>(

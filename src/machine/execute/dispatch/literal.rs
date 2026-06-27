@@ -1,61 +1,119 @@
 use std::collections::HashMap;
 
 use crate::machine::model::ast::ExpressionPart;
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
-use crate::machine::{KError, KErrorKind, NameOutcome, NodeId, TraceFrame};
+use crate::machine::{FrameSet, KError, KErrorKind, KoanRegion, NameOutcome, NodeId, TraceFrame};
 use crate::source::Spanned;
+use crate::witnessed::{reattachable, Sealed, Witnessed};
 
-use super::super::outcome::Outcome;
+use super::super::outcome::DepTerminal;
 use super::super::runtime::KoanRuntime;
-use super::super::DepFinish;
+use super::super::WitnessedDepFinish;
 use super::ctx::{current_scope, SchedulerView};
 use super::resolve_name_part;
 
-/// One element of a list literal or one side of a dict-literal pair. Indices are into the
-/// the dep-finish's results: `Park(i)` reads position `i` of the park-producer prefix; `Owned(j)`
-/// reads position `park_count + j` of the owned-sub suffix.
-enum Slot<'step> {
-    Static(Held<'step>),
+/// Build-time accumulator family for an aggregate fold: the destination region plus the partial cell
+/// vector. Each cell carrier is `transfer_into`-folded in — relocating the value and unioning its
+/// reach onto the accumulator's witness — then the final `map` allocates the aggregate from the
+/// region. Layout-invariant in `'r`: a thin region pointer and a `Vec` of layout-invariant cells.
+struct AggBuildFamily;
+reattachable!(AggBuildFamily => (&'r KoanRegion, Vec<Held<'r>>));
+
+/// One cell of a list / dict / record literal. A `Static` cell is wrapped into a witnessed carrier
+/// **at its source** (when the literal is classified), so the layout is lifetime-free and every cell
+/// — static or dep — folds uniformly. `Park(i)` / `Owned(j)` index the dep-finish's resolved
+/// terminals: position `i` of the park prefix, or `park_count + j` of the owned suffix.
+enum Slot {
+    Static(Sealed<CarriedFamily, FrameSet>),
     Park(usize),
     Owned(usize),
 }
 
-impl<'step> Slot<'step> {
+impl Slot {
     /// Append `id` as an owned sub-dependency and return the `Owned` slot that reads its result.
-    /// The one place the "push a sub-dispatch, point a slot at it" tail lives.
     fn owned(deps: &mut Vec<NodeId>, id: NodeId) -> Self {
         let pos = deps.len();
         deps.push(id);
         Slot::Owned(pos)
     }
+}
 
-    /// Deep-clones `Park` / `Owned` results because the produced container owns its cells
-    /// and can't borrow a `&'step` carrier into its `Rc<…>`. A literal element may be a runtime
-    /// value *or* a first-class type, so each carrier widens to a [`Held`] cell.
-    fn materialize(self, results: &[Carried<'step>], park_count: usize) -> Held<'step> {
-        match self {
-            Slot::Static(held) => held,
-            Slot::Park(i) => Held::from_carried(results[i]),
-            Slot::Owned(j) => Held::from_carried(results[park_count + j]),
+/// The per-cell carrier the fold consumes: a static cell's source-wrapped carrier, or a dep terminal
+/// wrapped here under its own reach (un-relocated — `transfer_into` relocates it once into the
+/// aggregate's region while unioning the reach onto the carrier).
+fn cell_carrier(
+    slot: Slot,
+    terminals: &[&DepTerminal<'_>],
+    park_count: usize,
+) -> Sealed<CarriedFamily, FrameSet> {
+    match slot {
+        Slot::Static(sealed) => sealed,
+        Slot::Park(i) => Sealed::seal(Witnessed::new(terminals[i].value, terminals[i].reach.clone())),
+        Slot::Owned(j) => {
+            let dep = terminals[park_count + j];
+            Sealed::seal(Witnessed::new(dep.value, dep.reach.clone()))
         }
     }
 }
 
-/// Allocate `obj` in the executing slot's region and wrap it as a successful combine result — the
-/// shared tail of every aggregate-literal finish.
-fn done_object<'step>(view: &SchedulerView<'step, '_>, obj: KObject<'step>) -> Outcome<'step> {
-    Outcome::Done(Ok(Carried::Object(
-        view.current_scope().region.alloc_object(obj),
-    )))
+/// Fold a sequence of cell carriers into a witnessed `(region, Vec<Held>)` accumulator over the
+/// consumer scope's region: `yoke` an empty accumulator under the consumer frame, then
+/// `transfer_into` each cell so the result names the union of every cell's reach. The final aggregate
+/// shape (`list_of_held` / `dict_of_held` / `record_of_held`) is built by the caller's `map`.
+fn fold_cells(
+    view: &SchedulerView<'_, '_>,
+    cells: impl Iterator<Item = Sealed<CarriedFamily, FrameSet>>,
+    capacity: usize,
+) -> Witnessed<AggBuildFamily, FrameSet> {
+    let dest_frame = view
+        .current_scope()
+        .region_owner()
+        .upgrade()
+        .expect("the consumer scope's region owner is held for the step");
+    let acc0 = Witnessed::<AggBuildFamily, FrameSet>::yoke(FrameSet::singleton(dest_frame), |region| {
+        (region, Vec::with_capacity(capacity))
+    });
+    cells.fold(acc0, |acc, cell| {
+        cell.transfer_into::<AggBuildFamily, AggBuildFamily>(
+            acc,
+            |cell, (region, mut cells), _brand| {
+                cells.push(Held::from_carried(cell));
+                (region, cells)
+            },
+        )
+        .expect("a FrameSet set witness always represents the union")
+    })
+}
+
+/// Read a dict key cell as a scalar [`KKey`]: a key is never folded (it is a scalar, reaching no
+/// region), so it is read out and converted in place. A `Type` arm or a non-scalar value errors.
+fn scalar_key(
+    slot: &Slot,
+    terminals: &[&DepTerminal<'_>],
+    park_count: usize,
+) -> Result<KKey, String> {
+    match slot {
+        Slot::Static(sealed) => key_from_carried(sealed.read()),
+        Slot::Park(i) => key_from_carried(terminals[*i].value),
+        Slot::Owned(j) => key_from_carried(terminals[park_count + *j].value),
+    }
+}
+
+fn key_from_carried(c: Carried<'_>) -> Result<KKey, String> {
+    match c {
+        Carried::Object(o) => KKey::try_from_kobject(o),
+        Carried::Type(_) => Err("dict key must be a value, not a type".to_string()),
+    }
 }
 
 impl<'step> KoanRuntime<'step> {
-    /// Schedule a list-literal materialization as a dep-finish over its element producers.
+    /// Schedule a list-literal materialization as a witnessed dep-finish over its element producers.
     pub(in crate::machine::execute) fn schedule_list_literal<'a>(
         &mut self,
         items: Vec<ExpressionPart<'a>>,
     ) -> NodeId {
-        let mut layout: Vec<Slot<'a>> = Vec::with_capacity(items.len());
+        let mut layout: Vec<Slot> = Vec::with_capacity(items.len());
         let mut deps: Vec<NodeId> = Vec::new();
         let mut park_producers: Vec<NodeId> = Vec::new();
         for part in items {
@@ -64,25 +122,27 @@ impl<'step> KoanRuntime<'step> {
             layout.push(slot);
         }
         let park_count = park_producers.len();
-        let finish: DepFinish<'a> = Box::new(move |_sched, results| {
-            let items: Vec<Held<'a>> = layout
+        let finish: WitnessedDepFinish<'a> = Box::new(move |view, terminals| {
+            let n = layout.len();
+            let cells = layout
                 .into_iter()
-                .map(|slot| slot.materialize(results, park_count))
-                .collect();
-            done_object(_sched, KObject::list_of_held(items))
+                .map(|slot| cell_carrier(slot, terminals, park_count));
+            let acc = fold_cells(view, cells, n);
+            Ok(acc.map(|(region, cells), _brand| {
+                Carried::Object(region.alloc_object(KObject::list_of_held(cells)))
+            }))
         });
-        self.submit_dep_finish_in_own_scope(deps, park_producers, finish)
+        self.submit_dep_finish_witnessed_in_own_scope(deps, park_producers, finish)
     }
 
-    /// Schedule a dict-literal materialization as a dep-finish over its key/value producers.
-    /// Bare identifiers on either side are name-resolved (Python-like: keys are
-    /// expressions, not symbols). Non-scalar keys produce `KErrorKind::ShapeError` at
-    /// finish-time via the `KKey` conversion.
+    /// Schedule a dict-literal materialization as a witnessed dep-finish over its key/value producers.
+    /// Bare identifiers on either side are name-resolved (Python-like: keys are expressions, not
+    /// symbols). Non-scalar keys produce `KErrorKind::ShapeError`, raised before the value fold.
     pub(in crate::machine::execute) fn schedule_dict_literal<'a>(
         &mut self,
         pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
     ) -> NodeId {
-        let mut layout: Vec<(Slot<'a>, Slot<'a>)> = Vec::with_capacity(pairs.len());
+        let mut layout: Vec<(Slot, Slot)> = Vec::with_capacity(pairs.len());
         let mut deps: Vec<NodeId> = Vec::new();
         let mut park_producers: Vec<NodeId> = Vec::new();
         for (k, v) in pairs {
@@ -90,36 +150,31 @@ impl<'step> KoanRuntime<'step> {
             let val_slot = self.classify_aggregate_part(v, &mut deps, &mut park_producers, true);
             layout.push((key_slot, val_slot));
         }
-        let frame_label = || TraceFrame::bare("<dict>", "dict literal");
         let park_count = park_producers.len();
-        let finish: DepFinish<'a> = Box::new(move |_sched, results| {
-            let mut map: HashMap<Box<dyn Serializable<'a> + 'a>, Held<'a>> = HashMap::new();
+        let finish: WitnessedDepFinish<'a> = Box::new(move |view, terminals| {
+            let frame_label = || TraceFrame::bare("<dict>", "dict literal");
+            let n = layout.len();
+            // Keys stay scalar (reaching no region): read them out eagerly, erroring before the fold.
+            // The value cells fold into the witnessed accumulator, paired back with the keys at `map`.
+            let mut keys: Vec<KKey> = Vec::with_capacity(n);
+            let mut value_cells: Vec<Sealed<CarriedFamily, FrameSet>> = Vec::with_capacity(n);
             for (k_slot, v_slot) in layout {
-                let key_held = k_slot.materialize(results, park_count);
-                let value_held = v_slot.materialize(results, park_count);
-                // Keys stay scalar: only a value can be a `KKey`, never a first-class type.
-                let key_obj = match key_held.as_object() {
-                    Some(obj) => obj,
-                    None => {
-                        return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(
-                            "dict key must be a value, not a type".to_string(),
-                        ))
-                        .with_frame(frame_label())))
-                    }
-                };
-                let kkey = match KKey::try_from_kobject(key_obj) {
-                    Ok(k) => k,
-                    Err(msg) => {
-                        return Outcome::Done(Err(
-                            KError::new(KErrorKind::ShapeError(msg)).with_frame(frame_label())
-                        ))
-                    }
-                };
-                map.insert(Box::new(kkey), value_held);
+                let kkey = scalar_key(&k_slot, terminals, park_count)
+                    .map_err(|msg| KError::new(KErrorKind::ShapeError(msg)).with_frame(frame_label()))?;
+                keys.push(kkey);
+                value_cells.push(cell_carrier(v_slot, terminals, park_count));
             }
-            done_object(_sched, KObject::dict_of_held(map))
+            let acc = fold_cells(view, value_cells.into_iter(), n);
+            Ok(acc.map(|(region, value_helds), _brand| {
+                let map: HashMap<Box<dyn Serializable + '_>, Held<'_>> = keys
+                    .into_iter()
+                    .zip(value_helds)
+                    .map(|(k, v)| (Box::new(k) as Box<dyn Serializable + '_>, v))
+                    .collect();
+                Carried::Object(region.alloc_object(KObject::dict_of_held(map)))
+            }))
         });
-        self.submit_dep_finish_in_own_scope(deps, park_producers, finish)
+        self.submit_dep_finish_witnessed_in_own_scope(deps, park_producers, finish)
     }
 
     /// Schedule a record-literal materialization (`{x = 1, y = "a"}`). Field *names* are literal
@@ -130,7 +185,7 @@ impl<'step> KoanRuntime<'step> {
         fields: Vec<(String, ExpressionPart<'a>)>,
     ) -> NodeId {
         let mut names: Vec<String> = Vec::with_capacity(fields.len());
-        let mut layout: Vec<Slot<'a>> = Vec::with_capacity(fields.len());
+        let mut layout: Vec<Slot> = Vec::with_capacity(fields.len());
         let mut deps: Vec<NodeId> = Vec::new();
         let mut park_producers: Vec<NodeId> = Vec::new();
         for (name, value) in fields {
@@ -140,27 +195,30 @@ impl<'step> KoanRuntime<'step> {
             layout.push(val_slot);
         }
         let park_count = park_producers.len();
-        let finish: DepFinish<'a> = Box::new(move |_sched, results| {
-            let record: Record<Held<'a>> = names
+        let finish: WitnessedDepFinish<'a> = Box::new(move |view, terminals| {
+            let n = layout.len();
+            let cells = layout
                 .into_iter()
-                .zip(layout)
-                .map(|(name, slot)| (name, slot.materialize(results, park_count)))
-                .collect();
-            done_object(_sched, KObject::record_of_held(record))
+                .map(|slot| cell_carrier(slot, terminals, park_count));
+            let acc = fold_cells(view, cells, n);
+            Ok(acc.map(|(region, value_helds), _brand| {
+                let record: Record<Held<'_>> = names.into_iter().zip(value_helds).collect();
+                Carried::Object(region.alloc_object(KObject::record_of_held(record)))
+            }))
         });
-        self.submit_dep_finish_in_own_scope(deps, park_producers, finish)
+        self.submit_dep_finish_witnessed_in_own_scope(deps, park_producers, finish)
     }
 
-    /// Plan one slot of a list / dict literal. The cycle check in the bare-name path is
-    /// suppressed (`consumer = None` to `resolve_name_part`) because the dep-finish slot
-    /// does not yet exist; cycles are caught post-submission against the dep-finish ID.
+    /// Plan one slot of a list / dict literal. The cycle check in the bare-name path is suppressed
+    /// (`consumer = None` to `resolve_name_part`) because the dep-finish slot does not yet exist;
+    /// cycles are caught post-submission against the dep-finish ID.
     fn classify_aggregate_part<'a>(
         &mut self,
         part: ExpressionPart<'a>,
         deps: &mut Vec<NodeId>,
         park_producers: &mut Vec<NodeId>,
         wrap_identifiers: bool,
-    ) -> Slot<'a> {
+    ) -> Slot {
         match part {
             ExpressionPart::ListLiteral(inner) => {
                 Slot::owned(deps, self.schedule_list_literal(inner))
@@ -187,20 +245,30 @@ impl<'step> KoanRuntime<'step> {
             ref p @ ExpressionPart::Type(_) if wrap_identifiers => {
                 self.resolve_aggregate_bare_name(p, deps, park_producers)
             }
-            other => Slot::Static(Held::Object(other.resolve())),
+            other => {
+                // A static literal: resolve to an owned value, alloc it into the classify region, and
+                // wrap it as a witnessed carrier at its source — so the cell is lifetime-free and
+                // folds uniformly with the dep cells, its reach named on the carrier.
+                let scope = current_scope(&self.ambient);
+                let obj = Carried::Object(scope.region.alloc_object(other.resolve()));
+                let witness = scope
+                    .region_owner()
+                    .upgrade()
+                    .map_or_else(FrameSet::empty, FrameSet::singleton);
+                Slot::Static(Sealed::seal(Witnessed::new(obj, witness)))
+            }
         }
     }
 
-    /// Shared eager-resolve for the Identifier and leaf-Type branches. Unbound /
-    /// ProducerErrored / Cycle outcomes fall back to a sub-Dispatch so the
-    /// `BareIdentifier` fast lane's error path (and the dep-finish's dep-error
-    /// short-circuit) handles them uniformly.
+    /// Shared eager-resolve for the Identifier and leaf-Type branches. Unbound / ProducerErrored /
+    /// Cycle outcomes fall back to a sub-Dispatch so the `BareIdentifier` fast lane's error path (and
+    /// the dep-finish's dep-error short-circuit) handles them uniformly.
     fn resolve_aggregate_bare_name<'a>(
         &mut self,
         part: &ExpressionPart<'a>,
         deps: &mut Vec<NodeId>,
         park_producers: &mut Vec<NodeId>,
-    ) -> Slot<'a> {
+    ) -> Slot {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         match resolve_name_part(
             current_scope(&self.ambient),
@@ -209,9 +277,16 @@ impl<'step> KoanRuntime<'step> {
             active_chain,
             None,
         ) {
-            // An aggregate literal element may resolve to a value or a first-class type;
-            // both ride into the cell as a `Held`.
-            NameOutcome::Resolved(c) => Slot::Static(Held::from_carried(c)),
+            // An aggregate literal element may resolve to a value or a first-class type; both ride
+            // into the cell as a carrier, wrapped at source under the classify frame (whose `outer`
+            // chain pins the resolved value's region, an ancestor) so the cell is lifetime-free.
+            NameOutcome::Resolved(c) => {
+                let witness = current_scope(&self.ambient)
+                    .region_owner()
+                    .upgrade()
+                    .map_or_else(FrameSet::empty, FrameSet::singleton);
+                Slot::Static(Sealed::seal(Witnessed::new(c, witness)))
+            }
             NameOutcome::Parked(producer) => {
                 let pos = park_producers.len();
                 park_producers.push(producer);
