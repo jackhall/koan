@@ -40,9 +40,9 @@ fn cart_chain_reaches_region(cart_scope: &Scope<'_>, target: &KoanRegion) -> boo
 use super::super::nodes::NodePayload;
 use super::super::nodes::{NodeScope, NodeWork};
 use super::super::outcome::dep_error_frame;
-use super::super::{short_circuit_witnessed, WitnessedDepFinish};
 #[cfg(test)]
 use super::super::{short_circuit, DepFinish};
+use super::super::{short_circuit_witnessed, WitnessedDepFinish};
 use super::{KoanRuntime, KoanWorkload};
 
 /// A bare dep-finish node built for direct submission (not via `apply_outcome`): waits on `deps` (a

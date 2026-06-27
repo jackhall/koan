@@ -70,9 +70,10 @@ fn fold_cells(
         .region_owner()
         .upgrade()
         .expect("the consumer scope's region owner is held for the step");
-    let acc0 = Witnessed::<AggBuildFamily, FrameSet>::yoke(FrameSet::singleton(dest_frame), |region| {
-        (region, Vec::with_capacity(capacity))
-    });
+    let acc0 =
+        Witnessed::<AggBuildFamily, FrameSet>::yoke(FrameSet::singleton(dest_frame), |region| {
+            (region, Vec::with_capacity(capacity))
+        });
     cells.fold(acc0, |acc, cell| {
         cell.transfer_into::<AggBuildFamily, AggBuildFamily>(
             acc,
@@ -158,8 +159,9 @@ impl<'step> KoanRuntime<'step> {
             let mut keys: Vec<KKey> = Vec::with_capacity(n);
             let mut value_cells: Vec<Sealed<CarriedFamily, FrameSet>> = Vec::with_capacity(n);
             for (k_slot, v_slot) in layout {
-                let kkey = scalar_key(&k_slot, terminals, park_count)
-                    .map_err(|msg| KError::new(KErrorKind::ShapeError(msg)).with_frame(frame_label()))?;
+                let kkey = scalar_key(&k_slot, terminals, park_count).map_err(|msg| {
+                    KError::new(KErrorKind::ShapeError(msg)).with_frame(frame_label())
+                })?;
                 keys.push(kkey);
                 value_cells.push(cell_carrier(v_slot, terminals, park_count));
             }
@@ -254,9 +256,10 @@ impl<'step> KoanRuntime<'step> {
                     .region_owner()
                     .upgrade()
                     .expect("the classify scope's region owner is held for the step");
-                let carrier = KoanRegion::alloc_witnessed(FrameSet::singleton(frame), move |region| {
-                    Carried::Object(region.alloc_object(other.resolve_region_pure()))
-                });
+                let carrier =
+                    KoanRegion::alloc_witnessed(FrameSet::singleton(frame), move |region| {
+                        Carried::Object(region.alloc_object(other.resolve_region_pure()))
+                    });
                 Slot::Static(Sealed::seal(carrier))
             }
         }

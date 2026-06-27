@@ -149,9 +149,7 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::DictLiteral(pairs) => pairs
                 .iter()
                 .all(|(k, v)| k.is_splice_free() && v.is_splice_free()),
-            ExpressionPart::RecordLiteral(pairs) => {
-                pairs.iter().all(|(_, v)| v.is_splice_free())
-            }
+            ExpressionPart::RecordLiteral(pairs) => pairs.iter().all(|(_, v)| v.is_splice_free()),
             ExpressionPart::Keyword(_)
             | ExpressionPart::Identifier(_)
             | ExpressionPart::Type(_)

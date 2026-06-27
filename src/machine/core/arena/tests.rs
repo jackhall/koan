@@ -332,10 +332,10 @@ fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
 #[test]
 fn alloc_witnessed_yokes_a_co_located_value() {
     let frame = FrameStorage::run_root();
-    let w: Witnessed<CarriedFamily, FrameSet> = KoanRegion::alloc_witnessed(
-        FrameSet::singleton(Rc::clone(&frame)),
-        |region| Carried::Object(region.alloc_object(KObject::Number(7.0))),
-    );
+    let w: Witnessed<CarriedFamily, FrameSet> =
+        KoanRegion::alloc_witnessed(FrameSet::singleton(Rc::clone(&frame)), |region| {
+            Carried::Object(region.alloc_object(KObject::Number(7.0)))
+        });
     drop(frame); // the bundled witness now solely owns the region the value lives in.
     let got = w.with(|c| match *c {
         Carried::Object(KObject::Number(n)) => *n,
@@ -355,19 +355,20 @@ fn alloc_witnessed_yokes_a_co_located_value() {
 fn alloc_witnessed_merge_folds_an_independent_foreign_value() {
     let here_frame = FrameStorage::run_root();
     let foreign_frame = FrameStorage::run_root(); // unrelated — a sibling producer's frame.
-    let foreign: Witnessed<CarriedFamily, FrameSet> = KoanRegion::alloc_witnessed(
-        FrameSet::singleton(Rc::clone(&foreign_frame)),
-        |r| Carried::Object(r.alloc_object(KObject::Number(1.0))),
-    );
-    let here: Witnessed<CarriedFamily, FrameSet> = KoanRegion::alloc_witnessed(
-        FrameSet::singleton(Rc::clone(&here_frame)),
-        |r| Carried::Object(r.alloc_object(KObject::Number(2.0))),
-    );
+    let foreign: Witnessed<CarriedFamily, FrameSet> =
+        KoanRegion::alloc_witnessed(FrameSet::singleton(Rc::clone(&foreign_frame)), |r| {
+            Carried::Object(r.alloc_object(KObject::Number(1.0)))
+        });
+    let here: Witnessed<CarriedFamily, FrameSet> =
+        KoanRegion::alloc_witnessed(FrameSet::singleton(Rc::clone(&here_frame)), |r| {
+            Carried::Object(r.alloc_object(KObject::Number(2.0)))
+        });
     // Fold the foreign element in at the shared brand; re-seal under the union of both regions.
     let merged: Witnessed<CarriedFamily, FrameSet> = here
-        .merge::<CarriedFamily, CarriedFamily>(foreign, |_here, foreign, _brand: PhantomData<&_>| {
-            foreign
-        })
+        .merge::<CarriedFamily, CarriedFamily>(
+            foreign,
+            |_here, foreign, _brand: PhantomData<&_>| foreign,
+        )
         .expect("a FrameSet set witness always represents the union of unrelated regions");
     drop(here_frame);
     drop(foreign_frame); // `merged` holds its own clones of both frames.
@@ -413,25 +414,31 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     // The consumer's own frame: the region the finished list node lands in.
     let dest_frame = FrameStorage::run_root();
     // `yoke` the empty accumulator (the dest region + no cells yet) into the dest frame's region.
-    let acc0: Witnessed<AggBuildFamily, FrameSet> =
-        Witnessed::<AggBuildFamily, FrameSet>::yoke(FrameSet::singleton(Rc::clone(&dest_frame)), |region| {
-            (region, Vec::new())
-        });
+    let acc0: Witnessed<AggBuildFamily, FrameSet> = Witnessed::<AggBuildFamily, FrameSet>::yoke(
+        FrameSet::singleton(Rc::clone(&dest_frame)),
+        |region| (region, Vec::new()),
+    );
     // Fold each dep in: bind its re-anchored carrier into the cells (a list element borrows into the
     // foreign region exactly as a surviving closure rides its bare borrow); the witness accumulates
     // the union. `transfer_into` borrows the dep's seal (does not consume it — other consumers keep
     // reading the producer terminal).
     let acc1 = dep_a
-        .transfer_into::<AggBuildFamily, AggBuildFamily>(acc0, |dep, (region, mut cells), _brand| {
-            cells.push(Held::from_carried(dep));
-            (region, cells)
-        })
+        .transfer_into::<AggBuildFamily, AggBuildFamily>(
+            acc0,
+            |dep, (region, mut cells), _brand| {
+                cells.push(Held::from_carried(dep));
+                (region, cells)
+            },
+        )
         .expect("a FrameSet set witness always represents the union");
     let acc2 = dep_b
-        .transfer_into::<AggBuildFamily, AggBuildFamily>(acc1, |dep, (region, mut cells), _brand| {
-            cells.push(Held::from_carried(dep));
-            (region, cells)
-        })
+        .transfer_into::<AggBuildFamily, AggBuildFamily>(
+            acc1,
+            |dep, (region, mut cells), _brand| {
+                cells.push(Held::from_carried(dep));
+                (region, cells)
+            },
+        )
         .expect("a FrameSet set witness always represents the union");
     // Allocate the list node from the carried dest region; the cells ride borrows into both foreign
     // regions, all three now named on this one carrier's witness.

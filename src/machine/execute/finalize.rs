@@ -119,8 +119,10 @@ impl NodeFinalize for KoanRuntime<'_> {
         let home = contract
             .expect("a declared return type implies a contract")
             .home_region();
-        let home_carrier =
-            Witnessed::<ContractHomeFamily, FrameSet>::new((home, declared), carrier.witness().clone());
+        let home_carrier = Witnessed::<ContractHomeFamily, FrameSet>::new(
+            (home, declared),
+            carrier.witness().clone(),
+        );
         let mut mismatch: Option<KError> = None;
         let restamped = carrier
             .merge::<ContractHomeFamily, CarriedFamily>(
@@ -128,8 +130,12 @@ impl NodeFinalize for KoanRuntime<'_> {
                 |value, (home_region, declared_type), _brand| {
                     let object = value.object();
                     if !declared_type.matches_value(object) {
-                        mismatch =
-                            Some(return_type_mismatch(declared_type, per_call, &label, object.ktype().name()));
+                        mismatch = Some(return_type_mismatch(
+                            declared_type,
+                            per_call,
+                            &label,
+                            object.ktype().name(),
+                        ));
                         return Carried::Object(home_region.alloc_object(object.deep_clone()));
                     }
                     Carried::Object(
@@ -234,7 +240,9 @@ fn pull_declared_return<'o>(
 ) -> Option<(&'o KType<'o>, String, bool)> {
     match contract {
         Some(ReturnContract::Function(f)) => match &f.signature.return_type {
-            crate::machine::model::types::ReturnType::Resolved(d) => Some((d, f.summarize(), false)),
+            crate::machine::model::types::ReturnType::Resolved(d) => {
+                Some((d, f.summarize(), false))
+            }
             _ => None,
         },
         Some(ReturnContract::Arm { ret, kind, .. }) => Some((ret, kind.to_string(), false)),
@@ -256,5 +264,8 @@ fn return_type_mismatch(declared: &KType<'_>, per_call: bool, label: &str, got: 
         expected,
         got,
     })
-    .with_frame(crate::machine::TraceFrame::bare(label.to_string(), label.to_string()))
+    .with_frame(crate::machine::TraceFrame::bare(
+        label.to_string(),
+        label.to_string(),
+    ))
 }

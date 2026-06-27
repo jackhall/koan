@@ -15,8 +15,8 @@ use crate::witnessed::{reattachable, seal_option, MergeWitness, SealedExtern};
 
 use super::dispatch::{reattach_node_scope, SchedulerView};
 use super::finalize::NodeFinalize;
-use super::outcome::DepTerminal;
 use super::nodes::{Node, NodeFrame, NodePayload, NodeScope, NodeStep, NodeWork};
+use super::outcome::DepTerminal;
 use super::runtime::{KoanRuntime, KoanWorkload};
 
 #[cfg(test)]
