@@ -609,6 +609,21 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
         self.inner.duplicate().merge::<B, P>(dest, relocate)
     }
 
+    /// Duplicate the sealed carrier — copy the erased value (a `Copy` carrier family) and clone the
+    /// witness — leaving this seal intact. The consumer-pull lift hands each construction finish a
+    /// duplicate of the producer slot's own carrier (so the dep arrives **witnessed**, its reach named,
+    /// rather than re-wrapped via an asserted [`Witnessed::new`]); the producer keeps its terminal for
+    /// other consumers. Routes [`Witnessed::duplicate`], so it adds no `unsafe`.
+    pub(crate) fn duplicate(&self) -> Self
+    where
+        Erased<T>: Copy,
+        W: Clone,
+    {
+        Sealed {
+            inner: self.inner.duplicate(),
+        }
+    }
+
     /// The bundled witness — the producer frame `Rc` (possibly wrapped in [`Option`]) that pins the
     /// carrier's pointee. Cloned out by the consumer-pull lift to keep the backing region alive while
     /// the value is copied into the consumer's frame. Hands back the witness, not the value, so it

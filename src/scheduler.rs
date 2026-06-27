@@ -36,7 +36,8 @@ mod workload;
 // The lifetime-erasure carrier substrate lives in the top-level `witnessed` module (below both
 // `machine` and `scheduler`); re-exported here so the scheduler's carriers name it unqualified.
 pub(crate) use crate::witnessed::{
-    reattach_ref, reattach_ref_with, reattach_with, Erased, MergeWitness, Reattachable, Witnessed,
+    reattach_ref, reattach_ref_with, reattach_with, Erased, MergeWitness, Reattachable, Sealed,
+    Witnessed,
 };
 pub use node_id::NodeId;
 pub(crate) use workload::{Live, Workload};
@@ -130,6 +131,17 @@ impl<W: Workload> Scheduler<W> {
     /// errored slot). Follows a bare-name-forward alias to the real producer.
     pub(crate) fn dep_witness(&self, id: NodeId) -> W::Witness {
         self.store.dep_witness(self.resolve_alias(id))
+    }
+
+    /// Duplicate a finalized terminal's sealed carrier (value + witness set), leaving the producer's
+    /// own seal intact — the consumer-pull lift hands each dep this so a construction finish folds it
+    /// witnessed, naming the reach on the carrier rather than reconstructing it. Follows a
+    /// bare-name-forward alias to the real producer (which holds the sole copy).
+    pub(crate) fn dep_carrier(
+        &self,
+        id: NodeId,
+    ) -> Result<Sealed<W::Value, W::Witness>, &W::Error> {
+        self.store.dep_carrier(self.resolve_alias(id))
     }
 
     /// Relocate a finalized terminal into a destination region (the `Forward`-ready pull / drain

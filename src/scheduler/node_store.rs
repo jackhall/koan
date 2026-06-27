@@ -222,6 +222,19 @@ impl<W: Workload> NodeStore<W> {
         }
     }
 
+    /// Duplicate the finalized terminal's sealed carrier — value + witness set — leaving the slot's
+    /// own seal intact for other consumers. The consumer-pull lift hands this to a construction finish
+    /// so the dep arrives **witnessed** (its reach named on the carrier), ready to fold via
+    /// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into) — rather than the value read
+    /// out bare and re-paired with a separately-read witness through an asserted `Witnessed::new`.
+    pub(super) fn dep_carrier(&self, id: NodeId) -> Result<FinalizedValue<W>, &W::Error> {
+        match &self.slots[id] {
+            SlotState::Done(Ok(sealed), ..) => Ok(sealed.duplicate()),
+            SlotState::Done(Err(e), ..) => Err(e),
+            _ => panic!("result must be ready by the time its carrier is taken"),
+        }
+    }
+
     /// Idempotent on already-`Free` slots when paired with the cascade-free
     /// walk's `is_reclaimed` guard. Pairs with the `notify_list[id]` /
     /// `dep_edges[id]` free-time clears in `DepGraph`.

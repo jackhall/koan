@@ -23,8 +23,8 @@ use crate::machine::core::ScopeId;
 use crate::machine::model::values::{Carried, CarriedFamily, KObject};
 
 use crate::machine::{FrameSet, KError, NodeId, TraceFrame};
-use crate::witnessed::Witnessed;
 use crate::witnessed::reattachable;
+use crate::witnessed::{Sealed, Witnessed};
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
 use super::lift::{reached_frame, relocate_carried};
@@ -144,19 +144,20 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
         + 'a,
 >;
 
-/// A resolved dep terminal as the continuation receives it, **un-relocated**: the [`Carried`] value
-/// read out of its producer slot (pinned by the step open) plus `reach` — the set of regions that
-/// value reaches, its own witness set read off its slot carrier
-/// ([`Scheduler::dep_witness`](crate::scheduler::Scheduler)) rather than recovered structurally. The
-/// consuming continuation relocates it into the consumer region: a value-copy finish via
-/// [`relocate_dep_into_consumer`] (which retains a surviving closure / module borrow through
-/// [`reached_frame`](super::lift::reached_frame)), or the [`alloc` construction
-/// inversion](../../../../roadmap/per-node-memory/alloc-object-witnessed.md), which folds each dep
-/// carrier via `transfer_into` so the aggregate is born naming every region it reaches. `reach` is the
-/// operand that fold `merge`s, and is unioned into the consumer-step `pin` before the open.
+/// A resolved dep terminal as the continuation receives it, **un-relocated**. It holds the producer
+/// slot's own [`Sealed`] carrier (a [`duplicate`](crate::witnessed::Sealed::duplicate) — the producer
+/// keeps its terminal for other consumers), so a **construction finish** folds the dep *witnessed* via
+/// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into), its reach named on the carrier
+/// by construction (the [`alloc` construction
+/// inversion](../../../../roadmap/per-node-memory/alloc-object-witnessed.md)). `value` is the same
+/// value re-anchored **live at the step brand** (read out of the producer slot, pinned by the step
+/// open) for the **value-copy** finishes still on the bare channel (the type channel), which relocate
+/// it into the consumer region via [`relocate_dep_into_consumer`] (retaining a surviving closure /
+/// module borrow through [`reached_frame`](super::lift::reached_frame)). The dep's reach is read off
+/// the carrier (`carrier.witness()`) and unioned into the consumer-step `pin` before the open.
 pub(in crate::machine::execute) struct DepTerminal<'a> {
     pub(in crate::machine::execute) value: Carried<'a>,
-    pub(in crate::machine::execute) reach: FrameSet,
+    pub(in crate::machine::execute) carrier: Sealed<CarriedFamily, FrameSet>,
 }
 
 /// The one continuation every node runs when its deps resolve — the unified currency

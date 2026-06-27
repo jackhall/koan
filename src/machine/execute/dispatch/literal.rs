@@ -39,9 +39,11 @@ impl Slot {
     }
 }
 
-/// The per-cell carrier the fold consumes: a static cell's source-wrapped carrier, or a dep terminal
-/// wrapped here under its own reach (un-relocated — `transfer_into` relocates it once into the
-/// aggregate's region while unioning the reach onto the carrier).
+/// The per-cell carrier the fold consumes: a static cell's source-built carrier, or a dep terminal's
+/// own `Sealed` carrier (arriving witnessed from the lift, un-relocated — `transfer_into` relocates it
+/// once into the aggregate's region while unioning its reach onto the carrier). The dep arm hands back
+/// a [`duplicate`](crate::witnessed::Sealed::duplicate) of the terminal's carrier, never a fresh
+/// `Witnessed::new` over the read-out value + a separately-read reach.
 fn cell_carrier(
     slot: Slot,
     terminals: &[&DepTerminal<'_>],
@@ -49,11 +51,8 @@ fn cell_carrier(
 ) -> Sealed<CarriedFamily, FrameSet> {
     match slot {
         Slot::Static(sealed) => sealed,
-        Slot::Park(i) => Sealed::seal(Witnessed::new(terminals[i].value, terminals[i].reach.clone())),
-        Slot::Owned(j) => {
-            let dep = terminals[park_count + j];
-            Sealed::seal(Witnessed::new(dep.value, dep.reach.clone()))
-        }
+        Slot::Park(i) => terminals[i].carrier.duplicate(),
+        Slot::Owned(j) => terminals[park_count + j].carrier.duplicate(),
     }
 }
 

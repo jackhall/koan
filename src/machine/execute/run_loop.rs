@@ -164,13 +164,13 @@ impl<'run> KoanRuntime<'run> {
         let dep_sources: Vec<Result<DepTerminal<'_>, KError>> = deps
             .iter()
             .map(|d| {
-                self.sched
-                    .read_result(*d)
-                    .map(|value| DepTerminal {
-                        value,
-                        reach: self.sched.dep_witness(*d),
-                    })
-                    .map_err(|e| e.clone())
+                // The live value (re-anchored to the step brand by the open below, for the bare
+                // value-copy relocate) plus the producer slot's own `Sealed` carrier (duplicated, so a
+                // construction finish folds the dep witnessed). Both read the same slot, so a single
+                // error short-circuits the terminal.
+                let value = self.sched.read_result(*d).map_err(|e| e.clone())?;
+                let carrier = self.sched.dep_carrier(*d).map_err(|e| e.clone())?;
+                Ok(DepTerminal { value, carrier })
             })
             .collect();
         // The consumer-step **pin**: the set union of every region this step's deps reach, read off
@@ -186,7 +186,7 @@ impl<'run> KoanRuntime<'run> {
                 .zip(deps.iter())
                 .fold(FrameSet::empty(), |acc, (src, d)| {
                     match src {
-                        Ok(t) => FrameSet::merge(&acc, &t.reach),
+                        Ok(t) => FrameSet::merge(&acc, t.carrier.witness()),
                         Err(_) => FrameSet::merge(&acc, &self.sched.dep_witness(*d)),
                     }
                     .expect("a set witness always represents the union")
