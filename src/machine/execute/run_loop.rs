@@ -299,6 +299,21 @@ impl<'run> KoanRuntime<'run> {
                             }
                             self.sched.finalize(idx, result);
                         }
+                        NodeStep::DoneWitnessed(carrier) => {
+                            // The object-family terminal arrived already witnessed — the construction
+                            // inversion built it inside its witness closure, naming every region it
+                            // reaches. The hook seals it: a pass-through bar a declared-return re-stamp,
+                            // and **no** `dep_reached`/`pin` recomputation — the carrier's own witness
+                            // is the exact reach (over-approximate `pin` retired for this path).
+                            let live_contract = frame.and(live_contract);
+                            let result =
+                                self.finalize_terminal_witnessed(carrier, frame, live_contract);
+                            if result.is_err() {
+                                reattach_node_scope(&post.payload().scope, Some(&post.prev_frame))
+                                    .clear_placeholders_for_producer(id);
+                            }
+                            self.sched.finalize(idx, result);
+                        }
                         NodeStep::ForwardReady(producer) => {
                             // Relocate `producer`'s terminal into this slot's region via the merge-form
                             // transfer — re-sealed under the producer's own reached sources ∪ this slot's

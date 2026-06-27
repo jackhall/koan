@@ -8,12 +8,13 @@
 use std::rc::Rc;
 
 use super::body::ReturnContract;
-use crate::machine::core::{CallFrame, LexicalFrame, Scope, ScopeId};
+use crate::machine::core::{CallFrame, FrameStorage, LexicalFrame, Scope, ScopeId};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::KType;
-use crate::machine::model::values::Held;
+use crate::machine::model::values::{CarriedFamily, Held};
 use crate::machine::model::{Carried, KObject};
-use crate::machine::{BindingIndex, KError, KErrorKind, NodeId};
+use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, NodeId};
+use crate::witnessed::Witnessed;
 
 /// Unwrap a `Result<T, KError>` inside an `Action`-returning body, early-returning
 /// `Action::Done(Err(e))` on the error arm — the `Action`-body analogue of `?`. Collapses the
@@ -28,6 +29,18 @@ macro_rules! try_action {
             Err(error) => return $crate::machine::core::kfunction::action::Action::Done(Err(error)),
         }
     };
+}
+
+/// The `Rc<FrameStorage>` that owns `scope`'s region — the witness a value built into that region is
+/// `yoke`d under (the object-family construction inversion: a region-resident object is born bundled
+/// with its frame as its reach). The scope's `region_owner` is `Weak` — an in-region value holds no
+/// owning `Rc` back to its frame — and upgrades for the whole of the scope's own step, while the
+/// producing node holds the frame live.
+pub fn scope_frame(scope: &Scope<'_>) -> Rc<FrameStorage> {
+    scope
+        .region_owner()
+        .upgrade()
+        .expect("a producing scope's frame is live during its own step")
 }
 
 /// Read a builtin argument's `KObject` from a `BodyCtx::args` `KObject::Record` by name. `None` if
@@ -191,6 +204,14 @@ pub type CatchContinue<'a> =
 pub enum Action<'a> {
     /// Produce a value / error for this slot (after any direct scope mutation the builtin did).
     Done(Result<Carried<'a>, KError>),
+    /// Produce a value built **inside the witness closure** — already bundled with the set of
+    /// regions it reaches ([`yoke`](crate::witnessed::Witnessed::yoke) / `merge` at the alloc site),
+    /// so it is co-located by construction rather than paired with an asserted witness at finalize.
+    /// The object-family terminal: a builtin that allocates a `KObject` returns this instead of the
+    /// bare [`Done`](Self::Done). The type channel (a `Carried::Type`) and every error stay on `Done`
+    /// until [`alloc_ktype`](../../../../roadmap/per-node-memory/alloc-ktype-witnessed.md) inverts
+    /// the type family, when the two collapse to one.
+    DoneWitnessed(Witnessed<CarriedFamily, FrameSet>),
     /// Tail-replace into `tail`, carrying `contract`, in a cart per `frame_placement`. When
     /// `leading` (the body's non-tail statements) is non-empty the slot first parks on them as
     /// owned deps and tail-replaces only once they resolve — so they run, and cascade-free, before

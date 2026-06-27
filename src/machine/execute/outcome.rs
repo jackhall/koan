@@ -20,9 +20,10 @@
 use crate::machine::core::kfunction::action::{Dep, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::ScopeId;
-use crate::machine::model::values::{Carried, KObject};
+use crate::machine::model::values::{Carried, CarriedFamily, KObject};
 
 use crate::machine::{FrameSet, KError, NodeId, TraceFrame};
+use crate::witnessed::Witnessed;
 use crate::witnessed::reattachable;
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
@@ -41,6 +42,13 @@ pub(in crate::machine::execute) enum Outcome<'step> {
     /// allocates it there, a forwarded dep arrives already lifted into it) and relocated across each
     /// dep edge by the consumer-pull lift into the consuming node's frame.
     Done(Result<Carried<'step>, KError>),
+    /// The node dies with a value **built inside the witness closure** — a
+    /// [`Witnessed`](crate::witnessed::Witnessed) carrier already naming every region it reaches
+    /// (`yoke` / `merge` / the aggregate fold at the alloc site), so `finalize` seals it without an
+    /// asserted-co-location [`Witnessed::new`](crate::witnessed::Witnessed::new). The object-family
+    /// terminal; the type channel and every error stay on [`Done`](Self::Done) until the type family
+    /// inverts. The carrier is lifetime-free, so this arm carries no `'step`.
+    DoneWitnessed(Witnessed<CarriedFamily, FrameSet>),
     /// The node lives: install `work` and run again immediately (no park). `frame` rotates the
     /// per-call cart (`Inherit` keeps it; `ReuseReserve`/`FreshChild` install a new one — the
     /// harness resolves the placement to a cart); `contract` / `block_entry` / `body_index` carry

@@ -1,12 +1,23 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ReturnContract;
+use crate::machine::core::KoanRegion;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType};
 use crate::machine::{CallFrame, FrameSet, KError, KErrorKind};
-use crate::witnessed::{MergeWitness, Witnessed};
+use crate::witnessed::{reattachable, MergeWitness, Witnessed};
 
 use super::runtime::KoanRuntime;
+
+/// `Reattachable` carrier family for a declared-return re-stamp's two region-resident operands: the
+/// contract's home region the re-tagged value lands in, and the declared `KType` it is stamped with.
+/// Both live in the home region (a strict ancestor of the producer frame) the finalized carrier's
+/// witness already pins via its `outer` chain, so [`finalize_terminal_witnessed`] folds them in with
+/// [`merge`](Witnessed::merge) — the re-stamp is born co-located, no asserted bundle. Layout-invariant:
+/// a `(&'r KoanRegion, &'r KType<'r>)` is two thin pointers whose representation never depends on `'r`.
+struct ContractHomeFamily;
+
+reattachable!(ContractHomeFamily => (&'r KoanRegion, &'r KType<'r>));
 
 /// The workload's Done-boundary contract hook: enforce a finished node's declared return contract,
 /// returning the slot's final terminal. The driver opens the slot's contract at the step brand
@@ -40,6 +51,22 @@ pub(in crate::machine::execute) trait NodeFinalize {
         contract: Option<ReturnContract<'o>>,
         dep_reached: FrameSet,
     ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError>;
+
+    /// The object-family Done-boundary hook: seal a terminal that arrives **already witnessed** — a
+    /// [`Witnessed`] carrier the construction inversion built inside its witness closure, naming
+    /// every region it reaches. Where [`finalize_terminal`](Self::finalize_terminal) computes a
+    /// witness set and bundles a bare value (the transitional type/error path), this hook trusts the
+    /// carrier's own witness and only enforces the declared return: with no declared type the carrier
+    /// passes through untouched (no `Witnessed::new`); a declared-return re-stamp re-tags the value
+    /// into the contract's home region via [`merge`](Witnessed::merge), re-sealed under the carrier's
+    /// own witness (which pins `home` through its `outer` chain). A `None` frame (a frameless / run
+    /// producer) carries no per-call return obligation and seals as-is.
+    fn finalize_terminal_witnessed<'o>(
+        &self,
+        carrier: Witnessed<CarriedFamily, FrameSet>,
+        frame: Option<&Rc<CallFrame>>,
+        contract: Option<ReturnContract<'o>>,
+    ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError>;
 }
 
 impl NodeFinalize for KoanRuntime<'_> {
@@ -63,6 +90,58 @@ impl NodeFinalize for KoanRuntime<'_> {
             None => dep_reached,
         };
         Ok(Witnessed::new(checked, witness))
+    }
+
+    fn finalize_terminal_witnessed<'o>(
+        &self,
+        carrier: Witnessed<CarriedFamily, FrameSet>,
+        frame: Option<&Rc<CallFrame>>,
+        contract: Option<ReturnContract<'o>>,
+    ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+        // A frameless / run producer carries no per-call return obligation (the run_loop frame-gates
+        // the contract to `None` here anyway): the carrier already names its exact reach, seal as-is.
+        if frame.is_none() {
+            return Ok(carrier);
+        }
+        // No declared return (or a non-`Resolved` FN-def carrier): pass through — the carrier's own
+        // witness is the exact reach, no asserted bundle.
+        let Some((declared, label, per_call)) = pull_declared_return(contract) else {
+            return Ok(carrier);
+        };
+        // Re-tag to the declared return type (may coarsen, e.g. `List<Number>` through
+        // `:(LIST OF Any)`). The check and re-stamp run **inside** the `merge`, where the carrier
+        // value and the declared type — folded in from the contract's home region — meet at one
+        // brand (the only place a `&KType<'o>` and the lifetime-free carrier can be compared). The
+        // re-tag homes in the home region, a strict ancestor the carrier's witness already pins via
+        // its `outer` chain, so the union re-seals under the carrier's own witness (subsumption drops
+        // the home duplicate) and the value is born co-located. A failed check is captured and raised
+        // after the fold (the discarded re-home is harmless).
+        let home = contract
+            .expect("a declared return type implies a contract")
+            .home_region();
+        let home_carrier =
+            Witnessed::<ContractHomeFamily, FrameSet>::new((home, declared), carrier.witness().clone());
+        let mut mismatch: Option<KError> = None;
+        let restamped = carrier
+            .merge::<ContractHomeFamily, CarriedFamily>(
+                home_carrier,
+                |value, (home_region, declared_type), _brand| {
+                    let object = value.object();
+                    if !declared_type.matches_value(object) {
+                        mismatch =
+                            Some(return_type_mismatch(declared_type, per_call, &label, object.ktype().name()));
+                        return Carried::Object(home_region.alloc_object(object.deep_clone()));
+                    }
+                    Carried::Object(
+                        home_region.alloc_object(object.deep_clone().stamp_type(declared_type)),
+                    )
+                },
+            )
+            .expect("a FrameSet set witness always represents the union");
+        match mismatch {
+            Some(error) => Err(error),
+            None => Ok(restamped),
+        }
     }
 }
 
@@ -136,27 +215,46 @@ fn check_declared_return<'o>(
     satisfies: impl FnOnce(&KType<'o>) -> bool,
     got_name: impl FnOnce() -> String,
 ) -> Result<Option<&'o KType<'o>>, KError> {
-    let (declared, label, per_call) = match contract {
-        Some(ReturnContract::Function(f)) => match &f.signature.return_type {
-            crate::machine::model::types::ReturnType::Resolved(d) => (d, f.summarize(), false),
-            _ => return Ok(None),
-        },
-        Some(ReturnContract::Arm { ret, kind, .. }) => (ret, kind.to_string(), false),
-        Some(ReturnContract::PerCall { func, ret }) => (ret, func.summarize(), true),
-        None => return Ok(None),
+    let Some((declared, label, per_call)) = pull_declared_return(contract) else {
+        return Ok(None);
     };
     if !satisfies(declared) {
-        let expected = if per_call {
-            format!("{} (per-call return type)", declared.name())
-        } else {
-            declared.name()
-        };
-        return Err(KError::new(KErrorKind::TypeMismatch {
-            arg: "<return>".to_string(),
-            expected,
-            got: got_name(),
-        })
-        .with_frame(crate::machine::TraceFrame::bare(label.clone(), label)));
+        return Err(return_type_mismatch(declared, per_call, &label, got_name()));
     }
     Ok(Some(declared))
+}
+
+/// Pull the declared return type off `contract` plus its diagnostic label and the `per_call` flag, or
+/// `None` when nothing is declared — no contract, or a `Function` whose signature return is
+/// non-`Resolved` (a `Deferred` carrier still in its FN-def signature). The extraction half of
+/// [`check_declared_return`]; the witnessed path reuses it so the value check can run *inside* the
+/// re-stamp `merge` (where the carrier value and the declared type meet at one brand).
+fn pull_declared_return<'o>(
+    contract: Option<ReturnContract<'o>>,
+) -> Option<(&'o KType<'o>, String, bool)> {
+    match contract {
+        Some(ReturnContract::Function(f)) => match &f.signature.return_type {
+            crate::machine::model::types::ReturnType::Resolved(d) => Some((d, f.summarize(), false)),
+            _ => None,
+        },
+        Some(ReturnContract::Arm { ret, kind, .. }) => Some((ret, kind.to_string(), false)),
+        Some(ReturnContract::PerCall { func, ret }) => Some((ret, func.summarize(), true)),
+        None => None,
+    }
+}
+
+/// The labelled `TypeMismatch` a failed declared-return check raises. `expected` names the declared
+/// type (tagged "per-call return type" for a `PerCall`); `got` names the produced carrier.
+fn return_type_mismatch(declared: &KType<'_>, per_call: bool, label: &str, got: String) -> KError {
+    let expected = if per_call {
+        format!("{} (per-call return type)", declared.name())
+    } else {
+        declared.name()
+    };
+    KError::new(KErrorKind::TypeMismatch {
+        arg: "<return>".to_string(),
+        expected,
+        got,
+    })
+    .with_frame(crate::machine::TraceFrame::bare(label.to_string(), label.to_string()))
 }

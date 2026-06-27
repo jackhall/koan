@@ -3,8 +3,10 @@ use std::rc::Rc;
 use super::runtime::KoanWorkload;
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::{assemble_body_chain, ErasedScopePtr, ScopeId};
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::Carried;
-use crate::machine::{CallFrame, KError, LexicalFrame, NodeId};
+use crate::machine::{CallFrame, FrameSet, KError, LexicalFrame, NodeId};
+use crate::witnessed::Witnessed;
 
 /// The generic per-node state lives in [`crate::scheduler::nodes`]; re-exported here so the Koan
 /// execute tree has a single `nodes` surface combining them with the Koan-side [`NodeStep`] /
@@ -32,6 +34,14 @@ pub(super) enum NodeStep<'step> {
     /// accumulated over the step — and finalizes it into the slot store, erasing `'step` before the
     /// frame drops.
     Done(Result<Carried<'step>, KError>),
+    /// The finalized terminal **already bundled with its witness set** — a
+    /// [`Witnessed`](crate::witnessed::Witnessed) carrier the object-family construction inversion
+    /// built inside the witness closure, naming every region it reaches. `run_step` seals it through
+    /// [`finalize_terminal_witnessed`](super::finalize::NodeFinalize::finalize_terminal_witnessed)
+    /// (a declared-return re-stamp aside, a pass-through — no `Witnessed::new`). The type channel and
+    /// errors stay on [`Done`](Self::Done); the carrier is lifetime-free, so this arm carries no
+    /// `'step`.
+    DoneWitnessed(Witnessed<CarriedFamily, FrameSet>),
     /// A ready bare-name forward: this slot's terminal *is* `producer`'s. `run_step` relocates
     /// `producer`'s terminal into this slot's region (carrying its own witness) and finalizes — no
     /// re-check, the producer already enforced its own contract. (`Alias` is the not-yet-ready twin.)

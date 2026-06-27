@@ -188,6 +188,9 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
         // Terminal: the value the builtin already computed (scope was mutated in place first).
         Action::Done(Ok(c)) => Outcome::Done(Ok(c)),
         Action::Done(Err(e)) => Outcome::Done(Err(e)),
+        // Object-family terminal: the carrier the builtin built inside its witness closure rides
+        // straight through — `finalize` seals it, no asserted-co-location bundle.
+        Action::DoneWitnessed(carrier) => Outcome::DoneWitnessed(carrier),
 
         Action::Tail {
             leading,
@@ -380,6 +383,9 @@ impl<'run> KoanRuntime<'run> {
             // The terminal stays live at `'step`; `run_step` contract-checks it (value and contract
             // share `'step`) and only then bundles it with its witness set and finalizes.
             Outcome::Done(output) => NodeStep::Done(output),
+            // The object-family carrier rides straight through to the Done boundary, where the
+            // workload hook seals it (a declared-return re-stamp aside, untouched).
+            Outcome::DoneWitnessed(carrier) => NodeStep::DoneWitnessed(carrier),
             Outcome::Continue {
                 work,
                 frame,
