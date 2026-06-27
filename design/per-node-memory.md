@@ -67,19 +67,28 @@ because there is no prior carrier to inherit it from: `yoke` is the door through
 which a value first becomes witnessed. In Koan: an `alloc` site inverts so its
 construction runs *inside* the closure — a region-pure leaf
 (`region.alloc_object(…)` over owned or region-derived parts) is a `yoke` whose
-closure is the single allocation. What `yoke` cannot mint composes through `merge`: an
-aggregate folds its *element carriers* (deps arriving witnessed from the lift); a closure
-folds the captured-scope operand minted from its frame `Rc`; a value embedding an AST
-reference — a quoted expression, an FN body — folds the AST carrier. That last needs the
-program AST to *be* a carrier rather than a bare `&'run` borrow, which the `for<'b>` brand
-could never capture: the parsed program is [yoked into the run
-region](../roadmap/per-node-memory/yoke-ast-to-run-region.md) at the run boundary, so every
-FN body and quoted sub-expression is a run-region carrier the construction `merge`s, the run
-frame subsumed under the producing frame. The target is `yoke` and `merge` throughout —
-co-location the `for<'b>` brand enforces, never asserted. `Witnessed::new`, which pairs an
-*already-built* value with an asserted witness, is the transitional rung each family climbs
-off as its constructions invert — the AST-embedding sites climb off once the AST carrier
-above lands.
+closure is the single allocation. A value embedding an AST — a quoted expression, an FN body — also
+`yoke`s, because the embedded AST is *owned data*, not a borrow. An FN body and a quoted expression are owned
+[`KExpression`](../src/machine/model/ast.rs) clones (the `KObject::KExpression` and
+`Body::UserDefined` payloads), and a `KExpression`'s lifetime parameter is borne by exactly one
+variant — `ExpressionPart::Spliced(Carried)`, the per-call resolved sub-result the scheduler folds
+into a parent's parts. Raw, unevaluated AST is *splice-free*: it holds no `Spliced` part, so it binds
+no live borrow and its `'a` is a phantom. `KExpression` is therefore a [layout-invariant carrier
+family](#the-core-erase-store-witness-reattach) (the splice rides the layout-invariant `Carried`),
+and an AST-embedding object yokes via `KoanRegion::alloc_witnessed_embedding`: it moves the owned
+splice-free expression into the `yoke` closure, re-anchors its phantom lifetime onto the brand through
+the safe-signature `reattach_with`, and allocs the object natively at the brand. Co-location is
+enforced by the `for<'b>` brand exactly as for any leaf; the embedded AST contributes no region of its
+own, and the sole residual obligation — that the embed is splice-free — is a `debug_assert`, not a
+witness the type encodes.
+
+What `yoke` cannot mint composes through `merge`: an aggregate folds its *element carriers* (deps
+arriving witnessed from the lift); a closure folds the captured-scope operand minted from its frame
+`Rc`. The target is `yoke` and `merge` throughout — co-location the `for<'b>` brand enforces, never
+asserted. `Witnessed::new`, which pairs an *already-built* value with an asserted witness, is the
+transitional rung the remaining alloc inversions ([`alloc_object`](../roadmap/per-node-memory/alloc-object-witnessed.md),
+[`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md)) climb off as their constructions
+invert.
 
 **`merge` — fold many region-resident values into one.** Generic: a value built
 from references into *two* regions cannot be bundled with one witness by `yoke`

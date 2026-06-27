@@ -93,6 +93,10 @@ What's shipped that the open items below build on:
   confirmation of the removed self-reference tokens has landed — the slate is green. And
   `KFunction::captured` now rides a `BoundedScopePtr`
   (see [design/per-call-region/scope-handles.md § Slot-table scope handle](../design/per-call-region/scope-handles.md#slot-table-scope-handle)).
+  And [`KExpression`](../src/machine/model/ast.rs) joined the layout-invariant carrier families (its
+  lifetime borne only by a `Spliced(Carried)` part), so `QUOTE` now yokes its owned splice-free
+  expression via [`KoanRegion::alloc_witnessed_embedding`](../src/machine/core/arena.rs) — the
+  object's region co-located by the `for<'b>` brand — rather than asserting it via `Witnessed::new`.
   See [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Shell-over-storage frame reuse.* `CallFrame` is now a thin shell over a refcounted
   [`FrameStorage`](../src/machine/core/arena.rs) (the per-call `KoanRegion` plus the ancestor
@@ -312,10 +316,10 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
+- [`alloc_object` returns `Witnessed`](per-node-memory/alloc-object-witnessed.md)
 - [Migrate the loose witness-borrow wrappers onto `Sealed`](per-node-memory/migrate-reattach-helpers.md)
 - [Migrate scope-handle reads to `open`](per-node-memory/scope-reads-to-open.md)
 - [Migrate result-slot value reads to `open`](per-node-memory/value-reads-to-open.md)
-- [Yoke the program AST into the run region](per-node-memory/yoke-ast-to-run-region.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
@@ -423,9 +427,6 @@ migrate onto it, with `attach` a contingent fallback retired last:
 - [Migrate the loose witness-borrow wrappers onto `Sealed`](per-node-memory/migrate-reattach-helpers.md) —
   move the `vend_carrier` continuation / contract and the `reattach_*_with` sites onto the access
   methods and delete the four wrappers.
-- [Yoke the program AST into the run region](per-node-memory/yoke-ast-to-run-region.md) — make the
-  parsed program region-resident as a carrier, so AST-embedding constructions `merge` it instead of
-  asserting co-location via `Witnessed::new`; the keystone the `alloc_object` AST sites ride.
 - [`alloc_object` returns `Witnessed`](per-node-memory/alloc-object-witnessed.md) — convert the
   object family onto `yoke` / `merge`, retiring transfer-into-lift's structural walk.
 - [`alloc_ktype` returns `Witnessed`](per-node-memory/alloc-ktype-witnessed.md) — convert the

@@ -21,13 +21,13 @@ carrier could have named at construction.
 **Acceptance criteria.**
 
 - `alloc_object` returns a `KObject` bundled with the set of regions it reaches, built inside the
-  witness closure: region-pure parts via `yoke`, and dep element carriers, a captured scope, or the
-  run-region AST carrier (a quoted expression, an FN body) folded in via `merge`. A region-resident
-  object is born co-located by construction, its reach named on the carrier — co-location enforced by
-  the `for<'b>` brand, not asserted.
-- The object family carries no `Witnessed::new`: every construction is `yoke` (region-pure parts) or
-  `merge` (witnessed deps, a captured scope, the run-region AST carrier, a single embedded dep / bound
-  value), never an arbitrary value paired with an asserted witness.
+  witness closure: region-pure parts via `yoke`, an embedded owned splice-free expression (a quoted
+  expression, an FN body) via `yoke` (`alloc_witnessed_embedding`), and dep element carriers or a
+  captured scope folded in via `merge`. A region-resident object is born co-located by construction,
+  its reach named on the carrier — co-location enforced by the `for<'b>` brand, not asserted.
+- The object family carries no `Witnessed::new`: every construction is `yoke` (region-pure parts, an
+  embedded owned splice-free expression) or `merge` (witnessed deps, a captured scope, a single
+  embedded dep / bound value), never an arbitrary value paired with an asserted witness.
 - A construction finish receives its deps as witnessed carriers, not bare `Carried`: the
   consumer-pull lift hands each dep's witness set through to the construction site so `merge`
   composes it, rather than discarding it at the `relocate`.
@@ -53,14 +53,18 @@ carrier could have named at construction.
   construction (it captures a borrow that is neither region-derived nor owned / `'static`), the value
   is adopted under its exact `singleton(F)` via *structural* `Witnessed::new`, never the prose-asserted
   bundle — a `for<'b>` closure cannot accept an already-built `KObject<'a>`.
-- *AST-embedding and single-dep sites `merge`, not `new` — decided.* `alloc_function` (a
-  `KObject::KFunction` over an FN body) and `quote` (a `KObject::KExpression` over a quoted expression)
-  cannot `yoke` — the `for<'b>` brand can't capture the `&'run` AST — so they `merge` the run-region AST
-  carrier ([yoke-ast](yoke-ast-to-run-region.md)); `catch`'s `Tagged` and the `Wrapped` newtype each
-  embed a single dep / bound value and `merge` that one carrier (a single-dep fold). None carries a
-  `Witnessed::new`. *Transitionally*, until the AST carrier lands, `alloc_function` / `quote` may ride a
-  structural `new` under `singleton(F)` — the asserted rung they climb off when
-  [yoke-ast](yoke-ast-to-run-region.md) lands.
+- *AST-embedding and single-dep sites yoke or `merge`, not `new` — decided.* An FN body and a quoted
+  expression are *owned* [`KExpression`](../../src/machine/model/ast.rs) clones, not `&'run` AST
+  references (`require_kexpression` clones; `Body::UserDefined` / `KObject::KExpression` own their
+  expression). A raw, unevaluated expression is splice-free, so its sole `'a`-bearing variant
+  (`ExpressionPart::Spliced(Carried)`) is absent and it binds no live borrow. So an AST-embedding
+  object *yokes* its expression: [`alloc_witnessed_embedding`](../../src/machine/core/arena.rs) moves
+  the owned splice-free expression into the `yoke` closure, re-anchors it onto the brand via the
+  safe-signature `reattach_with`, and allocs the object natively at the brand — co-location enforced by
+  the `for<'b>` brand, the embedded AST contributing no region of its own. `quote` is converted;
+  `alloc_function` reuses the same primitive when it moves off the bare `Action::Done(Ok(Carried))`
+  channel. `catch`'s `Tagged` and the `Wrapped` newtype each embed a single dep / bound value and
+  `merge` that one carrier (a single-dep fold). None carries a `Witnessed::new`.
 - *The set is built at construction, not recovered after — decided.* `yoke` / `merge` / structural
   `new` at the alloc site builds the reached-region set directly: a closure's witness is its captured
   scope's defining frame (`scope.region_owner()`); an aggregate's is its elements' carrier sets,
@@ -92,13 +96,10 @@ carrier could have named at construction.
 
 This item lands the shared dep-result plumbing (the lift hands each finish its deps' carriers) that the
 type family reuses. Its aggregate and leaf inversions build on the shipped substrate (`yoke` / `merge`
-/ `transfer_into`); its AST-embedding inversions (`alloc_function`, `quote`) `merge` an AST carrier the
-keystone below lands first.
+/ `transfer_into`); its AST-embedding inversions (`alloc_function`, `quote`) yoke an owned splice-free
+expression via the shipped [`alloc_witnessed_embedding`](../../src/machine/core/arena.rs).
 
-**Requires:**
-
-- [Yoke the program AST into the run region](yoke-ast-to-run-region.md) — the `alloc_function` / `quote`
-  inversions `merge` the AST carrier it lands, rather than asserting co-location via `Witnessed::new`.
+**Requires:** none — foundation (the witnessed substrate, including the AST-embedding `yoke`, is shipped).
 
 **Unblocks:**
 
