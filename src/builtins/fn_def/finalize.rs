@@ -12,12 +12,15 @@
 //! FUNCTOR-only return-type admissibility check; `Anonymous` (the `FN :{…}`
 //! record-schema binder) skips registration. No closure plumbing.
 
+use crate::machine::core::kfunction::action::{scope_frame, Action};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{Elaborator, ReturnType};
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionSignature, KObject, SignatureElement};
-use crate::machine::{BindingIndex, Body, KError, KErrorKind, NodeId, Scope};
+use crate::machine::{BindingIndex, Body, FrameSet, KError, KErrorKind, NodeId, Scope};
+use crate::witnessed::{reattach_with, Witnessed};
 
 use super::return_type::{
     make_capture, resolve_capture_at_finish, ReturnTypeCapture, ReturnTypeState,
@@ -201,7 +204,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     body_expr: KExpression<'a>,
     kind: FnKind,
     bind_index: BindingIndex,
-) -> Result<Carried<'a>, KError> {
+) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     let is_functor = matches!(kind, FnKind::Functor);
     // FUNCTOR-only post-resolution return-type validation: fires here when the
     // return slot resolved at dep-finish time rather than synchronously.
@@ -258,9 +261,26 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         };
         scope.register_function(name, f, obj, bind_index)?;
     }
-    // Return the function reference so `LET f = (FN ...)` captures a callable
-    // handle for the identifier-bound dispatch fallback.
-    Ok(Carried::Object(obj))
+    // Witness the FN value by its defining scope's frame: the `KFunction` is co-located in that
+    // frame's region (owned signature / body, a `BoundedScopePtr` capture), and the captured scope —
+    // region-resident under the frame — transitively keeps every foreign region its bindings reach
+    // alive through the scope's sealed reach-set. `yoke` + `reattach_with` re-anchor the already-built,
+    // co-located object onto the carrier, so the FN value names its reach by construction — never an
+    // asserted `Witnessed::new`. `LET f = (FN ...)` still captures the callable via this carrier.
+    let frame = scope_frame(scope);
+    Ok(Witnessed::<CarriedFamily, FrameSet>::yoke(
+        FrameSet::singleton(frame),
+        |region| reattach_with::<CarriedFamily, _>(Carried::Object(obj), region),
+    ))
+}
+
+/// Wrap a [`finalize_fn_with_kind`] result in the action currency. The FN value is built witnessed
+/// (it names its captured scope's frame), so success seals as [`Action::DoneWitnessed`].
+pub(crate) fn fn_action<'a>(result: Result<Witnessed<CarriedFamily, FrameSet>, KError>) -> Action<'a> {
+    match result {
+        Ok(witnessed) => Action::DoneWitnessed(witnessed),
+        Err(e) => Action::Done(Err(e)),
+    }
 }
 
 /// Schedule a `AwaitDeps` over `park_producers` plus any newly scheduled
@@ -344,7 +364,7 @@ pub(crate) fn defer<'a>(
                 }
             }
         };
-        Action::Done(finalize_fn_with_kind(
+        fn_action(finalize_fn_with_kind(
             fctx.scope,
             elements,
             return_type,

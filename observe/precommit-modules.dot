@@ -299,6 +299,8 @@ digraph {
     "koan::builtins::fn_def::finalize" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::fn_def::finalize" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::builtins::fn_def::finalize" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::builtins::fn_def::finalize" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::builtins::fn_def::finalize" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::builtins::fn_def::param_refs" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::builtins::fn_def::return_type" -> "koan::builtins::fn_def::param_refs" [label="uses", style="dashed"];
     "koan::builtins::fn_def::return_type" -> "koan::machine" [label="uses", style="dashed"];
