@@ -5,9 +5,10 @@ use crate::machine::model::types::{
     finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalSchema, SchemaSealResult,
     SealOutcome,
 };
-use crate::machine::model::values::Carried;
+use crate::machine::model::values::{Carried, CarriedFamily};
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
+use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope, TraceFrame};
+use crate::witnessed::Witnessed;
 
 use super::{arg, kw, sig};
 
@@ -20,7 +21,7 @@ fn finalize_union<'a>(
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
-) -> Result<Carried<'a>, KError> {
+) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
             "UNION schema must have at least one tag".to_string(),
@@ -48,7 +49,10 @@ fn finalize_union<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => Ok(Carried::Type(scope.region.alloc_ktype(kt_ref.clone()))),
+        SealOutcome::Sealed(kt_ref) => {
+            let kt = scope.region.alloc_ktype(kt_ref.clone());
+            Ok(scope.seal_value(Carried::Type(kt), None))
+        }
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "UNION `{name}` schema references unsealed type `{missing}`",
         )))),
@@ -260,7 +264,7 @@ mod tests {
             vec![("Some".into(), KType::Number)],
             BindingIndex::value(0),
         );
-        match second {
+        match second.as_ref().map(|carrier| carrier.read()) {
             Ok(Carried::Type(KType::SetRef { set, index })) => {
                 assert_eq!(set.member(*index).name, "Maybe");
             }

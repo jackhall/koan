@@ -87,19 +87,18 @@ mod action_bodies {
 
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let elem = crate::try_action!(require_ktype(ctx.args, "elem"));
-        Action::Done(Ok(Carried::Type(
-            ctx.scope.region.alloc_ktype(KType::List(Box::new(elem))),
-        )))
+        let kt = ctx.scope.region.alloc_ktype(KType::List(Box::new(elem)));
+        Action::DoneWitnessed(ctx.scope.seal_value(Carried::Type(kt), None))
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let k = crate::try_action!(require_ktype(ctx.args, "k"));
         let v = crate::try_action!(require_ktype(ctx.args, "v"));
-        Action::Done(Ok(Carried::Type(
-            ctx.scope
-                .region
-                .alloc_ktype(KType::Dict(Box::new(k), Box::new(v))),
-        )))
+        let kt = ctx
+            .scope
+            .region
+            .alloc_ktype(KType::Dict(Box::new(k), Box::new(v)));
+        Action::DoneWitnessed(ctx.scope.seal_value(Carried::Type(kt), None))
     }
 
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -128,12 +127,11 @@ mod action_bodies {
                 ctor.name(),
             )))));
         }
-        Action::Done(Ok(Carried::Type(ctx.scope.region.alloc_ktype(
-            KType::ConstructorApply {
-                ctor: Box::new(ctor),
-                args: vec![applied],
-            },
-        ))))
+        let kt = ctx.scope.region.alloc_ktype(KType::ConstructorApply {
+            ctor: Box::new(ctor),
+            args: vec![applied],
+        });
+        Action::DoneWitnessed(ctx.scope.seal_value(Carried::Type(kt), None))
     }
 
     pub(super) fn body_fn<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -167,9 +165,10 @@ fn build_carrier<'a>(
         &mut elaborator,
         None,
     ) {
-        FieldListOutcome::Done(fields) => Action::Done(Ok(Carried::Type(finalize_carrier(
-            ctx.scope, fields, ret, kind,
-        )))),
+        FieldListOutcome::Done(fields) => {
+            let kt = finalize_carrier(ctx.scope, fields, ret, kind);
+            Action::DoneWitnessed(ctx.scope.seal_value(Carried::Type(kt), None))
+        }
         FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
             park_producers,
@@ -185,7 +184,8 @@ fn build_carrier<'a>(
             None,
             None,
             Box::new(move |scope, fields| {
-                Ok(Carried::Type(finalize_carrier(scope, fields, ret, kind)))
+                let kt = finalize_carrier(scope, fields, ret, kind);
+                Ok(scope.seal_value(Carried::Type(kt), None))
             }),
         ),
     }

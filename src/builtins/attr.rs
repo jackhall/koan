@@ -23,27 +23,16 @@ use crate::witnessed::{Sealed, Witnessed};
 
 use super::{arg, kw, sig};
 
-/// A projected ATTR member. An object value seals as a [`Witnessed`] carrier naming its reach (the
-/// object-family terminal); a type identity stays on the `Done` / type channel until
-/// [`alloc_ktype`](../../roadmap/per-node-memory/alloc-ktype-witnessed.md) inverts the type
-/// family. [`route`] turns either into the matching [`Action`].
-enum AttrOutcome<'a> {
-    Object(Witnessed<CarriedFamily, FrameSet>),
-    Type(&'a KType<'a>),
-}
-
-/// Turn an `access_*` result into its terminal [`Action`]: an object member seals as
-/// [`Action::DoneWitnessed`] carrying its reach, a type member and every error stay on
-/// [`Action::Done`].
+/// Lift an `access_*` result into its terminal [`Action`]: a projected member — object or type —
+/// seals as a [`Witnessed`] carrier naming its reach
+/// ([`Action::DoneWitnessed`](crate::machine::core::kfunction::action::Action::done_witnessed)), an
+/// error as a bare `Done`. Both channels are witnessed: an object value via
+/// [`Scope::seal_value`], a type identity via [`Scope::seal_type`] (a projected nested module folds
+/// its child-scope reach).
 fn route<'a>(
-    result: Result<AttrOutcome<'a>, KError>,
+    result: Result<Witnessed<CarriedFamily, FrameSet>, KError>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::Action;
-    match result {
-        Ok(AttrOutcome::Object(witnessed)) => Action::DoneWitnessed(witnessed),
-        Ok(AttrOutcome::Type(kt)) => Action::Done(Ok(Carried::Type(kt))),
-        Err(e) => Action::Done(Err(e)),
-    }
+    crate::machine::core::kfunction::action::Action::done_witnessed(result)
 }
 
 
@@ -137,7 +126,7 @@ pub fn body_type_lhs<'a>(
     let field_name = crate::try_action!(read_field_name(ctx.args));
     match s_kt {
         KType::Unresolved(te) => match resolve_type_leaf_carrier(ctx.scope, te, None) {
-            TypeLeafCarrier::Resolved(kt) => route(access_type_member(ctx.scope, kt, &field_name)),
+            TypeLeafCarrier::Resolved(kt) => route(access_type_member(kt, &field_name)),
             TypeLeafCarrier::Unbound(name) => {
                 Action::Done(Err(KError::new(KErrorKind::UnboundName(name))))
             }
@@ -151,7 +140,7 @@ pub fn body_type_lhs<'a>(
                 )))))
             }
         },
-        kt => route(access_type_member(ctx.scope, kt, &field_name)),
+        kt => route(access_type_member(kt, &field_name)),
     }
 }
 
@@ -206,10 +195,9 @@ pub fn body_module<'a>(
 /// A `SetRef` (struct / union name) and every other type has no members and falls through to
 /// the same TypeMismatch a static struct field access produces.
 fn access_type_member<'a>(
-    scope: &Scope<'a>,
     kt: &KType<'a>,
     field: &str,
-) -> Result<AttrOutcome<'a>, KError> {
+) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     match kt {
         KType::Module { module: m, .. } => access_module_member(m, field),
         // ATTR over a first-class signature value — reverse-lookup against the decl scope. A value
@@ -217,10 +205,10 @@ fn access_type_member<'a>(
         KType::Signature { sig: s, .. } => {
             let decl = s.decl_scope();
             if let Some(Resolution::Value(obj)) = decl.bindings().lookup_value(field, None) {
-                return Ok(AttrOutcome::Object(decl.seal_value(Carried::Object(obj), None)));
+                return Ok(decl.seal_value(Carried::Object(obj), None));
             }
             if let Some(kt) = decl.resolve_type(field) {
-                return Ok(AttrOutcome::Type(scope.region.alloc_ktype(kt.clone())));
+                return Ok(decl.seal_type(Carried::Type(decl.region.alloc_ktype(kt.clone()))));
             }
             Err(KError::new(KErrorKind::ShapeError(format!(
                 "signature `{}` has no member `{}`",
@@ -246,7 +234,7 @@ fn access_field<'a>(
     target: &KObject<'a>,
     field: &str,
     embedded: Option<&Sealed<CarriedFamily, FrameSet>>,
-) -> Result<AttrOutcome<'a>, KError> {
+) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     match target {
         // NEWTYPE fall-through. A record-repr newtype (an ex-struct) wraps a
         // `KObject::Record`; read the field straight off it, naming the nominal type in the
@@ -259,12 +247,12 @@ fn access_field<'a>(
         // a multi-region value keeps every region it borrows into alive.
         KObject::Wrapped { inner, type_id } => match inner.get() {
             KObject::Record(values, _) => match values.get(field) {
-                Some(Held::Object(value)) => Ok(AttrOutcome::Object(scope.seal_value(
+                Some(Held::Object(value)) => Ok(scope.seal_value(
                     Carried::Object(scope.region.alloc_object(value.deep_clone())),
                     embedded,
-                ))),
+                )),
                 Some(Held::Type(kt)) => {
-                    Ok(AttrOutcome::Type(scope.region.alloc_ktype(kt.clone())))
+                    Ok(scope.seal_type(Carried::Type(scope.region.alloc_ktype(kt.clone()))))
                 }
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",
@@ -303,10 +291,10 @@ fn access_field<'a>(
 /// scope is a per-call region. The module and its `slot_type_tags` are declaration-stable,
 /// so the module region is the right home; both `inner` (the slot value) and `type_id`
 /// (the abstract tag, which references the module) then live there together.
-fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<AttrOutcome<'a>, KError> {
+fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     let module_scope = m.child_scope();
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
-        return Ok(AttrOutcome::Type(module_scope.region.alloc_ktype(kt)));
+        return Ok(module_scope.seal_type(Carried::Type(module_scope.region.alloc_ktype(kt))));
     }
     // A value member lives in the module's region; it seals under the module scope's home frame,
     // which transitively pins the module's reach-set — so the read value (or its re-tag carrier)
@@ -318,16 +306,12 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<AttrOutcom
                 inner: NonWrappedRef::peel(obj),
                 type_id,
             });
-            return Ok(AttrOutcome::Object(
-                module_scope.seal_value(Carried::Object(wrapped), None),
-            ));
+            return Ok(module_scope.seal_value(Carried::Object(wrapped), None));
         }
-        return Ok(AttrOutcome::Object(
-            module_scope.seal_value(Carried::Object(obj), None),
-        ));
+        return Ok(module_scope.seal_value(Carried::Object(obj), None));
     }
     if let Some(kt) = module_scope.resolve_type(field) {
-        return Ok(AttrOutcome::Type(module_scope.region.alloc_ktype(kt.clone())));
+        return Ok(module_scope.seal_type(Carried::Type(module_scope.region.alloc_ktype(kt.clone()))));
     }
     Err(KError::new(KErrorKind::ShapeError(format!(
         "module `{}` has no member `{}`",

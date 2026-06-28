@@ -122,9 +122,9 @@ fn apply_constructor<'step>(
                     index: *index,
                     tag,
                 };
-                return Outcome::Done(Ok(Carried::Type(
-                    ctx.current_scope().region.alloc_ktype(variant),
-                )));
+                let scope = ctx.current_scope();
+                let kt = scope.region.alloc_ktype(variant);
+                return Outcome::DoneWitnessed(scope.seal_type(Carried::Type(kt)));
             }
             // Positional construction: `Outcome (Error "x")` (paren-group body). Tagged
             // unions and higher-kinded `TypeConstructor`s both construct positionally.

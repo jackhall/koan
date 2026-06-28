@@ -157,7 +157,7 @@ fn finalize_val<'a>(
     if let Err(e) = scope.register_user_type(name, declared_kt, bind_index) {
         return Action::Done(Err(e));
     }
-    Action::Done(Ok(Carried::Type(kt_ref)))
+    Action::DoneWitnessed(scope.seal_type(Carried::Type(kt_ref)))
 }
 
 pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {

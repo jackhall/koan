@@ -42,7 +42,8 @@ pub fn body<'a>(
         child_scope.close();
         // Idempotent-finalize guard: a re-bound name short-circuits.
         if let Some(kt) = fctx.scope.bindings().lookup_type(&name_for_finish, None) {
-            return Action::Done(Ok(Carried::Type(fctx.scope.region.alloc_ktype(kt.clone()))));
+            let module_obj = fctx.scope.region.alloc_ktype(kt.clone());
+            return Action::DoneWitnessed(fctx.scope.seal_module(Carried::Type(module_obj)));
         }
         let module: &'a Module<'a> = fctx
             .scope
@@ -66,9 +67,10 @@ pub fn body<'a>(
             .scope
             .register_type_upsert(name_for_finish.clone(), identity, bind_index)
         {
-            Ok(kt_ref) => Action::Done(Ok(Carried::Type(
-                fctx.scope.region.alloc_ktype(kt_ref.clone()),
-            ))),
+            Ok(kt_ref) => {
+                let module_obj = fctx.scope.region.alloc_ktype(kt_ref.clone());
+                Action::DoneWitnessed(fctx.scope.seal_module(Carried::Type(module_obj)))
+            }
             Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                 "<module>",
                 format!("MODULE {} body", name_for_finish),

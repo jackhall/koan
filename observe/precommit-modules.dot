@@ -357,6 +357,7 @@ digraph {
     "koan::builtins::newtype_def" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::newtype_def" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::newtype_def" -> "koan::source" [label="uses", style="dashed"];
+    "koan::builtins::newtype_def" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::builtins::nominal_schema" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::nominal_schema" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::nominal_schema" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
@@ -364,6 +365,7 @@ digraph {
     "koan::builtins::nominal_schema" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::nominal_schema" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::nominal_schema" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::builtins::nominal_schema" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -446,6 +448,7 @@ digraph {
     "koan::builtins::union" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::union" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::union" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::builtins::union" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -653,6 +656,7 @@ digraph {
     "koan::machine::execute::dispatch::field_list" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::field_list" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::field_list" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::field_list" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::fn_value" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::fn_value" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::fn_value" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];

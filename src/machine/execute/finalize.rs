@@ -108,14 +108,17 @@ impl NodeFinalize for KoanRuntime<'_> {
         let Some((declared, label, per_call)) = pull_declared_return(contract) else {
             return Ok(carrier);
         };
-        // Re-tag to the declared return type (may coarsen, e.g. `List<Number>` through
-        // `:(LIST OF Any)`). The check and re-stamp run **inside** the `merge`, where the carrier
-        // value and the declared type — folded in from the contract's home region — meet at one
-        // brand (the only place a `&KType<'o>` and the lifetime-free carrier can be compared). The
-        // re-tag homes in the home region, a strict ancestor the carrier's witness already pins via
-        // its `outer` chain, so the union re-seals under the carrier's own witness (subsumption drops
-        // the home duplicate) and the value is born co-located. A failed check is captured and raised
-        // after the fold (the discarded re-home is harmless).
+        // Check the declared return at the merge brand, where the carrier value and the declared type
+        // — folded in from the contract's home region — meet at one `'b`. This is the only place a
+        // `&KType<'o>` and the lifetime-free carrier can be compared: `KType` is invariant in its
+        // lifetime, so a free-`'o` declared type and a branded carrier value cannot be compared
+        // outside a shared brand. The home region is a strict ancestor the carrier's witness already
+        // pins via its `outer` chain, so the union re-seals under the carrier's own witness
+        // (subsumption drops the home duplicate). The **object** channel coarsens/re-stamps into the
+        // home region (e.g. `List<Number>` through `:(LIST OF Any)`); the **type** channel checks but
+        // passes the value through unchanged — it never re-tags, mirroring the bare
+        // [`enforce_return_contract`]. A failed check is captured and raised after the fold (the
+        // discarded re-home is harmless).
         let home = contract
             .expect("a declared return type implies a contract")
             .home_region();
@@ -124,29 +127,42 @@ impl NodeFinalize for KoanRuntime<'_> {
             carrier.witness().clone(),
         );
         let mut mismatch: Option<KError> = None;
-        let restamped = carrier
+        let checked = carrier
             .merge::<ContractHomeFamily, CarriedFamily>(
                 home_carrier,
-                |value, (home_region, declared_type), _brand| {
-                    let object = value.object();
-                    if !declared_type.matches_value(object) {
-                        mismatch = Some(return_type_mismatch(
-                            declared_type,
-                            per_call,
-                            &label,
-                            object.ktype().name(),
-                        ));
-                        return Carried::Object(home_region.alloc_object(object.deep_clone()));
+                |value, (home_region, declared_type), _brand| match value {
+                    Carried::Object(_) => {
+                        let object = value.object();
+                        if !declared_type.matches_value(object) {
+                            mismatch = Some(return_type_mismatch(
+                                declared_type,
+                                per_call,
+                                &label,
+                                object.ktype().name(),
+                            ));
+                            return Carried::Object(home_region.alloc_object(object.deep_clone()));
+                        }
+                        Carried::Object(
+                            home_region.alloc_object(object.deep_clone().stamp_type(declared_type)),
+                        )
                     }
-                    Carried::Object(
-                        home_region.alloc_object(object.deep_clone().stamp_type(declared_type)),
-                    )
+                    Carried::Type(t) => {
+                        if !declared_type.matches_type(t) {
+                            mismatch = Some(return_type_mismatch(
+                                declared_type,
+                                per_call,
+                                &label,
+                                t.name(),
+                            ));
+                        }
+                        value
+                    }
                 },
             )
             .expect("a FrameSet set witness always represents the union");
         match mismatch {
             Some(error) => Err(error),
-            None => Ok(restamped),
+            None => Ok(checked),
         }
     }
 }

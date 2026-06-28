@@ -50,7 +50,7 @@ pub fn body<'a>(
         .scope
         .region
         .alloc_ktype(KType::SetRef { set, index: 0 });
-    Action::Done(Ok(Carried::Type(kt)))
+    Action::DoneWitnessed(ctx.scope.seal_value(Carried::Type(kt), None))
 }
 
 #[cfg(test)]

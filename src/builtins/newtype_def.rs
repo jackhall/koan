@@ -25,9 +25,10 @@ use crate::machine::model::types::{
     finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalMember, NominalSchema,
     Record, RecursiveSet, SchemaSealResult, SealOutcome,
 };
-use crate::machine::model::values::{Carried, KObject};
+use crate::machine::model::values::{Carried, CarriedFamily, KObject};
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, KError, KErrorKind, Resolution, Scope, TraceFrame};
+use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Resolution, Scope, TraceFrame};
+use crate::witnessed::Witnessed;
 use crate::source::Spanned;
 
 use super::{arg, kw, sig};
@@ -41,7 +42,7 @@ fn finalize_newtype<'a>(
     name: String,
     repr: KType<'a>,
     bind_index: BindingIndex,
-) -> Result<Carried<'a>, KError> {
+) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     let scope_id = scope.id;
     let member = NominalMember::pending(name.clone(), scope_id, KKind::NewType);
     member.fill(NominalSchema::NewType(Box::new(repr)));
@@ -52,7 +53,10 @@ fn finalize_newtype<'a>(
         .bindings()
         .try_register_type(&name, kt_ref, bind_index)
     {
-        Ok(ApplyOutcome::Applied) => Ok(Carried::Type(scope.region.alloc_ktype(kt_ref.clone()))),
+        Ok(ApplyOutcome::Applied) => {
+            let kt = scope.region.alloc_ktype(kt_ref.clone());
+            Ok(scope.seal_value(Carried::Type(kt), None))
+        }
         // Finalize sites run post-dep-finish outside the re-entrant hot path, so borrow
         // contention here is a programming error. Surface as a structured error rather
         // than panicking — a future re-entrant caller still gets a recoverable diag.
@@ -73,7 +77,7 @@ fn finalize_record_newtype<'a>(
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
-) -> Result<Carried<'a>, KError> {
+) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE record repr must have at least one field".to_string(),
@@ -102,7 +106,10 @@ fn finalize_record_newtype<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => Ok(Carried::Type(scope.region.alloc_ktype(kt_ref.clone()))),
+        SealOutcome::Sealed(kt_ref) => {
+            let kt = scope.region.alloc_ktype(kt_ref.clone());
+            Ok(scope.seal_value(Carried::Type(kt), None))
+        }
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE `{name}` record repr references unsealed type `{missing}`",
         )))),
@@ -131,7 +138,7 @@ pub fn body<'a>(
                     .scope
                     .resolve_type_with_chain(te.as_str(), chain.as_deref())
                 {
-                    return Action::Done(finalize_newtype(ctx.scope, name, kt.clone(), bind_index));
+                    return Action::done_witnessed(finalize_newtype(ctx.scope, name, kt.clone(), bind_index));
                 }
                 // The repr names a type still finalizing in this scheduler: park on its producer
                 // and re-resolve at dep-finish. A name with no in-flight producer is a genuine
@@ -145,7 +152,7 @@ pub fn body<'a>(
                             .scope
                             .resolve_type_with_chain(te.as_str(), chain_for_finish.as_deref())
                         {
-                            Some(kt) => Action::Done(finalize_newtype(
+                            Some(kt) => Action::done_witnessed(finalize_newtype(
                                 fctx.scope,
                                 name,
                                 kt.clone(),
@@ -166,7 +173,7 @@ pub fn body<'a>(
                     te.as_str(),
                 )))))
             }
-            other => Action::Done(finalize_newtype(ctx.scope, name, other.clone(), bind_index)),
+            other => Action::done_witnessed(finalize_newtype(ctx.scope, name, other.clone(), bind_index)),
         }
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
         defer_resolved_sigil(name, inner.clone(), bind_index)
@@ -190,7 +197,7 @@ fn defer_resolved_sigil<'a>(
     ))]);
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| match results[0] {
         Carried::Type(kt) => {
-            Action::Done(finalize_newtype(fctx.scope, name, kt.clone(), bind_index))
+            Action::done_witnessed(finalize_newtype(fctx.scope, name, kt.clone(), bind_index))
         }
         Carried::Object(other) => Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE repr sigil resolved to a non-type value `{}`",

@@ -14,8 +14,8 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::{arg, kw, sig};
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription. Reads `m` / `s` from the
-/// `BodyCtx::args` type channel, mints on `ctx.scope.region`, and returns the view module as
-/// `Action::Done(Ok(Carried::Type(..)))`.
+/// `BodyCtx::args` type channel, mints on `ctx.scope.region`, and returns the view module as a
+/// witnessed [`Action::DoneWitnessed`] carrier (`Scope::seal_module` folds the child scope's reach).
 pub fn body_opaque<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -125,11 +125,12 @@ pub fn body_opaque<'a>(
     new_module.mark_satisfies(s.sig_id());
 
     let module_obj: &'a KType<'a> = region.alloc_ktype(KType::Module { module: new_module });
-    Action::Done(Ok(Carried::Type(module_obj)))
+    Action::DoneWitnessed(ctx.scope.seal_module(Carried::Type(module_obj)))
 }
 
 /// `<m:Module> :! <s:Signature>` — transparent ascription. Shape-checks against the source's
-/// own child scope and returns the retagged view module as `Action::Done(Ok(Carried::Type(..)))`.
+/// own child scope and returns the retagged view module as a witnessed [`Action::DoneWitnessed`]
+/// carrier — `seal_module` pins the (foreign) source module's child-scope region the view borrows.
 pub fn body_transparent<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -147,7 +148,7 @@ pub fn body_transparent<'a>(
     ));
     new_module.mark_satisfies(s.sig_id());
     let module_obj: &'a KType<'a> = region.alloc_ktype(KType::Module { module: new_module });
-    Action::Done(Ok(Carried::Type(module_obj)))
+    Action::DoneWitnessed(ctx.scope.seal_module(Carried::Type(module_obj)))
 }
 
 /// Read the `m:Module` / `s:Signature` operands from the `BodyCtx::args` type channel, producing

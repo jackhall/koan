@@ -75,7 +75,7 @@ pub fn body<'a>(
         sig: s,
         pinned_slots: pinned,
     });
-    Action::Done(Ok(Carried::Type(kt)))
+    Action::DoneWitnessed(ctx.scope.seal_value(Carried::Type(kt), None))
 }
 
 #[cfg(test)]

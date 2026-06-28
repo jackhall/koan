@@ -159,9 +159,10 @@ pub fn body<'a>(
             .scope
             .register_type_upsert(group_name.clone(), handle, bind_index)
         {
-            Ok(kt_ref) => Action::Done(Ok(Carried::Type(
-                fctx.scope.region.alloc_ktype(kt_ref.clone()),
-            ))),
+            Ok(kt_ref) => {
+                let kt = fctx.scope.region.alloc_ktype(kt_ref.clone());
+                Action::DoneWitnessed(fctx.scope.seal_value(Carried::Type(kt), None))
+            }
             Err(e) => Action::Done(Err(e.with_frame(frame()))),
         }
     });

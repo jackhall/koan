@@ -261,6 +261,21 @@ pub enum Action<'a> {
     },
 }
 
+impl<'a> Action<'a> {
+    /// Lift a witnessed-construction result into a terminal: `Ok` seals as
+    /// [`DoneWitnessed`](Self::DoneWitnessed) (the carrier already names its reach), `Err` as a
+    /// bare [`Done`](Self::Done) error. The terminal form for a type/object construction that may
+    /// fail its seal — folds the pervasive `match { Ok => DoneWitnessed, Err => Done(Err) }`.
+    pub(crate) fn done_witnessed(
+        result: Result<Witnessed<CarriedFamily, FrameSet>, KError>,
+    ) -> Self {
+        match result {
+            Ok(carrier) => Action::DoneWitnessed(carrier),
+            Err(error) => Action::Done(Err(error)),
+        }
+    }
+}
+
 /// A dep-finish/Tail dependency. `Dispatch` → an owned sub-slot the harness dispatches; `Existing` → a
 /// producer NodeId the builtin already found in scope (a forward-ref / pending type) kept alive as
 /// a park-producer.

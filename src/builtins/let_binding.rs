@@ -107,7 +107,7 @@ pub fn body<'a>(
         if let Err(e) = ctx.scope.register_user_type(name, kt, bind_index) {
             return done_err(e);
         }
-        Action::Done(Ok(Carried::Type(kt_ref)))
+        Action::DoneWitnessed(ctx.scope.seal_type(Carried::Type(kt_ref)))
     } else {
         let value = rhs
             .as_object()

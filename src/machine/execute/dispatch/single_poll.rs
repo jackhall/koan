@@ -72,12 +72,10 @@ pub(super) fn bare_type_leaf<'step, 'b>(
     t: &TypeIdentifier,
 ) -> Outcome<'step> {
     match resolve_type_leaf_carrier(s, t, ctx.active_chain()) {
-        TypeLeafCarrier::Resolved(kt) => {
-            Outcome::Done(Ok(crate::scheduler::reattach_with::<CarriedFamily, _>(
-                Carried::Type(kt),
-                ctx.current_scope().region,
-            )))
-        }
+        // A resolved type leaf seals under `s` (the scope it was resolved against): a `KType::Module`
+        // folds its child-scope reach via `seal_type`, every owned / ancestor-pinned variant rides
+        // `s`'s home frame — born co-located rather than bare-reattached to the step region.
+        TypeLeafCarrier::Resolved(kt) => Outcome::DoneWitnessed(s.seal_type(Carried::Type(kt))),
         TypeLeafCarrier::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS
         // through the bridge, so a bare leaf parks on exactly one producer; park on it and
