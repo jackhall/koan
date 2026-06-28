@@ -62,7 +62,7 @@ pub(crate) fn defer_field_list<'step>(
     finalize: FieldListFinalize<'step>,
 ) -> Outcome<'step> {
     let park_count = park_producers.len();
-    let finish: DepFinish<'step> = Box::new(move |view, results| {
+    let finish: DepFinish<'step> = Box::new(move |view, results, _carriers| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
         // `results` = `[park results.. , owned-sub results..]`; the re-walk consumes only

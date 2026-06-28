@@ -21,8 +21,11 @@ use crate::machine::core::kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome,
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::KoanRegion;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::types::{Record, SignatureElement};
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType, Parseable};
-use crate::machine::{KError, KErrorKind};
+use crate::machine::{FrameSet, KError, KErrorKind};
+use crate::witnessed::Sealed;
 
 /// Home a deferred FN's resolved return *type* in `region` (a strict ancestor the cart keeps live), so
 /// the erased `PerCall` contract's `ret` borrow outlives the dying call frame. Non-module types are
@@ -49,6 +52,7 @@ fn home_return_type<'a>(kt: &KType<'a>, region: &'a KoanRegion) -> Result<&'a KT
 pub(super) fn invoke_continue<'step>(
     picked: &'step KFunction<'step>,
     working_expr: KExpression<'step>,
+    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
 ) -> Outcome<'step> {
     let frame = match &picked.body {
         Body::Builtin(_) => FramePlacement::Inherit,
@@ -57,7 +61,7 @@ pub(super) fn invoke_continue<'step>(
         },
     };
     Outcome::Continue {
-        work: invoke_work(picked, working_expr),
+        work: invoke_work(picked, working_expr, arg_carriers),
         frame,
         contract: None,
         block_entry: None,
@@ -70,13 +74,14 @@ pub(super) fn invoke_continue<'step>(
 fn invoke_work<'step>(
     picked: &'step KFunction<'step>,
     working_expr: KExpression<'step>,
+    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
 ) -> NodeWork<KoanWorkload> {
     let carrier = working_expr.summarize();
     NodeWork::new(
         Vec::new(),
         0,
         ignore_results(Box::new(move |view, _idx| {
-            invoke(view, picked, working_expr)
+            invoke(view, picked, working_expr, arg_carriers)
         })),
         Some(carrier),
     )
@@ -92,17 +97,21 @@ pub(super) fn invoke<'step>(
     view: &SchedulerView<'step, '_>,
     picked: &'step KFunction<'step>,
     working_expr: KExpression<'step>,
+    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
 ) -> Outcome<'step> {
     // An action-harness builtin: build a read-only `BodyCtx`, get the `Action`, and lower it
     // through the shared `run_action` interpreter. Builtins run in the current frame, so the
     // builtin call's `Continue` carries `FramePlacement::Inherit` and this reads nothing.
     if let Body::Builtin(f) = &picked.body {
         let f = *f;
+        // Re-key the slot-indexed arg carriers onto their parameter names (the body reads them by
+        // name) before `bind` consumes the working expression.
+        let arg_carriers = map_arg_carriers(picked, arg_carriers);
         let args = match picked.bind(working_expr) {
             Ok(future) => future.args,
             Err(e) => return Outcome::Done(Err(e)),
         };
-        return run_action_builtin(view, f, args);
+        return run_action_builtin(view, f, args, arg_carriers);
     }
 
     // Validate each argument against its declared parameter type before the (type-trusting)
@@ -189,7 +198,7 @@ pub(super) fn invoke<'step>(
             // `Continue`, re-entering the already-installed cart with `Inherit`.
             let statements: Vec<KExpression<'step>> =
                 leading.into_iter().map(|e| (*e).clone()).collect();
-            let finish: DepFinish<'step> = Box::new(move |_view, _results| Outcome::Continue {
+            let finish: DepFinish<'step> = Box::new(move |_view, _results, _carriers| Outcome::Continue {
                 work: super::decide(tail_expr),
                 frame: FramePlacement::Inherit,
                 contract: Some(contract),
@@ -223,7 +232,7 @@ pub(super) fn invoke<'step>(
             // Capture the body scope id before `frame` moves into the `BodyBlock` dep; the finish
             // re-enters that already-installed cart with `Inherit`.
             let block_entry = frame.scope().id;
-            let finish: DepFinish<'step> = Box::new(move |_view, results| {
+            let finish: DepFinish<'step> = Box::new(move |_view, results, _carriers| {
                 // The return-type expression is the last body statement, so its resolved value is
                 // the last result.
                 let kt = match results[results.len() - 1] {
@@ -266,13 +275,33 @@ pub(super) fn invoke<'step>(
     }
 }
 
+/// Re-key the delivered arg carriers — indexed by their working-expr part slot — onto the parameter
+/// name the builtin body reads. A committed call's parts line up 1:1 with `picked`'s signature
+/// elements (`validate_call_args` enforces it), so the element at a carrier's slot names its
+/// parameter. Only spliced / bound-name args carry a carrier; a scalar-literal arg is region-pure and
+/// simply has no entry, which the body reads as "no foreign reach".
+fn map_arg_carriers<'step>(
+    picked: &KFunction<'step>,
+    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
+) -> Record<Sealed<CarriedFamily, FrameSet>> {
+    let mut record = Record::new();
+    for (slot, carrier) in arg_carriers {
+        if let Some(SignatureElement::Argument(arg)) = picked.signature.elements.get(slot) {
+            record.insert(arg.name.clone(), carrier);
+        }
+    }
+    record
+}
+
 /// Lower an action-harness builtin: convert its resolved `args` record into the `KObject::Record`
 /// the `BodyCtx` exposes, build the read-only `BodyCtx`, call the `ActionFn`, then interpret the
-/// returned `Action` through the shared `run_action`.
+/// returned `Action` through the shared `run_action`. `arg_carriers` are the per-parameter reach
+/// carriers (a value-embedding body folds / merges the one it embeds; an absent entry is region-pure).
 fn run_action_builtin<'step>(
     view: &SchedulerView<'step, '_>,
     f: crate::machine::core::kfunction::ActionFn,
-    args: crate::machine::model::types::Record<crate::machine::model::values::ArgValue<'step>>,
+    args: Record<crate::machine::model::values::ArgValue<'step>>,
+    arg_carriers: Record<Sealed<CarriedFamily, FrameSet>>,
 ) -> Outcome<'step> {
     use crate::machine::core::kfunction::action::BodyCtx;
     use crate::machine::model::values::{ArgValue, Held};
@@ -294,6 +323,7 @@ fn run_action_builtin<'step>(
             frame: frame.as_ref(),
             chain,
             args: args_obj,
+            arg_carriers: &arg_carriers,
         };
         f(&body_ctx)
     };

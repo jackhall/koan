@@ -229,7 +229,7 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                 ),
             };
             let body_frame = frame.clone();
-            let finish: DepFinish<'step> = Box::new(move |_view, _results| Outcome::Continue {
+            let finish: DepFinish<'step> = Box::new(move |_view, _results, _carriers| Outcome::Continue {
                 work: super::dispatch::decide(tail),
                 frame: FramePlacement::FreshChild { frame: body_frame },
                 contract,
@@ -264,7 +264,7 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
             }
             let park_count = park.len();
             park.extend(owned);
-            let wrapped: DepFinish<'step> = Box::new(move |view, results| {
+            let wrapped: DepFinish<'step> = Box::new(move |view, results, _carriers| {
                 let fctx = FinishCtx {
                     scope: view.current_scope(),
                 };

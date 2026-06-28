@@ -20,7 +20,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
     let mut sched = KoanRuntime::new();
     let dep_a = sched.dispatch_in_scope(let_expr("ca", 7.0), scope);
     let dep_b = sched.dispatch_in_scope(let_expr("cb", 11.0), scope);
-    let finish: DepFinish = Box::new(|_sched, results| {
+    let finish: DepFinish = Box::new(|_sched, results, _carriers| {
         let a = match results[0] {
             Carried::Object(KObject::Number(n)) => *n,
             _ => {
@@ -81,7 +81,7 @@ fn dep_finish_short_circuits_on_dep_error() {
 
     let invoked: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let invoked_clone = Rc::clone(&invoked);
-    let finish: DepFinish = Box::new(move |_sched, _results| {
+    let finish: DepFinish = Box::new(move |_sched, _results, _carriers| {
         invoked_clone.set(true);
         Outcome::Done(Ok(Carried::Object(value)))
     });

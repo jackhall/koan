@@ -67,7 +67,7 @@ fn park_on_head<'step>(
     head: KExpression<'step>,
     type_only: bool,
 ) -> Outcome<'step> {
-    let finish: DepFinish<'step> = Box::new(move |ctx, results| {
+    let finish: DepFinish<'step> = Box::new(move |ctx, results, _carriers| {
         let callable = match classify_head(results[0], type_only) {
             Ok(c) => c,
             Err(e) => return Outcome::Done(Err(e)),

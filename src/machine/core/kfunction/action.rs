@@ -10,7 +10,7 @@ use std::rc::Rc;
 use super::body::ReturnContract;
 use crate::machine::core::{CallFrame, FrameStorage, LexicalFrame, Scope, ScopeId};
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::KType;
+use crate::machine::model::types::{KType, Record};
 use crate::machine::model::values::{CarriedFamily, Held};
 use crate::machine::model::{Carried, KObject};
 use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, NodeId};
@@ -172,6 +172,13 @@ pub struct BodyCtx<'a, 'c> {
     /// its `index` for `BindingIndex`, MATCH passes it to `resolve_type_identifier`). `None` at top level.
     pub chain: Option<Rc<LexicalFrame>>,
     pub args: &'c KObject<'a>,
+    /// Per-parameter reach carriers, keyed by parameter name: the [`Sealed`] carrier of each argument
+    /// that arrived as a resolved value (a spliced sub-result or a bound-name read), naming every
+    /// region that value reaches. A value-embedding body folds the carrier of the value it deposits (a
+    /// bind into the scope reach-set) or `merge`s the one it embeds (a `Wrapped` / re-tagged `Record`),
+    /// so the result names that reach by construction. A scalar-literal argument is region-pure and has
+    /// no entry — [`arg_carrier`](Self::arg_carrier) reads `None`, i.e. "no foreign reach".
+    pub arg_carriers: &'c Record<Sealed<CarriedFamily, FrameSet>>,
 }
 
 impl<'a, 'c> BodyCtx<'a, 'c> {
@@ -183,6 +190,12 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
             .as_ref()
             .map(|chain| BindingIndex::value(chain.index))
             .unwrap_or(BindingIndex::BUILTIN)
+    }
+
+    /// The reach carrier of argument `name` — `Some` when it arrived as a resolved value (so a
+    /// value-embedding body can fold / merge it), `None` for a scalar-literal (region-pure) argument.
+    pub fn arg_carrier(&self, name: &str) -> Option<&Sealed<CarriedFamily, FrameSet>> {
+        self.arg_carriers.get(name)
     }
 }
 

@@ -20,9 +20,11 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::Carried;
-use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeId, Scope};
+use crate::machine::{CallFrame, FrameSet, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 use crate::source::Spanned;
+use crate::witnessed::Sealed;
 
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
@@ -230,6 +232,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         mut working_expr: KExpression<'step>,
         staged_subs: Vec<(usize, PendingSub<'step>)>,
         picked: Option<&'step KFunction<'step>>,
+        inline_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
     ) -> Outcome<'step> {
         use super::super::DepFinish;
         let mut deps: Vec<DepRequest<'step>> = Vec::with_capacity(staged_subs.len());
@@ -256,22 +259,30 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         }
         if deps.is_empty() {
             // No subs to resolve — `working_expr` is already fully resolved, so route to the finish
-            // now instead of parking on a dep-finish.
-            return finish_eager_subs(working_expr, picked);
+            // now instead of parking on a dep-finish. Only the inline-resolved wrap slots carry a
+            // reach carrier here; a scalar-literal arg is region-pure ("no foreign reach").
+            return finish_eager_subs(working_expr, picked, inline_carriers);
         }
         let dep_error_frame = Some(crate::machine::TraceFrame::from_expr(
             "<bind>",
             &working_expr,
         ));
-        let finish: DepFinish<'step> = Box::new(move |_ctx, results| {
-            // The short-circuit already guaranteed every dep resolved; splice each into the slot it
-            // was staged from, then route the continuation. `results` are the dep terminals,
-            // pull-lifted into this node's frame and re-exposed at `'step` by the combinator, so they
-            // splice straight into the `'step` working expression that re-dispatches in this frame.
-            for (slot, value) in part_indices.iter().zip(results) {
+        let finish: DepFinish<'step> = Box::new(move |_ctx, values, carriers| {
+            // The short-circuit already guaranteed every dep resolved; splice each value into the slot
+            // it was staged from, and collect each dep's carrier (keyed by that slot) to deliver to the
+            // body. `values` are pull-lifted into this node's frame and re-exposed at `'step`, so they
+            // splice straight into the `'step` working expression that re-dispatches here; `carriers`
+            // name each arg's reach and ride on (a `duplicate` per arg — the producer keeps its seal)
+            // to `run_action_builtin` / the user-fn arg fold.
+            // Start from the inline-resolved wrap slots' carriers and add each staged sub's carrier,
+            // so the body receives every value arg's reach (inline plus eager-sub).
+            let mut arg_carriers = inline_carriers;
+            arg_carriers.reserve(part_indices.len());
+            for ((slot, value), carrier) in part_indices.iter().zip(values).zip(carriers) {
                 working_expr.parts[*slot].value = ExpressionPart::Spliced(*value);
+                arg_carriers.push((*slot, carrier.duplicate()));
             }
-            finish_eager_subs(working_expr, picked)
+            finish_eager_subs(working_expr, picked, arg_carriers)
         });
         park_on_deps(deps, dep_error_frame, finish)
     }
@@ -287,9 +298,12 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
 fn finish_eager_subs<'step>(
     working_expr: KExpression<'step>,
     picked: Option<&'step KFunction<'step>>,
+    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
 ) -> Outcome<'step> {
     match picked {
-        Some(f) => super::exec::invoke_continue(f, working_expr),
-        None => super::keyworded::redispatch_continue(working_expr),
+        Some(f) => super::exec::invoke_continue(f, working_expr, arg_carriers),
+        // The re-resolve path commits its call in `keyworded::finish`; thread the arg carriers through
+        // so the re-resolved builtin / user-fn still receives every value arg's reach.
+        None => super::keyworded::redispatch_continue(working_expr, arg_carriers),
     }
 }

@@ -5,11 +5,14 @@ use crate::machine::core::kfunction::action::FramePlacement;
 use crate::machine::core::kfunction::KFunctionRefFamily;
 use crate::machine::core::Scope;
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::Parseable;
+use crate::machine::model::values::CarriedFamily;
+use crate::machine::model::{Carried, Parseable};
 use crate::machine::{
-    BindingIndex, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, TraceFrame,
+    BindingIndex, FrameSet, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, TraceFrame,
+    ValueCarrierResolution,
 };
 use crate::scheduler::reattach_with;
+use crate::witnessed::Sealed;
 
 use super::super::ignore_results;
 use super::super::nodes::NodeWork;
@@ -100,23 +103,26 @@ pub(super) fn initial<'step, 'b>(
         new_parts,
         producers_to_wait,
         staged_subs,
+        arg_carriers,
     } = walk;
     let new_expr = KExpression::new(new_parts);
     if !producers_to_wait.is_empty() {
-        // Park-precedence guard: drop staged_subs on the floor;
+        // Park-precedence guard: drop staged_subs (and their inline carriers) on the floor;
         // re-Dispatch on wake re-runs the walk and re-stages them.
         let _ = staged_subs;
+        let _ = arg_carriers;
         return install_bare_name_park(producers_to_wait, new_expr, pre_subs);
     }
     if staged_subs.is_empty() {
         // The synchronous (no-eager-subs) call — the common path for builtins and simple calls.
         // Re-anchor the picked function from `'b` to the cart `'step`, witnessed by the active region.
+        // `arg_carriers` are the inline-resolved bound-name args' reach carriers delivered to the body.
         let function =
             reattach_with::<KFunctionRefFamily, _>(resolved.function, ctx.current_scope().region);
-        return super::exec::invoke_continue(function, new_expr);
+        return super::exec::invoke_continue(function, new_expr, arg_carriers);
     }
     let _ = resolved; // discard the speculative pick.
-    install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs)
+    install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs, arg_carriers)
 }
 
 /// Re-resolve dispatch against the (now fully spliced) `working_expr`
@@ -125,14 +131,18 @@ pub(super) fn finish<'step>(
     ctx: &SchedulerView<'step, '_>,
     working_expr: KExpression<'step>,
     idx: usize,
+    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
 ) -> Outcome<'step> {
     match ctx
         .current_scope()
         .resolve_dispatch(&working_expr, ctx.chain_deref(), &[])
     {
         // The post-eager-subs re-dispatch lands resolved calls here — fold the resolved call into
-        // the `Continue` that installs its frame and runs `invoke`.
-        ResolveOutcome::Resolved(r) => super::exec::invoke_continue(r.function, working_expr),
+        // the `Continue` that installs its frame and runs `invoke`, threading the arg carriers
+        // (inline-resolved plus eager-sub) collected before the re-resolve.
+        ResolveOutcome::Resolved(r) => {
+            super::exec::invoke_continue(r.function, working_expr, arg_carriers)
+        }
         // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
         // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
         ResolveOutcome::Ambiguous(n) => {
@@ -159,12 +169,17 @@ pub(super) fn finish<'step>(
 /// Fold the post-eager-subs re-resolve into a [`Outcome::Continue`]: a dep-free decide that re-runs
 /// [`finish`] against the fully-spliced `working_expr` on the next pop, with no committed function
 /// pick. `Inherit` — a re-resolve runs in the slot's current frame.
-pub(super) fn redispatch_continue<'step>(working_expr: KExpression<'step>) -> Outcome<'step> {
+pub(super) fn redispatch_continue<'step>(
+    working_expr: KExpression<'step>,
+    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
+) -> Outcome<'step> {
     let carrier = working_expr.summarize();
     let work = NodeWork::new(
         Vec::new(),
         0,
-        ignore_results(Box::new(move |ctx, idx| finish(ctx, working_expr, idx))),
+        ignore_results(Box::new(move |ctx, idx| {
+            finish(ctx, working_expr, idx, arg_carriers)
+        })),
         Some(carrier),
     );
     Outcome::Continue {
@@ -229,7 +244,8 @@ fn install_eager_only<'step>(
          resolve_dispatch contract requires at least one eager part",
     );
     let new_expr = KExpression::new(new_parts);
-    install_eager_subs_track(ctx, new_expr, staged_subs, Vec::new())
+    // The Deferred arm has no pre-pick, so no inline-resolved wrap slots — no inline carriers.
+    install_eager_subs_track(ctx, new_expr, staged_subs, Vec::new(), Vec::new())
 }
 
 /// Park on bare-name forward-reference producers. `working_expr` is partly spliced — Resolved wrap
@@ -255,12 +271,14 @@ fn install_eager_subs_track<'step>(
     working_expr: KExpression<'step>,
     staged_subs: Vec<(usize, PendingSub<'step>)>,
     pre_subs: Vec<(usize, NodeId)>,
+    inline_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
 ) -> Outcome<'step> {
     // The combine carrier owns its deps directly; the Keyworded eager-subs resume state is
     // never re-entered (a re-Dispatch never lands here — the combine finish runs instead),
-    // so `pre_subs` is unused on this path.
+    // so `pre_subs` is unused on this path. `inline_carriers` are the wrap slots that resolved in
+    // place; the eager-subs finish merges them with the staged subs' carriers before re-dispatch.
     let _ = pre_subs;
-    ctx.install_eager_subs(working_expr, staged_subs, None)
+    ctx.install_eager_subs(working_expr, staged_subs, None, inline_carriers)
 }
 
 /// Fused splice / park / eager-sub walk over `parts`. Pure: no
@@ -285,6 +303,7 @@ fn part_walk<'step>(
     let mut new_parts: Vec<Spanned<ExpressionPart<'step>>> = Vec::with_capacity(parts.len());
     let mut producers_to_wait: Vec<NodeId> = Vec::new();
     let mut staged_subs: Vec<(usize, PendingSub<'step>)> = Vec::new();
+    let mut arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)> = Vec::new();
     for (i, part) in parts.into_iter().enumerate() {
         let span = part.span;
         if let Some(&(_, sub_id)) = pre_subs.iter().find(|(j, _)| *j == i) {
@@ -295,6 +314,20 @@ fn part_walk<'step>(
         if wrap_set.contains(&i) {
             match &bare_outcomes[i] {
                 Some(NameOutcome::Resolved(c)) => {
+                    // A value-bound name spliced inline also rides on a binding-scope carrier so the
+                    // body names its reach by construction (the relocate-seam reconstruction is retired
+                    // for objects). A first-class **type** stays on the type channel — no carrier here
+                    // (the type family inverts under `alloc_ktype`).
+                    if matches!(c, Carried::Object(_)) {
+                        if let Some(name) = bare_name_of(&part.value) {
+                            if let ValueCarrierResolution::Value(carrier) = ctx
+                                .current_scope()
+                                .resolve_value_carrier(&name, ctx.chain_deref())
+                            {
+                                arg_carriers.push((i, Sealed::seal(carrier)));
+                            }
+                        }
+                    }
                     new_parts.push(Spanned {
                         value: ExpressionPart::Spliced(*c),
                         span,
@@ -411,5 +444,6 @@ fn part_walk<'step>(
         new_parts,
         producers_to_wait,
         staged_subs,
+        arg_carriers,
     })
 }

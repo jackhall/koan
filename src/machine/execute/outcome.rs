@@ -126,15 +126,23 @@ pub(in crate::machine::execute) enum Continuation<'step> {
     },
 }
 
-/// Host-side value-only closure run by a dep-finish [`NodeWork`](super::nodes::NodeWork) once its
-/// deps resolve without error. Receives the dep terminals in submission
-/// order as [`Carried`] (an object or a type flowing in the type channel); static elements are
-/// captured in the closure. A value-consuming finish calls `.object()` on each; a type-resolving
-/// dep (a VAL type, an FN return type, a field type) arrives as [`Carried::Type`]. The finish
-/// decides against a read-only [`SchedulerView`] and returns an [`Outcome`] the harness applies —
-/// it issues no graph write of its own.
-pub(in crate::machine::execute) type DepFinish<'a> =
-    Box<dyn for<'view> FnOnce(&SchedulerView<'a, 'view>, &[Carried<'a>]) -> Outcome<'a> + 'a>;
+/// Host-side closure run by a dep-finish [`NodeWork`](super::nodes::NodeWork) once its deps resolve
+/// without error. Receives the dep **values** in submission order as [`Carried`] (relocated into the
+/// consumer region; an object or a type flowing in the type channel) **and**, in the same order, a
+/// borrow of each dep's own [`Sealed`] carrier (un-relocated, naming the dep's reach) — so a finish
+/// that commits a call threads each arg's carrier on to the body. Static elements are captured in the
+/// closure. A value-consuming finish calls `.object()` on each value; a type-resolving dep arrives as
+/// [`Carried::Type`]; a finish that needs no carriers ignores the slice. The finish decides against a
+/// read-only [`SchedulerView`] and returns an [`Outcome`] the harness applies — it issues no graph
+/// write of its own.
+pub(in crate::machine::execute) type DepFinish<'a> = Box<
+    dyn for<'view> FnOnce(
+            &SchedulerView<'a, 'view>,
+            &[Carried<'a>],
+            &[&Sealed<CarriedFamily, FrameSet>],
+        ) -> Outcome<'a>
+        + 'a,
+>;
 
 /// The error-frame label a dep-finish attaches when a dependency errors — an action-harness combine
 /// (a fanned-out FN arg / arm body) or a literal builder (a list element / dict value). A dispatch
@@ -240,15 +248,22 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
 ) -> NodeContinuation<'a> {
     Box::new(move |view, results, _idx| {
         let mut values: Vec<Carried<'_>> = Vec::with_capacity(results.len());
+        let mut carriers: Vec<&Sealed<CarriedFamily, FrameSet>> = Vec::with_capacity(results.len());
         for r in results {
             match r {
-                Ok(t) => values.push(relocate_dep_into_consumer(view, t.value)),
+                Ok(t) => {
+                    values.push(relocate_dep_into_consumer(view, t.value));
+                    // The dep's own carrier (un-relocated, naming its reach) rides alongside the
+                    // relocated value so a call-committing finish threads it to the body. Borrowed —
+                    // a finish that keeps a carrier `duplicate`s it.
+                    carriers.push(&t.carrier);
+                }
                 Err(e) => {
                     return Outcome::Done(Err(propagate_dep_error(e, dep_error_frame.clone())))
                 }
             }
         }
-        finish(view, &values)
+        finish(view, &values, &carriers)
     })
 }
 

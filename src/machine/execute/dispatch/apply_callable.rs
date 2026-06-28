@@ -193,5 +193,8 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'step>(
     let wrap_indices = picked.classify_for_pick(&expr).wrap_indices;
     let (new_parts, staged_subs) = stage_all_eager_parts(expr.parts, &wrap_indices);
     let working_expr = KExpression::new(new_parts);
-    ctx.install_eager_subs(working_expr, staged_subs, Some(picked))
+    // The FunctionValueCall path stages every bare-name value slot as a sub-dispatch (so each rides
+    // `bare_identifier`'s reach carrier through the eager-subs finish) — no slots resolve inline here,
+    // so there are no inline carriers to seed.
+    ctx.install_eager_subs(working_expr, staged_subs, Some(picked), Vec::new())
 }

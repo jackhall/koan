@@ -621,8 +621,10 @@ digraph {
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::ctx" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::ctx" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
@@ -637,7 +639,9 @@ digraph {
     "koan::machine::execute::dispatch::exec" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::exec" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::exec" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::field_list" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::field_list" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::field_list" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
@@ -675,8 +679,10 @@ digraph {
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::keyworded" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::keyworded" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];

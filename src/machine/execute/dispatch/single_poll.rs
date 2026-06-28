@@ -187,7 +187,7 @@ pub(super) fn literal_pass_through<'step>(
 /// lifts the producer's resolved value straight through. The harness submits the literal and owns
 /// it; a dep error short-circuits frameless before the finish runs.
 fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
-    let finish: DepFinish<'step> = Box::new(|_ctx, results| Outcome::Done(Ok(results[0])));
+    let finish: DepFinish<'step> = Box::new(|_ctx, results, _carriers| Outcome::Done(Ok(results[0])));
     park_on_deps(vec![dep], None, finish)
 }
 
