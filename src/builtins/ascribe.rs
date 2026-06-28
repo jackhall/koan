@@ -35,6 +35,12 @@ pub fn body_opaque<'a>(
         return Action::Done(Err(e));
     }
 
+    // The view's members are all bulk-installed into `new_scope` above, and nothing binds into it
+    // below (the type-member / slot-tag writes target `new_module`, not the scope) — so seal its
+    // reach-set here, before the module captures it, mirroring the MODULE / SIG block-finish close.
+    // A member folded into the set rides the escaping view-module value sealed in.
+    new_scope.close();
+
     let new_module: &'a Module<'a> = region.alloc_module(Module::new(m.path.clone(), new_scope));
     // Per-slot kind: a SIG-declared `LET Wrap = (TEMPLATE T)` mints a fresh
     // `TypeConstructor` rather than the default `AbstractType` arm, preserving the
