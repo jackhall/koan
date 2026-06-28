@@ -417,8 +417,8 @@ Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
 - 2026-06-27: 117s — 36 tests, 0 leaks, 0 UB
+- 2026-06-27: 117s — 36 tests, 0 leaks, 0 UB
 - 2026-06-27: 123s — 36 tests, 0 leaks, 0 UB
 - 2026-06-27: 157s — 36 tests, 0 leaks, 0 UB
 - 2026-06-26: 159s — 36 tests, 0 leaks, 0 UB
-- 2026-06-26: 134s — 36 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

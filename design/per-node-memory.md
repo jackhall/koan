@@ -88,11 +88,16 @@ arriving witnessed from the lift); a closure folds the captured-scope operand mi
 literal and a static aggregate cell `yoke` their owned data, and a list / dict / record folds its
 dep carriers via `transfer_into` ([dispatch/literal.rs](../src/machine/execute/dispatch/literal.rs)
 / [single_poll.rs](../src/machine/execute/dispatch/single_poll.rs)) — co-location the `for<'b>`
-brand enforces, never asserted. `Witnessed::new`, which pairs an *already-built* value with an
-asserted witness, is the transitional rung the remaining alloc inversions climb off as their
-constructions invert: the value-embedding object sites (a bound value, a captured scope, a
-deep-cloned dep — [`alloc-object-embedding-sites`](../roadmap/per-node-memory/alloc-object-embedding-sites.md))
-and the type family ([`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md)).
+brand enforces, never asserted. The carrier-self-building object constructions climb off `Witnessed::new`
+the same way: the newtype / tagged-union [`constructors`](../src/machine/execute/dispatch/constructors.rs)
+and [`catch`](../src/builtins/catch.rs) fold their dep carriers via `transfer_into` / `merge`, and FN
+def [`finalize`](../src/builtins/fn_def/finalize.rs) `yoke`s its co-located `KObject::KFunction` onto a
+carrier witnessed by the defining scope's frame. `Witnessed::new`, which pairs an *already-built* value
+with an asserted witness, is the transitional rung the **remaining** value-embedding alloc inversions
+climb off as their constructions invert: the bare-arg object sites and the literal Resolved arm (a
+bound value, a wrapped arg, a re-tagged record —
+[the carrier-delivery follow-up](../roadmap/per-node-memory/alloc-object-delivered-carriers.md)) and the
+type family ([`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md)).
 
 **`merge` — fold many region-resident values into one.** Generic: a value built
 from references into *two* regions cannot be bundled with one witness by `yoke`
@@ -207,17 +212,20 @@ consumer-pull lift across a dependency edge — `relocate_carried` copies the de
 riding its bare borrow), and `transfer_into` re-seals it under the set union of its reached sources
 and `dest`. The lift delivers each dep **both** as a live bare `Carried` and as its producer slot's
 own `Sealed` carrier (a `duplicate`): a **witnessed construction finish** — the object family's
-aggregate and region-pure inversions — folds the dep carrier via `transfer_into`, so its reach is
-named on the carrier and never reconstructed. The **bare value-copy** finishes — the type channel,
-and the object value-embedding sites not yet inverted — instead read the live value out, dropping
-its set, and reconstruct the reach with a transitional mechanism: [`reached_frame`](../src/machine/execute/lift.rs)
+aggregate and region-pure inversions, the newtype / tagged-union constructors, and `catch` — folds the
+dep carrier via `transfer_into`, so its reach is named on the carrier and never reconstructed. The
+**bare value-copy** finishes — the type channel, the object value-embedding sites that take a bare arg
+(`attr`, `FROM`, the literal Resolved arm), and the user-fn object-arg bind — instead read the live
+value out, dropping its set, and reconstruct the reach with a transitional mechanism:
+[`reached_frame`](../src/machine/execute/lift.rs)
 recovers a *single* `Rc<FrameStorage>` from the value's scope `region_owner`. At the relocate-into-consumer
 seam this single frame folds onto the consumer **scope's reach-set** (below); the run-root drain still
 `retain`s it onto the per-frame `FrameStorage.retained`. This is a single-frame approximation — a value
 reaching several regions (a list of closures, a closure capturing several closures) is mis-recorded —
 and exists *only* for the values whose carried set is dropped and re-derived. The remaining
-[`alloc` inversions](../roadmap/per-node-memory/alloc-object-embedding-sites.md) build the reach on the
-carrier at construction (`yoke` / `merge`) and carry it through the lift.
+[`alloc` inversions and the user-fn arg conversion](../roadmap/per-node-memory/alloc-object-delivered-carriers.md)
+build the reach on the carrier at construction (`yoke` / `merge`) or fold it into the scope reach-set,
+and carry it through the lift.
 
 A value *bound into a scope*, whose reach must outlive the binding node, deposits its reach on the
 scope's own **reach-set**: a `FrameSet` held on the [`Scope`](../src/machine/core/scope.rs) that folds
@@ -229,9 +237,11 @@ slot's `Done` / tail-`Continue`; `MODULE` / `SIG` at the block finish; the run r
 deposit is **transitional**: the relocate-into-consumer seam folds the single `reached_frame` of the
 relocated value, so a multi-region value is still under-recorded there. The full carried `FrameSet`
 folds in once binds witness their construction —
-[`alloc_object` embedding sites](../roadmap/per-node-memory/alloc-object-embedding-sites.md) fold a
+[the carrier-delivery follow-up](../roadmap/per-node-memory/alloc-object-delivered-carriers.md) folds a
 `let`-bound value's carrier union, replacing this single-frame relocate-seam fold for the object
-channel. With construction carried and binds folded,
+channel, and converts the user-fn object-arg bind (which shares the seam fold through the eager-subs
+`short_circuit`) to fold its dep carriers into the per-call frame's scope reach-set. With construction
+carried and binds folded,
 [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) takes the last `KType::Module` user
 off `reached_frame` and deletes it together with the per-frame `retained` field, retiring the
 relocate-seam fold entirely: reach then lives on the node carrier and, for bindings, on the per-scope
@@ -293,10 +303,12 @@ cycle gate), and the per-scope sealed reach-set with its scope-close seal (the *
 above) have all landed (see [Region lifetime
 erasure](memory-model.md#region-lifetime-erasure)); what remains is one linear chain:
 
-- [`alloc_object` embedding sites](../roadmap/per-node-memory/alloc-object-embedding-sites.md) and
-  [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) returning `Witnessed` — wiring
-  the remaining `alloc` sites onto `yoke` / `merge`, folding scope binds' full carriers into the
-  reach-set (replacing the transitional single-frame relocate-seam fold), then deleting `reached_frame`
+- [Carrier-self-building object constructions](../roadmap/per-node-memory/alloc-object-embedding-sites.md),
+  then [the carrier-delivered object embeds](../roadmap/per-node-memory/alloc-object-delivered-carriers.md),
+  then [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) returning `Witnessed` —
+  wiring the remaining `alloc` sites onto `yoke` / `merge`, threading a delivered carrier to the bare-arg
+  bodies, folding scope binds' (and the user-fn object-arg bind's) full carriers into the reach-set
+  (replacing the transitional single-frame relocate-seam fold), then deleting `reached_frame`
   and the per-frame `retained` with the last `KType::Module` user.
 - [Migrate the consumption reads onto `open`](../roadmap/per-node-memory/reads-to-open.md), then
   [a single access verb](../roadmap/per-node-memory/single-open-verb.md) — restructuring the value-,

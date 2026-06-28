@@ -4,7 +4,7 @@ Restructure every read that escapes a re-anchored reference up the dispatcher st
 copy-out / CPS, deleting the transitional self-witnessed `read` and the loose witness-borrow wrappers.
 
 **Problem.** With construction witnessed and reach carried (see
-[`alloc_object`](alloc-object-embedding-sites.md) and [`alloc_ktype`](alloc-ktype-witnessed.md)), the
+[the object embeds](alloc-object-delivered-carriers.md) and [`alloc_ktype`](alloc-ktype-witnessed.md)), the
 values flowing through slots are `Sealed` carriers, but the consumption sites still hand a re-anchored
 reference back up the call stack — the shape the rank-2 [`open`](../../src/witnessed.rs) forbids by
 construction. Three readers do it: the result-slot value reads ([`read_result`](../../src/scheduler.rs)
@@ -45,8 +45,10 @@ transitional `read` and both wrappers stay alive as alternate spellings of the o
 
 **Requires:**
 
-- [`alloc_object` embedding sites return `Witnessed`](alloc-object-embedding-sites.md) — the object
-  half of getting construction off the bare read-out the transitional `read` serves.
+- [Carrier-delivered object embeds and the relocate-seam-fold retirement](alloc-object-delivered-carriers.md) —
+  the object half of getting construction off the bare read-out the transitional `read` serves (the
+  carrier-self-building constructions already build witnessed; this clears the bare-arg sites and the
+  literal Resolved arm).
 - [`alloc_ktype` returns `Witnessed`](alloc-ktype-witnessed.md) — the type half; with both done no
   construction reads a value out bare, so `read` can retire.
 

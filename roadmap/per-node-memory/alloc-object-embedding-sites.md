@@ -1,97 +1,82 @@
-# `alloc_object` embedding sites return `Witnessed`
+# Carrier-self-building object constructions return `Witnessed`
 
-Convert the value-embedding object-construction sites onto `yoke` / `merge`, and route scope binds
-through the [per-scope reach-set](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into),
-so the object channel names its reach on the carrier and the bindings on the scope set — never
-reconstructed.
+Convert the object-construction sites that build their own carrier — the newtype / tagged-union
+constructors, `catch`, and FN def — onto `yoke` / `merge` / `transfer_into`, so each names the reach
+of every region it embeds on its carrier rather than pairing an already-built `&'a KObject` with an
+asserted witness.
 
 **Problem.** The region-pure and aggregate object constructions are built inside the witness closure —
 a region-pure leaf [`yoke`s](../../src/witnessed.rs), and a list / dict / record folds its dep
-[`Sealed`](../../src/witnessed.rs) carriers via `transfer_into`. But the *value-embedding* sites still
-pair an already-built `&'a KObject` with an asserted witness through a structural `Witnessed::new` (or
-stay on the bare value-copy channel entirely). Each receives its input as a **bare `Held` arg or a
-captured `&'a` borrow** — `let_binding` and the `NEWTYPE` / tagged
-[`constructors`](../../src/machine/execute/dispatch/constructors.rs) deep-clone bare `ctx.args`;
-[`catch`](../../src/builtins/catch.rs)'s `CatchContinue` tags a bare watched value;
-[`record_projection`](../../src/builtins/record_projection.rs)'s `FROM` re-tags a bare record;
-[`attr`](../../src/builtins/attr.rs)'s `Wrapped` wraps a bare arg; and
-[`alloc_function`](../../src/builtins.rs) embeds a captured `scope: &'a Scope` plus a signature of
-`&'a KType` refs. A bare arg can neither `yoke` (the `for<'b>` brand rejects the captured `&'a`) nor
-`merge` (no carrier is in hand to fold). The
-[`resolve_aggregate_bare_name`](../../src/machine/execute/dispatch/literal.rs) **Resolved arm** sits in
-the same bind. So these sites keep the object path *depending on* the read-out
-[`reached_frame`](../../src/machine/execute/lift.rs) reconstruction (and, for binds, on the per-frame
-accumulator) to recover reach — the mechanism the rest of the object family no longer needs.
+[`Sealed`](../../src/witnessed.rs) carriers via `transfer_into`. But the carrier-self-building
+constructions — the `NEWTYPE` / tagged [`constructors`](../../src/machine/execute/dispatch/constructors.rs),
+[`catch`](../../src/builtins/catch.rs)'s `Result`, and the FN-def
+[`finalize`](../../src/builtins/fn_def/finalize.rs) — still pair an already-built `&'a KObject` with an
+asserted `Witnessed::new`. The constructors and `catch` hold their embedded values as dep terminals
+(value + reach), and FN def holds a `KObject::KFunction` co-located in its defining scope's frame; both
+have a carrier in hand to fold, yet the build reads a bare value out and re-pairs it with a separately
+recovered reach. So these sites keep the object path *depending on* the read-out
+[`reached_frame`](../../src/machine/execute/lift.rs) reconstruction to recover reach — the mechanism
+the rest of the object family no longer needs.
 
 **Acceptance criteria.**
 
-- Each value-embedding object construction is built inside the witness closure: a single embedded dep
-  or bound value (`catch`'s `Tagged`, `attr`'s `Wrapped`, `FROM`'s `Record`, a `NEWTYPE` / tagged
-  param) `merge`s the one carrier it embeds, and a captured scope (`alloc_function`'s `KFunction`, its
-  body via `alloc_witnessed_embedding`) witnesses the defining scope's sealed
-  [reach-set](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into) — never an
-  arbitrary value paired with an asserted witness.
-- A `let`-bound value is a **deposit**, not a construction: `let_binding` folds the bound value's
-  carrier `FrameSet` into the [per-scope reach-set](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into),
-  so a bound list-of-closures contributes every region it reaches. This bind-precise fold **replaces**
-  the transitional single-frame relocate-seam fold (the TCO-safe `reached_frame` patch in
-  `relocate_dep_into_consumer`) for the object channel: the object value-copy finish stops folding at
-  the relocate seam once its bind folds the full carrier, so the two never double-fold the same value.
-- The object family carries no `Witnessed::new`: the
-  [`literal.rs`](../../src/machine/execute/dispatch/literal.rs) Resolved arm and every bare value-copy
-  object site are converted, so a grep for object-family `Witnessed::new` is empty.
-- A lifted object's reached regions are read off its carrier's witness set end-to-end, and a bound
-  object's off the scope reach-set: the object path no longer *depends on* the `reached_frame`
-  reconstruction. (The mechanism is not deleted here — `KType::Module` still rides it on the type
-  channel; [`alloc_ktype`](alloc-ktype-witnessed.md) converts that last user and deletes it.)
+- The newtype / tagged-union [`constructors`](../../src/machine/execute/dispatch/constructors.rs) build
+  the `KObject::Wrapped` / `Tagged` **inside the witness closure**, folding their value deps' carriers
+  via `transfer_into` (a record newtype folds each field carrier, then `merge`s the record) so the
+  constructed object names every region it reaches; the nominal type identity crosses the build brand as
+  a non-object [`RegionTypeFamily`](../../src/machine/core/arena.rs) operand, and the type-check runs
+  before the build (read out of the bare dep value) so the closure is infallible.
+- [`catch`](../../src/builtins/catch.rs)'s `Result` is built witnessed: the `Ok` arm `transfer_into`s
+  the watched value's carrier, the `Error` arm `yoke`s the region-pure error tag and `merge`s the
+  identity operand, and the finish returns `Action::DoneWitnessed` — never an asserted `Witnessed::new`
+  over a read-out value.
+- The FN-def [`finalize`](../../src/builtins/fn_def/finalize.rs) returns a
+  `Witnessed<CarriedFamily, FrameSet>`: the co-located `KObject::KFunction` is re-anchored onto a
+  carrier witnessed by the defining scope's frame via `yoke` + `reattach_with` (the captured scope —
+  region-resident under the frame — transitively keeps every foreign region its bindings reach alive
+  through the scope's sealed reach-set), and the three FN-def sites route it as
+  `Action::DoneWitnessed`.
+- These sites add no object-value `Witnessed::new`. (The non-object operand `Witnessed::new` that
+  cross the build brand — `RegionTypeFamily` here, plus `RegionRefFamily` / `ContractHomeFamily`
+  elsewhere — and the transitional value-copy `finalize_terminal` `Witnessed::new` are **not**
+  object-value embeds and stay: "zero object `Witnessed::new`" is zero at an object-VALUE embedding
+  site, decided per the *Directions* below.) The remaining object-value `Witnessed::new` — the
+  bare-arg sites and the literal Resolved arm — convert under
+  [the carrier-delivery follow-up](alloc-object-delivered-carriers.md).
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` clean.
 
 **Directions.**
 
-- *Mechanism for delivering a carrier to a builtin body — open.* A value-embedding site can only
-  `merge`, and a bind can only fold, if the input arrives as a carrier, but a builtin body reads its
-  inputs as bare `Held` args (their carriers discarded at dispatch). Route (a): **thread carriers
-  through the args record** — deliver each builtin arg as a `Sealed`, relaxing the current "nothing new
-  threads through `Carried` / `Held` / `ArgValue`" constraint. Route (b) — *mint the merge operand from
-  the captured scope frame `{F}`* — is **dead for binds and for foreign-reaching embeds**: `{F}` names
-  the scope's frame, not the bound value's foreign reach (the multi-region case the
-  [reach-set](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into) exists to
-  capture), so only a value provably region-local to the body's frame may use it. Recommended: route
-  (a) wherever the embedded value can reach another region.
-- *AC `Witnessed::new` scope — open.* Two non-object-value `Witnessed::new` sites remain after the
-  object values convert: [`finalize.rs`](../../src/machine/execute/finalize.rs)'s `ContractHomeFamily`
-  operand (the declared-return re-stamp's `(home, declared)` pair, consumed inside a `merge`) and
-  [`runtime.rs`](../../src/machine/execute/runtime.rs)'s `RegionRefFamily` operand (the `dest` region
-  carrier for `transfer_into`). Decide whether the "zero object `Witnessed::new`" criterion covers
-  these or exempts them as non-object-value helper carriers feeding a `merge` / relocation.
-  ([`finalize.rs`](../../src/machine/execute/finalize.rs)'s bare `finalize_terminal` stays — it serves
-  the type channel, errors, and `KType::Module`.)
-- *`alloc_function` reuses `alloc_witnessed_embedding` for the body — decided.* The FN body is an owned
-  splice-free [`KExpression`](../../src/machine/model/ast.rs), so it yokes via the shipped
-  [`alloc_witnessed_embedding`](../../src/machine/core/arena.rs) exactly as `quote` does; the captured
-  scope's reach rides the scope's sealed reach-set, the signature refs fold in via `merge`.
-- *Seal the ascribe per-ascription module view — decided.* Folding binds into the scope reach-set must
-  also close [`ascribe`](../../src/builtins/ascribe.rs)'s `child_under_module` `new_scope`: it escapes
-  via `new_module` like a MODULE body, so once a bound member folds its carrier into that scope's set
-  the set must seal. The finalize-time, owner-routed closes shipped with the reach-set (per-call frame /
-  `MODULE` / `SIG` / run root) do not cover it — ascribe binds via a synchronous `try_bulk_install_from`
-  rather than a dispatched body, so its view stays open. Add a `new_scope.close()` at the ascription
-  finish, before `new_module` captures the scope, mirroring the `MODULE` / `SIG` close.
+- *Construction inversion via dep carriers — decided.* Each converted site builds inside the witness
+  closure: the constructors and `catch` fold their embedded dep carriers via `transfer_into` / `merge`,
+  and FN def `yoke`s its co-located `KObject::KFunction` and re-anchors it via `reattach_with`. The
+  decide-side constructors park on their value deps through a `park_on_deps_witnessed`
+  ([`FinishWitnessed`](../../src/machine/execute/outcome.rs) continuation) that reuses the apply-side
+  witnessed dep-finish, so a construction decide builds the wrapped value naming every region it
+  reaches.
+- *The nominal type identity crosses as a shared non-object operand — decided.* The declared / `SetRef`
+  type identity a construction wraps with is type-channel data the consumer frame's `outer` chain pins,
+  not an object value, so it crosses the build brand as the shared
+  [`RegionTypeFamily`](../../src/machine/core/arena.rs) `(&'r KoanRegion, &'r KType<'r>)` operand
+  consumed inside the `transfer_into` / `merge`.
+- *"Zero object `Witnessed::new`" is zero at an object-VALUE embed — decided.* The non-object operand
+  `Witnessed::new` (`RegionTypeFamily` here; `RegionRefFamily` for the relocation `dest`;
+  `ContractHomeFamily` for the declared-return re-stamp) feed a `merge` / relocation and carry no object
+  value, and the transitional value-copy [`finalize_terminal`](../../src/machine/execute/finalize.rs)
+  `Witnessed::new` serves the type channel, errors, and `KType::Module`. The criterion targets the
+  object-VALUE embedding sites; these helper / transitional carriers are exempt.
 
 ## Dependencies
 
-This finishes the object-family conversion: the shared dep-result plumbing (the lift hands each finish
-its deps' `Sealed` carriers) and the region-pure leaf and aggregate constructions have shipped (see
-[per-node-memory.md § Construction](../../design/per-node-memory.md#construction-yoke-merge-map-and-one-wrapper-per-node)).
-The value-embedding sites need the carrier-delivery mechanism decided above before they can `merge`.
+This converts the object-construction sites that already hold a carrier; the value-embedding sites that
+take a bare arg, and the relocate-seam-fold retirement, follow in
+[the carrier-delivery follow-up](alloc-object-delivered-carriers.md).
 
 **Requires:** none — the [per-scope reach-set](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into)
-foundation it folds binds into has shipped.
+foundation and the dep-carrier delivery to construction finishes have shipped.
 
 **Unblocks:**
 
-- [`alloc_ktype` returns `Witnessed`](alloc-ktype-witnessed.md) — completes the `reached_frame` /
-  `retained` deletion by taking the last `KType::Module` user off them; this item retires the object
-  path's dependence on the same reconstruction.
-- [Migrate the consumption reads onto `open`](reads-to-open.md) — the transitional `read` can retire
-  only once both construction channels are off the bare read-out, of which this is the object half.
+- [Carrier-delivered object embeds and the relocate-seam-fold retirement](alloc-object-delivered-carriers.md) —
+  the bare-arg value-embedding sites and the seam-fold retirement build on these carrier-self-building
+  conversions.

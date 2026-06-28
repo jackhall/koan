@@ -214,10 +214,12 @@ reattachable!(ContinuationFamily => NodeContinuation<'r>);
 /// **Tracked-transitional**: this is single-frame, so a multi-region value (a list of closures, a
 /// closure over several closures) is under-recorded — the gap [`reached_frame`] itself carries. It
 /// upgrades to the full carried `FrameSet` as binds witness their construction: a `let`-bound value
-/// folds its carrier's union in
-/// [alloc-object-embedding-sites](../../../roadmap/per-node-memory/alloc-object-embedding-sites.md),
-/// and this relocate-seam fold retires when the value channel finishes witnessing in
-/// [alloc-ktype-witnessed](../../../roadmap/per-node-memory/alloc-ktype-witnessed.md).
+/// folds its carrier's union, and the user-fn object-arg bind that shares this seam fold folds its dep
+/// carriers into the scope reach-set, both in
+/// [alloc-object-delivered-carriers](../../../roadmap/per-node-memory/alloc-object-delivered-carriers.md);
+/// the seam fold then retires there, leaving only `KType::Module` for
+/// [alloc-ktype-witnessed](../../../roadmap/per-node-memory/alloc-ktype-witnessed.md) to take off
+/// [`reached_frame`].
 fn relocate_dep_into_consumer<'b>(view: &SchedulerView<'b, '_>, value: Carried<'b>) -> Carried<'b> {
     let relocated = relocate_carried(value, view.current_scope().region);
     // A surviving closure / module borrow keeps its defining (foreign) region alive on the consumer

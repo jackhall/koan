@@ -52,20 +52,21 @@ dep-result currency already carries — the uniform retain at the
   the child scope's sealed
   [reach-set](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into) plus its home
   frame added on lift.
-- *Completes the single-frame reconstruction's deletion — decided.* The object path's last dependence
-  on `reached_frame` is retired by
-  [`alloc-object-embedding-sites`](alloc-object-embedding-sites.md); this item takes the final
-  `KType::Module` user off it. With binding reach on the per-scope reach-set and every relocated value
-  carrying its reach on its dep currency, the uniform retain at the `relocate` loses its last caller, so
-  `reached_frame` and the per-frame `retained` field are deleted here.
+- *Completes the single-frame reconstruction's deletion — decided.* The object and user-fn-arg paths'
+  last dependence on `reached_frame` is retired by
+  [the carrier-delivery follow-up](alloc-object-delivered-carriers.md) (the value-embedding object sites
+  and the user-fn object-arg bind both fold onto carriers / the scope reach-set); this item takes the
+  final `KType::Module` user off it. With binding reach on the per-scope reach-set and every relocated
+  value carrying its reach on its dep currency, the uniform retain at the `relocate` loses its last
+  caller, so `reached_frame` and the per-frame `retained` field are deleted here.
 
 ## Dependencies
 
 **Requires:**
 
-- [`alloc_object` embedding sites return `Witnessed`](alloc-object-embedding-sites.md) — retires the
-  object path's dependence on `reached_frame`, the retirement this item completes by taking the final
-  `KType::Module` user off it.
+- [Carrier-delivered object embeds and the relocate-seam-fold retirement](alloc-object-delivered-carriers.md) —
+  takes the object and user-fn-arg paths off `reached_frame`, the retirement this item completes by
+  taking the final `KType::Module` user off it.
 
 **Unblocks:**
 
