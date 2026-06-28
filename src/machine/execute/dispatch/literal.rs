@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
-use crate::machine::{FrameSet, KError, KErrorKind, KoanRegion, NameOutcome, NodeId, TraceFrame};
+use crate::machine::{
+    FrameSet, KError, KErrorKind, KoanRegion, NameOutcome, NodeId, TraceFrame, ValueCarrierResolution,
+};
 use crate::source::Spanned;
 use crate::witnessed::{reattachable, Sealed, Witnessed};
 
@@ -275,6 +277,17 @@ impl<'step> KoanRuntime<'step> {
         park_producers: &mut Vec<NodeId>,
     ) -> Slot {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
+        // A value-bound Identifier element rides into the cell on a carrier witnessed by its binding
+        // scope's home frame, which transitively pins that scope's reach-set — so the cell names the
+        // value's reach by construction, never an asserted `Witnessed::new`. Type leaves and unbound /
+        // pending names fall to the shared `resolve_name_part` path below.
+        if let ExpressionPart::Identifier(name) = part {
+            if let ValueCarrierResolution::Value(carrier) =
+                current_scope(&self.ambient).resolve_value_carrier(name, active_chain.map(|c| &**c))
+            {
+                return Slot::Static(Sealed::seal(carrier));
+            }
+        }
         match resolve_name_part(
             current_scope(&self.ambient),
             part,
@@ -282,9 +295,10 @@ impl<'step> KoanRuntime<'step> {
             active_chain,
             None,
         ) {
-            // An aggregate literal element may resolve to a value or a first-class type; both ride
-            // into the cell as a carrier, wrapped at source under the classify frame (whose `outer`
-            // chain pins the resolved value's region, an ancestor) so the cell is lifetime-free.
+            // A first-class **type** resolved into the cell rides the type channel — the transitional
+            // `Witnessed::new` bundle stays until the type family inverts (`alloc_ktype`). The value
+            // case is handled above via the binding-scope carrier, so this is reached only for a `Type`
+            // carrier (whose region the classify frame's `outer` chain pins, an ancestor).
             NameOutcome::Resolved(c) => {
                 let witness = current_scope(&self.ambient)
                     .region_owner()

@@ -14,7 +14,7 @@ use crate::machine::core::{KoanRegion, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
-use crate::machine::{FrameSet, KError, KErrorKind, Resolution};
+use crate::machine::{FrameSet, KError, KErrorKind, Resolution, ValueCarrierResolution};
 use crate::source::Spanned;
 
 use super::super::DepFinish;
@@ -54,17 +54,15 @@ pub(super) fn bare_identifier<'step, 'b>(
     s: &'b Scope<'b>,
     name: String,
 ) -> Outcome<'step> {
-    match s.resolve_with_chain(&name, ctx.chain_deref()) {
-        // Re-anchor the `'b`-branded resolve result to the cart `'step`, witnessed by the active
-        // region (which pins the resolved object's storage for `'step`).
-        Resolution::Value(obj) => {
-            Outcome::Done(Ok(crate::scheduler::reattach_with::<CarriedFamily, _>(
-                Carried::Object(obj),
-                ctx.current_scope().region,
-            )))
+    match s.resolve_value_carrier(&name, ctx.chain_deref()) {
+        // The bound value rides out on a carrier witnessed by its binding scope's home frame, which
+        // transitively pins that scope's reach-set — so the read names the value's reach by
+        // construction rather than leaving it for the relocate-seam `reached_frame` reconstruction.
+        ValueCarrierResolution::Value(carrier) => Outcome::DoneWitnessed(carrier),
+        ValueCarrierResolution::Placeholder(producer) => forward_to_producer(producer),
+        ValueCarrierResolution::UnboundName => {
+            Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))))
         }
-        Resolution::Placeholder(producer) => forward_to_producer(producer),
-        Resolution::UnboundName => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name)))),
     }
 }
 

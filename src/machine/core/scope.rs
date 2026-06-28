@@ -16,7 +16,8 @@ use super::scope_id::ScopeId;
 use super::scope_ptr::BoundedScopePtr;
 use crate::machine::core::kfunction::{KFunction, NodeId};
 use crate::machine::model::types::Record;
-use crate::machine::model::values::{ArgValue, KObject};
+use crate::machine::model::values::{ArgValue, Carried, CarriedFamily, KObject};
+use crate::witnessed::{reattach_with, Witnessed};
 
 /// A resolved-but-not-yet-executed call: the original expression, the chosen `KFunction`,
 /// and the resolved argument record from `KFunction::bind`. Unit of deferred work in dispatch.
@@ -145,6 +146,17 @@ pub enum ScopeKind {
     Anonymous,
     Sig { name: String },
     Module { name: String },
+}
+
+/// The carrier form of a value-name resolution — the witnessed twin of [`Resolution`]. The `Value`
+/// arm hands back the bound value already wrapped in a [`Witnessed`] carrier naming its reach (the
+/// binding scope's home frame, which transitively pins that scope's sealed reach-set), so an
+/// object-value read site embeds a carrier rather than re-asserting co-location. The non-`Value` arms
+/// mirror [`Resolution`] verbatim.
+pub(crate) enum ValueCarrierResolution {
+    Value(Witnessed<CarriedFamily, FrameSet>),
+    Placeholder(NodeId),
+    UnboundName,
 }
 
 impl<'a> Scope<'a> {
@@ -725,6 +737,51 @@ impl<'a> Scope<'a> {
                     .lookup_value(name, scope.binding_cutoff(chain))
             })
             .unwrap_or(Resolution::UnboundName)
+    }
+
+    /// Carrier-returning twin of [`Self::resolve_with_chain`]: resolve `name` to the bound value
+    /// wrapped in a [`Witnessed`] carrier naming its reach, so an object-value read embeds a carrier
+    /// by construction instead of reconstructing the reach via `reached_frame`. Walks the same `outer`
+    /// chain, but at the **binding** scope wraps the value via [`Self::bound_value_carrier`] — the
+    /// witness is that scope's home frame, not the reading scope's. The non-`Value` dispositions mirror
+    /// [`Self::resolve_with_chain`].
+    pub(crate) fn resolve_value_carrier(
+        &self,
+        name: &str,
+        chain: Option<&LexicalFrame>,
+    ) -> ValueCarrierResolution {
+        self.ancestors()
+            .find_map(|scope| {
+                match scope.bindings().lookup_value(name, scope.binding_cutoff(chain))? {
+                    Resolution::Value(obj) => {
+                        Some(ValueCarrierResolution::Value(scope.bound_value_carrier(obj)))
+                    }
+                    Resolution::Placeholder(producer) => {
+                        Some(ValueCarrierResolution::Placeholder(producer))
+                    }
+                    // `lookup_value` reports a miss as `None`, never `Some(UnboundName)`; treat any
+                    // such value as a miss and keep walking the chain.
+                    Resolution::UnboundName => None,
+                }
+            })
+            .unwrap_or(ValueCarrierResolution::UnboundName)
+    }
+
+    /// Wrap a value resolved **in this scope** as a carrier witnessed by this scope's home frame. The
+    /// value lives in this scope's region (binders deep-clone into it), so the home frame is co-located
+    /// for the re-anchor; and because the scope's sealed reach-set lives in that same region, holding
+    /// the home frame transitively pins every foreign region the value reaches — so a single-frame
+    /// witness names the full reach. Built via `yoke` + [`reattach_with`] (the co-located
+    /// pre-existing-value pattern, as [`fn_def`](crate::builtins) homes its `KFunction`), so it carries
+    /// no asserted `Witnessed::new`.
+    fn bound_value_carrier(&self, obj: &'a KObject<'a>) -> Witnessed<CarriedFamily, FrameSet> {
+        let home = self
+            .region_owner()
+            .upgrade()
+            .expect("the binding scope's region owner is held while its value is read");
+        Witnessed::<CarriedFamily, FrameSet>::yoke(FrameSet::singleton(home), |region| {
+            reattach_with::<CarriedFamily, _>(Carried::Object(obj), region)
+        })
     }
 
     /// Install a dispatch-time placeholder for `name` -> producer slot `idx`. See

@@ -16,6 +16,7 @@ pub use core::{
     KFuture, KoanRegion, LexicalFrame, RegionTypeFamily, Resolution, Scope, ScopeId, ScopeKind,
     TraceFrame,
 };
+pub(crate) use core::ValueCarrierResolution;
 pub use execute::{
     interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime, NameOutcome,
     ResolveOutcome, Resolved, TypeIdentifierResolution,
