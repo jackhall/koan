@@ -14,7 +14,7 @@ use crate::machine::model::types::KType;
 use crate::machine::model::values::{CarriedFamily, Held};
 use crate::machine::model::{Carried, KObject};
 use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, NodeId};
-use crate::witnessed::Witnessed;
+use crate::witnessed::{Sealed, Witnessed};
 
 /// Unwrap a `Result<T, KError>` inside an `Action`-returning body, early-returning
 /// `Action::Done(Err(e))` on the error arm — the `Action`-body analogue of `?`. Collapses the
@@ -196,9 +196,19 @@ pub struct FinishCtx<'a, 'c> {
 /// harness recurses into. Reads only a `FinishCtx`, never the scheduler — exec's continuation pattern.
 pub type AwaitContinue<'a> = Box<dyn FnOnce(&FinishCtx<'a, '_>, &[Carried<'a>]) -> Action<'a> + 'a>;
 
-/// A `Catch` finish: re-entered with the watched slot's `Result`, yielding a `Action`.
+/// The watched value as a `Catch` finish receives it on success: the value **relocated** into the
+/// consumer region (for a finish that reads it — TRY-WITH's `it` bind) plus the watched producer's own
+/// [`Sealed`] carrier (for a finish that builds a *witnessed* result — CATCH's `Result`, folded via
+/// [`transfer_into`](crate::witnessed::Sealed::transfer_into) so it names every region the watched
+/// value reaches). On a watched error the finish gets the `KError` instead.
+pub struct CatchOk<'a> {
+    pub value: Carried<'a>,
+    pub carrier: Sealed<CarriedFamily, FrameSet>,
+}
+
+/// A `Catch` finish: re-entered with the watched slot's [`CatchOk`] (or error), yielding a `Action`.
 pub type CatchContinue<'a> =
-    Box<dyn FnOnce(&FinishCtx<'a, '_>, Result<&'a KObject<'a>, KError>) -> Action<'a> + 'a>;
+    Box<dyn FnOnce(&FinishCtx<'a, '_>, Result<CatchOk<'a>, KError>) -> Action<'a> + 'a>;
 
 /// What happens next for a slot — the four shapes the builtin survey reduced everything to.
 pub enum Action<'a> {

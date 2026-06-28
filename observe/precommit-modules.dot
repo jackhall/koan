@@ -274,6 +274,8 @@ digraph {
     "koan::builtins::catch" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::catch" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::builtins::catch" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -754,6 +756,7 @@ digraph {
     "koan::machine::execute::outcome" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
+    "koan::machine::execute::outcome" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::witnessed" [label="uses", style="dashed"];

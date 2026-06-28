@@ -80,6 +80,16 @@ reattachable! {
     OperatorGroup => OperatorGroup,
 }
 
+/// A witnessed-construction operand bundling a destination region with a type-channel identity (a
+/// `SetRef` / declared type) that must cross the build brand. A value-embedding construction
+/// `transfer_into`/`merge`s its object carrier with this operand so the wrapped value lands in
+/// `region` tagged by the identity, both re-anchored to the brand under the same witness — the dest
+/// frame's `outer` chain pins the identity's (ancestor) region. Used by the newtype / tagged-union
+/// constructors and the `CATCH` `Result` build. Layout-invariant: two thin pointers, representation
+/// independent of `'r`.
+pub struct RegionTypeFamily;
+reattachable!(RegionTypeFamily => (&'r KoanRegion, &'r KType<'r>));
+
 // Per-family `Stored` policy: which sub-arena each family lands in, plus `KObject`'s allocation
 // address side-table hook. No stored family carries a self-targeting `Rc<FrameStorage>` — a stored
 // closure / future / module is a bare borrow into its defining region, kept alive by its carrier's

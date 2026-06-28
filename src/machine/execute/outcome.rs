@@ -17,10 +17,10 @@
 //!   another outcome.
 //! - [`Outcome::Forward`] — splice the slot out as an alias of an existing producer.
 
-use crate::machine::core::kfunction::action::{Dep, FramePlacement};
+use crate::machine::core::kfunction::action::{CatchOk, Dep, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::ScopeId;
-use crate::machine::model::values::{Carried, CarriedFamily, KObject};
+use crate::machine::model::values::{Carried, CarriedFamily};
 
 use crate::machine::{FrameSet, KError, NodeId, TraceFrame};
 use crate::witnessed::reattachable;
@@ -147,7 +147,7 @@ pub(in crate::machine::execute) fn dep_error_frame() -> TraceFrame {
 /// Host-side closure for a catch [`NodeWork`](super::nodes::NodeWork). Receives the watched slot's terminal as a
 /// `Result` so the closure can branch on either outcome, plus a read-only [`SchedulerView`].
 pub(in crate::machine::execute) type CatchFinish<'a> = Box<
-    dyn for<'view> FnOnce(&SchedulerView<'a, 'view>, Result<&'a KObject<'a>, KError>) -> Outcome<'a>
+    dyn for<'view> FnOnce(&SchedulerView<'a, 'view>, Result<CatchOk<'a>, KError>) -> Outcome<'a>
         + 'a,
 >;
 
@@ -296,9 +296,13 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
 ) -> NodeContinuation<'a> {
     Box::new(move |view, results, _idx| {
         let result = match &results[0] {
-            // Relocate the watched terminal into the consumer region (the lift delivers it
-            // un-relocated), so the recovered value outlives the watched producer's frame.
-            Ok(t) => Ok(relocate_dep_into_consumer(view, t.value).object()),
+            // Relocate the watched value into the consumer region (the lift delivers it un-relocated)
+            // for a value-reading finish (TRY-WITH's `it` bind), and hand the producer's own carrier
+            // alongside for a witnessed finish (CATCH folds it via `transfer_into`).
+            Ok(t) => Ok(CatchOk {
+                value: relocate_dep_into_consumer(view, t.value),
+                carrier: t.carrier.duplicate(),
+            }),
             // Frameless: the recovery-site dispatch attaches its own frame.
             Err(e) => Err(propagate_dep_error(e, None)),
         };
@@ -324,6 +328,7 @@ mod erased_continuation_tests {
     use super::*;
     use crate::builtins::default_scope;
     use crate::machine::core::{CallFrame, FrameStorage};
+    use crate::machine::model::KObject;
     use crate::scheduler::{Erased, Scheduler};
     use crate::witnessed::SealedExtern;
     use std::rc::Rc;

@@ -42,8 +42,10 @@ pub fn body<'a>(
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
         // On `ok`, `it` is the bare success value; on error, the per-variant payload Struct
         // unwrapped from `KError::to_tagged`'s Tagged carrier.
+        // TRY-WITH reads the watched value (relocated into the consumer region) to bind `it` and
+        // tail-replaces into the matched branch; it builds no object, so it ignores `ok.carrier`.
         let (tag, it_value, original_err): (String, KObject<'a>, Option<KError>) = match result {
-            Ok(v) => ("Ok".to_string(), v.deep_clone(), None),
+            Ok(ok) => ("Ok".to_string(), ok.value.object().deep_clone(), None),
             Err(e) => {
                 let tagged: KObject<'a> = e.to_tagged(fctx.scope.region);
                 let (tag, payload) = match tagged {

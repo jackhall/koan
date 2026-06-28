@@ -39,9 +39,12 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        require_kexpression, Action, CatchContinue, Dep, DepPlacement,
+        require_kexpression, scope_frame, Action, CatchContinue, Dep, DepPlacement,
     };
+    use crate::machine::model::values::CarriedFamily;
     use crate::machine::model::Carried;
+    use crate::machine::{FrameSet, RegionTypeFamily};
+    use crate::witnessed::Witnessed;
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", "expr"));
     // Capture the prelude `Result` member identity at body time so the CATCH value shares the
     // nominal identity of a `Result (...)`-constructed one.
@@ -50,18 +53,72 @@ pub fn body<'a>(
         _ => panic!("Result must be registered before CATCH"),
     };
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
-        let (tag, payload): (&str, KObject<'a>) = match result {
-            Ok(v) => ("Ok", v.deep_clone()),
-            Err(e) => ("Error", e.to_tagged(fctx.scope.region)),
-        };
-        let tagged = KObject::Tagged {
-            tag: tag.to_string(),
-            value: Rc::new(payload),
+        // Wrap `payload` as a `Result` `Tagged` at the build brand `'x`. A free fn (no captured
+        // lifetime) so both the `Ok` `transfer_into` and the `Err` `merge` brand closures can call it.
+        fn build_result<'x>(tag: &str, identity: &KType<'x>, payload: KObject<'x>) -> KObject<'x> {
+            let (set, index) = match identity {
+                KType::SetRef { set, index } => (Rc::clone(set), *index),
+                _ => unreachable!("the prelude Result identity is always a SetRef"),
+            };
+            KObject::Tagged {
+                tag: tag.to_string(),
+                value: Rc::new(payload),
+                set,
+                index,
+                type_args: Rc::new(vec![]),
+            }
+        }
+        // Build the `Result` `Tagged` **inside the witness closure** so it names every region the
+        // wrapped value reaches. The `Result` `SetRef` identity is type-channel data the scope's frame
+        // pins (its `outer` chain); it crosses the build brand as a [`RegionTypeFamily`] operand.
+        let region = fctx.scope.region;
+        let frame = scope_frame(fctx.scope);
+        let identity: &KType<'a> = region.alloc_ktype(KType::SetRef {
             set: Rc::clone(&result_set),
             index: result_index,
-            type_args: Rc::new(vec![]),
+        });
+        let home = Witnessed::<RegionTypeFamily, FrameSet>::new(
+            (region, identity),
+            FrameSet::singleton(frame.clone()),
+        );
+        let witnessed = match result {
+            // The watched value's carrier folds onto the result: `transfer_into` relocates it into the
+            // consumer region and unions its reach onto the `Ok` carrier.
+            Ok(ok) => ok
+                .carrier
+                .transfer_into::<RegionTypeFamily, CarriedFamily>(
+                    home,
+                    |value, (region, identity), _brand| {
+                        Carried::Object(region.alloc_object(build_result(
+                            "Ok",
+                            identity,
+                            value.object().deep_clone(),
+                        )))
+                    },
+                )
+                .expect("a FrameSet set witness always represents the union"),
+            // The error payload is built region-pure into the scope region (it reaches no foreign
+            // region); `yoke` it, then `merge` the identity operand to wrap it as `Result::Error`.
+            Err(e) => {
+                let payload = Witnessed::<CarriedFamily, FrameSet>::yoke(
+                    FrameSet::singleton(frame),
+                    |region| Carried::Object(region.alloc_object(e.to_tagged(region))),
+                );
+                payload
+                    .merge::<RegionTypeFamily, CarriedFamily>(
+                        home,
+                        |payload, (region, identity), _brand| {
+                            Carried::Object(region.alloc_object(build_result(
+                                "Error",
+                                identity,
+                                payload.object().deep_clone(),
+                            )))
+                        },
+                    )
+                    .expect("a FrameSet set witness always represents the union")
+            }
         };
-        Action::Done(Ok(Carried::Object(fctx.scope.region.alloc_object(tagged))))
+        Action::DoneWitnessed(witnessed)
     });
     Action::Catch {
         watched: Dep::Dispatch {

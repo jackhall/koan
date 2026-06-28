@@ -15,7 +15,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::{CarriedFamily, NonWrappedRef};
 use crate::machine::model::{Carried, KObject, Record};
-use crate::machine::{FrameSet, KError, KErrorKind, KoanRegion};
+use crate::machine::{FrameSet, KError, KErrorKind, RegionTypeFamily};
 use crate::source::Spanned;
 use crate::witnessed::{reattachable, Witnessed};
 
@@ -25,17 +25,9 @@ use super::ctx::SchedulerView;
 use super::single_poll::CtorKind;
 use super::{park_on_deps_witnessed, DepRequest, Outcome};
 
-/// Dest-operand family for the single-value constructions (`NewType` / `Tagged`): the consumer region
-/// the wrapped value lands in plus the nominal type identity (a `SetRef`), both re-anchored to the
-/// `transfer_into` brand. The identity is type-channel data the dest frame's `outer` chain pins, folded
-/// in as a non-object operand — the same shape [`finalize`](super::super::finalize)'s contract-home
-/// re-stamp uses. Layout-invariant: two thin pointers, representation independent of `'r`.
-struct ConstructHomeFamily;
-reattachable!(ConstructHomeFamily => (&'r KoanRegion, &'r KType<'r>));
-
 /// Fold accumulator for a record-repr newtype: the field values gathered from the value deps, each
 /// `transfer_into`-folded so the accumulator's witness names every region a field reaches. The final
-/// `merge` with [`ConstructHomeFamily`] builds the `Record` and wraps it with the identity.
+/// `merge` with [`RegionTypeFamily`] builds the `Record` and wraps it with the identity.
 /// Layout-invariant: a `Vec` of layout-invariant `(String, KObject)` cells.
 struct RecordFieldsFamily;
 reattachable!(RecordFieldsFamily => Vec<(String, KObject<'r>)>);
@@ -170,7 +162,7 @@ fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind<'step>)
 /// value carriers' reach onto the result so the constructed object names every region it reaches by
 /// construction (no `Witnessed::new` over a read-out value). The nominal type identity is type-channel
 /// data the consumer frame's `outer` chain pins; it crosses the brand as a non-object operand
-/// ([`ConstructHomeFamily`]). Type-checks run before the build (read out of the carrier), so the
+/// ([`RegionTypeFamily`]). Type-checks run before the build (read out of the carrier), so the
 /// closure is infallible.
 fn finish_witnessed<'step>(
     view: &SchedulerView<'step, '_>,
@@ -187,13 +179,13 @@ fn finish_witnessed<'step>(
         CtorKind::NewType { identity } => {
             debug_assert_eq!(terminals.len(), 1);
             check_newtype_repr(identity, terminals[0].value.object())?;
-            let home = Witnessed::<ConstructHomeFamily, FrameSet>::new(
+            let home = Witnessed::<RegionTypeFamily, FrameSet>::new(
                 (region, identity),
                 FrameSet::singleton(dest_frame),
             );
             Ok(terminals[0]
                 .carrier
-                .transfer_into::<ConstructHomeFamily, CarriedFamily>(
+                .transfer_into::<RegionTypeFamily, CarriedFamily>(
                     home,
                     |value, (region, identity_ty), _brand| {
                         Carried::Object(region.alloc_object(KObject::Wrapped {
@@ -233,12 +225,12 @@ fn finish_witnessed<'step>(
                     )
                     .expect("a FrameSet set witness always represents the union")
             });
-            let home = Witnessed::<ConstructHomeFamily, FrameSet>::new(
+            let home = Witnessed::<RegionTypeFamily, FrameSet>::new(
                 (region, identity),
                 FrameSet::singleton(dest_frame),
             );
             Ok(fields
-                .merge::<ConstructHomeFamily, CarriedFamily>(
+                .merge::<RegionTypeFamily, CarriedFamily>(
                     home,
                     |fields, (region, identity_ty), _brand| {
                         let record = Record::from_pairs(fields);
@@ -278,14 +270,14 @@ fn finish_witnessed<'step>(
                 set: Rc::clone(set),
                 index: *index,
             });
-            let home = Witnessed::<ConstructHomeFamily, FrameSet>::new(
+            let home = Witnessed::<RegionTypeFamily, FrameSet>::new(
                 (region, identity),
                 FrameSet::singleton(dest_frame),
             );
             let tag = tag.clone();
             Ok(terminals[0]
                 .carrier
-                .transfer_into::<ConstructHomeFamily, CarriedFamily>(
+                .transfer_into::<RegionTypeFamily, CarriedFamily>(
                     home,
                     move |value, (region, identity_ty), _brand| {
                         let (set, index) = match identity_ty {
