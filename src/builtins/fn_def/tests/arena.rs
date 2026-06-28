@@ -313,3 +313,82 @@ fn body_subexpression_slots_recycle_across_calls() {
          Binds should be recycled via the free-list, not accumulating."
     );
 }
+
+/// A closure capturing a per-call value survives a `let`-bind: `MAKE_HOLDER` returns a closure over
+/// its `base` argument, which lives in MAKE_HOLDER's per-call frame; `LET hold` binds the closure,
+/// retiring that frame. Calling `hold` reads the captured `base`, so the bind's carrier fold (C1)
+/// must keep the producing frame's region alive. (Under Miri this is the no-use-after-free check for
+/// a captured per-call value read after its producing frame retires.)
+#[test]
+fn captured_per_call_value_survives_let_bind_and_call() {
+    use crate::machine::model::KObject;
+    let region = FrameStorage::run_root();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
+         (FN (GET q :Number) -> Number = (base))\n\
+         LET hold = (MAKE_HOLDER 99)",
+    );
+    let result = run_one(scope, parse_one("hold {q = 0}"));
+    assert!(
+        matches!(result, KObject::Number(n) if *n == 99.0),
+        "the let-bound closure must read its captured base=99, got {:?}",
+        result.ktype(),
+    );
+}
+
+/// A closure passed as a user-fn argument stays live through the call: `CALL_IT` receives a closure
+/// over `base` (in MAKE_HOLDER's per-call frame) and invokes it. The arg-bind carrier fold (D1) must
+/// keep that frame alive for the per-call scope, so the inner read of `base` does not dangle. (Miri:
+/// no-use-after-free for a closure argument invoked inside the callee.)
+#[test]
+fn closure_argument_stays_live_through_user_fn_call() {
+    use crate::machine::model::KObject;
+    let region = FrameStorage::run_root();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
+         (FN (GET q :Number) -> Number = (base))\n\
+         FN (CALL_IT f :(FN (q :Number) -> Number)) -> Number = (f {q = 0})\n\
+         LET answer = (CALL_IT (MAKE_HOLDER 77))",
+    );
+    let result = run_one(scope, parse_one("answer"));
+    assert!(
+        matches!(result, KObject::Number(n) if *n == 77.0),
+        "the closure arg invoked inside CALL_IT must read base=77, got {:?}",
+        result.ktype(),
+    );
+}
+
+/// A `let`-bound list reaching two *distinct* per-call regions keeps both alive: each `MAKE_HOLDER`
+/// call captures its own per-call frame, and the list holds both closures. The bind's carrier fold
+/// (C1) must contribute *every* region the multi-region value reaches — the case the single-frame
+/// relocate-seam fold under-recorded. Reading the list back after the producing frames retire must
+/// find both closures intact. (Miri: the multi-region no-use-after-free check.)
+#[test]
+fn let_bound_list_reaching_two_call_regions_keeps_both_live() {
+    use crate::machine::model::{Held, KObject};
+    let region = FrameStorage::run_root();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
+         (FN (GET q :Number) -> Number = (base))\n\
+         LET holders = [(MAKE_HOLDER 1) (MAKE_HOLDER 2)]",
+    );
+    let result = run_one(scope, parse_one("holders"));
+    match result {
+        KObject::List(items, _) => {
+            assert_eq!(items.len(), 2, "list should hold both holder closures");
+            assert!(
+                items
+                    .iter()
+                    .all(|h| matches!(h, Held::Object(KObject::KFunction(_)))),
+                "both list elements must be intact closures after their call regions retired",
+            );
+        }
+        other => panic!("expected a List, got {:?}", other.ktype()),
+    }
+}

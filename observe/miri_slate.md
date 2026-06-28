@@ -80,7 +80,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-36 tests, grouped by the unsafe site each pins down. Names below are the exact
+39 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -134,8 +134,18 @@ closure invocation reads `KFunction::captured_scope`, a safe call that routes th
 branded `BoundedScopePtr::get` on the captured definition-scope pointer (the transmute
 lives in `scope_ptr.rs`). The escaped-closure test pins that the pointee outlives the
 `KFunction` even when the closure is invoked after its defining frame has returned.
+The reading-the-captured-value tests further pin the **delivered-carrier reach fold**
+that keeps that defining region alive once the object channel is off the relocate seam: a
+`let`-bound closure folds its carrier into the binding scope's reach-set, a user-fn
+closure argument folds into the per-call scope, and a `let`-bound list contributes
+*every* region a multi-region value reaches (the case the single-frame seam fold
+under-recorded). Each reads a captured *outer* value after its producing frame retires, so
+a lost region dangles under tree borrows.
 
 - `fast_lane_closure_escapes_outer_call_and_remains_invocable`
+- `captured_per_call_value_survives_let_bind_and_call`
+- `closure_argument_stays_live_through_user_fn_call`
+- `let_bound_list_reaching_two_call_regions_keeps_both_live`
 
 **`Scope::add` re-entry** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — adding a binding while
 a `data` borrow is live queues onto a pending list and drains on borrow drop,
@@ -416,9 +426,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-28: 140s — 39 tests, 0 leaks, 0 UB
 - 2026-06-28: 121s — 36 tests, 0 leaks, 0 UB
 - 2026-06-28: 181s — 36 tests, 0 leaks, 0 UB
 - 2026-06-27: 117s — 36 tests, 0 leaks, 0 UB
 - 2026-06-27: 117s — 36 tests, 0 leaks, 0 UB
-- 2026-06-27: 123s — 36 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
