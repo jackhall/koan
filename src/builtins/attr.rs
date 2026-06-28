@@ -19,7 +19,7 @@ use crate::machine::model::values::Carried;
 use crate::machine::model::values::{CarriedFamily, Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{FrameSet, KError, KErrorKind, Resolution, Scope};
-use crate::witnessed::{reattach_with, Sealed, Witnessed};
+use crate::witnessed::{Sealed, Witnessed};
 
 use super::{arg, kw, sig};
 
@@ -46,32 +46,6 @@ fn route<'a>(
     }
 }
 
-/// Seal a projected object member as a carrier naming its reach. `value` must live in `scope`'s
-/// region — a field read deep-clones into the read-site region, while a module / signature member
-/// already lives in its declaration region, so the declaration scope is passed. The witness is
-/// `scope`'s home frame, which transitively pins that scope's reach-set (so a single-frame witness
-/// names the full reach, as a bound-name read does via the binding scope's home frame).
-/// An `embedded` carrier — the computed lhs the member is read out of — folds its foreign reach on
-/// top (omitting any frame the home already pins), so a member of a multi-region value names every
-/// region that value reaches. Built via `yoke` + [`reattach_with`] (the co-located
-/// pre-existing-value pattern), so it carries no asserted `Witnessed::new`.
-fn seal_field<'a>(
-    value: Carried<'a>,
-    scope: &Scope<'a>,
-    embedded: Option<&Sealed<CarriedFamily, FrameSet>>,
-) -> Witnessed<CarriedFamily, FrameSet> {
-    let home = scope
-        .region_owner()
-        .upgrade()
-        .expect("the read-site scope's region owner is held while its member is read");
-    let mut witness = FrameSet::singleton(home.clone());
-    if let Some(carrier) = embedded {
-        witness.fold_foreign(carrier.witness(), Some(&home));
-    }
-    Witnessed::<CarriedFamily, FrameSet>::yoke(witness, |region| {
-        reattach_with::<CarriedFamily, _>(value, region)
-    })
-}
 
 /// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the
 /// type-channel leaf token (resolved or rendered), else a `MissingArg`. Mirrors [`read_field_name`].
@@ -243,7 +217,7 @@ fn access_type_member<'a>(
         KType::Signature { sig: s, .. } => {
             let decl = s.decl_scope();
             if let Some(Resolution::Value(obj)) = decl.bindings().lookup_value(field, None) {
-                return Ok(AttrOutcome::Object(seal_field(Carried::Object(obj), decl, None)));
+                return Ok(AttrOutcome::Object(decl.seal_value(Carried::Object(obj), None)));
             }
             if let Some(kt) = decl.resolve_type(field) {
                 return Ok(AttrOutcome::Type(scope.region.alloc_ktype(kt.clone())));
@@ -285,9 +259,8 @@ fn access_field<'a>(
         // a multi-region value keeps every region it borrows into alive.
         KObject::Wrapped { inner, type_id } => match inner.get() {
             KObject::Record(values, _) => match values.get(field) {
-                Some(Held::Object(value)) => Ok(AttrOutcome::Object(seal_field(
+                Some(Held::Object(value)) => Ok(AttrOutcome::Object(scope.seal_value(
                     Carried::Object(scope.region.alloc_object(value.deep_clone())),
-                    scope,
                     embedded,
                 ))),
                 Some(Held::Type(kt)) => {
@@ -345,17 +318,13 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<AttrOutcom
                 inner: NonWrappedRef::peel(obj),
                 type_id,
             });
-            return Ok(AttrOutcome::Object(seal_field(
-                Carried::Object(wrapped),
-                module_scope,
-                None,
-            )));
+            return Ok(AttrOutcome::Object(
+                module_scope.seal_value(Carried::Object(wrapped), None),
+            ));
         }
-        return Ok(AttrOutcome::Object(seal_field(
-            Carried::Object(obj),
-            module_scope,
-            None,
-        )));
+        return Ok(AttrOutcome::Object(
+            module_scope.seal_value(Carried::Object(obj), None),
+        ));
     }
     if let Some(kt) = module_scope.resolve_type(field) {
         return Ok(AttrOutcome::Type(module_scope.region.alloc_ktype(kt.clone())));

@@ -17,7 +17,7 @@ use super::scope_ptr::BoundedScopePtr;
 use crate::machine::core::kfunction::{KFunction, NodeId};
 use crate::machine::model::types::Record;
 use crate::machine::model::values::{ArgValue, Carried, CarriedFamily, KObject};
-use crate::witnessed::{reattach_with, Witnessed};
+use crate::witnessed::{reattach_with, Sealed, Witnessed};
 
 /// A resolved-but-not-yet-executed call: the original expression, the chosen `KFunction`,
 /// and the resolved argument record from `KFunction::bind`. Unit of deferred work in dispatch.
@@ -767,20 +767,38 @@ impl<'a> Scope<'a> {
             .unwrap_or(ValueCarrierResolution::UnboundName)
     }
 
-    /// Wrap a value resolved **in this scope** as a carrier witnessed by this scope's home frame. The
-    /// value lives in this scope's region (binders deep-clone into it), so the home frame is co-located
-    /// for the re-anchor; and because the scope's sealed reach-set lives in that same region, holding
-    /// the home frame transitively pins every foreign region the value reaches — so a single-frame
-    /// witness names the full reach. Built via `yoke` + [`reattach_with`] (the co-located
-    /// pre-existing-value pattern, as [`fn_def`](crate::builtins) homes its `KFunction`), so it carries
-    /// no asserted `Witnessed::new`.
+    /// Wrap a bound value resolved **in this scope** as a carrier witnessed by this scope's home
+    /// frame: the [`Self::seal_value`] case with no embedded lhs, since a bound name's reach is fully
+    /// pinned by its binding scope (its value lives in this region and its foreign reach is in this
+    /// scope's sealed reach-set).
     fn bound_value_carrier(&self, obj: &'a KObject<'a>) -> Witnessed<CarriedFamily, FrameSet> {
+        self.seal_value(Carried::Object(obj), None)
+    }
+
+    /// Seal a value living **in this scope's region** as a carrier naming its reach. The witness is
+    /// this scope's home frame, co-located for the re-anchor; because the scope's sealed reach-set
+    /// lives in that same region, holding the home frame transitively pins every foreign region the
+    /// value reaches, so a single-frame witness names the full reach. An `embedded` carrier — a
+    /// computed value the sealed value was projected out of, whose reach the read-site frame may not
+    /// pin (an attr field of a delivered `Wrapped`, a FROM record's shared backing) — folds its
+    /// foreign reach on top, omitting any frame the home already pins (see [`FrameSet::fold_foreign`]).
+    /// Built via `yoke` + [`reattach_with`] (the co-located pre-existing-value pattern, as
+    /// [`fn_def`](crate::builtins) homes its `KFunction`), so it carries no asserted `Witnessed::new`.
+    pub(crate) fn seal_value(
+        &self,
+        value: Carried<'a>,
+        embedded: Option<&Sealed<CarriedFamily, FrameSet>>,
+    ) -> Witnessed<CarriedFamily, FrameSet> {
         let home = self
             .region_owner()
             .upgrade()
-            .expect("the binding scope's region owner is held while its value is read");
-        Witnessed::<CarriedFamily, FrameSet>::yoke(FrameSet::singleton(home), |region| {
-            reattach_with::<CarriedFamily, _>(Carried::Object(obj), region)
+            .expect("the sealing scope's region owner is held while its value is read");
+        let mut witness = FrameSet::singleton(home.clone());
+        if let Some(carrier) = embedded {
+            witness.fold_foreign(carrier.witness(), Some(&home));
+        }
+        Witnessed::<CarriedFamily, FrameSet>::yoke(witness, |region| {
+            reattach_with::<CarriedFamily, _>(value, region)
         })
     }
 

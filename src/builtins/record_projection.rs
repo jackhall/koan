@@ -91,7 +91,14 @@ pub fn body<'a>(
     let narrowed = Record::from_pairs(narrowed_pairs);
     let result = KObject::record_with_type(Rc::clone(fields), narrowed);
     let obj = ctx.scope.region.alloc_object(result);
-    Action::Done(Ok(Carried::Object(obj)))
+    // The projection `Rc`-shares the record's backing field values, so it reaches whatever the
+    // `record` operand reaches. Seal it under the read-site home frame with the record carrier's
+    // foreign reach folded in, so every region the shared backing borrows into outlives the
+    // projection — the object-family terminal replacing the relocate-seam reconstruction.
+    Action::DoneWitnessed(
+        ctx.scope
+            .seal_value(Carried::Object(obj), ctx.arg_carrier("record")),
+    )
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
