@@ -303,11 +303,13 @@ the carrier a node holds, not an arena the node owns.
 The construction surface (`yoke` / `merge` / `with` / `map`, the witness-borrow
 reattaches) is shipped, as is the relocation of the generic `Region<P>` allocator
 beside its carrier in the `witnessed` module and the opaque [`Sealed`](../src/witnessed.rs)
-storage form (`seal` / `open`, plus a transitional `read`), with the node result slot
-rerouted onto it. The `Sealed` carrier's remaining access verbs (the consuming
-externally-witnessed `open`, the contingent `attach`, `transfer_into`) and the broad
-call-site migration onto the sealed surface are tracked by the per-node-memory roadmap
-project below.
+storage form (`seal` / `open`), with the node result slot rerouted onto it. Its **value reads** now
+nest under the rank-2 `open`: two driver accessors copy out inside the brand — a value read
+([`read_result_with`](../src/scheduler.rs)) and a borrow-free error probe (`result_error`) — and the
+three ride-up-stack dispatch sites resolve at the cart `'step` directly, so the transitional
+self-witnessed `Sealed::read` is gone. The `Sealed` carrier's remaining access verbs (the consuming
+externally-witnessed `open`, the contingent `attach`, `transfer_into`), the residual scope-channel
+reads, and the seal-site re-anchors are tracked by the per-node-memory roadmap project below.
 
 ## Open work
 
@@ -316,12 +318,19 @@ The keystone run-loop restructure and its consuming `open`, the unified `FrameSe
 production witness impls, the `transfer_into` relocation verb, the per-value frame anchor's
 removal (a stored value holds no owning `Rc` back to a region, so the allocation engine needs no
 cycle gate), the per-scope sealed reach-set with its scope-close seal (the *Transfer* section
-above), and **both construction channels** — every object *and* type construction `yoke`s / `merge`s
+above), **both construction channels** — every object *and* type construction `yoke`s / `merge`s
 or seals (`seal_value` / `seal_type` / `seal_module`) its reach, the bare-arg value-embedding sites
 (`attr`, `FROM`, the literal Resolved arm) `merge` their delivered carrier, and `let` / user-fn arg /
-`USING` binds fold their carriers into the reach-set — have all landed (see
-[Region lifetime erasure](memory-model.md#region-lifetime-erasure)); what remains is one linear chain:
+`USING` binds fold their carriers into the reach-set — and the **value-read migration** — the
+result-slot value reads nest under the rank-2 `Sealed::open` (a value copy-out and a borrow-free error
+probe) and the three ride-up-stack dispatch sites resolve at the cart `'step`, so the transitional
+self-witnessed `read` is deleted — have all landed (see
+[Region lifetime erasure](memory-model.md#region-lifetime-erasure)); what remains is the scope channel
+and the seal-site witnessing:
 
-- [Migrate the consumption reads onto `open`](../roadmap/per-node-memory/reads-to-open.md), then
-  [a single access verb](../roadmap/per-node-memory/single-open-verb.md) — restructuring the value-,
-  scope-, and wrapper reads onto `open` and deleting the transitional `read` / `attach`.
+- [Invert the scope-handle reads onto `open`](../roadmap/per-node-memory/scope-reads-to-open.md), then
+  [a single access verb](../roadmap/per-node-memory/single-open-verb.md) — inverting the scope-channel
+  reads onto `open` (reworking `Region::alloc` and deleting `reattach_ref_with`), then deleting the
+  transitional `attach`.
+- [Witness value carriers at their construction site](../roadmap/per-node-memory/witness-at-construction.md)
+  — witnessing the seal sites' values where they are built and deleting the loose `reattach_with`.

@@ -174,9 +174,9 @@ fn function_value_call_named_args_missing_short_circuits() {
     sched
         .execute()
         .expect("scheduler should not surface errors directly");
-    let err = match sched.read_result(id) {
+    let err = match sched.read_result_with(id, |v| v.summarize()) {
         Err(e) => e.clone(),
-        Ok(v) => panic!("expected MissingArg error, got value {}", v.summarize()),
+        Ok(summary) => panic!("expected MissingArg error, got value {summary}"),
     };
     assert_eq!(
         resolve_dispatch_entry_count(),
@@ -566,7 +566,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
          before any args-shape inspection — never entering resolve_dispatch",
     );
     assert!(
-        sched.read_result(f_call_id).is_err(),
+        sched.result_error(f_call_id).is_err(),
         "the head-Placeholder arm must propagate the ready producer's error to the call slot",
     );
 }
@@ -784,12 +784,11 @@ fn operator_chain_undeclared_errors_cleanly() {
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("a + b + c"), scope);
     sched.execute().expect("scheduler drains without deadlock");
-    let msg = match sched.read_result(id) {
+    let msg = match sched.read_result_with(id, |v| v.summarize()) {
         Err(e) => e.to_string(),
-        Ok(obj) => panic!(
-            "an undeclared operator chain must terminate with an error; got {}",
-            obj.summarize()
-        ),
+        Ok(summary) => {
+            panic!("an undeclared operator chain must terminate with an error; got {summary}")
+        }
     };
     assert!(
         msg.contains("operator group") || msg.contains("declared together"),
@@ -825,12 +824,9 @@ fn operator_chain_registered_reaches_fold_seam() {
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("a + b + c"), scope);
     sched.execute().expect("scheduler drains without deadlock");
-    let msg = match sched.read_result(id) {
+    let msg = match sched.read_result_with(id, |v| v.summarize()) {
         Err(e) => e.to_string(),
-        Ok(obj) => panic!(
-            "a registered chain reaches the fold seam (an error); got {}",
-            obj.summarize()
-        ),
+        Ok(summary) => panic!("a registered chain reaches the fold seam (an error); got {summary}"),
     };
     assert!(
         msg.contains("not yet implemented"),
@@ -1030,9 +1026,8 @@ fn non_callable_list_head_errors() {
         .execute()
         .expect("a non-callable head is slot-terminal, not a fatal execute error");
     let err = sched
-        .read_result(root)
-        .err()
-        .expect("a non-callable head must finalize the slot with an error");
+        .result_error(root)
+        .expect_err("a non-callable head must finalize the slot with an error");
     match &err.kind {
         KErrorKind::DispatchFailed { reason, .. } => assert!(
             reason.contains("head is not callable") && reason.contains("[1 2 3]"),

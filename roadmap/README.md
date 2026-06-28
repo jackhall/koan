@@ -184,8 +184,11 @@ What's shipped that the open items below build on:
   value-embedding object sites (`attr` / `FROM` / the literal Resolved arm) and the **type family** have
   since followed — every type construction terminal seals via `seal_value` / `seal_type` / `seal_module`,
   so a `KType::Module` names its child-scope reach on its own carrier, retiring the single-frame
-  `reached_frame` reconstruction and the per-frame `FrameStorage.retained` field. What remains is the
-  consumption-read migration, tracked by the [per-node-memory](per-node-memory/) project. See
+  `reached_frame` reconstruction and the per-frame `FrameStorage.retained` field. The **value-read
+  migration** has since followed — the result-slot value reads nest under the rank-2 `Sealed::open` (a
+  value copy-out and a borrow-free error probe), and the three ride-up-stack dispatch sites resolve at
+  the cart `'step`, retiring the transitional self-witnessed `read`. What remains is the scope-channel
+  reads and the seal-site witnessing, tracked by the [per-node-memory](per-node-memory/) project. See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -329,7 +332,8 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [Migrate the consumption reads onto `open`](per-node-memory/reads-to-open.md)
+- [Invert the scope-handle reads onto `open`](per-node-memory/scope-reads-to-open.md)
+- [Witness value carriers at their construction site](per-node-memory/witness-at-construction.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
@@ -438,13 +442,19 @@ Resolved arm — `merge` a delivered `Sealed` carrier, and `let` / user-fn arg b
 value's full carrier into the reach-set), and the **type family** (every type construction terminal
 seals via `seal_value` / `seal_type` / `seal_module`, so a `KType::Module` names its child-scope reach
 on its own carrier — taking the last user off the single-frame `reached_frame` reconstruction and
-deleting both it and the per-frame `FrameStorage.retained` field) are all shipped. The design is
-captured in [design/per-node-memory.md](../design/per-node-memory.md). What remains is the
-consumption-read migration onto a single `open` verb:
+deleting both it and the per-frame `FrameStorage.retained` field) are all shipped, as is the
+**value-read migration** (the result-slot value reads nest under the rank-2 `Sealed::open` — a value
+copy-out and a borrow-free error probe — the three ride-up-stack dispatch sites resolve at the cart
+`'step`, and the transitional self-witnessed `read` is deleted). The design is captured in
+[design/per-node-memory.md](../design/per-node-memory.md). What remains is the scope channel, the
+seal-site witnessing, and collapsing the access surface to `open` alone:
 
-- [Migrate the consumption reads onto `open`](per-node-memory/reads-to-open.md) — restructure the
-  result-slot value reads, scope-handle reads, and ~40 loose `reattach_*` sites onto `open` + copy-out /
-  CPS, deleting the transitional self-witnessed `read` and both wrappers.
+- [Invert the scope-handle reads onto `open`](per-node-memory/scope-reads-to-open.md) — invert the
+  scope-channel reads (`current_scope` / `reattach_node_scope` / `scope_bounded`) onto `open`, rework
+  `Region::alloc` off the free wrapper, and delete `reattach_ref_with`.
+- [Witness value carriers at their construction site](per-node-memory/witness-at-construction.md) —
+  witness the seal sites' values where they are built so they fold via `yoke` / `merge` instead of
+  re-anchoring, and delete `reattach_with`.
 - [`Sealed`: a single access verb](per-node-memory/single-open-verb.md) — delete the transitional
   `attach` and the externally-witnessed read path, leaving `Sealed` with `open` alone.
 

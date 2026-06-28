@@ -62,7 +62,7 @@ fn run_collecting_first_err(source: &str) -> Option<koan::machine::KError> {
         return Some(e);
     }
     for id in ids {
-        if let Err(e) = sched.read_result(id) {
+        if let Err(e) = sched.result_error(id) {
             return Some(e.clone());
         }
     }
@@ -358,15 +358,14 @@ fn producer_error_propagates_to_parked_consumer() {
         .execute()
         .expect("a producer error routes into the slot, not a fatal execute abort");
     let err = sched
-        .read_result(ids[0])
-        .err()
-        .expect("execute should surface UNDEFINED_FN's dispatch failure");
+        .result_error(ids[0])
+        .expect_err("execute should surface UNDEFINED_FN's dispatch failure");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed for UNDEFINED_FN, got {err}",
     );
     assert!(
-        sched.read_result(ids[1]).is_err(),
+        sched.result_error(ids[1]).is_err(),
         "y must inherit its dependency's error",
     );
 }

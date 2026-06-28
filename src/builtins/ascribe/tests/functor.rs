@@ -127,9 +127,8 @@ fn functor_rejects_unascribed_module_argument() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let err = sched
-        .read_result(root)
-        .err()
-        .expect("expected a DispatchFailed in the dispatch slot");
+        .result_error(root)
+        .expect_err("expected a DispatchFailed in the dispatch slot");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed, got {err}",
@@ -280,7 +279,7 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     }
     sched.execute().expect("scheduler should succeed");
     for (i, id) in ids.iter().enumerate() {
-        if let Err(e) = sched.read_result(*id) {
+        if let Err(e) = sched.result_error(*id) {
             panic!("expr {} errored: {}", i, e);
         }
     }

@@ -62,7 +62,7 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
 
 /// A finalized value terminal: the erased inter-node value bundled with the [`Workload::Witness`] set
 /// pinning its backing (empty for a frameless / run-region value), held in its dormant [`Sealed`] form
-/// between steps and read back through [`Sealed::read`].
+/// between steps and read back through [`Sealed::open`].
 type FinalizedValue<W> = Sealed<<W as Workload>::Value, <W as Workload>::Witness>;
 
 enum SlotState<W: Workload> {
@@ -71,12 +71,13 @@ enum SlotState<W: Workload> {
     /// `reinstall` / `finalize` / `free_one` exits this state.
     Running,
     /// A finalized terminal: a [`Sealed`] carrier bundling the value (erased to `'static`) with the
-    /// producer frame `Rc` that backs it (`None` for a frameless / run-region value). A read
-    /// re-anchors the value to the read borrow through `Sealed::read`, witnessed by the bundled
-    /// frame. Holding the frame `Rc` inside the carrier pins the producer's per-call memory until the
-    /// slot is freed, so frame death moves from Done to free and a read's re-anchored lifetime cannot
-    /// outlive the backing region. The pin is read by the consumer-pull lift, which copies the
-    /// terminal out of this frame into the consumer's. The error carries no frame (it owns its data).
+    /// producer frame `Rc` that backs it (`None` for a frameless / run-region value). A read opens the
+    /// value at a rank-2 brand through `Sealed::open`, witnessed by the bundled frame, so the
+    /// re-anchored carrier nests inside the access rather than escaping up-stack. Holding the frame
+    /// `Rc` inside the carrier pins the producer's per-call memory until the slot is freed, so frame
+    /// death moves from Done to free and an opened carrier cannot outlive the backing region. The pin
+    /// is read by the consumer-pull lift, which copies the terminal out of this frame into the
+    /// consumer's. The error carries no frame (it owns its data).
     Done(Result<FinalizedValue<W>, W::Error>),
     /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
     /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
@@ -258,25 +259,30 @@ impl<W: Workload> NodeStore<W> {
         matches!(self.slots.get(id), Some(SlotState::Done(..)))
     }
 
-    /// Only safe on IDs whose slot has been finalized; internal slots may have been eagerly freed by
-    /// their parent. Raw — callers pass an already alias-resolved id.
-    pub(super) fn read_result(&self, id: NodeId) -> Result<Live<'_, W>, &W::Error> {
+    /// Read a finalized terminal at a **rank-2** brand: the value is opened through [`Sealed::open`]
+    /// and handed to `f` as `Result<Live<'b>, &W::Error>`, so the re-anchored carrier nests inside
+    /// the access rather than escaping up-stack. The destination-verb form of the value read — the
+    /// consumer copies out what it needs (a scalar, a cloned error) from inside the closure. Callers
+    /// pass an already alias-resolved id; the slot must be finalized.
+    pub(super) fn read_result_with<R>(
+        &self,
+        id: NodeId,
+        f: impl for<'b> FnOnce(Live<'b, W>) -> R,
+    ) -> Result<R, &W::Error> {
         match &self.slots[id] {
-            // `Sealed::read` re-anchors the carrier to this `&self` borrow, bounded by the bundled
-            // frame `Rc`: `free_one`/`finalize` need `&mut self`, so for the whole `&self` borrow the
-            // frame cannot drop, so the read borrow cannot outlive the backing region.
-            SlotState::Done(Ok(w), ..) => Ok(w.read()),
+            SlotState::Done(Ok(w), ..) => Ok(w.open(f)),
             SlotState::Done(Err(e), ..) => Err(e),
             _ => panic!("result must be ready by the time it's read"),
         }
     }
 
-    pub(super) fn read(&self, id: NodeId) -> Live<'_, W> {
+    /// The terminal's error, or `Ok(())` for a value terminal — the borrow-free probe the many
+    /// consumers that only branch on success/failure use, reading no value (no `open`). Callers pass
+    /// an already alias-resolved id; the slot must be finalized.
+    pub(super) fn result_error(&self, id: NodeId) -> Result<(), &W::Error> {
         match &self.slots[id] {
-            SlotState::Done(Ok(w), ..) => w.read(),
-            // The scheduler stores the opaque error but never inspects it, so the misuse panic
-            // names the node, not the error value.
-            SlotState::Done(Err(_), ..) => panic!("read called on errored node"),
+            SlotState::Done(Ok(_), ..) => Ok(()),
+            SlotState::Done(Err(e), ..) => Err(e),
             _ => panic!("result must be ready by the time it's read"),
         }
     }

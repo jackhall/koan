@@ -474,7 +474,10 @@ fn fold_foreign_omits_the_home_frame_and_keeps_foreign_reach() {
     // reach (the self-bind / home-frame omission).
     let mut set = FrameSet::empty();
     set.fold_foreign(&FrameSet::singleton(Rc::clone(&home)), Some(&home));
-    assert!(set.is_empty(), "the home frame must be omitted from the reach-set");
+    assert!(
+        set.is_empty(),
+        "the home frame must be omitted from the reach-set"
+    );
 
     // A foreign frame is kept — the region a bound closure / module borrows into.
     set.fold_foreign(&FrameSet::singleton(Rc::clone(&foreign)), Some(&home));

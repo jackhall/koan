@@ -201,9 +201,9 @@ fn tail_call_enforces_first_callers_return_contract() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("FF -> Number tail-calling GG -> Str must fail FF's return contract"),
+        Ok(()) => panic!("FF -> Number tail-calling GG -> Str must fail FF's return contract"),
     };
     assert!(
         matches!(err.kind, KErrorKind::TypeMismatch { ref arg, .. } if arg == "<return>"),

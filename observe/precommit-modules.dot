@@ -247,6 +247,7 @@ digraph {
     "koan::builtins" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins" -> "koan::parse" [label="uses", style="dashed"];
     "koan::builtins" -> "koan::scheduler" [label="uses", style="dashed"];
+    "koan::builtins" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -516,7 +517,6 @@ digraph {
     "koan::machine::core::kfunction" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::source" [label="uses", style="dashed"];
-    "koan::machine::core::kfunction" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
@@ -623,7 +623,6 @@ digraph {
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::ctx" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::scheduler" [label="uses", style="dashed"];
@@ -658,13 +657,11 @@ digraph {
     "koan::machine::execute::dispatch::field_list" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::field_list" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::fn_value" -> "koan::machine" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::fn_value" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::fn_value" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::fn_value" -> "koan::machine::execute::dispatch::apply_callable" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::fn_value" -> "koan::machine::execute::dispatch::ctx" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::fn_value" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::fn_value" -> "koan::machine::model::ast" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::fn_value" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::head_deferred" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::head_deferred" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::head_deferred" -> "koan::machine::execute" [label="uses", style="dashed"];
@@ -675,8 +672,6 @@ digraph {
     "koan::machine::execute::dispatch::head_deferred" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::head_deferred" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::keyworded" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::keyworded" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
@@ -685,7 +680,6 @@ digraph {
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::model::values" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::keyworded" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::machine" [label="uses", style="dashed"];
@@ -727,7 +721,6 @@ digraph {
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::execute::dispatch::ctx" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::model::ast" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::single_poll" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::single_poll" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::submit" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::submit" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];

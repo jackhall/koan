@@ -223,18 +223,20 @@ impl<'a> Scope<'a> {
             self.id,
         );
         let home = self.region_owner.upgrade();
-        self.reach.borrow_mut().fold_foreign_omitting(witness, |region| {
-            // Omit any region this scope already keeps alive: its own / a storage-`outer` ancestor
-            // ([`FrameStorage::pins_region`]), or a **lexical** `outer`-chain ancestor. A per-call
-            // frame's storage `outer` is None under TCO, so the lexical walk is what catches the
-            // closure's captured (ancestor) scope — a region the closure already pins, which the
-            // reach-set must not re-pin (re-pinning it, paired with a sibling bind of the call's
-            // result, closes a region cycle).
-            home.as_ref().is_some_and(|h| h.pins_region(region))
-                || self
-                    .ancestors()
-                    .any(|scope| std::ptr::eq(scope.region, region))
-        });
+        self.reach
+            .borrow_mut()
+            .fold_foreign_omitting(witness, |region| {
+                // Omit any region this scope already keeps alive: its own / a storage-`outer` ancestor
+                // ([`FrameStorage::pins_region`]), or a **lexical** `outer`-chain ancestor. A per-call
+                // frame's storage `outer` is None under TCO, so the lexical walk is what catches the
+                // closure's captured (ancestor) scope — a region the closure already pins, which the
+                // reach-set must not re-pin (re-pinning it, paired with a sibling bind of the call's
+                // result, closes a region cycle).
+                home.as_ref().is_some_and(|h| h.pins_region(region))
+                    || self
+                        .ancestors()
+                        .any(|scope| std::ptr::eq(scope.region, region))
+            });
     }
 
     pub fn child_for_call(&'a self) -> Scope<'a> {
@@ -761,10 +763,13 @@ impl<'a> Scope<'a> {
     ) -> ValueCarrierResolution {
         self.ancestors()
             .find_map(|scope| {
-                match scope.bindings().lookup_value(name, scope.binding_cutoff(chain))? {
-                    Resolution::Value(obj) => {
-                        Some(ValueCarrierResolution::Value(scope.bound_value_carrier(obj)))
-                    }
+                match scope
+                    .bindings()
+                    .lookup_value(name, scope.binding_cutoff(chain))?
+                {
+                    Resolution::Value(obj) => Some(ValueCarrierResolution::Value(
+                        scope.bound_value_carrier(obj),
+                    )),
                     Resolution::Placeholder(producer) => {
                         Some(ValueCarrierResolution::Placeholder(producer))
                     }
@@ -854,7 +859,9 @@ impl<'a> Scope<'a> {
     /// sites use so a projected nested module is sealed Module-correctly without each site branching.
     pub(crate) fn seal_type(&self, kt: Carried<'a>) -> Witnessed<CarriedFamily, FrameSet> {
         match kt {
-            Carried::Type(crate::machine::model::types::KType::Module { .. }) => self.seal_module(kt),
+            Carried::Type(crate::machine::model::types::KType::Module { .. }) => {
+                self.seal_module(kt)
+            }
             _ => self.seal_value(kt, None),
         }
     }

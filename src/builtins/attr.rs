@@ -35,7 +35,6 @@ fn route<'a>(
     crate::machine::core::kfunction::action::Action::done_witnessed(result)
 }
 
-
 /// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the
 /// type-channel leaf token (resolved or rendered), else a `MissingArg`. Mirrors [`read_field_name`].
 fn read_field_name<'a>(args: &KObject<'a>) -> Result<String, KError> {
@@ -291,7 +290,10 @@ fn access_field<'a>(
 /// scope is a per-call region. The module and its `slot_type_tags` are declaration-stable,
 /// so the module region is the right home; both `inner` (the slot value) and `type_id`
 /// (the abstract tag, which references the module) then live there together.
-fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+fn access_module_member<'a>(
+    m: &'a Module<'a>,
+    field: &str,
+) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     let module_scope = m.child_scope();
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
         return Ok(module_scope.seal_type(Carried::Type(module_scope.region.alloc_ktype(kt))));
@@ -311,7 +313,9 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<Witnessed<
         return Ok(module_scope.seal_value(Carried::Object(obj), None));
     }
     if let Some(kt) = module_scope.resolve_type(field) {
-        return Ok(module_scope.seal_type(Carried::Type(module_scope.region.alloc_ktype(kt.clone()))));
+        return Ok(
+            module_scope.seal_type(Carried::Type(module_scope.region.alloc_ktype(kt.clone())))
+        );
     }
     Err(KError::new(KErrorKind::ShapeError(format!(
         "module `{}` has no member `{}`",

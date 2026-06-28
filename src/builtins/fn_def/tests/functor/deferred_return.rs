@@ -203,9 +203,9 @@ fn deferred_return_tail_call_stays_tco_flat() {
         .execute()
         .expect("execute does not surface per-slot errors");
     assert!(
-        sched.read_result(id).is_ok(),
+        sched.result_error(id).is_ok(),
         "AA Seq should succeed: {:?}",
-        sched.read_result(id).err(),
+        sched.result_error(id).err(),
     );
     assert_eq!(
         sched.len(),
@@ -244,9 +244,9 @@ fn deferred_expression_return_tail_chain_reuses_frames() {
         .execute()
         .expect("execute does not surface per-slot errors");
     assert!(
-        sched.read_result(id).is_ok(),
+        sched.result_error(id).is_ok(),
         "AA should succeed: {:?}",
-        sched.read_result(id).err(),
+        sched.result_error(id).err(),
     );
     // Subsequent calls tail-replace and reuse per-call frames rather than each spawning a dep-finish.
     assert!(
@@ -278,9 +278,9 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("BAD should fail per-call return-type check"),
+        Ok(()) => panic!("BAD should fail per-call return-type check"),
     };
     match &err.kind {
         KErrorKind::TypeMismatch { arg, expected, .. } => {

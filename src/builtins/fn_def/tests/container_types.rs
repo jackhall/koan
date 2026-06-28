@@ -41,7 +41,7 @@ fn fn_return_heterogeneous_list_rejected_by_precise_declared() {
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("BAD"), scope);
     sched.execute().expect("scheduler runs to completion");
-    assert!(sched.read_result(id).is_err());
+    assert!(sched.result_error(id).is_err());
 }
 
 /// Empty container through an annotated return boundary: the vacuous `matches_value`
@@ -74,7 +74,7 @@ fn fn_returning_typed_list_accepts_matching_value() {
 }
 
 /// The scheduler stores the return-type-check error in the result slot rather than
-/// failing `execute`, so we read the slot via `read_result` to assert the failure.
+/// failing `execute`, so we read the slot via `result_error` to assert the failure.
 #[test]
 fn fn_returning_typed_list_rejects_wrong_element_type() {
     let region = FrameStorage::run_root();
@@ -83,7 +83,7 @@ fn fn_returning_typed_list_rejects_wrong_element_type() {
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("BAD"), scope);
     sched.execute().expect("scheduler runs to completion");
-    let res = sched.read_result(id);
+    let res = sched.result_error(id);
     assert!(
         res.is_err(),
         "expected return-type mismatch when body produces :(LIST OF Any) for declared :(LIST OF Number)"
@@ -130,9 +130,8 @@ fn fn_with_typed_function_param_rejects_name_mismatch() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = sched
-        .read_result(root)
-        .err()
-        .expect("a function with param name `n` must not fill a `(x :Number)` slot");
+        .result_error(root)
+        .expect_err("a function with param name `n` must not fill a `(x :Number)` slot");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed on parameter-name mismatch, got {error:?}",
@@ -194,9 +193,8 @@ fn fn_with_typed_function_param_rejects_width_extra() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = sched
-        .read_result(root)
-        .err()
-        .expect("a value declaring an extra param `y` must not fill a `(x :Number)` slot");
+        .result_error(root)
+        .expect_err("a value declaring an extra param `y` must not fill a `(x :Number)` slot");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed on width-extra value param, got {error:?}",
@@ -241,9 +239,8 @@ fn fn_typed_function_param_incomparable_is_ambiguous() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = sched
-        .read_result(root)
-        .err()
-        .expect("an `Any`-param value matching two incomparable slots must be ambiguous");
+        .result_error(root)
+        .expect_err("an `Any`-param value matching two incomparable slots must be ambiguous");
     assert!(
         matches!(error.kind, KErrorKind::AmbiguousDispatch { .. }),
         "expected AmbiguousDispatch across incomparable function slots, got {error:?}",
@@ -353,9 +350,8 @@ fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = sched
-        .read_result(root)
-        .err()
-        .expect("an unbound name across tied overloads must error");
+        .result_error(root)
+        .expect_err("an unbound name across tied overloads must error");
     assert!(
         matches!(error.kind, KErrorKind::UnboundName(ref n) if n == "nope"),
         "expected UnboundName(\"nope\"), got {error:?}",
@@ -383,9 +379,8 @@ fn dispatch_heterogeneous_literal_matches_no_concrete_element_overload() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = sched
-        .read_result(root)
-        .err()
-        .expect("heterogeneous List<Any> must match no concrete-element overload");
+        .result_error(root)
+        .expect_err("heterogeneous List<Any> must match no concrete-element overload");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed, got {error:?}",
@@ -449,9 +444,8 @@ fn fn_typed_list_param_wrong_element_type_finds_no_match() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = sched
-        .read_result(root)
-        .err()
-        .expect("List<Str> against a :(LIST OF Number)-only overload must fail to dispatch");
+        .result_error(root)
+        .expect_err("List<Str> against a :(LIST OF Number)-only overload must fail to dispatch");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed (no matching overload), got {error:?}",

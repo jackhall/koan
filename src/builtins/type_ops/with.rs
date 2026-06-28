@@ -176,12 +176,12 @@ mod tests {
         sched
             .execute()
             .expect("execute does not surface per-slot errors");
-        match sched.read_result(id) {
+        match sched.result_error(id) {
             Err(e) => assert!(
                 format!("{e}").contains("no abstract type slot"),
                 "expected unknown-slot rejection, got {e}",
             ),
-            Ok(_) => panic!("WITH on unknown slot must err"),
+            Ok(()) => panic!("WITH on unknown slot must err"),
         }
     }
 
@@ -198,12 +198,12 @@ mod tests {
         sched
             .execute()
             .expect("execute does not surface per-slot errors");
-        match sched.read_result(id) {
+        match sched.result_error(id) {
             Err(e) => assert!(
                 format!("{e}").contains("no abstract type slot"),
                 "expected lowercase-slot rejection, got {e}",
             ),
-            Ok(_) => panic!("WITH with lowercase slot must err"),
+            Ok(()) => panic!("WITH with lowercase slot must err"),
         }
     }
 }

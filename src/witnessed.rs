@@ -468,10 +468,11 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         })
     }
 
-    /// Re-anchor the carrier and hand it **out** bounded by the `&self` borrow. The borrow-bounded
-    /// sibling of [`Self::with`]: where `with`'s `for<'b>` brand forbids the carrier from escaping the
-    /// closure, `read` lets it escape *at the borrow lifetime itself* — the content lifetime is the
-    /// `&self` borrow, not a free `'b`, so the caller cannot widen it past the witness pin.
+    /// Re-anchor the carrier and hand it **out** bounded by the `&self` borrow — the internal
+    /// borrow-bounded reader [`Sealed::open`] copies its value through. The borrow-bounded sibling of
+    /// [`Self::with`]: where `with`'s `for<'b>` brand forbids the carrier from escaping the closure,
+    /// `read` lets it escape *at the borrow lifetime itself* — the content lifetime is the `&self`
+    /// borrow, not a free `'b`, so the caller cannot widen it past the witness pin.
     ///
     /// This is sound for the exact reason the naive content-free reader is not: there, a free `'b`
     /// could be inferred `'static` and outlive the witness (a Miri-proven use-after-free); here the
@@ -513,8 +514,8 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
 
 /// The dormant node-storage form of a [`Witnessed`] carrier: an opaque seal the inter-node value
 /// rests in between a node's steps, exposing neither construction nor transform — only the rank-2
-/// destination verb [`open`](Self::open) (plus a transitional borrow-bounded [`read`](Self::read)).
-/// Where [`Witnessed`] offers `with` / `map` / `yoke` / `merge` directly, `Sealed` hides them, so
+/// destination verb [`open`](Self::open). Where [`Witnessed`] offers `with` / `map` / `yoke` /
+/// `merge` directly, `Sealed` hides them, so
 /// "this carrier is dormant — nothing is borrowed from it" is a type, not a convention. It wraps a
 /// [`Witnessed`] rather than re-storing the erased carrier, so [`retype`] stays the single audited
 /// reattach home and `Sealed` adds no `unsafe` of its own.
@@ -565,22 +566,11 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
     where
         T::At<'static>: Copy,
     {
-        // The value is read at the `&self` borrow — witness-pinned for its whole duration — and the
-        // `for<'b>` brand on `f` keeps anything content-branded from escaping into `R`. Same brand and
-        // same audited reattach as `Witnessed::with` / `read`, so `Sealed` introduces no `unsafe`.
+        // The value is read at the `&self` borrow via [`Witnessed::read`] — witness-pinned for its
+        // whole duration — and the `for<'b>` brand on `f` keeps anything content-branded from escaping
+        // into `R`. Same brand and same audited reattach as `Witnessed::with`, so `Sealed` introduces
+        // no `unsafe` of its own.
         f(self.inner.read())
-    }
-
-    /// Transitional borrow-bounded reader: re-anchor the value and hand it out bounded by the `&self`
-    /// borrow, delegating to [`Witnessed::read`]. Unlike [`open`](Self::open), the value *does* escape
-    /// — at the borrow lifetime, which the bundled witness keeps pinned — so the result-slot readers
-    /// stay borrow-returning and their callers unchanged. This is the self-witnessed dual of the
-    /// externally-witnessed `attach`, and like it is retired once those callers move onto `open`.
-    pub fn read(&self) -> T::At<'_>
-    where
-        T::At<'static>: Copy,
-    {
-        self.inner.read()
     }
 
     /// Relocate the sealed carrier into a destination region and re-seal it under the witness that

@@ -58,7 +58,7 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
     }
     sched.execute().expect("scheduler should succeed");
     for (i, id) in ids.iter().enumerate() {
-        if let Err(e) = sched.read_result(*id) {
+        if let Err(e) = sched.result_error(*id) {
             panic!("expr {} errored: {}", i, e);
         }
     }

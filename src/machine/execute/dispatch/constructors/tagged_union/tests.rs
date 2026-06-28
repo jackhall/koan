@@ -60,8 +60,8 @@ fn run_one_err<'run>(
     sched
         .execute()
         .expect("scheduler should not surface errors directly");
-    match sched.read_result(id) {
-        Ok(_) => panic!("expected error"),
+    match sched.result_error(id) {
+        Ok(()) => panic!("expected error"),
         Err(e) => e.clone(),
     }
 }

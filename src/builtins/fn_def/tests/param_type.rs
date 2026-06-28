@@ -49,9 +49,8 @@ fn fn_typed_param_rejects_mismatched_call() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let err = sched
-        .read_result(root)
-        .err()
-        .expect("DOUBLE \"hi\" should fail dispatch");
+        .result_error(root)
+        .expect_err("DOUBLE \"hi\" should fail dispatch");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed for type-mismatched DOUBLE call, got {err}",
@@ -80,9 +79,9 @@ fn fn_param_without_annotation_is_rejected() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("untyped parameter should error"),
+        Ok(()) => panic!("untyped parameter should error"),
     };
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`x`")),
@@ -103,9 +102,9 @@ fn fn_param_with_unknown_type_name_is_rejected() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("unknown param type should error"),
+        Ok(()) => panic!("unknown param type should error"),
     };
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("Bogus")),

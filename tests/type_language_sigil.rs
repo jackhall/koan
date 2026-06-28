@@ -57,8 +57,8 @@ fn run_expect_err(region: &Rc<FrameStorage>, src: &str) -> String {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let last = *ids.last().expect("at least one expression");
-    match sched.read_result(last) {
-        Ok(_) => panic!("expected scheduler error, got success"),
+    match sched.result_error(last) {
+        Ok(()) => panic!("expected scheduler error, got success"),
         Err(e) => e.to_string(),
     }
 }

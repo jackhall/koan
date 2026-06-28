@@ -49,7 +49,7 @@ fn let_t_cycle_errors() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = sched.read_result(ids[0]);
+    let res = sched.read_result_with(ids[0], |v| format!("{:?}", v.ktype()));
     match res {
         // The bare-leaf RHS resolves through the memoized type-expr bridge, whose miss
         // surfaces the elaborator's `unknown type name` diagnostic naming `Ty`. The
@@ -59,7 +59,7 @@ fn let_t_cycle_errors() {
             matches!(&e.kind, KErrorKind::UnboundName(msg) if msg.contains("Ty")),
             "expected UnboundName naming Ty, got {e}",
         ),
-        Ok(v) => panic!("expected UnboundName error, got value {:?}", v.ktype()),
+        Ok(ktype) => panic!("expected UnboundName error, got value {ktype}"),
     }
 }
 
@@ -80,13 +80,13 @@ fn let_type_class_with_non_type_value_errors() {
         sched
             .execute()
             .expect("execute does not surface per-slot errors");
-        match sched.read_result(id) {
+        match sched.read_result_with(id, |v| format!("{:?}", v.ktype())) {
             Err(e) => assert!(
                 matches!(&e.kind, KErrorKind::TypeClassBindingExpectsType { name, got }
                     if name == "Foo" && got == expected),
                 "expected TypeClassBindingExpectsType for {src:?}, got {e}",
             ),
-            Ok(v) => panic!("expected bind-time error for {src:?}, got {:?}", v.ktype()),
+            Ok(ktype) => panic!("expected bind-time error for {src:?}, got {ktype}"),
         }
     }
 }
@@ -109,7 +109,7 @@ fn let_type_class_with_type_value_still_binds() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = sched.read_result(ids[0]);
+    let res = sched.result_error(ids[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
     let kt = scope
         .resolve_type("Foo")
@@ -134,7 +134,7 @@ fn let_identifier_lhs_with_non_type_still_binds() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = sched.read_result(ids[0]);
+    let res = sched.result_error(ids[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
     let data = scope.bindings().data();
     let (entry, _) = data.get("foo").expect("expected binding 'foo'");
@@ -163,13 +163,13 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = sched.read_result(ids[0]);
+    let res = sched.read_result_with(ids[0], |v| format!("{:?}", v.ktype()));
     match res {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::ShapeError(_)),
             "expected ShapeError, got {e}",
         ),
-        Ok(v) => panic!("expected shape error, got value {:?}", v.ktype()),
+        Ok(ktype) => panic!("expected shape error, got value {ktype}"),
     }
 }
 

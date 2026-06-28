@@ -47,9 +47,9 @@ fn fn_with_unknown_return_type_name_errors() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("unknown type name should error"),
+        Ok(()) => panic!("unknown type name should error"),
     };
     assert!(
         matches!(err.kind, KErrorKind::ShapeError(ref msg) if msg.contains("Bogus")),
@@ -67,9 +67,9 @@ fn user_fn_return_type_mismatch_surfaces_as_kerror() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("LIE should fail return-type check"),
+        Ok(()) => panic!("LIE should fail return-type check"),
     };
     match &err.kind {
         KErrorKind::TypeMismatch { arg, expected, got } => {
@@ -122,9 +122,9 @@ fn fn_return_type_surface_name_preserved_in_error() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("unknown type name should error"),
+        Ok(()) => panic!("unknown type name should error"),
     };
     assert!(
         matches!(err.kind, KErrorKind::ShapeError(ref msg) if msg.contains("SomeWeirdName")),

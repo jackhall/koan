@@ -12,7 +12,7 @@ use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 
 /// Tolerates the error surfacing either from `KoanRuntime::execute()` (resolve
-/// rejects at admission) or from `read_result` (auto-wrap committed and bind
+/// rejects at admission) or from `read_result_with` (auto-wrap committed and bind
 /// later refused). Compare `test_support::run_one_err`, which panics on the
 /// first path.
 fn run_expecting_dispatch_error<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KError {
@@ -20,12 +20,11 @@ fn run_expecting_dispatch_error<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>)
     let id = sched.dispatch_in_scope(expr, scope);
     match sched.execute() {
         Err(e) => e,
-        Ok(()) => match sched.read_result(id) {
+        Ok(()) => match sched.read_result_with(id, |v| v.ktype().name().to_string()) {
             Err(e) => e.clone(),
-            Ok(v) => panic!(
-                "expected dispatch-level error, got value of type {}",
-                v.ktype().name(),
-            ),
+            Ok(type_name) => {
+                panic!("expected dispatch-level error, got value of type {type_name}",)
+            }
         },
     }
 }
@@ -165,9 +164,9 @@ fn functor_deferred_return_builtin_keyed_mismatch_surfaces_per_call_diagnostic()
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("BUILD Str should fail the per-call return-type check"),
+        Ok(()) => panic!("BUILD Str should fail the per-call return-type check"),
     };
     match &err.kind {
         KErrorKind::TypeMismatch { arg, expected, .. } => {

@@ -228,9 +228,8 @@ mod tests {
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let err = sched
-            .read_result(root)
-            .err()
-            .expect("a non-record operand must fail dispatch");
+            .result_error(root)
+            .expect_err("a non-record operand must fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
             "expected a clean DispatchFailed (not a leaked unbound-name), got: {err}",
@@ -261,9 +260,8 @@ mod tests {
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let error = sched
-            .read_result(root)
-            .err()
-            .expect("the bare call must tie across both incomparable arms");
+            .result_error(root)
+            .expect_err("the bare call must tie across both incomparable arms");
         assert!(
             matches!(error.kind, KErrorKind::AmbiguousDispatch { .. }),
             "expected AmbiguousDispatch on the bare call, got {error:?}",

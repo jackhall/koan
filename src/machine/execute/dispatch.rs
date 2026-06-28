@@ -122,9 +122,9 @@ fn disposition_for_producer<'step>(
     consumer: Option<NodeId>,
 ) -> NameOutcome<'step> {
     if scheduler.is_result_ready(producer) {
-        match scheduler.read_result(producer) {
+        match scheduler.result_error(producer) {
             Err(e) => NameOutcome::ProducerErrored(e.clone_for_propagation()),
-            Ok(_) => NameOutcome::Unbound(name.to_string()),
+            Ok(()) => NameOutcome::Unbound(name.to_string()),
         }
     } else if matches!(consumer, Some(c) if scheduler.would_create_cycle(producer, c)) {
         NameOutcome::Cycle(name.to_string())
@@ -192,7 +192,13 @@ pub(in crate::machine::execute) struct PartWalkResult<'step> {
     /// than sub-dispatched), keyed by part slot. The committed call threads them to the body so a
     /// bound-name arg names its reach by construction; a staged sub's carrier is collected later, at
     /// the eager-subs finish.
-    pub arg_carriers: Vec<(usize, crate::witnessed::Sealed<crate::machine::model::values::CarriedFamily, crate::machine::FrameSet>)>,
+    pub arg_carriers: Vec<(
+        usize,
+        crate::witnessed::Sealed<
+            crate::machine::model::values::CarriedFamily,
+            crate::machine::FrameSet,
+        >,
+    )>,
 }
 
 /// The argument body of a `head (...)` / `head {...}` call, classified by surface shape.
@@ -465,11 +471,11 @@ fn classify_dispatch<'step>(
         }
         DispatchShape::FunctionValueCall => {
             debug_assert!(pre_subs.is_empty());
-            view.with_current_scope(|s| fn_value::initial(view, s, expr))
+            fn_value::initial(view, expr)
         }
         DispatchShape::TypeCall => {
             debug_assert!(pre_subs.is_empty());
-            view.with_current_scope(|s| single_poll::type_call(view, s, expr))
+            single_poll::type_call(view, expr)
         }
         DispatchShape::HeadDeferred => {
             debug_assert!(pre_subs.is_empty());
@@ -497,9 +503,7 @@ fn classify_dispatch<'step>(
             debug_assert!(pre_subs.is_empty());
             view.with_current_scope(|s| operator_chain::run(view, s, &expr))
         }
-        DispatchShape::Keyworded => {
-            view.with_current_scope(|s| keyworded::initial(view, s, expr, pre_subs, idx))
-        }
+        DispatchShape::Keyworded => keyworded::initial(view, expr, pre_subs, idx),
         DispatchShape::SigiledTypeExpr => {
             debug_assert!(pre_subs.is_empty());
             single_poll::sigiled_type_expr(expr)

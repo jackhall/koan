@@ -36,8 +36,7 @@ mod workload;
 // The lifetime-erasure carrier substrate lives in the top-level `witnessed` module (below both
 // `machine` and `scheduler`); re-exported here so the scheduler's carriers name it unqualified.
 pub(crate) use crate::witnessed::{
-    reattach_ref, reattach_ref_with, reattach_with, Erased, MergeWitness, Reattachable, Sealed,
-    Witnessed,
+    reattach_ref, reattach_ref_with, Erased, MergeWitness, Reattachable, Sealed, Witnessed,
 };
 pub use node_id::NodeId;
 pub(crate) use workload::{Live, Workload};
@@ -114,16 +113,21 @@ impl<W: Workload> Scheduler<W> {
         self.store.is_result_ready(self.resolve_alias(id))
     }
 
-    /// Only safe on IDs returned by `dispatch_in_scope`; internal slots may have been eagerly
-    /// freed by their parent. Follows a bare-name-forward alias to the real producer. The value is
-    /// re-anchored to the `&self` borrow — the slot's frame `Rc` pins it for that long.
-    pub fn read_result(&self, id: NodeId) -> Result<Live<'_, W>, &W::Error> {
-        self.store.read_result(self.resolve_alias(id))
+    /// Open a finalized terminal at a rank-2 brand and hand it to `f` as
+    /// `Result<Live<'b>, &W::Error>` — the destination-verb read, so the value nests inside the
+    /// access rather than riding the `&self` borrow up-stack. Follows a bare-name-forward alias.
+    pub fn read_result_with<R>(
+        &self,
+        id: NodeId,
+        f: impl for<'b> FnOnce(Live<'b, W>) -> R,
+    ) -> Result<R, &W::Error> {
+        self.store.read_result_with(self.resolve_alias(id), f)
     }
 
-    /// Panics on `Err`. Follows a bare-name-forward alias to the real producer.
-    pub fn read(&self, id: NodeId) -> Live<'_, W> {
-        self.store.read(self.resolve_alias(id))
+    /// The terminal's error, or `Ok(())` for a value terminal — the borrow-free success/failure
+    /// probe that reads no value. Follows a bare-name-forward alias to the real producer.
+    pub(crate) fn result_error(&self, id: NodeId) -> Result<(), &W::Error> {
+        self.store.result_error(self.resolve_alias(id))
     }
 
     /// The finalized terminal's witness set — the regions it reaches, cloned out for the consumer-pull

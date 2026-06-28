@@ -169,9 +169,8 @@ fn using_on_non_module_fails_dispatch() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let err = sched
-        .read_result(root)
-        .err()
-        .expect("expected a DispatchFailed in the dispatch slot");
+        .result_error(root)
+        .expect_err("expected a DispatchFailed in the dispatch slot");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed for USING on a Number, got {err}",

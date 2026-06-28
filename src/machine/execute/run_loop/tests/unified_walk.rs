@@ -50,9 +50,9 @@ fn self_referential_let_surfaces_unbound_name() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(ids[0]) {
+    let err = match sched.result_error(ids[0]) {
         Err(e) => e.clone(),
-        Ok(_) => panic!("self-referential LET should surface UnboundName"),
+        Ok(()) => panic!("self-referential LET should surface UnboundName"),
     };
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(n) if n.contains("Ty")),

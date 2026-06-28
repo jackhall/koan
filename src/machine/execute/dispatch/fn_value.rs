@@ -4,10 +4,7 @@
 //! immediately, an unbound name errors, and a still-finalizing head placeholder parks via a
 //! [`park_resume`] closure that re-runs the fast lane on resume.
 
-use crate::machine::core::Scope;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::values::CarriedFamily;
-use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::Parseable;
 use crate::machine::{KError, KErrorKind, NodeId, Resolution};
@@ -16,9 +13,8 @@ use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
 use super::{park_resume, Outcome};
 
-pub(super) fn initial<'step, 'b>(
+pub(super) fn initial<'step>(
     ctx: &SchedulerView<'step, '_>,
-    s: &'b Scope<'b>,
     expr: KExpression<'step>,
 ) -> Outcome<'step> {
     let head = match &expr.parts[0].value {
@@ -26,19 +22,10 @@ pub(super) fn initial<'step, 'b>(
         _ => unreachable!("FunctionValueCall shape implies Identifier head"),
     };
     let chain = ctx.chain_deref();
-    match s.resolve_with_chain(&head, chain) {
-        // `obj` resolves at the threaded scope's `'b` brand; re-anchor it to the cart `'step`,
-        // witnessed by the active region, which pins `obj`'s storage for `'step`.
-        Resolution::Value(obj) => {
-            let carried = crate::scheduler::reattach_with::<CarriedFamily, _>(
-                Carried::Object(obj),
-                ctx.current_scope().region,
-            );
-            let Carried::Object(obj) = carried else {
-                unreachable!("reattach preserves the Object variant")
-            };
-            dispatch_callable_value(ctx, expr, obj)
-        }
+    match ctx.current_scope().resolve_with_chain(&head, chain) {
+        // `obj` resolves against the cart scope at `'step` directly — the cart pins its storage for
+        // `'step`, so it rides straight into the `Outcome<'step>` with no re-anchor.
+        Resolution::Value(obj) => dispatch_callable_value(ctx, expr, obj),
         // A still-finalizing head placeholder parks and re-runs on resume. A placeholder whose
         // producer has *already* finalized splits two ways:
         // - `Err`: the binder errored before binding the head, so the name never became a value —
@@ -48,9 +35,9 @@ pub(super) fn initial<'step, 'b>(
         //   never `Placeholder`. Reaching here means that invariant broke.
         Resolution::Placeholder(producer) => {
             if ctx.is_result_ready(producer) {
-                match ctx.read_result(producer) {
+                match ctx.result_error(producer) {
                     Err(e) => Outcome::Done(Err(e.clone_for_propagation())),
-                    Ok(_) => unreachable!(
+                    Ok(()) => unreachable!(
                         "head placeholder `{head}` producer finalized Ok without registering the \
                          name — a binder's successful finalize always binds its name, so a \
                          ready-Ok producer must resolve to a Value, not a Placeholder",
@@ -96,6 +83,6 @@ fn install_head_park<'step>(producer: NodeId, expr: KExpression<'step>) -> Outco
     park_resume(
         vec![producer],
         Some(carrier),
-        Box::new(move |ctx, _idx| ctx.with_current_scope(|s| initial(ctx, s, expr))),
+        Box::new(move |ctx, _idx| initial(ctx, expr)),
     )
 }

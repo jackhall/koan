@@ -12,7 +12,6 @@ use std::rc::Rc;
 use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::core::{KoanRegion, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
 use crate::machine::{FrameSet, KError, KErrorKind, Resolution, ValueCarrierResolution};
 use crate::source::Spanned;
@@ -88,7 +87,7 @@ pub(super) fn bare_type_leaf<'step, 'b>(
                 }
             };
             if ctx.is_result_ready(producer) {
-                if let Err(e) = ctx.read_result(producer) {
+                if let Err(e) = ctx.result_error(producer) {
                     return Outcome::Done(Err(e.clone_for_propagation()));
                 }
                 // Ready-and-bound: the referent finalized between resolve and this check, so
@@ -185,7 +184,8 @@ pub(super) fn literal_pass_through<'step>(
 /// lifts the producer's resolved value straight through. The harness submits the literal and owns
 /// it; a dep error short-circuits frameless before the finish runs.
 fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
-    let finish: DepFinish<'step> = Box::new(|_ctx, results, _carriers| Outcome::Done(Ok(results[0])));
+    let finish: DepFinish<'step> =
+        Box::new(|_ctx, results, _carriers| Outcome::Done(Ok(results[0])));
     park_on_deps(vec![dep], None, finish)
 }
 
@@ -208,9 +208,8 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
 ///
 /// A name with no producer and no binding is `UnboundName` (genuine absence only —
 /// pending names are already parked in step 1).
-pub(super) fn type_call<'step, 'b>(
+pub(super) fn type_call<'step>(
     ctx: &SchedulerView<'step, '_>,
-    s: &'b Scope<'b>,
     expr: KExpression<'step>,
 ) -> Outcome<'step> {
     let head_t = match &expr.parts[0].value {
@@ -218,6 +217,9 @@ pub(super) fn type_call<'step, 'b>(
         _ => unreachable!("TypeCall shape implies leaf Type head"),
     };
     let chain = ctx.chain_deref();
+    // Resolve against the cart scope at `'step`, so the resolved identity rides into the outcome
+    // with no re-anchor.
+    let scope = ctx.current_scope();
     // A still-finalizing head binding (a `LET <Type-class> = …` placeholder — e.g. a
     // forward functor) whose producer is not yet terminal: park on the producer and
     // re-run `type_call` on resume. Once the binding finalizes, the value-side
@@ -225,7 +227,7 @@ pub(super) fn type_call<'step, 'b>(
     // or type alias), so a keyworded resume would wrongly fail. A producer that is
     // already terminal falls through — its placeholder is on its way out, so the
     // type-table read below is authoritative.
-    if let Resolution::Placeholder(producer) = s.resolve_with_chain(head_t.as_str(), chain) {
+    if let Resolution::Placeholder(producer) = scope.resolve_with_chain(head_t.as_str(), chain) {
         if !ctx.is_result_ready(producer) {
             // The original call expression is the deadlock-summary sample; the resume re-runs
             // the whole fast lane against it once the head binding finalizes.
@@ -233,7 +235,7 @@ pub(super) fn type_call<'step, 'b>(
             return park_resume(
                 vec![producer],
                 Some(carrier),
-                Box::new(move |ctx, _idx| ctx.with_current_scope(|s| type_call(ctx, s, expr))),
+                Box::new(move |ctx, _idx| type_call(ctx, expr)),
             );
         }
     }
@@ -241,17 +243,10 @@ pub(super) fn type_call<'step, 'b>(
     // a `SetRef` whose member carries the schema (filled at the member's finalize) — no
     // value-side carrier involved. A bound functor lives here too, carrying its callable
     // body on `KType::KFunctor { body: Some(f) }`.
-    let identity = match s.resolve_type_with_chain(head_t.as_str(), chain) {
-        // Re-anchor the `'b`-branded type to the cart `'step` (it feeds `apply_callable`'s outcome).
-        Some(kt) => {
-            let Carried::Type(kt) = crate::scheduler::reattach_with::<CarriedFamily, _>(
-                Carried::Type(kt),
-                ctx.current_scope().region,
-            ) else {
-                unreachable!("reattach preserves the Type variant")
-            };
-            kt
-        }
+    let identity = match scope.resolve_type_with_chain(head_t.as_str(), chain) {
+        // `kt` resolves at the cart `'step` directly — it feeds `apply_callable`'s outcome with no
+        // re-anchor.
+        Some(kt) => kt,
         None => {
             return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head_t.render()))));
         }

@@ -206,17 +206,17 @@ in fact routes only the safe `erase`, carrying no retype of its own.
 The value channel is borrow-checked end to end. The scheduler stores a finalized terminal as a single
 `Sealed<W::Value, W::Witness>` ([`node_store.rs`](../src/scheduler/node_store.rs)) — the
 opaque dormant form of a `Witnessed` carrier, which hides every transform (`with` / `map` / `yoke` /
-`merge`) and re-anchors only through the rank-2 destination verb `Sealed::open` or the transitional
-borrow-bounded `Sealed::read`. `finalize` bundles the erased value with its producer frame's witness
-(a singleton `FrameSet`) and seals it (an empty set is a frameless / run-region terminal). A read (`read_result` / `read` /
-`read_result_with_frame`) goes through `Sealed::read` — which delegates to `Witnessed::read` —
-re-anchoring to the read's own `&self` borrow — `Live<'node, W>`. Because
-`free_one` / `finalize` need `&mut self`, the bundled witness cannot drop while a read borrow is
-live, so the re-anchored `'node` lifetime cannot outlive the backing region: the pin-outlives-read
-fact is a borrow the compiler checks. The driver's transient reads
-([`KoanRuntime::read_result`](../src/machine/execute/runtime.rs), the
-[`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) forwarder) consume that `'node` value with
-no `unsafe` of their own. The continuation and contract carriers — stored `Erased` on the
+`merge`) and re-anchors only through the rank-2 destination verb `Sealed::open`. `finalize` bundles
+the erased value with its producer frame's witness (a singleton `FrameSet`) and seals it (an empty set
+is a frameless / run-region terminal). A value read goes through `Sealed::open`, which copies the value
+out inside a `for<'b>` brand — the fabricated content lifetime is un-nameable, so nothing branded
+escapes into the result (`open` delegates to the kept `Witnessed::read` for the copy, witness-pinned
+for the `&self` borrow it spans). The driver exposes two accessors over it:
+[`read_result_with`](../src/machine/execute/runtime.rs) hands the value to a closure that copies out
+what it needs, and the borrow-free `result_error` reports a slot's success or failure without reading
+the value at all — the [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) a decide sees exposes
+only the probe, since a resolved value rides the scope channel rather than a slot read. Neither lets a
+re-anchored reference ride the `&self` borrow up-stack. The continuation and contract carriers — stored `Erased` on the
 lifetime-free node — re-anchor through the run-loop step's **consuming, externally-witnessed**
 `Sealed::open`: [`run_step`](../src/machine/execute/run_loop.rs) zips the continuation, the contract,
 and the consumer region and opens them at one rank-2 `for<'b>` brand standing in for the step

@@ -99,9 +99,8 @@ fn record_field_type_mismatch_is_dispatch_failure() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = sched
-        .read_result(root)
-        .err()
-        .expect("a `:{x :Str}` value must not fill a `:{x :Number}` slot");
+        .result_error(root)
+        .expect_err("a `:{x :Str}` value must not fill a `:{x :Number}` slot");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed on record field-type mismatch, got {error:?}",
@@ -122,9 +121,8 @@ fn record_missing_field_is_dispatch_failure() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = sched
-        .read_result(root)
-        .err()
-        .expect("a `{x = 1}` value must not fill a `:{x :Number, q :Bool}` slot");
+        .result_error(root)
+        .expect_err("a `{x = 1}` value must not fill a `:{x :Number, q :Bool}` slot");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed on missing record field, got {error:?}",
@@ -147,9 +145,8 @@ fn record_incomparable_overloads_are_ambiguous() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = sched
-        .read_result(root)
-        .err()
-        .expect("a value matching two incomparable record slots must be ambiguous");
+        .result_error(root)
+        .expect_err("a value matching two incomparable record slots must be ambiguous");
     assert!(
         matches!(error.kind, KErrorKind::AmbiguousDispatch { .. }),
         "expected AmbiguousDispatch across incomparable record slots, got {error:?}",

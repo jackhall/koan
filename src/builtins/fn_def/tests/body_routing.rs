@@ -122,9 +122,9 @@ fn fn_def_parens_param_type_non_type_value_errors() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("non-type param type expression should error"),
+        Ok(()) => panic!("non-type param type expression should error"),
     };
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("expected a type expression")),
@@ -145,9 +145,9 @@ fn fn_def_sigil_return_type_non_type_value_errors() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("non-type return-type expression should error"),
+        Ok(()) => panic!("non-type return-type expression should error"),
     };
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("return-type slot sub-Dispatch")),

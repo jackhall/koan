@@ -28,8 +28,8 @@ use crate::machine::model::types::{
 use crate::machine::model::values::{Carried, CarriedFamily, KObject};
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Resolution, Scope, TraceFrame};
-use crate::witnessed::Witnessed;
 use crate::source::Spanned;
+use crate::witnessed::Witnessed;
 
 use super::{arg, kw, sig};
 
@@ -138,7 +138,12 @@ pub fn body<'a>(
                     .scope
                     .resolve_type_with_chain(te.as_str(), chain.as_deref())
                 {
-                    return Action::done_witnessed(finalize_newtype(ctx.scope, name, kt.clone(), bind_index));
+                    return Action::done_witnessed(finalize_newtype(
+                        ctx.scope,
+                        name,
+                        kt.clone(),
+                        bind_index,
+                    ));
                 }
                 // The repr names a type still finalizing in this scheduler: park on its producer
                 // and re-resolve at dep-finish. A name with no in-flight producer is a genuine
@@ -173,7 +178,9 @@ pub fn body<'a>(
                     te.as_str(),
                 )))))
             }
-            other => Action::done_witnessed(finalize_newtype(ctx.scope, name, other.clone(), bind_index)),
+            other => {
+                Action::done_witnessed(finalize_newtype(ctx.scope, name, other.clone(), bind_index))
+            }
         }
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
         defer_resolved_sigil(name, inner.clone(), bind_index)
@@ -626,9 +633,8 @@ mod tests {
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let err = sched1
-            .read_result(root)
-            .err()
-            .expect("TAKES_NUM on Distance should fail dispatch");
+            .result_error(root)
+            .expect_err("TAKES_NUM on Distance should fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed on Number-slot Distance, got {err}",
@@ -639,9 +645,8 @@ mod tests {
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let err2 = sched2
-            .read_result(root2)
-            .err()
-            .expect("TAKES_DIST on raw Number should fail dispatch");
+            .result_error(root2)
+            .expect_err("TAKES_DIST on raw Number should fail dispatch");
         assert!(
             matches!(&err2.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed on Distance-slot Number, got {err2}",

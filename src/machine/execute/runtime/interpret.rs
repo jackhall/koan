@@ -92,20 +92,21 @@ impl<'run> KoanRuntime<'run> {
         // empty `[]` / `{}` reaching it has no element type to infer, so reject rather
         // than silently resolve to `List<Any>` / `Dict<Any, Any>`.
         for id in top_level {
-            match self.read_result(id) {
+            // Copy out the empty-container verdict from inside the open — the carrier never escapes.
+            let is_unannotated_empty = match self.read_result_with(id, |value| {
+                value
+                    .as_object()
+                    .is_some_and(|o| o.is_unstamped_empty_container())
+            }) {
                 Err(e) => return Err(e.clone()),
-                Ok(value)
-                    if value
-                        .as_object()
-                        .is_some_and(|o| o.is_unstamped_empty_container()) =>
-                {
-                    return Err(KError::new(KErrorKind::ShapeError(
-                        "bare empty container has no element type to infer; annotate its \
-                         type (e.g. via a typed FN return) or use a non-empty literal"
-                            .to_string(),
-                    )));
-                }
-                Ok(_) => {}
+                Ok(flag) => flag,
+            };
+            if is_unannotated_empty {
+                return Err(KError::new(KErrorKind::ShapeError(
+                    "bare empty container has no element type to infer; annotate its \
+                     type (e.g. via a typed FN return) or use a non-empty literal"
+                        .to_string(),
+                )));
             }
         }
         Ok(())

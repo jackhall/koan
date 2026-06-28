@@ -9,7 +9,6 @@ use crate::machine::core::scope_ptr::BoundedScopePtr;
 use crate::machine::core::{KError, KErrorKind, KFuture, Scope};
 use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
 use crate::machine::model::values::{ArgValue, NamedPairs};
-use crate::witnessed::reattachable;
 
 /// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
 /// `machine::execute::runtime::run_action`.
@@ -57,12 +56,6 @@ pub struct KFunction<'a> {
     /// [design/typing/functors.md](../../../design/typing/functors.md).
     pub is_functor: bool,
 }
-
-/// `Reattachable` family for a `&KFunction` reference — re-anchors a resolved dispatch function from
-/// a threaded scope's `'b` brand back to the cart `'step`. A reference is a thin pointer, layout
-/// identical for every `'r`, so the shared `reattachable!` macro discharges the obligation once.
-pub struct KFunctionRefFamily;
-reattachable!(KFunctionRefFamily => &'r KFunction<'r>);
 
 impl<'a> KFunction<'a> {
     pub fn new(signature: ExpressionSignature<'a>, body: Body<'a>, captured: &Scope<'a>) -> Self {

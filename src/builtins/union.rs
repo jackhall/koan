@@ -184,9 +184,8 @@ mod tests {
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let err = sched
-            .read_result(root)
-            .err()
-            .expect("a bare anonymous UNION (...) must fail dispatch");
+            .result_error(root)
+            .expect_err("a bare anonymous UNION (...) must fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed on bare UNION (...) (matches no UNION overload); got {err}",
@@ -264,10 +263,16 @@ mod tests {
             vec![("Some".into(), KType::Number)],
             BindingIndex::value(0),
         );
-        match second.as_ref().map(|carrier| carrier.read()) {
-            Ok(Carried::Type(KType::SetRef { set, index })) => {
-                assert_eq!(set.member(*index).name, "Maybe");
-            }
+        let member_name = second.as_ref().map(|carrier| {
+            carrier.with(|c| match c {
+                Carried::Type(KType::SetRef { set, index }) => {
+                    Some(set.member(*index).name.clone())
+                }
+                _ => None,
+            })
+        });
+        match member_name {
+            Ok(Some(name)) => assert_eq!(name, "Maybe"),
             _ => panic!("expected short-circuit Ok(Type(SetRef)) from finalize_union"),
         }
         assert!(

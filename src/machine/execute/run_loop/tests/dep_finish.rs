@@ -45,7 +45,12 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
     });
     let dep_finish_id = sched.add_dep_finish(vec![dep_a, dep_b], vec![], scope, finish);
     sched.execute().unwrap();
-    assert!(matches!(sched.read(dep_finish_id).object(), KObject::KString(s) if s == "7+11"));
+    assert!(sched
+        .read_result_with(
+            dep_finish_id,
+            |v| matches!(v.object(), KObject::KString(s) if s == "7+11")
+        )
+        .expect("value"));
 }
 
 #[test]
@@ -89,10 +94,10 @@ fn dep_finish_short_circuits_on_dep_error() {
     sched.execute().unwrap();
 
     assert!(!invoked.get(), "finish must not run when a dep errored");
-    let result = sched.read_result(dep_finish_id);
+    let result = sched.result_error(dep_finish_id);
     let err = match result {
         Err(e) => e.clone(),
-        Ok(_) => panic!("combine should have errored"),
+        Ok(()) => panic!("combine should have errored"),
     };
     assert!(
         err.frames.iter().any(|f| f.function == "<deps>"),
@@ -145,7 +150,12 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
     );
     sched.execute().unwrap();
     assert!(
-        matches!(sched.read(id).object(), KObject::KString(s) if s == "from-combine"),
+        sched
+            .read_result_with(
+                id,
+                |v| matches!(v.object(), KObject::KString(s) if s == "from-combine")
+            )
+            .expect("value"),
         "DEFERTEST slot's terminal should match the dep-finish's terminal",
     );
 }
@@ -164,7 +174,12 @@ fn tail_call_reuses_node_slot_in_place() {
 
     sched.execute().unwrap();
 
-    assert!(matches!(sched.read(id).object(), KObject::KString(s) if s == "hi"));
+    assert!(sched
+        .read_result_with(
+            id,
+            |v| matches!(v.object(), KObject::KString(s) if s == "hi")
+        )
+        .expect("value"));
     assert_eq!(
         sched.len(),
         1,

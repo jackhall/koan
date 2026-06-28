@@ -4,7 +4,8 @@ use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
 use crate::machine::{
-    FrameSet, KError, KErrorKind, KoanRegion, NameOutcome, NodeId, TraceFrame, ValueCarrierResolution,
+    FrameSet, KError, KErrorKind, KoanRegion, NameOutcome, NodeId, TraceFrame,
+    ValueCarrierResolution,
 };
 use crate::source::Spanned;
 use crate::witnessed::{reattachable, Sealed, Witnessed};
@@ -96,7 +97,7 @@ fn scalar_key(
     park_count: usize,
 ) -> Result<KKey, String> {
     match slot {
-        Slot::Static(sealed) => key_from_carried(sealed.read()),
+        Slot::Static(sealed) => sealed.open(key_from_carried),
         Slot::Park(i) => key_from_carried(terminals[*i].value),
         Slot::Owned(j) => key_from_carried(terminals[park_count + *j].value),
     }

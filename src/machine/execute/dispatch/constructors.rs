@@ -213,18 +213,21 @@ fn finish_witnessed<'step>(
                 FrameSet::singleton(dest_frame.clone()),
                 |_region| Vec::with_capacity(field_names.len()),
             );
-            let fields = terminals.iter().zip(field_names).fold(acc0, |acc, (term, name)| {
-                let name = name.clone();
-                term.carrier
-                    .transfer_into::<RecordFieldsFamily, RecordFieldsFamily>(
-                        acc,
-                        move |value, mut fields, _brand| {
-                            fields.push((name, value.object().deep_clone()));
-                            fields
-                        },
-                    )
-                    .expect("a FrameSet set witness always represents the union")
-            });
+            let fields = terminals
+                .iter()
+                .zip(field_names)
+                .fold(acc0, |acc, (term, name)| {
+                    let name = name.clone();
+                    term.carrier
+                        .transfer_into::<RecordFieldsFamily, RecordFieldsFamily>(
+                            acc,
+                            move |value, mut fields, _brand| {
+                                fields.push((name, value.object().deep_clone()));
+                                fields
+                            },
+                        )
+                        .expect("a FrameSet set witness always represents the union")
+                });
             let home = Witnessed::<RegionTypeFamily, FrameSet>::new(
                 (region, identity),
                 FrameSet::singleton(dest_frame),

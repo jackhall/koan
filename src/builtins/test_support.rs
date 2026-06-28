@@ -17,22 +17,27 @@ use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{KError, Scope};
 use crate::parse::parse;
-use crate::scheduler::{reattach_with, NodeId};
+use crate::scheduler::NodeId;
+use crate::witnessed::reattach_with;
 
 use super::default_scope;
 
-/// Extract a top-level terminal at the scope lifetime `'a`. The scheduler reads at its own `&self`
-/// borrow; re-anchoring the read to `'a` — a safe `reattach_with` witnessed by the `scope.region`
-/// borrow — is sound. A returned closure / module rides a bare borrow into its per-call region, so
-/// (like the production drain) fold the slot's witness onto `scope`'s reach-set: the caller drops the
-/// scheduler right after this returns, and `scope` outlives it, so its reach-set keeps every region
-/// the result reaches alive. Test-only — production code reads at the scheduler borrow.
+/// Extract a top-level terminal at the scope lifetime `'a`. The terminal is opened at a rank-2 brand
+/// and re-anchored to `'a` — a safe `reattach_with` witnessed by the `scope.region` borrow — inside
+/// the open. A returned closure / module rides a bare borrow into its per-call region, so (like the
+/// production drain) fold the slot's witness onto `scope`'s reach-set: the caller drops the scheduler
+/// right after this returns, and `scope` outlives it, so its reach-set keeps every region the result
+/// reaches alive. Test-only — production code reads inside the open without a fixed escape lifetime.
 pub(crate) fn extract_terminal<'a>(
     sched: &KoanRuntime<'a>,
     scope: &'a Scope<'a>,
     id: NodeId,
 ) -> Carried<'a> {
-    let value = reattach_with::<CarriedFamily, _>(sched.read(id), scope.region);
+    let value = sched
+        .read_result_with(id, |live| {
+            reattach_with::<CarriedFamily, _>(live, scope.region)
+        })
+        .expect("terminal should be a value, not an error");
     scope.fold_reach(&sched.dep_witness(id));
     value
 }
@@ -110,8 +115,8 @@ pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KE
     sched
         .execute()
         .expect("scheduler should not surface errors directly");
-    match sched.read_result(id) {
-        Ok(_) => panic!("expected error"),
+    match sched.result_error(id) {
+        Ok(()) => panic!("expected error"),
         Err(e) => e.clone(),
     }
 }

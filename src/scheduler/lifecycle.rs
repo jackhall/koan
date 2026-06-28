@@ -35,8 +35,8 @@ impl<W: Workload> Scheduler<W> {
     /// producers this slot merely parked on, and reclaiming a consumer must not reach
     /// across a park edge into the producer's subtree.
     ///
-    /// Idempotent and safe to call on a still-live slot. References handed out by `read` survive
-    /// because the value lives in a region.
+    /// Idempotent and safe to call on a still-live slot. A value opened by a read lives in a region
+    /// the carrier's frame pins, not in the slot, so freeing the slot cannot dangle it.
     pub(crate) fn free(&mut self, idx: usize) {
         let mut stack: Vec<NodeId> = vec![NodeId(idx)];
         while let Some(id) = stack.pop() {

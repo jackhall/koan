@@ -10,8 +10,9 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ErasedContract;
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::{FrameSet, KError, KErrorKind, KoanRegion, NodeId};
-use crate::witnessed::{reattachable, seal_option, MergeWitness, SealedExtern};
+use crate::witnessed::{erase_to_static, reattachable, seal_option, MergeWitness, SealedExtern};
 
 use super::dispatch::{reattach_node_scope, SchedulerView};
 use super::finalize::NodeFinalize;
@@ -162,15 +163,15 @@ impl<'run> KoanRuntime<'run> {
         // plus its `reach` set (its slot witness). The slice erases into one carrier that opens
         // **in-band** at `'b` alongside the continuation (the only sound route to the unbounded brand,
         // see `DepResultsFamily`); the sources stay pinned by `combined` across the open.
-        let dep_sources: Vec<Result<DepTerminal<'_>, KError>> = deps
+        let dep_sources: Vec<Result<DepTerminal<'static>, KError>> = deps
             .iter()
             .map(|d| {
-                // The live value (re-anchored to the step brand by the open below, for the bare
-                // value-copy relocate) plus the producer slot's own `Sealed` carrier (duplicated, so a
-                // construction finish folds the dep witnessed). Both read the same slot, so a single
-                // error short-circuits the terminal.
-                let value = self.sched.read_result(*d).map_err(|e| e.clone())?;
+                // The producer slot's own `Sealed` carrier (duplicated, so a construction finish folds
+                // the dep witnessed), and the live value sourced from *it* — opened at a brand and
+                // erased for storage, re-anchored to the step brand by the open below for the bare
+                // value-copy relocate. One slot read: an errored slot short-circuits here.
                 let carrier = self.sched.dep_carrier(*d).map_err(|e| e.clone())?;
+                let value = carrier.open(|live| erase_to_static::<CarriedFamily>(live));
                 Ok(DepTerminal { value, carrier })
             })
             .collect();

@@ -29,7 +29,12 @@ fn single_identifier_short_circuit_returns_value_when_bound() {
     sched.execute().unwrap();
     let id = sched.dispatch_in_scope(parse_one("(x)"), scope);
     sched.execute().unwrap();
-    assert!(matches!(sched.read(id).object(), KObject::Number(n) if *n == 42.0));
+    assert!(sched
+        .read_result_with(
+            id,
+            |v| matches!(v.object(), KObject::Number(n) if *n == 42.0)
+        )
+        .expect("value"));
 }
 
 /// Index-gated LET visibility — see [design/execution/README.md § Dispatch-time
@@ -42,7 +47,7 @@ fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
     let ids = sched.enter_block(scope.id, parse_all("LET y = (x)\nLET x = 1"), scope);
     sched.execute().unwrap();
     let err = sched
-        .read_result(ids[0])
+        .result_error(ids[0])
         .err()
         .cloned()
         .expect("forward-ref LET should error");
@@ -59,9 +64,9 @@ fn single_identifier_short_circuit_falls_through_when_unbound() {
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("(missing)"), scope);
     sched.execute().unwrap();
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e.clone(),
-        Ok(_) => panic!("missing should error"),
+        Ok(()) => panic!("missing should error"),
     };
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(name) if name == "missing"),
@@ -91,7 +96,7 @@ fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
     let ids = sched.enter_block(scope.id, parse_all("LET y = z\nLET z = 9"), scope);
     sched.execute().unwrap();
     let err = sched
-        .read_result(ids[0])
+        .result_error(ids[0])
         .err()
         .cloned()
         .expect("forward-ref wrap-slot should error");
@@ -139,9 +144,8 @@ fn forward_keyword_function_reference_is_unbound() {
         .execute()
         .expect("a forward-FN dispatch failure is slot-terminal");
     let err = sched
-        .read_result(ids[0])
-        .err()
-        .expect("forward-FN call should fail dispatch");
+        .result_error(ids[0])
+        .expect_err("forward-FN call should fail dispatch");
     assert!(
         matches!(
             &err.kind,
@@ -220,11 +224,11 @@ fn replay_park_propagates_producer_error() {
         .execute()
         .expect("a producer error routes into the slot, not a fatal execute abort");
     assert!(
-        sched.read_result(ids[1]).is_err(),
+        sched.result_error(ids[1]).is_err(),
         "the UNDEFINED_FN producer call must error",
     );
     assert!(
-        sched.read_result(ids[0]).is_err(),
+        sched.result_error(ids[0]).is_err(),
         "y must inherit its dependency's error",
     );
     assert!(
@@ -271,13 +275,13 @@ fn let_type_to_value_name_rejected() {
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("LET ty = Number"), scope);
     sched.execute().unwrap();
-    match sched.read_result(id) {
+    match sched.read_result_with(id, |v| format!("{:?}", v.ktype())) {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("ty") && msg.contains("Type-classified")),
             "expected a value-classified-type rejection, got {e}",
         ),
-        Ok(v) => panic!("LET ty = Number must be rejected, got {:?}", v.ktype()),
+        Ok(ktype) => panic!("LET ty = Number must be rejected, got {ktype}"),
     }
 
     // The Type-classified alias is the legal form: it lands type-side.

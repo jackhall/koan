@@ -202,11 +202,11 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = sched.read_result(id);
+    let res = sched.read_result_with(id, |v| format!("{:?}", v.ktype()));
     assert!(
         res.is_err(),
         "MAKEBAD must fail return-type check (mismatched pin or unascribed module), \
          got Ok({:?})",
-        res.ok().map(|o| o.ktype()),
+        res.ok(),
     );
 }

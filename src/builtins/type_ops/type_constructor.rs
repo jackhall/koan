@@ -130,8 +130,8 @@ mod tests {
             scope,
         );
         sched.execute().expect("scheduler should run");
-        match sched.read_result(id) {
-            Ok(_) => {}
+        match sched.result_error(id) {
+            Ok(()) => {}
             Err(e) => panic!("FN with :(Number AS Wrap) return failed: {}", e),
         }
         let pure = scope.bindings().expect_value("pure");
@@ -169,7 +169,7 @@ mod tests {
             Err(e) => panic!("scheduler errored: {}", e),
         }
         for (i, id) in ids.iter().enumerate() {
-            if let Err(e) = sched.read_result(*id) {
+            if let Err(e) = sched.result_error(*id) {
                 panic!("expr {} errored: {}", i, e);
             }
         }

@@ -55,7 +55,7 @@ fn run_collect_err(source: &str) -> Option<KError> {
         return Some(e);
     }
     for id in ids {
-        if let Err(e) = sched.read_result(id) {
+        if let Err(e) = sched.result_error(id) {
             return Some(e.clone());
         }
     }

@@ -209,13 +209,14 @@ pub(super) fn invoke<'step>(
             // `Continue`, re-entering the already-installed cart with `Inherit`.
             let statements: Vec<KExpression<'step>> =
                 leading.into_iter().map(|e| (*e).clone()).collect();
-            let finish: DepFinish<'step> = Box::new(move |_view, _results, _carriers| Outcome::Continue {
-                work: super::decide(tail_expr),
-                frame: FramePlacement::Inherit,
-                contract: Some(contract),
-                block_entry: Some(block_entry),
-                body_index,
-            });
+            let finish: DepFinish<'step> =
+                Box::new(move |_view, _results, _carriers| Outcome::Continue {
+                    work: super::decide(tail_expr),
+                    frame: FramePlacement::Inherit,
+                    contract: Some(contract),
+                    block_entry: Some(block_entry),
+                    body_index,
+                });
             Outcome::ParkThenContinue {
                 deps: vec![DepRequest::BodyBlock { frame, statements }],
                 park_count: 0,

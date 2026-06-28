@@ -354,7 +354,6 @@ impl FrameStorage {
             }
         }
     }
-
 }
 
 /// The unified region-owner witness: the set of `Rc<FrameStorage>` whose regions a carrier's value
@@ -453,7 +452,6 @@ impl FrameSet {
             self.insert(Rc::clone(owner));
         }
     }
-
 }
 
 // SAFETY: each member `Rc<FrameStorage>` keeps its `KoanRegion` — and the arena pages a value lives in

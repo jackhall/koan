@@ -102,16 +102,20 @@ impl Default for KoanRuntime<'_> {
 /// (terminal reads / slot count) so callers drive the whole run through the harness without ever
 /// borrowing the scheduler — the write methods are the inherent `&mut self` ones above.
 impl<'run> KoanRuntime<'run> {
-    /// Read a slot's terminal, re-anchored by the scheduler to this `&self` borrow (the slot's frame
-    /// `Rc` pins the value for the borrow), so the driver-side read is safe. See
-    /// [`Scheduler::read_result`].
-    pub fn read_result(&self, id: NodeId) -> Result<crate::machine::model::Carried<'_>, &KError> {
-        self.sched.read_result(id)
+    /// Open a slot's terminal at a rank-2 brand and hand the value to `f`, returning its result or
+    /// the terminal's error — the destination-verb read. See [`Scheduler::read_result_with`].
+    pub fn read_result_with<R>(
+        &self,
+        id: NodeId,
+        f: impl for<'b> FnOnce(crate::machine::model::Carried<'b>) -> R,
+    ) -> Result<R, &KError> {
+        self.sched.read_result_with(id, f)
     }
 
-    /// Read a slot's value terminal, panicking on `Err`. See [`Scheduler::read`].
-    pub fn read(&self, id: NodeId) -> crate::machine::model::Carried<'_> {
-        self.sched.read(id)
+    /// A slot terminal's error, or `Ok(())` on success — the value-free probe.
+    /// See [`Scheduler::result_error`].
+    pub fn result_error(&self, id: NodeId) -> Result<(), &KError> {
+        self.sched.result_error(id)
     }
 
     /// The witness set of a slot's finalized terminal — every region the value reaches. The
@@ -238,13 +242,14 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                 ),
             };
             let body_frame = frame.clone();
-            let finish: DepFinish<'step> = Box::new(move |_view, _results, _carriers| Outcome::Continue {
-                work: super::dispatch::decide(tail),
-                frame: FramePlacement::FreshChild { frame: body_frame },
-                contract,
-                block_entry,
-                body_index,
-            });
+            let finish: DepFinish<'step> =
+                Box::new(move |_view, _results, _carriers| Outcome::Continue {
+                    work: super::dispatch::decide(tail),
+                    frame: FramePlacement::FreshChild { frame: body_frame },
+                    contract,
+                    block_entry,
+                    body_index,
+                });
             Outcome::ParkThenContinue {
                 deps: vec![DepRequest::BodyBlock {
                     frame,

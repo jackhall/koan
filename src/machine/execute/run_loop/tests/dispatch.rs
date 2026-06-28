@@ -89,11 +89,19 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(expr, inner);
     sched.execute().unwrap();
-    let result = sched.read(id).object();
+    let (matched, summary) = sched
+        .read_result_with(id, |v| {
+            let obj = v.object();
+            (
+                matches!(obj, KObject::KString(s) if s == "inner_any"),
+                summarize_marker(obj),
+            )
+        })
+        .expect("value");
     assert!(
-        matches!(result, KObject::KString(s) if s == "inner_any"),
+        matched,
         "inner Any must shadow outer Number (lexical shadowing > specificity), got {:?}",
-        summarize_marker(result),
+        summary,
     );
 }
 
@@ -124,12 +132,12 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().unwrap();
-    let err = match sched.read_result(id) {
+    let err = match sched.read_result_with(id, |v| v.summarize()) {
         Err(e) => e.clone(),
-        Ok(v) => panic!(
+        Ok(summary) => panic!(
             "stateful BareIdentifier must surface UnboundName for an unbound name; \
              got value {}",
-            v.summarize(),
+            summary,
         ),
     };
     assert!(
@@ -164,6 +172,10 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().unwrap();
-    let result = sched.read(id).object();
-    assert!(matches!(result, KObject::KString(s) if s == "lowercase"));
+    assert!(sched
+        .read_result_with(
+            id,
+            |v| matches!(v.object(), KObject::KString(s) if s == "lowercase")
+        )
+        .expect("value"));
 }

@@ -21,7 +21,6 @@ use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::CarriedFamily;
-use crate::machine::model::Carried;
 use crate::machine::{CallFrame, FrameSet, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 use crate::source::Spanned;
 use crate::witnessed::Sealed;
@@ -186,10 +185,11 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         self.sched.is_result_ready(id)
     }
 
-    pub(super) fn read_result(&self, id: NodeId) -> Result<Carried<'_>, &KError> {
-        // The scheduler re-anchors the value to this `&self` borrow (the slot's frame `Rc` pins it
-        // for that long); the dispatch decide reads it transiently, so no `'step` fabrication.
-        self.sched.read_result(id)
+    /// A pre-existing producer's terminal error, or `Ok(())` on success — the value-free probe a
+    /// decide uses to short-circuit on an errored dep. Decides never read a producer's *value* (a
+    /// resolved value rides the scope channel, not a slot read), so the view exposes only this.
+    pub(super) fn result_error(&self, id: NodeId) -> Result<(), &KError> {
+        self.sched.result_error(id)
     }
 
     pub(super) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {

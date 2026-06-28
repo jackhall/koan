@@ -8,17 +8,17 @@ consumer is on `open`, leaving `Sealed` with one access verb.
 [`arena.rs`](../../src/machine/core/arena.rs)) for the frame's child-scope readers, which alloc into
 the cart region and return the result up-stack — the shape the keystone's `for<'b>` `open` forbids by
 construction. It is the transitional borrow-bounded accessor that lets a re-anchored reference ride up
-the dispatcher call stack. Once the [read migrations](reads-to-open.md) invert those readers, its only
-justification is gone, but `attach` and its externally-witnessed read path still exist as a second
-access verb beside [`open`](../../src/witnessed.rs). (Its self-witnessed twin, the transitional `read`,
-is retired by [the read migration](reads-to-open.md); this item clears `attach`, so the two reach the
-single-access-verb end-state together.)
+the dispatcher call stack. Once the [scope-read migration](scope-reads-to-open.md) inverts those
+readers, its only justification is gone, but `attach` and its externally-witnessed read path still
+exist as a second access verb beside [`open`](../../src/witnessed.rs). (Its self-witnessed twin
+`Sealed::read` is already gone — deleted by the shipped value-read migration; this item clears
+`attach` to reach the single-access-verb end-state.)
 
 **Acceptance criteria.**
 
 - `Sealed` exposes a single access verb, `open` (plus its consuming externally-witnessed twin): `attach`
-  and the externally-witnessed witness-borrow read path are deleted, the self-witnessed `read` having
-  been deleted by [the read migration](reads-to-open.md), and no call site references either.
+  and the externally-witnessed witness-borrow read path are deleted, the self-witnessed `read` already
+  deleted by the shipped value-read migration, and no call site references either.
 - Any reader that provably cannot nest under `open` is surfaced and documented as the lone exception,
   not silently retained; no speculative generic borrow-bounded `attach` is added — the destination is
   open-only, and a fallback is built only if a concrete site forces it.
@@ -41,7 +41,7 @@ single-access-verb end-state together.)
 
 **Requires:**
 
-- [Migrate the consumption reads onto `open`](reads-to-open.md) — clears the value- and scope-read
-  escapes (and the loose wrappers) that are `attach`'s only remaining callers.
+- [Invert the scope-handle reads onto `open`](scope-reads-to-open.md) — clears the scope-read escapes
+  (and the `reattach_ref_with` wrapper) that are `attach`'s only remaining callers.
 
 **Unblocks:** none.
