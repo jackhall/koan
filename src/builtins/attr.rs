@@ -16,17 +16,61 @@ use crate::machine::execute::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::Carried;
-use crate::machine::model::values::{Module, NonWrappedRef};
+use crate::machine::model::values::{CarriedFamily, Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
-use crate::machine::{KError, KErrorKind, Resolution, Scope};
+use crate::machine::{FrameSet, KError, KErrorKind, Resolution, Scope};
+use crate::witnessed::{reattach_with, Sealed, Witnessed};
 
 use super::{arg, kw, sig};
 
-/// Wrap an `access_*` helper's `Result<Carried, KError>` as a `Done` [`Action`].
-fn done<'a>(
-    result: Result<Carried<'a>, KError>,
+/// A projected ATTR member. An object value seals as a [`Witnessed`] carrier naming its reach (the
+/// object-family terminal); a type identity stays on the `Done` / type channel until
+/// [`alloc_ktype`](../../roadmap/per-node-memory/alloc-ktype-witnessed.md) inverts the type
+/// family. [`route`] turns either into the matching [`Action`].
+enum AttrOutcome<'a> {
+    Object(Witnessed<CarriedFamily, FrameSet>),
+    Type(&'a KType<'a>),
+}
+
+/// Turn an `access_*` result into its terminal [`Action`]: an object member seals as
+/// [`Action::DoneWitnessed`] carrying its reach, a type member and every error stay on
+/// [`Action::Done`].
+fn route<'a>(
+    result: Result<AttrOutcome<'a>, KError>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    crate::machine::core::kfunction::action::Action::Done(result)
+    use crate::machine::core::kfunction::action::Action;
+    match result {
+        Ok(AttrOutcome::Object(witnessed)) => Action::DoneWitnessed(witnessed),
+        Ok(AttrOutcome::Type(kt)) => Action::Done(Ok(Carried::Type(kt))),
+        Err(e) => Action::Done(Err(e)),
+    }
+}
+
+/// Seal a projected object member as a carrier naming its reach. `value` must live in `scope`'s
+/// region — a field read deep-clones into the read-site region, while a module / signature member
+/// already lives in its declaration region, so the declaration scope is passed. The witness is
+/// `scope`'s home frame, which transitively pins that scope's reach-set (so a single-frame witness
+/// names the full reach, as a bound-name read does via the binding scope's home frame).
+/// An `embedded` carrier — the computed lhs the member is read out of — folds its foreign reach on
+/// top (omitting any frame the home already pins), so a member of a multi-region value names every
+/// region that value reaches. Built via `yoke` + [`reattach_with`] (the co-located
+/// pre-existing-value pattern), so it carries no asserted `Witnessed::new`.
+fn seal_field<'a>(
+    value: Carried<'a>,
+    scope: &Scope<'a>,
+    embedded: Option<&Sealed<CarriedFamily, FrameSet>>,
+) -> Witnessed<CarriedFamily, FrameSet> {
+    let home = scope
+        .region_owner()
+        .upgrade()
+        .expect("the read-site scope's region owner is held while its member is read");
+    let mut witness = FrameSet::singleton(home.clone());
+    if let Some(carrier) = embedded {
+        witness.fold_foreign(carrier.witness(), Some(&home));
+    }
+    Witnessed::<CarriedFamily, FrameSet>::yoke(witness, |region| {
+        reattach_with::<CarriedFamily, _>(value, region)
+    })
 }
 
 /// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the
@@ -72,17 +116,19 @@ pub fn body_identifier<'a>(
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
     let field_name = crate::try_action!(read_field_name(ctx.args));
+    // `s` is a bound name: the target lives in its (ancestor) binding scope, transitively pinned by
+    // the read-site scope's home frame, so the field read needs no embedded lhs carrier to fold.
     if let Some(target) = ctx.scope.lookup(&s_name) {
-        return done(access_field(ctx.scope, target, &field_name));
+        return route(access_field(ctx.scope, target, &field_name, None));
     }
     if let Some(kt) = ctx.scope.resolve_type(&s_name) {
         match kt {
-            KType::Module { module: m, .. } => return done(access_module_member(m, &field_name)),
+            KType::Module { module: m, .. } => return route(access_module_member(m, &field_name)),
             KType::AbstractType {
                 source: AbstractSource::Module(m),
                 ..
             } => {
-                return done(access_module_member(m, &field_name));
+                return route(access_module_member(m, &field_name));
             }
             KType::AbstractType { .. } => {}
             _ => {}
@@ -117,7 +163,7 @@ pub fn body_type_lhs<'a>(
     let field_name = crate::try_action!(read_field_name(ctx.args));
     match s_kt {
         KType::Unresolved(te) => match resolve_type_leaf_carrier(ctx.scope, te, None) {
-            TypeLeafCarrier::Resolved(kt) => done(access_type_member(ctx.scope, kt, &field_name)),
+            TypeLeafCarrier::Resolved(kt) => route(access_type_member(ctx.scope, kt, &field_name)),
             TypeLeafCarrier::Unbound(name) => {
                 Action::Done(Err(KError::new(KErrorKind::UnboundName(name))))
             }
@@ -131,7 +177,7 @@ pub fn body_type_lhs<'a>(
                 )))))
             }
         },
-        kt => done(access_type_member(ctx.scope, kt, &field_name)),
+        kt => route(access_type_member(ctx.scope, kt, &field_name)),
     }
 }
 
@@ -145,7 +191,15 @@ pub fn body_newtype<'a>(
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
     let field_name = crate::try_action!(read_field_name(ctx.args));
-    done(access_field(ctx.scope, target, &field_name))
+    // The lhs `s` is a computed `Wrapped` value delivered to this call (e.g. `seg.finish.x`), so its
+    // carrier names regions the read-site frame may not pin; fold it as the field read's `embedded`
+    // reach so the projected field outlives every region the lhs reaches.
+    route(access_field(
+        ctx.scope,
+        target,
+        &field_name,
+        ctx.arg_carrier("s"),
+    ))
 }
 
 /// Projects the field off a module identity riding the type channel (the lhs is the `Type` arm).
@@ -171,7 +225,7 @@ pub fn body_module<'a>(
         }
     };
     let field_name = crate::try_action!(read_field_name(ctx.args));
-    done(access_module_member(m, &field_name))
+    route(access_module_member(m, &field_name))
 }
 
 /// Project `field` off a Type-channel lhs: a module / signature / opaque-abstract identity.
@@ -181,17 +235,18 @@ fn access_type_member<'a>(
     scope: &Scope<'a>,
     kt: &KType<'a>,
     field: &str,
-) -> Result<Carried<'a>, KError> {
+) -> Result<AttrOutcome<'a>, KError> {
     match kt {
         KType::Module { module: m, .. } => access_module_member(m, field),
-        // ATTR over a first-class signature value — reverse-lookup against the decl scope.
+        // ATTR over a first-class signature value — reverse-lookup against the decl scope. A value
+        // member lives in that decl region, so it seals under the decl scope's home frame.
         KType::Signature { sig: s, .. } => {
             let decl = s.decl_scope();
             if let Some(Resolution::Value(obj)) = decl.bindings().lookup_value(field, None) {
-                return Ok(Carried::Object(obj));
+                return Ok(AttrOutcome::Object(seal_field(Carried::Object(obj), decl, None)));
             }
             if let Some(kt) = decl.resolve_type(field) {
-                return Ok(Carried::Type(scope.region.alloc_ktype(kt.clone())));
+                return Ok(AttrOutcome::Type(scope.region.alloc_ktype(kt.clone())));
             }
             Err(KError::new(KErrorKind::ShapeError(format!(
                 "signature `{}` has no member `{}`",
@@ -216,27 +271,35 @@ fn access_field<'a>(
     scope: &Scope<'a>,
     target: &KObject<'a>,
     field: &str,
-) -> Result<Carried<'a>, KError> {
+    embedded: Option<&Sealed<CarriedFamily, FrameSet>>,
+) -> Result<AttrOutcome<'a>, KError> {
     match target {
         // NEWTYPE fall-through. A record-repr newtype (an ex-struct) wraps a
         // `KObject::Record`; read the field straight off it, naming the nominal type in the
         // miss diagnostic so `b.z` on a `Point` still reports `Point`. `Wrapped.inner` is
         // invariantly not a `Wrapped` (the construction-time collapse rule peels any
         // `Wrapped` before re-wrapping), so a scalar inner (a NEWTYPE-over-`Number`, which
-        // has no fields) falls to the `other` arm.
+        // has no fields) falls to the `other` arm. The field value is deep-cloned into the
+        // read-site region and sealed under that region's home frame; `embedded` (the computed
+        // lhs carrier, when the lhs was a delivered value) folds its foreign reach so a field of
+        // a multi-region value keeps every region it borrows into alive.
         KObject::Wrapped { inner, type_id } => match inner.get() {
             KObject::Record(values, _) => match values.get(field) {
-                Some(Held::Object(value)) => Ok(Carried::Object(
-                    scope.region.alloc_object(value.deep_clone()),
-                )),
-                Some(Held::Type(kt)) => Ok(Carried::Type(scope.region.alloc_ktype(kt.clone()))),
+                Some(Held::Object(value)) => Ok(AttrOutcome::Object(seal_field(
+                    Carried::Object(scope.region.alloc_object(value.deep_clone())),
+                    scope,
+                    embedded,
+                ))),
+                Some(Held::Type(kt)) => {
+                    Ok(AttrOutcome::Type(scope.region.alloc_ktype(kt.clone())))
+                }
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",
                     type_id.name(),
                     field
                 )))),
             },
-            inner => access_field(scope, inner, field),
+            inner => access_field(scope, inner, field, embedded),
         },
         other => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
@@ -267,25 +330,35 @@ fn access_field<'a>(
 /// scope is a per-call region. The module and its `slot_type_tags` are declaration-stable,
 /// so the module region is the right home; both `inner` (the slot value) and `type_id`
 /// (the abstract tag, which references the module) then live there together.
-fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<Carried<'a>, KError> {
+fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<AttrOutcome<'a>, KError> {
     let module_scope = m.child_scope();
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
-        return Ok(Carried::Type(module_scope.region.alloc_ktype(kt)));
+        return Ok(AttrOutcome::Type(module_scope.region.alloc_ktype(kt)));
     }
+    // A value member lives in the module's region; it seals under the module scope's home frame,
+    // which transitively pins the module's reach-set — so the read value (or its re-tag carrier)
+    // names the full reach without an embedded lhs to fold (the module identity is the lhs).
     if let Some(Resolution::Value(obj)) = module_scope.bindings().lookup_value(field, None) {
         if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
             let type_id = module_scope.region.alloc_ktype(tag);
-            return Ok(Carried::Object(module_scope.region.alloc_object(
-                KObject::Wrapped {
-                    inner: NonWrappedRef::peel(obj),
-                    type_id,
-                },
+            let wrapped = module_scope.region.alloc_object(KObject::Wrapped {
+                inner: NonWrappedRef::peel(obj),
+                type_id,
+            });
+            return Ok(AttrOutcome::Object(seal_field(
+                Carried::Object(wrapped),
+                module_scope,
+                None,
             )));
         }
-        return Ok(Carried::Object(obj));
+        return Ok(AttrOutcome::Object(seal_field(
+            Carried::Object(obj),
+            module_scope,
+            None,
+        )));
     }
     if let Some(kt) = module_scope.resolve_type(field) {
-        return Ok(Carried::Type(module_scope.region.alloc_ktype(kt.clone())));
+        return Ok(AttrOutcome::Type(module_scope.region.alloc_ktype(kt.clone())));
     }
     Err(KError::new(KErrorKind::ShapeError(format!(
         "module `{}` has no member `{}`",

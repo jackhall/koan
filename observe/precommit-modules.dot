@@ -264,6 +264,7 @@ digraph {
     "koan::builtins::attr" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::attr" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::attr" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::builtins::attr" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
