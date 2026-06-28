@@ -326,7 +326,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [Carrier-self-building object constructions return `Witnessed`](per-node-memory/alloc-object-embedding-sites.md)
+- [`alloc_ktype` returns `Witnessed`](per-node-memory/alloc-ktype-witnessed.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
@@ -426,25 +426,20 @@ through a rank-2 `open`, result slot rerouted onto it), the run-loop step restru
 its consuming `open`, the region-pure / aggregate construction inversions, the
 carrier-self-building object constructions (the newtype / tagged-union constructors, `catch`, and FN
 def now build witnessed via `transfer_into` / `merge` / `yoke`, with the nominal type identity crossing
-the build brand as a non-object `RegionTypeFamily` operand), and the
+the build brand as a non-object `RegionTypeFamily` operand), the
 per-scope sealed reach-set (a `FrameSet` on `Scope` that folds a deposited value's reach,
-omits the home frame, and seals at scope close — `close` wired finalize-time and
-owner-routed for per-call frames, `MODULE` / `SIG`, and the run root) are all
+omits the home frame and its lexical ancestors, and seals at scope close — `close` wired finalize-time
+and owner-routed for per-call frames, `MODULE` / `SIG`, and the run root), and the
+**carrier-delivered object embeds** (the bare-arg value-embedding sites — `attr`, `FROM`, the literal
+Resolved arm — `merge` a delivered `Sealed` carrier, and `let` / user-fn arg binds fold the bound
+value's full carrier into the reach-set, taking the whole object channel off the single-frame
+`reached_frame` reconstruction) are all
 shipped. The design is captured in
 [design/per-node-memory.md](../design/per-node-memory.md). What remains migrates as one
-linear chain: the value-embedding sites that take a bare arg fold a delivered carrier, the reach-set's
-deposit folds each bound value's full carrier (and the user-fn object-arg bind path follows it off the
-transitional single-frame relocate-seam fold), retiring the single-frame `reached_frame` /
-`FrameStorage.retained` reconstruction — then the consumption reads converge on a single `open` verb:
+linear chain: the type family converts onto `yoke`, taking the last `KType::Module` user off the
+single-frame `reached_frame` / `FrameStorage.retained` reconstruction so it can be deleted — then the
+consumption reads converge on a single `open` verb:
 
-- [Carrier-self-building object constructions return `Witnessed`](per-node-memory/alloc-object-embedding-sites.md) —
-  the newtype / tagged-union constructors, `catch`, and FN def build their wrapped value inside the
-  witness closure, folding their dep / scope carriers, so each names every region it reaches by
-  construction.
-- [Carrier-delivered object embeds and the relocate-seam-fold retirement](per-node-memory/alloc-object-delivered-carriers.md) —
-  thread each builtin arg's `Sealed` carrier into the body so the bare-arg sites (`attr`, `FROM`, the
-  literal Resolved arm) `merge` and `let` deposits fold the full carrier; convert the user-fn object-arg
-  bind path so the single-frame relocate-seam fold retires for both the object and user-fn-arg channels.
 - [`alloc_ktype` returns `Witnessed`](per-node-memory/alloc-ktype-witnessed.md) — convert the type
   family onto `yoke`; the last `KType::Module` user converted, `reached_frame` and the per-frame
   `retained` field are deleted and the step `pin` becomes exact.

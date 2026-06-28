@@ -74,10 +74,10 @@ the call-site scope and pin every prior frame's bindings alive.
 
 ## Per-call region protocol
 
-The per-call region's lifecycle — how a relocated value's reached region is
+The per-call region's lifecycle — how a relocated value's reached regions are
 retained onto the consumer frame (the
-[`relocate_carried`](../src/machine/execute/lift.rs) copy plus the
-`reached_frame` retention), how the scheduler propagates the active frame, how
+[`relocate_carried`](../src/machine/execute/lift.rs) copy plus the carrier-set
+retention, with `reached_frame` for the residual type-channel module), how the scheduler propagates the active frame, how
 builtin-built frames chain the call-site frame's storage through
 `FrameStorage.outer`, and how the TCO step reuses the frame shell over a
 fresh `FrameStorage` — is documented in
@@ -239,12 +239,17 @@ relocated value re-sealed under the set union of every region it still reaches (
 run-global root region the same way.
 
 A relocated closure / future / module survives its producer's dying frame because the copy keeps its
-bare borrow and the *consumer* frame keeps that borrow's region alive: `reached_frame`
-([`lift.rs`](../src/machine/execute/lift.rs)) recovers the defining frame from the value's scope
-`region_owner` (a `KFunction` / `KFuture` via its captured scope, a `KType::Module` via its child
-scope), and the consumer frame `retain`s it into `FrameStorage.retained` (a `FrameSet`) at the three
-read-out boundaries — the `run_step` relocate, the root drain, and the `extract_terminal` test
-harness. No cycle forms: a dispatched frame's `outer` is `None`, so a retained descendant never
+bare borrow and the *consumer* frame keeps that borrow's region alive. A **closure / future** carries
+the regions it reaches on its [delivered carrier](per-node-memory.md#storage-and-access-seal-open-transfer_into):
+the embedding or binding site folds that carrier (`merge` at an `attr` / `FROM` projection, `fold_reach`
+at a `let` / user-fn arg bind), and the root drain `retain`s the rehomed terminal's full witness set
+onto `FrameStorage.retained` — so a multi-region value keeps *every* region it reaches. The one value
+still reconstructed is the type channel's not-yet-witnessed `KType::Module`: `reached_frame`
+([`lift.rs`](../src/machine/execute/lift.rs)) recovers its child scope's defining frame from the value's
+`region_owner`, and the consumer frame `retain`s that single frame into `FrameStorage.retained` at the
+read-out boundaries — the `run_step` relocate, the root drain, and the `extract_terminal` test harness —
+until [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) takes it off and deletes the
+reconstruction. No cycle forms: a dispatched frame's `outer` is `None`, so a retained descendant never
 strong-refs back, and `retain` drops a frame whose region an ancestor already pins.
 
 The per-call frame's seed binds (MATCH / TRY `it`, `KFunction::invoke` params) reach the per-call
@@ -390,8 +395,8 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
 
 ## Open work
 
-The remaining per-node-memory migrations — wiring `alloc_object` / `alloc_ktype` to return a
-co-located `Witnessed` carrier, and moving the residual witness-borrow read paths onto the `Sealed`
-access verbs — are tracked by the
+The remaining per-node-memory migrations — wiring `alloc_ktype` to return a co-located `Witnessed`
+carrier (the object channel is already witnessed end-to-end), and moving the residual witness-borrow
+read paths onto the `Sealed` access verbs — are tracked by the
 [per-node-memory roadmap project](../roadmap/per-node-memory/). See
 [per-node-memory.md § Open work](per-node-memory.md#open-work) for the dependency ordering.

@@ -91,15 +91,22 @@ witness pins that region; once it is relocated out of the scheduler — bound in
 spliced into a working expr and re-dispatched, or read out as a top-level result — the producer slot
 is gone, so the *consumer frame* takes over the pin.
 
-[`reached_frame`](../../src/machine/execute/lift.rs) recovers the defining frame from the value's
-scope `region_owner` — a `KFunction` / `KFuture` via its captured scope, a `KType::Module` via its
-child scope — and the consumer frame `retain`s it into `FrameStorage.retained` (a `FrameSet`) at the
-three read-out boundaries where the consumer frame is known: the `run_step` relocate loop (covering
-the splice/redispatch and binding paths), the [`run_program`](../../src/machine/execute/runtime/interpret.rs)
-root drain, and the `extract_terminal` test harness. `retain` is guarded by `pins_region`, so a frame
-whose region the consumer or an ancestor already pins is not re-added, and the set dedups by region.
-No cycle forms: a dispatched frame's `outer` is `None`, so a retained descendant never strong-refs
-back into the chain that would close a loop.
+A **closure / future** carries the regions it reaches on its delivered
+[`Sealed`](../per-node-memory.md#storage-and-access-seal-open-transfer_into) carrier: the embedding or
+binding site folds that carrier — `merge` at an `attr` / `FROM` projection, `fold_reach` at a `let` /
+user-fn arg bind — and the [`run_program`](../../src/machine/execute/runtime/interpret.rs) root drain
+`retain`s the rehomed terminal's full witness set into `FrameStorage.retained`, so a value reaching
+several regions (a list of closures) keeps every one. The one value still reconstructed is the
+not-yet-witnessed type-channel `KType::Module`: [`reached_frame`](../../src/machine/execute/lift.rs)
+recovers its child scope's defining frame from the value's `region_owner`, and the consumer frame
+`retain`s that single frame into `FrameStorage.retained` (a `FrameSet`) at the read-out boundaries where
+the consumer frame is known: the `run_step` relocate loop (covering the splice/redispatch and binding
+paths), the root drain, and the `extract_terminal` test harness. `retain` is guarded by `pins_region`,
+so a frame whose region the consumer or an ancestor already pins is not re-added, and the set dedups by
+region. [`alloc_ktype`](../../roadmap/per-node-memory/alloc-ktype-witnessed.md) takes the last
+`KType::Module` user off `reached_frame` and deletes the reconstruction with the `retained` field. No
+cycle forms: a dispatched frame's `outer` is `None`, so a retained descendant never strong-refs back
+into the chain that would close a loop.
 
 The allocation engine therefore needs **no cycle gate**. A stored value holds no owning `Rc` back to
 a region, so storing a composite that carries an escaping closure into any region — including the one

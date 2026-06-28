@@ -41,8 +41,10 @@ dep-result currency already carries — the uniform retain at the
 **Directions.**
 
 - *Its own PR, after the object family — decided.* At ~38 sites the `ktype` conversion is its own PR;
-  it reuses the shipped dep-result plumbing and lands *after* the object family's
-  [embedding-site inversions](alloc-object-embedding-sites.md).
+  it reuses the shipped dep-result plumbing and lands *after* the object family's construction
+  inversions ([`constructors`](../../src/machine/execute/dispatch/constructors.rs),
+  [`catch`](../../src/builtins/catch.rs), [FN-def `finalize`](../../src/builtins/fn_def/finalize.rs)),
+  which have shipped.
 - *Construction inversion, not post-hoc bundling — decided.* The type is built inside the witness
   closure; a `for<'b>` closure cannot accept an already-built `KType<'a>`. Most variants `yoke` (owned
   / `Rc` data); a `KType::Module` folds its child-scope reach.
@@ -53,20 +55,19 @@ dep-result currency already carries — the uniform retain at the
   [reach-set](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into) plus its home
   frame added on lift.
 - *Completes the single-frame reconstruction's deletion — decided.* The object and user-fn-arg paths'
-  last dependence on `reached_frame` is retired by
-  [the carrier-delivery follow-up](alloc-object-delivered-carriers.md) (the value-embedding object sites
-  and the user-fn object-arg bind both fold onto carriers / the scope reach-set); this item takes the
-  final `KType::Module` user off it. With binding reach on the per-scope reach-set and every relocated
-  value carrying its reach on its dep currency, the uniform retain at the `relocate` loses its last
-  caller, so `reached_frame` and the per-frame `retained` field are deleted here.
+  last dependence on `reached_frame` is already retired: the value-embedding object sites
+  ([`attr`](../../src/builtins/attr.rs), [`FROM`](../../src/builtins/record_projection.rs), the literal
+  Resolved arm) `merge` their delivered carrier, and the [`let`](../../src/builtins/let_binding.rs) and
+  user-fn object-arg ([`exec::invoke`](../../src/machine/execute/dispatch/exec.rs)) binds fold onto the
+  scope reach-set, leaving [`reached_frame`](../../src/machine/execute/lift.rs) serving only
+  `KType::Module`. This item takes that final user off it. With binding reach on the per-scope reach-set
+  and every relocated value carrying its reach on its dep currency, the uniform retain at the `relocate`
+  loses its last caller, so `reached_frame` and the per-frame `retained` field are deleted here.
 
 ## Dependencies
 
-**Requires:**
-
-- [Carrier-delivered object embeds and the relocate-seam-fold retirement](alloc-object-delivered-carriers.md) —
-  takes the object and user-fn-arg paths off `reached_frame`, the retirement this item completes by
-  taking the final `KType::Module` user off it.
+**Requires:** none — the object and user-fn-arg paths are already off `reached_frame` (the
+carrier-delivered embeds and bind folds have shipped), leaving only `KType::Module` for this item.
 
 **Unblocks:**
 
