@@ -143,6 +143,17 @@ pub(super) fn invoke<'step>(
     let frame = view
         .current_frame()
         .expect("a user-fn invoke runs against the Continue-installed per-call cart");
+    // Deposit each delivered argument's reach into the per-call scope's reach-set — the same scope
+    // `run_user_fn` deep-clones the arguments into and binds the parameters on — so every foreign
+    // region an argument borrows into outlives the call. This is the bind-precise fold replacing the
+    // relocate-seam reconstruction for user-fn object args (the seam wrongly folds into the caller
+    // scope). Each carrier names the consumer frame ∪ foreign reach, and `fold_reach` omits the home
+    // frame, so a region-pure argument deposits nothing while a multi-region one contributes every
+    // region it reaches. Slot identity is irrelevant here, so all carriers fold uniformly.
+    let call_scope = frame.scope();
+    for (_slot, carrier) in &arg_carriers {
+        call_scope.fold_reach(carrier.witness());
+    }
     let exec_frame = ExecFrame {
         region: frame.clone(),
     };
