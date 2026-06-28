@@ -131,6 +131,15 @@ pub fn body<'a>(
         if let Err(e) = ctx.scope.bind_value(name, allocated, bind_index) {
             return done_err(e);
         }
+        // Deposit the bound value's reach into the scope's reach-set so every foreign region it
+        // borrows into outlives the binding — the bind-precise fold replacing the single-frame
+        // relocate-seam reconstruction for the object channel. The delivered carrier witnesses the
+        // consumer frame ∪ the value's foreign reach; `fold_reach` omits the home frame, so a
+        // region-pure value (or an ancestor-bound name, kept alive by the home frame's `outer` chain)
+        // deposits nothing, while a multi-region value contributes every region it reaches.
+        if let Some(carrier) = ctx.arg_carrier("value") {
+            ctx.scope.fold_reach(carrier.witness());
+        }
         Action::Done(Ok(Carried::Object(allocated)))
     }
 }
