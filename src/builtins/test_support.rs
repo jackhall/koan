@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::FrameStorage;
-use crate::machine::execute::{reached_frame, KoanRuntime};
+use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
@@ -24,18 +24,16 @@ use super::default_scope;
 /// Extract a top-level terminal at the scope lifetime `'a`. The scheduler reads at its own `&self`
 /// borrow; re-anchoring the read to `'a` — a safe `reattach_with` witnessed by the `scope.region`
 /// borrow — is sound. A returned closure / module rides a bare borrow into its per-call region, so
-/// (like a production bind / drain) retain that region on `scope`'s frame: the caller drops the
-/// scheduler right after this returns, and the result must outlive it. Test-only — production code
-/// reads at the scheduler borrow.
+/// (like the production drain) fold the slot's witness onto `scope`'s reach-set: the caller drops the
+/// scheduler right after this returns, and `scope` outlives it, so its reach-set keeps every region
+/// the result reaches alive. Test-only — production code reads at the scheduler borrow.
 pub(crate) fn extract_terminal<'a>(
     sched: &KoanRuntime<'a>,
     scope: &'a Scope<'a>,
     id: NodeId,
 ) -> Carried<'a> {
     let value = reattach_with::<CarriedFamily, _>(sched.read(id), scope.region);
-    if let (Some(home), Some(reached)) = (scope.region_owner().upgrade(), reached_frame(value)) {
-        home.retain(reached);
-    }
+    scope.fold_reach(&sched.dep_witness(id));
     value
 }
 

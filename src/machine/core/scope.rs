@@ -211,12 +211,11 @@ impl<'a> Scope<'a> {
 
     /// Fold a value's reach (a [`FrameSet`]) into this scope's reach-set, omitting any frame the home
     /// frame already pins (its own region or an ancestor) — see [`FrameSet::fold_foreign`]. Called as a
-    /// value is relocated / bound under the scope, so the foreign regions it borrows into stay alive for
-    /// the scope's life. The relocate seam folds a single frame recovered from the value via
-    /// [`reached_frame`](crate::machine::execute::reached_frame); a witnessed bind folds the value's
-    /// full carried union, so a multi-region value then contributes *every* region it reaches rather
-    /// than one frame. A fold past the seal ([`Self::close`]) is the same invariant violation as a bind
-    /// past close, so it mirrors [`Self::assert_open`]'s `debug_assert`.
+    /// value is bound under the scope (a `let` / user-fn arg / applied-here closure) and at the
+    /// run-root drain, so the foreign regions it borrows into stay alive for the scope's life. A bind
+    /// folds the value's full carried union, so a multi-region value contributes *every* region it
+    /// reaches. A fold past the seal ([`Self::close`]) is the same invariant violation as a bind past
+    /// close, so it mirrors [`Self::assert_open`]'s `debug_assert`.
     pub(crate) fn fold_reach(&self, witness: &FrameSet) {
         debug_assert!(
             !self.closed.get(),
@@ -751,7 +750,7 @@ impl<'a> Scope<'a> {
 
     /// Carrier-returning twin of [`Self::resolve_with_chain`]: resolve `name` to the bound value
     /// wrapped in a [`Witnessed`] carrier naming its reach, so an object-value read embeds a carrier
-    /// by construction instead of reconstructing the reach via `reached_frame`. Walks the same `outer`
+    /// by construction instead of reconstructing the reach from the value. Walks the same `outer`
     /// chain, but at the **binding** scope wraps the value via [`Self::bound_value_carrier`] — the
     /// witness is that scope's home frame, not the reading scope's. The non-`Value` dispositions mirror
     /// [`Self::resolve_with_chain`].

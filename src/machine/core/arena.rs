@@ -13,7 +13,7 @@
 //! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 
 use typed_arena::Arena;
@@ -318,15 +318,6 @@ pub struct FrameStorage {
     /// storage outlives this child's `outer` scope pointer — and the link [`FrameStorage::pins_region`]
     /// walks for [`FrameSet`] subsumption. Drop tears down the chain in order.
     outer: Option<Rc<FrameStorage>>,
-    /// Per-call regions a value *bound into this frame's region* still borrows into. A returned
-    /// closure / module rides a bare borrow into its defining (descendant) frame, whose `Rc` is held
-    /// only by the producing scheduler's nodes and would drop when that scheduler tears down. Binding
-    /// the value retains that frame here — the persistent pin a region-referencing value needs once
-    /// its producer is gone, recovered from the value's scope `region_owner` at bind time. No cycle
-    /// forms: a dispatched frame's `outer` is `None`, so a retained descendant never strong-refs back
-    /// up the chain. Declared after `region` so this frame's borrowers drop before the regions they
-    /// borrow into; `RefCell` because binds accrue after construction.
-    retained: RefCell<FrameSet>,
 }
 
 impl FrameStorage {
@@ -338,7 +329,6 @@ impl FrameStorage {
         Rc::new(FrameStorage {
             region: KoanRegion::new(),
             outer: None,
-            retained: RefCell::new(FrameSet::empty()),
         })
     }
 
@@ -365,16 +355,6 @@ impl FrameStorage {
         }
     }
 
-    /// Pin `frame`'s region under this frame so a value bound here that still borrows into it
-    /// outlives `frame`'s producing scheduler. A no-op when this frame's own `outer` chain already
-    /// keeps the region alive (self or an ancestor); the [`FrameSet`] dedups by region, so repeated
-    /// binds reaching one region pin it once.
-    pub(crate) fn retain(&self, frame: Rc<FrameStorage>) {
-        if self.pins_region(frame.region() as *const KoanRegion) {
-            return;
-        }
-        self.retained.borrow_mut().insert(frame);
-    }
 }
 
 /// The unified region-owner witness: the set of `Rc<FrameStorage>` whose regions a carrier's value
@@ -474,16 +454,6 @@ impl FrameSet {
         }
     }
 
-    /// Retain every member's region onto `home` — the persistent-frame analog of [`Self::fold_foreign`]
-    /// for a drained top-level result, so a closure read out of the scheduler outlives its producer
-    /// frames' teardown. Each member rides [`FrameStorage::retain`]'s region-subsumption dedup (a member
-    /// `home` or an ancestor already pins is a no-op), so a multi-region result keeps every region it
-    /// reaches read straight off the carrier's witness set.
-    pub(crate) fn retain_onto(&self, home: &FrameStorage) {
-        for owner in &self.frames {
-            home.retain(Rc::clone(owner));
-        }
-    }
 }
 
 // SAFETY: each member `Rc<FrameStorage>` keeps its `KoanRegion` — and the arena pages a value lives in
@@ -557,7 +527,6 @@ impl CallFrame {
         let storage = Rc::new(FrameStorage {
             region: KoanRegion::new(),
             outer: outer_frame,
-            retained: RefCell::new(FrameSet::empty()),
         });
         // The child is built from the heap-pinned `storage` handle — no `'static` claim and no
         // pointer fabrication. It derives both the region borrow and the owning `Weak` from
@@ -717,7 +686,6 @@ impl CallFrame {
         let storage = Rc::new(FrameStorage {
             region: KoanRegion::new(),
             outer: None,
-            retained: RefCell::new(FrameSet::empty()),
         });
         // The child is built from the heap-pinned `storage` handle (region borrow + owning `Weak`),
         // with `new_outer` brand-shortened by `child_for_frame` (no `reattach_ref` on the outer link).

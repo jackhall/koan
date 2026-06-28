@@ -27,7 +27,7 @@ use crate::witnessed::reattachable;
 use crate::witnessed::{Sealed, Witnessed};
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
-use super::lift::{reached_frame, relocate_carried};
+use super::lift::relocate_carried;
 use super::nodes::NodeWork;
 use super::runtime::KoanWorkload;
 
@@ -166,11 +166,12 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
 /// by construction (the [`alloc` construction
 /// inversion](../../../../design/per-node-memory.md#construction-yoke-merge-map-and-one-wrapper-per-node)). `value` is the same
 /// value re-anchored **live at the step brand** (read out of the producer slot, pinned by the step
-/// open) for the **value-copy** finishes still on the bare channel, which relocate it into the consumer
-/// region via [`relocate_dep_into_consumer`], folding the relocated value's reach into the consumer
-/// scope's [reach-set](crate::machine::Scope::fold_reach) so a surviving module borrow outlives the
-/// producer's frame (the object channel rides its carrier instead). The dep's reach is separately read
-/// off the carrier (`carrier.witness()`) and unioned into the consumer-step `pin` before the open.
+/// open) for the **value-copy** finishes still on the bare channel, which [`relocate_carried`] it into
+/// the consumer region (a bare structural copy: the spine is rebuilt, a surviving closure / module
+/// borrow is preserved verbatim). Such a borrow stays alive without a per-relocate reach fold: its
+/// reach rides the dep's own carrier, read off `carrier.witness()` and unioned into the consumer-step
+/// `pin` before the open, and folded onto the scope reach-set only when the value is *bound*
+/// (`let` / user-fn arg). The dep's reach is read off the carrier the same way for every dep.
 pub(in crate::machine::execute) struct DepTerminal<'a> {
     pub(in crate::machine::execute) value: Carried<'a>,
     pub(in crate::machine::execute) carrier: Sealed<CarriedFamily, FrameSet>,
@@ -207,34 +208,6 @@ pub(in crate::machine::execute) struct ContinuationFamily;
 // layout is identical for every `'r`, so the shared `reattachable!` macro discharges the obligation.
 reattachable!(ContinuationFamily => NodeContinuation<'r>);
 
-/// Relocate a dep terminal into the consumer scope's region and — for the type channel's not-yet-
-/// witnessed `KType::Module` identity — fold the region it borrows into onto that scope's
-/// [reach-set](crate::machine::Scope::fold_reach). The consumer-pull lift delivers each dep
-/// un-relocated (read at the step brand from its producer slot); a value-copy finish calls this to copy
-/// the value into its own region so it dies with the consumer. A relocated module still rides a bare
-/// borrow into its defining (foreign) region, recovered from the *relocated value* via
-/// [`reached_frame`](super::lift::reached_frame); folding it keeps that borrow alive for the life of the
-/// scope it lands under. Every other value folds nothing here: the object channel carries its reach on
-/// the delivered carrier (folded at the embedding site — `let` / `attr` / `FROM` / user-fn arg), and a
-/// region-pure value reaches no foreign frame.
-///
-/// The module reach is read from the **value**, not from the dep's carrier witness: a finalized carrier
-/// witnesses its *producer* frame (held only so the terminal stays readable until consumers pull),
-/// which a region-pure value does not reach — folding that would peg a TCO-reusable frame.
-///
-/// Only `KType::Module` remains on this fold — every object site reads its reach off a carrier;
-/// [`alloc_ktype`](../../../roadmap/per-node-memory/alloc-ktype-witnessed.md) takes the module off
-/// [`reached_frame`] when it inverts the type family.
-fn relocate_dep_into_consumer<'b>(view: &SchedulerView<'b, '_>, value: Carried<'b>) -> Carried<'b> {
-    let relocated = relocate_carried(value, view.current_scope().region);
-    // A relocated module borrow keeps its defining (foreign) region alive on the consumer scope's
-    // reach-set; `reached_frame` returns `None` for every other value, which folds nothing.
-    if let Some(reached) = reached_frame(relocated) {
-        view.current_scope().fold_reach(&FrameSet::singleton(reached));
-    }
-    relocated
-}
-
 /// Dep-finish continuation: short-circuit on the first errored dep (labelled with `dep_error_frame`),
 /// else relocate each resolved dep into the consumer region and hand the values to a value-only
 /// [`DepFinish`]. The short-circuit and the per-dep relocation are this combinator's job, so the node
@@ -249,7 +222,7 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
         for r in results {
             match r {
                 Ok(t) => {
-                    values.push(relocate_dep_into_consumer(view, t.value));
+                    values.push(relocate_carried(t.value, view.current_scope().region));
                     // The dep's own carrier (un-relocated, naming its reach) rides alongside the
                     // relocated value so a call-committing finish threads it to the body. Borrowed —
                     // a finish that keeps a carrier `duplicate`s it.
@@ -280,8 +253,8 @@ pub(in crate::machine::execute) type WitnessedDepFinish<'a> = Box<
 /// Witnessed dep-finish continuation: short-circuit on the first errored dep, else hand the resolved
 /// dep terminals (un-relocated, value + reach) to a [`WitnessedDepFinish`] that folds them into a
 /// witnessed aggregate carrier. The fold relocates each dep once (`transfer_into`) and names the union
-/// of their reaches on the carrier, so neither per-dep relocation nor `reached_frame` retention runs
-/// on this path. A finish error becomes a bare [`Outcome::Done`] error.
+/// of their reaches on the carrier, so no separate per-dep relocation runs on this path. A finish
+/// error becomes a bare [`Outcome::Done`] error.
 pub(in crate::machine::execute) fn short_circuit_witnessed<'a>(
     dep_error_frame: Option<TraceFrame>,
     finish: WitnessedDepFinish<'a>,
@@ -314,7 +287,7 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
             // for a value-reading finish (TRY-WITH's `it` bind), and hand the producer's own carrier
             // alongside for a witnessed finish (CATCH folds it via `transfer_into`).
             Ok(t) => Ok(CatchOk {
-                value: relocate_dep_into_consumer(view, t.value),
+                value: relocate_carried(t.value, view.current_scope().region),
                 carrier: t.carrier.duplicate(),
             }),
             // Frameless: the recovery-site dispatch attaches its own frame.

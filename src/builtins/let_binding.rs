@@ -107,7 +107,13 @@ pub fn body<'a>(
         if let Err(e) = ctx.scope.register_user_type(name, kt, bind_index) {
             return done_err(e);
         }
-        Action::DoneWitnessed(ctx.scope.seal_type(Carried::Type(kt_ref)))
+        // Deposit the bound type's reach onto the scope's reach-set so an identity reaching a foreign
+        // region (a module returned from a call, naming a child scope in the now-dying producer frame)
+        // outlives the binding — the type-channel analogue of the value-arm fold below. `fold_reach`
+        // omits the home frame, so a region-pure / ancestor-resident type deposits nothing.
+        let carrier = ctx.scope.seal_type(Carried::Type(kt_ref));
+        ctx.scope.fold_reach(carrier.witness());
+        Action::DoneWitnessed(carrier)
     } else {
         let value = rhs
             .as_object()

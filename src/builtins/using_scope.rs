@@ -57,9 +57,16 @@ pub fn body<'a>(
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("m".to_string())))),
     };
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "USING", "body"));
-    // The borrowed window outlives the eager `m` arg and any escaping closure because the module
-    // arrives as a consumer-pulled dep, its defining region pinned by this step's witness set — no
-    // per-value frame anchor to re-root.
+    // Root the opened module's reach on the call-site scope. Its child-scope region (a functor
+    // result's per-call frame) is pinned only by the eager `m` dep across this step, but the
+    // transparent `child` window below borrows that region and outlives the step — and any closure
+    // escaping the block captures `child`. Folding the `m` carrier's reach onto `ctx.scope` (where
+    // `child` lives) keeps the region alive for the window's life, the carrier-delivered analogue of
+    // the old relocate-seam reach reconstruction. A top-level module reaches no per-call region, so
+    // `fold_reach`'s home/ancestor omission folds nothing.
+    if let Some(carrier) = ctx.arg_carrier("m") {
+        ctx.scope.fold_reach(carrier.witness());
+    }
     // Transparent scope lives in the call-site region so forwarded binds and block-defined
     // functions outlive the block.
     let module_bindings = module.child_scope().bindings();

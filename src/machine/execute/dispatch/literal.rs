@@ -295,16 +295,13 @@ impl<'step> KoanRuntime<'step> {
             active_chain,
             None,
         ) {
-            // A first-class **type** resolved into the cell rides the type channel — the transitional
-            // `Witnessed::new` bundle stays until the type family inverts (`alloc_ktype`). The value
-            // case is handled above via the binding-scope carrier, so this is reached only for a `Type`
-            // carrier (whose region the classify frame's `outer` chain pins, an ancestor).
+            // A first-class **type** resolved into the cell rides the type channel sealed under the
+            // classify scope's home frame, which pins the type's (ancestor) region via its `outer`
+            // chain — `seal_type` yokes it (a `KType::Module` folds its child reach), co-located by the
+            // brand, never an asserted bundle. The value case is handled above via the binding-scope
+            // carrier, so this is reached only for a `Type` carrier.
             NameOutcome::Resolved(c) => {
-                let witness = current_scope(&self.ambient)
-                    .region_owner()
-                    .upgrade()
-                    .map_or_else(FrameSet::empty, FrameSet::singleton);
-                Slot::Static(Sealed::seal(Witnessed::new(c, witness)))
+                Slot::Static(Sealed::seal(current_scope(&self.ambient).seal_type(c)))
             }
             NameOutcome::Parked(producer) => {
                 let pos = park_producers.len();

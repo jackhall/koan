@@ -114,6 +114,15 @@ impl<'run> KoanRuntime<'run> {
         self.sched.read(id)
     }
 
+    /// The witness set of a slot's finalized terminal — every region the value reaches. The
+    /// test-harness [`extract_terminal`](crate::builtins::test_support) hook for depositing a returned
+    /// closure's / module's reach onto a surviving scope's reach-set, mirroring the run-root drain's
+    /// `fold_reach`. Production reads the witness off the relocated carrier instead.
+    #[cfg(test)]
+    pub(crate) fn dep_witness(&self, id: NodeId) -> crate::machine::FrameSet {
+        self.sched.dep_witness(id)
+    }
+
     /// Relocate `producer`'s terminal into `dest` and re-seal it under the set union of every region
     /// it reaches and `dest`'s `dest_witness` — routing the merge-form
     /// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into), so the relocation re-anchors

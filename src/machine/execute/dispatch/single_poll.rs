@@ -57,7 +57,7 @@ pub(super) fn bare_identifier<'step, 'b>(
     match s.resolve_value_carrier(&name, ctx.chain_deref()) {
         // The bound value rides out on a carrier witnessed by its binding scope's home frame, which
         // transitively pins that scope's reach-set — so the read names the value's reach by
-        // construction rather than leaving it for the relocate-seam `reached_frame` reconstruction.
+        // construction rather than reconstructing it from the value.
         ValueCarrierResolution::Value(carrier) => Outcome::DoneWitnessed(carrier),
         ValueCarrierResolution::Placeholder(producer) => forward_to_producer(producer),
         ValueCarrierResolution::UnboundName => {

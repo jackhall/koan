@@ -7,7 +7,6 @@
 use super::KoanRuntime;
 use crate::builtins::default_scope;
 use crate::machine::core::FrameStorage;
-use crate::machine::execute::lift::reached_frame;
 use crate::machine::model::ast::KExpression;
 use crate::machine::{FrameSet, KError, KErrorKind, Scope};
 use crate::parse::{parse, parse_with_path};
@@ -70,30 +69,18 @@ impl<'run> KoanRuntime<'run> {
             // that outlives the run — and an errored terminal need no re-home.
             let pin = self.sched.dep_witness(id);
             if !pin.is_empty() {
-                // The type channel's module identity is not yet witnessed, so the region it borrows
-                // into is recovered from the value via `reached_frame` (Module-only) and retained on
-                // the persistent run-root frame, so a returned module the caller inspects survives the
-                // scheduler's teardown — until alloc-ktype inverts the type family.
-                if let (Some(home), Ok(value)) =
-                    (root.region_owner().upgrade(), self.read_result(id))
-                {
-                    if let Some(reached) = reached_frame(value) {
-                        home.retain(reached);
-                    }
-                }
                 // Relocate into the surviving run region via the merge-form transfer: the spine is
                 // copied there and the result re-sealed under the root's own reached sources (the run
                 // region's `dest_witness` is empty — it outlives the run, so needs no held pin),
                 // dropping the per-call frame the producer kept the terminal in.
                 if let Ok(witnessed) = self.relocate_terminal(id, root.region, FrameSet::empty()) {
-                    // The rehomed terminal's witness names the object channel's foreign reach (a
-                    // closure's captured regions) with the producer frame already dropped by the
-                    // relocate, so retaining it on the persistent run-root frame keeps a closure read
-                    // out of the scheduler alive past teardown — multi-region correct, read straight
-                    // off the carrier rather than reconstructed.
-                    if let Some(home) = root.region_owner().upgrade() {
-                        witnessed.witness().retain_onto(&home);
-                    }
+                    // Deposit the rehomed terminal's reach (a returned closure's / module's captured
+                    // regions, named on the carrier with the producer frame already dropped by the
+                    // relocate) onto the run-root scope's reach-set. The run root lives in the run
+                    // region that outlives the scheduler, so its reach-set keeps every such region
+                    // alive past teardown — multi-region correct, read straight off the carrier for
+                    // both channels (the type-channel module included now that it is witnessed).
+                    root.fold_reach(witnessed.witness());
                     self.sched.rehome_terminal(id, Ok(witnessed));
                 }
             }

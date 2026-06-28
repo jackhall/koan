@@ -145,10 +145,11 @@ impl<'run> KoanRuntime<'run> {
         // lifetime `'s` bounded by the cart `Rc` cloned into `consumer_frame` — not the run global.
         // `read_lifted` re-anchors each producer read to it.
         let consumer_frame = self.ambient.active_frame_ref().cloned();
-        // `dest` is the consumer scope's region. The relocation that copies each dep into it — and the
-        // `reached_frame` retention that keeps a relocated closure / module's defining region alive on
-        // the consumer frame — now runs inside the consuming continuation (`short_circuit` / `catch`),
-        // not here: the lift delivers deps un-relocated so a construction finish can fold the carriers.
+        // `dest` is the consumer scope's region. The relocation that copies each dep into it runs
+        // inside the consuming continuation (`short_circuit` / `catch`), not here: the lift delivers
+        // deps un-relocated, so a construction finish folds their carriers and a value-copy finish
+        // copies the spine — a relocated closure / module's reach rides its own carrier (read off the
+        // witness set), folded onto the scope only when the value is bound, never reconstructed.
         let dest: &KoanRegion = {
             let payload = self
                 .ambient
@@ -175,11 +176,14 @@ impl<'run> KoanRuntime<'run> {
             .collect();
         // The consumer-step **pin**: the set union of every region this step's deps reach, read off
         // the dep terminals' `reach` above (an errored dep has no `DepTerminal`, so its witness is
-        // re-read). Assembled *before* the open so it outlives the brand `'b`; it is the dep half of the
-        // finalized terminal's witness set, and — unioned with the cart into `combined` below — the
-        // witness the step open re-anchors its carriers against, keeping every dep source alive past
-        // `reclaim_deps`. (Over-approximation: every read dep, not only those reaching the output;
-        // retired to exact when `alloc_*` returns `Witnessed`.)
+        // re-read). Assembled *before* the open so it outlives the brand `'b`; unioned with the cart
+        // into `combined` below, it is the witness the step open re-anchors its carriers against,
+        // keeping every dep source alive past `reclaim_deps`. As the *liveness* pin it must cover every
+        // read dep (each is opened at `'b`), so it spans the whole dep slice. As a *terminal* witness
+        // (the bare-`Done` path's `dep_reached`) it is now exact, not over-approximate: every multi-dep
+        // construction rides `DoneWitnessed` with its own carrier naming exactly the regions the output
+        // reaches, so the only terminals still taking `pin` are single-dep forwards (`pin` = that dep's
+        // reach) and errors (which carry no value witness).
         let pin: FrameSet =
             dep_sources
                 .iter()
@@ -277,11 +281,11 @@ impl<'run> KoanRuntime<'run> {
                             self.sched.finalize(idx, result);
                         }
                         NodeStep::DoneWitnessed(carrier) => {
-                            // The object-family terminal arrived already witnessed — the construction
-                            // inversion built it inside its witness closure, naming every region it
-                            // reaches. The hook seals it: a pass-through bar a declared-return re-stamp,
-                            // and **no** `dep_reached`/`pin` recomputation — the carrier's own witness
-                            // is the exact reach (over-approximate `pin` retired for this path).
+                            // A construction terminal — object *or* type — arrived already witnessed:
+                            // the construction inversion built it inside its witness closure, naming
+                            // every region it reaches. The hook seals it: a pass-through bar a
+                            // declared-return re-stamp, and **no** `dep_reached`/`pin` use — the
+                            // carrier's own witness is the exact reach.
                             let live_contract = frame.and(live_contract);
                             let result =
                                 self.finalize_terminal_witnessed(carrier, frame, live_contract);

@@ -8,7 +8,6 @@ use crate::machine::model::types::KType;
 use crate::machine::model::values::{Carried, CarriedFamily, Held, KObject};
 use crate::machine::BindingIndex;
 use crate::witnessed::{Sealed, Witnessed};
-use std::cell::RefCell;
 use std::marker::PhantomData;
 
 /// A child `FrameStorage` whose `outer` chains `parent` — the ancestry shape `FrameSet`
@@ -17,7 +16,6 @@ fn child_storage(parent: &Rc<FrameStorage>) -> Rc<FrameStorage> {
     Rc::new(FrameStorage {
         region: KoanRegion::new(),
         outer: Some(Rc::clone(parent)),
-        retained: RefCell::new(FrameSet::empty()),
     })
 }
 
@@ -394,9 +392,9 @@ crate::witnessed::reattachable!(AggBuildFamily => (&'r KoanRegion, Vec<Held<'r>>
 /// every reached region (a `FrameSet` set witness — the multi-foreign case a single-region witness
 /// cannot represent); a final [`map`](Witnessed::map) allocates the list node into the carried region.
 /// After every producer handle drops, the folded witness is the sole owner of all three regions the
-/// list reaches, so reading the cells back is sound — the proof the construction site does not need a
-/// `reached_frame` recovery or a `FrameStorage.retained` accumulator: the reach is named on the one
-/// carrier. Mirrors the production fold; fails on UB / leaks, not values.
+/// list reaches, so reading the cells back is sound — the proof the construction site names its reach
+/// on the one carrier rather than reconstructing it from the value. Mirrors the production fold; fails
+/// on UB / leaks, not values.
 #[test]
 fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     // Two unrelated producer frames, each holding one element — sibling producers whose terminals

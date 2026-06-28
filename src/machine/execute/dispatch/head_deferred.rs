@@ -74,9 +74,9 @@ fn park_on_head<'step>(
         };
         // The head resolved to a computed callable (a functor / closure) whose captured region is
         // foreign to this scope and held only on the producer's now-resolving node. Fold its carrier
-        // reach into the consumer scope so the captured environment outlives the application — the
-        // object channel's carrier read-off replacing the seam's `reached_frame` retention for a
-        // called-here closure (the head value is applied, not embedded in a witnessed result).
+        // reach into the consumer scope so the captured environment outlives the application: the head
+        // value is applied (not embedded in a witnessed result), so its reach rides the bind fold here,
+        // read straight off the delivered carrier.
         if let Some(carrier) = carriers.first() {
             ctx.current_scope().fold_reach(carrier.witness());
         }
