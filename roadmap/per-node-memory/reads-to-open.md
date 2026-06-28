@@ -3,9 +3,8 @@
 Restructure every read that escapes a re-anchored reference up the dispatcher stack onto `open` +
 copy-out / CPS, deleting the transitional self-witnessed `read` and the loose witness-borrow wrappers.
 
-**Problem.** With the object channel witnessed and its reach carried (the value-embedding sites `merge`
-their delivered carrier and binds fold it into the scope reach-set) and the type channel converting next
-([`alloc_ktype`](alloc-ktype-witnessed.md)), the
+**Problem.** With both the object and type channels witnessed and their reach carried (the
+value-embedding sites `merge` their delivered carrier and binds fold it into the scope reach-set), the
 values flowing through slots are `Sealed` carriers, but the consumption sites still hand a re-anchored
 reference back up the call stack — the shape the rank-2 [`open`](../../src/witnessed.rs) forbids by
 construction. Three readers do it: the result-slot value reads ([`read_result`](../../src/scheduler.rs)
@@ -44,10 +43,8 @@ transitional `read` and both wrappers stay alive as alternate spellings of the o
 
 ## Dependencies
 
-**Requires:**
-
-- [`alloc_ktype` returns `Witnessed`](alloc-ktype-witnessed.md) — the type half; with both done no
-  construction reads a value out bare, so `read` can retire.
+**Requires:** none — both construction channels are witnessed, so every value flowing through a slot
+is a `Sealed` carrier.
 
 **Unblocks:**
 

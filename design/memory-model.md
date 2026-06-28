@@ -29,8 +29,9 @@ than ownership trees. The structural edges:
   reference's scope `region_owner`. They carry no per-value liveness anchor:
   the region an escaping closure / future reaches is pinned by the carrier's
   witness [`FrameSet`](../src/machine/core/arena.rs) while it rides a scheduler
-  slot, and retained onto the consumer frame when the value is relocated out
-  (see [§ Region lifetime erasure](#region-lifetime-erasure)).
+  slot, then carried on the relocated value's own witness and folded onto the
+  consumer scope's reach-set when the value is bound (see
+  [§ Region lifetime erasure](#region-lifetime-erasure)).
 - `Module` and `Signature` cache their declaration scopes as a
   [`BoundedScopePtr`](../src/machine/core/scope_ptr.rs) (heap-pinned by the surrounding
   region chain).
@@ -42,8 +43,8 @@ per-call region by the lexical-scoping invariant. A reference that points
 canonical case being a closure / module returned from its defining frame —
 keeps that region alive through its carrier's witness, never a per-value anchor
 on the value itself: a producer slot's `FrameSet` pins it while the value rides
-the scheduler, and relocating the value into a consumer's region retains its
-reached frame onto the consumer (see
+the scheduler, and the relocated value carries its reach on its own carrier
+witness, deposited onto the consumer scope's reach-set when bound (see
 [§ Region lifetime erasure](#region-lifetime-erasure)).
 
 **Why graph rather than tree.** Many-to-one captures and bindings, sibling
@@ -75,9 +76,8 @@ the call-site scope and pin every prior frame's bindings alive.
 ## Per-call region protocol
 
 The per-call region's lifecycle — how a relocated value's reached regions are
-retained onto the consumer frame (the
-[`relocate_carried`](../src/machine/execute/lift.rs) copy plus the carrier-set
-retention, with `reached_frame` for the residual type-channel module), how the scheduler propagates the active frame, how
+kept alive (the [`relocate_carried`](../src/machine/execute/lift.rs) copy plus the
+carrier-set reach read off each dep's witness for both channels), how the scheduler propagates the active frame, how
 builtin-built frames chain the call-site frame's storage through
 `FrameStorage.outer`, and how the TCO step reuses the frame shell over a
 fresh `FrameStorage` — is documented in
@@ -239,18 +239,16 @@ relocated value re-sealed under the set union of every region it still reaches (
 run-global root region the same way.
 
 A relocated closure / future / module survives its producer's dying frame because the copy keeps its
-bare borrow and the *consumer* frame keeps that borrow's region alive. A **closure / future** carries
-the regions it reaches on its [delivered carrier](per-node-memory.md#storage-and-access-seal-open-transfer_into):
-the embedding or binding site folds that carrier (`merge` at an `attr` / `FROM` projection, `fold_reach`
-at a `let` / user-fn arg bind), and the root drain `retain`s the rehomed terminal's full witness set
-onto `FrameStorage.retained` — so a multi-region value keeps *every* region it reaches. The one value
-still reconstructed is the type channel's not-yet-witnessed `KType::Module`: `reached_frame`
-([`lift.rs`](../src/machine/execute/lift.rs)) recovers its child scope's defining frame from the value's
-`region_owner`, and the consumer frame `retain`s that single frame into `FrameStorage.retained` at the
-read-out boundaries — the `run_step` relocate, the root drain, and the `extract_terminal` test harness —
-until [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) takes it off and deletes the
-reconstruction. No cycle forms: a dispatched frame's `outer` is `None`, so a retained descendant never
-strong-refs back, and `retain` drops a frame whose region an ancestor already pins.
+bare borrow and the *consumer* keeps that borrow's region alive. Both channels carry the regions they
+reach on their [delivered carrier](per-node-memory.md#storage-and-access-seal-open-transfer_into): a
+**closure / future** seals its captured-scope reach at construction, and a **`KType::Module`** seals its
+child-scope home frame and reach-set the same way (via [`Scope::seal_module`](../src/machine/core/scope.rs)).
+The embedding or binding site folds that carrier (`merge` at an `attr` / `FROM` projection, `fold_reach`
+at a `let` / user-fn arg / `USING` bind), and the root drain folds the rehomed terminal's full witness
+set onto the run-root scope's reach-set — so a multi-region value keeps *every* region it reaches, read
+straight off its carrier rather than reconstructed from the value. No cycle forms: a dispatched frame's
+`outer` is `None`, so a depositing descendant never strong-refs back, and `fold_reach` omits a region
+the consumer or an ancestor already pins.
 
 The per-call frame's seed binds (MATCH / TRY `it`, `KFunction::invoke` params) reach the per-call
 region through the child scope's own `region` field — a `Copy` `&'a KoanRegion` reached via
@@ -395,8 +393,7 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
 
 ## Open work
 
-The remaining per-node-memory migrations — wiring `alloc_ktype` to return a co-located `Witnessed`
-carrier (the object channel is already witnessed end-to-end), and moving the residual witness-borrow
-read paths onto the `Sealed` access verbs — are tracked by the
+The remaining per-node-memory migration — moving the residual witness-borrow read paths onto the
+`Sealed` access verbs — is tracked by the
 [per-node-memory roadmap project](../roadmap/per-node-memory/). See
 [per-node-memory.md § Open work](per-node-memory.md#open-work) for the dependency ordering.

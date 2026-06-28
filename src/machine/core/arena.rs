@@ -520,7 +520,7 @@ impl CallFrame {
     /// Build a fresh per-call frame whose child `Scope` uses `outer` as its `outer` link.
     /// `outer_frame` must hold the parent frame's `FrameStorage` Rc when the parent is per-call;
     /// `None` when the parent is run-root — a dispatched frame strong-owns no ancestor, so an
-    /// escaping value retained on a consumer frame forms no back-edge.
+    /// escaping value kept alive by a consumer scope's reach-set forms no back-edge.
     pub fn new(outer: &Scope<'_>, outer_frame: Option<Rc<FrameStorage>>) -> Rc<CallFrame> {
         // The region is born inside its own `Rc<FrameStorage>`, heap-pinned from this point on, so
         // the child-scope pointer below stays valid as the storage Rc moves into the shell.

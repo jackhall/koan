@@ -170,7 +170,7 @@ What's shipped that the open items below build on:
   set-witness (result slot and scope handle on one region-owner type), and the per-value frame
   anchor's removal — a stored value now holds no owning `Rc` back to a region, so the allocation
   engine needs no cycle gate, and an escaping closure / module is kept alive by its carrier's witness
-  set while it rides a slot and retained onto the consumer frame when relocated out; this closed the
+  set while it rides a slot and by the consumer scope's reach-set once bound out; this closed the
   lift-relocation `unsafe` and cleared the process-exit leak — have since landed too. The
   `alloc`-side carrier adoption has begun: the consumer-pull lift now hands each construction finish
   its deps as their producer slots' own `Sealed` carriers (`Sealed::duplicate` / `Scheduler::dep_carrier`,
@@ -180,9 +180,12 @@ What's shipped that the open items below build on:
   carrier-self-building object constructions then joined them: the newtype / tagged-union constructors
   and `catch` fold their dep carriers via `transfer_into` / `merge` (the nominal type identity crossing
   the build brand as a non-object `RegionTypeFamily` operand), and FN def `yoke`s its co-located
-  `KObject::KFunction` onto a carrier witnessed by the defining scope's frame. The
-  remaining value-embedding object sites (the bare-arg `attr` / `FROM` / literal Resolved arm) and the
-  type family are tracked by the [per-node-memory](per-node-memory/) project. See
+  `KObject::KFunction` onto a carrier witnessed by the defining scope's frame. The bare-arg
+  value-embedding object sites (`attr` / `FROM` / the literal Resolved arm) and the **type family** have
+  since followed — every type construction terminal seals via `seal_value` / `seal_type` / `seal_module`,
+  so a `KType::Module` names its child-scope reach on its own carrier, retiring the single-frame
+  `reached_frame` reconstruction and the per-frame `FrameStorage.retained` field. What remains is the
+  consumption-read migration, tracked by the [per-node-memory](per-node-memory/) project. See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -326,7 +329,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [`alloc_ktype` returns `Witnessed`](per-node-memory/alloc-ktype-witnessed.md)
+- [Migrate the consumption reads onto `open`](per-node-memory/reads-to-open.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
@@ -432,17 +435,13 @@ omits the home frame and its lexical ancestors, and seals at scope close — `cl
 and owner-routed for per-call frames, `MODULE` / `SIG`, and the run root), and the
 **carrier-delivered object embeds** (the bare-arg value-embedding sites — `attr`, `FROM`, the literal
 Resolved arm — `merge` a delivered `Sealed` carrier, and `let` / user-fn arg binds fold the bound
-value's full carrier into the reach-set, taking the whole object channel off the single-frame
-`reached_frame` reconstruction) are all
-shipped. The design is captured in
-[design/per-node-memory.md](../design/per-node-memory.md). What remains migrates as one
-linear chain: the type family converts onto `yoke`, taking the last `KType::Module` user off the
-single-frame `reached_frame` / `FrameStorage.retained` reconstruction so it can be deleted — then the
-consumption reads converge on a single `open` verb:
+value's full carrier into the reach-set), and the **type family** (every type construction terminal
+seals via `seal_value` / `seal_type` / `seal_module`, so a `KType::Module` names its child-scope reach
+on its own carrier — taking the last user off the single-frame `reached_frame` reconstruction and
+deleting both it and the per-frame `FrameStorage.retained` field) are all shipped. The design is
+captured in [design/per-node-memory.md](../design/per-node-memory.md). What remains is the
+consumption-read migration onto a single `open` verb:
 
-- [`alloc_ktype` returns `Witnessed`](per-node-memory/alloc-ktype-witnessed.md) — convert the type
-  family onto `yoke`; the last `KType::Module` user converted, `reached_frame` and the per-frame
-  `retained` field are deleted and the step `pin` becomes exact.
 - [Migrate the consumption reads onto `open`](per-node-memory/reads-to-open.md) — restructure the
   result-slot value reads, scope-handle reads, and ~40 loose `reattach_*` sites onto `open` + copy-out /
   CPS, deleting the transitional self-witnessed `read` and both wrappers.

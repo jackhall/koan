@@ -228,12 +228,12 @@ pub enum Action<'a> {
     /// Produce a value / error for this slot (after any direct scope mutation the builtin did).
     Done(Result<Carried<'a>, KError>),
     /// Produce a value built **inside the witness closure** — already bundled with the set of
-    /// regions it reaches ([`yoke`](crate::witnessed::Witnessed::yoke) / `merge` at the alloc site),
-    /// so it is co-located by construction rather than paired with an asserted witness at finalize.
-    /// The object-family terminal: a builtin that allocates a `KObject` returns this instead of the
-    /// bare [`Done`](Self::Done). The type channel (a `Carried::Type`) and every error stay on `Done`
-    /// until [`alloc_ktype`](../../../../roadmap/per-node-memory/alloc-ktype-witnessed.md) inverts
-    /// the type family, when the two collapse to one.
+    /// regions it reaches ([`yoke`](crate::witnessed::Witnessed::yoke) / `merge` at the alloc site, or
+    /// a `seal_value` / `seal_type` / `seal_module` sealing a constructed value), so it is co-located
+    /// by construction rather than paired with an asserted witness at finalize. The construction
+    /// terminal for **both** channels: a builtin that allocates a `KObject` or a `KType` returns this
+    /// instead of the bare [`Done`](Self::Done). Only errors and a single-dep value *forward* (whose
+    /// witness is exactly the forwarded dep's reach) stay on `Done`.
     DoneWitnessed(Witnessed<CarriedFamily, FrameSet>),
     /// Tail-replace into `tail`, carrying `contract`, in a cart per `frame_placement`. When
     /// `leading` (the body's non-tail statements) is non-empty the slot first parks on them as

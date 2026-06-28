@@ -100,8 +100,13 @@ climb off it the same way: each receives the value it embeds as a delivered
 [`BodyCtx::arg_carrier`](../src/machine/core/kfunction/action.rs), the Resolved arm through the binding
 scope's own [`Scope::seal_value`](../src/machine/core/scope.rs)) and `merge`s it, so the projected object
 names every region it reaches by construction. `Witnessed::new`, which pairs an *already-built* value
-with an asserted witness, is now the transitional rung of the **type** family alone
-([`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md)) — no object-value embed asserts it.
+with an asserted witness, backs no construction terminal: the **type** family seals the same way — a
+region-pure or owned `KType` through [`Scope::seal_value`](../src/machine/core/scope.rs), a
+region-referencing `KType::Module` through [`Scope::seal_module`](../src/machine/core/scope.rs) (which
+folds its child scope's reach) — so every constructed value, object or type, is born co-located by the
+`yoke` brand. Its one remaining use is the bare-[`Done`](../src/machine/core/kfunction/action.rs)
+[`finalize_terminal`](../src/machine/execute/finalize.rs) path, which carries only a single-dep value
+*forward* (its witness exactly the forwarded dep's reach) and errors — never a multi-dep construction.
 
 **`merge` — fold many region-resident values into one.** Generic: a value built
 from references into *two* regions cannot be bundled with one witness by `yoke`
@@ -221,27 +226,29 @@ aggregate and region-pure inversions, the newtype / tagged-union constructors, a
 dep carriers via `transfer_into`; the bare-arg value-embedding sites (`attr`, `FROM`, the literal
 Resolved arm) `merge` the [delivered carrier](#storage-and-access-seal-open-transfer_into) of the value
 they project; and a `let` or user-fn arg bind folds the bound value's carrier into the scope reach-set
-(below). The one **bare value-copy** finish left is the type channel's not-yet-witnessed
-`KType::Module`: it reads the live value out, dropping its set, and reconstructs the reach with a
-transitional mechanism — [`reached_frame`](../src/machine/execute/lift.rs) recovers the *single*
-`Rc<FrameStorage>` the module's child scope lives in. At the relocate-into-consumer seam this single
-frame folds onto the consumer **scope's reach-set** (below); the run-root drain `retain`s it onto the
-per-frame `FrameStorage.retained`, alongside the object channel's full carried set retained off the
-rehomed terminal's witness. [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) takes
-this last `KType::Module` user off `reached_frame` and deletes the reconstruction together with the
-per-frame `retained` field.
+(below). The **type** channel rides the same construction: a type terminal seals via
+[`Scope::seal_type`](../src/machine/core/scope.rs) — a region-pure or owned `KType` under the
+producer's home frame, a region-referencing `KType::Module` via
+[`Scope::seal_module`](../src/machine/core/scope.rs), which folds the child scope's home frame and its
+sealed reach-set onto the carrier. A relocated module therefore names every region it reaches on its
+own witness, read back at the consumer rather than reconstructed from the value. No finish reads a live
+value out to rebuild its reach: the relocate-into-consumer seam is a plain
+[`relocate_carried`](../src/machine/execute/lift.rs) structural copy, transient reach rides each dep's
+carrier, and only a *bound* value deposits onto the scope reach-set (below).
 
 A value *bound into a scope*, whose reach must outlive the binding node, deposits its reach on the
 scope's own **reach-set**: a `FrameSet` held on the [`Scope`](../src/machine/core/scope.rs) that folds
 each deposited value's carried reach (via `fold_reach`) and seals when the scope closes — `close` is the
 seal point, fired at the owning node's finalize and routed per scope kind (a per-call frame at its body
 slot's `Done` / tail-`Continue`; `MODULE` / `SIG` at the block finish; the run root at run end). The
-bind sites deposit by folding the bound value's full delivered carrier: a
-[`let`](../src/builtins/let_binding.rs) folds its value carrier's `FrameSet`, and a user-fn object-arg
-bind folds each argument carrier into the *per-call* scope ([`exec::invoke`](../src/machine/execute/dispatch/exec.rs),
-the scope the parameters bind on), so a multi-region value (a list of closures, a closure over several
-closures) contributes *every* region it reaches — the precise fold that replaced the transitional
-single-frame relocate-seam reconstruction for the object channel.
+bind sites deposit by folding the bound value's full delivered carrier across both channels: a
+[`let`](../src/builtins/let_binding.rs) folds its bound value's carrier (an object RHS or a
+resolved-type RHS alike), a user-fn arg bind folds each argument carrier — object and type — into the
+*per-call* scope ([`exec::invoke`](../src/machine/execute/dispatch/exec.rs), the scope the parameters
+bind on), and [`USING`](../src/builtins/using_scope.rs)'s transparent window folds the opened module's
+carrier onto the call-site scope it borrows into. A multi-region value (a list of closures, a closure
+over several closures, a module reaching a functor-result region) thus contributes *every* region it
+reaches to the scope that outlives it.
 
 `fold_reach` **omits ancestor regions** the scope already keeps alive: its own / a storage-`outer`
 ancestor ([`FrameStorage::pins_region`]), *and* a **lexical** `outer`-chain ancestor. The lexical
@@ -252,10 +259,9 @@ close a `region → scope → set → frame` cycle and defeat the `Rc::get_mut` 
 it realizes [`fold_foreign`](#construction-yoke-merge-map-and-one-wrapper-per-node)'s "omit ancestors"
 intent while keeping a region-pure or ancestor-bound value depositing nothing.
 
-With construction carried and binds folded, the object channel no longer touches `reached_frame`;
-[`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) takes the last `KType::Module` user
-off it and deletes it together with the per-frame `retained` field, retiring the relocate-seam fold
-entirely: reach then lives on the node carrier and, for bindings, on the per-scope sealed reach-set.
+With both channels' construction carried and binds folded, reach lives entirely on the node carrier
+and, for bindings, on the per-scope sealed reach-set: a relocated value's reach is read off its own
+carrier witness, never recovered from the value.
 
 ## Why reads are safe — and where the one escape hatch sits
 
@@ -310,15 +316,12 @@ The keystone run-loop restructure and its consuming `open`, the unified `FrameSe
 production witness impls, the `transfer_into` relocation verb, the per-value frame anchor's
 removal (a stored value holds no owning `Rc` back to a region, so the allocation engine needs no
 cycle gate), the per-scope sealed reach-set with its scope-close seal (the *Transfer* section
-above), and the **whole object channel** — every object construction `yoke`s / `merge`s its reach, the
-bare-arg value-embedding sites (`attr`, `FROM`, the literal Resolved arm) `merge` their delivered
-carrier, and `let` / user-fn arg binds fold their carriers into the reach-set — have all landed (see
+above), and **both construction channels** — every object *and* type construction `yoke`s / `merge`s
+or seals (`seal_value` / `seal_type` / `seal_module`) its reach, the bare-arg value-embedding sites
+(`attr`, `FROM`, the literal Resolved arm) `merge` their delivered carrier, and `let` / user-fn arg /
+`USING` binds fold their carriers into the reach-set — have all landed (see
 [Region lifetime erasure](memory-model.md#region-lifetime-erasure)); what remains is one linear chain:
 
-- [`alloc_ktype`](../roadmap/per-node-memory/alloc-ktype-witnessed.md) returning `Witnessed` — wiring the
-  remaining type `alloc` sites onto `yoke` / `merge` so the last `KType::Module` user comes off
-  `reached_frame`, then deleting `reached_frame` and the per-frame `retained` field (the object channel
-  already reads its reach off the carrier and the scope reach-set, leaving only the type-channel module).
 - [Migrate the consumption reads onto `open`](../roadmap/per-node-memory/reads-to-open.md), then
   [a single access verb](../roadmap/per-node-memory/single-open-verb.md) — restructuring the value-,
   scope-, and wrapper reads onto `open` and deleting the transitional `read` / `attach`.
