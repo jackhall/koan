@@ -1,17 +1,13 @@
 //! Tagged-union construction. `prepare_args` validates the call-site
-//! `(tag value)` shape; `construct` checks the tag against the schema
-//! and the value against the tag's expected type, then emits the
-//! `KObject::Tagged`. See
+//! `(tag value)` shape; the tag/value-type checks and the witnessed
+//! `KObject::Tagged` build live in
+//! [`constructors::finish_witnessed`](super::finish_witnessed), which folds the
+//! value carrier's reach onto the result. See
 //! [`constructors::dispatch_construct`](super::dispatch_construct) for
 //! the dispatch entry.
 
-use std::collections::HashMap;
-use std::rc::Rc;
-
 use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::ast::ExpressionPart;
-use crate::machine::model::types::{KType, RecursiveSet};
-use crate::machine::model::values::KObject;
 use crate::source::Spanned;
 
 /// Validate the args shape: exactly two parts, the first a `Type`-token
@@ -40,41 +36,6 @@ pub(in crate::machine::execute) fn prepare_args<'step>(
         }
     };
     Ok((tag, value_part.value))
-}
-
-/// Validate `tag` against `schema` and `value` against the schema's
-/// expected type for that tag, then emit the `KObject::Tagged`.
-pub(in crate::machine::execute) fn construct<'step>(
-    schema: &HashMap<String, KType<'step>>,
-    set: &Rc<RecursiveSet<'step>>,
-    index: usize,
-    tag: String,
-    value: &KObject<'step>,
-) -> Result<KObject<'step>, KError> {
-    let expected = match schema.get(&tag) {
-        Some(t) => t.clone(),
-        None => {
-            return Err(KError::new(KErrorKind::ShapeError(format!(
-                "tag `{}` not in union (known: {})",
-                tag,
-                schema.keys().cloned().collect::<Vec<_>>().join(", ")
-            ))));
-        }
-    };
-    if !expected.matches_value(value) {
-        return Err(KError::new(KErrorKind::TypeMismatch {
-            arg: "value".to_string(),
-            expected: expected.name().to_string(),
-            got: value.ktype().name().to_string(),
-        }));
-    }
-    Ok(KObject::Tagged {
-        tag,
-        value: Rc::new(value.deep_clone()),
-        set: Rc::clone(set),
-        index,
-        type_args: Rc::new(vec![]),
-    })
 }
 
 #[cfg(test)]

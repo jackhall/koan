@@ -66,8 +66,8 @@ fn run_one_err<'run>(
     }
 }
 
-/// `tagged_union::construct`'s value-type check fires when the value-cell
-/// resolves to a `KObject` that doesn't match the tag's expected type.
+/// The tagged-union value-type check fires when the value-cell resolves to a
+/// `KObject` that doesn't match the tag's expected type.
 #[test]
 fn ctor_fast_lane_rejects_value_of_wrong_type() {
     let region = FrameStorage::run_root();

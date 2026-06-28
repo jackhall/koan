@@ -34,7 +34,8 @@ use super::nodes::{ChainOp, NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, Continuation, Outcome};
 use super::run_loop::RegionRefFamily;
 use super::{
-    catch_continuation, ignore_results, short_circuit, CatchFinish, ContinuationFamily, DepFinish,
+    catch_continuation, ignore_results, short_circuit, short_circuit_witnessed, CatchFinish,
+    ContinuationFamily, DepFinish,
 };
 use crate::machine::model::values::CarriedFamily;
 use crate::scheduler::{Scheduler, Workload};
@@ -503,6 +504,15 @@ impl<'run> KoanRuntime<'run> {
                         dep_ids,
                         park_count,
                         short_circuit(dep_error_frame, finish),
+                        None,
+                    ),
+                    // The construction-inversion sibling: same realized deps and edges, but the
+                    // continuation folds the resolved terminals (value + reach) into one witnessed
+                    // carrier and seals as `DoneWitnessed` (see [`short_circuit_witnessed`]).
+                    Continuation::FinishWitnessed(finish) => NodeWork::new(
+                        dep_ids,
+                        park_count,
+                        short_circuit_witnessed(dep_error_frame, finish),
                         None,
                     ),
                     // The action-harness catch carries its single watched dep unrealized (its

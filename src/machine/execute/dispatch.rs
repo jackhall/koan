@@ -31,7 +31,7 @@ use crate::source::Spanned;
 
 use super::nodes::NodeWork;
 use super::runtime::KoanWorkload;
-use super::{ignore_results, DepFinish};
+use super::{ignore_results, DepFinish, WitnessedDepFinish};
 use crate::machine::core::kfunction::action::{DepPlacement, FramePlacement};
 use crate::scheduler::Scheduler;
 
@@ -263,6 +263,23 @@ pub(in crate::machine::execute) fn park_on_deps<'step>(
         deps,
         park_count: 0,
         continuation: Continuation::Finish(finish),
+        dep_error_frame,
+    }
+}
+
+/// Construction-inversion sibling of [`park_on_deps`]: park on `deps` (all owned) and, on resolve,
+/// fold their terminals (value + reach) into one witnessed carrier via the [`WitnessedDepFinish`],
+/// sealing the slot as [`Outcome::DoneWitnessed`]. The decide-side entry a construction decide
+/// (newtype / tagged union) uses so the built value names every region it reaches by construction.
+pub(in crate::machine::execute) fn park_on_deps_witnessed<'step>(
+    deps: Vec<DepRequest<'step>>,
+    dep_error_frame: Option<TraceFrame>,
+    finish: WitnessedDepFinish<'step>,
+) -> Outcome<'step> {
+    Outcome::ParkThenContinue {
+        deps,
+        park_count: 0,
+        continuation: Continuation::FinishWitnessed(finish),
         dep_error_frame,
     }
 }

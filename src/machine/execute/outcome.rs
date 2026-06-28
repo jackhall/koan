@@ -95,6 +95,12 @@ pub(in crate::machine::execute) enum Outcome<'step> {
 ///   dep-finishes ([`run_action`](super::runtime::run_action)'s `Action::AwaitDeps`, the literal
 ///   builders — labelled [`dep_error_frame`]). Its finish consumes the dep values, runs against a
 ///   read-only [`SchedulerView`], and returns another [`Outcome`] (it may itself re-park).
+/// - `FinishWitnessed` is the construction-inversion sibling of `Finish`: it short-circuits the same
+///   way but hands the resolved dep *terminals* (value + reach) to a [`WitnessedDepFinish`] that folds
+///   them into a single witnessed carrier ([`short_circuit_witnessed`]), sealing the slot as
+///   [`Outcome::DoneWitnessed`]. The decide-side twin of the apply-side
+///   `submit_dep_finish_witnessed_in_own_scope` — used by a construction decide (newtype / tagged
+///   union) that parks on its value deps and builds the wrapped value naming every region it reaches.
 /// - `Catch` is the action-harness catch ([`run_action`](super::runtime::run_action)'s
 ///   `Action::Catch`): the slot becomes a [`NodeWork`](super::nodes::NodeWork) watching the realized `watched` dep;
 ///   the harness owns that producer. `watched`'s placement is realized at apply time (an `InScope`
@@ -109,6 +115,7 @@ pub(in crate::machine::execute) enum Outcome<'step> {
 /// [`Outcome::Forward`], never parking on a dep.)
 pub(in crate::machine::execute) enum Continuation<'step> {
     Finish(DepFinish<'step>),
+    FinishWitnessed(WitnessedDepFinish<'step>),
     Catch {
         watched: Dep<'step>,
         finish: CatchFinish<'step>,
