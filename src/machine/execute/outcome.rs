@@ -166,11 +166,11 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
 /// by construction (the [`alloc` construction
 /// inversion](../../../../design/per-node-memory.md#construction-yoke-merge-map-and-one-wrapper-per-node)). `value` is the same
 /// value re-anchored **live at the step brand** (read out of the producer slot, pinned by the step
-/// open) for the **value-copy** finishes still on the bare channel (the type channel), which relocate
-/// it into the consumer region via [`relocate_dep_into_consumer`], folding the relocated value's own
-/// reach into the consumer scope's [reach-set](crate::machine::Scope::fold_reach) so a surviving
-/// closure / module borrow outlives the producer's frame. The dep's reach is separately read off the
-/// carrier (`carrier.witness()`) and unioned into the consumer-step `pin` before the open.
+/// open) for the **value-copy** finishes still on the bare channel, which relocate it into the consumer
+/// region via [`relocate_dep_into_consumer`], folding the relocated value's reach into the consumer
+/// scope's [reach-set](crate::machine::Scope::fold_reach) so a surviving module borrow outlives the
+/// producer's frame (the object channel rides its carrier instead). The dep's reach is separately read
+/// off the carrier (`carrier.witness()`) and unioned into the consumer-step `pin` before the open.
 pub(in crate::machine::execute) struct DepTerminal<'a> {
     pub(in crate::machine::execute) value: Carried<'a>,
     pub(in crate::machine::execute) carrier: Sealed<CarriedFamily, FrameSet>,
@@ -207,31 +207,28 @@ pub(in crate::machine::execute) struct ContinuationFamily;
 // layout is identical for every `'r`, so the shared `reattachable!` macro discharges the obligation.
 reattachable!(ContinuationFamily => NodeContinuation<'r>);
 
-/// Relocate a dep terminal into the consumer scope's region and fold the relocated value's own reach
-/// into that scope's [reach-set](crate::machine::Scope::fold_reach). The consumer-pull lift delivers
-/// each dep un-relocated (read at the step brand from its producer slot); a value-copy finish calls
-/// this to copy the value into its own region so it dies with the consumer, and folds the foreign frame
-/// a surviving closure / module borrow still reaches — recovered from the *relocated value* via
-/// [`reached_frame`](super::lift::reached_frame) — so that borrow outlives the producer's frame for the
-/// life of the scope it lands under. A region-pure value reaches no foreign frame and folds nothing.
+/// Relocate a dep terminal into the consumer scope's region and — for the type channel's not-yet-
+/// witnessed `KType::Module` identity — fold the region it borrows into onto that scope's
+/// [reach-set](crate::machine::Scope::fold_reach). The consumer-pull lift delivers each dep
+/// un-relocated (read at the step brand from its producer slot); a value-copy finish calls this to copy
+/// the value into its own region so it dies with the consumer. A relocated module still rides a bare
+/// borrow into its defining (foreign) region, recovered from the *relocated value* via
+/// [`reached_frame`](super::lift::reached_frame); folding it keeps that borrow alive for the life of the
+/// scope it lands under. Every other value folds nothing here: the object channel carries its reach on
+/// the delivered carrier (folded at the embedding site — `let` / `attr` / `FROM` / user-fn arg), and a
+/// region-pure value reaches no foreign frame.
 ///
-/// The reach is read from the **value**, not from the dep's carrier witness: a finalized carrier
+/// The module reach is read from the **value**, not from the dep's carrier witness: a finalized carrier
 /// witnesses its *producer* frame (held only so the terminal stays readable until consumers pull),
 /// which a region-pure value does not reach — folding that would peg a TCO-reusable frame.
 ///
-/// **Tracked-transitional**: this is single-frame, so a multi-region value (a list of closures, a
-/// closure over several closures) is under-recorded — the gap [`reached_frame`] itself carries. It
-/// upgrades to the full carried `FrameSet` as binds witness their construction: a `let`-bound value
-/// folds its carrier's union, and the user-fn object-arg bind that shares this seam fold folds its dep
-/// carriers into the scope reach-set, both in
-/// [alloc-object-delivered-carriers](../../../roadmap/per-node-memory/alloc-object-delivered-carriers.md);
-/// the seam fold then retires there, leaving only `KType::Module` for
-/// [alloc-ktype-witnessed](../../../roadmap/per-node-memory/alloc-ktype-witnessed.md) to take off
-/// [`reached_frame`].
+/// Only `KType::Module` remains on this fold — every object site reads its reach off a carrier;
+/// [`alloc_ktype`](../../../roadmap/per-node-memory/alloc-ktype-witnessed.md) takes the module off
+/// [`reached_frame`] when it inverts the type family.
 fn relocate_dep_into_consumer<'b>(view: &SchedulerView<'b, '_>, value: Carried<'b>) -> Carried<'b> {
     let relocated = relocate_carried(value, view.current_scope().region);
-    // A surviving closure / module borrow keeps its defining (foreign) region alive on the consumer
-    // scope's reach-set; a region-pure value reaches no foreign frame and folds nothing.
+    // A relocated module borrow keeps its defining (foreign) region alive on the consumer scope's
+    // reach-set; `reached_frame` returns `None` for every other value, which folds nothing.
     if let Some(reached) = reached_frame(relocated) {
         view.current_scope().fold_reach(&FrameSet::singleton(reached));
     }

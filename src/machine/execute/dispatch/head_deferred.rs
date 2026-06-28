@@ -67,11 +67,19 @@ fn park_on_head<'step>(
     head: KExpression<'step>,
     type_only: bool,
 ) -> Outcome<'step> {
-    let finish: DepFinish<'step> = Box::new(move |ctx, results, _carriers| {
+    let finish: DepFinish<'step> = Box::new(move |ctx, results, carriers| {
         let callable = match classify_head(results[0], type_only) {
             Ok(c) => c,
             Err(e) => return Outcome::Done(Err(e)),
         };
+        // The head resolved to a computed callable (a functor / closure) whose captured region is
+        // foreign to this scope and held only on the producer's now-resolving node. Fold its carrier
+        // reach into the consumer scope so the captured environment outlives the application — the
+        // object channel's carrier read-off replacing the seam's `reached_frame` retention for a
+        // called-here closure (the head value is applied, not embedded in a witnessed result).
+        if let Some(carrier) = carriers.first() {
+            ctx.current_scope().fold_reach(carrier.witness());
+        }
         apply_callable(ctx, callable, &expr)
     });
     // The head sub is the only dep; a dep error propagates frameless (the resumed dispatch

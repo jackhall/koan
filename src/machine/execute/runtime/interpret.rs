@@ -70,10 +70,10 @@ impl<'run> KoanRuntime<'run> {
             // that outlives the run — and an errored terminal need no re-home.
             let pin = self.sched.dep_witness(id);
             if !pin.is_empty() {
-                // A closure / module read out of the scheduler as a top-level result (e.g. a returned
-                // module the caller inspects) borrows back into its per-call region. The rehomed
-                // terminal's witness pins that region only while its slot lives, so retain it on the
-                // persistent run-root frame too — the read then survives the scheduler's teardown.
+                // The type channel's module identity is not yet witnessed, so the region it borrows
+                // into is recovered from the value via `reached_frame` (Module-only) and retained on
+                // the persistent run-root frame, so a returned module the caller inspects survives the
+                // scheduler's teardown — until alloc-ktype inverts the type family.
                 if let (Some(home), Ok(value)) =
                     (root.region_owner().upgrade(), self.read_result(id))
                 {
@@ -86,6 +86,14 @@ impl<'run> KoanRuntime<'run> {
                 // region's `dest_witness` is empty — it outlives the run, so needs no held pin),
                 // dropping the per-call frame the producer kept the terminal in.
                 if let Ok(witnessed) = self.relocate_terminal(id, root.region, FrameSet::empty()) {
+                    // The rehomed terminal's witness names the object channel's foreign reach (a
+                    // closure's captured regions) with the producer frame already dropped by the
+                    // relocate, so retaining it on the persistent run-root frame keeps a closure read
+                    // out of the scheduler alive past teardown — multi-region correct, read straight
+                    // off the carrier rather than reconstructed.
+                    if let Some(home) = root.region_owner().upgrade() {
+                        witnessed.witness().retain_onto(&home);
+                    }
                     self.sched.rehome_terminal(id, Ok(witnessed));
                 }
             }

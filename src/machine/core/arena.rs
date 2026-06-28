@@ -453,6 +453,37 @@ impl FrameSet {
             self.insert(Rc::clone(owner));
         }
     }
+
+    /// Fold every member of `other` into `self`, skipping any whose region `omit` reports as already
+    /// kept alive — the predicate form of [`Self::fold_foreign`] for the per-scope reach-set, which
+    /// must omit a per-call frame's **lexical** ancestors (its `outer`-chain scopes) that
+    /// [`FrameStorage::pins_region`] cannot see: a per-call frame carries no storage `outer` link
+    /// under TCO, so the storage chain stops at its own region while the closure still holds its
+    /// captured (ancestor) scope alive. Re-pinning such an ancestor in the reach-set, paired with a
+    /// sibling bind of the call's result, would close a region cycle.
+    pub(crate) fn fold_foreign_omitting(
+        &mut self,
+        other: &FrameSet,
+        omit: impl Fn(*const KoanRegion) -> bool,
+    ) {
+        for owner in &other.frames {
+            if omit(owner.region() as *const KoanRegion) {
+                continue;
+            }
+            self.insert(Rc::clone(owner));
+        }
+    }
+
+    /// Retain every member's region onto `home` — the persistent-frame analog of [`Self::fold_foreign`]
+    /// for a drained top-level result, so a closure read out of the scheduler outlives its producer
+    /// frames' teardown. Each member rides [`FrameStorage::retain`]'s region-subsumption dedup (a member
+    /// `home` or an ancestor already pins is a no-op), so a multi-region result keeps every region it
+    /// reaches read straight off the carrier's witness set.
+    pub(crate) fn retain_onto(&self, home: &FrameStorage) {
+        for owner in &self.frames {
+            home.retain(Rc::clone(owner));
+        }
+    }
 }
 
 // SAFETY: each member `Rc<FrameStorage>` keeps its `KoanRegion` — and the arena pages a value lives in
