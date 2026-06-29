@@ -262,7 +262,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         scope.register_function(name, f, obj, bind_index)?;
     }
     // Witness the FN value by its defining scope's frame: the `KFunction` is co-located in that
-    // frame's region (owned signature / body, a `BoundedScopePtr` capture), and the captured scope —
+    // frame's region (owned signature / body, a `&Scope` capture), and the captured scope —
     // region-resident under the frame — transitively keeps every foreign region its bindings reach
     // alive through the scope's sealed reach-set. `yoke` + `reattach_with` re-anchor the already-built,
     // co-located object onto the carrier, so the FN value names its reach by construction — never an

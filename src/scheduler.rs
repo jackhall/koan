@@ -36,7 +36,7 @@ mod workload;
 // The lifetime-erasure carrier substrate lives in the top-level `witnessed` module (below both
 // `machine` and `scheduler`); re-exported here so the scheduler's carriers name it unqualified.
 pub(crate) use crate::witnessed::{
-    reattach_ref, reattach_ref_with, Erased, MergeWitness, Reattachable, Sealed, Witnessed,
+    reattach_ref_with, Erased, MergeWitness, Reattachable, Sealed, Witnessed,
 };
 pub use node_id::NodeId;
 pub(crate) use workload::{Live, Workload};

@@ -7,7 +7,8 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::{assemble_body_chain, ErasedScopePtr, KoanRegion, ScopeId};
+use crate::machine::core::{assemble_body_chain, KoanRegion, ScopeId, ScopeRefFamily};
+use crate::witnessed::SealedExtern;
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallFrame, LexicalFrame, NodeId, Scope};
 
@@ -126,7 +127,7 @@ impl<'run> KoanRuntime<'run> {
                 return NodeScope::Yoked;
             }
             if f.with_scope(|fs| cart_chain_reaches_region(fs, scope.region)) {
-                return NodeScope::YokedChild(ErasedScopePtr::erase(scope));
+                return NodeScope::YokedChild(SealedExtern::<ScopeRefFamily>::erase(scope));
             }
             unreachable!("a framed submission's scope is the cart's own or a cart-ancestor child");
         }
@@ -140,8 +141,8 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Submit `work` against the executing slot's own [`NodeScope`] handle (read back from the
-    /// ambient payload): `YokedChild` re-uses the erased cart-ancestor `ErasedScopePtr` the slot already
-    /// holds; `Yoked` re-projects from the active frame cart at the read boundary. The chain defaults
+    /// ambient payload): `YokedChild` re-uses the erased cart-ancestor `SealedExtern` carrier the slot
+    /// already holds; `Yoked` re-projects from the active frame cart at the read boundary. The chain defaults
     /// to the ambient one (or a detached chain at top level). Backs the `*_here` re-dispatch path.
     pub(in crate::machine::execute) fn submit_in_own_scope(
         &mut self,

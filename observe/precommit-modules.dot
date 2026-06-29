@@ -820,6 +820,7 @@ digraph {
     "koan::machine::execute::runtime::submit" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::submit" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::submit" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::execute::runtime::submit" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::model::values" [label="uses", style="dashed"];

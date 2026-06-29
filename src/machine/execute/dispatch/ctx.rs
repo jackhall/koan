@@ -35,10 +35,10 @@ use crate::scheduler::Scheduler;
 /// hands back the opaque payload ([`AmbientContext::active_payload`]), from which the workload extracts
 /// the scope handle, plus the per-call cart the slot ran against. A `Yoked` slot re-projects from the
 /// active cart through [`CallFrame::with_scope`] (the same `open` the step brand uses); a `YokedChild`
-/// slot re-anchors its erased cart-ancestor [`ErasedScopePtr`](crate::machine::core::ErasedScopePtr)
-/// through the witness-bounded `reattach_witnessed`, pinned by `frame` (collapsing that pointer onto
-/// the holder's own `open` is the scope-pointer-collapse follow-up). Either way the `&Scope<'b>` is
-/// confined to `f`, so no borrow rides up a `&mut self` path.
+/// slot opens its erased cart-ancestor [`SealedExtern<ScopeRefFamily>`](crate::witnessed::SealedExtern)
+/// carrier at the same `for<'b>` brand, pinned by `frame` — the scope folded onto the holder's own
+/// `open` like every other channel. Either way the `&Scope<'b>` is confined to `f`, so no borrow rides
+/// up a `&mut self` path.
 pub(in crate::machine::execute) fn with_node_scope<R>(
     node_scope: &NodeScope,
     frame: Option<&Rc<CallFrame>>,
@@ -46,7 +46,7 @@ pub(in crate::machine::execute) fn with_node_scope<R>(
 ) -> R {
     let frame = frame.expect("a slot keeps its active cart");
     match node_scope {
-        NodeScope::YokedChild(ptr) => f(ptr.reattach_witnessed(frame)),
+        NodeScope::YokedChild(carrier) => carrier.open(frame, f),
         NodeScope::Yoked => frame.with_scope(f),
     }
 }

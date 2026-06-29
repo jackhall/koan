@@ -202,12 +202,12 @@ impl<'run> KoanRuntime<'run> {
         let continuation = SealedExtern::seal(erased_continuation);
         let contract = seal_option(prev_contract);
         // The active scope as an externally-witnessed carrier, for both node-scope shapes: a `Yoked`
-        // slot takes the start cart's own child-scope carrier; a `YokedChild` re-packages its erased
-        // pointer the same way. `combined` pins both — the cart's region for `Yoked`, an ancestor via
-        // the cart's `outer` chain for `YokedChild`.
+        // slot takes the start cart's own child-scope carrier; a `YokedChild` already holds its own
+        // `SealedExtern<ScopeRefFamily>` carrier and reuses it directly. `combined` pins both — the
+        // cart's region for `Yoked`, an ancestor via the cart's `outer` chain for `YokedChild`.
         let scope_carrier = match node_scope {
             NodeScope::Yoked => continuation_witness.scope_sealed(),
-            NodeScope::YokedChild(ptr) => ptr.to_sealed_extern(),
+            NodeScope::YokedChild(carrier) => carrier,
         };
         let dep_carrier = SealedExtern::<DepResultsFamily>::erase(dep_sources);
         continuation

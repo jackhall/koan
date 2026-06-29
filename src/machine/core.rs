@@ -26,4 +26,4 @@ pub use lexical_frame::{assemble_body_chain, LexicalFrame};
 pub(crate) use scope::ValueCarrierResolution;
 pub use scope::{KFuture, Scope, ScopeKind};
 pub use scope_id::ScopeId;
-pub use scope_ptr::{BoundedScopePtr, ErasedScopePtr};
+pub use scope_ptr::ScopeRefFamily;

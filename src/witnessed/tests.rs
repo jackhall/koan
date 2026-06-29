@@ -95,22 +95,17 @@ unsafe impl MergeWitness for Rc<TestCart> {
     }
 }
 
-/// The witness-less primitives still routed by the value-carrier path: `Erased` storage and the
-/// transient `reattach_ref` helper, exercised over a real borrow.
+/// The witness-less primitive still routed by the value-carrier path: `Erased` storage, exercised
+/// over a real borrow.
 #[test]
-fn erased_roundtrip_and_helpers() {
+fn erased_roundtrip() {
     let backing = [7u32, 8, 9];
     let erased: Erased<RefFamily> = Erased::erase(&backing[0]);
     // SAFETY: `backing` is held live to the end of the test, pinning the re-anchored borrow.
     let reattached: &u32 = unsafe { erased.reattach() };
     assert_eq!(*reattached, 7);
 
-    let by_ref: &&u32 = &&backing[2];
-    // SAFETY: as above.
-    let viaref: &&u32 = unsafe { reattach_ref::<RefFamily>(by_ref) };
-    assert_eq!(**viaref, 9);
-
-    // Re-read the first borrow to catch a tree-borrows regression from the later helper calls.
+    // Re-read the borrow to catch a tree-borrows regression.
     assert_eq!(*reattached, 7);
 }
 
@@ -141,7 +136,7 @@ fn reattach_with_live_value_and_ref() {
     let one: &u32 = reattach_with::<RefFamily, _>(&backing[0], &frame);
     assert_eq!(*one, 11);
     // Erase a borrow to the `'static` store, then re-anchor a *reference* to it under the witness —
-    // the shape the region's store-side re-anchor and the scope pointer's `reattach_witnessed` route.
+    // the shape the region's store-side re-anchor and the scope pointer's `recouple_scope` route.
     let stored: <RefFamily as Reattachable>::At<'static> =
         erase_to_static::<RefFamily>(&backing[0]);
     let reref: &&u32 = reattach_ref_with::<RefFamily, _>(&stored, &frame);
