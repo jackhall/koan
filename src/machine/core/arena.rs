@@ -501,7 +501,8 @@ unsafe impl MergeWitness for FrameSet {
 pub struct CallFrame {
     storage: Rc<FrameStorage>,
     /// The per-call child scope on the substrate's externally-witnessed [`SealedExtern`] carrier
-    /// (a `&'static Scope`); read back through [`SealedExtern::attach`] against `storage` as the pin.
+    /// (a `&'static Scope`); read back through [`Self::with_scope`] / [`Self::scope_sealed`]
+    /// ([`SealedExtern::open`]) against `storage` as the pin.
     scope_carrier: Option<SealedExtern<ScopeRefFamily>>,
     /// True only for the scheduler-owned run frame, which carries the top-level run scope and
     /// never drops mid-run. Its `region` is empty (top-level values live in the externally-owned
@@ -530,7 +531,7 @@ impl CallFrame {
         // The child is built from the heap-pinned `storage` handle — no `'static` claim and no
         // pointer fabrication. It derives both the region borrow and the owning `Weak` from
         // `storage`; `outer` (a longer-lived ancestor) is brand-shortened by `child_for_frame`, so
-        // the two need no common lifetime and the outer link needs no `reattach_ref`.
+        // the two need no common lifetime and the outer link needs no separate scope re-anchor.
         let child = Scope::child_for_frame(outer, &storage);
         // Stored at the region's real lifetime, then erased once through the safe `SealedExtern::erase`.
         // The local borrow of `storage` ends here (the carrier holds a `&'static` reference, not a
@@ -587,30 +588,6 @@ impl CallFrame {
         self.owner.get()
     }
 
-    /// The child scope re-handed with a **witness-bounded** borrow: the borrow `'step` is bounded by
-    /// the `&'step Rc<Self>` receiver (the frame `Rc` witness), while the scope content `'a` is free
-    /// (`'a: 'step`). It hands back a reference that *cannot outlive the `Rc` it borrows from*, so
-    /// storing it past the frame is a compile error. Invariance in `'a` rides structurally on the
-    /// returned `Scope<'a>` (`Scope` is invariant), so this ephemeral form needs no separate brand
-    /// struct. The brand-confined [`Self::with_scope`] is the read the frame-side callers take; this
-    /// borrow-bounded form backs only the seed-side re-anchor [`Self::with_frame_interior`] (the
-    /// MATCH / TRY arm `it`-bind, the user-fn param-bind, and the deferred-return-type elaboration —
-    /// each allocates a caller-`'a` value into the frame, so the region must read back at that `'a`),
-    /// whose fold onto `open` is the scope-pointer-collapse follow-up.
-    pub fn scope_bounded<'step, 'a: 'step>(self: &'step Rc<Self>) -> &'step Scope<'a> {
-        (**self).reattach_scope()
-    }
-
-    /// The borrow-bounded re-attach of the frame's child scope: borrow bounded by the `&'s self`
-    /// receiver, content `'b` free (`'b: 's`). Backs [`Self::scope_bounded`] (the surviving seed-side
-    /// re-anchor); the frame-side reads take the brand-confined [`Self::with_scope`] instead. Carries
-    /// **no `unsafe`** of its own — it re-anchors through the carrier's witness-bounded
-    /// [`SealedExtern::attach`], passing this frame's own storage `Rc` as the pin, so the returned
-    /// borrow cannot outlive the region that `Rc` keeps alive.
-    fn reattach_scope<'s, 'b: 's>(&'s self) -> &'s Scope<'b> {
-        self.scope_carrier_set().attach(&self.storage)
-    }
-
     /// The child scope's externally-witnessed [`SealedExtern`] carrier, which is `Some` for the whole
     /// life of a constructed frame (`None` only transiently inside `new` / `try_reset_for_tail`
     /// before the child scope is allocated).
@@ -627,11 +604,15 @@ impl CallFrame {
         *self.scope_carrier_set()
     }
 
-    /// Run `f` with this frame's child scope opened at a `for<'b>` brand — the frame-side read folded
-    /// onto `open` like the decide channel. The carrier opens against this frame's own storage `Rc`
-    /// (the witness [`Self::reattach_scope`] also pins with), and the rank-2 brand keeps the
-    /// `&Scope<'b>` from escaping the call, so no scope borrow rides up a `&mut self` path. Carries
-    /// **no `unsafe`** — `SealedExtern::open` routes the substrate's single audited reattach.
+    /// Run `f` with this frame's child scope opened at a `for<'b>` brand — the sole scope read, folded
+    /// onto `open` like the decide channel. Both the frame-side reads (scope id, the arg reach-set
+    /// fold) and the seed-side binds (the MATCH / TRY arm `it`-bind, the user-fn param-bind, the
+    /// deferred-return-type elaboration) take this read: a seed relocates its caller-`'a` value into
+    /// the opened scope's own region through the substrate (a witnessed shortening) before binding it,
+    /// so nothing fabricates a free `&'a`. The carrier opens against this frame's own storage `Rc`
+    /// (the pin), and the rank-2 brand keeps the `&Scope<'b>` from escaping the call, so no scope
+    /// borrow rides up a `&mut self` path. Carries **no `unsafe`** — `SealedExtern::open` routes the
+    /// substrate's single audited reattach.
     pub fn with_scope<R>(&self, f: impl for<'b> FnOnce(&'b Scope<'b>) -> R) -> R {
         self.scope_sealed().open(&self.storage, f)
     }
@@ -640,29 +621,6 @@ impl CallFrame {
     /// sites that need only the id, with no `&Scope` escaping the open.
     pub fn scope_id(&self) -> ScopeId {
         self.with_scope(|s| s.id)
-    }
-
-    /// Run `f` with this frame's per-call region and its child scope. The seed-side re-anchor — the
-    /// last borrow-bounded scope reader: the MATCH / TRY arm and `KFunction::invoke` body seeds bind
-    /// their `it` / parameters (and the deferred-return-type elaboration reads the scope) — values
-    /// whose type carries the caller's `'a`, deep-cloned into this frame's region — into the child
-    /// scope inside `f`. Unlike the brand-confined [`Self::with_scope`] the frame-side reads fold onto,
-    /// these allocate a caller-`'a` value into the frame, so the region must read back at that free
-    /// `'a` rather than a `for<'b>` brand; folding them onto `open` is the scope-pointer-collapse
-    /// follow-up.
-    ///
-    /// The **region** is reached through the child scope's own `region` field (`&'a KoanRegion`, a
-    /// `Copy` reference), so reading it back at the scope's content `'a` needs no separate re-borrow:
-    /// the same heap pin (this frame's `Rc`) that keeps the scope alive keeps the region it names
-    /// alive. The **child scope** rides the bounded `scope_bounded` borrow — capped at the `&Rc`
-    /// receiver, content `'a` — so it is *not* fabricated free; `bind_value` matches on the `'a`
-    /// content. Carries **no `unsafe`**.
-    pub fn with_frame_interior<'a, R>(
-        self: &Rc<Self>,
-        f: impl FnOnce(&'a KoanRegion, &Scope<'a>) -> R,
-    ) -> R {
-        let scope: &Scope<'a> = self.scope_bounded();
-        f(scope.region, scope)
     }
 
     pub fn region(&self) -> &KoanRegion {
@@ -694,7 +652,7 @@ impl CallFrame {
             outer: None,
         });
         // The child is built from the heap-pinned `storage` handle (region borrow + owning `Weak`),
-        // with `new_outer` brand-shortened by `child_for_frame` (no `reattach_ref` on the outer link).
+        // with `new_outer` brand-shortened by `child_for_frame` (no separate re-anchor on the outer link).
         let child = Scope::child_for_frame(new_outer, &storage);
         let scope_carrier = SealedExtern::erase(storage.region().alloc_scope(child));
         // The local borrow of `storage` ends above, so it can move into the shell.

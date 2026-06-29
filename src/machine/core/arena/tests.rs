@@ -80,22 +80,6 @@ fn frameset_singleton_exposes_region_and_sole() {
     assert!(FrameSet::empty().is_empty());
 }
 
-/// `scope_bounded` re-anchors the child scope with a borrow bounded by the `&Rc` witness.
-/// The good path: read it within the witness borrow. The over-anchor and covariance
-/// compile-error properties were confirmed by the C0 spike (see
-/// scratch/type-enforced-frame-reanchor-plan.md § C0 verdict); they are structural —
-/// `scope_bounded`'s `'step` borrow cannot widen to a free `'a`, and `Scope<'a>` is invariant.
-#[test]
-fn scope_bounded_reanchors_within_witness_borrow() {
-    let region = FrameStorage::run_root();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
-    let bounded: &Scope<'_> = frame.scope_bounded();
-    // Repeated re-anchors return the same underlying child scope.
-    assert_eq!(bounded.id, frame.scope_bounded().id);
-    assert!(std::ptr::eq(bounded, frame.scope_bounded()));
-}
-
 /// `with_scope` opens the child scope at a `for<'b>` brand — the frame-side read folded onto `open`.
 /// A scalar copies out; a bind / lookup consumed in place stays inside the brand (the value is
 /// allocated at the same `'b` via the opened scope's own region), so nothing branded escapes.
@@ -104,102 +88,121 @@ fn with_scope_opens_child_scope_at_brand() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
-    // Scalar copy-out: matches the borrow-bounded re-anchor and `scope_id`.
+    // Scalar copy-out: matches `scope_id`.
     let id = frame.with_scope(|s| s.id);
-    assert_eq!(id, frame.scope_bounded().id);
     assert_eq!(id, frame.scope_id());
     // In-place bind + lookup, all at the brand `'b` (value allocated via the opened scope's region).
     frame.with_scope(|s| {
         let v = s.region.alloc_object(KObject::Number(7.0));
-        s.bind_value("k".to_string(), v, BindingIndex::BUILTIN).unwrap();
+        s.bind_value("k".to_string(), v, BindingIndex::BUILTIN)
+            .unwrap();
         assert!(matches!(s.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
     });
 }
 
-/// `CallFrame::scope_bounded`'s re-borrow stays valid when the region is mutated through a
-/// sibling pointer afterward — `frame.scope_bounded()` and `frame.region().alloc(...)`
-/// must coexist soundly under tree borrows.
+/// The seed-side re-anchor: a caller-lifetime value relocated into the frame brand region through the
+/// substrate (`reattach_with` witnessed by the opened scope's own region — a shortening of the caller
+/// lifetime), then bound. The MATCH / TRY `it`-bind and the user-fn param-bind take this shape; pins
+/// the relocate-into-the-brand-and-bind aliasing under tree borrows.
+#[test]
+fn with_scope_relocates_seed_value_into_brand() {
+    use crate::witnessed::reattach_with;
+    // The caller value is a deep clone of a value resident in its own, longer-lived region —
+    // mirroring the matched `it` / a bound arg.
+    let caller_region = KoanRegion::new();
+    let it_value: KObject<'_> = caller_region
+        .alloc_object(KObject::Number(99.0))
+        .deep_clone();
+    let region = FrameStorage::run_root();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    frame.with_scope(|child| {
+        let relocated = reattach_with::<KObject<'static>, _>(it_value, child.region);
+        let it_obj = child.region.alloc_object(relocated);
+        child
+            .bind_value("it".to_string(), it_obj, BindingIndex::BUILTIN)
+            .unwrap();
+        assert!(matches!(child.lookup("it"), Some(KObject::Number(n)) if *n == 99.0));
+    });
+}
+
+/// `SealedExtern::attach` — the now-callerless borrow-bounded scope re-anchor kept for the
+/// single-open-verb follow-up. Pins the witness-bounded `reattach_ref_with` shape directly on the
+/// frame's child-scope carrier: a borrow capped at the witness `Rc` with a free content lifetime,
+/// distinct from `with_scope`'s `for<'b>` brand (borrow == content). Read within the witness borrow,
+/// then alloc + bind into the re-anchored scope's region.
+#[test]
+fn sealed_extern_attach_bounded_reanchor() {
+    let region = FrameStorage::run_root();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let carrier = frame.scope_sealed();
+    let storage = frame.storage_rc();
+    let child: &Scope<'_> = carrier.attach(&storage);
+    assert!(child.outer().is_some());
+    let v = child.region.alloc_object(KObject::Number(5.0));
+    child
+        .bind_value("a".to_string(), v, BindingIndex::BUILTIN)
+        .unwrap();
+    assert!(matches!(child.lookup("a"), Some(KObject::Number(n)) if *n == 5.0));
+}
+
+/// The opened child scope's re-borrow stays valid when the region is mutated through a sibling
+/// pointer afterward — `with_scope`'s `&Scope` and `region().alloc(...)` must coexist soundly under
+/// tree borrows.
 #[test]
 fn call_frame_scope_survives_subsequent_alloc() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame = CallFrame::new_test(scope, None);
-    let s = frame.scope_bounded();
-    let _new = frame.region().alloc_object(KObject::Number(1.0));
-    assert!(std::ptr::eq(s.region, frame.region()));
+    frame.with_scope(|s| {
+        let _new = s.region.alloc_object(KObject::Number(1.0));
+        assert!(std::ptr::eq(s.region, frame.region()));
+    });
 }
 
-/// Raw-pointer roundtrip: lifetime-anchor an extracted `*const KoanRegion` and
-/// `*const Scope<'_>` from the same frame, then mutate via one ref while the other
-/// stays live.
+/// Raw-pointer roundtrip inside the brand: lifetime-anchor an extracted `*const KoanRegion` and
+/// `*const Scope<'_>` from the opened child scope, then mutate via one ref while the other stays live.
 #[test]
 fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
-    let region_ptr: *const KoanRegion = frame.region();
-    let scope_ptr: *const Scope<'_> = frame.scope_bounded();
-    let inner_region: &KoanRegion = unsafe { &*(region_ptr as *const _) };
-    let child: &Scope<'_> = unsafe { &*(scope_ptr as *const _) };
-    let it_obj: &KObject<'_> = inner_region.alloc_object(KObject::Number(42.0));
-    child
-        .bind_value("it".to_string(), it_obj, BindingIndex::BUILTIN)
-        .unwrap();
-    assert!(matches!(child.lookup("it"), Some(KObject::Number(n)) if *n == 42.0));
-}
-
-/// Repeated `frame.scope_bounded()` calls produce aliasing shared refs that must be
-/// concurrently readable.
-#[test]
-fn call_frame_scope_repeated_calls_alias() {
-    let region = FrameStorage::run_root();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let frame = CallFrame::new_test(scope, None);
-    let s1 = frame.scope_bounded();
-    let s2 = frame.scope_bounded();
-    let s3 = frame.scope_bounded();
-    assert!(std::ptr::eq(s1, s2));
-    assert!(std::ptr::eq(s2, s3));
-    assert!(s1.outer().is_some());
+    frame.with_scope(|child| {
+        let region_ptr: *const KoanRegion = child.region;
+        let scope_ptr: *const Scope<'_> = child;
+        let inner_region: &KoanRegion = unsafe { &*(region_ptr as *const _) };
+        let child_ref: &Scope<'_> = unsafe { &*(scope_ptr as *const _) };
+        let it_obj: &KObject<'_> = inner_region.alloc_object(KObject::Number(42.0));
+        child_ref
+            .bind_value("it".to_string(), it_obj, BindingIndex::BUILTIN)
+            .unwrap();
+        assert!(matches!(child_ref.lookup("it"), Some(KObject::Number(n)) if *n == 42.0));
+    });
 }
 
 /// Two-deep chain: dropping the local `outer` handle leaves only `inner`'s `FrameStorage.outer`
-/// keeping the outer region alive while we read through `inner.scope_bounded().outer`.
+/// keeping the outer region alive while we read through `inner`'s child scope's `outer`.
 #[test]
 fn call_frame_chained_outer_frame_walkable() {
     let region = FrameStorage::run_root();
     let run_scope = default_scope(&region, Box::new(std::io::sink()));
     let outer = CallFrame::new_test(run_scope, None);
-    let inner = CallFrame::new_test(outer.scope_bounded(), Some(outer.storage_rc()));
+    // Build the inner frame parented on the outer frame's child scope, read at the brand. The
+    // returned `Rc<CallFrame>` carries no brand lifetime, so it escapes the open.
+    let inner =
+        outer.with_scope(|outer_child| CallFrame::new_test(outer_child, Some(outer.storage_rc())));
     drop(outer);
-    let outer_scope = inner
-        .scope_bounded()
-        .outer()
-        .expect("inner.scope_bounded().outer must be Some");
-    assert!(std::ptr::eq(
-        outer_scope.region,
-        inner.scope_bounded().outer().unwrap().region
-    ));
-    assert!(outer_scope.outer().is_some());
-}
-
-/// In-struct Rc must keep the region alive for a re-anchored `&Scope` stored alongside
-/// it once the local Rc handle is dropped.
-#[test]
-fn call_frame_scope_re_anchored_into_struct_alongside_rc() {
-    struct Holder<'a> {
-        s: &'a Scope<'a>,
-        _f: Rc<CallFrame>,
-    }
-
-    let region = FrameStorage::run_root();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let h = {
-        let f = CallFrame::new_test(scope, None);
-        let s: &Scope<'_> = unsafe { std::mem::transmute::<&Scope<'_>, &Scope<'_>>(f.scope_bounded()) };
-        Holder { s, _f: f }
-    };
-    assert!(h.s.outer().is_some());
+    inner.with_scope(|inner_child| {
+        let outer_scope = inner_child
+            .outer()
+            .expect("inner's child scope must have an outer");
+        assert!(std::ptr::eq(
+            outer_scope.region,
+            inner_child.outer().unwrap().region
+        ));
+        assert!(outer_scope.outer().is_some());
+    });
 }
 
 /// Allocating records the stored address into the `membership` side-table via
@@ -241,13 +244,15 @@ fn call_frame_try_reset_for_tail_round_trip() {
     // Fresh region: only the new child scope remains.
     assert_eq!(frame.region().alloc_count(), 1);
 
-    let v = frame.region().alloc_object(KObject::Number(42.0));
-    frame
-        .scope_bounded()
-        .bind_value("k".to_string(), v, BindingIndex::BUILTIN)
-        .unwrap();
-    assert!(matches!(frame.scope_bounded().lookup("k"), Some(KObject::Number(n)) if *n == 42.0));
-    assert!(frame.scope_bounded().outer().is_some());
+    // After reset, a fresh alloc via the opened scope's region and a bind on that scope coexist.
+    frame.with_scope(|child| {
+        let v = child.region.alloc_object(KObject::Number(42.0));
+        child
+            .bind_value("k".to_string(), v, BindingIndex::BUILTIN)
+            .unwrap();
+        assert!(matches!(child.lookup("k"), Some(KObject::Number(n)) if *n == 42.0));
+        assert!(child.outer().is_some());
+    });
 }
 
 /// `try_reset_for_tail` refuses when another `Rc<CallFrame>` *shell* clone exists — a

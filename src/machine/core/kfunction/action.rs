@@ -308,7 +308,7 @@ pub enum FramePlacement<'a> {
     ReuseReserve { outer: &'a Scope<'a> },
     /// A **pre-built** fresh cart the builtin minted (`CallFrame::new`, never the reserve), handed
     /// to the harness to install. The builtin owns construction because it may seed the cart before
-    /// the tail dispatches — MATCH/TRY bind `it` into it via `with_frame_interior`; EVAL builds it
+    /// the tail dispatches — MATCH/TRY bind `it` into it via `CallFrame::with_scope`; EVAL builds it
     /// for the UAF guard.
     FreshChild { frame: Rc<CallFrame> },
     /// No new frame; continue in the slot's current cart. Frameless tails / `Done`.

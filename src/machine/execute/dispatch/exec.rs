@@ -17,32 +17,16 @@ use super::SchedulerView;
 use crate::machine::core::kfunction::action::FramePlacement;
 use crate::machine::core::kfunction::bind_by_name::CallArgs;
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
+use crate::machine::core::kfunction::exec::{
+    home_return_type, run_user_fn, ExecFrame, ExecOutcome, PerCallReturn,
+};
 use crate::machine::core::kfunction::{Body, KFunction};
-use crate::machine::core::KoanRegion;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{Record, SignatureElement};
 use crate::machine::model::values::CarriedFamily;
-use crate::machine::model::{Carried, KType, Parseable};
+use crate::machine::model::{Carried, Parseable};
 use crate::machine::{FrameSet, KError, KErrorKind};
 use crate::witnessed::Sealed;
-
-/// Home a deferred FN's resolved return *type* in `region` (a strict ancestor the cart keeps live), so
-/// the erased `PerCall` contract's `ret` borrow outlives the dying call frame. Non-module types are
-/// owned / `Rc` data the clone re-homes safely. A concrete first-class **module is rejected**: a
-/// module value's identity is not a return type (return a signature or the `:Module` kind), and it is
-/// the one return type that would borrow the dying frame — so erroring here is what lets the value
-/// carrier hold no per-value region anchor. (A module returned as a *value* is unaffected — it rides
-/// the value channel's witness set like a returned closure.)
-fn home_return_type<'a>(kt: &KType<'a>, region: &'a KoanRegion) -> Result<&'a KType<'a>, KError> {
-    if matches!(kt, KType::Module { .. }) {
-        return Err(KError::new(KErrorKind::ShapeError(
-            "a module cannot be a function's return type; return a signature or the `:Module` kind"
-                .to_string(),
-        )));
-    }
-    Ok(region.alloc_ktype(kt.clone()))
-}
 
 /// Fold a resolved call into a [`Outcome::Continue`]: the producer installs the per-call cart and
 /// `invoke` runs against it on the next pop. A user fn's `Continue` carries
@@ -137,7 +121,6 @@ pub(super) fn invoke<'step>(
         Err(e) => return Outcome::Done(Err(e)),
     };
 
-    let outer = picked.captured_scope();
     // The per-call frame the producer's `Continue` (`ReuseReserve`) already acquired and installed
     // as the slot's cart — `invoke` runs against it, so read it from the view rather than a param.
     let frame = view
@@ -164,25 +147,16 @@ pub(super) fn invoke<'step>(
     match run_user_fn(picked, bound, &exec_frame, in_chain) {
         ExecOutcome::Tail { leading, tail, ret } => {
             // The return contract carried on the tail-replace. A resolved return reads its type off
-            // the signature; a deferred `Type` return carries the resolved per-call type as a
-            // `PerCall` contract — checked + stamped at the lift boundary like any FN return, so the
-            // body is a proper tail call and a recursive deferred body stays TCO-flat.
+            // the signature; a deferred `Type` return carries the resolved per-call type — already
+            // re-homed into the captured-scope region by `run_user_fn` — as a `PerCall` contract,
+            // checked + stamped at the lift boundary like any FN return, so the body is a proper tail
+            // call and a recursive deferred body stays TCO-flat.
             let contract = match ret {
                 PerCallReturn::FromSignature => ReturnContract::Function(picked),
-                PerCallReturn::Resolved(kt) => {
-                    // Re-home the per-call type in the captured-scope (frame-outer) region — a strict
-                    // ancestor the cart keeps live — so the erased contract's `ret` borrow stays
-                    // valid past the dying frame, mirroring an `Arm`'s `ret`. A concrete module return
-                    // type is rejected here (see `home_return_type`).
-                    let ret_ref = match home_return_type(&kt, outer.region) {
-                        Ok(r) => r,
-                        Err(e) => return Outcome::Done(Err(e)),
-                    };
-                    ReturnContract::PerCall {
-                        func: picked,
-                        ret: ret_ref,
-                    }
-                }
+                PerCallReturn::Resolved(ret_ref) => ReturnContract::PerCall {
+                    func: picked,
+                    ret: ret_ref,
+                },
             };
             // Empty `leading` → body_index 1 (the lone statement sits above the params); otherwise
             // the leading statements sit at indices `1..=N` and the tail replaces in at `N + 1`.

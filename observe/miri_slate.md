@@ -85,27 +85,25 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-39 tests, grouped by the unsafe site each pins down. Names below are the exact
+40 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
-child-scope `Option<SealedExtern<ScopeRefFamily>>` (re-attached to an `&self`-bounded borrow via the
-witness-bounded `SealedExtern::attach`, the frame's own storage `Rc` as the pin) plus
-the `Rc<CallFrame>` chain that keeps per-call regions pinned across re-borrow. One test pins the
-re-attach surviving a sibling alloc; the other pins the `Rc<CallFrame>` chain keeping an outer region
-alive after its local handle drops. A third pins `SealedExtern::attach` (via
-`CallFrame::scope_bounded`), which splits the stored `&'static Scope` into a witness-bounded borrow
-and a free content lifetime — re-read alongside the collapsed `scope` / `scope_for_bind`
-accessors (`'b = 'step`) over the same child scope. `CallFrame::adopting` (the scheduler-owned run frame)
-carries the same `&Scope<'_>` erasure as `new`, over the run scope it adopts
-rather than a freshly-minted child; it is built on the first run-lifetime submission, so every
-scheduler-driving slate test below (`recursive_tagged_match_no_uaf`,
-`lift_park_minimal_program_for_miri`, …) exercises it
+child-scope `Option<SealedExtern<ScopeRefFamily>>` opened at a `for<'b>` brand via `CallFrame::with_scope`
+(`SealedExtern::open`, the frame's own storage `Rc` as the pin) plus the `Rc<CallFrame>` chain that
+keeps per-call regions pinned across re-borrow. One test pins the open surviving a sibling alloc; one
+pins the `Rc<CallFrame>` chain keeping an outer region alive after its local handle drops; a third pins
+the **seed-side re-anchor** — a caller-lifetime value relocated into the opened scope's own region
+through the substrate (`reattach_with`, a shortening of the caller lifetime) and bound, the shape the
+MATCH / TRY `it`-bind and the user-fn param-bind take. `CallFrame::adopting` (the scheduler-owned run
+frame) carries the same `&Scope<'_>` erasure as `new`, over the run scope it adopts rather than a
+freshly-minted child; it is built on the first run-lifetime submission, so every scheduler-driving slate
+test below (`recursive_tagged_match_no_uaf`, `lift_park_minimal_program_for_miri`, …) exercises it
 end-to-end — the run scope outlives the frame, so no separate minimal test.
 
 - `call_frame_scope_survives_subsequent_alloc`
 - `call_frame_chained_outer_frame_walkable`
-- `scope_bounded_reanchors_within_witness_borrow`
+- `with_scope_relocates_seed_value_into_brand`
 
 **`Region` alloc engine under live borrows** ([src/witnessed/region.rs](../src/witnessed/region.rs)) — the
 generic `alloc` engine erases the value to `'static` (the move-through-union `erase_store`),
@@ -121,8 +119,8 @@ frame reuse installs a fresh refcounted `FrameStorage` (a new `KoanRegion`) and
 re-allocates the child `Scope` through the safe `Scope::child_for_frame`: the new
 outer link and root are brand-shortened to the fresh region's lifetime, so the
 child is built at real lifetimes and erased once via `SealedExtern::erase` with
-no construction-time transmute. The re-attach these tests pin is the read-side
-`SealedExtern::attach` on the re-installed child plus the swap's drop
+no construction-time transmute. The read these tests pin is `CallFrame::with_scope`
+(`SealedExtern::open`) on the re-installed child plus the swap's drop
 discipline: the `Rc::get_mut` gate refuses only when another `Rc<CallFrame>`
 *shell* holder still exists; an escaped value pins the `FrameStorage`, not the
 shell, so it does not foreclose reuse — the swap drops the shell's reference to the
@@ -172,26 +170,26 @@ because tree borrows catches a regression in the aliasing or rooting discipline.
 - `using_temporary_functor_result_is_sound`
 
 **MATCH on `Tagged` recursion** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — MATCH
-builds its per-call frame and seeds its `it` bind through `CallFrame::with_frame_interior`
-(the region reached through the child scope's `region` field, the scope re-handed via the bounded
-`scope_bounded` brand); the `FrameStorage` ancestor chain keeps the call-site region alive across
-TCO replace when a user-fn recurses through a `Tagged` parameter via MATCH.
+builds its per-call frame and seeds its `it` bind through `CallFrame::with_scope`: the matched value,
+deep-cloned at the caller lifetime, is relocated into the opened child scope's own region through the
+substrate (`reattach_with`, a shortening) and bound; the `FrameStorage` ancestor chain keeps the
+call-site region alive across TCO replace when a user-fn recurses through a `Tagged` parameter via
+MATCH.
 
 - `recursive_tagged_match_no_uaf`
 
 **TRY-WITH inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — same
-`CallFrame::with_frame_interior` seed bind as MATCH for the per-branch frame; the
+`CallFrame::with_scope` seed relocation + bind as MATCH for the per-branch frame; the
 `FrameStorage.outer` chain keeps the call-site region alive when the branch body
 tail-calls back through the enclosing user-fn.
 
 - `try_inside_tco_position_preserves_frame_chain`
 
 **`KFunction::invoke` per-call frame re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
-seed bind routed through `CallFrame::with_frame_interior`: the per-call region reached through the
-child scope's `region` field at the scope's content `'a` (an `'a`-typed value must land in an
-`'a`-typed region) while the child scope rides the witness-bounded `scope_bounded` brand. Witnessed
-by the `Rc<CallFrame>` moved into
-`BodyResult::Tail`. Exercised by every user-fn invocation: repeated-call reclamation, type-op
+seed bind routed through `CallFrame::with_scope`: the deep-cloned argument record is relocated into the
+opened child scope's own region through the substrate (`reattach_with`, a shortening) and each parameter
+bound, while the scope rides the `for<'b>` brand the open confines. Witnessed by the `Rc<CallFrame>`
+moved into `BodyResult::Tail`. Exercised by every user-fn invocation: repeated-call reclamation, type-op
 dispatch through a functor-call's per-call scope, and `MODULE_TYPE_OF` lift-out.
 
 - `repeated_user_fn_calls_do_not_grow_run_root_per_call`
@@ -225,11 +223,15 @@ holds a `&'static Scope` (erased once on the store side through the safe `erase_
 so the re-hand is the witnessed `reattach_ref_with::<ScopeFamily>` on that stored reference with **no
 `unsafe`** of its own — the only `unsafe` it routes is the shared `retype` in `witnessed.rs`. The
 child scope rides the substrate's `SealedExtern<ScopeRefFamily>` and re-anchors through
-`SealedExtern::attach` (`CallFrame::scope_bounded` passes the frame's own storage `Rc`), yielding a
-borrow bounded by the witness with a free content lifetime — sound because the frame `Rc` keeps the
-pointee live for the borrow. Call sites carry **no `unsafe`**. The store side (`SealedExtern::erase`)
-forgets the reference's lifetime for storage through the safe `erase_to_static`. The `CallFrame` group
-exercises `attach` through its own accessors.
+`SealedExtern::attach`, yielding a borrow bounded by the witness with a free content lifetime — sound
+because the frame `Rc` keeps the pointee live for the borrow, distinct from `with_scope`'s `for<'b>`
+brand (borrow == content). Call sites carry **no `unsafe`**. The store side (`SealedExtern::erase`)
+forgets the reference's lifetime for storage through the safe `erase_to_static`. `attach` is now
+**callerless** — the frame's reads fold onto `SealedExtern::open` (`CallFrame::with_scope`); it survives
+only for the `single-open-verb` follow-up to delete, pinned until then by the minimal mirror below that
+re-anchors the frame's child-scope carrier directly, passing the frame's storage `Rc` as the witness.
+
+- `sealed_extern_attach_bounded_reanchor`
 
 **`NodeScope::YokedChild` lifetime fabrication** ([src/machine/execute/nodes.rs](../src/machine/execute/nodes.rs))
 — a cart-ancestor block scope evicted off a lifetime-free scheduler node (`NodeScope::YokedChild`) is
@@ -427,9 +429,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-29: 146s — 40 tests, 0 leaks, 0 UB
 - 2026-06-29: 135s — 39 tests, 0 leaks, 0 UB
 - 2026-06-29: 242s — 39 tests, 0 leaks, 0 UB
 - 2026-06-29: 143s — 39 tests, 0 leaks, 0 UB
 - 2026-06-28: 146s — 39 tests, 0 leaks, 0 UB
-- 2026-06-28: 143s — 39 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

@@ -8,9 +8,9 @@
 use std::rc::Rc;
 
 use crate::machine::core::{assemble_body_chain, KoanRegion, ScopeId, ScopeRefFamily};
-use crate::witnessed::SealedExtern;
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallFrame, LexicalFrame, NodeId, Scope};
+use crate::witnessed::SealedExtern;
 
 use super::super::dispatch::with_node_scope;
 

@@ -271,6 +271,7 @@ digraph {
     "koan::builtins::branch_walk" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::builtins::branch_walk" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -546,6 +547,7 @@ digraph {
     "koan::machine::core::kfunction::exec" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::exec" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::exec" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction::exec" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::pick" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::pick" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::pick" -> "koan::machine::model::types" [label="uses", style="dashed"];
@@ -630,7 +632,6 @@ digraph {
     "koan::machine::execute::dispatch::ctx" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::exec" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine::core::kfunction::bind_by_name" [label="uses", style="dashed"];
@@ -744,6 +745,7 @@ digraph {
     "koan::machine::execute::lift" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::machine::execute::lift" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine::core" [label="uses", style="dashed"];

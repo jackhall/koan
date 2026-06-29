@@ -18,18 +18,25 @@ use std::rc::Rc;
 fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFunction<'run> {
     use crate::machine::model::{ExpressionSignature, ReturnType, SignatureElement};
     use crate::machine::{Body, KFunction};
-    let kf = KFunction::new(
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Null),
-            elements: vec![SignatureElement::Keyword("__INNER__".into())],
-        },
-        Body::Builtin(|ctx| {
-            crate::machine::core::kfunction::action::Action::Done(Ok(Carried::Object(
-                ctx.scope.region.alloc_object(KObject::Null),
-            )))
-        }),
-        home.scope_bounded(),
-    );
+    use crate::witnessed::reattach_with;
+    // Capture the home frame's child scope (read at the brand), build the function there, then
+    // relocate it to `home`'s region lifetime — witnessed by that region, where the captured scope
+    // genuinely lives — and alloc it. Mirrors a closure capturing its defining scope in its own region.
+    let kf = home.with_scope(|child| {
+        let kf = KFunction::new(
+            ExpressionSignature {
+                return_type: ReturnType::Resolved(KType::Null),
+                elements: vec![SignatureElement::Keyword("__INNER__".into())],
+            },
+            Body::Builtin(|ctx| {
+                crate::machine::core::kfunction::action::Action::Done(Ok(Carried::Object(
+                    ctx.scope.region.alloc_object(KObject::Null),
+                )))
+            }),
+            child,
+        );
+        reattach_with::<KFunction<'static>, _>(kf, home.region())
+    });
     home.region().alloc_function(kf)
 }
 
