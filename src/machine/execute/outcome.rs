@@ -346,14 +346,18 @@ mod erased_continuation_tests {
         let erased: Erased<ContinuationFamily> = Erased::erase(continuation);
         let sched = Scheduler::new();
         let ambient = crate::machine::execute::ambient::AmbientContext::default();
-        // Open the continuation against the held cart `Rc` at the brand and run the single shot inside
-        // it — the same consuming externally-witnessed open the driver uses in `run_step`. The branded
+        // Open the continuation and a scope carrier against the held cart `Rc` at the brand and run the
+        // single shot inside it — the same consuming externally-witnessed open the driver uses in
+        // `run_step`, where the scope is zipped in so the view reads it at the brand. The branded
         // `Outcome` is consumed in place; nothing leaves the brand.
-        SealedExtern::seal(erased).open(&cart, |continuation| {
-            let view = SchedulerView::new(&sched, &ambient);
-            let out = continuation(&view, &[], 0);
-            assert!(matches!(out, Outcome::Done(Err(_))));
-        });
+        let scope_carrier = cart.scope_sealed();
+        SealedExtern::seal(erased)
+            .zip(scope_carrier)
+            .open(&cart, |(continuation, scope)| {
+                let view = SchedulerView::new(&sched, &ambient, scope);
+                let out = continuation(&view, &[], 0);
+                assert!(matches!(out, Outcome::Done(Err(_))));
+            });
         // Mutate the region through a sibling pointer after the brand to catch a stacked-borrow regression.
         let _other = region.region().alloc_object(KObject::Number(8.0));
         assert!(matches!(captured, KObject::Number(n) if *n == 7.0));

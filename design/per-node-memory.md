@@ -165,8 +165,9 @@ holder already pins the backing and supplies it at the access, read through a
 **consuming, externally-witnessed `open`** — the witness handed in at the call and the
 carrier moved into the same rank-2 `for<'b>` brand, so a non-`Copy` carrier (a continuation)
 passes and nothing branded escapes. (A borrow-bounded `attach<'w>(&'w self, &'w W) -> Live<'w>`,
-re-anchoring capped at the witness borrow, is the accessor the scope channel reads through; its fold
-into the step `open` is tracked in [Open work](#open-work).) Bundling a witness the carrier does
+re-anchoring capped at the witness borrow, is the accessor the **frame-side** scope reads route
+through — the decide channel reads its scope from the step `open` instead; folding the frame-side reads
+onto `open` too is tracked in [Open work](#open-work).) Bundling a witness the carrier does
 not need would be a redundant second owner — and, when the witness is
 reference-counted, an extra count the holder's own uniqueness checks must subtract.
 `yoke`, which moves `W` into the bundle, builds the self-witnessed form; the
@@ -280,12 +281,17 @@ continuation run, the outcome apply, and the finalize all run inside one brand (
 externally-witnessed `open` above), so nothing branded crosses the step boundary. The step's dep
 slice is opened *in-band* at that same brand — each producer terminal read out borrow-bounded, erased
 into one slice carrier, and zipped alongside the continuation — so every dep value is born at `'b`
-through the one step `open`, with no separate slice reattach. The scope is the one channel not yet
-nested this way: the dispatch decide reads it through a borrow-bounded
+through the one step `open`, with no separate slice reattach. The **active scope** opens at that same
+brand: its carrier — the frame's own `SealedExtern<ScopeRefFamily>` for a `Yoked` slot, the node's
+`ErasedScopePtr` for a `YokedChild` — is zipped into the step `open` alongside the continuation, so the
+dispatch decide reads `&Scope<'b>` from the one brand (and the consumer `dest` region is the opened
+scope's own `region`, derived inside it) rather than re-anchoring a free `&Scope<'step>` up the
+dispatcher stack. The reads still on the borrow-bounded
 `attach<'w>(&'w self, &'w W) -> Live<'w>` accessor — re-anchoring *capped at the witness borrow* `'w`
-rather than at a free `'b` that could be widened past it — sound because the witness pin outlives the
-borrow (a fact the compiler checks). Folding it into the step `open` like every other channel is
-tracked in [Open work](#open-work).
+rather than at a free `'b` that could be widened past it, sound because the witness pin outlives the
+borrow (a fact the compiler checks) — are the frame-side ones: the `&mut self` submit / classify paths
+and the `CallFrame` accessors (`scope` / `scope_for_bind` / `scope_bounded`) that read a frame's own
+child scope. Folding those onto `open` like the decide channel is tracked in [Open work](#open-work).
 
 ## Storage choice belongs to the workload
 
@@ -328,24 +334,19 @@ probe) and the three ride-up-stack dispatch sites resolve at the cart `'step`, s
 self-witnessed `read` is deleted — have all landed (see
 [Region lifetime erasure](memory-model.md#region-lifetime-erasure)).
 
-What remains is the **scope channel**, the **`Region::alloc` re-anchor**, and the **seal-site
-witnessing** — and one line of reasoning ties the first three together. The keystone step `open`
-already opens the continuation, return contract, consumer `dest` region, and dep slice at one rank-2
-`for<'b>` brand, so the whole step tail — decide, outcome apply, finalize — runs inside it and consumes
-its `Outcome<'b>` in place; nothing branded escapes. The scope is the **one channel not yet folded into
-that brand**: the dispatch decide reads it through the escaping `current_scope` / `reattach_node_scope`
-/ `scope_bounded`, which hand a `&Scope<'step>` up the dispatcher stack at a free content lifetime — the
-shape the brand forbids — and `dest` is derived from an escaping scope read taken *before* the open. A
-fast lane cannot nest under a *separate* scope `open` because it returns `Outcome<'step>` and a
-`for<'b>` closure cannot hand a branded outcome back out; the fix is therefore not a per-reader rewrite
-but folding the scope into the **one step brand the tail already runs in**, after which the
-scope-pointer storage and the allocator re-anchor follow:
+What remains is the **frame-side scope reads**, the **scope-pointer collapse**, the **`Region::alloc`
+re-anchor**, and the **seal-site witnessing**. With the decide channel folded into the step brand (the
+active scope now opens there alongside the continuation — *Why reads are safe* above — so the decide
+reads `&Scope<'b>` and `dest` is the opened scope's own `region`), the residual scope reads are the
+frame-side ones: the `&mut self` submit / classify paths and the `CallFrame` accessors (`scope` /
+`scope_for_bind` / `scope_bounded`) that read a frame's own child scope through the borrow-bounded
+`attach`. Folding those onto `open` clears that accessor's last callers, after which the scope-pointer
+storage and the allocator re-anchor follow:
 
-- [Fold the scope channel into the step `open`](../roadmap/per-node-memory/scope-reads-to-open.md) —
-  zip the active scope's carrier into the step `open`, opened at the brand through the consuming
-  `SealedExtern::open` rather than the borrow-bounded `attach`; the decide receives `&Scope<'b>`,
-  `dest` becomes the opened scope's `region` (the separate region carrier dissolves), and the escaping
-  scope readers are gone.
+- [Fold the frame-side scope reads onto `open`](../roadmap/per-node-memory/frame-scope-reads-to-open.md)
+  — migrate the `CallFrame` accessors (`scope` / `scope_for_bind` / `scope_bounded`), the submit-path
+  `reattach_node_scope`, and the literal-classify free `current_scope` off the borrow-bounded `attach`,
+  so the frame's child scope is read through `open` like the decide channel.
 - [Collapse the scope-pointer erasure into the substrate](../roadmap/per-node-memory/scope-pointer-collapse.md)
   — a region-resident value's captured / defining / parent scope (`KFunction::captured`, `Module` /
   `Signature`'s scope pointers, a `Scope`'s `outer` / `root`) is a foreign borrow the witness pins, so
@@ -362,7 +363,7 @@ scope-pointer storage and the allocator re-anchor follow:
   `alloc -> &'a` remains and the alloc retype is confined by the brand exactly as `open`'s is.
   Aggregates compose their element carriers via `merge`.
 - [`Sealed`: a single access verb](../roadmap/per-node-memory/single-open-verb.md) — with the scope
-  folded, the allocator confined, and the scope pointers collapsed, the borrow-bounded `attach` and the
+  reads folded, the allocator confined, and the scope pointers collapsed, the borrow-bounded `attach` and the
   `reattach_ref_with` it routes have no caller left, so they are deleted, leaving `Sealed` /
   `SealedExtern` with `open` (plus its consuming twin) as the single access verb.
 - [Witness value carriers at their construction site](../roadmap/per-node-memory/witness-at-construction.md)

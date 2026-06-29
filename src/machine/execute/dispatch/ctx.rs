@@ -14,7 +14,6 @@
 //! (`keyworded`, `fn_value`, `single_poll`) never name scheduler fields directly — only
 //! `cx.foo(...)` — so a future scheduler internal rename is a single-file change inside `scheduler/`.
 
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::DepPlacement;
@@ -59,46 +58,17 @@ pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
     }
 }
 
-/// The active slot's scope, re-anchored from the ambient payload's scope handle. The workload-side
-/// form of the read the scheduler core no longer owns: it materializes a `&Scope` so `scheduler/**`
-/// names none. Panics outside a slot step (no ambient payload); within a step the scope is always
-/// present — a `YokedChild` slot carries its own pointer, and a `Yoked` slot's active cart is never
-/// emptied mid-step (an invoke reuses the reserve, not the active cart).
+/// The active slot's scope, re-anchored from the ambient payload's scope handle — the read the
+/// `&mut self` literal-classify and submit paths use (they hold `self.ambient`, not the step `open`'s
+/// branded scope, so they cannot yet take the threaded read). Panics outside a slot step; within a
+/// step the scope is always present — a `YokedChild` slot carries its own pointer, and a `Yoked`
+/// slot's active cart is never emptied mid-step. Reducing these to the brand-threaded read is the
+/// frame-scope-reads follow-up.
 pub(in crate::machine::execute) fn current_scope<'step>(ambient: &AmbientContext) -> &Scope<'step> {
     let payload = ambient
         .active_payload()
         .expect("a slot step installs the ambient payload (and a Yoked slot keeps its frame)");
     reattach_node_scope(&payload.scope, ambient.active_frame_ref())
-}
-
-/// Closure (`for<'b>`) analog of [`reattach_node_scope`]: hand the node scope in at a rank-2 brand so
-/// the borrow cannot escape `f`. The `Yoked` arm routes [`CallFrame::with_scope`]; the `YokedChild`
-/// arm stays a witnessed reference (a cross-node erasure outside the per-call struct). The handlers
-/// that consume their scope in place read it through this instead of the escaping `current_scope()`.
-pub(in crate::machine::execute) fn with_node_scope<R>(
-    node_scope: &NodeScope,
-    frame: Option<&Rc<CallFrame>>,
-    f: impl for<'b> FnOnce(&'b Scope<'b>) -> R,
-) -> R {
-    match node_scope {
-        NodeScope::YokedChild(ptr) => {
-            f(ptr.reattach_witnessed(frame.expect("a YokedChild slot keeps its active cart")))
-        }
-        NodeScope::Yoked => frame
-            .expect("a Yoked slot keeps its active cart")
-            .with_scope(f),
-    }
-}
-
-/// Closure analog of [`current_scope`]: open the active slot's scope at a `for<'b>` brand.
-pub(in crate::machine::execute) fn with_current_scope<R>(
-    ambient: &AmbientContext,
-    f: impl for<'b> FnOnce(&'b Scope<'b>) -> R,
-) -> R {
-    let payload = ambient
-        .active_payload()
-        .expect("a slot step installs the ambient payload (and a Yoked slot keeps its frame)");
-    with_node_scope(&payload.scope, ambient.active_frame_ref(), f)
 }
 
 /// Read-only dispatch view — the decide-phase context. It holds only `&Scheduler`, never `&mut`.
@@ -112,25 +82,26 @@ pub(in crate::machine::execute) struct SchedulerView<'step, 'view> {
     /// The driver's ambient per-step context: the scope/chain reads (`current_scope`, `chain_deref`,
     /// `active_chain`, `current_frame`, `in_contract_chain`) read it, not the scheduler.
     ambient: &'view AmbientContext,
-    /// `SchedulerView` re-anchors the value-erased scheduler's reads to `'step` (the cart/scope
-    /// content lifetime the decide runs against); the scheduler itself is `Scheduler<KoanWorkload>`,
-    /// so `'step` lives only on this view, kept here by the marker. Every dispatch decide runs at the
-    /// cart lifetime `'step`: the working expression is re-anchored from its erased node carrier to
-    /// `'step`, so the view's slot is the cart, never the program AST. The pristine-AST lifetime
-    /// `'ast` lives only at the submission boundary, where a borrowed `&KExpression<'ast>` is read
-    /// against the cart scope.
-    _step: PhantomData<&'step ()>,
+    /// The active slot's scope, opened at the step brand and handed in by the run-loop step `open`
+    /// (`run_step`), so [`Self::current_scope`] returns it directly rather than re-anchoring an erased
+    /// handle up the dispatcher stack. It carries the cart/scope content lifetime `'step` the decide
+    /// runs at: every decide runs at the cart lifetime, the working expression re-anchored from its
+    /// erased node carrier to `'step`, so the view's slot is the cart, never the program AST. The
+    /// pristine-AST lifetime `'ast` lives only at the submission boundary, where a borrowed
+    /// `&KExpression<'ast>` is read against the cart scope.
+    scope: &'step Scope<'step>,
 }
 
 impl<'step, 'view> SchedulerView<'step, 'view> {
     pub(in crate::machine::execute) fn new(
         sched: &'view Scheduler<KoanWorkload>,
         ambient: &'view AmbientContext,
+        scope: &'step Scope<'step>,
     ) -> Self {
         Self {
             sched,
             ambient,
-            _step: PhantomData,
+            scope,
         }
     }
 
@@ -139,17 +110,18 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     // (`is_result_ready`, `would_create_cycle`, `read_result`) all forward to the borrowed
     // scheduler.
 
-    /// Open the active slot's scope at a `for<'b>` brand — the closure-threaded read the dispatch
-    /// handlers that consume their scope in place use instead of the escaping [`Self::current_scope`].
+    /// Run `f` with the active slot's scope. The scope was opened at the step brand and handed to this
+    /// view, so it satisfies the `for<'b>` closure at the view's own `'step`; the closure form is kept
+    /// for the handlers that consume their scope in place, alongside the plain [`Self::current_scope`].
     pub(in crate::machine::execute) fn with_current_scope<R>(
         &self,
         f: impl for<'b> FnOnce(&'b Scope<'b>) -> R,
     ) -> R {
-        with_current_scope(self.ambient, f)
+        f(self.scope)
     }
 
-    pub(in crate::machine::execute) fn current_scope(&self) -> &Scope<'step> {
-        current_scope(self.ambient)
+    pub(in crate::machine::execute) fn current_scope(&self) -> &'step Scope<'step> {
+        self.scope
     }
 
     pub(super) fn chain_deref(&self) -> Option<&LexicalFrame> {

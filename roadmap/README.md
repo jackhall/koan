@@ -84,10 +84,13 @@ What's shipped that the open items below build on:
   slot's own `Node.frame` cart — no fabricated run-length `&'a` persists across a TCO reset.
   The frame re-anchor then landed in full: the free `&'run` scope fabrication at the read
   boundary is deleted, a within-step frame lifetime `'step` (`'a: 'step`) threads
-  `run_dispatch`/`SchedulerView`/`BuiltinFn`, and a slot's scope is now read on demand via
-  [`Scheduler::current_scope`](../src/machine/execute/run_loop.rs) through the witness-bounded
-  [`CallFrame::scope_bounded`](../src/machine/core/arena.rs) brand (the post-step loop reads it
-  through a `PostStep` token off the slot's returned frame).
+  `run_dispatch`/`SchedulerView`/`BuiltinFn`, and a slot's scope is read on demand through the
+  witness-bounded [`CallFrame::scope_bounded`](../src/machine/core/arena.rs) brand. The decide
+  channel then folded onto the step `open`: the active scope's carrier is zipped into the run-loop
+  step's [`SealedExtern::open`](../src/witnessed.rs) alongside the continuation, contract, and deps,
+  so the dispatch decide reads `&Scope<'b>` at the step brand and the consumer `dest` is the opened
+  scope's own region (the separate region carrier dissolves) — leaving only the frame-side
+  `&mut self` submit / classify and `CallFrame`-accessor reads on the borrow-bounded `attach`.
   [`CallFrame::with_frame_interior`](../src/machine/core/arena.rs)'s seed bind no longer re-exposes
   the region at a free `'a`: it reaches the region through the child scope's own `region` field
   (a `Copy` `&'a KoanRegion`), so the seed side carries no free re-exposure. The full Miri-slate
@@ -333,8 +336,9 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
+- [Fold the frame-side scope reads onto `open`](per-node-memory/frame-scope-reads-to-open.md)
 - [Confine `Region::alloc` to a brand](per-node-memory/region-alloc-brand-confined.md)
-- [Fold the scope channel into the step `open`](per-node-memory/scope-reads-to-open.md)
+- [Collapse the scope-pointer erasure into the substrate](per-node-memory/scope-pointer-collapse.md)
 - [Witness value carriers at their construction site](per-node-memory/witness-at-construction.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
@@ -448,13 +452,13 @@ deleting both it and the per-frame `FrameStorage.retained` field) are all shippe
 **value-read migration** (the result-slot value reads nest under the rank-2 `Sealed::open` — a value
 copy-out and a borrow-free error probe — the three ride-up-stack dispatch sites resolve at the cart
 `'step`, and the transitional self-witnessed `read` is deleted). The design is captured in
-[design/per-node-memory.md](../design/per-node-memory.md). What remains is the scope channel, the
-scope-pointer collapse, the `Region::alloc` re-anchor, the seal-site witnessing, and collapsing the
+[design/per-node-memory.md](../design/per-node-memory.md). What remains is the frame-side scope reads,
+the scope-pointer collapse, the `Region::alloc` re-anchor, the seal-site witnessing, and collapsing the
 access surface to `open` alone:
 
-- [Fold the scope channel into the step `open`](per-node-memory/scope-reads-to-open.md) — zip the
-  active scope's carrier into the step `open` so the decide reads `&Scope<'b>` from the one brand,
-  collapse `dest` into the opened scope, and remove the escaping scope readers.
+- [Fold the frame-side scope reads onto `open`](per-node-memory/frame-scope-reads-to-open.md) —
+  migrate the `CallFrame` accessors (`scope` / `scope_for_bind` / `scope_bounded`), the submit-path
+  `reattach_node_scope`, and the literal-classify `current_scope` off the borrow-bounded `attach`.
 - [Collapse the scope-pointer erasure into the substrate](per-node-memory/scope-pointer-collapse.md) —
   re-anchor a region-resident value's captured / parent scope through the holder's own `open`, deleting
   `BoundedScopePtr` / `ErasedScopePtr` and the bare `reattach_ref` (its `NonNull` deref) so the scope

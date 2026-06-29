@@ -1,6 +1,6 @@
 # `Sealed`: a single access verb
 
-With the scope folded, the allocator confined, and the scope pointers collapsed, delete the
+With the scope reads folded, the allocator confined, and the scope pointers collapsed, delete the
 now-callerless borrow-bounded `attach` and the `reattach_ref_with` witness-borrow read path, leaving
 `Sealed` / `SealedExtern` with one access verb.
 
@@ -38,8 +38,8 @@ re-anchored reference ride up-stack — a second access verb beside [`open`](../
 
 **Requires:**
 
-- [Fold the scope channel into the step `open`](scope-reads-to-open.md) — clears the borrow-bounded
-  `attach`'s callers (the escaping scope readers).
+- [Fold the frame-side scope reads onto `open`](frame-scope-reads-to-open.md) — clears the
+  borrow-bounded `attach`'s remaining (frame-side) callers.
 - [Collapse the scope-pointer erasure into the substrate](scope-pointer-collapse.md) — clears
   `ErasedScopePtr`'s use of `reattach_ref_with`.
 - [Confine `Region::alloc` to a brand](region-alloc-brand-confined.md) — clears `Region::alloc`'s use

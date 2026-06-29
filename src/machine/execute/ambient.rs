@@ -60,18 +60,13 @@ pub(in crate::machine::execute) struct SlotStepGuard {
     /// Saved so nested slot runs (combinator finish closures) don't inherit the
     /// outer slot's reserve frame.
     prev_reserve: Option<Rc<CallFrame>>,
-    /// The step's own payload, kept so [`KoanRuntime::exit_slot_step`] can hand it back inside the
-    /// [`PostStep`] token — the step's scope is then re-derivable from the *returned* payload (and
-    /// frame), never the ambient (and possibly invoke-swapped) state.
-    step_payload: NodePayload,
 }
 
-/// The frames and payload of a just-finished step, returned by [`KoanRuntime::exit_slot_step`]. Owns
-/// `prev_frame` (the slot's frame *at step end* — an in-step invoke may have swapped the ambient
-/// `active_frame`, so this returned value, not the ambient `active_frame`, is the authoritative
-/// source) and hands back the slot's opaque workload payload through [`Self::payload`]; the workload
-/// re-anchors it against `prev_frame` at the Done boundary. Reading the step state from ambient
-/// state post-step is thereby unspellable.
+/// The frames of a just-finished step, returned by [`KoanRuntime::exit_slot_step`]. Owns `prev_frame`
+/// — the slot's frame *at step end* (an in-step invoke may have swapped the ambient `active_frame`, so
+/// this returned value, not the ambient `active_frame`, is the authoritative source) — and the
+/// post-step reserve. The step's scope is opened at the step brand in `run_step`, so `PostStep` no
+/// longer carries the slot's payload.
 pub(in crate::machine::execute) struct PostStep {
     /// The slot's cart at step end. Always present: `enter_slot_step` installs the node's cart and
     /// an invoke never empties `active_frame` — reuse draws from the reserve via
@@ -80,17 +75,6 @@ pub(in crate::machine::execute) struct PostStep {
     pub(in crate::machine::execute) prev_frame: Rc<CallFrame>,
     /// The slot's reserve frame at step end (see ping-pong reserve rotation).
     pub(in crate::machine::execute) post_step_reserve: Option<Rc<CallFrame>>,
-    payload: NodePayload,
-}
-
-impl PostStep {
-    /// The slot's opaque workload payload at step end. The workload re-anchors it (the scope handle)
-    /// against [`Self::prev_frame`] at the Done boundary; `PostStep` never materializes a `&Scope`
-    /// itself, so reading the step scope from ambient (possibly invoke-swapped) state stays
-    /// unspellable.
-    pub(in crate::machine::execute) fn payload(&self) -> &NodePayload {
-        &self.payload
-    }
 }
 
 impl AmbientContext {
@@ -109,9 +93,7 @@ impl AmbientContext {
 
 impl<'run> KoanRuntime<'run> {
     /// Install the slot's frame/payload/reserve as the ambient values for one step. The caller passes
-    /// the returned guard to [`Self::exit_slot_step`] when the step returns; `node_payload` is cloned
-    /// only here (so the caller can keep its own copy for the Replace arm without double-counting any
-    /// `Rc` it holds).
+    /// the returned guard to [`Self::exit_slot_step`] when the step returns.
     pub(in crate::machine::execute) fn enter_slot_step(
         &mut self,
         node_frame: Rc<CallFrame>,
@@ -120,17 +102,16 @@ impl<'run> KoanRuntime<'run> {
     ) -> SlotStepGuard {
         let prev_frame = self.ambient.active_frame.replace(node_frame);
         let prev_reserve = std::mem::replace(&mut self.ambient.active_reserve, node_reserve);
-        let prev_payload = self.ambient.active_payload.replace(node_payload.clone());
+        let prev_payload = self.ambient.active_payload.replace(node_payload);
         SlotStepGuard {
             prev_frame,
             prev_payload,
             prev_reserve,
-            step_payload: node_payload,
         }
     }
 
     /// Restore the values saved by [`Self::enter_slot_step`] and return the
-    /// [`PostStep`] token (post-step frame + reserve + payload).
+    /// [`PostStep`] token (post-step frame + reserve).
     ///
     /// `post_step_reserve` carries the slot's reserve at step end. The Replace arm reads it to
     /// decide rotation: with a new frame, the post-step reserve is two iterations old and gets
@@ -152,7 +133,6 @@ impl<'run> KoanRuntime<'run> {
                 "a step runs against a cart; an invoke reuses the reserve, never the active",
             ),
             post_step_reserve,
-            payload: guard.step_payload,
         }
     }
 

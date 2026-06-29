@@ -14,7 +14,7 @@ use crate::machine::model::values::CarriedFamily;
 use crate::machine::{FrameSet, KError, KErrorKind, KoanRegion, NodeId};
 use crate::witnessed::{erase_to_static, reattachable, seal_option, MergeWitness, SealedExtern};
 
-use super::dispatch::{reattach_node_scope, SchedulerView};
+use super::dispatch::SchedulerView;
 use super::finalize::NodeFinalize;
 use super::nodes::{Node, NodeFrame, NodePayload, NodeScope, NodeStep, NodeWork};
 use super::outcome::DepTerminal;
@@ -25,14 +25,12 @@ mod run_tests;
 #[cfg(test)]
 mod tests;
 
-/// `Reattachable` family for the consumer `dest` region the step pull-lifts into — a bare
-/// `&KoanRegion` carried into the step brand so the dep terminals and an `Outcome::Forward` pull are
-/// born at the brand `'b` natively (no value-slice reattach). The region lives in the consumer
-/// scope's storage, which the step's start-cart `Rc` pins; sealing it (witness-less, via
-/// [`SealedExtern::erase`]) and opening it against that cart at the brand re-anchors the reference,
-/// not its referent. Layout-invariant: `&'r KoanRegion` is a thin pointer whose representation never
-/// depends on `'r`. Also the destination-region carrier `read_lifted` feeds to
-/// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into).
+/// `Reattachable` family for a `&KoanRegion` — the destination-region carrier the consumer-pull lift's
+/// `read_lifted` feeds to [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into) when it
+/// re-anchors a relocated value at the destination's lifetime. The step's own `dest` region rides the
+/// opened scope (`scope.region`) rather than a separate carrier, so this family backs only the
+/// relocate seam. Layout-invariant: `&'r KoanRegion` is a thin pointer whose representation never
+/// depends on `'r`.
 pub(in crate::machine::execute) struct RegionRefFamily;
 
 // `&'r KoanRegion` is one type generic only in `'r` (a thin reference); its layout is identical for
@@ -89,17 +87,17 @@ impl<'run> KoanRuntime<'run> {
     /// [`SlotStepGuard`](super::ambient::SlotStepGuard) is born and consumed without escaping.
     ///
     /// The whole step tail runs inside one rank-2 `for<'b>` brand standing in for the step lifetime
-    /// `'s`: [`SealedExtern::open`] opens the continuation, the return contract, and the consumer
-    /// `dest` region together at `'b` witnessed by the held cart `Rc` (`continuation_witness`), which
-    /// the step guard keeps live across the continuation's run; the dep slice and an `Outcome::Forward`
-    /// pull are then born at `'b` from the opened region. The body, including the [`NodeStep::Done`]
-    /// terminal's finalize, runs while `consumer_frame` (also the step's cart `Rc`) witnesses the
-    /// value-channel pull-lift. So the Done value, born at `'b` in the consumer frame, is finalized into
-    /// the slot store (where `finalize` erases it) *within* `'b`: it never has to be laundered to `'run`
-    /// to cross a step-guard exit, and nothing branded escapes the closure. Both cart clones are
-    /// confined to this call and dropped at return — before the next iteration's `try_reset_for_tail`,
-    /// which resets a *different* (the prior step's) cart — so they do not contend with the TCO
-    /// `Rc::get_mut` uniqueness gate.
+    /// `'s`: [`SealedExtern::open`] opens the continuation, the return contract, the active scope, and
+    /// the dep slice together at `'b` witnessed by `combined` (the held cart `Rc` `continuation_witness`
+    /// unioned with the dep `pin`), which the step guard keeps live across the continuation's run. The
+    /// consumer `dest` region is the opened scope's own region (`scope.region`), and an
+    /// `Outcome::Forward` pull is born at `'b` into it. The body, including the [`NodeStep::Done`]
+    /// terminal's finalize, runs while the cart `Rc` witnesses the value-channel pull-lift. So the Done
+    /// value, born at `'b` in the consumer frame, is finalized into the slot store (where `finalize`
+    /// erases it) *within* `'b`: it never has to be laundered to `'run` to cross a step-guard exit, and
+    /// nothing branded escapes the closure. The cart clone is confined to this call and dropped at
+    /// return — before the next iteration's `try_reset_for_tail`, which resets a *different* (the prior
+    /// step's) cart — so it does not contend with the TCO `Rc::get_mut` uniqueness gate.
     fn run_step(&mut self, id: NodeId, node: Node<KoanWorkload>) {
         let idx = id.index();
         // The step reads its scope on demand (`current_scope`), and the post-step uses below
@@ -136,28 +134,15 @@ impl<'run> KoanRuntime<'run> {
         // chain — a deferred-return FN dispatched here skips resolving its own return type (keep-first
         // discards it anyway).
         self.ambient.active_in_contract_chain = prev_contract.is_some();
-        // Consumer-pull: lift each dep's terminal out of its producer frame into this consumer's
-        // own scope region, so the value dies with the consumer and the producer keeps no surviving
-        // copy that would outlive its own dying frame. A frameless / run-region terminal already
-        // survives and is forwarded as-is.
-        //
-        // `dest` is the consumer *scope's* region (the right region even for a transparent USING
-        // window, whose scope region differs from the active frame's), re-anchored at the step
-        // lifetime `'s` bounded by the cart `Rc` cloned into `consumer_frame` — not the run global.
-        // `read_lifted` re-anchors each producer read to it.
-        let consumer_frame = self.ambient.active_frame_ref().cloned();
-        // `dest` is the consumer scope's region. The relocation that copies each dep into it runs
-        // inside the consuming continuation (`short_circuit` / `catch`), not here: the lift delivers
-        // deps un-relocated, so a construction finish folds their carriers and a value-copy finish
-        // copies the spine — a relocated closure / module's reach rides its own carrier (read off the
-        // witness set), folded onto the scope only when the value is bound, never reconstructed.
-        let dest: &KoanRegion = {
-            let payload = self
-                .ambient
-                .active_payload()
-                .expect("a slot step installs the ambient payload");
-            reattach_node_scope(&payload.scope, consumer_frame.as_ref()).region
-        };
+        // Consumer-pull: lift each dep's terminal out of its producer frame into this consumer's own
+        // scope region, so the value dies with the consumer and the producer keeps no surviving copy
+        // that would outlive its own dying frame. A frameless / run-region terminal already survives
+        // and is forwarded as-is. The consumer `dest` region is the *scope's* region, derived inside
+        // the step `open` from the opened scope (`scope.region`) — the right region even for a
+        // transparent USING window, whose scope region differs from the active frame's. The relocation
+        // that copies each dep into `dest` runs inside the consuming continuation (`short_circuit` /
+        // `catch`), not here: the lift delivers deps un-relocated, so a construction finish folds their
+        // carriers and a value-copy finish copies the spine.
         let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
         // Read each producer terminal out (borrow-bounded) into the dep slice — the resolved value
         // plus its `reach` set (its slot witness). The slice erases into one carrier that opens
@@ -206,32 +191,42 @@ impl<'run> KoanRuntime<'run> {
         )
         .expect("a set witness always represents the union");
         // Open the step's externally-witnessed carriers — the continuation, the (frame-gated) return
-        // contract, the consumer `dest` region, and the dep slice — together at a single rank-2
-        // `for<'b>` brand standing in for the step lifetime `'s`, witnessed by `combined`. The brand is
-        // generative: nothing outside is at `'b`, so every value the tail consumes is opened here. The
-        // closure's result cannot name `'b`, so the `Outcome<'b>` the continuation returns and the
-        // finalized `Carried<'b>` are consumed in place — erased into the slot store before return —
-        // and nothing branded crosses the step boundary. This is what lets the tail carry **no** loose
-        // witness-borrow reattach: continuation, dep slice, and contract all route this one open.
+        // contract, the active scope, and the dep slice — together at a single rank-2 `for<'b>` brand
+        // standing in for the step lifetime `'s`, witnessed by `combined`. The brand is generative:
+        // nothing outside is at `'b`, so every value the tail consumes is opened here — including the
+        // scope, from which the consumer `dest` region is derived. The closure's result cannot name
+        // `'b`, so the `Outcome<'b>` the continuation returns and the finalized `Carried<'b>` are
+        // consumed in place — erased into the slot store before return — and nothing branded crosses
+        // the step boundary. This is what lets the tail carry **no** loose witness-borrow reattach:
+        // continuation, scope, dep slice, and contract all route this one open.
         let continuation = SealedExtern::seal(erased_continuation);
         let contract = seal_option(prev_contract);
-        let region = SealedExtern::<RegionRefFamily>::erase(dest);
+        // The active scope as an externally-witnessed carrier, for both node-scope shapes: a `Yoked`
+        // slot takes the start cart's own child-scope carrier; a `YokedChild` re-packages its erased
+        // pointer the same way. `combined` pins both — the cart's region for `Yoked`, an ancestor via
+        // the cart's `outer` chain for `YokedChild`.
+        let scope_carrier = match node_scope {
+            NodeScope::Yoked => continuation_witness.scope_sealed(),
+            NodeScope::YokedChild(ptr) => ptr.to_sealed_extern(),
+        };
         let dep_carrier = SealedExtern::<DepResultsFamily>::erase(dep_sources);
         continuation
             .zip(contract)
-            .zip(region)
+            .zip(scope_carrier)
             .zip(dep_carrier)
             .open(
                 &combined,
-                |(((continuation, live_contract), region), dep_sources)| {
-                    // Deps arrive un-relocated at `'b` from the opened carrier (read out of their producer
-                    // slots, which `combined` pins across the open). The consuming continuation relocates
-                    // each into the consumer `dest` region — `short_circuit` / `catch` for a value-copy
-                    // finish, the construction inversion's `transfer_into` fold for an aggregate (which
-                    // relocates once and names every reached region on the carrier). The lift itself no
-                    // longer pre-relocates.
+                |(((continuation, live_contract), scope), dep_sources)| {
+                    // The active `scope` is now live at the brand `'b`, and the consumer `dest` region
+                    // is its own region. Deps arrive un-relocated at `'b` from the opened carrier (read
+                    // out of their producer slots, which `combined` pins across the open). The consuming
+                    // continuation relocates each into `dest` — `short_circuit` / `catch` for a
+                    // value-copy finish, the construction inversion's `transfer_into` fold for an
+                    // aggregate (which relocates once and names every reached region on the carrier).
+                    // The lift itself no longer pre-relocates.
+                    let dest: &KoanRegion = scope.region;
                     let outcome = continuation(
-                        &SchedulerView::new(&self.sched, &self.ambient),
+                        &SchedulerView::new(&self.sched, &self.ambient, scope),
                         &dep_sources,
                         idx,
                     );
@@ -239,17 +234,14 @@ impl<'run> KoanRuntime<'run> {
                     // The dep half of the finalized terminal's witness set is `pin` itself.
                     let dep_reached = pin.clone();
                     // `apply_outcome` realizes the outcome into a `NodeStep`; a ready `Outcome::Forward`
-                    // becomes a `ForwardReady` relocated below at the brand into this same `region`.
+                    // becomes a `ForwardReady` relocated below at the brand into this same `dest`.
                     let step = self.apply_outcome(outcome, idx);
-                    // The post-step token owns the slot's frame at step end and is the *only* source of the
-                    // step scope (via `post.payload()`), so the wrong-frame read that ambient `active_frame`
-                    // allowed is unspellable here.
                     let post = self.exit_slot_step(guard);
                     self.ambient.active_in_contract_chain = false;
-                    // Drain re-entrant writes against the step scope (re-anchored at the workload boundary
-                    // from the slot's raw handle and the authoritative post-step frame).
-                    reattach_node_scope(&post.payload().scope, Some(&post.prev_frame))
-                        .drain_pending();
+                    // Drain re-entrant writes against the step scope — the same `scope` opened at the
+                    // brand (`combined` pins it through the whole closure; the slot's scope is unchanged
+                    // by the step).
+                    scope.drain_pending();
                     // The producer's per-call frame, gated to a dying producer: it is the frame folded into
                     // a `Done` terminal's witness (a frameless / run-frame producer folds in nothing) and
                     // the destination pin for a `ForwardReady` relocation.
@@ -276,8 +268,7 @@ impl<'run> KoanRuntime<'run> {
                             let result =
                                 self.finalize_terminal(output, frame, live_contract, dep_reached);
                             if result.is_err() {
-                                reattach_node_scope(&post.payload().scope, Some(&post.prev_frame))
-                                    .clear_placeholders_for_producer(id);
+                                scope.clear_placeholders_for_producer(id);
                             }
                             self.sched.finalize(idx, result);
                         }
@@ -291,23 +282,21 @@ impl<'run> KoanRuntime<'run> {
                             let result =
                                 self.finalize_terminal_witnessed(carrier, frame, live_contract);
                             if result.is_err() {
-                                reattach_node_scope(&post.payload().scope, Some(&post.prev_frame))
-                                    .clear_placeholders_for_producer(id);
+                                scope.clear_placeholders_for_producer(id);
                             }
                             self.sched.finalize(idx, result);
                         }
                         NodeStep::ForwardReady(producer) => {
                             // Relocate `producer`'s terminal into this slot's region via the merge-form
                             // transfer — re-sealed under the producer's own reached sources ∪ this slot's
-                            // frame (the `dest_witness` pinning `region`); no contract re-check (the
+                            // frame (the `dest_witness` pinning `dest`); no contract re-check (the
                             // producer enforced its own). A ready-but-errored producer relocates to an
                             // `Err`, clearing this slot's placeholders as the `Done` error path does.
                             let dest_witness = frame
                                 .map_or(FrameSet::empty(), |f| FrameSet::singleton(f.storage_rc()));
-                            let result = self.relocate_terminal(producer, region, dest_witness);
+                            let result = self.relocate_terminal(producer, dest, dest_witness);
                             if result.is_err() {
-                                reattach_node_scope(&post.payload().scope, Some(&post.prev_frame))
-                                    .clear_placeholders_for_producer(id);
+                                scope.clear_placeholders_for_producer(id);
                             }
                             self.sched.finalize(idx, result);
                         }

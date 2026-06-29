@@ -46,10 +46,7 @@ once the holder opens at a brand.
 
 ## Dependencies
 
-**Requires:**
-
-- [Fold the scope channel into the step `open`](scope-reads-to-open.md) — a holder's `outer` / `root`
-  re-anchors through the holder's own `open`, which the scope channel's fold establishes.
+**Requires:** none — the decide-channel scope fold it builds on has shipped.
 
 **Unblocks:**
 

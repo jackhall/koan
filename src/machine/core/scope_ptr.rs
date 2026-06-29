@@ -163,6 +163,15 @@ impl ErasedScopePtr {
         }
     }
 
+    /// Re-package the erased scope as the substrate's externally-witnessed [`SealedExtern`] carrier —
+    /// the run-loop step's source for a `YokedChild` slot, so it opens at the step brand uniformly with
+    /// the frame's own `scope_carrier`. The stored `&'static Scope` is the same pointee
+    /// [`Self::reattach_witnessed`] re-anchors; sealing it routes the safe `SealedExtern::erase`, so it
+    /// carries no `unsafe`.
+    pub(crate) fn to_sealed_extern(self) -> SealedExtern<ScopeRefFamily> {
+        SealedExtern::<ScopeRefFamily>::erase(self.stored)
+    }
+
     /// Re-attach bounded by a held [`Witness`] borrow — the scope-pointer analog of
     /// [`reattach_with`](crate::witnessed). The borrow `'w` is bounded by the witness `&'w W` and the
     /// scope content `'b` is left free (`'b: 'w`); the returned reference **cannot outlive `'w`**, so

@@ -621,14 +621,6 @@ impl CallFrame {
         self.scope_carrier_set().attach(&self.storage)
     }
 
-    /// Run `f` with this frame's child scope handed in at a **rank-2 (`for<'b>`)** brand, so the
-    /// borrow cannot escape the closure. The dispatch handlers that consume their scope in place
-    /// (e.g. `fn_value::initial`, `single_poll::type_call`) read it through this instead of cashing a
-    /// free `current_scope()`, so the re-anchored borrow lives only inside `f`.
-    pub fn with_scope<R>(&self, f: impl for<'b> FnOnce(&'b Scope<'b>) -> R) -> R {
-        f(self.reattach_scope())
-    }
-
     /// The child scope's externally-witnessed [`SealedExtern`] carrier, which is `Some` for the whole
     /// life of a constructed frame (`None` only transiently inside `new` / `try_reset_for_tail`
     /// before the child scope is allocated).
@@ -636,6 +628,13 @@ impl CallFrame {
         self.scope_carrier
             .as_ref()
             .expect("scope_carrier is set after construction")
+    }
+
+    /// The child scope's externally-witnessed carrier by value (`SealedExtern<ScopeRefFamily>` is
+    /// `Copy`) — the run-loop step's source for a `Yoked` slot, opened at the step brand alongside the
+    /// continuation / contract / deps instead of re-anchored through the borrow-bounded `attach`.
+    pub(crate) fn scope_sealed(&self) -> SealedExtern<ScopeRefFamily> {
+        *self.scope_carrier_set()
     }
 
     /// Run `f` with this frame's per-call region and its child scope. The seed-side re-anchor: the
