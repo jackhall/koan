@@ -28,7 +28,7 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
                 ctx.scope.region.alloc_object(KObject::Null),
             )))
         }),
-        home.scope(),
+        home.scope_bounded(),
     );
     home.region().alloc_function(kf)
 }

@@ -54,7 +54,7 @@ mod submit;
 mod tests;
 
 pub(in crate::machine::execute) use super::outcome::{Continuation, Outcome};
-pub(in crate::machine::execute) use ctx::{reattach_node_scope, SchedulerView};
+pub(in crate::machine::execute) use ctx::{with_node_scope, SchedulerView};
 pub(crate) use field_list::defer_field_list_action;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};

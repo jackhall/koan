@@ -393,7 +393,7 @@ impl<'run> KoanRuntime<'run> {
     fn close_owned_scope(&self, idx: usize) {
         if let Some(frame) = self.ambient.active_frame_ref() {
             if frame.owner() == Some(NodeId(idx)) {
-                frame.scope().close();
+                frame.with_scope(|s| s.close());
             }
         }
     }

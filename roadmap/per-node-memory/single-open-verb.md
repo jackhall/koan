@@ -38,8 +38,6 @@ re-anchored reference ride up-stack — a second access verb beside [`open`](../
 
 **Requires:**
 
-- [Fold the frame-side scope reads onto `open`](frame-scope-reads-to-open.md) — clears the
-  borrow-bounded `attach`'s remaining (frame-side) callers.
 - [Collapse the scope-pointer erasure into the substrate](scope-pointer-collapse.md) — clears
   `ErasedScopePtr`'s use of `reattach_ref_with`.
 - [Confine `Region::alloc` to a brand](region-alloc-brand-confined.md) — clears `Region::alloc`'s use

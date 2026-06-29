@@ -11,7 +11,7 @@ use crate::machine::core::{assemble_body_chain, ErasedScopePtr, KoanRegion, Scop
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallFrame, LexicalFrame, NodeId, Scope};
 
-use super::super::dispatch::reattach_node_scope;
+use super::super::dispatch::with_node_scope;
 
 /// Pointer equality of two scopes (identity, not structural).
 fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
@@ -122,17 +122,17 @@ impl<'run> KoanRuntime<'run> {
         scope: &'a Scope<'a>,
     ) -> NodeScope {
         if let Some(f) = self.active_frame_ref() {
-            if scopes_eq(f.scope(), scope) {
+            if f.with_scope(|fs| scopes_eq(fs, scope)) {
                 return NodeScope::Yoked;
             }
-            if cart_chain_reaches_region(f.scope(), scope.region) {
+            if f.with_scope(|fs| cart_chain_reaches_region(fs, scope.region)) {
                 return NodeScope::YokedChild(ErasedScopePtr::erase(scope));
             }
             unreachable!("a framed submission's scope is the cart's own or a cart-ancestor child");
         }
         if self
             .run_frame_ref()
-            .is_some_and(|rf| scopes_eq(rf.scope(), scope))
+            .is_some_and(|rf| rf.with_scope(|rs| scopes_eq(rs, scope)))
         {
             return NodeScope::Yoked;
         }
@@ -216,11 +216,10 @@ impl<'run> KoanRuntime<'run> {
         let frame = self
             .current_frame()
             .expect("in-frame dispatch requires an active frame");
-        // `scope_for_bind` is `Rc`-bounded — not a free `'run`-fabrication. The slot stores `Yoked`
-        // and re-projects the scope from the frame cart at the read boundary, so this short borrow
-        // only needs to outlive the `submit_expression` call.
-        let scope = frame.scope_for_bind();
-        self.submit_expression(expr, scope, NodeScope::Yoked, chain)
+        // The slot stores `Yoked` and re-projects the scope from the frame cart at the read boundary,
+        // so the scope opens at a `for<'b>` brand confined to the `submit_expression` call — no borrow
+        // rides up the `&mut self` path.
+        frame.with_scope(|scope| self.submit_expression(expr, scope, NodeScope::Yoked, chain))
     }
 
     /// Dispatch `expr` against the executing slot's own scope handle — the honest
@@ -239,14 +238,14 @@ impl<'run> KoanRuntime<'run> {
         let chain = self.ambient_or_detached_chain();
         match node_scope {
             NodeScope::YokedChild(_) => {
-                // Clone the active cart `Rc` to a local so the reattached borrow is witnessed by an
-                // owned handle (decoupled from `&mut self` for the `submit_expression` call below).
-                // Routes the single audited reattach in `reattach_node_scope` rather than a second
-                // open-coded fabrication — `node_scope`'s `YokedChild` pointer is pinned by the cart's
-                // `FrameStorage.outer` chain the held `Rc` keeps alive.
+                // Clone the active cart `Rc` to a local so the reattach is witnessed by an owned handle
+                // (decoupled from `&mut self` for the `submit_expression` call). `with_node_scope` opens
+                // the slot's own `YokedChild` pointer at a `for<'b>` brand — pinned by the cart's
+                // `FrameStorage.outer` chain the held `Rc` keeps alive — so no borrow escapes the call.
                 let cart = self.active_frame_ref().cloned();
-                let scope: &Scope<'_> = reattach_node_scope(&node_scope, cart.as_ref());
-                self.submit_expression(expr, scope, node_scope, chain)
+                with_node_scope(&node_scope, cart.as_ref(), |scope| {
+                    self.submit_expression(expr, scope, node_scope, chain)
+                })
             }
             NodeScope::Yoked => self.dispatch_in_active_frame(expr, chain),
         }
@@ -263,17 +262,20 @@ impl<'run> KoanRuntime<'run> {
         frame: &Rc<CallFrame>,
         statements: Vec<KExpression<'a>>,
     ) -> Vec<NodeId> {
-        let body_scope = frame.scope_for_bind();
-        let body_scope_id = body_scope.id;
-        let parent = assemble_body_chain(
-            body_scope,
-            self.active_payload()
-                .map(|p| p.chain.clone())
-                .expect("a body block runs inside an active lexical chain"),
-            0,
-        )
-        .parent
-        .clone();
+        let call_site_chain = self
+            .active_payload()
+            .map(|p| p.chain.clone())
+            .expect("a body block runs inside an active lexical chain");
+        // Open the body scope at a `for<'b>` brand: the id copies out and `assemble_body_chain`
+        // returns an unbranded `Rc<LexicalFrame>`, so nothing branded escapes the read.
+        let (body_scope_id, parent) = frame.with_scope(|body_scope| {
+            (
+                body_scope.id,
+                assemble_body_chain(body_scope, call_site_chain, 0)
+                    .parent
+                    .clone(),
+            )
+        });
         let mut ids = Vec::with_capacity(statements.len());
         for (i, statement) in statements.into_iter().enumerate() {
             let statement_chain = LexicalFrame::push(parent.clone(), body_scope_id, i + 1);

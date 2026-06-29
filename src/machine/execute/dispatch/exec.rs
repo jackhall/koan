@@ -150,10 +150,11 @@ pub(super) fn invoke<'step>(
     // scope). Each carrier names the consumer frame ∪ foreign reach, and `fold_reach` omits the home
     // frame, so a region-pure argument deposits nothing while a multi-region one contributes every
     // region it reaches. Slot identity is irrelevant here, so all carriers fold uniformly.
-    let call_scope = frame.scope();
-    for (_slot, carrier) in &arg_carriers {
-        call_scope.fold_reach(carrier.witness());
-    }
+    frame.with_scope(|call_scope| {
+        for (_slot, carrier) in &arg_carriers {
+            call_scope.fold_reach(carrier.witness());
+        }
+    });
     let exec_frame = ExecFrame {
         region: frame.clone(),
     };
@@ -188,7 +189,7 @@ pub(super) fn invoke<'step>(
             let body_index = leading.len() + 1;
             // Capture the body scope id before `frame` moves; the reinstall site reads it to
             // assemble the chain.
-            let block_entry = frame.scope().id;
+            let block_entry = frame.scope_id();
             let tail_expr = tail.clone();
             if leading.is_empty() {
                 // No leading statements: tail-replace directly into the body terminal. The frame is
@@ -243,7 +244,7 @@ pub(super) fn invoke<'step>(
             let tail_expr = tail.clone();
             // Capture the body scope id before `frame` moves into the `BodyBlock` dep; the finish
             // re-enters that already-installed cart with `Inherit`.
-            let block_entry = frame.scope().id;
+            let block_entry = frame.scope_id();
             let finish: DepFinish<'step> = Box::new(move |_view, results, _carriers| {
                 // The return-type expression is the last body statement, so its resolved value is
                 // the last result.

@@ -89,8 +89,9 @@ What's shipped that the open items below build on:
   channel then folded onto the step `open`: the active scope's carrier is zipped into the run-loop
   step's [`SealedExtern::open`](../src/witnessed.rs) alongside the continuation, contract, and deps,
   so the dispatch decide reads `&Scope<'b>` at the step brand and the consumer `dest` is the opened
-  scope's own region (the separate region carrier dissolves) — leaving only the frame-side
-  `&mut self` submit / classify and `CallFrame`-accessor reads on the borrow-bounded `attach`.
+  scope's own region (the separate region carrier dissolves) — leaving the frame-side
+  `&mut self` submit / classify and `CallFrame`-accessor reads on the borrow-bounded `attach`, since
+  folded onto `open` as well (below).
   [`CallFrame::with_frame_interior`](../src/machine/core/arena.rs)'s seed bind no longer re-exposes
   the region at a free `'a`: it reaches the region through the child scope's own `region` field
   (a `Copy` `&'a KoanRegion`), so the seed side carries no free re-exposure. The full Miri-slate
@@ -191,8 +192,12 @@ What's shipped that the open items below build on:
   `reached_frame` reconstruction and the per-frame `FrameStorage.retained` field. The **value-read
   migration** has since followed — the result-slot value reads nest under the rank-2 `Sealed::open` (a
   value copy-out and a borrow-free error probe), and the three ride-up-stack dispatch sites resolve at
-  the cart `'step`, retiring the transitional self-witnessed `read`. What remains is the scope-channel
-  reads and the seal-site witnessing, tracked by the [per-node-memory](per-node-memory/) project. See
+  the cart `'step`, retiring the transitional self-witnessed `read`. The **frame-side scope reads** have
+  since folded onto `open` as well — a frame's child scope opens at a `for<'b>` brand via
+  [`CallFrame::with_scope`](../src/machine/core/arena.rs), leaving the borrow-bounded `attach` only the
+  seed-side re-anchor. What remains is the scope-pointer collapse (which folds that last re-anchor), the
+  `Region::alloc` re-anchor, and the seal-site witnessing, tracked by the
+  [per-node-memory](per-node-memory/) project. See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -336,7 +341,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [Fold the frame-side scope reads onto `open`](per-node-memory/frame-scope-reads-to-open.md)
 - [Confine `Region::alloc` to a brand](per-node-memory/region-alloc-brand-confined.md)
 - [Collapse the scope-pointer erasure into the substrate](per-node-memory/scope-pointer-collapse.md)
 - [Witness value carriers at their construction site](per-node-memory/witness-at-construction.md)
@@ -451,14 +455,14 @@ on its own carrier — taking the last user off the single-frame `reached_frame`
 deleting both it and the per-frame `FrameStorage.retained` field) are all shipped, as is the
 **value-read migration** (the result-slot value reads nest under the rank-2 `Sealed::open` — a value
 copy-out and a borrow-free error probe — the three ride-up-stack dispatch sites resolve at the cart
-`'step`, and the transitional self-witnessed `read` is deleted). The design is captured in
-[design/per-node-memory.md](../design/per-node-memory.md). What remains is the frame-side scope reads,
-the scope-pointer collapse, the `Region::alloc` re-anchor, the seal-site witnessing, and collapsing the
-access surface to `open` alone:
+`'step`, and the transitional self-witnessed `read` is deleted) and the **frame-side scope reads** (a
+frame's child scope, the `&mut self` submit / classify paths, and the literal-classify reads now open at
+a `for<'b>` brand through `CallFrame::with_scope` / `with_node_scope` / `with_current_node_scope`,
+leaving the borrow-bounded `attach` only the seed-side re-anchor `with_frame_interior`). The design is
+captured in [design/per-node-memory.md](../design/per-node-memory.md). What remains is the scope-pointer
+collapse (which also folds that seed-side re-anchor), the `Region::alloc` re-anchor, the seal-site
+witnessing, and collapsing the access surface to `open` alone:
 
-- [Fold the frame-side scope reads onto `open`](per-node-memory/frame-scope-reads-to-open.md) —
-  migrate the `CallFrame` accessors (`scope` / `scope_for_bind` / `scope_bounded`), the submit-path
-  `reattach_node_scope`, and the literal-classify `current_scope` off the borrow-bounded `attach`.
 - [Collapse the scope-pointer erasure into the substrate](per-node-memory/scope-pointer-collapse.md) —
   re-anchor a region-resident value's captured / parent scope through the holder's own `open`, deleting
   `BoundedScopePtr` / `ErasedScopePtr` and the bare `reattach_ref` (its `NonNull` deref) so the scope

@@ -64,7 +64,7 @@ pub(crate) fn arm_tail<'a>(
         let it_obj = region.alloc_object(it_value);
         let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
     });
-    let arm_scope_id = frame.scope_for_bind().id;
+    let arm_scope_id = frame.scope_id();
     let mut statements = split_body_statements(body_expr);
     let tail = statements
         .pop()

@@ -286,12 +286,17 @@ brand: its carrier — the frame's own `SealedExtern<ScopeRefFamily>` for a `Yok
 `ErasedScopePtr` for a `YokedChild` — is zipped into the step `open` alongside the continuation, so the
 dispatch decide reads `&Scope<'b>` from the one brand (and the consumer `dest` region is the opened
 scope's own `region`, derived inside it) rather than re-anchoring a free `&Scope<'step>` up the
-dispatcher stack. The reads still on the borrow-bounded
-`attach<'w>(&'w self, &'w W) -> Live<'w>` accessor — re-anchoring *capped at the witness borrow* `'w`
-rather than at a free `'b` that could be widened past it, sound because the witness pin outlives the
-borrow (a fact the compiler checks) — are the frame-side ones: the `&mut self` submit / classify paths
-and the `CallFrame` accessors (`scope` / `scope_for_bind` / `scope_bounded`) that read a frame's own
-child scope. Folding those onto `open` like the decide channel is tracked in [Open work](#open-work).
+dispatcher stack. The frame-side reads fold onto `open` the same way: a frame's own child scope opens at
+a `for<'b>` brand through [`CallFrame::with_scope`](../src/machine/core/arena.rs) — the `&mut self`
+submit / classify paths reach it through `with_node_scope` / `with_current_node_scope`, copying out a
+scalar (an id, a region) where they need no live scope — so no `&Scope` rides up a `&mut self` path. The
+one reader still on the borrow-bounded `attach<'w>(&'w self, &'w W) -> Live<'w>` accessor — re-anchoring
+*capped at the witness borrow* `'w` rather than at a free `'b` that could be widened past it, sound
+because the witness pin outlives the borrow (a fact the compiler checks) — is the seed-side re-anchor
+[`CallFrame::with_frame_interior`](../src/machine/core/arena.rs): the MATCH / TRY arm `it`-bind, the
+user-fn param-bind, and the deferred-return-type elaboration each allocate a caller-`'a` value *into*
+the frame, whose invariant `'a` a `for<'b>` brand cannot hold, so folding them onto `open` is tracked in
+[Open work](#open-work).
 
 ## Storage choice belongs to the workload
 
@@ -334,19 +339,16 @@ probe) and the three ride-up-stack dispatch sites resolve at the cart `'step`, s
 self-witnessed `read` is deleted — have all landed (see
 [Region lifetime erasure](memory-model.md#region-lifetime-erasure)).
 
-What remains is the **frame-side scope reads**, the **scope-pointer collapse**, the **`Region::alloc`
-re-anchor**, and the **seal-site witnessing**. With the decide channel folded into the step brand (the
-active scope now opens there alongside the continuation — *Why reads are safe* above — so the decide
-reads `&Scope<'b>` and `dest` is the opened scope's own `region`), the residual scope reads are the
-frame-side ones: the `&mut self` submit / classify paths and the `CallFrame` accessors (`scope` /
-`scope_for_bind` / `scope_bounded`) that read a frame's own child scope through the borrow-bounded
-`attach`. Folding those onto `open` clears that accessor's last callers, after which the scope-pointer
-storage and the allocator re-anchor follow:
+What remains is the **scope-pointer collapse**, the **`Region::alloc` re-anchor**, and the **seal-site
+witnessing**. With the decide channel and the frame-side reads both folded onto the brand (the active
+scope opens alongside the continuation, and a frame's own child scope opens through
+`CallFrame::with_scope` — *Why reads are safe* above), the one reader still on the borrow-bounded
+`attach` is the seed-side re-anchor `with_frame_interior` (the MATCH / TRY arm `it`-bind, the user-fn
+param-bind, and the deferred-return-type elaboration), which allocates a caller-`'a` value into the
+frame that a `for<'b>` brand cannot hold; its fold needs the object / type relocation the scope-pointer
+collapse owns, so it is tracked there, after which the allocator re-anchor and seal-site witnessing
+follow:
 
-- [Fold the frame-side scope reads onto `open`](../roadmap/per-node-memory/frame-scope-reads-to-open.md)
-  — migrate the `CallFrame` accessors (`scope` / `scope_for_bind` / `scope_bounded`), the submit-path
-  `reattach_node_scope`, and the literal-classify free `current_scope` off the borrow-bounded `attach`,
-  so the frame's child scope is read through `open` like the decide channel.
 - [Collapse the scope-pointer erasure into the substrate](../roadmap/per-node-memory/scope-pointer-collapse.md)
   — a region-resident value's captured / defining / parent scope (`KFunction::captured`, `Module` /
   `Signature`'s scope pointers, a `Scope`'s `outer` / `root`) is a foreign borrow the witness pins, so
@@ -355,7 +357,10 @@ storage and the allocator re-anchor follow:
   `NonNull` deref. `BoundedScopePtr` / `ErasedScopePtr`, their brand-shortening helpers, and the bare
   `reattach_ref` (`BoundedScopePtr::get`'s `NonNull::as_ref`) are deleted, so the scope / module /
   function path's only `unsafe` becomes the substrate's single `retype` — not a per-handle
-  "irreducible" one.
+  "irreducible" one. It also folds the seed-side re-anchor (`with_frame_interior` — the MATCH / TRY
+  `it`-bind, the user-fn param-bind, and the return-type elaboration), the last borrow-bounded scope
+  reader, deleting `with_frame_interior` / `scope_bounded` / `reattach_scope` and leaving `attach`
+  callerless.
 - [Confine `Region::alloc` to a brand](../roadmap/per-node-memory/region-alloc-brand-confined.md) —
   allocation produces an erased carrier, never a live region-lifetime reference: it happens only inside
   a rank-2 region brand (`yoke` / `merge` / `transfer_into`, already this form, or a witness-less

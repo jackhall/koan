@@ -13,7 +13,7 @@ use crate::witnessed::{reattachable, Sealed, Witnessed};
 use super::super::outcome::DepTerminal;
 use super::super::runtime::KoanRuntime;
 use super::super::WitnessedDepFinish;
-use super::ctx::{current_scope, SchedulerView};
+use super::ctx::{with_current_node_scope, SchedulerView};
 use super::resolve_name_part;
 
 /// Build-time accumulator family for an aggregate fold: the destination region plus the partial cell
@@ -255,10 +255,11 @@ impl<'step> KoanRuntime<'step> {
                 // scope's frame, born co-located with that frame as its reach rather than resolved at
                 // the ambient lifetime and bundled via `Witnessed::new`. The cell is then lifetime-free
                 // and folds uniformly with the dep cells.
-                let frame = current_scope(&self.ambient)
-                    .region_owner()
-                    .upgrade()
-                    .expect("the classify scope's region owner is held for the step");
+                let frame = with_current_node_scope(&self.ambient, |s| {
+                    s.region_owner()
+                        .upgrade()
+                        .expect("the classify scope's region owner is held for the step")
+                });
                 let carrier =
                     KoanRegion::alloc_witnessed(FrameSet::singleton(frame), move |region| {
                         Carried::Object(region.alloc_object(other.resolve_region_pure()))
@@ -283,33 +284,42 @@ impl<'step> KoanRuntime<'step> {
         // value's reach by construction, never an asserted `Witnessed::new`. Type leaves and unbound /
         // pending names fall to the shared `resolve_name_part` path below.
         if let ExpressionPart::Identifier(name) = part {
-            if let ValueCarrierResolution::Value(carrier) =
-                current_scope(&self.ambient).resolve_value_carrier(name, active_chain.map(|c| &**c))
-            {
+            let resolved = with_current_node_scope(&self.ambient, |s| {
+                s.resolve_value_carrier(name, active_chain.map(|c| &**c))
+            });
+            if let ValueCarrierResolution::Value(carrier) = resolved {
                 return Slot::Static(Sealed::seal(carrier));
             }
         }
-        match resolve_name_part(
-            current_scope(&self.ambient),
-            part,
-            &self.sched,
-            active_chain,
-            None,
-        ) {
-            // A first-class **type** resolved into the cell rides the type channel sealed under the
-            // classify scope's home frame, which pins the type's (ancestor) region via its `outer`
-            // chain — `seal_type` yokes it (a `KType::Module` folds its child reach), co-located by the
-            // brand, never an asserted bundle. The value case is handled above via the binding-scope
-            // carrier, so this is reached only for a `Type` carrier.
-            NameOutcome::Resolved(c) => {
-                Slot::Static(Sealed::seal(current_scope(&self.ambient).seal_type(c)))
+        // Resolve + seal inside the brand (the scope and its `NameOutcome` are branded); the rebuilt
+        // owned `part_b` matches the scope's `'b`. The unbound / errored / cycle fallback needs
+        // `&mut self`, so it runs after the read closes — `None` signals it.
+        let resolved = with_current_node_scope(&self.ambient, |s| {
+            let part_b = match part {
+                ExpressionPart::Identifier(n) => ExpressionPart::Identifier(n.clone()),
+                ExpressionPart::Type(t) => ExpressionPart::Type(t.clone()),
+                _ => unreachable!("resolve_aggregate_bare_name only sees Identifier / Type parts"),
+            };
+            match resolve_name_part(s, &part_b, &self.sched, active_chain, None) {
+                // A first-class **type** resolved into the cell rides the type channel sealed under the
+                // classify scope's home frame, which pins the type's (ancestor) region via its `outer`
+                // chain — `seal_type` yokes it (a `KType::Module` folds its child reach), co-located by
+                // the brand, never an asserted bundle. The value case is handled above via the
+                // binding-scope carrier, so this is reached only for a `Type` carrier.
+                NameOutcome::Resolved(c) => Some(Slot::Static(Sealed::seal(s.seal_type(c)))),
+                NameOutcome::Parked(producer) => {
+                    let pos = park_producers.len();
+                    park_producers.push(producer);
+                    Some(Slot::Park(pos))
+                }
+                NameOutcome::Unbound(_)
+                | NameOutcome::ProducerErrored(_)
+                | NameOutcome::Cycle(_) => None,
             }
-            NameOutcome::Parked(producer) => {
-                let pos = park_producers.len();
-                park_producers.push(producer);
-                Slot::Park(pos)
-            }
-            NameOutcome::Unbound(_) | NameOutcome::ProducerErrored(_) | NameOutcome::Cycle(_) => {
+        });
+        match resolved {
+            Some(slot) => slot,
+            None => {
                 let expr =
                     crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part.clone())]);
                 Slot::owned(deps, self.dispatch_in_own_scope(expr))

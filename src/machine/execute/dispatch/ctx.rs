@@ -30,45 +30,40 @@ use super::super::runtime::KoanWorkload;
 use super::{park_on_deps, resolve_name_part, DepRequest, Outcome, PendingSub};
 use crate::scheduler::Scheduler;
 
-/// Re-anchor a raw [`NodeScope`] handle into a usable `&Scope` — the Koan scope interpretation the
-/// scheduler no longer owns. The driver hands back the opaque payload
-/// ([`AmbientContext::active_payload`] / `PostStep::payload`), from which the workload extracts the
-/// scope handle, plus the per-call cart the slot ran against; this workload-side helper reattaches
-/// them. A `YokedChild` slot reattaches its erased cart-ancestor
-/// [`ErasedScopePtr`](crate::machine::core::ErasedScopePtr) ([`reattach`](crate::machine::core::ErasedScopePtr::reattach));
-/// a `Yoked` slot re-projects from `frame`. Content lifetime free, borrow bounded by `frame` — so
-/// the result cannot outlive the cart it names.
-pub(in crate::machine::execute) fn reattach_node_scope<'step, 'b: 'step>(
-    node_scope: &'step NodeScope,
-    frame: Option<&'step Rc<CallFrame>>,
-) -> &'step Scope<'b> {
+/// Run `f` with a raw [`NodeScope`] handle's scope opened at a `for<'b>` brand — the Koan scope
+/// interpretation the scheduler does not own, folded onto `open` like the decide channel. The driver
+/// hands back the opaque payload ([`AmbientContext::active_payload`]), from which the workload extracts
+/// the scope handle, plus the per-call cart the slot ran against. A `Yoked` slot re-projects from the
+/// active cart through [`CallFrame::with_scope`] (the same `open` the step brand uses); a `YokedChild`
+/// slot re-anchors its erased cart-ancestor [`ErasedScopePtr`](crate::machine::core::ErasedScopePtr)
+/// through the witness-bounded `reattach_witnessed`, pinned by `frame` (collapsing that pointer onto
+/// the holder's own `open` is the scope-pointer-collapse follow-up). Either way the `&Scope<'b>` is
+/// confined to `f`, so no borrow rides up a `&mut self` path.
+pub(in crate::machine::execute) fn with_node_scope<R>(
+    node_scope: &NodeScope,
+    frame: Option<&Rc<CallFrame>>,
+    f: impl for<'b> FnOnce(&'b Scope<'b>) -> R,
+) -> R {
+    let frame = frame.expect("a slot keeps its active cart");
     match node_scope {
-        // The `YokedChild` pointer was erased from a block scope in a cart-*ancestor* region
-        // (`resolve_node_scope`'s outer-chain check); the active cart's `FrameStorage.outer` chain
-        // pins that region. Re-anchor through the witness-bounded `reattach_witnessed` with `frame`
-        // (the active cart) as the pin, so this carries no `unsafe`: the returned borrow is bounded
-        // by `frame`, so it cannot be cashed past the cart that pins the pointee.
-        NodeScope::YokedChild(ptr) => {
-            let frame = frame.expect("a YokedChild slot keeps its active cart");
-            ptr.reattach_witnessed(frame)
-        }
-        NodeScope::Yoked => frame
-            .expect("a Yoked slot keeps its active cart")
-            .scope_bounded(),
+        NodeScope::YokedChild(ptr) => f(ptr.reattach_witnessed(frame)),
+        NodeScope::Yoked => frame.with_scope(f),
     }
 }
 
-/// The active slot's scope, re-anchored from the ambient payload's scope handle — the read the
-/// `&mut self` literal-classify and submit paths use (they hold `self.ambient`, not the step `open`'s
-/// branded scope, so they cannot yet take the threaded read). Panics outside a slot step; within a
-/// step the scope is always present — a `YokedChild` slot carries its own pointer, and a `Yoked`
-/// slot's active cart is never emptied mid-step. Reducing these to the brand-threaded read is the
-/// frame-scope-reads follow-up.
-pub(in crate::machine::execute) fn current_scope<'step>(ambient: &AmbientContext) -> &Scope<'step> {
+/// Run `f` with the active slot's scope, opened at a `for<'b>` brand from the ambient payload's scope
+/// handle — the read the `&mut self` literal-classify and submit paths use (they hold `self.ambient`,
+/// not the step `open`'s branded scope). Panics outside a slot step; within a step the scope is always
+/// present — a `YokedChild` slot carries its own pointer, and a `Yoked` slot's active cart is never
+/// emptied mid-step.
+pub(in crate::machine::execute) fn with_current_node_scope<R>(
+    ambient: &AmbientContext,
+    f: impl for<'b> FnOnce(&'b Scope<'b>) -> R,
+) -> R {
     let payload = ambient
         .active_payload()
         .expect("a slot step installs the ambient payload (and a Yoked slot keeps its frame)");
-    reattach_node_scope(&payload.scope, ambient.active_frame_ref())
+    with_node_scope(&payload.scope, ambient.active_frame_ref(), f)
 }
 
 /// Read-only dispatch view — the decide-phase context. It holds only `&Scheduler`, never `&mut`.

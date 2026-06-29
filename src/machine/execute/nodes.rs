@@ -113,7 +113,7 @@ impl ChainOp {
         match self {
             ChainOp::Unchanged => prev_chain,
             ChainOp::AssembleBody { body_index } => {
-                assemble_body_chain(body_frame.scope(), prev_chain, body_index)
+                body_frame.with_scope(|s| assemble_body_chain(s, prev_chain, body_index))
             }
             ChainOp::PushBlock {
                 scope_id,

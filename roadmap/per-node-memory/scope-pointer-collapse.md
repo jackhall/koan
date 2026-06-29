@@ -20,6 +20,20 @@ holder reaches is a foreign borrow the holder's witness already pins (a co-locat
 ancestor pinned by the `outer` chain), so it can re-anchor as part of the holder's own carrier `open` —
 once the holder opens at a brand.
 
+The frame-side scope reads now open at a `for<'b>` brand like the decide channel, leaving one
+borrow-bounded scope reader to fold here: the **seed-side re-anchors** —
+[`CallFrame::with_frame_interior`](../../src/machine/core/arena.rs) → `scope_bounded`, used by the
+MATCH / TRY arm `it`-bind ([`branch_walk.rs`](../../src/builtins/branch_walk.rs)), the user-fn
+param-bind and the deferred-return-type elaboration
+([`kfunction/exec.rs`](../../src/machine/core/kfunction/exec.rs)'s `run_user_fn`). Each allocates a
+caller-`'a` value *into* the frame, so a `for<'b>` brand cannot hold it (the value's `'a` is invariant
+and outlives the brand) — folding them needs the object / type relocation through the substrate (the
+return-type elaboration also re-homes its `KType` via
+[`home_return_type`](../../src/machine/execute/dispatch/exec.rs) into the `captured_scope().region`, a
+scope pointer this item collapses). So the seed-side re-anchor belongs with the scope-pointer collapse,
+and clearing it deletes `with_frame_interior` / `scope_bounded` / `reattach_scope`, leaving `attach`
+callerless for [`single-open-verb`](single-open-verb.md).
+
 **Acceptance criteria.**
 
 - A region-resident value's captured / defining / parent scope re-anchors as part of the holder's own
@@ -30,6 +44,10 @@ once the holder opens at a brand.
 - The scope / module / function path carries no `unsafe` of its own: the only `unsafe` it reaches is
   the substrate's single `retype`, and the inverted "irreducible unsafe" comment in `module.rs` is
   corrected.
+- The seed-side re-anchors (`with_frame_interior`: the MATCH / TRY arm `it`-bind, the user-fn
+  param-bind, and the deferred-return-type elaboration) relocate their caller-`'a` value into the frame
+  through the substrate at the brand instead of `scope_bounded`, so `with_frame_interior` /
+  `scope_bounded` / `reattach_scope` have no caller left and `attach` is callerless.
 - TCO frame reuse is unaffected — `try_reset_for_tail` keeps its three Miri tests.
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` clean.
 
