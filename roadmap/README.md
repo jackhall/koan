@@ -63,9 +63,10 @@ What's shipped that the open items below build on:
   families route the scheduler's single audited `erase_to_static` (the safe direction of the
   one `retype` primitive the read-side re-anchor shares) and one gated `alloc` engine,
   replacing the per-type `T<'a> → T<'static>` transmute pairs with one. The scope-pointer surface
-  split on whether the carrier can brand the scope's `'a`: the safe `BoundedScopePtr<'a>` makes
+  split on whether the carrier can brand the scope's `'a`: the branded `BoundedScopePtr<'a>` makes
   `Module::child_scope`, `Signature::decl_scope`, `KFunction::captured` and a `Scope`'s `outer`
-  reader-bounded re-hands carrying no `unsafe`. The two lifetime-free carriers each store a
+  reader-bounded re-hands, sound by the brand though `get` routes a `NonNull::as_ref` deref and the
+  bare `reattach_ref`. The two lifetime-free carriers each store a
   `&'static Scope` erased once through the safe `erase_to_static::<ScopeRefFamily>`, so the handle
   itself holds no `unsafe`: `CallFrame`'s per-call child scope rides the substrate's externally-witnessed
   `SealedExtern<ScopeRefFamily>` carrier (read back through the witness-bounded `SealedExtern::attach`),
@@ -332,7 +333,8 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [Invert the scope-handle reads onto `open`](per-node-memory/scope-reads-to-open.md)
+- [Confine `Region::alloc` to a brand](per-node-memory/region-alloc-brand-confined.md)
+- [Fold the scope channel into the step `open`](per-node-memory/scope-reads-to-open.md)
 - [Witness value carriers at their construction site](per-node-memory/witness-at-construction.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
@@ -447,16 +449,24 @@ deleting both it and the per-frame `FrameStorage.retained` field) are all shippe
 copy-out and a borrow-free error probe — the three ride-up-stack dispatch sites resolve at the cart
 `'step`, and the transitional self-witnessed `read` is deleted). The design is captured in
 [design/per-node-memory.md](../design/per-node-memory.md). What remains is the scope channel, the
-seal-site witnessing, and collapsing the access surface to `open` alone:
+scope-pointer collapse, the `Region::alloc` re-anchor, the seal-site witnessing, and collapsing the
+access surface to `open` alone:
 
-- [Invert the scope-handle reads onto `open`](per-node-memory/scope-reads-to-open.md) — invert the
-  scope-channel reads (`current_scope` / `reattach_node_scope` / `scope_bounded`) onto `open`, rework
-  `Region::alloc` off the free wrapper, and delete `reattach_ref_with`.
+- [Fold the scope channel into the step `open`](per-node-memory/scope-reads-to-open.md) — zip the
+  active scope's carrier into the step `open` so the decide reads `&Scope<'b>` from the one brand,
+  collapse `dest` into the opened scope, and remove the escaping scope readers.
+- [Collapse the scope-pointer erasure into the substrate](per-node-memory/scope-pointer-collapse.md) —
+  re-anchor a region-resident value's captured / parent scope through the holder's own `open`, deleting
+  `BoundedScopePtr` / `ErasedScopePtr` and the bare `reattach_ref` (its `NonNull` deref) so the scope
+  path's only `unsafe` is the substrate `retype`.
+- [Confine `Region::alloc` to a brand](per-node-memory/region-alloc-brand-confined.md) — allocate only
+  inside a rank-2 region brand (`yoke` / `merge` or a witness-less closure), so no public
+  `alloc -> &'a` remains and the alloc retype is brand-confined.
 - [Witness value carriers at their construction site](per-node-memory/witness-at-construction.md) —
   witness the seal sites' values where they are built so they fold via `yoke` / `merge` instead of
   re-anchoring, and delete `reattach_with`.
-- [`Sealed`: a single access verb](per-node-memory/single-open-verb.md) — delete the transitional
-  `attach` and the externally-witnessed read path, leaving `Sealed` with `open` alone.
+- [`Sealed`: a single access verb](per-node-memory/single-open-verb.md) — delete the borrow-bounded
+  `attach` and the `reattach_ref_with` witness-borrow read path, leaving `Sealed` with `open` alone.
 
 ### Refactor — [refactor/](refactor/)
 

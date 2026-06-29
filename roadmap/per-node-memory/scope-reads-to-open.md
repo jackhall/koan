@@ -1,50 +1,53 @@
-# Invert the scope-handle reads onto `open`
+# Fold the scope channel into the step `open`
 
-Restructure the scope-handle reads that re-anchor an `&Scope` up the dispatcher stack onto the
-existing CPS readers, rework `Region::alloc`'s bare-arena re-anchor off the free wrapper, and delete
-`reattach_ref_with`.
+Open the active scope at the run-loop step brand alongside the continuation, contract, and dep slice,
+so the dispatch decide reads `&Scope<'b>` from the one step `open` rather than an escaping re-anchor.
 
-**Problem.** The result-slot *value* reads now nest under [`Sealed::open`](../../src/witnessed.rs)
-(the value-read migration shipped), but the scope channel still hands a re-anchored `&Scope` back up
-the call stack — the shape the rank-2 `open` forbids by construction. The scope-handle reads
-(`current_scope` / `reattach_node_scope` /
-[`CallFrame::scope_bounded`](../../src/machine/core/arena.rs)) carry an `&Scope` through
-`run_dispatch` / [`SchedulerView`](../../src/machine/execute/dispatch/ctx.rs), and `Region::alloc`'s
-read-back plus the two [`scope_ptr`](../../src/machine/core/scope_ptr.rs) handles re-anchor through the
-loose [`reattach_ref_with`](../../src/witnessed.rs) wrapper (4 sites). Until each inverts onto a CPS
-reader, the wrapper stays alive as an alternate spelling of the one primitive, and `attach`
-([a single access verb](single-open-verb.md)) keeps its callers.
+**Problem.** The keystone step `open` ([`run_loop.rs`](../../src/machine/execute/run_loop.rs)) opens
+the continuation, return contract, consumer `dest` region, and dep slice together at one rank-2
+`for<'b>` brand, so the whole step tail — decide, outcome apply, finalize — runs inside it and consumes
+its `Outcome<'b>` in place. The scope is the one carrier not folded in: the decide reads it through the
+escaping [`current_scope`](../../src/machine/execute/dispatch/ctx.rs) / `reattach_node_scope` /
+[`CallFrame::scope_bounded`](../../src/machine/core/arena.rs), which hand a `&Scope<'step>` up the
+dispatcher stack at a free content lifetime — the shape the brand forbids — and `dest` is derived from
+an escaping scope read taken *before* the open. A fast lane cannot nest under a *separate* scope `open`
+because it returns `Outcome<'step>` and a `for<'b>` closure cannot hand a branded outcome back out; the
+resolution is not a per-reader rewrite but folding the scope into the one step brand the tail already
+runs in.
 
 **Acceptance criteria.**
 
-- Every scope-handle read that currently rides a re-anchored `&Scope` up-stack copies the needed data
-  out of the access or is restructured CPS so the consumption nests inside it; no scope borrow escapes
-  its access window.
-- `Region::alloc` expresses its bare-arena re-anchor without the free `reattach_ref_with` wrapper.
-- `reattach_ref_with` is deleted, and no call site references it.
+- The active scope's carrier is zipped into the step `open` and opened at the brand through the
+  consuming `SealedExtern::open`; the dispatch decide receives `&Scope<'b>` from that open.
+- No scope read hands a borrow up the dispatcher stack: `current_scope` / `reattach_node_scope` /
+  `scope_bounded` (and their escaping `with_*` analogs) are gone or reduced to the brand-threaded read.
+- `dest` is the opened scope's `region`, derived inside the brand; the separate `RegionRefFamily` step
+  carrier is gone (the region is reached through the scope).
 - TCO frame reuse is unaffected — `try_reset_for_tail` keeps its three Miri tests.
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` clean.
 
 **Directions.**
 
-- *Rework `Region::alloc` onto `Witnessed` — decided.* The bare-arena re-anchor expresses through the
-  witnessed substrate rather than the free wrapper. **Open risk:** the scope chain holds raw `NonNull`
-  ([`BoundedScopePtr`](../../src/machine/core/scope_ptr.rs)), so routing `alloc` through `Witnessed` is
-  a substrate re-architecture, not a local rewrite — the concrete design is TBD and is surfaced before
-  the wrapper is deleted.
-- *Per-site copy-out vs CPS — open.* Each scope reader chooses copy-out (a cheap field) or a
-  continuation rewrite; decided site-by-site during implementation.
+- *Fold the scope into the step `open`, not a per-reader inversion — decided.* The scope is the last
+  carrier outside the keystone brand; zip its carrier in, derive `dest` inside, and thread `&Scope<'b>`
+  into the decide. A read that provably cannot reach the brand is surfaced here, not retained as a
+  borrow-bounded accessor.
+- *Open the existing carrier, leave storage to a follow-up — decided.* The frame's child scope already
+  rides a `SealedExtern<ScopeRefFamily>` carrier and a node's `YokedChild` an `ErasedScopePtr`; this
+  item opens them at the step brand through the consuming `open`, leaving their *storage* representation
+  to [scope-pointer-collapse](scope-pointer-collapse.md). What it removes here is the escaping read,
+  which clears the borrow-bounded `attach`'s callers.
 
 ## Dependencies
 
-Builds on the shipped value-read migration (the result-slot value reads nest under `Sealed::open`),
-which leaves the scope channel as the remaining re-anchored read.
+Builds on the shipped keystone step `open` (the run-loop tail already nests continuation / contract /
+deps at one brand); this folds the remaining channel into that open.
 
-**Requires:** none — the value-read migration shipped; this item inverts the scope channel onto the
-same `open`.
+**Requires:** none — the keystone `open` shipped.
 
 **Unblocks:**
 
-- [`Sealed`: a single access verb](single-open-verb.md) — clearing the scope-read escapes (and the
-  `reattach_ref_with` wrapper that backs `attach`'s callers) is what must land before `attach` can be
-  deleted.
+- [Collapse the scope-pointer erasure into the substrate](scope-pointer-collapse.md) — opening the
+  scope at the brand is what lets a holder's `outer` / `root` re-anchor through its own `open`.
+- [`Sealed`: a single access verb](single-open-verb.md) — folding the scope in clears the
+  borrow-bounded `attach`'s callers.

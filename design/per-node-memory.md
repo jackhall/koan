@@ -165,8 +165,8 @@ holder already pins the backing and supplies it at the access, read through a
 **consuming, externally-witnessed `open`** — the witness handed in at the call and the
 carrier moved into the same rank-2 `for<'b>` brand, so a non-`Copy` carrier (a continuation)
 passes and nothing branded escapes. (A borrow-bounded `attach<'w>(&'w self, &'w W) -> Live<'w>`,
-re-anchoring capped at the witness borrow, is a contingent fallback for a site that cannot nest its
-consumption inside the brand.) Bundling a witness the carrier does
+re-anchoring capped at the witness borrow, is the accessor the scope channel reads through; its fold
+into the step `open` is tracked in [Open work](#open-work).) Bundling a witness the carrier does
 not need would be a redundant second owner — and, when the witness is
 reference-counted, an extra count the holder's own uniqueness checks must subtract.
 `yoke`, which moves `W` into the bundle, builds the self-witnessed form; the
@@ -263,7 +263,7 @@ With both channels' construction carried and binds folded, reach lives entirely 
 and, for bindings, on the per-scope sealed reach-set: a relocated value's reach is read off its own
 carrier witness, never recovered from the value.
 
-## Why reads are safe — and where the one escape hatch sits
+## Why reads are safe
 
 The danger in any reattach is a *free, unbounded* content lifetime the caller can
 widen past the witness pin — the Miri-proven use-after-free the naive content-free
@@ -280,11 +280,12 @@ continuation run, the outcome apply, and the finalize all run inside one brand (
 externally-witnessed `open` above), so nothing branded crosses the step boundary. The step's dep
 slice is opened *in-band* at that same brand — each producer terminal read out borrow-bounded, erased
 into one slice carrier, and zipped alongside the continuation — so every dep value is born at `'b`
-through the one step `open`, with no separate slice reattach. A borrow-bounded
-`attach<'w>(&'w self, &'w W) -> Live<'w>` accessor — re-anchoring *capped at the witness borrow*
-`'w` rather than at a free `'b` that could be widened past it — is sound (the witness pin outlives
-the borrow, a fact the compiler checks) and lets a reference flow up the stack without a copy; it is
-a **contingent fallback** for any site that cannot nest, not a verb every consumer needs.
+through the one step `open`, with no separate slice reattach. The scope is the one channel not yet
+nested this way: the dispatch decide reads it through a borrow-bounded
+`attach<'w>(&'w self, &'w W) -> Live<'w>` accessor — re-anchoring *capped at the witness borrow* `'w`
+rather than at a free `'b` that could be widened past it — sound because the witness pin outlives the
+borrow (a fact the compiler checks). Folding it into the step `open` like every other channel is
+tracked in [Open work](#open-work).
 
 ## Storage choice belongs to the workload
 
@@ -308,7 +309,7 @@ nest under the rank-2 `open`: two driver accessors copy out inside the brand —
 ([`read_result_with`](../src/scheduler.rs)) and a borrow-free error probe (`result_error`) — and the
 three ride-up-stack dispatch sites resolve at the cart `'step` directly, so the transitional
 self-witnessed `Sealed::read` is gone. The `Sealed` carrier's remaining access verbs (the consuming
-externally-witnessed `open`, the contingent `attach`, `transfer_into`), the residual scope-channel
+externally-witnessed `open`, the borrow-bounded `attach`, `transfer_into`), the residual scope-channel
 reads, and the seal-site re-anchors are tracked by the per-node-memory roadmap project below.
 
 ## Open work
@@ -325,12 +326,45 @@ or seals (`seal_value` / `seal_type` / `seal_module`) its reach, the bare-arg va
 result-slot value reads nest under the rank-2 `Sealed::open` (a value copy-out and a borrow-free error
 probe) and the three ride-up-stack dispatch sites resolve at the cart `'step`, so the transitional
 self-witnessed `read` is deleted — have all landed (see
-[Region lifetime erasure](memory-model.md#region-lifetime-erasure)); what remains is the scope channel
-and the seal-site witnessing:
+[Region lifetime erasure](memory-model.md#region-lifetime-erasure)).
 
-- [Invert the scope-handle reads onto `open`](../roadmap/per-node-memory/scope-reads-to-open.md), then
-  [a single access verb](../roadmap/per-node-memory/single-open-verb.md) — inverting the scope-channel
-  reads onto `open` (reworking `Region::alloc` and deleting `reattach_ref_with`), then deleting the
-  transitional `attach`.
+What remains is the **scope channel**, the **`Region::alloc` re-anchor**, and the **seal-site
+witnessing** — and one line of reasoning ties the first three together. The keystone step `open`
+already opens the continuation, return contract, consumer `dest` region, and dep slice at one rank-2
+`for<'b>` brand, so the whole step tail — decide, outcome apply, finalize — runs inside it and consumes
+its `Outcome<'b>` in place; nothing branded escapes. The scope is the **one channel not yet folded into
+that brand**: the dispatch decide reads it through the escaping `current_scope` / `reattach_node_scope`
+/ `scope_bounded`, which hand a `&Scope<'step>` up the dispatcher stack at a free content lifetime — the
+shape the brand forbids — and `dest` is derived from an escaping scope read taken *before* the open. A
+fast lane cannot nest under a *separate* scope `open` because it returns `Outcome<'step>` and a
+`for<'b>` closure cannot hand a branded outcome back out; the fix is therefore not a per-reader rewrite
+but folding the scope into the **one step brand the tail already runs in**, after which the
+scope-pointer storage and the allocator re-anchor follow:
+
+- [Fold the scope channel into the step `open`](../roadmap/per-node-memory/scope-reads-to-open.md) —
+  zip the active scope's carrier into the step `open`, opened at the brand through the consuming
+  `SealedExtern::open` rather than the borrow-bounded `attach`; the decide receives `&Scope<'b>`,
+  `dest` becomes the opened scope's `region` (the separate region carrier dissolves), and the escaping
+  scope readers are gone.
+- [Collapse the scope-pointer erasure into the substrate](../roadmap/per-node-memory/scope-pointer-collapse.md)
+  — a region-resident value's captured / defining / parent scope (`KFunction::captured`, `Module` /
+  `Signature`'s scope pointers, a `Scope`'s `outer` / `root`) is a foreign borrow the witness pins, so
+  it re-anchors as part of the **holder's own carrier `open`** at the brand — one `Reattachable` retype
+  over the whole value — on the `&'static Scope` representation `ErasedScopePtr` already proves needs no
+  `NonNull` deref. `BoundedScopePtr` / `ErasedScopePtr`, their brand-shortening helpers, and the bare
+  `reattach_ref` (`BoundedScopePtr::get`'s `NonNull::as_ref`) are deleted, so the scope / module /
+  function path's only `unsafe` becomes the substrate's single `retype` — not a per-handle
+  "irreducible" one.
+- [Confine `Region::alloc` to a brand](../roadmap/per-node-memory/region-alloc-brand-confined.md) —
+  allocation produces an erased carrier, never a live region-lifetime reference: it happens only inside
+  a rank-2 region brand (`yoke` / `merge` / `transfer_into`, already this form, or a witness-less
+  `alloc(value, |live| erase)` closure for the frame builder's pre-witness child scope), so no public
+  `alloc -> &'a` remains and the alloc retype is confined by the brand exactly as `open`'s is.
+  Aggregates compose their element carriers via `merge`.
+- [`Sealed`: a single access verb](../roadmap/per-node-memory/single-open-verb.md) — with the scope
+  folded, the allocator confined, and the scope pointers collapsed, the borrow-bounded `attach` and the
+  `reattach_ref_with` it routes have no caller left, so they are deleted, leaving `Sealed` /
+  `SealedExtern` with `open` (plus its consuming twin) as the single access verb.
 - [Witness value carriers at their construction site](../roadmap/per-node-memory/witness-at-construction.md)
-  — witnessing the seal sites' values where they are built and deleting the loose `reattach_with`.
+  — witness the value seal sites where they are built so they fold via `yoke` / `merge` instead of
+  re-anchoring through the loose `reattach_with`, which is then deleted.

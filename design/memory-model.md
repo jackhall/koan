@@ -115,14 +115,16 @@ centralized in two branded handles in
 [`scope_ptr.rs`](../src/machine/core/scope_ptr.rs), split on **whether the carrier can brand the
 scope's `'a`**.
 
-The **safe** [`BoundedScopePtr<'a>`](../src/machine/core/scope_ptr.rs) backs every carrier that owns
+The branded [`BoundedScopePtr<'a>`](../src/machine/core/scope_ptr.rs) backs every carrier that owns
 a real `'a`: `KFunction::captured`, `Module::child_scope`, `Signature::decl_scope`, and a `Scope`'s
 `outer` lexical parent and `root` handle. `erase(&Scope<'a>)` records the content `'a` in a
 `PhantomData<&'a Scope<'a>>` brand (which, because `Scope<'a>` is invariant, also pins the carrier
 invariant in `'a`); `get(&'p self) -> &'p Scope<'a>` re-hands the content `'a` behind a
-reader-bounded borrow. Because the free content `'a` is never cashed *unbounded*, a shorter witness
-borrow cannot fabricate a longer-lived reference, so `get` needs no borrow==content coupling and
-carries **no `unsafe`**.
+reader-bounded borrow — sound because the free content `'a` is never cashed *unbounded*, so a shorter
+witness borrow cannot fabricate a longer-lived reference. Unlike the lifetime-free handles below, it
+stores a `NonNull<Scope<'static>>`, so `get` routes a `NonNull::as_ref` deref and the bare
+[`reattach_ref`](../src/witnessed.rs) — the scope path's one `unsafe` site beyond the shared
+`retype`.
 
 `BoundedScopePtr` also carries two **brand-shortening** helpers — `erase_shortened<'long: 'a>(&Scope<'long>)`
 and `shortened<'short>(self) where 'a: 'short` — that brand a longer-lived scope at a shorter `'a`.
