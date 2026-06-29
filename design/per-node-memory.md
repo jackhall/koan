@@ -184,7 +184,7 @@ This split is what keeps self-witnessing cycle-free. A self-witnessed carrier's 
 `Rc` rides the *carrier*, which a node holds *outside* the region it witnesses; `merge` folds
 every intermediate into that one carrier (the *one wrapper per node* invariant above), so no
 region-resident value strong-owns its own frame — the value in-region holds only non-owning
-pointers (a `BoundedScopePtr`, a `Weak` `region_owner`). The per-call scope is the one value held
+pointers (a plain `&Scope`, a `Weak` `region_owner`). The per-call scope is the one value held
 *inside* the frame, which is exactly why it stays externally-witnessed. A value that *captures*
 the scope therefore has no bundled scope witness to `merge` against: it mints its merge operand
 from the frame `Rc` the builder already holds — co-located, since the scope lives in that frame's
@@ -283,20 +283,21 @@ slice is opened *in-band* at that same brand — each producer terminal read out
 into one slice carrier, and zipped alongside the continuation — so every dep value is born at `'b`
 through the one step `open`, with no separate slice reattach. The **active scope** opens at that same
 brand: its carrier — the frame's own `SealedExtern<ScopeRefFamily>` for a `Yoked` slot, the node's
-`ErasedScopePtr` for a `YokedChild` — is zipped into the step `open` alongside the continuation, so the
+own `SealedExtern<ScopeRefFamily>` for a `YokedChild` — is zipped into the step `open` alongside the continuation, so the
 dispatch decide reads `&Scope<'b>` from the one brand (and the consumer `dest` region is the opened
 scope's own `region`, derived inside it) rather than re-anchoring a free `&Scope<'step>` up the
 dispatcher stack. The frame-side reads fold onto `open` the same way: a frame's own child scope opens at
 a `for<'b>` brand through [`CallFrame::with_scope`](../src/machine/core/arena.rs) — the `&mut self`
 submit / classify paths reach it through `with_node_scope` / `with_current_node_scope`, copying out a
 scalar (an id, a region) where they need no live scope — so no `&Scope` rides up a `&mut self` path. The
-one reader still on the borrow-bounded `attach<'w>(&'w self, &'w W) -> Live<'w>` accessor — re-anchoring
-*capped at the witness borrow* `'w` rather than at a free `'b` that could be widened past it, sound
-because the witness pin outlives the borrow (a fact the compiler checks) — is the seed-side re-anchor
-[`CallFrame::with_frame_interior`](../src/machine/core/arena.rs): the MATCH / TRY arm `it`-bind, the
-user-fn param-bind, and the deferred-return-type elaboration each allocate a caller-`'a` value *into*
-the frame, whose invariant `'a` a `for<'b>` brand cannot hold, so folding them onto `open` is tracked in
-[Open work](#open-work).
+seed-side binds fold onto `open` the same way: the MATCH / TRY arm `it`-bind, the user-fn param-bind, and
+the deferred-return-type elaboration each open the child scope at the brand through
+[`CallFrame::with_scope`](../src/machine/core/arena.rs) and **relocate** their caller-`'a` value into the
+opened scope's own region through the substrate (a shortening `reattach_with` for the `it` / param binds;
+the deferred return re-homing its elaborated `KType` into the captured-scope region) before binding it —
+so the value lands at the brand and the seed fabricates no free `&'a`. With every frame-side and
+seed-side read on `open`, the borrow-bounded `attach<'w>(&'w self, &'w W) -> Live<'w>` accessor is
+**callerless** — kept only for the follow-up that collapses the access surface to `open` alone.
 
 ## Storage choice belongs to the workload
 
@@ -319,9 +320,10 @@ storage form (`seal` / `open`), with the node result slot rerouted onto it. Its 
 nest under the rank-2 `open`: two driver accessors copy out inside the brand — a value read
 ([`read_result_with`](../src/scheduler.rs)) and a borrow-free error probe (`result_error`) — and the
 three ride-up-stack dispatch sites resolve at the cart `'step` directly, so the transitional
-self-witnessed `Sealed::read` is gone. The `Sealed` carrier's remaining access verbs (the consuming
-externally-witnessed `open`, the borrow-bounded `attach`, `transfer_into`), the residual scope-channel
-reads, and the seal-site re-anchors are tracked by the per-node-memory roadmap project below.
+self-witnessed `Sealed::read` is gone, and the scope channel — the frame-side reads and the seed-side
+binds alike — now folds onto `open` too, leaving the borrow-bounded `attach` callerless. The
+`Region::alloc` re-anchor, the seal-site witnessing, and collapsing the access surface to `open` alone
+(deleting that callerless `attach`) are tracked by the per-node-memory roadmap project below.
 
 ## Open work
 
@@ -339,38 +341,27 @@ probe) and the three ride-up-stack dispatch sites resolve at the cart `'step`, s
 self-witnessed `read` is deleted — have all landed (see
 [Region lifetime erasure](memory-model.md#region-lifetime-erasure)).
 
-What remains is the **scope-pointer collapse**, the **`Region::alloc` re-anchor**, and the **seal-site
-witnessing**. With the decide channel and the frame-side reads both folded onto the brand (the active
-scope opens alongside the continuation, and a frame's own child scope opens through
-`CallFrame::with_scope` — *Why reads are safe* above), the one reader still on the borrow-bounded
-`attach` is the seed-side re-anchor `with_frame_interior` (the MATCH / TRY arm `it`-bind, the user-fn
-param-bind, and the deferred-return-type elaboration), which allocates a caller-`'a` value into the
-frame that a `for<'b>` brand cannot hold; its fold needs the object / type relocation the scope-pointer
-collapse owns, so it is tracked there, after which the allocator re-anchor and seal-site witnessing
-follow:
+What remains is the **`Region::alloc` re-anchor**, the **seal-site witnessing**, and collapsing the
+access surface to **`open` alone**. The scope-pointer collapse has landed: a region-resident value's
+captured / defining / parent scope (`KFunction::captured`, `Module` / `Signature`'s scope pointers, a
+`Scope`'s `outer` / `root`) is now held **outright** as a plain `&'a Scope<'a>` and re-anchored to `'a`
+with the whole value on read — one `Reattachable` retype, no scope-specialized handle and no per-handle
+`NonNull` deref (see [Region lifetime erasure](memory-model.md#region-lifetime-erasure)). With the
+decide channel, the frame-side reads, and the seed-side binds (the MATCH / TRY `it`-bind, the user-fn
+param-bind, the deferred-return-type elaboration — each relocating its caller value into the opened
+scope's own region through the substrate, *Why reads are safe* above) all folded onto the brand, the
+borrow-bounded `attach` is callerless. The allocator re-anchor and seal-site witnessing follow:
 
-- [Collapse the scope-pointer erasure into the substrate](../roadmap/per-node-memory/scope-pointer-collapse.md)
-  — a region-resident value's captured / defining / parent scope (`KFunction::captured`, `Module` /
-  `Signature`'s scope pointers, a `Scope`'s `outer` / `root`) is a foreign borrow the witness pins, so
-  it re-anchors as part of the **holder's own carrier `open`** at the brand — one `Reattachable` retype
-  over the whole value — on the `&'static Scope` representation `ErasedScopePtr` already proves needs no
-  `NonNull` deref. `BoundedScopePtr` / `ErasedScopePtr`, their brand-shortening helpers, and the bare
-  `reattach_ref` (`BoundedScopePtr::get`'s `NonNull::as_ref`) are deleted, so the scope / module /
-  function path's only `unsafe` becomes the substrate's single `retype` — not a per-handle
-  "irreducible" one. It also folds the seed-side re-anchor (`with_frame_interior` — the MATCH / TRY
-  `it`-bind, the user-fn param-bind, and the return-type elaboration), the last borrow-bounded scope
-  reader, deleting `with_frame_interior` / `scope_bounded` / `reattach_scope` and leaving `attach`
-  callerless.
 - [Confine `Region::alloc` to a brand](../roadmap/per-node-memory/region-alloc-brand-confined.md) —
   allocation produces an erased carrier, never a live region-lifetime reference: it happens only inside
   a rank-2 region brand (`yoke` / `merge` / `transfer_into`, already this form, or a witness-less
   `alloc(value, |live| erase)` closure for the frame builder's pre-witness child scope), so no public
   `alloc -> &'a` remains and the alloc retype is confined by the brand exactly as `open`'s is.
   Aggregates compose their element carriers via `merge`.
-- [`Sealed`: a single access verb](../roadmap/per-node-memory/single-open-verb.md) — with the scope
-  reads folded, the allocator confined, and the scope pointers collapsed, the borrow-bounded `attach` and the
-  `reattach_ref_with` it routes have no caller left, so they are deleted, leaving `Sealed` /
-  `SealedExtern` with `open` (plus its consuming twin) as the single access verb.
+- [`Sealed`: a single access verb](../roadmap/per-node-memory/single-open-verb.md) — the scope reads
+  are folded and the scope pointers collapsed, so the borrow-bounded `attach` is already callerless;
+  once the allocator is confined too, it and the `reattach_ref_with` read path are deleted, leaving
+  `Sealed` / `SealedExtern` with `open` (plus its consuming twin) as the single access verb.
 - [Witness value carriers at their construction site](../roadmap/per-node-memory/witness-at-construction.md)
   — witness the value seal sites where they are built so they fold via `yoke` / `merge` instead of
   re-anchoring through the loose `reattach_with`, which is then deleted.

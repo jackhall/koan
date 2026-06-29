@@ -13,15 +13,17 @@
 //! value at the done boundary. Keeping that out of here is what lets `exec` stay scheduler-agnostic
 //! and `'run`-free.
 //!
-//! ## Lifetimes
+//! ## Two lifetimes
 //!
-//! [`run_user_fn`] takes two, because the AST and the delivered arguments genuinely differ: the
-//! function and its body expressions are **borrowed** from the long-lived, immutable AST (`'ast`,
-//! which outlives the run), while the arguments live in the caller's step (`'step`, which dies with
-//! the call) until they are deep-cloned into the frame. [`ExecOutcome`] itself carries only `'ast`:
-//! its dispatchable expressions are AST borrows, and a deferred-`Type` return rides as a `ret`
-//! reference already re-homed into the captured-scope region (an `'ast`-lifetime ancestor), so no
-//! frame-local value escapes on the outcome.
+//! [`ExecOutcome`] carries two, because the AST and the produced value genuinely differ: the
+//! dispatchable expressions are **borrowed** from the long-lived, immutable AST (`'ast`, which
+//! outlives the run), while a deferred-`Type` return's resolved type is **re-homed** into the
+//! captured-scope region's storage but **capped at the call's `'step`** — the contract lifetime, the
+//! in-call window the lift boundary consumes it within. Capping at `'step` (not the captured region's
+//! full lifetime) is what keeps a `ret` reference from out-claiming the caller region a resolved
+//! parameter type borrows into, so the re-home holds the same bound the old type-checked home did.
+//! `KExpression`'s invariance blocks collapsing the two. `exec` holds no lift handle, so it cannot
+//! move the body's *value* out of the frame; the scheduler lifts that at the done boundary.
 
 use std::rc::Rc;
 
@@ -46,12 +48,12 @@ pub struct ExecFrame {
     pub region: Rc<CallFrame>,
 }
 
-/// **exec → scheduler.** What running a body describes next, in `exec`'s native currency. One
-/// lifetime: its dispatchable expressions are **borrowed** from the long-lived, immutable AST
-/// (`'ast`), and a deferred-`Type` return rides as a `ret` reference already re-homed into the
-/// captured-scope region (also `'ast`-lived), so no frame-local produced value escapes on the
-/// outcome — the scheduler still lifts the body's *value* at the done boundary, but not via this.
-pub enum ExecOutcome<'ast> {
+/// **exec → scheduler.** What running a body describes next, in `exec`'s native currency. Two
+/// lifetimes, because the AST and the produced value genuinely differ: the dispatchable
+/// expressions are **borrowed** from the long-lived, immutable AST (`'ast`), while a deferred-`Type`
+/// return's resolved type is re-homed and held at the call's `'step` (the contract lifetime the lift
+/// boundary consumes). `KExpression`'s invariance blocks collapsing the two.
+pub enum ExecOutcome<'ast, 'step> {
     /// The body failed; propagate the error.
     Errored(KError),
     /// Run the body as a flat sequence: dispatch each `leading` expression — the non-tail
@@ -62,7 +64,7 @@ pub enum ExecOutcome<'ast> {
     Tail {
         leading: Vec<&'ast KExpression<'ast>>,
         tail: &'ast KExpression<'ast>,
-        ret: PerCallReturn<'ast>,
+        ret: PerCallReturn<'step>,
     },
     /// A deferred-`Expression` return on its **first** call: resolve `type_expr` (an async
     /// sub-dispatch — `Er.Carrier`, `sig WITH {…}`) as a single dep-finish dependency, run `leading` as
@@ -81,38 +83,45 @@ pub enum ExecOutcome<'ast> {
 /// resolved synchronously carries it **already re-homed** into the captured-scope region (`Resolved`
 /// → `ReturnContract::PerCall`), so the body tail-replaces and the lift boundary checks + stamps
 /// against it — no dep-finish, TCO preserved. The re-home (via [`home_return_type`]) is what lets the
-/// elaboration read the param-bound child scope at the frame brand yet hand back a `ret` reference
-/// that outlives the dying frame.
-pub enum PerCallReturn<'ast> {
+/// elaboration read the param-bound child scope at the frame brand yet hand back a `ret` reference at
+/// the call's `'step` — the contract lifetime, which the lift boundary consumes within the call.
+pub enum PerCallReturn<'step> {
     FromSignature,
-    Resolved(&'ast KType<'ast>),
+    Resolved(&'step KType<'step>),
 }
 
-/// Home a deferred FN's resolved return *type* in `region` (the captured-scope region — a strict
-/// ancestor the cart keeps live), so the `PerCall` contract's `ret` reference outlives the dying call
-/// frame. The elaboration reads the param-bound child scope at the frame brand, so `kt`'s lifetime is
-/// the (short) brand; the re-anchor caps the clone at `region`'s lifetime, witnessed by `region`
-/// itself. Sound because a **non-module** return type's reach is `Rc`-owned (recursive sets) or
-/// definition-stable (a signature / abstract member visible at the FN's definition, hence resident in
-/// `region` or a lexical ancestor of it) — pinned independent of the dying frame. A concrete
-/// first-class **module is rejected**: a module value's identity is not a return type (return a
-/// signature or the `:Module` kind), and it is the one return type that would borrow the dying frame,
-/// so erroring here is what lets the value carrier hold no per-value region anchor. (A module returned
-/// as a *value* is unaffected — it rides the value channel's witness set like a returned closure.)
-pub(crate) fn home_return_type<'r>(
+/// Home a deferred FN's resolved return *type* into `region`'s storage (the captured-scope region — a
+/// strict ancestor the cart keeps live), capped at the caller-supplied `'a`: the elaboration reads the
+/// param-bound child scope at the frame brand, so `kt`'s lifetime is the (short) brand, and the
+/// re-anchor lifts the clone to `'a` witnessed by `region`. Callers pass the **contract** lifetime
+/// (`'step`) as `'a`, *not* the captured region's full lifetime — the cap is load-bearing: a non-module
+/// return type can embed a region-borrowed scope reference (a [`KType::Signature`]'s `decl_scope_ref`,
+/// a [`KType::AbstractType`]'s `Module` source) that resolves to a **caller-provided** parameter, so
+/// the clone's reach borrows into the *caller* region. The caller region outlives the call (the caller
+/// awaits the callee, and the per-call reach-set fold pins the argument's reach for the call), so `kt`
+/// is valid for the contract `'step` — but it must not be lengthened past it to the captured region's
+/// own lifetime, which can outlive the caller. Capping at `'step` holds exactly the bound the borrow
+/// checker gave the elaborate-at-`'step` home this fold replaced.
+///
+/// A concrete first-class **module is rejected**: a module value's identity is not a return type
+/// (return a signature or the `:Module` kind), and it is the one return type whose borrow points into
+/// the *dying per-call frame* rather than the caller — invalid even at `'step` — so erroring here is
+/// what lets the value carrier hold no per-value region anchor. (A module returned as a *value* is
+/// unaffected — it rides the value channel's witness set like a returned closure.)
+pub(crate) fn home_return_type<'a>(
     kt: &KType<'_>,
-    region: &'r KoanRegion,
-) -> Result<&'r KType<'r>, KError> {
+    region: &'a KoanRegion,
+) -> Result<&'a KType<'a>, KError> {
     if matches!(kt, KType::Module { .. }) {
         return Err(KError::new(KErrorKind::ShapeError(
             "a module cannot be a function's return type; return a signature or the `:Module` kind"
                 .to_string(),
         )));
     }
-    // Re-anchor the (non-module, hence reach-stable) clone from the elaboration brand to `region`'s
-    // lifetime, witnessed by `region` — the safe-signature `reattach_with`, so the home carries no
-    // `unsafe` of its own beyond the substrate's single retype.
-    let relocated: KType<'r> = reattach_with::<KType<'static>, _>(kt.clone(), region);
+    // Re-anchor the (non-module) clone from the elaboration brand to `'a` — the caller's contract
+    // lifetime — witnessed by `region`, through the safe-signature `reattach_with`, so the home carries
+    // no `unsafe` of its own beyond the substrate's single retype.
+    let relocated: KType<'a> = reattach_with::<KType<'static>, _>(kt.clone(), region);
     Ok(region.alloc_ktype(relocated))
 }
 
@@ -134,7 +143,10 @@ pub fn run_user_fn<'ast, 'step>(
     args: Record<Carried<'step>>,
     ctx: &ExecFrame,
     in_contract_chain: bool,
-) -> ExecOutcome<'ast> {
+) -> ExecOutcome<'ast, 'step>
+where
+    'ast: 'step,
+{
     // Materialize the bound args as a record value **in the frame**, then bind each parameter to a
     // reference into the record's cell — one deep-clone per field (`Carried` → owned `Held`), and
     // the record carries its per-field type record. The record's cells double as the parameter
@@ -201,11 +213,15 @@ pub fn run_user_fn<'ast, 'step>(
             match deferred {
                 // `Type` form (`-> Er`): elaborate it inline against the per-call (param-bound)
                 // child scope at the frame brand, then **re-home** the resolved type into the
-                // captured-scope region inside the open — so the elaborated `KType` is freed from the
-                // brand (it lands in an `'ast`-lifetime ancestor) and rides the tail-replace as a
-                // reference that outlives the dying frame.
+                // captured-scope region's storage inside the open — so the elaborated `KType` is freed
+                // from the brand and rides the tail-replace as a `'step` reference (the contract
+                // lifetime) that outlives the dying frame.
                 DeferredReturn::Type(type_expr) => {
-                    let captured_region = func.captured_scope().region;
+                    // Home into the captured-scope region's storage, but **capped at `'step`** (the
+                    // `'ast: 'step` bound coerces the `&'ast` region down): the contract `ret` must not
+                    // out-claim a caller-region scope borrow a resolved param type embeds — see
+                    // `home_return_type`.
+                    let captured_region: &'step KoanRegion = func.captured_scope().region;
                     let homed = ctx.region.with_scope(|child| {
                         let mut elaborator = Elaborator::new(child);
                         let kt = match elaborate_type_identifier(&mut elaborator, type_expr) {

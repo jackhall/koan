@@ -5,12 +5,14 @@ now-callerless borrow-bounded `attach` and the `reattach_ref_with` witness-borro
 `Sealed` / `SealedExtern` with one access verb.
 
 **Problem.** The FrameStorage restructure landed a scope-specialized
-[`SealedExtern<ScopeRefFamily>::attach`](../../src/machine/core/arena.rs) — a borrow-bounded
-`&'w Scope<'b>` re-anchor (routing [`reattach_ref_with`](../../src/witnessed.rs)) that the frame's
-child-scope readers use to return a re-anchored scope up the dispatcher stack, the shape the
-keystone's `for<'b>` `open` forbids by construction. It is the borrow-bounded accessor that lets a
-re-anchored reference ride up-stack — a second access verb beside [`open`](../../src/witnessed.rs).
-(Its self-witnessed twin `Sealed::read` is already gone, deleted by the value-read migration.)
+[`SealedExtern<ScopeRefFamily>::attach`](../../src/machine/core/scope_ptr.rs) — a borrow-bounded
+`&'w Scope<'b>` re-anchor (routing [`reattach_ref_with`](../../src/witnessed.rs)), the shape the
+keystone's `for<'b>` `open` forbids by construction: a second access verb beside
+[`open`](../../src/witnessed.rs) that lets a re-anchored reference ride up the dispatcher stack. The
+scope-pointer collapse folded every frame-side and seed-side reader onto `open`, so `attach` is now
+**callerless** — it survives only to be deleted here, along with the `reattach_ref_with` witness-borrow
+read path it routes. (Its self-witnessed twin `Sealed::read` is already gone, deleted by the value-read
+migration.)
 
 **Acceptance criteria.**
 
@@ -38,8 +40,6 @@ re-anchored reference ride up-stack — a second access verb beside [`open`](../
 
 **Requires:**
 
-- [Collapse the scope-pointer erasure into the substrate](scope-pointer-collapse.md) — clears
-  `ErasedScopePtr`'s use of `reattach_ref_with`.
 - [Confine `Region::alloc` to a brand](region-alloc-brand-confined.md) — clears `Region::alloc`'s use
   of `reattach_ref_with`.
 

@@ -121,8 +121,8 @@ Two structural invariants make the reset sound:
 `try_reset_for_tail` takes `&mut Rc<CallFrame>`, so a live region borrow
 cannot span that frame's reset — a captured pointer across the reset is
 a compile error, not a discipline the code must remember.
-`with_frame_interior`'s seed binds reach the region through the child
-scope's own `region` field (`&'a KoanRegion`), pinned by the held frame
+`with_scope`'s seed binds relocate their caller value into the opened
+child scope's own region through the substrate, pinned by the held frame
 `Rc` — see [§ Seed-side re-anchor](scope-handles.md#seed-side-re-anchor)).
 
 Frame reuse is what makes deep tail recursion truly constant-memory —
