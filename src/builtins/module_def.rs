@@ -50,16 +50,12 @@ pub fn body<'a>(
             .scope
             .brand()
             .alloc_module(Module::new(name_for_finish.clone(), child_scope));
-        // Mirror pure type-side bindings into the module's `type_members`.
+        // Mirror the module's type-side bindings into `type_members`. The cross-kind exclusion
+        // keeps `data` and `types` disjoint by name, so this is an exact mirror of `iter_types`
+        // (no value-member name can also be a type name to filter out).
         {
-            let bindings = child_scope.bindings();
-            let data_names: std::collections::HashSet<String> =
-                bindings.iter_data().into_iter().map(|(n, _)| n).collect();
             let mut tm = module.type_members.borrow_mut();
-            for (member, kt) in bindings.iter_types() {
-                if data_names.contains(&member) {
-                    continue;
-                }
+            for (member, kt) in child_scope.bindings().iter_types() {
                 tm.insert(member, kt.clone());
             }
         }

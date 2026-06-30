@@ -84,6 +84,16 @@ impl<'a> TypeResolution<'a> {
     }
 }
 
+/// The value-or-type a name resolves to in one classified result — for ATTR module/signature
+/// member access. Produced by [`crate::machine::core::Scope::lookup_member`], which checks the
+/// module-own value side then the type side in one call, so a call site no longer probes the
+/// value map then the type map by hand. The `data`/`types` cross-kind exclusion keeps the two
+/// arms from ever both matching within a scope.
+pub enum MemberResolution<'a> {
+    Value(&'a KObject<'a>),
+    Type(&'a KType<'a>),
+}
+
 /// Outcome of a per-scope `lookup_function` call. Visibility (per
 /// `chain_cutoff`) is applied inside the lookup; `overloads` holds only
 /// visible finalized overloads (may be empty) and `pending` the earliest-index
@@ -226,6 +236,30 @@ impl<'a> Bindings<'a> {
         if let Some((id, idx, kind)) = self.placeholders.borrow().get(name).copied() {
             if kind == BindKind::Type && Self::visible(idx, chain_cutoff) {
                 return Some(TypeResolution::Placeholder(id));
+            }
+        }
+        None
+    }
+
+    /// Classified per-scope member lookup for ATTR module / signature access: the value-or-type
+    /// `name` resolves to, read from **this scope's own** `data` then `types` in one pass. A
+    /// module member is module-own — the lookup deliberately does **not** consult the builtin
+    /// root or walk lexical ancestors, so `m.Type` (a builtin type name) or `m.SomeOuterType`
+    /// is "no member", not a fall-through. The cross-kind exclusion keeps the two arms from both
+    /// matching, so the result is unambiguous. No placeholder arm — a read module is finalized.
+    pub fn lookup_member(
+        &self,
+        name: &str,
+        chain_cutoff: Option<usize>,
+    ) -> Option<MemberResolution<'a>> {
+        if let Some((obj, idx)) = self.data.borrow().get(name).copied() {
+            if Self::visible(idx, chain_cutoff) {
+                return Some(MemberResolution::Value(obj));
+            }
+        }
+        if let Some((kt, idx)) = self.types.borrow().get(name).copied() {
+            if Self::visible(idx, chain_cutoff) {
+                return Some(MemberResolution::Type(kt));
             }
         }
         None

@@ -272,7 +272,11 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
          MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
          LET IntOrdView = (IntOrd :| OrderedSig)",
     );
-    run(scope, "FN (BAD Er :OrderedSig) -> Er.Type = (1)");
+    // `Er.Carrier` is the SIG's abstract type member; under opaque ascription it is not
+    // `Number`, so the `(1)` body fails the per-call return-type check. (Referencing a real
+    // member, not the builtin `Type` name — module member access is module-own and does not
+    // fall through to the builtin root.)
+    run(scope, "FN (BAD Er :OrderedSig) -> Er.Carrier = (1)");
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("BAD IntOrdView"), scope);
     sched

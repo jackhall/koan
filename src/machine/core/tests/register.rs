@@ -273,6 +273,31 @@ fn register_function_coexists_with_same_name_type() {
         .unwrap_or(false));
 }
 
+/// `lookup_member` (the one classified ATTR lookup) yields exactly one result per name: a
+/// value-classified bind surfaces as `Value`, a type-classified bind as `Type`, and an unbound
+/// name as `None`. The cross-kind exclusion keeps a name from being both, so it never ambiguates.
+#[test]
+fn lookup_member_classifies_value_and_type_unambiguously() {
+    use crate::machine::core::MemberResolution;
+    let region = FrameStorage::run_root();
+    let scope = run_root_bare(&region);
+    let v = region.brand().alloc_object(KObject::Number(1.0));
+    scope
+        .bind_value("val".to_string(), v, BindingIndex::BUILTIN)
+        .unwrap();
+    scope.register_type("Ty".to_string(), KType::Number, BindingIndex::BUILTIN);
+    let bindings = scope.bindings();
+    assert!(matches!(
+        bindings.lookup_member("val", None),
+        Some(MemberResolution::Value(KObject::Number(n))) if *n == 1.0
+    ));
+    assert!(matches!(
+        bindings.lookup_member("Ty", None),
+        Some(MemberResolution::Type(KType::Number))
+    ));
+    assert!(bindings.lookup_member("absent", None).is_none());
+}
+
 #[test]
 fn resolve_returns_placeholder_when_only_placeholder_exists() {
     let region = FrameStorage::run_root();

@@ -17,7 +17,7 @@ use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::{CarriedFamily, Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
-use crate::machine::{FrameSet, KError, KErrorKind, Resolution, Scope};
+use crate::machine::{FrameSet, KError, KErrorKind, MemberResolution, Scope};
 use crate::witnessed::{Sealed, Witnessed};
 
 use super::{arg, kw, sig};
@@ -202,16 +202,16 @@ fn access_type_member<'a>(
         // member lives in that decl region, so it seals under the decl scope's home frame.
         KType::Signature { sig: s, .. } => {
             let decl = s.decl_scope();
-            if let Some(Resolution::Value(obj)) = decl.bindings().lookup_value(field, None) {
-                return Ok(decl.resident_object_carrier(obj));
+            match decl.bindings().lookup_member(field, None) {
+                Some(MemberResolution::Value(obj)) => Ok(decl.resident_object_carrier(obj)),
+                Some(MemberResolution::Type(kt)) => {
+                    Ok(decl.seal_type(decl.brand().alloc_ktype_witnessed(kt.clone())))
+                }
+                None => Err(KError::new(KErrorKind::ShapeError(format!(
+                    "signature `{}` has no member `{}`",
+                    s.path, field
+                )))),
             }
-            if let Some(kt) = decl.resolve_type(field) {
-                return Ok(decl.seal_type(decl.brand().alloc_ktype_witnessed(kt.clone())));
-            }
-            Err(KError::new(KErrorKind::ShapeError(format!(
-                "signature `{}` has no member `{}`",
-                s.path, field
-            ))))
         }
         // ATTR over an opaque-ascription abstract type — project against the source module.
         // A `Sig`-rooted abstract type has no module to project off, so it falls through.
@@ -297,29 +297,34 @@ fn access_module_member<'a>(
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
         return Ok(module_scope.seal_type(module_scope.brand().alloc_ktype_witnessed(kt)));
     }
-    // A value member lives in the module's region; it seals under the module scope's home frame,
-    // which transitively pins the module's reach-set — so the read value (or its re-tag carrier)
-    // names the full reach without an embedded lhs to fold (the module identity is the lhs).
-    if let Some(Resolution::Value(obj)) = module_scope.bindings().lookup_value(field, None) {
-        if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
-            let type_id = module_scope.brand().alloc_ktype(tag);
-            let carrier = module_scope
-                .brand()
-                .alloc_object_witnessed(KObject::Wrapped {
-                    inner: NonWrappedRef::peel(obj),
-                    type_id,
-                });
-            return Ok(module_scope.seal_value(carrier, None));
+    // One classified lookup over the module's own bindings — the cross-kind exclusion makes a
+    // name value-xor-type, so a single read decides the arm instead of probing `data` then
+    // `types` by hand. A value member lives in the module's region; it seals under the module
+    // scope's home frame, which transitively pins the module's reach-set — so the read value
+    // (or its re-tag carrier) names the full reach without an embedded lhs to fold (the module
+    // identity is the lhs).
+    match module_scope.bindings().lookup_member(field, None) {
+        Some(MemberResolution::Value(obj)) => {
+            if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
+                let type_id = module_scope.brand().alloc_ktype(tag);
+                let carrier = module_scope
+                    .brand()
+                    .alloc_object_witnessed(KObject::Wrapped {
+                        inner: NonWrappedRef::peel(obj),
+                        type_id,
+                    });
+                return Ok(module_scope.seal_value(carrier, None));
+            }
+            Ok(module_scope.resident_object_carrier(obj))
         }
-        return Ok(module_scope.resident_object_carrier(obj));
+        Some(MemberResolution::Type(kt)) => {
+            Ok(module_scope.seal_type(module_scope.brand().alloc_ktype_witnessed(kt.clone())))
+        }
+        None => Err(KError::new(KErrorKind::ShapeError(format!(
+            "module `{}` has no member `{}`",
+            m.path, field
+        )))),
     }
-    if let Some(kt) = module_scope.resolve_type(field) {
-        return Ok(module_scope.seal_type(module_scope.brand().alloc_ktype_witnessed(kt.clone())));
-    }
-    Err(KError::new(KErrorKind::ShapeError(format!(
-        "module `{}` has no member `{}`",
-        m.path, field
-    ))))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
