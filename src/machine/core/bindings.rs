@@ -40,15 +40,48 @@ use super::kerror::{KError, KErrorKind};
 mod pending;
 pub use pending::{PendingBinderGuard, PendingTypeEntry, PendingTypes};
 
+/// Whether a binding — committed or an in-flight placeholder — lives in the value
+/// language or the type language. The `data`/`types` partition is mutually exclusive
+/// (a name is one xor the other; see the cross-kind check in the write paths), and a
+/// forward-reference placeholder is tagged with its kind so a type placeholder is
+/// never satisfied by a value bind, nor the reverse.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub enum BindKind {
+    Value,
+    Type,
+}
+
 /// Outcome of a value-side name lookup. `Resolution::Placeholder` carries the
 /// producer `NodeId` the consumer should park on.
 ///
-/// Invariant: within one scope, `data` and `placeholders` never both hold the
-/// same name — every successful write path clears any matching placeholder.
+/// Invariant: within one scope, `data` and a `BindKind::Value` `placeholders` entry
+/// never both hold the same name — every successful value write path clears its
+/// matching value placeholder.
 pub enum Resolution<'a> {
     Value(&'a KObject<'a>),
     Placeholder(NodeId),
     UnboundName,
+}
+
+/// Outcome of a per-scope type-side lookup — the type-language mirror of
+/// [`Resolution`]. `Placeholder` carries the producer `NodeId` of an earlier
+/// still-finalizing type binder the consumer parks on. A miss is `None` (the caller
+/// keeps walking ancestors), matching how [`Bindings::lookup_value`] returns `None`.
+#[derive(Copy, Clone, Debug)]
+pub enum TypeResolution<'a> {
+    Type(&'a KType<'a>),
+    Placeholder(NodeId),
+}
+
+impl<'a> TypeResolution<'a> {
+    /// The resolved type, or `None` for an in-flight placeholder — for callers that act
+    /// only on a finalized type and treat a still-running producer as "not bound yet".
+    pub fn finalized(self) -> Option<&'a KType<'a>> {
+        match self {
+            TypeResolution::Type(kt) => Some(kt),
+            TypeResolution::Placeholder(_) => None,
+        }
+    }
 }
 
 /// Outcome of a per-scope `lookup_function` call. Visibility (per
@@ -106,7 +139,7 @@ pub struct Bindings<'a> {
     types: RefCell<HashMap<String, (&'a KType<'a>, BindingIndex)>>,
     data: RefCell<HashMap<String, (&'a KObject<'a>, BindingIndex)>>,
     functions: RefCell<HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>>,
-    placeholders: RefCell<HashMap<String, (NodeId, BindingIndex)>>,
+    placeholders: RefCell<HashMap<String, (NodeId, BindingIndex, BindKind)>>,
     /// Bucket-key → entries for FN / FUNCTOR overloads whose binder has
     /// dispatched but not finalized. Sibling binders sharing one inner-call
     /// bucket key each install their own entry; consumers park on the
@@ -169,23 +202,45 @@ impl<'a> Bindings<'a> {
                 return Some(Resolution::Value(obj));
             }
         }
-        if let Some((id, idx)) = self.placeholders.borrow().get(name).copied() {
-            if Self::visible(idx, chain_cutoff) {
+        if let Some((id, idx, kind)) = self.placeholders.borrow().get(name).copied() {
+            if kind == BindKind::Value && Self::visible(idx, chain_cutoff) {
                 return Some(Resolution::Placeholder(id));
             }
         }
         None
     }
 
-    /// Per-scope type-side lookup. Mirrors [`Self::lookup_value`] for the
-    /// `types` map.
-    pub fn lookup_type(&self, name: &str, chain_cutoff: Option<usize>) -> Option<&'a KType<'a>> {
-        let types = self.types.borrow();
-        let (kt, idx) = types.get(name).copied()?;
-        if Self::visible(idx, chain_cutoff) {
-            Some(kt)
-        } else {
-            None
+    /// Per-scope type-side lookup. The type-language mirror of [`Self::lookup_value`]:
+    /// consults `types` then the `BindKind::Type` `placeholders` entries, returning the
+    /// first visible hit as a [`TypeResolution`], or `None` so the caller keeps walking.
+    pub fn lookup_type(
+        &self,
+        name: &str,
+        chain_cutoff: Option<usize>,
+    ) -> Option<TypeResolution<'a>> {
+        if let Some((kt, idx)) = self.types.borrow().get(name).copied() {
+            if Self::visible(idx, chain_cutoff) {
+                return Some(TypeResolution::Type(kt));
+            }
+        }
+        if let Some((id, idx, kind)) = self.placeholders.borrow().get(name).copied() {
+            if kind == BindKind::Type && Self::visible(idx, chain_cutoff) {
+                return Some(TypeResolution::Placeholder(id));
+            }
+        }
+        None
+    }
+
+    /// The producer `NodeId` of a still-finalizing **type** binder named `name`, read straight
+    /// from the kind-tagged `placeholders` map — *not* through [`Self::lookup_type`], which
+    /// prefers a (possibly seal-pre-installed, still-unsealed) `types` entry. The finalize gate
+    /// uses this to park the type-identifier memo on an in-flight producer even when the seal
+    /// has already pre-installed the name's external identity into `types`. Visibility-unfiltered:
+    /// this is producer-dependency tracking, not consumer-visibility enforcement.
+    pub fn type_placeholder_producer(&self, name: &str) -> Option<NodeId> {
+        match self.placeholders.borrow().get(name).copied() {
+            Some((id, _, BindKind::Type)) => Some(id),
+            _ => None,
         }
     }
 
@@ -363,7 +418,7 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub fn placeholders(&self) -> Ref<'_, HashMap<String, (NodeId, BindingIndex)>> {
+    pub fn placeholders(&self) -> Ref<'_, HashMap<String, (NodeId, BindingIndex, BindKind)>> {
         self.placeholders.borrow()
     }
 
@@ -506,7 +561,7 @@ impl<'a> Bindings<'a> {
             }
         }
         drop(types);
-        self.clear_placeholder_best_effort(name);
+        self.clear_placeholder_best_effort(name, BindKind::Type);
         Ok(ApplyOutcome::Applied)
     }
 
@@ -520,12 +575,16 @@ impl<'a> Bindings<'a> {
     ///
     /// The eventual `try_bind_value` / `try_register_*` call must carry the
     /// same `index` so the consumer's visibility test stays consistent across
-    /// the placeholder → finalized transition.
+    /// the placeholder → finalized transition. `kind` records which language the
+    /// forward reference resolves in, so a value bind never satisfies a type
+    /// placeholder (or the reverse) — see [`Bindings::lookup_value`] /
+    /// [`Bindings::lookup_type`], each of which surfaces only its own kind.
     pub fn try_install_placeholder(
         &self,
         name: String,
         idx: NodeId,
         index: BindingIndex,
+        kind: BindKind,
     ) -> Result<(), KError> {
         if let Some((existing, _)) = self.data.borrow().get(&name).copied() {
             if matches!(existing, KObject::KFunction(_)) {
@@ -534,13 +593,13 @@ impl<'a> Bindings<'a> {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
         let mut ph = self.placeholders.borrow_mut();
-        if let Some((existing, _)) = ph.get(&name).copied() {
+        if let Some((existing, _, _)) = ph.get(&name).copied() {
             if existing == idx {
                 return Ok(());
             }
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        ph.insert(name, (idx, index));
+        ph.insert(name, (idx, index, kind));
         Ok(())
     }
 
@@ -626,7 +685,7 @@ impl<'a> Bindings<'a> {
         }
         types.insert(name.to_string(), (kt, index));
         drop(types);
-        self.clear_placeholder_best_effort(name);
+        self.clear_placeholder_best_effort(name, BindKind::Type);
         Ok(ApplyOutcome::Applied)
     }
 
@@ -731,7 +790,7 @@ impl<'a> Bindings<'a> {
         }
         drop(data);
         drop(functions_handle);
-        self.clear_placeholder_best_effort(name);
+        self.clear_placeholder_best_effort(name, BindKind::Value);
         if let Some(bucket) = cleared_overload_bucket {
             // Remove only this binder's pending entry; siblings stay as wake sources.
             self.clear_pending_overload_best_effort(&bucket, index);
@@ -739,12 +798,17 @@ impl<'a> Bindings<'a> {
         Ok(ApplyOutcome::Applied)
     }
 
-    /// Shared tail of every successful write path. `try_borrow_mut().ok()`
-    /// tolerates a caller holding a placeholder borrow up the stack — a
-    /// hard `borrow_mut()` would panic on legitimate reads across a write.
-    fn clear_placeholder_best_effort(&self, name: &str) {
+    /// Shared tail of every successful write path. Removes a *matching-kind* placeholder
+    /// for `name`: a value write clears only a [`BindKind::Value`] entry, a type write only
+    /// a [`BindKind::Type`] one, so a value bind never clears an in-flight type producer's
+    /// placeholder (or the reverse). `try_borrow_mut().ok()` tolerates a caller holding a
+    /// placeholder borrow up the stack — a hard `borrow_mut()` would panic on legitimate
+    /// reads across a write.
+    fn clear_placeholder_best_effort(&self, name: &str, kind: BindKind) {
         if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
-            ph.remove(name);
+            if matches!(ph.get(name), Some((_, _, k)) if *k == kind) {
+                ph.remove(name);
+            }
         }
     }
 
@@ -755,7 +819,7 @@ impl<'a> Bindings<'a> {
     /// a later run on a persistent scope. Same tolerant `try_borrow_mut`.
     pub fn clear_placeholders_for_producer(&self, producer: NodeId) {
         if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
-            ph.retain(|_, (id, _)| *id != producer);
+            ph.retain(|_, (id, _, _)| *id != producer);
         }
     }
 

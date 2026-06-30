@@ -166,7 +166,10 @@ impl<'a> RegionBrand<'a> {
     /// pins the region externally for the construction step and `finalize` folds the producer
     /// **before** the carrier is stored on a node. A value that *references* another region is the
     /// `yoke` / `merge` path, not this one.
-    pub(crate) fn alloc_object_witnessed(self, value: KObject<'_>) -> Witnessed<CarriedFamily, FrameSet> {
+    pub(crate) fn alloc_object_witnessed(
+        self,
+        value: KObject<'_>,
+    ) -> Witnessed<CarriedFamily, FrameSet> {
         self.0
             .alloc::<KObject<'static>, _>(value, |live| Witnessed::resident(Carried::Object(live)))
     }
@@ -182,7 +185,10 @@ impl<'a> RegionBrand<'a> {
     /// region — owned data, or a borrow this region already pins. A `KType::Module` reaches its child
     /// scope's region, so it is born here empty and folds that reach through
     /// [`Scope::seal_module`](crate::machine::core::Scope) rather than naming it on this surface.
-    pub(crate) fn alloc_ktype_witnessed(self, value: KType<'_>) -> Witnessed<CarriedFamily, FrameSet> {
+    pub(crate) fn alloc_ktype_witnessed(
+        self,
+        value: KType<'_>,
+    ) -> Witnessed<CarriedFamily, FrameSet> {
         self.0
             .alloc::<KType<'static>, _>(value, |live| Witnessed::resident(Carried::Type(live)))
     }
@@ -309,7 +315,10 @@ impl Region<KoanStorageProfile> {
     /// region. The yoke hands a `&'b KoanRegion`; wrapping it as the brand is sound for the same reason
     /// the yoke is — the `for<'b>` quantifier admits only region-derived/owned references, so
     /// co-location holds by construction and nothing branded escapes the closure.
-    pub(crate) fn yoke_branded<T: Reattachable, F>(witness: FrameSet, build: F) -> Witnessed<T, FrameSet>
+    pub(crate) fn yoke_branded<T: Reattachable, F>(
+        witness: FrameSet,
+        build: F,
+    ) -> Witnessed<T, FrameSet>
     where
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>,
     {
@@ -363,7 +372,10 @@ impl CallFrame {
     }
 
     /// Test alias for [`CallFrame::try_reset_for_tail`].
-    pub(crate) fn try_reset_for_tail_test<'a>(self: &mut Rc<Self>, new_outer: &'a Scope<'a>) -> bool {
+    pub(crate) fn try_reset_for_tail_test<'a>(
+        self: &mut Rc<Self>,
+        new_outer: &'a Scope<'a>,
+    ) -> bool {
         self.try_reset_for_tail(new_outer)
     }
 }
@@ -583,7 +595,8 @@ pub(crate) fn build_frame_child_witnessed<'p>(
         // `region_b: &'b KoanRegion`, `outer_b: &'b Scope<'b>` — the region and parent unified at the
         // one brand. The child stores both by plain coercion (no retype of its own).
         let child = Scope::child_for_frame_witnessed(outer_b, RegionBrand(region_b), region_owner);
-        region_b.alloc::<Scope<'static>, _>(child, |live| SealedExtern::<ScopeRefFamily>::erase(live))
+        region_b
+            .alloc::<Scope<'static>, _>(child, |live| SealedExtern::<ScopeRefFamily>::erase(live))
     })
 }
 

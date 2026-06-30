@@ -13,7 +13,7 @@ use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::core::{KoanRegion, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
-use crate::machine::{FrameSet, KError, KErrorKind, Resolution, ValueCarrierResolution};
+use crate::machine::{FrameSet, KError, KErrorKind, TypeResolution, ValueCarrierResolution};
 use crate::source::Spanned;
 
 use super::super::DepFinish;
@@ -226,33 +226,30 @@ pub(super) fn type_call<'step>(
     // Resolve against the cart scope at `'step`, so the resolved identity rides into the outcome
     // with no re-anchor.
     let scope = ctx.current_scope();
-    // A still-finalizing head binding (a `LET <Type-class> = …` placeholder — e.g. a
-    // forward functor) whose producer is not yet terminal: park on the producer and
-    // re-run `type_call` on resume. Once the binding finalizes, the value-side
-    // placeholder is cleared and the head resolves through the type table (a functor
-    // or type alias), so a keyworded resume would wrongly fail. A producer that is
-    // already terminal falls through — its placeholder is on its way out, so the
-    // type-table read below is authoritative.
-    if let Resolution::Placeholder(producer) = scope.resolve_with_chain(head_t.as_str(), chain) {
-        if !ctx.is_result_ready(producer) {
-            // The original call expression is the deadlock-summary sample; the resume re-runs
-            // the whole fast lane against it once the head binding finalizes.
-            let carrier = expr.summarize();
-            return park_resume(
-                vec![producer],
-                Some(carrier),
-                Box::new(move |ctx, _idx| type_call(ctx, expr)),
-            );
-        }
-    }
-    // Fresh `types[name]` lookup at construction time. A sealed nominal type's identity is
-    // a `SetRef` whose member carries the schema (filled at the member's finalize) — no
-    // value-side carrier involved. A bound functor lives here too, carrying its callable
-    // body on `KType::KFunctor { body: Some(f) }`.
+    // One type-side resolution at construction time. A sealed nominal type's identity is a
+    // `SetRef` whose member carries the schema (filled at the member's finalize) — no
+    // value-side carrier involved. A bound functor lives here too, carrying its callable body
+    // on `KType::KFunctor { body: Some(f) }`.
     let identity = match scope.resolve_type_with_chain(head_t.as_str(), chain) {
         // `kt` resolves at the cart `'step` directly — it feeds `apply_callable`'s outcome with no
         // re-anchor.
-        Some(kt) => kt,
+        Some(TypeResolution::Type(kt)) => kt,
+        // A still-finalizing head binding (a `LET <Type-class> = …` placeholder — e.g. a forward
+        // functor) whose producer is not yet terminal: park on the producer and re-run `type_call`
+        // on resume. A terminal producer has already installed `types[name]`, so the `Type` arm
+        // above wins; reaching this arm with a terminal producer means a mid-write/errored
+        // producer, so it surfaces `UnboundName` (the resume re-runs the fast lane).
+        Some(TypeResolution::Placeholder(producer)) => {
+            if !ctx.is_result_ready(producer) {
+                let carrier = expr.summarize();
+                return park_resume(
+                    vec![producer],
+                    Some(carrier),
+                    Box::new(move |ctx, _idx| type_call(ctx, expr)),
+                );
+            }
+            return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head_t.render()))));
+        }
         None => {
             return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head_t.render()))));
         }

@@ -68,9 +68,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .brand()
         .alloc_module(Module::new("NoTypePin".into(), child_c));
     m_none.mark_satisfies(sig_id);
-    let m_none_obj = region
-        .brand()
-        .alloc_ktype(KType::Module { module: m_none });
+    let m_none_obj = region.brand().alloc_ktype(KType::Module { module: m_none });
 
     let slot = KType::Signature {
         sig,

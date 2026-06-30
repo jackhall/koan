@@ -73,10 +73,10 @@ fn fold_cells(
         .region_owner()
         .upgrade()
         .expect("the consumer scope's region owner is held for the step");
-    let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(
-        FrameSet::singleton(dest_frame),
-        |region| (region, Vec::with_capacity(capacity)),
-    );
+    let acc0 =
+        KoanRegion::yoke_branded::<AggBuildFamily, _>(FrameSet::singleton(dest_frame), |region| {
+            (region, Vec::with_capacity(capacity))
+        });
     cells.fold(acc0, |acc, cell| {
         cell.transfer_into::<AggBuildFamily, AggBuildFamily>(
             acc,

@@ -278,7 +278,12 @@ fn resolve_returns_placeholder_when_only_placeholder_exists() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
     scope
-        .install_placeholder("x".to_string(), NodeId(7), BindingIndex::BUILTIN)
+        .install_placeholder(
+            "x".to_string(),
+            NodeId(7),
+            BindingIndex::BUILTIN,
+            crate::machine::BindKind::Value,
+        )
         .unwrap();
     match scope.resolve("x") {
         Resolution::Placeholder(id) => assert_eq!(id, NodeId(7)),
@@ -296,7 +301,12 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
         .unwrap();
     let inner = region.brand().alloc_scope(outer.child_for_call());
     inner
-        .install_placeholder("x".to_string(), NodeId(3), BindingIndex::BUILTIN)
+        .install_placeholder(
+            "x".to_string(),
+            NodeId(3),
+            BindingIndex::BUILTIN,
+            crate::machine::BindKind::Value,
+        )
         .unwrap();
     match inner.resolve("x") {
         Resolution::Placeholder(id) => assert_eq!(id, NodeId(3)),
@@ -316,7 +326,12 @@ fn bind_value_clears_own_placeholder() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
     scope
-        .install_placeholder("x".to_string(), NodeId(2), BindingIndex::BUILTIN)
+        .install_placeholder(
+            "x".to_string(),
+            NodeId(2),
+            BindingIndex::BUILTIN,
+            crate::machine::BindKind::Value,
+        )
         .unwrap();
     let v = region.brand().alloc_object(KObject::Number(42.0));
     scope
@@ -410,7 +425,12 @@ fn visibility_placeholder_filtered_same_as_value() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
     scope
-        .install_placeholder("ph".to_string(), NodeId(2), BindingIndex::value(5))
+        .install_placeholder(
+            "ph".to_string(),
+            NodeId(2),
+            BindingIndex::value(5),
+            crate::machine::BindKind::Value,
+        )
         .unwrap();
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
     assert!(matches!(

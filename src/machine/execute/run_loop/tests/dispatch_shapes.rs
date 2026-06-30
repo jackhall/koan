@@ -552,7 +552,12 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
         .expect("bind_value should succeed");
     let producer = sched.dispatch_in_scope(parse_one("producer_target {y = 1}"), scope);
     scope
-        .install_placeholder("f".to_string(), producer, BindingIndex::BUILTIN)
+        .install_placeholder(
+            "f".to_string(),
+            producer,
+            BindingIndex::BUILTIN,
+            crate::machine::BindKind::Value,
+        )
         .expect("install_placeholder should succeed");
 
     let f_call_id = sched.dispatch_in_scope(parse_one("f {x = 7}"), scope);

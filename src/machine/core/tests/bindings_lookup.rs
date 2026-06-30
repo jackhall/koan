@@ -5,7 +5,7 @@
 
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
-use crate::machine::core::{BindingIndex, FrameStorage, Resolution};
+use crate::machine::core::{BindingIndex, FrameStorage, Resolution, TypeResolution};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
@@ -57,7 +57,12 @@ fn lookup_value_placeholder_filtered_same_as_value() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
     scope
-        .install_placeholder("placeholder".to_string(), NodeId(2), BindingIndex::value(5))
+        .install_placeholder(
+            "placeholder".to_string(),
+            NodeId(2),
+            BindingIndex::value(5),
+            crate::machine::BindKind::Value,
+        )
         .unwrap();
     assert!(scope
         .bindings()
@@ -76,7 +81,7 @@ fn lookup_type_chain_cutoff_none_admits_every_index() {
     scope.register_type("Tee".into(), KType::Number, BindingIndex::value(99));
     assert!(matches!(
         scope.bindings().lookup_type("Tee", None),
-        Some(KType::Number),
+        Some(TypeResolution::Type(KType::Number)),
     ));
 }
 

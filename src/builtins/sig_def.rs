@@ -87,7 +87,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "SIG",
         signature,
         body,
-        Some(super::type_part_binder_name),
+        Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
         None,
         false,
     );
@@ -150,6 +150,7 @@ mod tests {
             .decl_scope()
             .bindings()
             .lookup_type("x", None)
+            .and_then(crate::machine::TypeResolution::finalized)
             .expect("VAL slot `x` must live in SIG's type table");
         assert!(
             matches!(x, KType::Number),

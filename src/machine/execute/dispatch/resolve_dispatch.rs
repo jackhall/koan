@@ -13,7 +13,7 @@
 //! name as an `:Identifier` / `:Any` slot.
 
 use crate::machine::core::kfunction::{ClassifiedSlots, KFunction};
-use crate::machine::core::{FunctionLookup, KError, LexicalFrame, Scope};
+use crate::machine::core::{BindKind, FunctionLookup, KError, LexicalFrame, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::{ExpressionSignature, KType, SignatureElement};
@@ -57,7 +57,9 @@ pub fn reset_resolve_dispatch_entry_count() {
 /// [`crate::machine::core::kfunction::ClassifiedSlots`].
 pub struct Resolved<'step> {
     pub function: &'step KFunction<'step>,
-    pub placeholder_name: Option<String>,
+    /// The forward-reference name a binder declares, with the language it binds in, so the
+    /// dispatch driver installs a kind-tagged placeholder. `None` for a non-binder pick.
+    pub placeholder: Option<(String, BindKind)>,
     /// `Some(_)` only for binder builtins whose body registers a callable
     /// function (FN, FUNCTOR): holds the inner-call bucket key so a sibling
     /// bare-arg call to the to-be-registered overload parks on this slot.
@@ -503,7 +505,9 @@ fn build_resolved<'step, 'e>(
 ) -> Resolved<'step> {
     Resolved {
         function: picked,
-        placeholder_name: picked.binder_name.and_then(|extractor| extractor(expr)),
+        placeholder: picked
+            .binder_name
+            .and_then(|(extractor, kind)| extractor(expr).map(|name| (name, kind))),
         pending_overload_bucket: picked.binder_bucket.and_then(|extractor| extractor(expr)),
         slots: picked.classify_for_pick(expr),
     }

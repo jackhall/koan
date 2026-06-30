@@ -80,7 +80,7 @@ pub(crate) fn register_builtin_full<'a>(
     name: &str,
     signature: ExpressionSignature<'a>,
     body: crate::machine::core::kfunction::ActionFn,
-    binder_name: Option<BinderNameFn>,
+    binder_name: Option<(BinderNameFn, crate::machine::core::BindKind)>,
     binder_bucket: Option<crate::machine::core::kfunction::BinderBucketFn>,
     is_functor: bool,
 ) {

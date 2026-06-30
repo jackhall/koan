@@ -13,7 +13,7 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use crate::machine::core::{LexicalFrame, Resolution, Scope, ScopeId};
+use crate::machine::core::{LexicalFrame, Resolution, Scope, ScopeId, TypeResolution};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::NodeId;
 
@@ -101,23 +101,22 @@ pub fn elaborate_type_identifier<'a>(
             return ElabResult::Done(KType::RecursiveRef(name.to_string()));
         }
     }
-    if let Some(kt) = el.scope.resolve_type_with_chain(name, el.chain.as_deref()) {
-        return ElabResult::Done(kt.clone());
+    match el.scope.resolve_type_with_chain(name, el.chain.as_deref()) {
+        // A finalized type resolves directly.
+        Some(TypeResolution::Type(kt)) => return ElabResult::Done(kt.clone()),
+        // A *visible* type placeholder is an earlier-declared type still finalizing: park on
+        // its producer and re-elaborate when it terminalizes. A forward reference (a later
+        // sibling) is filtered out by the chain before reaching here — a position error, not a
+        // park. Mutual recursion across the cut uses a `RECURSIVE TYPES` block, threaded above.
+        Some(TypeResolution::Placeholder(id)) => return ElabResult::Park(vec![id]),
+        None => {}
     }
+    // Not a type (finalized or in flight). Consult the value side only to sharpen the miss
+    // message: a name bound — or still binding — in the value language gets the layering
+    // diagnostic; an unknown name gets the unknown-name failure. `from_name` is tried first in
+    // both arms so fixture scopes that skip builtin registration still resolve builtin names.
     match el.scope.resolve_with_chain(name, el.chain.as_deref()) {
-        // A *visible* placeholder is an earlier-declared type still finalizing: park on its
-        // producer and re-elaborate when it terminalizes. A forward reference (a later
-        // sibling) is filtered out by the chain before reaching here, so it falls through
-        // to `UnboundName` — a position error, not a park. Mutual recursion across the cut
-        // is expressed with a `RECURSIVE TYPES` block, threaded above.
-        Resolution::Placeholder(id) => ElabResult::Park(vec![id]),
-        // `from_name` is tried first in both arms so fixture scopes that skip
-        // builtin registration still resolve builtin names. The split only
-        // affects the miss message: a `Value` resolution means the name *is*
-        // bound, just in the value language, so the diagnostic must name the
-        // type-language / value-language layering rather than read as an
-        // unknown-name failure (see design/typing/functors.md).
-        Resolution::Value(_) => match KType::<'a>::from_name(name) {
+        Resolution::Value(_) | Resolution::Placeholder(_) => match KType::<'a>::from_name(name) {
             Some(kt) => ElabResult::Done(kt),
             None => ElabResult::Unbound(format!(
                 "`{name}` is value-language only — a type slot needs a type-language \
@@ -173,7 +172,11 @@ pub fn finalize_nominal_member<'a>(
     //   parallel finalize of *this* declaration — short-circuit on it (idempotent).
     // - Any other existing `SetRef` is a genuine prior type of this name; mint a fresh
     //   singleton so the install path below raises the `Rebind` a redeclaration deserves.
-    let pre_installed = match scope.bindings().lookup_type(name, None) {
+    let pre_installed = match scope
+        .bindings()
+        .lookup_type(name, None)
+        .and_then(TypeResolution::finalized)
+    {
         Some(KType::SetRef { set, index }) if !set.member(*index).is_filled() => {
             Some((Rc::clone(set), *index))
         }

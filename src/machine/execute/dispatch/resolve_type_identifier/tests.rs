@@ -191,7 +191,12 @@ mod resolve_type_leaf_carrier {
             },
         );
         scope
-            .install_placeholder("Node".into(), NodeId(7), BindingIndex::value(0))
+            .install_placeholder(
+                "Node".into(),
+                NodeId(7),
+                BindingIndex::value(0),
+                crate::machine::BindKind::Type,
+            )
             .expect("placeholder install");
 
         let leaf = TypeIdentifier::leaf("Node".to_string());

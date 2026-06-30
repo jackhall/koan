@@ -120,13 +120,10 @@ impl<'view, 'step> FinalizeGate<'view, 'step> {
             if !owner.bindings().pending_types().contains_key(name) {
                 continue;
             }
-            // `chain_cutoff = None` because this is producer-dependency tracking, not
-            // consumer-visibility enforcement. A `Value`-arm hit would mean the
-            // named type already finalized, which the `pending_types` check above
-            // rules out for any name reaching this branch.
-            if let Some(crate::machine::core::Resolution::Placeholder(node_id)) =
-                owner.bindings().lookup_value(name, None)
-            {
+            // Read the type placeholder straight from the kind-tagged map — not via
+            // `lookup_type`, which would prefer the seal's pre-installed (still-unsealed)
+            // `types` entry and miss the in-flight producer this gate must park on.
+            if let Some(node_id) = owner.bindings().type_placeholder_producer(name) {
                 if !pending.contains(&node_id) {
                     pending.push(node_id);
                 }

@@ -8,7 +8,7 @@ use crate::machine::model::ast::KExpression;
 
 use super::arena::{FrameSet, FrameStorage, KoanRegion, RegionBrand};
 pub use super::bindings::Resolution;
-use super::bindings::{ApplyOutcome, BindingIndex, Bindings};
+use super::bindings::{ApplyOutcome, BindKind, BindingIndex, Bindings, TypeResolution};
 use super::kerror::{KError, KErrorKind};
 use super::lexical_frame::LexicalFrame;
 use super::pending::PendingQueue;
@@ -913,13 +913,16 @@ impl<'a> Scope<'a> {
         name: String,
         idx: NodeId,
         index: BindingIndex,
+        kind: BindKind,
     ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
-            return self.write_target().install_placeholder(name, idx, index);
+            return self
+                .write_target()
+                .install_placeholder(name, idx, index, kind);
         }
         self.bindings
             .get()
-            .try_install_placeholder(name, idx, index)
+            .try_install_placeholder(name, idx, index, kind)
     }
 
     /// Error-path companion to [`Self::install_placeholder`]: remove any value-side
@@ -959,21 +962,26 @@ impl<'a> Scope<'a> {
             .try_install_pending_overload(bucket, idx, index)
     }
 
-    /// Type-side analogue of [`Self::lookup`] — no `Placeholder` variant. Visibility
-    /// unfiltered; dispatch-driven reads use [`Self::resolve_type_with_chain`].
+    /// Resolve a *finalized* type, unfiltered. The `Option<&KType>` adapter over
+    /// [`Self::resolve_type_with_chain`]: an in-flight [`TypeResolution::Placeholder`]
+    /// collapses to `None` here, so callers that must park on the producer use
+    /// `resolve_type_with_chain` and match its `Placeholder` arm.
     pub fn resolve_type(&self, name: &str) -> Option<&'a crate::machine::model::types::KType<'a>> {
         self.resolve_type_with_chain(name, None)
+            .and_then(TypeResolution::finalized)
     }
 
-    /// Chain-gated companion to [`Self::resolve_type`]. Per-scope `types` hits are
-    /// filtered through [`visible`], so a type binding declared lexically later in
+    /// Chain-gated type-side resolution — the type-language mirror of
+    /// [`Self::resolve_with_chain`]. Per-scope `types` (and `BindKind::Type` placeholder)
+    /// hits are filtered through [`visible`], so a type binding declared lexically later in
     /// the same block is invisible to an earlier sibling — a forward type reference is a
-    /// position error.
+    /// position error. Surfaces a still-finalizing producer as [`TypeResolution::Placeholder`]
+    /// so a type consumer parks on it (rather than bootstrapping off the value-side lookup).
     pub fn resolve_type_with_chain(
         &self,
         name: &str,
         chain: Option<&LexicalFrame>,
-    ) -> Option<&'a crate::machine::model::types::KType<'a>> {
+    ) -> Option<TypeResolution<'a>> {
         // Builtins are unshadowable, so a builtin type is authoritative: consult the
         // immutable root in one hop and return it without walking the user chain. The
         // `idx == 0` gate keeps this to genuine builtins, so a synthetic root-position

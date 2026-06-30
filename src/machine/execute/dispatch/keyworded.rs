@@ -75,8 +75,8 @@ pub(super) fn initial<'step>(
         .expect("dispatching slot must have an active chain")
         .index;
     let bind_index = BindingIndex::value(lex_index);
-    if let Some(name) = resolved.placeholder_name.as_ref() {
-        if let Err(e) = scope.install_placeholder(name.clone(), NodeId(idx), bind_index) {
+    if let Some((name, kind)) = resolved.placeholder.as_ref() {
+        if let Err(e) = scope.install_placeholder(name.clone(), NodeId(idx), bind_index, *kind) {
             return Outcome::Done(Err(e));
         }
     }

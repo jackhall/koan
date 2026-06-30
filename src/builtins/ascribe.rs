@@ -9,7 +9,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
-use crate::machine::{KError, KErrorKind, Scope};
+use crate::machine::{KError, KErrorKind, Scope, TypeResolution};
 
 use super::{arg, kw, sig};
 
@@ -48,7 +48,10 @@ pub fn body_opaque<'a>(
     {
         let sig_bindings = s.decl_scope().bindings();
         for name in abstract_type_names_of(s.decl_scope()) {
-            let kt = match sig_bindings.lookup_type(&name, None) {
+            let kt = match sig_bindings
+                .lookup_type(&name, None)
+                .and_then(TypeResolution::finalized)
+            {
                 Some(KType::SetRef { set, index })
                     if set.member(*index).kind == KKind::TypeConstructor =>
                 {

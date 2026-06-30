@@ -27,7 +27,9 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::{Carried, CarriedFamily, KObject};
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Resolution, Scope, TraceFrame};
+use crate::machine::{
+    BindingIndex, FrameSet, KError, KErrorKind, Scope, TraceFrame, TypeResolution,
+};
 use crate::source::Spanned;
 use crate::witnessed::Witnessed;
 
@@ -132,49 +134,43 @@ pub fn body<'a>(
         match repr_kt {
             KType::Unresolved(te) => {
                 let te = te.clone();
-                if let Some(kt) = ctx
+                match ctx
                     .scope
                     .resolve_type_with_chain(te.as_str(), chain.as_deref())
                 {
-                    return Action::done_witnessed(finalize_newtype(
+                    Some(TypeResolution::Type(kt)) => Action::done_witnessed(finalize_newtype(
                         ctx.scope,
                         name,
                         kt.clone(),
                         bind_index,
-                    ));
-                }
-                // The repr names a type still finalizing in this scheduler: park on its producer
-                // and re-resolve at dep-finish. A name with no in-flight producer is a genuine
-                // forward/unknown reference.
-                if let Resolution::Placeholder(producer) =
-                    ctx.scope.resolve_with_chain(te.as_str(), chain.as_deref())
-                {
-                    let chain_for_finish = chain.clone();
-                    let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
-                        match fctx
+                    )),
+                    // The repr names a type still finalizing in this scheduler: park on its
+                    // producer and re-resolve at dep-finish.
+                    Some(TypeResolution::Placeholder(producer)) => {
+                        let chain_for_finish = chain.clone();
+                        let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| match fctx
                             .scope
                             .resolve_type_with_chain(te.as_str(), chain_for_finish.as_deref())
                         {
-                            Some(kt) => Action::done_witnessed(finalize_newtype(
-                                fctx.scope,
-                                name,
-                                kt.clone(),
-                                bind_index,
-                            )),
-                            None => Action::Done(Err(KError::new(KErrorKind::ShapeError(
-                                format!("NEWTYPE repr slot = unknown type name `{}`", te.as_str(),),
-                            )))),
+                            Some(TypeResolution::Type(kt)) => Action::done_witnessed(
+                                finalize_newtype(fctx.scope, name, kt.clone(), bind_index),
+                            ),
+                            _ => Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                                "NEWTYPE repr slot = unknown type name `{}`",
+                                te.as_str()
+                            ))))),
+                        });
+                        Action::AwaitDeps {
+                            deps: vec![Dep::Existing(producer)],
+                            finish,
                         }
-                    });
-                    return Action::AwaitDeps {
-                        deps: vec![Dep::Existing(producer)],
-                        finish,
-                    };
+                    }
+                    // A name with no in-flight producer is a genuine forward/unknown reference.
+                    None => Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                        "NEWTYPE repr slot = unknown type name `{}`",
+                        te.as_str(),
+                    ))))),
                 }
-                Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "NEWTYPE repr slot = unknown type name `{}`",
-                    te.as_str(),
-                )))))
             }
             other => {
                 Action::done_witnessed(finalize_newtype(ctx.scope, name, other.clone(), bind_index))
@@ -286,7 +282,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         )
     };
     use crate::builtins::register_builtin_full;
-    let binder = super::type_part_binder_name;
+    let binder: crate::machine::core::kfunction::BinderNameFn = super::type_part_binder_name;
+    let binder_kind = crate::machine::BindKind::Type;
     // Scalar / bare-leaf repr (`= Number`, `= Foo`) and non-record sigil repr (`= :(LIST OF T)`)
     // share `body`; the record repr (`= :{…}`) routes to `body_record_repr`.
     register_builtin_full(
@@ -294,7 +291,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "NEWTYPE",
         scalar_sig(),
         body,
-        Some(binder),
+        Some((binder, binder_kind)),
         None,
         false,
     );
@@ -303,7 +300,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "NEWTYPE",
         sigil_sig(),
         body,
-        Some(binder),
+        Some((binder, binder_kind)),
         None,
         false,
     );
@@ -312,7 +309,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "NEWTYPE",
         record_sig(),
         body_record_repr,
-        Some(binder),
+        Some((binder, binder_kind)),
         None,
         false,
     );

@@ -69,7 +69,12 @@ fn try_register_type_clears_matching_placeholder() {
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = region.alloc_ktype(KType::Number);
     bindings
-        .try_install_placeholder("Bar".to_string(), NodeId(7), BindingIndex::BUILTIN)
+        .try_install_placeholder(
+            "Bar".to_string(),
+            NodeId(7),
+            BindingIndex::BUILTIN,
+            BindKind::Type,
+        )
         .expect("placeholder install should succeed on fresh bindings");
     assert!(bindings.placeholders().contains_key("Bar"));
     bindings

@@ -11,7 +11,7 @@
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
-use crate::machine::{Scope, TraceFrame};
+use crate::machine::{Scope, TraceFrame, TypeResolution};
 
 use super::{arg, kw, sig};
 
@@ -40,7 +40,9 @@ pub fn body<'a>(
         // module value.
         child_scope.close();
         // Idempotent-finalize guard: a re-bound name short-circuits.
-        if let Some(kt) = fctx.scope.bindings().lookup_type(&name_for_finish, None) {
+        if let Some(TypeResolution::Type(kt)) =
+            fctx.scope.bindings().lookup_type(&name_for_finish, None)
+        {
             let carrier = fctx.scope.brand().alloc_ktype_witnessed(kt.clone());
             return Action::DoneWitnessed(fctx.scope.seal_module(carrier));
         }
@@ -100,7 +102,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "MODULE",
         signature,
         body,
-        Some(super::type_part_binder_name),
+        Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
         None,
         false,
     );

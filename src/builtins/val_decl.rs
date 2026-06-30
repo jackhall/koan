@@ -181,7 +181,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "VAL",
         signature,
         body,
-        Some(binder_name),
+        // VAL records a value-slot's declared type into the SIG decl-scope's `types` map
+        // (a type-language write), so its forward-reference placeholder is `Type`-kind.
+        Some((binder_name, crate::machine::BindKind::Type)),
         None,
         false,
     );

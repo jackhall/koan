@@ -168,12 +168,17 @@ fn capitalize_identifier(name: &str) -> String {
     }
 }
 
-/// Dispatch-time placeholder extractor for LET. Returns `None` on shape mismatch
+/// Dispatch-time placeholder extractor for the value-binding `LET <name> = …` overload:
+/// matches only an `Identifier` name part. The type-alias overload (`LET <Type> = …`) uses
+/// the shared [`type_part_binder_name`](crate::builtins::type_part_binder_name) instead, so
+/// each overload's extractor matches exactly its own name-part kind. This keeps the
+/// submit-time binder pick ([`extract_binder_install`]) selecting the correctly-classified
+/// overload (the value extractor misses a `Type` part, and vice versa), so the placeholder is
+/// tagged `Value` xor `Type` to match where the bind lands. Returns `None` on shape mismatch
 /// (the body surfaces a structured error later).
 pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     match &expr.parts.get(1)?.value {
         ExpressionPart::Identifier(s) => Some(s.clone()),
-        ExpressionPart::Type(t) => Some(t.render()),
         _ => None,
     }
 }
@@ -206,7 +211,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "LET",
         identifier_sig(),
         body,
-        Some(binder_name),
+        Some((binder_name, crate::machine::BindKind::Value)),
         None,
         false,
     );
@@ -215,7 +220,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "LET",
         type_sig(),
         body,
-        Some(binder_name),
+        Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
         None,
         false,
     );

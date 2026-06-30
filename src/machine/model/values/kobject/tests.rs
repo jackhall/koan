@@ -220,8 +220,8 @@ fn wrapped_ktype_reports_clone_of_type_id() {
 
 #[test]
 fn wrapped_summarize_renders_surface_form() {
-    use crate::machine::model::types::Parseable;
     use crate::machine::core::FrameStorage;
+    use crate::machine::model::types::Parseable;
     let storage = FrameStorage::run_root();
     let region = storage.brand();
     let inner = region.alloc_object(KObject::Number(3.0));

@@ -55,7 +55,12 @@ fn resolve_name_part_parked() {
         scope,
     );
     scope
-        .install_placeholder("fwd".to_string(), producer, BindingIndex::BUILTIN)
+        .install_placeholder(
+            "fwd".to_string(),
+            producer,
+            BindingIndex::BUILTIN,
+            crate::machine::BindKind::Value,
+        )
         .unwrap();
     let part = ExpressionPart::Identifier("fwd".to_string());
     match resolve_name_part(scope, &part, sched.scheduler(), None, None) {
@@ -89,7 +94,12 @@ fn resolve_name_part_self_park_is_cycle() {
         scope,
     );
     scope
-        .install_placeholder("self_ref".to_string(), slot, BindingIndex::BUILTIN)
+        .install_placeholder(
+            "self_ref".to_string(),
+            slot,
+            BindingIndex::BUILTIN,
+            crate::machine::BindKind::Value,
+        )
         .unwrap();
     let part = ExpressionPart::Identifier("self_ref".to_string());
     match resolve_name_part(scope, &part, sched.scheduler(), None, Some(slot)) {

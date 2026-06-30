@@ -829,4 +829,3 @@ pub struct OptionOf<T>(PhantomData<T>);
 unsafe impl<T: Reattachable> Reattachable for OptionOf<T> {
     type At<'r> = Option<T::At<'r>>;
 }
-
