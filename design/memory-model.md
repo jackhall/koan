@@ -157,7 +157,7 @@ private `retype<A, B>` — a `transmute_copy` through a `ManuallyDrop` (plain `t
 two opaque GAT projections share a size), guarded by a `const` size assert that restores the check
 `transmute` would emit — is the only place a
 `T::At<'a> → T::At<'b>` lifetime retype is written; `Erased::erase` / `Erased::reattach`, the
-witness-borrowed `reattach_with` / `reattach_ref_with`, the `Witnessed` accessors, and the region's
+witness-borrowed `reattach_ref_with`, the `Witnessed` accessors, and the region's
 store-side `erase_to_static` all route it. The carrier families live beside their own
 types as declarative `unsafe impl Reattachable` instantiations — `ContractFamily` for the
 node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` /
@@ -240,9 +240,10 @@ the consumer or an ancestor already pins.
 The per-call frame's seed binds (MATCH / TRY `it`, `KFunction::invoke` params, the deferred-return-type
 elaboration) open the child scope at a `for<'b>` brand through
 [`CallFrame::with_scope`](../src/machine/core/arena.rs) and **relocate** their caller value into the
-opened scope's own region through the substrate before binding it — the `it`-bind and param-bind via a
-shortening `reattach_with` witnessed by the frame's own region, the deferred return re-homing its
-elaborated `KType` into the captured-scope region — so the seed fabricates no free `&'a`. The store
+opened scope's own region through the substrate before binding it — the `it`-bind and param-bind via
+the erasing `alloc_object` (which forgets the caller lifetime and re-homes the value at the frame
+region), the deferred return re-homing its elaborated `KType` into the captured-scope region — so the
+seed fabricates no free `&'a`. The store
 side carries no `unsafe` at all: forgetting a scope reference's lifetime for storage routes the safe
 `erase_to_static`, and a region-resident holder's embedded `&Scope` re-anchors with the whole value on
 read, both deferring every fabrication hazard to the witnessed retype.

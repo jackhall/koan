@@ -16,7 +16,6 @@ pub fn body<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_held, arg_object, arg_type, Action};
     use crate::machine::model::values::Held;
-    use crate::machine::model::Carried;
 
     let done_err = |e: KError| Action::Done(Err(e));
     let bind_index = ctx.bind_index();
@@ -145,7 +144,10 @@ pub fn body<'a>(
         if let Some(carrier) = ctx.arg_carrier("value") {
             ctx.scope.fold_reach(carrier.witness());
         }
-        Action::Done(Ok(Carried::Object(allocated)))
+        // The bound value lives in this scope's region with its foreign reach deposited above, so the
+        // terminal is born witnessed by this scope's home frame (the asserted-co-location read path)
+        // rather than handed out as a bare `Done` for the finalize forward to wrap.
+        Action::DoneWitnessed(ctx.scope.resident_object_carrier(allocated))
     }
 }
 

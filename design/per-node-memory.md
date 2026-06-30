@@ -76,13 +76,12 @@ closure is the single allocation. A value embedding an AST — a quoted expressi
 variant — `ExpressionPart::Spliced(Carried)`, the per-call resolved sub-result the scheduler folds
 into a parent's parts. Raw, unevaluated AST is *splice-free*: it holds no `Spliced` part, so it binds
 no live borrow and its `'a` is a phantom. `KExpression` is therefore a [layout-invariant carrier
-family](#the-core-erase-store-witness-reattach) (the splice rides the layout-invariant `Carried`),
-and an AST-embedding object yokes via `KoanRegion::alloc_witnessed_embedding`: it moves the owned
-splice-free expression into the `yoke` closure, re-anchors its phantom lifetime onto the brand through
-the safe-signature `reattach_with`, and allocs the object natively at the brand. Co-location is
-enforced by the `for<'b>` brand exactly as for any leaf; the embedded AST contributes no region of its
-own, and the sole residual obligation — that the embed is splice-free — is a `debug_assert`, not a
-witness the type encodes.
+family](#the-core-erase-store-witness-reattach) (the splice rides the layout-invariant `Carried`), so
+a splice-free embed contributes no foreign region: the AST-embedding object is **region-pure** and
+allocs through the witnessed object surface (`alloc_object_witnessed`), born under the empty
+(foreign-reach-only) set exactly as any region-pure leaf. Co-location is enforced by the `for<'b>`
+brand; the embedded AST contributes no region of its own, and the sole residual obligation — that the
+embed is splice-free — is a `debug_assert` at the `QUOTE` site, not a witness the type encodes.
 
 What `yoke` cannot mint composes through `merge`: an aggregate folds its *element carriers* (deps
 arriving witnessed from the lift); a closure folds the captured-scope operand minted from its frame
@@ -113,9 +112,12 @@ witness, only with the empty reach a region-pure value genuinely has; that empti
 within-step transient, the producing frame folded in at close ([`reseal_under`](../src/witnessed.rs))
 before the carrier is stored. `Witnessed::new` keeps **no** blessed home: its surviving callers — the
 bare-[`Done`](../src/machine/core/kfunction/action.rs)
-[`finalize_terminal`](../src/machine/execute/finalize.rs) forward and the type / region operand
-bundles — are transitional, asserting in prose the co-location the `yoke` / `merge` / `resident`
-constructors enforce structurally.
+[`finalize_terminal`](../src/machine/execute/finalize.rs) forward, the type / region operand bundles,
+and [`Scope::resident_object_carrier`](../src/machine/core/scope.rs) (the read that wraps an
+*already-built* region-resident object — a bound name, an `ATTR` value member, a defined FN object —
+which pre-exists its carrier, so it cannot be born inside an alloc brand and a deep clone would drop a
+closure's captured reach) — are transitional, asserting in prose the co-location the `yoke` / `merge` /
+`resident` constructors enforce structurally.
 
 **`merge` — fold many region-resident values into one.** Generic: a value built
 from references into *two* regions cannot be bundled with one witness by `yoke`
@@ -302,9 +304,10 @@ scalar (an id, a region) where they need no live scope — so no `&Scope` rides 
 seed-side binds fold onto `open` the same way: the MATCH / TRY arm `it`-bind, the user-fn param-bind, and
 the deferred-return-type elaboration each open the child scope at the brand through
 [`CallFrame::with_scope`](../src/machine/core/arena.rs) and **relocate** their caller-`'a` value into the
-opened scope's own region through the substrate (a shortening `reattach_with` for the `it` / param binds;
-the deferred return re-homing its elaborated `KType` into the captured-scope region) before binding it —
-so the value lands at the brand and the seed fabricates no free `&'a`. With every frame-side and
+opened scope's own region through the substrate (the erasing `alloc_object`, which forgets the caller
+lifetime, for the `it` / param binds; the deferred return re-homing its elaborated `KType` into the
+captured-scope region) before binding it — so the value lands at the brand and the seed fabricates no
+free `&'a`. With every frame-side and
 seed-side read on `open`, the borrow-bounded `attach<'w>(&'w self, &'w W) -> Live<'w>` accessor is
 **callerless** — kept only for the follow-up that collapses the access surface to `open` alone.
 
@@ -331,11 +334,13 @@ nest under the rank-2 `open`: two driver accessors copy out inside the brand —
 three ride-up-stack dispatch sites resolve at the cart `'step` directly, so the transitional
 self-witnessed `Sealed::read` is gone, and the scope channel — the frame-side reads and the seed-side
 binds alike — now folds onto `open` too, leaving the borrow-bounded `attach` callerless. The witnessed
-alloc surface has since landed — region allocation hands back a foreign-reach-only
+alloc surface has landed — region allocation hands back a foreign-reach-only
 [`Witnessed`](../src/witnessed.rs) with the active frame folded in at close, and the frame builder's
-child scope is born externally-witnessed — so what the per-node-memory roadmap project below still
-tracks is migrating every remaining construction site onto it and collapsing the access surface to
-`open` alone (deleting that callerless `attach`).
+child scope is born externally-witnessed — and every object- and type-channel construction *terminal*
+builds through it, a seal folding the already-witnessed carrier's reach rather than re-anchoring a
+separately-built value, so what the per-node-memory roadmap project below still tracks is confining the
+build leaf behind a branded region handle and collapsing the access surface to `open` alone (deleting
+the callerless `attach`).
 
 ## Open work
 
@@ -359,16 +364,16 @@ alloc surface that opens this has landed: region allocation hands back a `Witnes
 set is the value's *foreign* reach, the active frame excluded and folded in only at close (the
 scope-reach seal), so a region-resident value never strong-owns its own frame — the `region → object →
 frame` cycle that would leak and defeat the `Rc::get_mut` TCO gate — and the frame builder's per-call
-child scope is born externally-witnessed, proven end-to-end on a region-pure pilot. What is left is
-breadth and enforcement: every remaining construction site migrates onto the surface, so the one
-alloc-retype left lives inside `yoke`, and then the build-at-a-brand leaf is confined behind a branded
+child scope is born externally-witnessed. Every object- and type-channel construction **terminal**
+builds through that surface, and a seal folds the already-witnessed carrier's reach via `reseal_under`
+([`Scope::seal_value`](../src/machine/core/scope.rs) / `seal_type` / `seal_module`) rather than
+re-anchoring a separately-built value — so the only bare `alloc_* -> &'a` calls are the
+build-at-a-brand leaf inside a `yoke` and the structural binds / registrations / relocations that
+never hold a terminal. What is left is **enforcement**: confining that build leaf behind a branded
 region handle, so a bare `&KoanRegion` cannot allocate at all and "always witnessed" is
 compile-enforced. (The scope-pointer collapse has already landed, leaving the borrow-bounded `attach`
-callerless for the last item to delete.) The two items carry this in sequence:
+callerless for that same item to delete.) One item carries this:
 
-- [Witness value carriers at their construction site](../roadmap/per-node-memory/witness-at-construction.md)
-  — every object- and type-channel construction folds reach via `yoke` / `merge` / `transfer_into` on
-  the witnessed alloc; the bare `alloc_* -> &'a` callers and `reattach_with` are deleted.
 - [One region handle, one access verb](../roadmap/per-node-memory/single-open-verb.md) — the build
   leaf moves behind a branded region handle (no bare-`&KoanRegion` alloc), the access surface
   collapses to `open`, and `attach` / `reattach_ref_with` / `recouple_scope` — the last retypes

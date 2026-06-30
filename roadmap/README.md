@@ -95,9 +95,10 @@ What's shipped that the open items below build on:
   green
   (see [design/per-call-region/scope-handles.md § Slot-table scope handle](../design/per-call-region/scope-handles.md#slot-table-scope-handle)).
   And [`KExpression`](../src/machine/model/ast.rs) joined the layout-invariant carrier families (its
-  lifetime borne only by a `Spliced(Carried)` part), so `QUOTE` now yokes its owned splice-free
-  expression via [`KoanRegion::alloc_witnessed_embedding`](../src/machine/core/arena.rs) — the
-  object's region co-located by the `for<'b>` brand — rather than asserting it via `Witnessed::new`.
+  lifetime borne only by a `Spliced(Carried)` part), so a splice-free quoted expression is region-pure
+  and `QUOTE` allocs it through the witnessed object surface
+  ([`KoanRegion::alloc_object_witnessed`](../src/machine/core/arena.rs)) — the object born under the
+  empty foreign-reach set — rather than asserting it via `Witnessed::new`.
   See [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Shell-over-storage frame reuse.* `CallFrame` is now a thin shell over a refcounted
   [`FrameStorage`](../src/machine/core/arena.rs) (the per-call `KoanRegion` plus the ancestor
@@ -194,9 +195,11 @@ What's shipped that the open items below build on:
   region-resident value's captured / defining / parent scope held outright as a plain `&Scope`, leaving
   the borrow-bounded `attach` callerless) and the **witnessed alloc surface** (region allocation hands
   back a foreign-reach-only `Witnessed<T, FrameSet>`, the active frame folded in at close, the frame
-  builder's child scope born externally-witnessed) have since landed too. What remains is migrating
-  every construction site onto that surface and collapsing the access verbs to `open`, tracked by the
-  [per-node-memory](per-node-memory/) project. See
+  builder's child scope born externally-witnessed) have since landed too, and every object- and
+  type-channel construction *terminal* now builds through that surface — a seal folds the
+  already-witnessed carrier's reach, the witness-borrow `reattach_with` re-anchor deleted. What remains
+  is confining the build leaf behind a branded region handle and collapsing the access verbs to `open`,
+  tracked by the [per-node-memory](per-node-memory/) project. See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -340,7 +343,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [Witness value carriers at their construction site](per-node-memory/witness-at-construction.md)
+- [One region handle, one access verb](per-node-memory/single-open-verb.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
@@ -460,16 +463,15 @@ a plain `&Scope` re-anchored with the whole value — the two scope-specialized 
 `reattach_ref` deleted, the borrow-bounded `attach` left callerless), and the **witnessed alloc
 surface** (region allocation hands back a foreign-reach-only `Witnessed<T, FrameSet>` — the active
 frame excluded, folded in at close, so no `region → object → frame` cycle — the frame builder's child
-scope born externally-witnessed, proven on a region-pure pilot). The design is captured in
+scope born externally-witnessed, proven on a region-pure pilot), and the **construction-terminal
+migration** (every object- and type-channel construction terminal born witnessed through that surface,
+a seal folding the already-witnessed carrier's reach via `reseal_under`, with the witness-borrow
+`reattach_with` and `alloc_witnessed_embedding` deleted). The design is captured in
 [design/per-node-memory.md](../design/per-node-memory.md). What remains carries the same goal to its
-end — an object allocated in a region is **always witnessed**: every remaining construction site
-migrates onto the surface so the one alloc-retype lives inside `yoke`, then the build leaf is confined
-behind a branded region handle so a bare `&KoanRegion` cannot allocate — compile-enforcing the model.
-The two items carry it in sequence:
+end — an object allocated in a region is **always witnessed**: the build leaf is confined behind a
+branded region handle so a bare `&KoanRegion` cannot allocate at all, compile-enforcing the model. One
+item carries it:
 
-- [Witness value carriers at their construction site](per-node-memory/witness-at-construction.md) —
-  every object- and type-channel construction folds reach via `yoke` / `merge` / `transfer_into` on
-  the witnessed alloc; the bare `alloc_* -> &'a` callers and `reattach_with` are deleted.
 - [One region handle, one access verb](per-node-memory/single-open-verb.md) — the build leaf moves
   behind a branded region handle (no bare-`&KoanRegion` alloc), the access surface collapses to
   `open`, and `attach` / `reattach_ref_with` / `recouple_scope` are deleted.

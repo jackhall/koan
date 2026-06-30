@@ -4,7 +4,8 @@ Confine the build-at-a-brand leaf behind a branded region handle — so a bare `
 `alloc` and "every object is witnessed" is compile-enforced — and collapse the access surface to
 `open`, deleting the last retypes outside Witnessed/Sealed.
 
-**Problem.** After [every construction is witnessed](witness-at-construction.md), the build leaf
+**Problem.** Now that every object- and type-channel construction terminal is
+[born witnessed](../../design/per-node-memory.md), the build leaf
 `region.alloc_object(…) -> &'b` is still reachable on any `&KoanRegion` — the bare reference scopes
 expose — even though its only legitimate callers are inside a `yoke` brand. Nothing compile-prevents a
 fresh bare-`&'a` alloc from reopening the hole. Two read-side retypes also survive outside the
@@ -40,9 +41,6 @@ parent / root through the same `reattach_ref_with`.
 
 ## Dependencies
 
-**Requires:**
-
-- [Witness value carriers at their construction site](witness-at-construction.md) — the bare `&'a`
-  alloc callers must all be witnessed before the leaf can be confined behind the handle.
+**Requires:** none — its construction-witnessing prerequisite has shipped.
 
 **Unblocks:** none.
