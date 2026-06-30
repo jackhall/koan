@@ -41,8 +41,8 @@ reattachable!(RegionRefFamily => RegionBrand<'r>);
 /// `Reattachable` family for the step's **dep slice** — the producer terminals read out, erased, and
 /// zipped into the step `open` so they arrive at the brand `'b` alongside the continuation. This is
 /// the only sound route to the unbounded `'b`: a value opened in-band rides the audited
-/// [`Erased::reattach`](crate::witnessed) the open already owns, where a witness-bounded reattach
-/// (the `reattach_ref_with` shape) cannot — capping the produced lifetime at the witness borrow, it would demand the
+/// [`Erased::reattach`](crate::witnessed) the open already owns, where a witness-*borrow*-bounded
+/// reattach cannot — capping the produced lifetime at the witness borrow, it would demand the
 /// step pin outlive a *universally* quantified `'b`, i.e. be `'static`. The held step witness keeps the
 /// sources alive across the open; the brand confines the values to it. Each cell is a
 /// [`DepTerminal`](super::outcome::DepTerminal) — the resolved value plus its `reach` set — so the

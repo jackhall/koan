@@ -50,7 +50,7 @@ pub(crate) fn resolve_arm_contract<'a>(
 /// tail-replacing into the arm body's last statement (the harness parks on the leading statements
 /// as owned deps, running them before the tail continues) carrying `contract`.
 pub(crate) fn arm_tail<'a>(
-    root: &Scope<'a>,
+    root: &'a Scope<'a>,
     outer_frame: Option<Rc<crate::machine::core::FrameStorage>>,
     it_value: crate::machine::model::KObject<'a>,
     body_expr: KExpression<'a>,

@@ -376,7 +376,7 @@ impl<'run> KoanRuntime<'run> {
     /// workload. The scheduler owns the reserve *slot* (rotation, lifecycle); this owns the
     /// `CallFrame` minting/reset, which names the run-lived `Scope`. `try_reset_for_tail`'s
     /// `Rc::get_mut` gate is the "no escape" uniqueness check (a cloned `Rc` forecloses reuse).
-    fn acquire_tail_frame(&mut self, outer: &Scope<'_>) -> Rc<CallFrame> {
+    fn acquire_tail_frame<'a>(&mut self, outer: &'a Scope<'a>) -> Rc<CallFrame> {
         if let Some(mut reserve) = self.take_active_reserve() {
             if reserve.try_reset_for_tail(outer) {
                 self.note_tail_reuse();

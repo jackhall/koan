@@ -213,6 +213,14 @@ reattachable! {
 pub struct RegionTypeFamily;
 reattachable!(RegionTypeFamily => (RegionBrand<'r>, &'r KType<'r>));
 
+/// `Reattachable` family for a **reference** to a [`KoanRegion`] — `&'r KoanRegion`, a thin pointer
+/// (`KoanRegion` is lifetime-free, so the reference is layout-invariant in `'r`). It lets the fresh
+/// per-call region erase and re-brand at the construction-door brand alongside the foreign parent
+/// scope, so [`build_frame_child_witnessed`] can present the region as a `RegionBrand<'b>` at the very
+/// `'b` the parent re-anchors to — the unification the per-call frame child needs.
+pub struct RegionRefFamily;
+reattachable!(RegionRefFamily => &'r KoanRegion);
+
 // Per-family `Stored` policy: which sub-arena each family lands in, plus `KObject`'s allocation
 // address side-table hook. No stored family carries a self-targeting `Rc<FrameStorage>` — a stored
 // closure / future / module is a bare borrow into its defining region, kept alive by its carrier's
@@ -347,15 +355,15 @@ impl Region<KoanStorageProfile> {
 impl CallFrame {
     /// Test alias for [`CallFrame::new`], kept so the many frame-construction tests share one
     /// construction name distinct from production call sites.
-    pub(crate) fn new_test(
-        outer: &Scope<'_>,
+    pub(crate) fn new_test<'a>(
+        outer: &'a Scope<'a>,
         outer_frame: Option<Rc<FrameStorage>>,
     ) -> Rc<CallFrame> {
         CallFrame::new(outer, outer_frame)
     }
 
     /// Test alias for [`CallFrame::try_reset_for_tail`].
-    pub(crate) fn try_reset_for_tail_test(self: &mut Rc<Self>, new_outer: &Scope<'_>) -> bool {
+    pub(crate) fn try_reset_for_tail_test<'a>(self: &mut Rc<Self>, new_outer: &'a Scope<'a>) -> bool {
         self.try_reset_for_tail(new_outer)
     }
 }
@@ -550,6 +558,35 @@ unsafe impl MergeWitness for FrameSet {
     }
 }
 
+/// Build a per-call frame's child scope **witnessed**, sealing it to the externally-witnessed
+/// [`SealedExtern<ScopeRefFamily>`] the [`CallFrame`] holds — the construction door that re-anchors the
+/// longer-lived lexical parent into the fresh region, with no retype outside the witnessed substrate.
+///
+/// The fresh region (as [`RegionRefFamily`]) and the foreign parent (as [`ScopeRefFamily`]) are erased
+/// and [`zip`](SealedExtern::zip)ped, then opened at **one** `for<'b>` brand against `storage` — the
+/// fresh frame's `Rc`, which pins both the region it owns and, via its `outer` chain, the parent. Inside
+/// the brand the real invariant `Scope<'b>` is built coupling the parent at `'b` (its `root`
+/// falling out as `outer.root`), allocated through the brand's [`RegionBrand`], and erased witness-less.
+/// `Scope`'s invariance is honoured by construction — the only retypes are the substrate's audited brand
+/// ([`SealedExtern::open`]) and store ([`Region::alloc`]) — so the per-call child stops being a re-anchor
+/// audited outside Witnessed/Sealed. The earlier single-`with_branded_ref`-per-ref attempt branded the
+/// two at *independent* `'b`s, which invariance rejects; one [`zip`](SealedExtern::zip)ped `open`
+/// unifies them.
+pub(crate) fn build_frame_child_witnessed<'p>(
+    outer: &'p Scope<'p>,
+    storage: &Rc<FrameStorage>,
+) -> SealedExtern<ScopeRefFamily> {
+    let region = SealedExtern::<RegionRefFamily>::erase(storage.region());
+    let parent = SealedExtern::<ScopeRefFamily>::erase(outer);
+    let region_owner = Rc::downgrade(storage);
+    region.zip(parent).open(storage, |(region_b, outer_b)| {
+        // `region_b: &'b KoanRegion`, `outer_b: &'b Scope<'b>` — the region and parent unified at the
+        // one brand. The child stores both by plain coercion (no retype of its own).
+        let child = Scope::child_for_frame_witnessed(outer_b, RegionBrand(region_b), region_owner);
+        region_b.alloc::<Scope<'static>, _>(child, |live| SealedExtern::<ScopeRefFamily>::erase(live))
+    })
+}
+
 /// One user-fn call's allocation frame: a thin shell over a refcounted [`FrameStorage`]. `Rc`-pinned
 /// so the scheduler manages the frame by `Rc<CallFrame>`; an escaping closure extends only the
 /// *storage* (via [`Self::storage_rc`]), not the shell, so tail reuse can reset the shell's storage
@@ -583,27 +620,21 @@ impl CallFrame {
     /// `outer_frame` must hold the parent frame's `FrameStorage` Rc when the parent is per-call;
     /// `None` when the parent is run-root — a dispatched frame strong-owns no ancestor, so an
     /// escaping value kept alive by a consumer scope's reach-set forms no back-edge.
-    pub fn new(outer: &Scope<'_>, outer_frame: Option<Rc<FrameStorage>>) -> Rc<CallFrame> {
+    pub fn new<'p>(outer: &'p Scope<'p>, outer_frame: Option<Rc<FrameStorage>>) -> Rc<CallFrame> {
         // The region is born inside its own `Rc<FrameStorage>`, heap-pinned from this point on, so
-        // the child-scope pointer below stays valid as the storage Rc moves into the shell.
+        // the erased child-scope pointer below stays valid as the storage Rc moves into the shell.
         let storage = Rc::new(FrameStorage {
             region: KoanRegion::new(),
             outer: outer_frame,
         });
-        // The child is built from the heap-pinned `storage` handle — no `'static` claim and no
-        // pointer fabrication. It derives both the region borrow and the owning `Weak` from
-        // `storage`; `outer` (a longer-lived ancestor) is brand-shortened by `child_for_frame`, so
-        // the two need no common lifetime and the outer link needs no separate scope re-anchor.
-        let child = Scope::child_for_frame(outer, &storage);
-        // The child scope is born externally-witnessed with no transient `&'a` minted: the
-        // brand-confined `alloc` stores it and hands the freshly-stored `&'b Scope<'b>` to the closure
-        // at the brand, which erases it straight into a `SealedExtern`. The local borrow of `storage`
-        // ends here (the carrier holds a `&'static` reference, not a borrow of `storage`), so
-        // `storage` moves into the shell below; the `KoanRegion` stays at a fixed heap address behind
-        // the Rc, keeping the erased reference valid.
-        let scope_carrier = storage
-            .region()
-            .alloc::<Scope<'static>, _>(child, |live| SealedExtern::<ScopeRefFamily>::erase(live));
+        // The child scope is born externally-witnessed through the construction door: it brands the
+        // fresh region and the longer-lived lexical parent at one `for<'b>`, builds the real invariant
+        // `Scope<'b>` coupling them, allocs it through the brand, and erases it straight into a
+        // `SealedExtern` — no transient `&'a` minted, no re-anchor outside the substrate. The local
+        // borrow of `storage` ends here (the carrier holds a `&'static` reference, not a borrow of
+        // `storage`), so `storage` moves into the shell below; the `KoanRegion` stays at a fixed heap
+        // address behind the Rc, keeping the erased reference valid.
+        let scope_carrier = build_frame_child_witnessed(outer, &storage);
         Rc::new(CallFrame {
             storage,
             scope_carrier: Some(scope_carrier),
@@ -715,7 +746,7 @@ impl CallFrame {
     /// while the shell reuses. Returns `false` (untouched) only when `Rc::get_mut` fails — another
     /// live `Rc<CallFrame>` (a shell clone, never an escape) foreclosing in-place reuse. See
     /// [per-call-region/frames.md § TCO frame reuse](../../../design/per-call-region/frames.md#tco-frame-reuse).
-    pub fn try_reset_for_tail(self: &mut Rc<Self>, new_outer: &Scope<'_>) -> bool {
+    pub fn try_reset_for_tail<'p>(self: &mut Rc<Self>, new_outer: &'p Scope<'p>) -> bool {
         if Rc::get_mut(self).is_none() {
             return false;
         }
@@ -725,14 +756,10 @@ impl CallFrame {
             region: KoanRegion::new(),
             outer: None,
         });
-        // The child is built from the heap-pinned `storage` handle (region borrow + owning `Weak`),
-        // with `new_outer` brand-shortened by `child_for_frame` (no separate re-anchor on the outer link).
-        let child = Scope::child_for_frame(new_outer, &storage);
-        // Born externally-witnessed at the brand — the brand-confined `alloc` erases the freshly-stored
-        // child scope into a `SealedExtern` with no transient `&'a` minted.
-        let scope_carrier = storage
-            .region()
-            .alloc::<Scope<'static>, _>(child, |live| SealedExtern::<ScopeRefFamily>::erase(live));
+        // Born externally-witnessed through the construction door: it brands the fresh region and
+        // `new_outer` at one `for<'b>`, builds the invariant `Scope<'b>` coupling them, and erases the
+        // freshly-stored child scope into a `SealedExtern` with no transient `&'a` minted.
+        let scope_carrier = build_frame_child_witnessed(new_outer, &storage);
         // The local borrow of `storage` ends above, so it can move into the shell.
         let this = Rc::get_mut(self).expect("just-verified unique above");
         // Drops the old storage (and its region) unless an escapee still holds it.

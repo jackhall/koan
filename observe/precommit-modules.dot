@@ -558,14 +558,12 @@ digraph {
     "koan::machine::core::scope" -> "koan::machine::core::lexical_frame" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::pending" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::scope_id" [label="uses", style="dashed"];
-    "koan::machine::core::scope" -> "koan::machine::core::scope_ptr" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::core::scope_id" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::scope_ptr" -> "koan::machine::core::scope" [label="uses", style="dashed"];
-    "koan::machine::core::scope_ptr" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::machine::core::scope_ptr" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::ambient" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::ambient" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];

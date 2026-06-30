@@ -13,7 +13,6 @@ use super::kerror::{KError, KErrorKind};
 use super::lexical_frame::LexicalFrame;
 use super::pending::PendingQueue;
 use super::scope_id::ScopeId;
-use super::scope_ptr::recouple_scope;
 use crate::machine::core::kfunction::{KFunction, NodeId};
 use crate::machine::model::types::Record;
 use crate::machine::model::values::{ArgValue, Carried, CarriedFamily, KObject};
@@ -48,18 +47,18 @@ impl<'a> KFuture<'a> {
 pub struct Scope<'a> {
     /// Lexical parent, held as a plain `&'a Scope<'a>` and read through the [`Scope::outer`]
     /// accessor (a bare field read). The reference re-anchors to `'a` together with the rest of the
-    /// `Scope` when the holder is read out of its region; at construction a per-call child whose
-    /// parent is longer-lived re-couples it to the child's region lifetime through
-    /// [`recouple_scope`](super::scope_ptr::recouple_scope), so the child needs no common lifetime
-    /// with its parent. `Scope` is invariant in `'a`, so the stored reference keeps `Scope<'a>`
-    /// invariant in `'a`.
+    /// `Scope` when the holder is read out of its region; a per-call child whose parent is
+    /// longer-lived couples it at the construction door's generative brand
+    /// ([`child_for_frame_witnessed`](Self::child_for_frame_witnessed)), so the child needs no common
+    /// lifetime with its parent. `Scope` is invariant in `'a`, so the stored reference keeps
+    /// `Scope<'a>` invariant in `'a`.
     outer: Option<&'a Scope<'a>>,
     /// Direct reference to the run-global [`ScopeKind::Root`] (builtins only, immutable), read
     /// through [`Scope::root_scope`]. `None` iff `self` is the root. Every other scope points
     /// straight at it, so a builtin lookup or the no-shadow consult reaches the root in one hop
     /// instead of walking `outer` — the root holds the builtins and never changes for a run. Held as
-    /// a plain `&'a Scope<'a>`; a per-call child re-couples the longer-lived root to its own region
-    /// lifetime at construction through [`recouple_scope`](super::scope_ptr::recouple_scope).
+    /// a plain `&'a Scope<'a>`; a per-call child's root falls out of its branded parent at the same
+    /// construction-door brand ([`child_for_frame_witnessed`](Self::child_for_frame_witnessed)).
     root: Option<&'a Scope<'a>>,
     bindings: ScopeBindings<'a>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
@@ -74,7 +73,7 @@ pub struct Scope<'a> {
     /// function's / module's region owner (the frame a consumer retains so an escaping value
     /// outlives its producer), without walking any frame chain. A [`Weak`] (the storage owns the
     /// region owns this scope — an `Rc` back-edge would leak); upgrades whenever the region is live.
-    /// Set at construction: a region-boundary scope ([`Self::run_root`], [`Self::child_for_frame`])
+    /// Set at construction: a region-boundary scope ([`Self::run_root`], [`Self::child_for_frame_witnessed`])
     /// takes its frame's storage; a same-region child inherits its parent's. Empty (`Weak::new()`)
     /// for a test scope built outside any `FrameStorage` — such scopes own no escapable region.
     region_owner: Weak<FrameStorage>,
@@ -275,7 +274,7 @@ impl<'a> Scope<'a> {
     /// `region_owner`, and its `root` handle, and takes a fresh id. The five public same-region
     /// constructors below differ only in what they pass here — the binding storage, the kind stamp,
     /// and any recursive-set membership — so the inherit-from-`outer` field set lives in one place.
-    /// (The two cross-region constructors, [`Self::run_root`] and [`Self::child_for_frame`], do not
+    /// (The two cross-region constructors, [`Self::run_root`] and [`Self::child_for_frame_witnessed`], do not
     /// route this: they set `root`/`region`/`region_owner` from a fresh frame, not from `outer`.)
     fn child_inheriting(
         outer: &'a Scope<'a>,
@@ -310,27 +309,30 @@ impl<'a> Scope<'a> {
         )
     }
 
-    /// Per-call frame child: built against a **fresh** `region` whose lifetime `'a` is shorter than
-    /// the lexical parent's `'long`. Unlike [`Self::child_under`] (same-region, single lifetime),
-    /// this takes the fresh per-call region explicitly and **re-couples** the parent and root
-    /// references to `'a` through [`recouple_scope`](super::scope_ptr::recouple_scope) — each
-    /// witnessed by its own region — so the child needs no common lifetime with its (longer-lived)
-    /// parent. That is what lets [`CallFrame::new`](super::arena::CallFrame::new) build the child at
-    /// real lifetimes with no scope-pointer fabrication. The frame `Rc` pins the real parent (via
-    /// `FrameStorage.outer`) and the run-global root, so the re-coupled references never out-claim a
-    /// live pointee.
-    pub fn child_for_frame<'long: 'a>(
-        outer: &Scope<'long>,
-        storage: &'a Rc<FrameStorage>,
+    /// Per-call frame child built **witnessed**, at the construction-door brand `'a`. The lexical
+    /// parent and the fresh region arrive *already coupled at one generative `'a`* — the door
+    /// ([`build_frame_child_witnessed`](super::arena::build_frame_child_witnessed)) brands them together
+    /// — so this constructor stores every field by **plain coercion**: `outer` is the branded parent,
+    /// `root` falls out as `outer.root`, `brand` is the branded fresh region, `region_owner` the fresh
+    /// frame's `Weak`. The longer-lived parent is content-shortened into the child's region *by the
+    /// brand*, honouring `Scope`'s invariance with **no retype** of its own — the per-call child's
+    /// construction carries no re-anchor audited outside the witnessed substrate. The door is the only
+    /// caller; the brand `'a` is un-nameable and the result erases
+    /// witness-less, so nothing at the brand escapes. The frame `Rc` pins the real parent (via
+    /// `FrameStorage.outer`) and the run-global root, so the coupled references never out-claim a live
+    /// pointee.
+    pub(crate) fn child_for_frame_witnessed(
+        outer: &'a Scope<'a>,
+        brand: RegionBrand<'a>,
+        region_owner: Weak<FrameStorage>,
     ) -> Scope<'a> {
         Scope {
-            outer: Some(recouple_scope(outer)),
-            root: outer.root.map(recouple_scope),
+            outer: Some(outer),
+            root: outer.root,
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
-            // Both the region borrow and the owning `Weak` come from the one `storage` handle.
-            brand: storage.brand(),
-            region_owner: Rc::downgrade(storage),
+            brand,
+            region_owner,
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,

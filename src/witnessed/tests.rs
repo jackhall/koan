@@ -125,19 +125,20 @@ fn read_borrow_bounded_witness_only() {
     assert_eq!(*w.read(), 7);
 }
 
-/// `reattach_ref_with`: re-anchor a reference-to-an-erased-store to a borrowed witness's lifetime —
-/// the witness-explicit transient re-anchor. Mirrors the production region-store flow: erase a borrow
-/// to the `'static` store, then re-hand a reference to it bounded by the witness pin.
+/// `with_branded_ref`: re-anchor a reference-to-an-erased-store behind the rank-2 brand and copy a
+/// scalar out — the witnessed read the deleted free-`'b` reattach is replaced by. Mirrors the
+/// production region-store flow: erase a borrow to the `'static` store, then read it back under the
+/// brand, the fabricated `'b` confined to the closure (`R` is a copied scalar that cannot name it).
 #[test]
 fn reattach_ref_to_erased_store() {
-    let frame: Rc<u32> = Rc::new(0);
     let backing = [11u32, 22, 33];
-    // Erase a borrow to the `'static` store, then re-anchor a *reference* to it under the witness —
-    // the shape the region's store-side re-anchor and the scope pointer's `recouple_scope` route.
+    // Erase a borrow to the `'static` store, then re-anchor behind the brand — the shape the region's
+    // store-side read routes. The pointee (`backing`) is kept live across the call; the brand keeps the
+    // view from escaping it.
     let stored: <RefFamily as Reattachable>::At<'static> =
         erase_to_static::<RefFamily>(&backing[0]);
-    let reref: &&u32 = reattach_ref_with::<RefFamily, _>(&stored, &frame);
-    assert_eq!(**reref, 11);
+    let value: u32 = with_branded_ref::<RefFamily, _>(&stored, |reref| **reref);
+    assert_eq!(value, 11);
 }
 
 /// Covariant carrier round-trips after the original borrow drops; the bundled witness keeps it live.
