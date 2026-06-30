@@ -130,7 +130,7 @@ fn read_borrow_bounded_witness_only() {
 /// production region-store flow: erase a borrow to the `'static` store, then read it back under the
 /// brand, the fabricated `'b` confined to the closure (`R` is a copied scalar that cannot name it).
 #[test]
-fn reattach_ref_to_erased_store() {
+fn branded_ref_reads_erased_store() {
     let backing = [11u32, 22, 33];
     // Erase a borrow to the `'static` store, then re-anchor behind the brand — the shape the region's
     // store-side read routes. The pointee (`backing`) is kept live across the call; the brand keeps the

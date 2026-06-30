@@ -112,8 +112,9 @@ because:
 The scope-pointer case — `CallFrame`, `Module`, `Signature`, `KFunction`, and a `Scope`'s
 own lexical parent each holding a pointer to a captured, defining, or parent `Scope` — holds that
 scope **outright** as a plain `&'a Scope<'a>` (a thin pointer, layout-invariant in `'a`), centralized
-through the [`ScopeFamily`](../src/machine/core/scope_ptr.rs) / `ScopeRefFamily` reattach families and
-the one re-anchor helper in [`scope_ptr.rs`](../src/machine/core/scope_ptr.rs).
+through the [`ScopeRefFamily`](../src/machine/core/scope_ptr.rs) reattach family in
+[`scope_ptr.rs`](../src/machine/core/scope_ptr.rs), with no scope-specialized re-anchor helper — the
+embedded pointer re-anchors with the holder's own whole-value retype.
 
 A region-stored holder's embedded scope reference re-anchors to the holder's `'a` as part of the
 holder's **own whole-value substrate retype**: when a `KFunction` / `Module` / `Signature` / `Scope`
@@ -121,15 +122,19 @@ is read out of its region, the embedded `&Scope` rides along in that single `Rea
 the whole value. So `KFunction::captured_scope`, `Module::child_scope`, `Signature::decl_scope`, and a
 `Scope`'s `outer` / `root` are **bare field reads** of an already-`'a` reference, not scope-specialized
 re-hands. The scope / module / function path carries **no `unsafe`** of its own — the only retype it
-routes is the substrate's single one (inside `reattach_ref_with`), shared with every other carrier;
+routes is the substrate's single [`retype`](../src/witnessed.rs), shared with every other carrier;
 there is no per-handle `NonNull` deref.
 
-At construction, a per-call child whose lexical parent / root is longer-lived (or whose source is a
-short reader borrow of a long-content scope) re-couples that reference to the child's own region
-lifetime through [`recouple_scope`](../src/machine/core/scope_ptr.rs), witnessed by the scope's own
-`region` field — so the child needs no common lifetime with its parent, and
-[`Scope::child_for_frame`](../src/machine/core/scope.rs) lets `CallFrame::new` / `try_reset_for_tail`
-build the per-call child at real (non-`'static`) lifetimes with no construction-time fabrication.
+At construction the scope reference is coupled at its target lifetime with no scope-specialized
+re-anchor verb. A same-region child stores its already-`'a` parent by plain coercion — the
+constructors take `&'a Scope<'a>`. A per-call child, whose lexical parent / root is longer-lived,
+builds through the externally-witnessed construction door
+[`build_frame_child_witnessed`](../src/machine/core/arena.rs): it brands the fresh region and the
+foreign parent at one `for<'b>` (the `zip`-combined [`SealedExtern::open`](../src/witnessed.rs) the
+run-loop step also rests on), builds the real invariant `Scope<'b>` coupling them through
+[`Scope::child_for_frame_witnessed`](../src/machine/core/scope.rs), and erases it witness-less — so
+`CallFrame::new` / `try_reset_for_tail` build the per-call child at real (non-`'static`) lifetimes with
+no construction-time fabrication and no re-anchor outside the witnessed substrate.
 
 `CallFrame`'s per-call child scope (non-generic — it backs `Rc<CallFrame>`) and a scheduler slot's
 `NodeScope::YokedChild` (a cart-ancestor block scope evicted off the lifetime-free node) additionally
@@ -138,11 +143,11 @@ carrier — a `&'static Scope` erased once on the store side through the safe
 `erase_to_static::<ScopeRefFamily>` (forgetting a reference's lifetime for storage cannot fabricate
 one). Both are read through the carrier's **rank-2** [`SealedExtern::open`](../src/witnessed.rs) (the
 frame's `with_scope`): the scope opens at a `for<'b>` brand against the frame / cart `Rc`, so the
-fabricated lifetime cannot escape the window and no scope borrow rides up a `&mut self` path. The
-borrow-bounded `SealedExtern::attach` — a `<'w, 'b: 'w, W: Witness>(&'w self, &'w W) -> &'w Scope<'b>`
-re-anchor that hands back a free content `'b` the brand cannot — is now **callerless**: every
-frame-side and seed-side read folds onto `open`, so it survives only for the follow-up cleanup that
-collapses the access surface to `open` alone.
+fabricated lifetime cannot escape the window and no scope borrow rides up a `&mut self` path.
+[`SealedExtern::open`](../src/witnessed.rs) (plus its consuming externally-witnessed twin) is the
+**single access verb**: every frame-side and seed-side read folds onto it, and the borrow-bounded
+`attach` re-anchor — a `<'w, 'b: 'w, W: Witness>(&'w self, &'w W) -> &'w Scope<'b>` that handed back a
+free content `'b` the brand cannot — is deleted.
 
 Beyond the store-side erasure and the branded scope pointers, a handful of carriers store a
 borrow-carrying *value* on a structure the borrow checker cannot lifetime-track — a scheduler
@@ -157,13 +162,13 @@ private `retype<A, B>` — a `transmute_copy` through a `ManuallyDrop` (plain `t
 two opaque GAT projections share a size), guarded by a `const` size assert that restores the check
 `transmute` would emit — is the only place a
 `T::At<'a> → T::At<'b>` lifetime retype is written; `Erased::erase` / `Erased::reattach`, the
-witness-borrowed `reattach_ref_with`, the `Witnessed` accessors, and the region's
+externally-witnessed `SealedExtern::open`, the `Witnessed` accessors, and the region's
 store-side `erase_to_static` all route it. The carrier families live beside their own
 types as declarative `unsafe impl Reattachable` instantiations — `ContractFamily` for the
 node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` /
 `ContinuationFamily` for the scheduler value (`Workload::Value`) and continuation
 (`Workload::Continuation`), `RegionRefFamily` for the consumer region the run-loop step opens its
-tail against, and `ScopeFamily` so the scope-pointer handles re-attach and the
+tail against, and `ScopeRefFamily` so the frame / node `&Scope` carriers and the
 region's `&Scope → &Scope<'static>` storage erasures route the same primitive — so `witnessed.rs`
 names no concrete Koan type and the scheduler stays workload-independent (the workload depends on
 the substrate for the machinery, not the reverse).
@@ -381,10 +386,3 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   under `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB and zero process-exit
   leaks, signing off the memory model as it stands today. The canonical
   slate list lives in [observe/miri_slate.md](../observe/miri_slate.md).
-
-## Open work
-
-The remaining per-node-memory migration — moving the residual witness-borrow read paths onto the
-`Sealed` access verbs — is tracked by the
-[per-node-memory roadmap project](../roadmap/per-node-memory/). See
-[per-node-memory.md § Open work](per-node-memory.md#open-work) for the dependency ordering.

@@ -306,7 +306,7 @@ unit tests in [arena/tests.rs](../src/machine/core/arena/tests.rs).
 
 - `erased_roundtrip`
 - `read_borrow_bounded_witness_only`
-- `reattach_ref_to_erased_store`
+- `branded_ref_reads_erased_store`
 - `covariant_roundtrip_witness_only`
 - `invariant_roundtrip_witness_only`
 - `continuation_binds_cart_coherent_value_via_map`

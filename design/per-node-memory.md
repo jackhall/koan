@@ -337,42 +337,11 @@ child scope is born externally-witnessed — and every object- and type-channel 
 builds through it, a seal folding the already-witnessed carrier's reach rather than re-anchoring a
 separately-built value. Allocation is reachable only through the branded
 [`RegionBrand`](../src/machine/core/arena.rs) handle — a bare `&KoanRegion` exposes no `alloc_*`, so
-"always witnessed" is compile-enforced for allocation.
-
-## Open work
-
-The [per-node-memory roadmap project](../roadmap/per-node-memory/) tracks the remaining migrations.
-The keystone run-loop restructure and its consuming `open`, the unified `FrameSet` set-witness, the
-production witness impls, the `transfer_into` relocation verb, the per-value frame anchor's
-removal (a stored value holds no owning `Rc` back to a region, so the allocation engine needs no
-cycle gate), the per-scope sealed reach-set with its scope-close seal (the *Transfer* section
-above), **both construction channels** — every object *and* type construction `yoke`s / `merge`s
-or seals (`seal_value` / `seal_type` / `seal_module`) its reach, the bare-arg value-embedding sites
-(`attr`, `FROM`, the literal Resolved arm) `merge` their delivered carrier, and `let` / user-fn arg /
-`USING` binds fold their carriers into the reach-set — and the **value-read migration** — the
-result-slot value reads nest under the rank-2 `Sealed::open` (a value copy-out and a borrow-free error
-probe) and the three ride-up-stack dispatch sites resolve at the cart `'step`, so the transitional
-self-witnessed `read` is deleted — have all landed (see
-[Region lifetime erasure](memory-model.md#region-lifetime-erasure)).
-
-What remains carries one goal to its end: an object allocated in a region is **always witnessed** —
-the Witnessed/Sealed wrapper covers its whole lifetime, with no bare `&'a` reattach hole. For
-*allocation* this is a type rule: every construction terminal is born witnessed (the foreign-reach
-`Witnessed<T, FrameSet>`, the active frame folded in only at close — the scope-reach seal — so a
-region-resident value never strong-owns its own frame, the `region → object → frame` cycle that would
-leak and defeat the `Rc::get_mut` TCO gate), a seal folds the carrier's reach via `reseal_under`
-([`Scope::seal_value`](../src/machine/core/scope.rs) / `seal_type` / `seal_module`), and allocation is
-reachable only through the branded [`RegionBrand`](../src/machine/core/arena.rs) handle — a bare
-`&KoanRegion` exposes no `alloc_*`. The one retype still outside Witnessed/Sealed is the
-**construction-time scope re-anchor**: a per-call child scope's lexical parent / root, content-shortened
-into the child's fresh region under `Scope`'s invariance, routed through `recouple_scope` /
-`reattach_ref_with`. Closing it — the same-region children coupling at the resident `&'a`, the
-cross-region frame child building through an externally-witnessed construction door — deletes both, and
-"always witnessed" becomes a closed type rule. One item carries this:
-
-- [One region handle, one access verb](../roadmap/per-node-memory/single-open-verb.md) — the
-  construction-time scope re-anchor folds into the substrate, both halves reducing to threading the
-  active scope **co-lifetimed** (`&'a Scope<'a>`, which it already is at its source): the same-region
-  child constructors then store it by plain coercion, and the cross-region frame child builds through an
-  externally-witnessed construction door, so `recouple_scope` and the `reattach_ref_with` it routes —
-  the last retypes outside Witnessed/Sealed — are deleted.
+"always witnessed" is compile-enforced for allocation. The construction-time scope re-anchor — a
+per-call child's longer-lived lexical parent and root, content-shortened into the child's fresh region
+under `Scope`'s invariance — is closed the same way: a same-region child stores its already-`'a` parent
+by plain coercion, and the per-call frame child builds through the externally-witnessed construction
+door [`build_frame_child_witnessed`](../src/machine/core/arena.rs), which brands the fresh region and
+the foreign parent at one `for<'b>` and erases the child witness-less. No scope re-anchor survives
+outside the witnessed substrate and the access surface is `open` alone, so "always witnessed" is a
+closed type rule.

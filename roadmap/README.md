@@ -72,11 +72,12 @@ What's shipped that the open items below build on:
   brand-shortening helpers, and the bare `reattach_ref` are deleted. `CallFrame`'s per-call child scope
   and a node's `NodeScope::YokedChild` additionally ride the substrate's externally-witnessed
   `SealedExtern<ScopeRefFamily>` carrier (a `&'static Scope` erased once through the safe
-  `erase_to_static::<ScopeRefFamily>`), read through its rank-2 `open`; the borrow-bounded `attach` is
-  now callerless. At construction `Scope::child_for_frame` re-couples the longer-lived lexical parent
-  and run-global root to the fresh per-call region's lifetime through `recouple_scope` (witnessed by
-  each scope's own region), so the per-call child builds at real lifetimes and touches no `unsafe` at
-  all. The
+  `erase_to_static::<ScopeRefFamily>`), read through its rank-2 `open` — the single access verb, with
+  the borrow-bounded `attach` deleted. At construction a same-region child stores its already-`'a`
+  parent by plain coercion, and the per-call frame child builds through an externally-witnessed
+  construction door ([`build_frame_child_witnessed`](../src/machine/core/arena.rs)), so no scope
+  re-anchor survives outside the witnessed substrate and the per-call child builds at real lifetimes,
+  touching no `unsafe` at all. The
   `unsafe impl Reattachable` obligation is discharged once through a shared `reattachable!` macro
   instead of per-carrier.
   Honest slot storage landed for per-call frame scopes: a frame scope rides its slot as a
@@ -197,9 +198,11 @@ What's shipped that the open items below build on:
   back a foreign-reach-only `Witnessed<T, FrameSet>`, the active frame folded in at close, the frame
   builder's child scope born externally-witnessed) have since landed too, and every object- and
   type-channel construction *terminal* now builds through that surface — a seal folds the
-  already-witnessed carrier's reach, the witness-borrow `reattach_with` re-anchor deleted. What remains
-  is confining the build leaf behind a branded region handle and collapsing the access verbs to `open`,
-  tracked by the [per-node-memory](per-node-memory/) project. See
+  already-witnessed carrier's reach, the witness-borrow `reattach_with` re-anchor deleted. The build
+  leaf is now confined behind a branded region handle (a bare `&KoanRegion` cannot allocate), the
+  access surface is collapsed to `open` — the borrow-bounded `attach`, the witness-borrow read path
+  (`reattach_ref_with`), and the construction-time scope re-anchor (`recouple_scope`) all deleted —
+  closing the per-node-memory project. See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -343,7 +346,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [One region handle, one access verb](per-node-memory/single-open-verb.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
@@ -430,51 +432,6 @@ foundation:
 
 - [Two-phase execution: build-time with pegged inputs, run-time resume](editor_tooling/two-phase-execution.md)
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
-
-### Per-node memory — [per-node-memory/](per-node-memory/)
-
-Grow the shipped `witnessed` carrier into a generic, Koan-free substrate for per-node
-scheduler memory — a sealed node-storage form, its access verbs, and the generic bump
-allocator — then migrate the engine's value, scope, continuation, and contract carriers
-onto it. The construction primitives (`yoke` / `merge` / `with` / `map`, the
-witness-borrow reattaches), the generic `Region<P>` bump allocator beside its carrier in
-the `witnessed` module, the opaque [`Sealed`](../src/witnessed.rs) storage form (read
-through a rank-2 `open`, result slot rerouted onto it), the run-loop step restructure and
-its consuming `open`, the region-pure / aggregate construction inversions, the
-carrier-self-building object constructions (the newtype / tagged-union constructors, `catch`, and FN
-def now build witnessed via `transfer_into` / `merge` / `yoke`, with the nominal type identity crossing
-the build brand as a non-object `RegionTypeFamily` operand), the
-per-scope sealed reach-set (a `FrameSet` on `Scope` that folds a deposited value's reach,
-omits the home frame and its lexical ancestors, and seals at scope close — `close` wired finalize-time
-and owner-routed for per-call frames, `MODULE` / `SIG`, and the run root), and the
-**carrier-delivered object embeds** (the bare-arg value-embedding sites — `attr`, `FROM`, the literal
-Resolved arm — `merge` a delivered `Sealed` carrier, and `let` / user-fn arg binds fold the bound
-value's full carrier into the reach-set), and the **type family** (every type construction terminal
-seals via `seal_value` / `seal_type` / `seal_module`, so a `KType::Module` names its child-scope reach
-on its own carrier — taking the last user off the single-frame `reached_frame` reconstruction and
-deleting both it and the per-frame `FrameStorage.retained` field) are all shipped, as is the
-**value-read migration** (the result-slot value reads nest under the rank-2 `Sealed::open` — a value
-copy-out and a borrow-free error probe — the three ride-up-stack dispatch sites resolve at the cart
-`'step`, and the transitional self-witnessed `read` is deleted) and the **scope-pointer collapse** (a
-frame's child scope, the `&mut self` submit / classify paths, the seed-side `it` / param binds, and the
-deferred-return-type elaboration now open at a `for<'b>` brand through `CallFrame::with_scope` /
-`with_node_scope`, and a region-resident value's captured / defining / parent scope is held outright as
-a plain `&Scope` re-anchored with the whole value — the two scope-specialized handles and the bare
-`reattach_ref` deleted, the borrow-bounded `attach` left callerless), and the **witnessed alloc
-surface** (region allocation hands back a foreign-reach-only `Witnessed<T, FrameSet>` — the active
-frame excluded, folded in at close, so no `region → object → frame` cycle — the frame builder's child
-scope born externally-witnessed, proven on a region-pure pilot), and the **construction-terminal
-migration** (every object- and type-channel construction terminal born witnessed through that surface,
-a seal folding the already-witnessed carrier's reach via `reseal_under`, with the witness-borrow
-`reattach_with` and `alloc_witnessed_embedding` deleted). The design is captured in
-[design/per-node-memory.md](../design/per-node-memory.md). What remains carries the same goal to its
-end — an object allocated in a region is **always witnessed**: the build leaf is confined behind a
-branded region handle so a bare `&KoanRegion` cannot allocate at all, compile-enforcing the model. One
-item carries it:
-
-- [One region handle, one access verb](per-node-memory/single-open-verb.md) — the build leaf moves
-  behind a branded region handle (no bare-`&KoanRegion` alloc), the access surface collapses to
-  `open`, and `attach` / `reattach_ref_with` / `recouple_scope` are deleted.
 
 ### Refactor — [refactor/](refactor/)
 

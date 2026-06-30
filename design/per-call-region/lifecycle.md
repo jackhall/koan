@@ -114,6 +114,6 @@ the closure's scope lives in — can never close a region↔value back-edge. The
 erases the value to `'static`, stores it, and re-anchors the store to `'a` with no redirect step. The
 engine lives generically in the `Region<W>` substrate (`src/witnessed/region.rs`), names no Koan type,
 and carries **no `unsafe`** of its own: its erase-store routes the scheduler's audited
-`erase_to_static` / `reattach_ref_with`. It stays unbypassable by construction — the substrate's
+`erase_to_static` and the single audited `retype`. It stays unbypassable by construction — the substrate's
 private `storage` bundle and that single store path mean no `Stored` impl can route around the engine.
 

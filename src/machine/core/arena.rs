@@ -218,8 +218,8 @@ reattachable!(RegionTypeFamily => (RegionBrand<'r>, &'r KType<'r>));
 /// per-call region erase and re-brand at the construction-door brand alongside the foreign parent
 /// scope, so [`build_frame_child_witnessed`] can present the region as a `RegionBrand<'b>` at the very
 /// `'b` the parent re-anchors to — the unification the per-call frame child needs.
-pub struct RegionRefFamily;
-reattachable!(RegionRefFamily => &'r KoanRegion);
+pub struct BareRegionFamily;
+reattachable!(BareRegionFamily => &'r KoanRegion);
 
 // Per-family `Stored` policy: which sub-arena each family lands in, plus `KObject`'s allocation
 // address side-table hook. No stored family carries a self-targeting `Rc<FrameStorage>` — a stored
@@ -562,7 +562,7 @@ unsafe impl MergeWitness for FrameSet {
 /// [`SealedExtern<ScopeRefFamily>`] the [`CallFrame`] holds — the construction door that re-anchors the
 /// longer-lived lexical parent into the fresh region, with no retype outside the witnessed substrate.
 ///
-/// The fresh region (as [`RegionRefFamily`]) and the foreign parent (as [`ScopeRefFamily`]) are erased
+/// The fresh region (as [`BareRegionFamily`]) and the foreign parent (as [`ScopeRefFamily`]) are erased
 /// and [`zip`](SealedExtern::zip)ped, then opened at **one** `for<'b>` brand against `storage` — the
 /// fresh frame's `Rc`, which pins both the region it owns and, via its `outer` chain, the parent. Inside
 /// the brand the real invariant `Scope<'b>` is built coupling the parent at `'b` (its `root`
@@ -576,7 +576,7 @@ pub(crate) fn build_frame_child_witnessed<'p>(
     outer: &'p Scope<'p>,
     storage: &Rc<FrameStorage>,
 ) -> SealedExtern<ScopeRefFamily> {
-    let region = SealedExtern::<RegionRefFamily>::erase(storage.region());
+    let region = SealedExtern::<BareRegionFamily>::erase(storage.region());
     let parent = SealedExtern::<ScopeRefFamily>::erase(outer);
     let region_owner = Rc::downgrade(storage);
     region.zip(parent).open(storage, |(region_b, outer_b)| {
