@@ -278,13 +278,13 @@ impl<'a> Scope<'a> {
     /// (The two cross-region constructors, [`Self::run_root`] and [`Self::child_for_frame`], do not
     /// route this: they set `root`/`region`/`region_owner` from a fresh frame, not from `outer`.)
     fn child_inheriting(
-        outer: &Scope<'a>,
+        outer: &'a Scope<'a>,
         bindings: ScopeBindings<'a>,
         kind: ScopeKind,
         recursive_set: Option<Rc<RecursiveSet<'a>>>,
     ) -> Scope<'a> {
         Scope {
-            outer: Some(recouple_scope(outer)),
+            outer: Some(outer),
             root: outer.root,
             bindings,
             out: RefCell::new(None),
@@ -301,7 +301,7 @@ impl<'a> Scope<'a> {
 
     /// `outer` is the lexical parent — for FN bodies the captured definition scope,
     /// not the call site.
-    pub fn child_under(outer: &Scope<'a>) -> Scope<'a> {
+    pub fn child_under(outer: &'a Scope<'a>) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new()),
@@ -341,7 +341,7 @@ impl<'a> Scope<'a> {
     }
 
     /// `child_under`, stamped as a SIG decl_scope.
-    pub fn child_under_sig(outer: &Scope<'a>, name: String) -> Scope<'a> {
+    pub fn child_under_sig(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new()),
@@ -352,7 +352,7 @@ impl<'a> Scope<'a> {
 
     /// `child_under`, stamped as a MODULE body (also used for the per-ascription view
     /// minted by `:|`).
-    pub fn child_under_module(outer: &Scope<'a>, name: String) -> Scope<'a> {
+    pub fn child_under_module(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new()),
@@ -365,7 +365,7 @@ impl<'a> Scope<'a> {
     /// whose members are co-declared. Members dispatch against this scope, so the elaborator
     /// threads the group (a member name lowers to `RecursiveRef`). `outer` is the lexical
     /// parent; the sealed members are mirrored up into it at the block's dep-finish.
-    pub fn child_recursive_group(outer: &Scope<'a>, set: Rc<RecursiveSet<'a>>) -> Scope<'a> {
+    pub fn child_recursive_group(outer: &'a Scope<'a>, set: Rc<RecursiveSet<'a>>) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new()),
@@ -388,7 +388,7 @@ impl<'a> Scope<'a> {
     /// `module_bindings`. Reads consult the window first then walk `outer`; writes
     /// forward to `outer`. `region` is `outer.region` so block-body allocations outlive
     /// the block (forwarded binds are sound).
-    pub fn child_transparent(outer: &Scope<'a>, module_bindings: &'a Bindings<'a>) -> Scope<'a> {
+    pub fn child_transparent(outer: &'a Scope<'a>, module_bindings: &'a Bindings<'a>) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Borrowed(module_bindings),

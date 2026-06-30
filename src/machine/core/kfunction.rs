@@ -5,7 +5,6 @@
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
-use crate::machine::core::scope_ptr::recouple_scope;
 use crate::machine::core::{KError, KErrorKind, KFuture, Scope};
 use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
 use crate::machine::model::values::{ArgValue, NamedPairs};
@@ -56,14 +55,14 @@ pub struct KFunction<'a> {
 }
 
 impl<'a> KFunction<'a> {
-    pub fn new(signature: ExpressionSignature<'a>, body: Body<'a>, captured: &Scope<'a>) -> Self {
+    pub fn new(signature: ExpressionSignature<'a>, body: Body<'a>, captured: &'a Scope<'a>) -> Self {
         Self::with_binder_name(signature, body, captured, None)
     }
 
     pub fn with_binder_name(
         signature: ExpressionSignature<'a>,
         body: Body<'a>,
-        captured: &Scope<'a>,
+        captured: &'a Scope<'a>,
         binder_name: Option<BinderNameFn>,
     ) -> Self {
         Self::with_binder_and_functor(signature, body, captured, binder_name, None, false)
@@ -72,7 +71,7 @@ impl<'a> KFunction<'a> {
     pub fn with_binder_and_functor(
         mut signature: ExpressionSignature<'a>,
         body: Body<'a>,
-        captured: &Scope<'a>,
+        captured: &'a Scope<'a>,
         binder_name: Option<BinderNameFn>,
         binder_bucket: Option<BinderBucketFn>,
         is_functor: bool,
@@ -81,8 +80,9 @@ impl<'a> KFunction<'a> {
         Self {
             signature,
             body,
-            // Re-couple the (possibly short-borrowed) capture to `'a`, witnessed by its own region.
-            captured: recouple_scope(captured),
+            // The capture is already the co-located `&'a Scope<'a>` resident — stored by plain
+            // coercion, no re-anchor.
+            captured,
             binder_name,
             binder_bucket,
             is_functor,

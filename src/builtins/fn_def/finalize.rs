@@ -198,7 +198,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
 /// deferred carrier that resolves non-admissibly later. `Anonymous` skips
 /// registration entirely — the value it returns is the function's only handle.
 pub(crate) fn finalize_fn_with_kind<'a>(
-    scope: &Scope<'a>,
+    scope: &'a Scope<'a>,
     elements: Vec<SignatureElement<'a>>,
     return_type: ReturnType<'a>,
     body_expr: KExpression<'a>,

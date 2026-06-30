@@ -507,7 +507,6 @@ digraph {
     "koan::machine::core::kerror" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::machine::core::kfunction" -> "koan::machine::core::scope_ptr" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::model::types" [label="uses", style="dashed"];

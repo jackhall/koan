@@ -166,7 +166,7 @@ pub type ActionFn = for<'a> fn(&BodyCtx<'a, '_>) -> Action<'a>;
 /// builtin's arguments as a `KObject::Record`; unevaluated args ride as `KObject::KExpression`
 /// cells.
 pub struct BodyCtx<'a, 'c> {
-    pub scope: &'c Scope<'a>,
+    pub scope: &'a Scope<'a>,
     pub frame: Option<&'c Rc<CallFrame>>,
     /// The ambient lexical chain (an `Rc`, as `current_lexical_chain` hands it out — binders read
     /// its `index` for `BindingIndex`, MATCH passes it to `resolve_type_identifier`). `None` at top level.
@@ -201,13 +201,13 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
 
 /// Wake-time context a finish receives: the slot's **own** scope (interior-mutable, with `.region`)
 /// re-projected at wake — a deferred binder `register_*`s on it here.
-pub struct FinishCtx<'a, 'c> {
-    pub scope: &'c Scope<'a>,
+pub struct FinishCtx<'a> {
+    pub scope: &'a Scope<'a>,
 }
 
 /// A `AwaitDeps` finish: re-entered at wake with the resolved dep values, yielding another `Action` the
 /// harness recurses into. Reads only a `FinishCtx`, never the scheduler — exec's continuation pattern.
-pub type AwaitContinue<'a> = Box<dyn FnOnce(&FinishCtx<'a, '_>, &[Carried<'a>]) -> Action<'a> + 'a>;
+pub type AwaitContinue<'a> = Box<dyn FnOnce(&FinishCtx<'a>, &[Carried<'a>]) -> Action<'a> + 'a>;
 
 /// The watched value as a `Catch` finish receives it on success: the value **relocated** into the
 /// consumer region (for a finish that reads it — TRY-WITH's `it` bind) plus the watched producer's own
@@ -221,7 +221,7 @@ pub struct CatchOk<'a> {
 
 /// A `Catch` finish: re-entered with the watched slot's [`CatchOk`] (or error), yielding a `Action`.
 pub type CatchContinue<'a> =
-    Box<dyn FnOnce(&FinishCtx<'a, '_>, Result<CatchOk<'a>, KError>) -> Action<'a> + 'a>;
+    Box<dyn FnOnce(&FinishCtx<'a>, Result<CatchOk<'a>, KError>) -> Action<'a> + 'a>;
 
 /// What happens next for a slot — the four shapes the builtin survey reduced everything to.
 pub enum Action<'a> {
