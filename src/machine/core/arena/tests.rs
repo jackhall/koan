@@ -526,3 +526,74 @@ fn fold_foreign_omits_the_home_frame_and_keeps_foreign_reach() {
         "with no home frame to omit, the full witness folds in",
     );
 }
+
+/// The brand-confined [`Region::alloc`] engine hands the freshly-stored value to its closure at a
+/// `for<'b>` brand and lets only the erased carrier escape (an empty-witnessed [`Witnessed`], no
+/// `'b`); a sibling alloc into the same region after the store coexists under tree borrows — the
+/// closure-surface twin of [`region_alloc_while_prior_ref_live`]. The escaped carrier reads back while
+/// its region backing is live.
+#[test]
+fn alloc_engine_brand_coexists_with_sibling_alloc() {
+    let region = KoanRegion::new();
+    // The engine stores `value`, hands the brand-fresh `&'b KObject<'b>` to the closure, and lets only
+    // the carrier escape — `Witnessed::resident` (the empty-witness constructor) names no `'b`.
+    let carrier: Witnessed<CarriedFamily, FrameSet> =
+        region.alloc::<KObject<'static>, _>(KObject::Number(1.0), |live| {
+            Witnessed::resident(Carried::Object(live))
+        });
+    // A sibling alloc into the same region coexists — the membership-table write and the prior store
+    // do not alias under tree borrows.
+    let sibling = region.alloc_object(KObject::Number(2.0));
+    // Read the escaped carrier back while `region` (its backing) is live.
+    let got = carrier.with(|c| match *c {
+        Carried::Object(KObject::Number(n)) => *n,
+        _ => panic!("expected a Number object"),
+    });
+    assert_eq!(got, 1.0);
+    assert!(matches!(sibling, KObject::Number(n) if *n == 2.0));
+}
+
+/// The empty-witness transient — the crux of the foreign-reach-only alloc. A region-pure carrier born
+/// under [`FrameSet::empty`] (the brand-confined [`alloc_object_witnessed`](super::Region::alloc_object_witnessed))
+/// pins **nothing**, sound only because the producer is folded into its witness **before** the carrier
+/// is stored on a node. This pins that fold-before-store across a frame reset: fold the producer, seal,
+/// then TCO-reset the producer *shell* — the folded producer-storage pin keeps the pre-reset region
+/// (where the value lives) alive, so opening the sealed carrier after the reset reads a live pointee,
+/// not a freed one. Without the fold the empty witness would pin nothing and the reset would free the
+/// region under the stored carrier.
+#[test]
+fn empty_witness_carrier_survives_producer_shell_reset_after_fold() {
+    let outer_region = FrameStorage::run_root();
+    let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
+    let mut frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
+
+    // Born foreign-reach-only (empty): the active frame is excluded at the alloc site.
+    let carrier: Witnessed<CarriedFamily, FrameSet> =
+        frame.region().alloc_object_witnessed(KObject::Number(7.0));
+    assert!(
+        carrier.witness().is_empty(),
+        "a region-pure carrier is born under the empty set",
+    );
+
+    // The scope-reach seal at close: fold the producer in before storage (the `finalize` shape), then
+    // seal for node storage. The fold is what gives the otherwise-unpinned carrier its pin.
+    let folded = carrier.reseal_under(FrameSet::singleton(frame.storage_rc()));
+    assert!(
+        !folded.witness().is_empty(),
+        "folding the producer pins the carrier",
+    );
+    let sealed: Sealed<CarriedFamily, FrameSet> = Sealed::seal(folded);
+
+    // TCO-reset the producer *shell* — succeeds (the sealed carrier holds the *storage* Rc, not the
+    // shell), installing fresh storage while the folded witness keeps the pre-reset region alive.
+    let did_reset = frame.try_reset_for_tail_test(outer_scope);
+    assert!(did_reset, "the shell is uniquely owned, so reset succeeds");
+
+    // The pointee is still live: the folded producer-storage pin held the pre-reset region across the
+    // shell reset, so opening the stored carrier reads a valid value rather than a freed one.
+    let got = sealed.open(|c| match c {
+        Carried::Object(KObject::Number(n)) => *n,
+        _ => panic!("expected a Number object"),
+    });
+    assert_eq!(got, 7.0);
+}

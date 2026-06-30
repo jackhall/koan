@@ -53,14 +53,17 @@ pub(in crate::machine::execute) trait NodeFinalize {
     ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError>;
 
     /// The object-family Done-boundary hook: seal a terminal that arrives **already witnessed** — a
-    /// [`Witnessed`] carrier the construction inversion built inside its witness closure, naming
-    /// every region it reaches. Where [`finalize_terminal`](Self::finalize_terminal) computes a
-    /// witness set and bundles a bare value (the transitional type/error path), this hook trusts the
-    /// carrier's own witness and only enforces the declared return: with no declared type the carrier
-    /// passes through untouched (no `Witnessed::new`); a declared-return re-stamp re-tags the value
-    /// into the contract's home region via [`merge`](Witnessed::merge), re-sealed under the carrier's
-    /// own witness (which pins `home` through its `outer` chain). A `None` frame (a frameless / run
-    /// producer) carries no per-call return obligation and seals as-is.
+    /// [`Witnessed`] carrier the construction inversion built inside its witness closure, naming its
+    /// *foreign* reach. Where [`finalize_terminal`](Self::finalize_terminal) computes a witness set and
+    /// bundles a bare value (the transitional type/error path), this hook folds the producing frame
+    /// into the carrier's foreign-only witness — the scope-reach seal at close, the pin a value born
+    /// under the empty set (the brand-confined alloc surface) relies on — and then enforces the
+    /// declared return: with no declared type the producer-folded carrier passes through; a
+    /// declared-return re-stamp re-tags the value into the contract's home region via
+    /// [`merge`](Witnessed::merge), re-sealed under that same witness (which pins `home` through its
+    /// `outer` chain). The fold is idempotent for a carrier that already names its dest frame, so
+    /// existing construction terminals seal unchanged. A `None` frame (a frameless / run producer) has
+    /// no frame to fold and seals as-is.
     fn finalize_terminal_witnessed<'o>(
         &self,
         carrier: Witnessed<CarriedFamily, FrameSet>,
@@ -99,11 +102,19 @@ impl NodeFinalize for KoanRuntime<'_> {
         contract: Option<ReturnContract<'o>>,
     ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
         // A frameless / run producer carries no per-call return obligation (the run_loop frame-gates
-        // the contract to `None` here anyway): the carrier already names its exact reach, seal as-is.
-        if frame.is_none() {
+        // the contract to `None` here anyway) and no producer frame to fold: its backing already
+        // outlives the carrier, so the foreign-reach-only witness is the exact reach. Seal as-is.
+        let Some(producer) = frame else {
             return Ok(carrier);
-        }
-        // No declared return (or a non-`Resolved` FN-def carrier): pass through — the carrier's own
+        };
+        // The scope-reach seal at close: fold the producing frame into the carrier's foreign-only
+        // witness — the pin that makes a value born under the empty set (the brand-confined alloc
+        // surface) storable. Applied before the pass-through / re-stamp split so both carry it: the
+        // re-stamp's `home_carrier` inherits the folded witness, keeping the re-homed value pinned.
+        // Idempotent for a carrier that already names its dest frame (producer == dest, subsumed), so
+        // the existing dest-witnessed construction terminals seal unchanged.
+        let carrier = carrier.reseal_under(FrameSet::singleton(producer.storage_rc()));
+        // No declared return (or a non-`Resolved` FN-def carrier): pass through — the producer-folded
         // witness is the exact reach, no asserted bundle.
         let Some((declared, label, per_call)) = pull_declared_return(contract) else {
             return Ok(carrier);

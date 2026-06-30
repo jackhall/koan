@@ -73,10 +73,12 @@ group just to silence the stale-anchor check.
   cart `Rc` as the witness to `SealedExtern::open`, a **safe** call, so ctx.rs carries no
   `unsafe`. The group pins that boundary end-to-end (every scheduler-driving slate test); the
   `unsafe` it routes lives in `witnessed.rs`.
-- `src/witnessed/region.rs` — the generic `alloc` engine routes a safe-signature `reattach_ref_with`
-  (the only `unsafe` it reaches is the shared `retype` in `witnessed.rs`), so region.rs carries **no
-  `unsafe`**. The group pins a safe-code invariant tree borrows can still violate: the alloc engine's
-  `membership` `RefCell` `borrow_mut` under a live `&` (`region_alloc_while_prior_ref_live`).
+- `src/witnessed/region.rs` — the `store` path and both alloc surfaces route safe-signature re-anchors
+  (`reattach_ref_with` / `with_branded_ref`; the only `unsafe` they reach is the shared `retype` in
+  `witnessed.rs`), so region.rs carries **no `unsafe`**. The group pins a safe-code invariant tree
+  borrows can still violate: the `membership` `RefCell` `borrow_mut` under a live `&`, over both the
+  bare leaf (`region_alloc_while_prior_ref_live`) and the closure surface
+  (`alloc_engine_brand_coexists_with_sibling_alloc`).
 - `src/machine/execute/lift.rs` — `relocate_carried` and `reached_frame` are safe (the value-relocation
   `unsafe` was deleted with the per-value anchor; the copy now allocs at the step brand). The group
   pins the escaping-value **retention** discipline — a surviving closure / module borrow kept alive by
@@ -85,7 +87,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-40 tests, grouped by the unsafe site each pins down. Names below are the exact
+42 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -106,13 +108,32 @@ end-to-end — the run scope outlives the frame, so no separate minimal test.
 - `with_scope_relocates_seed_value_into_brand`
 
 **`Region` alloc engine under live borrows** ([src/witnessed/region.rs](../src/witnessed/region.rs)) — the
-generic `alloc` engine erases the value to `'static` (the move-through-union `erase_store`),
-stores it, records its address into the `membership` `RefCell` via `borrow_mut`, and re-anchors
-the `'static` store to `'a` through the witness-bounded `reattach_ref_with` (the region itself as the
-pin, a **safe** call) — all while a prior `&` from the same frame is shared-borrowed. Pins that
-tree-borrows shape over the engine `KoanRegion` (= `Region<KoanStorageProfile>`) routes.
+single `store` path erases the value to `'static` (the move-through-union `erase_store`), writes it to
+the sub-arena, and records its address into the `membership` `RefCell` via `borrow_mut`; two surfaces
+re-anchor it, both pinned here while a prior `&` from the same region is shared-borrowed. The bare-`&'a`
+`alloc_resident` re-anchors to `'a` through the witness-bounded `reattach_ref_with` (the region itself
+the pin, a **safe** call — `region_alloc_while_prior_ref_live`). The brand-confined `alloc` hands the
+freshly-stored value to a `for<'b>` closure through `with_branded_ref`, letting only the erased carrier
+escape — the closure-surface twin pins the store → record → brand-read → sibling-alloc composition
+(`alloc_engine_brand_coexists_with_sibling_alloc`). Both over the `KoanRegion`
+(= `Region<KoanStorageProfile>`) the engine routes.
 
 - `region_alloc_while_prior_ref_live`
+- `alloc_engine_brand_coexists_with_sibling_alloc`
+
+**Empty-witness transient — foreign-reach-only alloc** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
+— a region-pure object allocated through the brand-confined `alloc_object_witnessed` is born under
+`FrameSet::empty()` (its *foreign* reach — the active frame excluded), so its witness pins **nothing**.
+Sound only as a within-step transient: the active frame pins the region externally for the construction
+step, and `finalize` folds the producer into the carrier's witness (`Witnessed::reseal_under`) **before**
+the carrier is stored on a node. The test pins that fold-before-store across a TCO reset — fold the
+producer, seal, then `try_reset_for_tail` the producer *shell*; the folded producer-storage pin keeps
+the pre-reset region (where the value lives) alive, so opening the sealed carrier after the reset reads
+a live pointee. Without the fold the empty witness would pin nothing and the reset would free the region
+under the stored carrier. The only `unsafe` it routes is the shared `retype` in `witnessed.rs` (through
+`Sealed::open` and `reseal_under`'s `merge`).
+
+- `empty_witness_carrier_survives_producer_shell_reset_after_fold`
 
 **`CallFrame::try_reset_for_tail`** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — TCO
 frame reuse installs a fresh refcounted `FrameStorage` (a new `KoanRegion`) and
@@ -429,9 +450,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-29: 137s — 42 tests, 0 leaks, 0 UB
 - 2026-06-29: 141s — 40 tests, 0 leaks, 0 UB
 - 2026-06-29: 146s — 40 tests, 0 leaks, 0 UB
 - 2026-06-29: 135s — 39 tests, 0 leaks, 0 UB
 - 2026-06-29: 242s — 39 tests, 0 leaks, 0 UB
-- 2026-06-29: 143s — 39 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

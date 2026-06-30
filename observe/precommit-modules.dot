@@ -378,7 +378,6 @@ digraph {
     "koan::builtins::parameterized_types" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::print" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::print" -> "koan::machine" [label="uses", style="dashed"];
-    "koan::builtins::print" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::print" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::builtins::print" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::quote" -> "koan::builtins" [label="uses", style="dashed"];

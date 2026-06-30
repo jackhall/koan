@@ -275,9 +275,10 @@ impl<'run> KoanRuntime<'run> {
                         NodeStep::DoneWitnessed(carrier) => {
                             // A construction terminal — object *or* type — arrived already witnessed:
                             // the construction inversion built it inside its witness closure, naming
-                            // every region it reaches. The hook seals it: a pass-through bar a
-                            // declared-return re-stamp, and **no** `dep_reached`/`pin` use — the
-                            // carrier's own witness is the exact reach.
+                            // its foreign reach. The hook folds the producing frame into that witness
+                            // (the scope-reach seal at close) and seals it — a pass-through bar a
+                            // declared-return re-stamp, with **no** `dep_reached`/`pin` use (unlike the
+                            // bare `finalize_terminal`).
                             let live_contract = frame.and(live_contract);
                             let result =
                                 self.finalize_terminal_witnessed(carrier, frame, live_contract);

@@ -1,46 +1,48 @@
-# `Sealed`: a single access verb
+# One region handle, one access verb
 
-With the scope reads folded, the allocator confined, and the scope pointers collapsed, delete the
-now-callerless borrow-bounded `attach` and the `reattach_ref_with` witness-borrow read path, leaving
-`Sealed` / `SealedExtern` with one access verb.
+Confine the build-at-a-brand leaf behind a branded region handle — so a bare `&KoanRegion` has no
+`alloc` and "every object is witnessed" is compile-enforced — and collapse the access surface to
+`open`, deleting the last retypes outside Witnessed/Sealed.
 
-**Problem.** The FrameStorage restructure landed a scope-specialized
-[`SealedExtern<ScopeRefFamily>::attach`](../../src/machine/core/scope_ptr.rs) — a borrow-bounded
-`&'w Scope<'b>` re-anchor (routing [`reattach_ref_with`](../../src/witnessed.rs)), the shape the
-keystone's `for<'b>` `open` forbids by construction: a second access verb beside
-[`open`](../../src/witnessed.rs) that lets a re-anchored reference ride up the dispatcher stack. The
-scope-pointer collapse folded every frame-side and seed-side reader onto `open`, so `attach` is now
-**callerless** — it survives only to be deleted here, along with the `reattach_ref_with` witness-borrow
-read path it routes. (Its self-witnessed twin `Sealed::read` is already gone, deleted by the value-read
-migration.)
+**Problem.** After [every construction is witnessed](witness-at-construction.md), the build leaf
+`region.alloc_object(…) -> &'b` is still reachable on any `&KoanRegion` — the bare reference scopes
+expose — even though its only legitimate callers are inside a `yoke` brand. Nothing compile-prevents a
+fresh bare-`&'a` alloc from reopening the hole. Two read-side retypes also survive outside the
+abstraction: the scope-pointer collapse left
+[`SealedExtern::attach`](../../src/machine/core/scope_ptr.rs) — a borrow-bounded `&'w Scope<'b>`
+re-anchor (routing [`reattach_ref_with`](../../src/witnessed.rs)) — callerless, and
+[`recouple_scope`](../../src/machine/core/scope_ptr.rs) still re-couples a per-call child's lexical
+parent / root through the same `reattach_ref_with`.
 
 **Acceptance criteria.**
 
+- Region allocation is reachable only through a branded region handle that `yoke` / `merge` /
+  `transfer_into` hand their closure; a bare `&KoanRegion` exposes no `alloc_*`, so a value cannot be
+  allocated outside the Witnessed/Sealed abstraction — the memory model is compile-enforced.
 - `Sealed` / `SealedExtern` expose a single access verb — `open` (plus its consuming
-  externally-witnessed twin): `attach`, the externally-witnessed witness-borrow read path, and
-  `reattach_ref_with` are deleted, and no call site references any of them.
-- Any reader that provably cannot nest under `open` is surfaced and documented as the lone exception,
-  not silently retained; no speculative generic borrow-bounded `attach` is added.
+  externally-witnessed twin); `attach` and the `reattach_ref_with` witness-borrow read path are
+  deleted.
+- `recouple_scope` is removed (or routes the brand), so `reattach_ref_with` has no caller and is
+  deleted — no retype outside Witnessed/Sealed remains.
+- `try_reset_for_tail` keeps its three Miri tests.
 - The full Miri slate is green; `cargo test` and `cargo clippy --all-targets` clean.
 
 **Directions.**
 
+- *Compile-enforce the memory model — decided.* The leaf moves onto a branded region handle so "an
+  allocated object is always witnessed" is a type rule, not an audited convention — no bare
+  `&KoanRegion` alloc to slip through.
 - *Open-only is the destination — decided.* A single access verb is the substrate's target surface;
-  this item is the cleanup that confirms no consumer still needs the borrow-bounded one once the
-  scope channel folds into the step `open`.
-- *No speculative generic `attach` — decided.* The shipped `attach` is scope-specialized; rather than
-  generalizing it to a `Sealed<T>` verb on spec, every site prefers `open` + copy-out, and the survey
-  for an un-nestable non-scope reference happens here. A generic borrow-bounded `attach` is added
-  *only* if such a site is found, surfaced with why it cannot fold — never as a default escape hatch.
-- *Gated on a clean residue — decided.* If a consumption path proves un-invertible and still holds an
-  `attach`, that is surfaced here rather than silently retained; the residue is closed before
-  deletion, not worked around.
+  `attach` is already callerless, deleted here with the `reattach_ref_with` read path it routes.
+- *`recouple_scope` folds in here — decided.* Deleting `reattach_ref_with` entirely requires its
+  construction-time scope re-anchor to go too; the per-call child's parent / root couple onto the
+  brand (or the whole scope is built witnessed) so no `reattach_ref_with` caller remains.
 
 ## Dependencies
 
 **Requires:**
 
-- [Confine `Region::alloc` to a brand](region-alloc-brand-confined.md) — clears `Region::alloc`'s use
-  of `reattach_ref_with`.
+- [Witness value carriers at their construction site](witness-at-construction.md) — the bare `&'a`
+  alloc callers must all be witnessed before the leaf can be confined behind the handle.
 
 **Unblocks:** none.

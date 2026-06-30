@@ -190,9 +190,12 @@ What's shipped that the open items below build on:
   value copy-out and a borrow-free error probe), and the three ride-up-stack dispatch sites resolve at
   the cart `'step`, retiring the transitional self-witnessed `read`. The **frame-side scope reads** have
   since folded onto `open` as well — a frame's child scope opens at a `for<'b>` brand via
-  [`CallFrame::with_scope`](../src/machine/core/arena.rs), leaving the borrow-bounded `attach` only the
-  seed-side re-anchor. What remains is the scope-pointer collapse (which folds that last re-anchor), the
-  `Region::alloc` re-anchor, and the seal-site witnessing, tracked by the
+  [`CallFrame::with_scope`](../src/machine/core/arena.rs). The **scope-pointer collapse** (a
+  region-resident value's captured / defining / parent scope held outright as a plain `&Scope`, leaving
+  the borrow-bounded `attach` callerless) and the **witnessed alloc surface** (region allocation hands
+  back a foreign-reach-only `Witnessed<T, FrameSet>`, the active frame folded in at close, the frame
+  builder's child scope born externally-witnessed) have since landed too. What remains is migrating
+  every construction site onto that surface and collapsing the access verbs to `open`, tracked by the
   [per-node-memory](per-node-memory/) project. See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
@@ -337,7 +340,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [Confine `Region::alloc` to a brand](per-node-memory/region-alloc-brand-confined.md)
 - [Witness value carriers at their construction site](per-node-memory/witness-at-construction.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
@@ -455,18 +457,22 @@ frame's child scope, the `&mut self` submit / classify paths, the seed-side `it`
 deferred-return-type elaboration now open at a `for<'b>` brand through `CallFrame::with_scope` /
 `with_node_scope`, and a region-resident value's captured / defining / parent scope is held outright as
 a plain `&Scope` re-anchored with the whole value — the two scope-specialized handles and the bare
-`reattach_ref` deleted, the borrow-bounded `attach` left callerless). The design is captured in
-[design/per-node-memory.md](../design/per-node-memory.md). What remains is the `Region::alloc`
-re-anchor, the seal-site witnessing, and collapsing the access surface to `open` alone:
+`reattach_ref` deleted, the borrow-bounded `attach` left callerless), and the **witnessed alloc
+surface** (region allocation hands back a foreign-reach-only `Witnessed<T, FrameSet>` — the active
+frame excluded, folded in at close, so no `region → object → frame` cycle — the frame builder's child
+scope born externally-witnessed, proven on a region-pure pilot). The design is captured in
+[design/per-node-memory.md](../design/per-node-memory.md). What remains carries the same goal to its
+end — an object allocated in a region is **always witnessed**: every remaining construction site
+migrates onto the surface so the one alloc-retype lives inside `yoke`, then the build leaf is confined
+behind a branded region handle so a bare `&KoanRegion` cannot allocate — compile-enforcing the model.
+The two items carry it in sequence:
 
-- [Confine `Region::alloc` to a brand](per-node-memory/region-alloc-brand-confined.md) — allocate only
-  inside a rank-2 region brand (`yoke` / `merge` or a witness-less closure), so no public
-  `alloc -> &'a` remains and the alloc retype is brand-confined.
 - [Witness value carriers at their construction site](per-node-memory/witness-at-construction.md) —
-  witness the seal sites' values where they are built so they fold via `yoke` / `merge` instead of
-  re-anchoring, and delete `reattach_with`.
-- [`Sealed`: a single access verb](per-node-memory/single-open-verb.md) — delete the borrow-bounded
-  `attach` and the `reattach_ref_with` witness-borrow read path, leaving `Sealed` with `open` alone.
+  every object- and type-channel construction folds reach via `yoke` / `merge` / `transfer_into` on
+  the witnessed alloc; the bare `alloc_* -> &'a` callers and `reattach_with` are deleted.
+- [One region handle, one access verb](per-node-memory/single-open-verb.md) — the build leaf moves
+  behind a branded region handle (no bare-`&KoanRegion` alloc), the access surface collapses to
+  `open`, and `attach` / `reattach_ref_with` / `recouple_scope` are deleted.
 
 ### Refactor — [refactor/](refactor/)
 
