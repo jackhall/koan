@@ -229,6 +229,14 @@ What's shipped that the open items below build on:
   now total at the LET boundary — a type binds only under a Type-classified name, so
   `LET t = Point` under a value-classified name is rejected. See
   [design/typing/elaboration.md](../design/typing/elaboration.md).
+- *Structural type/value binding partition.* The `data`/`types` split is enforced by the
+  [`Bindings`](../src/machine/core/bindings.rs) write paths, not per-callsite convention: a value
+  bind whose name is a committed type — or a type register whose name is a committed value — is a
+  `Rebind`, so one name can never hold both. Forward-reference placeholders carry a `BindKind`
+  axis (a type placeholder is never satisfied by a value bind, nor the reverse), and ATTR module /
+  signature member access reads its module-own value-or-type through one classified `lookup_member`
+  instead of probing `data` then `types`. See
+  [design/typing/lookup-protocol.md § Layer 2](../design/typing/lookup-protocol.md#layer-2--bindings-per-scope-lookup).
 - *Product-side nominal collapse.* A struct is a `NominalKind::Newtype` over a `KType::Record`,
   carried as `Wrapped { inner: Rc<KObject::Record>, type_id }`; the `STRUCT` declarator,
   `KObject::Struct` carrier, the `NominalSchema` / `ProjectedSchema` / `NominalKind` `Struct`
@@ -346,9 +354,9 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
+- [Structural witnesses](per-node-memory/structural-witnesses.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
-- [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
 - [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
@@ -469,10 +477,6 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md) — verify the
   AST recursion that finds a submission's binders, then cache its parse-static portion on
   `KExpression` (beside `DispatchShape`) instead of re-deriving it at every submission.
-- [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md) —
-  the committed `types`/`data` maps are partitioned, but the split is held by per-callsite
-  convention and the in-flight `placeholders` map carries no type/value discriminant; make the
-  distinction structural in the `Bindings` API.
 - [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md) — hold
   a record's `Box<Record<KType>>` field-type memo and an already-region-allocated `KType` by
   region reference, killing the `alloc_ktype(kt.clone())` and `.ktype()` deep clones on the

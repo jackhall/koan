@@ -69,22 +69,44 @@ threads a chain.
 maps — `data` (values), `types` (type-name → `&KType`), `functions`
 (registered overloads), `operators` (operator probe → shared
 [`OperatorGroup`](../../src/machine/model/operators.rs)),
-`placeholders` (in-flight name-keyed binders),
-`pending_overloads` (in-flight bucket-keyed binders). The three
-value/type/function accessors are mutually exclusive per name:
-`bind_value` and `register_function` remove their own placeholder
-before inserting, so a binding never appears in both `data` /
-`functions` and `placeholders` at the same moment.
+`placeholders` (in-flight name-keyed binders, each tagged with a
+[`BindKind`](../../src/machine/core/bindings.rs) — `Value` or `Type` —
+recording which language the forward reference resolves in),
+`pending_overloads` (in-flight bucket-keyed binders). The `data`/`types`
+split is **structural, not conventional**: every value write path rejects a
+name already committed to `types`, and every type write path rejects one
+already in `data` (a `Rebind` either way), so one name can never hold both a
+value and a type, and a lookup can never return the wrong kind. `bind_value`
+and `register_function` remove their own *matching-kind* placeholder before
+inserting — a value write clears only a `BindKind::Value` placeholder, a type
+write only a `BindKind::Type` one — so a binding never appears in both `data` /
+`functions` and `placeholders` at once, and a value bind never satisfies or
+clears an in-flight type producer's placeholder (nor the reverse).
 
 - [`Bindings::lookup_value`](../../src/machine/core/bindings.rs)
-  consults `data` then `placeholders`. Returns
+  consults `data` then the `BindKind::Value` `placeholders`. Returns
   `Resolution::Value(&KObject)` for a finalized visible binding,
   `Resolution::Placeholder(NodeId)` for a still-running visible
   producer (the caller parks on it), or `None` (the caller surfaces
-  `Resolution::UnboundName` on chain exhaustion).
+  `Resolution::UnboundName` on chain exhaustion). A same-name
+  `BindKind::Type` placeholder is invisible here — it belongs to the type
+  language.
 - [`Bindings::lookup_type`](../../src/machine/core/bindings.rs) is the
-  type-side symmetry: consults `types` then `placeholders` and surfaces
-  the same three-arm result.
+  type-side symmetry: consults `types` then the `BindKind::Type`
+  `placeholders`, surfacing the three-arm result as a
+  [`TypeResolution`](../../src/machine/core/bindings.rs) — `Type(&KType)`,
+  `Placeholder(NodeId)`, or `None`. The finalize gate that must park on an
+  in-flight type producer even after a seal pre-installs the name's identity
+  into `types` reads the placeholder directly through
+  [`Bindings::type_placeholder_producer`](../../src/machine/core/bindings.rs),
+  bypassing the `types`-first preference.
+- [`Bindings::lookup_member`](../../src/machine/core/bindings.rs) is the ATTR
+  module/signature read: one classified pass over the scope's *own* `data` then
+  `types`, returning a `MemberResolution::Value(&KObject)` or
+  `MemberResolution::Type(&KType)` (or `None`). It is deliberately module-own —
+  it consults neither the builtin root nor lexical ancestors, so `m.<non-member>`
+  is a missing member, not a fall-through to a builtin or outer type — and the
+  cross-kind exclusion keeps a name from matching both arms.
 - [`Bindings::lookup_function`](../../src/machine/core/bindings.rs)
   surfaces both maps in one pass as a `FunctionLookup` struct:
   `overloads` is the visibility-filtered `functions[key]` bucket (possibly

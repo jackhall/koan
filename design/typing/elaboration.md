@@ -223,10 +223,18 @@ names the type directly (`Point {…}`) or through a Type-classified alias
 the Type-class LET allowlist above, this makes `bindings.types` the single home
 for every type identity, so `bindings.data` is unconditionally free of
 type-language carriers and the value-side and type-class lookup paths never both
-find one under the same name. The [token-class rule](tokens.md) defines the
-Type-class shape (uppercase-leading plus at least one lowercase letter); the
-partition guard lives in
-[`let_binding`'s `body`](../../src/builtins/let_binding.rs).
+find one under the same name. This exclusion is **structural**, not just a
+LET-site convention: the [`Bindings`](../../src/machine/core/bindings.rs) write
+paths themselves reject a cross-kind collision — a value bind whose name is a
+committed type, or a type register whose name is a committed value, is a
+`Rebind` — so no bind site (LET, VAL, NEWTYPE, UNION, MODULE, SIG, RECURSIVE, or a
+`USING` replay) can land a name in both maps. The [token-class rule](tokens.md)
+defines the Type-class shape (uppercase-leading plus at least one lowercase
+letter); the LET-site classification guard (which map) lives in
+[`let_binding`'s `body`](../../src/builtins/let_binding.rs), and the
+mutual-exclusion guard (one map, never both) is the cross-kind check the value
+and type write paths run — see
+[lookup-protocol.md § Layer 2](lookup-protocol.md#layer-2--bindings-per-scope-lookup).
 
 The value-side ATTR walker and ascription's abstract-type member sweep both
 walk `bindings.types` and `bindings.data` via the `abstract_type_names_of`

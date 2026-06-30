@@ -83,10 +83,10 @@ state, which `fn_def/finalize.rs` (the asserted read) has not yet reached.
   surface always targets one region, so the single-region precondition lives in the type rather than a
   runtime `region()` that narrows-and-panics on a set.
 - *Object read-site carrier — decided.* Store each value binding's reach (its `FrameSet`, or its
-  `Sealed` carrier) on the classified `Bindings` entry that
-  [Enforce the type/value split in Bindings](../refactor/enforce-bindings-type-value-split.md) lands
-  (a `Requires`), so a name / ATTR lookup returns a witnessed carrier instead of re-wrapping a bare
-  `&KObject`.
+  `Sealed` carrier) on the classified [`Bindings`](../../src/machine/core/bindings.rs) entry — the
+  value/type split that hangs it is now structural (a value bind and a type bind of one name are
+  mutually exclusive by construction), so a name / ATTR lookup returns a witnessed carrier instead
+  of re-wrapping a bare `&KObject`.
 - *Object define-site — decided.* Move alloc + seal into one `Scope` method, so a freshly-built FN /
   LET-RHS object is witnessed by the scope that allocated it; the bare `&'a` needed for registration
   and the carrier returned to the scheduler come from the same call.
@@ -104,8 +104,5 @@ state, which `fn_def/finalize.rs` (the asserted read) has not yet reached.
 ## Dependencies
 
 **Requires:**
-- [Enforce the type/value split in Bindings](../refactor/enforce-bindings-type-value-split.md) — the
-  read-site carrier hangs on its classified binding entry; doing it first avoids re-threading the
-  carrier through a second `Bindings` reshape.
 
 **Unblocks:** none tracked yet.
