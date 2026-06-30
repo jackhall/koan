@@ -64,6 +64,130 @@ pub type KoanRegion = Region<KoanStorageProfile>;
 // witness the destination lifetime.
 unsafe impl<W: crate::witnessed::StorageProfile> crate::witnessed::Witness for Region<W> {}
 
+/// The frame-lifetime **allocation capability** for a [`KoanRegion`] — a `Copy` newtype over a
+/// `&'a KoanRegion` that carries every `alloc_*` method. It is the *only* way to allocate into a
+/// region: a bare `&KoanRegion` (the references that "scope around" — `scope.region()`,
+/// `frame.region()`) exposes identity queries (`owns_object`, `functions_is_empty`) but **no**
+/// `alloc_*`, so nothing can mint a region resident from an ambient region reference and "an
+/// allocated value is always born inside the Witnessed/Sealed abstraction" is a type rule, not an
+/// audited convention.
+///
+/// **Un-forgeable from a bare region.** The wrapped field is private to this module and the sole
+/// public minter is [`FrameStorage::brand`], which requires `&FrameStorage` — the storage that owns
+/// the region. The ambient `&KoanRegion` holders never hold the `FrameStorage`, so they cannot mint a
+/// brand; the capability reaches an allocation site only by riding the [`Scope`] (which stores the
+/// brand it was built under) or being threaded as a parameter.
+///
+/// **Frame-lifetime, not a per-alloc `for<'b>` brand.** A structural resident (a binding entry, a
+/// `Module`'s child `&Scope`) must outlive any one brand window, so it needs a real `&'a` — which only
+/// a frame-lifetime handle hands back. The per-alloc `for<'b>` brand is the right tool for *terminals*
+/// (the witnessed surface, where [`Region::alloc`] hands a `for<'b>` brand and returns a `Witnessed`
+/// carrier); this handle is for the co-located plumbing.
+///
+/// A bare `&KoanRegion` exposes **no** `alloc_*` — allocation is reachable only through this brand, so
+/// nothing can mint a region resident from an ambient region reference:
+///
+/// ```compile_fail
+/// // `alloc_object` lives on `RegionBrand`, not the bare region: no such method on `&KoanRegion`.
+/// let region = koan::machine::KoanRegion::new();
+/// let _ = region.alloc_object(todo!());
+/// ```
+#[derive(Clone, Copy)]
+pub struct RegionBrand<'a>(&'a KoanRegion);
+
+impl<'a> RegionBrand<'a> {
+    /// The bare region this brand authorizes — for identity compares (`ptr::eq`, `pins_region`). A
+    /// bare `&KoanRegion` cannot be turned *back* into a brand (the field is private and the only
+    /// minter is [`FrameStorage::brand`]), so handing out the identity reference opens no hole.
+    pub fn region(self) -> &'a KoanRegion {
+        self.0
+    }
+
+    /// Store a [`KObject`] into the region; the value lands here (no value holds an owning `Rc` back
+    /// to a region, so the store forms no back-edge). Yields a co-located `&'a` resident.
+    pub fn alloc_object(self, o: KObject<'_>) -> &'a KObject<'a> {
+        self.0.alloc_resident::<KObject<'static>>(o)
+    }
+
+    /// Store a [`KType`] into the region (a `Module` rides a bare borrow into its child scope's
+    /// region — held alive by the carrier's witness set, not an embedded anchor).
+    pub fn alloc_ktype(self, t: KType<'_>) -> &'a KType<'a> {
+        self.0.alloc_resident::<KType<'static>>(t)
+    }
+
+    /// INVARIANT: a `KFunction` must be allocated into the same `KoanRegion` that owns its
+    /// captured scope. The `functions_is_empty` fast path relies on this — without the
+    /// invariant, "no KFunction allocated here" no longer implies "no KFunction has
+    /// `captured_scope` in this region," and the path silently drops regions out from under
+    /// live `&KFunction` references. The `debug_assert!` catches violations at the
+    /// allocation site rather than later as use-after-free.
+    pub fn alloc_function(self, f: KFunction<'_>) -> &'a KFunction<'a> {
+        debug_assert!(
+            std::ptr::eq(
+                self.0 as *const KoanRegion,
+                f.captured_scope().region() as *const KoanRegion
+            ),
+            "alloc_function invariant :KFunction must be allocated into the same KoanRegion \
+             that owns its captured scope"
+        );
+        self.0.alloc_resident::<KFunction<'static>>(f)
+    }
+
+    pub fn alloc_scope(self, s: Scope<'_>) -> &'a Scope<'a> {
+        self.0.alloc_resident::<Scope<'static>>(s)
+    }
+
+    pub fn alloc_module(self, m: Module<'_>) -> &'a Module<'a> {
+        self.0.alloc_resident::<Module<'static>>(m)
+    }
+
+    pub fn alloc_signature(self, s: ModuleSignature<'_>) -> &'a ModuleSignature<'a> {
+        self.0.alloc_resident::<ModuleSignature<'static>>(s)
+    }
+
+    /// Allocate an [`OperatorGroup`]. Lifetime-free and anchor-free, so the gate is a no-op, but it
+    /// routes the same engine for a single uniform allocation path.
+    pub fn alloc_operator_group(self, g: OperatorGroup) -> &'a OperatorGroup {
+        self.0.alloc_resident::<OperatorGroup>(g)
+    }
+
+    /// The witnessed-allocation surface for an **owned, region-pure** object — a value referencing no
+    /// other region: born witnessed by the **empty** (foreign-reach-only) set. The brand-confined
+    /// [`alloc`](Region::alloc) stores `value` and hands the freshly-stored `&'b KObject<'b>` to the
+    /// closure at the brand, which bundles it through [`Witnessed::resident`] — the empty-witness
+    /// constructor that names the region-pure obligation, so the active frame is deliberately excluded.
+    /// The producing frame is folded in only at finalize/close (the scope-reach seal), so a
+    /// region-resident value never strong-owns its own frame (the `region → object → frame` cycle that
+    /// would defeat the `Rc::get_mut` TCO gate).
+    ///
+    /// Region-pure is this surface's precondition: the object — built fresh inside the brand —
+    /// references nothing foreign, so the empty set is its exact reach. Soundness is the within-step
+    /// transient invariant: the empty-witness carrier pins nothing, sound only because the active frame
+    /// pins the region externally for the construction step and `finalize` folds the producer
+    /// **before** the carrier is stored on a node. A value that *references* another region is the
+    /// `yoke` / `merge` path, not this one.
+    pub(crate) fn alloc_object_witnessed(self, value: KObject<'_>) -> Witnessed<CarriedFamily, FrameSet> {
+        self.0
+            .alloc::<KObject<'static>, _>(value, |live| Witnessed::resident(Carried::Object(live)))
+    }
+
+    /// The witnessed-allocation surface for an **owned, region-pure** type — the type-channel twin of
+    /// [`alloc_object_witnessed`](Self::alloc_object_witnessed). Born witnessed by the **empty**
+    /// (foreign-reach-only) set: the brand-confined [`alloc`](Region::alloc) stores `value` and hands
+    /// the freshly-stored `&'b KType<'b>` to the closure, which bundles it through
+    /// [`Witnessed::resident`]. The producing frame is folded in only at the seal/close (the
+    /// scope-reach seal), so a region-resident type never strong-owns its own frame.
+    ///
+    /// Region-pure is the precondition: a `KType` built fresh inside the brand referencing no other
+    /// region — owned data, or a borrow this region already pins. A `KType::Module` reaches its child
+    /// scope's region, so it is born here empty and folds that reach through
+    /// [`Scope::seal_module`](crate::machine::core::Scope) rather than naming it on this surface.
+    pub(crate) fn alloc_ktype_witnessed(self, value: KType<'_>) -> Witnessed<CarriedFamily, FrameSet> {
+        self.0
+            .alloc::<KType<'static>, _>(value, |live| Witnessed::resident(Carried::Type(live)))
+    }
+}
+
 // The lifetime family of each stored type, keyed on its `'static` form — the GAT the
 // `Region` engine erases to `'static` for storage and re-anchors to the caller's `'a` on read.
 // Each family is one type generic only in a single lifetime, so its layout is identical for every
@@ -79,15 +203,15 @@ reattachable! {
     OperatorGroup => OperatorGroup,
 }
 
-/// A witnessed-construction operand bundling a destination region with a type-channel identity (a
-/// `SetRef` / declared type) that must cross the build brand. A value-embedding construction
-/// `transfer_into`/`merge`s its object carrier with this operand so the wrapped value lands in
-/// `region` tagged by the identity, both re-anchored to the brand under the same witness — the dest
-/// frame's `outer` chain pins the identity's (ancestor) region. Used by the newtype / tagged-union
-/// constructors and the `CATCH` `Result` build. Layout-invariant: two thin pointers, representation
-/// independent of `'r`.
+/// A witnessed-construction operand bundling a destination region's [`RegionBrand`] with a
+/// type-channel identity (a `SetRef` / declared type) that must cross the build brand. A
+/// value-embedding construction `transfer_into`/`merge`s its object carrier with this operand so the
+/// wrapped value lands — allocated through the brand — tagged by the identity, both re-anchored to the
+/// build brand under the same witness; the dest frame's `outer` chain pins the identity's (ancestor)
+/// region. Used by the newtype / tagged-union constructors and the `CATCH` `Result` build.
+/// Layout-invariant: two thin pointers, representation independent of `'r`.
 pub struct RegionTypeFamily;
-reattachable!(RegionTypeFamily => (&'r KoanRegion, &'r KType<'r>));
+reattachable!(RegionTypeFamily => (RegionBrand<'r>, &'r KType<'r>));
 
 // Per-family `Stored` policy: which sub-arena each family lands in, plus `KObject`'s allocation
 // address side-table hook. No stored family carries a self-targeting `Rc<FrameStorage>` — a stored
@@ -140,50 +264,21 @@ impl Stored<KoanStorageProfile> for OperatorGroup {
     }
 }
 
-/// Koan-typed allocation surface on the run-lifetime region. The bare-`&'a` wrappers
-/// (`alloc_object` … `alloc_operator_group`) route the transitional [`Region::alloc_resident`] leaf;
-/// the witnessed surfaces ([`alloc_witnessed`](Self::alloc_witnessed) /
-/// [`alloc_object_witnessed`](Self::alloc_object_witnessed)) route the brand-confined
-/// [`Region::alloc`] and hand back a [`Witnessed`] carrier wrapped by the abstraction from birth.
+/// The Koan witnessed-allocation entry that takes a witness rather than a region — the `yoke`
+/// primitive — plus the region identity/read queries. Every co-located `alloc_*` lives on
+/// [`RegionBrand`] (minted via [`FrameStorage::brand`]); a bare `&KoanRegion` keeps only the
+/// identity surface here.
 impl Region<KoanStorageProfile> {
-    /// Store a [`KObject`] into the run-lifetime region; the value lands in this region (no value
-    /// holds an owning `Rc` back to a region, so the store forms no back-edge).
-    pub fn alloc_object<'a>(&'a self, o: KObject<'_>) -> &'a KObject<'a> {
-        self.alloc_resident::<KObject<'static>>(o)
-    }
-
-    /// Store a [`KType`] into the run-lifetime region (a `Module` rides a bare borrow into its
-    /// child scope's region — held alive by the carrier's witness set, not an embedded anchor).
-    pub fn alloc_ktype<'a>(&'a self, t: KType<'_>) -> &'a KType<'a> {
-        self.alloc_resident::<KType<'static>>(t)
-    }
-
-    /// INVARIANT: a `KFunction` must be allocated into the same `KoanRegion` that owns its
-    /// captured scope. The `functions_is_empty` fast path relies on this — without the
-    /// invariant, "no KFunction allocated here" no longer implies "no KFunction has
-    /// `captured_scope` in this region," and the path silently drops regions out from under
-    /// live `&KFunction` references. The `debug_assert!` catches violations at the
-    /// allocation site rather than later as use-after-free.
-    pub fn alloc_function<'a>(&'a self, f: KFunction<'_>) -> &'a KFunction<'a> {
-        debug_assert!(
-            std::ptr::eq(
-                self as *const KoanRegion,
-                f.captured_scope().region as *const KoanRegion
-            ),
-            "alloc_function invariant :KFunction must be allocated into the same KoanRegion \
-             that owns its captured scope"
-        );
-        self.alloc_resident::<KFunction<'static>>(f)
-    }
-
     /// The alloc-witnessed construction inversion's region-pure primitive: build a value into the
     /// witness frame's region *inside* the `yoke` closure, returning it bundled with `witness` (the set
     /// of regions it reaches) so it is co-located by construction rather than paired with an asserted
-    /// witness. One primitive for both value families — the closure returns a `Carried::Object` (an
-    /// [`alloc_object`](Self::alloc_object)) or a `Carried::Type` (an
-    /// [`alloc_ktype`](Self::alloc_ktype)). A value that *references* another region's resident value
-    /// folds that in with [`Witnessed::merge`] instead, unioning its reach; this primitive covers the
-    /// case whose references are all region-derived or owned, so the `for<'b>` brand admits them.
+    /// witness. The closure receives a per-construction [`RegionBrand`] confined to the `for<'b>` brand
+    /// (it cannot escape the closure), so it allocates through the same handle as every other site. One
+    /// primitive for both value families — the closure returns a `Carried::Object` (an
+    /// [`alloc_object`](RegionBrand::alloc_object)) or a `Carried::Type` (an
+    /// [`alloc_ktype`](RegionBrand::alloc_ktype)). A value that *references* another region's resident
+    /// value folds that in with [`Witnessed::merge`] instead, unioning its reach; this primitive covers
+    /// the case whose references are all region-derived or owned, so the `for<'b>` brand admits them.
     ///
     /// `build`'s return is spelled `<CarriedFamily as Reattachable>::At<'b>`, not the concrete
     /// `Carried<'b>`: the two are equal by the family's definition, but under the `for<'b>` binder the
@@ -194,70 +289,26 @@ impl Region<KoanStorageProfile> {
     // (design/per-node-memory.md): a region-pure leaf builds its `KObject` inside this closure.
     pub(crate) fn alloc_witnessed(
         witness: FrameSet,
-        build: impl for<'b> FnOnce(&'b KoanRegion) -> <CarriedFamily as Reattachable>::At<'b>,
+        build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
     ) -> Witnessed<CarriedFamily, FrameSet> {
-        // Turbofish `T` explicitly: inference does not drive `yoke`'s `T` from the return type early
-        // enough to check `build`'s `-> T::At<'b>` bound, so it sees `<_ as Reattachable>::At` and fails
-        // to match the projection.
-        Witnessed::<CarriedFamily, FrameSet>::yoke(witness, build)
+        Self::yoke_branded::<CarriedFamily, _>(witness, build)
     }
 
-    /// The witnessed-allocation surface for an **owned, region-pure** object — a value referencing no
-    /// other region: born witnessed by the **empty** (foreign-reach-only) set. The brand-confined
-    /// [`alloc`](Region::alloc) stores `value` and hands the freshly-stored `&'b KObject<'b>` to the
-    /// closure at the brand, which bundles it through [`Witnessed::resident`] — the empty-witness
-    /// constructor that names the region-pure obligation, so the active frame is deliberately excluded.
-    /// The producing frame is folded in only at finalize/close (the scope-reach seal), so a
-    /// region-resident value never strong-owns its own frame (the `region → object → frame` cycle that
-    /// would defeat the `Rc::get_mut` TCO gate).
-    ///
-    /// Region-pure is this surface's precondition: the object — built fresh inside the brand —
-    /// references nothing foreign, so the empty set is its exact reach. Soundness is the within-step
-    /// transient invariant: the empty-witness carrier pins nothing, sound only because the active frame
-    /// pins the region externally for the construction step and `finalize` folds the producer
-    /// **before** the carrier is stored on a node. A value that *references* another region is item 2's
-    /// `yoke` / `merge` path, not this one.
-    pub(crate) fn alloc_object_witnessed(
-        &self,
-        value: KObject<'_>,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
-        self.alloc::<KObject<'static>, _>(value, |live| Witnessed::resident(Carried::Object(live)))
-    }
-
-    /// The witnessed-allocation surface for an **owned, region-pure** type — the type-channel twin of
-    /// [`alloc_object_witnessed`](Self::alloc_object_witnessed). Born witnessed by the **empty**
-    /// (foreign-reach-only) set: the brand-confined [`alloc`](Region::alloc) stores `value` and hands
-    /// the freshly-stored `&'b KType<'b>` to the closure, which bundles it through
-    /// [`Witnessed::resident`]. The producing frame is folded in only at the seal/close (the
-    /// scope-reach seal), so a region-resident type never strong-owns its own frame.
-    ///
-    /// Region-pure is the precondition: a `KType` built fresh inside the brand referencing no other
-    /// region — owned data, or a borrow this region already pins. A `KType::Module` reaches its child
-    /// scope's region, so it is born here empty and folds that reach through
-    /// [`Scope::seal_module`](crate::machine::core::Scope) rather than naming it on this surface.
-    pub(crate) fn alloc_ktype_witnessed(
-        &self,
-        value: KType<'_>,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
-        self.alloc::<KType<'static>, _>(value, |live| Witnessed::resident(Carried::Type(live)))
-    }
-
-    pub fn alloc_scope<'a>(&'a self, s: Scope<'_>) -> &'a Scope<'a> {
-        self.alloc_resident::<Scope<'static>>(s)
-    }
-
-    pub fn alloc_module<'a>(&'a self, m: Module<'_>) -> &'a Module<'a> {
-        self.alloc_resident::<Module<'static>>(m)
-    }
-
-    pub fn alloc_signature<'a>(&'a self, s: ModuleSignature<'_>) -> &'a ModuleSignature<'a> {
-        self.alloc_resident::<ModuleSignature<'static>>(s)
-    }
-
-    /// Allocate an [`OperatorGroup`]. Lifetime-free and anchor-free, so the gate is a no-op, but it
-    /// routes the same engine for a single uniform allocation path.
-    pub fn alloc_operator_group(&self, g: OperatorGroup) -> &OperatorGroup {
-        self.alloc_resident::<OperatorGroup>(g)
+    /// `yoke` a value of **any** carrier family into the witness's region, handing the build closure a
+    /// per-construction [`RegionBrand`] (confined to the `for<'b>` brand) so it allocates through the
+    /// one capability. Generalizes [`alloc_witnessed`](Self::alloc_witnessed) (the `CarriedFamily`
+    /// case) for the aggregate-accumulator yokes (`AggBuildFamily`) whose closures alloc into the dest
+    /// region. The yoke hands a `&'b KoanRegion`; wrapping it as the brand is sound for the same reason
+    /// the yoke is — the `for<'b>` quantifier admits only region-derived/owned references, so
+    /// co-location holds by construction and nothing branded escapes the closure.
+    pub(crate) fn yoke_branded<T: Reattachable, F>(witness: FrameSet, build: F) -> Witnessed<T, FrameSet>
+    where
+        F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>,
+    {
+        // Turbofish `T` explicitly at the call: inference does not drive `yoke`'s `T` from the return
+        // type early enough to check `build`'s `-> T::At<'b>` bound, so it sees `<_ as Reattachable>::At`
+        // and fails to match the projection.
+        Witnessed::<T, FrameSet>::yoke(witness, |region| build(RegionBrand(region)))
     }
 
     /// Whether `ptr` was returned by a prior `alloc_object` on this region.
@@ -339,6 +390,15 @@ impl FrameStorage {
     /// subsumption) by holders that pin storage but never name a `CallFrame`.
     pub(crate) fn region(&self) -> &KoanRegion {
         &self.region
+    }
+
+    /// Mint the region's [`RegionBrand`] — the **sole** allocation capability for this storage's
+    /// region. The minter requires `&FrameStorage` (the storage that *owns* the region), so a holder
+    /// of a bare `&KoanRegion` — the references that scope around — cannot mint one: allocation is
+    /// reachable only by riding this brand (it is stored on the [`Scope`] built at region-open, and
+    /// threaded from there). This is the one place an allocation capability comes into existence.
+    pub(crate) fn brand(&self) -> RegionBrand<'_> {
+        RegionBrand(&self.region)
     }
 
     /// True iff holding `self`'s `Rc` keeps the region at `region_ptr` alive — `self`'s own region or
@@ -566,7 +626,7 @@ impl CallFrame {
     /// to the witness-bounded re-attach.
     pub fn adopting<'a>(scope: &'a Scope<'a>, run_storage: Rc<FrameStorage>) -> Rc<CallFrame> {
         debug_assert!(
-            std::ptr::eq(run_storage.region(), scope.region as *const KoanRegion),
+            std::ptr::eq(run_storage.region(), scope.region() as *const KoanRegion),
             "adopting run_storage must own the run-root scope's region"
         );
         Rc::new(CallFrame {
@@ -631,6 +691,14 @@ impl CallFrame {
 
     pub fn region(&self) -> &KoanRegion {
         &self.storage.region
+    }
+
+    /// This frame's region [`RegionBrand`] allocation capability, minted from its owning storage.
+    /// Test-only: production allocates through the scope (`scope.brand()`); the frame-level handle is
+    /// a convenience for the arena / lift Miri tests that alloc against a bare frame.
+    #[cfg(test)]
+    pub(crate) fn brand(&self) -> RegionBrand<'_> {
+        self.storage.brand()
     }
 
     /// Clone this frame's `FrameStorage` Rc — the handle an escaping value (a returned closure, a

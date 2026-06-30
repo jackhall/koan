@@ -49,7 +49,7 @@ fn sched_read_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -
 fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
     match arg_object(ctx.args, "n") {
         Some(obj) => Action::Done(Ok(Carried::Object(
-            ctx.scope.region.alloc_object(obj.deep_clone()),
+            ctx.scope.brand().alloc_object(obj.deep_clone()),
         ))),
         None => Action::Done(Err(crate::machine::KError::new(
             crate::machine::KErrorKind::MissingArg("n".to_string()),
@@ -67,12 +67,12 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
             ktype: KType::Number,
         })],
     };
-    let f = scope.region.alloc_function(KFunction::new(
+    let f = scope.brand().alloc_function(KFunction::new(
         sig,
         crate::machine::core::kfunction::Body::Builtin(body_identity),
         scope,
     ));
-    let obj = scope.region.alloc_object(KObject::KFunction(f));
+    let obj = scope.brand().alloc_object(KObject::KFunction(f));
     scope
         .bind_value("f".to_string(), obj, BindingIndex::BUILTIN)
         .expect("bind_value should succeed");
@@ -542,7 +542,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
     // errors with `TypeMismatch` (a `Number` head isn't callable) without entering
     // `resolve_dispatch`, so the producer finalizes `Err` and the routing counter stays
     // clean. `f` is then a backward-visible placeholder pointing at it.
-    let producer_target = scope.region.alloc_object(KObject::Number(42.0));
+    let producer_target = scope.brand().alloc_object(KObject::Number(42.0));
     scope
         .bind_value(
             "producer_target".to_string(),
@@ -815,7 +815,7 @@ fn operator_chain_registered_reaches_fold_seam() {
         },
     );
     let group = scope
-        .region
+        .brand()
         .alloc_operator_group(OperatorGroup::new(members));
     scope
         .register_operator_group("+".to_string(), group, BindingIndex::BUILTIN)

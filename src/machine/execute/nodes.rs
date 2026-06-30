@@ -189,7 +189,7 @@ mod tests {
     fn node_scope_yoked_child_erase_open_roundtrip() {
         let region = FrameStorage::run_root();
         let scope = default_scope(&region, Box::new(std::io::sink()));
-        let v = region.region().alloc_object(KObject::Number(7.0));
+        let v = region.brand().alloc_object(KObject::Number(7.0));
         scope
             .bind_value("k".to_string(), v, BindingIndex::BUILTIN)
             .unwrap();
@@ -202,7 +202,7 @@ mod tests {
         // region through a sibling pointer while the opened scope is still live.
         carrier.open(region.region(), |reattached| {
             assert!(matches!(reattached.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
-            let _other = region.region().alloc_object(KObject::Number(8.0));
+            let _other = region.brand().alloc_object(KObject::Number(8.0));
             assert!(reattached.lookup("k").is_some());
         });
     }

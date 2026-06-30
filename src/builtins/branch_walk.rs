@@ -39,9 +39,9 @@ pub(crate) fn resolve_arm_contract<'a>(
         }
     };
     Ok(ReturnContract::Arm {
-        ret: ctx.scope.region.alloc_ktype(ret_kt),
+        ret: ctx.scope.brand().alloc_ktype(ret_kt),
         kind,
-        region: ctx.scope.region,
+        region: ctx.scope.brand(),
     })
 }
 
@@ -64,7 +64,7 @@ pub(crate) fn arm_tail<'a>(
         // Bind the matched `it` value into the frame: `alloc_object` erases the caller-`'a` input and
         // re-homes it at the frame region, so no pre-shortening is needed. Its reach rides the matched
         // value's enclosing chain, pinned by `outer_frame`.
-        let it_obj = child.region.alloc_object(it_value);
+        let it_obj = child.brand().alloc_object(it_value);
         let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
     });
     let arm_scope_id = frame.scope_id();

@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::KoanRegion;
+use crate::machine::core::RegionBrand;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType};
 use crate::machine::{CallFrame, FrameSet, KError, KErrorKind};
@@ -14,10 +14,10 @@ use super::runtime::KoanRuntime;
 /// Both live in the home region (a strict ancestor of the producer frame) the finalized carrier's
 /// witness already pins via its `outer` chain, so [`finalize_terminal_witnessed`] folds them in with
 /// [`merge`](Witnessed::merge) — the re-stamp is born co-located, no asserted bundle. Layout-invariant:
-/// a `(&'r KoanRegion, &'r KType<'r>)` is two thin pointers whose representation never depends on `'r`.
+/// a `(RegionBrand<'r>, &'r KType<'r>)` is two thin pointers whose representation never depends on `'r`.
 struct ContractHomeFamily;
 
-reattachable!(ContractHomeFamily => (&'r KoanRegion, &'r KType<'r>));
+reattachable!(ContractHomeFamily => (RegionBrand<'r>, &'r KType<'r>));
 
 /// The workload's Done-boundary contract hook: enforce a finished node's declared return contract,
 /// returning the slot's final terminal. The driver opens the slot's contract at the step brand

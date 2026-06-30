@@ -29,7 +29,7 @@ pub fn body<'a>(
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", "body"));
     let child_scope = ctx
         .scope
-        .region
+        .brand()
         .alloc_scope(Scope::child_under_module(ctx.scope, name.clone()));
     let bind_index = ctx.bind_index();
     let name_for_finish = name;
@@ -41,12 +41,12 @@ pub fn body<'a>(
         child_scope.close();
         // Idempotent-finalize guard: a re-bound name short-circuits.
         if let Some(kt) = fctx.scope.bindings().lookup_type(&name_for_finish, None) {
-            let carrier = fctx.scope.region.alloc_ktype_witnessed(kt.clone());
+            let carrier = fctx.scope.brand().alloc_ktype_witnessed(kt.clone());
             return Action::DoneWitnessed(fctx.scope.seal_module(carrier));
         }
         let module: &'a Module<'a> = fctx
             .scope
-            .region
+            .brand()
             .alloc_module(Module::new(name_for_finish.clone(), child_scope));
         // Mirror pure type-side bindings into the module's `type_members`.
         {
@@ -67,7 +67,7 @@ pub fn body<'a>(
             .register_type_upsert(name_for_finish.clone(), identity, bind_index)
         {
             Ok(kt_ref) => {
-                let carrier = fctx.scope.region.alloc_ktype_witnessed(kt_ref.clone());
+                let carrier = fctx.scope.brand().alloc_ktype_witnessed(kt_ref.clone());
                 Action::DoneWitnessed(fctx.scope.seal_module(carrier))
             }
             Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
@@ -230,13 +230,13 @@ mod tests {
         let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let child = region
-            .region()
+            .brand()
             .alloc_scope(crate::machine::Scope::child_under_module(
                 scope,
                 "Foo".into(),
             ));
         let module: &Module<'_> = region
-            .region()
+            .brand()
             .alloc_module(Module::new("Foo".into(), child));
         let identity = KType::Module { module };
         // Pre-seed the type-only identity, then re-run `MODULE Foo = ...`. The finalize

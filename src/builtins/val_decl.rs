@@ -156,7 +156,7 @@ fn finalize_val<'a>(
     if let Err(e) = scope.register_user_type(name, declared_kt.clone(), bind_index) {
         return Action::Done(Err(e));
     }
-    Action::DoneWitnessed(scope.seal_type(scope.region.alloc_ktype_witnessed(declared_kt)))
+    Action::DoneWitnessed(scope.seal_type(scope.brand().alloc_ktype_witnessed(declared_kt)))
 }
 
 pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {

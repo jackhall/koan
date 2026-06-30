@@ -15,12 +15,12 @@ use super::{body_no_op, unit_signature};
 fn add_during_active_data_borrow_queues_and_drains() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let pre = region.region().alloc_object(KObject::Number(1.0));
+    let pre = region.brand().alloc_object(KObject::Number(1.0));
     scope
         .bind_value("pre".to_string(), pre, BindingIndex::BUILTIN)
         .unwrap();
 
-    let new_entry = region.region().alloc_object(KObject::Number(2.0));
+    let new_entry = region.brand().alloc_object(KObject::Number(2.0));
     {
         let snapshot = scope.bindings().data();
         assert!(snapshot.contains_key("pre"));
@@ -44,18 +44,18 @@ fn add_during_active_data_borrow_queues_and_drains() {
 fn drain_debug_asserts_on_invariant_violation() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let kfn1 = region.region().alloc_function(KFunction::new(
+    let kfn1 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj1 = region.region().alloc_object(KObject::KFunction(kfn1));
-    let kfn2 = region.region().alloc_function(KFunction::new(
+    let obj1 = region.brand().alloc_object(KObject::KFunction(kfn1));
+    let kfn2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj2 = region.region().alloc_object(KObject::KFunction(kfn2));
+    let obj2 = region.brand().alloc_object(KObject::KFunction(kfn2));
 
     let snapshot = scope.bindings().data();
     scope
@@ -75,12 +75,12 @@ fn drain_debug_asserts_on_invariant_violation() {
 fn register_function_defers_and_drains_through_function_arm() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let kfn = region.region().alloc_function(KFunction::new(
+    let kfn = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = region.region().alloc_object(KObject::KFunction(kfn));
+    let obj = region.brand().alloc_object(KObject::KFunction(kfn));
     let key = kfn.signature.untyped_key();
     {
         let snapshot = scope.bindings().functions();
@@ -102,7 +102,7 @@ fn register_function_defers_and_drains_through_function_arm() {
 fn drain_requeues_value_on_persistent_borrow_conflict() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let obj = region.region().alloc_object(KObject::Number(7.0));
+    let obj = region.brand().alloc_object(KObject::Number(7.0));
 
     let snapshot = scope.bindings().data();
     scope
@@ -123,12 +123,12 @@ fn drain_requeues_value_on_persistent_borrow_conflict() {
 fn drain_requeues_function_on_persistent_borrow_conflict() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let kfn = region.region().alloc_function(KFunction::new(
+    let kfn = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = region.region().alloc_object(KObject::KFunction(kfn));
+    let obj = region.brand().alloc_object(KObject::KFunction(kfn));
     let key = kfn.signature.untyped_key();
 
     let snapshot = scope.bindings().functions();
@@ -168,18 +168,18 @@ fn drain_requeues_type_on_persistent_borrow_conflict() {
 fn drain_debug_asserts_on_function_arm_invariant_violation() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let kfn1 = region.region().alloc_function(KFunction::new(
+    let kfn1 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj1 = region.region().alloc_object(KObject::KFunction(kfn1));
-    let kfn2 = region.region().alloc_function(KFunction::new(
+    let obj1 = region.brand().alloc_object(KObject::KFunction(kfn1));
+    let kfn2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj2 = region.region().alloc_object(KObject::KFunction(kfn2));
+    let obj2 = region.brand().alloc_object(KObject::KFunction(kfn2));
 
     let snapshot = scope.bindings().functions();
     scope

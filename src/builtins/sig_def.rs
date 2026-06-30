@@ -32,7 +32,7 @@ pub fn body<'a>(
 
     let decl_scope = ctx
         .scope
-        .region
+        .brand()
         .alloc_scope(Scope::child_under_sig(ctx.scope, name.clone()));
 
     let bind_index = ctx.bind_index();
@@ -43,7 +43,7 @@ pub fn body<'a>(
         decl_scope.close();
         let sig: &'a ModuleSignature<'a> = fctx
             .scope
-            .region
+            .brand()
             .alloc_signature(ModuleSignature::new(name_for_finish.clone(), decl_scope));
         let identity = KType::Signature {
             sig,
@@ -54,7 +54,7 @@ pub fn body<'a>(
             .register_type_upsert(name_for_finish.clone(), identity, bind_index)
         {
             Ok(kt_ref) => Action::DoneWitnessed(fctx.scope.seal_value(
-                fctx.scope.region.alloc_ktype_witnessed(kt_ref.clone()),
+                fctx.scope.brand().alloc_ktype_witnessed(kt_ref.clone()),
                 None,
             )),
             Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(

@@ -16,16 +16,15 @@
 //!   scope path carries **no `unsafe`** of its own beyond the substrate's single retype.
 //!
 //! The frame's per-call child scope additionally rides a [`SealedExtern<ScopeRefFamily>`] carrier (a
-//! `&'static Scope`), read through its rank-2 [`SealedExtern::open`] (the frame's `with_scope`). The
-//! borrow-bounded [`SealedExtern::attach`] is now **callerless** — kept only for the `single-open-verb`
-//! follow-up to delete.
+//! `&'static Scope`), read through its rank-2 [`SealedExtern::open`] (the frame's `with_scope`) — the
+//! single access verb.
 //!
 //! See [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the soundness argument the carriers' pinning supplies.
 
 use super::scope::Scope;
 use crate::scheduler::reattach_ref_with;
-use crate::witnessed::{reattachable, SealedExtern, Witness};
+use crate::witnessed::reattachable;
 
 /// `Reattachable` family for [`Scope`] — the family every scope-pointer re-attach (and the region's
 /// scope-erasure storage) routes through the single audited lifetime-retype. Layout-invariant: a
@@ -61,26 +60,5 @@ pub(crate) fn recouple_scope<'s, 'a>(scope: &Scope<'s>) -> &'a Scope<'a>
 where
     's: 'a,
 {
-    reattach_ref_with::<ScopeFamily, _>(scope, scope.region)
-}
-
-/// The frame's per-call child scope rides the substrate's externally-witnessed
-/// [`SealedExtern`] over [`ScopeRefFamily`] (a `&'static Scope`, erased once through the safe
-/// `erase_to_static`), read through its rank-2 [`SealedExtern::open`] (the frame's `with_scope`).
-/// [`Self::attach`] — the borrow-bounded re-anchor, the scope-pointer twin of
-/// [`reattach_ref_with`](crate::witnessed) — is now **callerless**: the frame-side reads and the
-/// seed-side `it` / param binds all fold onto `open`. It hands back a free content `'b` the
-/// `for<'b>`-branded `open` cannot, but no caller needs that now, so it survives only for the
-/// `single-open-verb` follow-up to delete.
-impl SealedExtern<ScopeRefFamily> {
-    /// Re-attach the frame's child scope bounded by a held [`Witness`] borrow: the borrow `'w` is
-    /// capped at the witness `&'w W` while the scope content `'b` is left free (`'b: 'w`), so the
-    /// returned reference **cannot outlive `'w`** and a value alloc'd into its region rides the cart
-    /// the witness pins. Routes the witness-bounded [`reattach_ref_with`] over the carrier's stored
-    /// `&'static Scope`, so it carries **no `unsafe`**. **Callerless** — the frame's reads fold onto
-    /// the rank-2 `open`; kept (and pinned by its own Miri test) for the `single-open-verb` follow-up
-    /// to delete.
-    pub fn attach<'w, 'b: 'w, W: Witness>(&'w self, witness: &'w W) -> &'w Scope<'b> {
-        reattach_ref_with::<ScopeFamily, W>(self.static_carrier(), witness)
-    }
+    reattach_ref_with::<ScopeFamily, _>(scope, scope.region())
 }

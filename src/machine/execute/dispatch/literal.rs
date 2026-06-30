@@ -4,7 +4,7 @@ use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
 use crate::machine::{
-    FrameSet, KError, KErrorKind, KoanRegion, NameOutcome, NodeId, TraceFrame,
+    FrameSet, KError, KErrorKind, KoanRegion, NameOutcome, NodeId, RegionBrand, TraceFrame,
     ValueCarrierResolution,
 };
 use crate::source::Spanned;
@@ -21,7 +21,7 @@ use super::resolve_name_part;
 /// reach onto the accumulator's witness — then the final `map` allocates the aggregate from the
 /// region. Layout-invariant in `'r`: a thin region pointer and a `Vec` of layout-invariant cells.
 struct AggBuildFamily;
-reattachable!(AggBuildFamily => (&'r KoanRegion, Vec<Held<'r>>));
+reattachable!(AggBuildFamily => (RegionBrand<'r>, Vec<Held<'r>>));
 
 /// One cell of a list / dict / record literal. A `Static` cell is wrapped into a witnessed carrier
 /// **at its source** (when the literal is classified), so the layout is lifetime-free and every cell
@@ -73,10 +73,10 @@ fn fold_cells(
         .region_owner()
         .upgrade()
         .expect("the consumer scope's region owner is held for the step");
-    let acc0 =
-        Witnessed::<AggBuildFamily, FrameSet>::yoke(FrameSet::singleton(dest_frame), |region| {
-            (region, Vec::with_capacity(capacity))
-        });
+    let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(
+        FrameSet::singleton(dest_frame),
+        |region| (region, Vec::with_capacity(capacity)),
+    );
     cells.fold(acc0, |acc, cell| {
         cell.transfer_into::<AggBuildFamily, AggBuildFamily>(
             acc,
@@ -310,7 +310,7 @@ impl<'step> KoanRuntime<'step> {
                 NameOutcome::Resolved(c) => {
                     let carrier = match c {
                         Carried::Type(kt) => {
-                            s.seal_type(s.region.alloc_ktype_witnessed(kt.clone()))
+                            s.seal_type(s.brand().alloc_ktype_witnessed(kt.clone()))
                         }
                         Carried::Object(obj) => s.resident_object_carrier(obj),
                     };

@@ -50,7 +50,7 @@ fn finalize_union<'a>(
     );
     match outcome {
         SealOutcome::Sealed(kt_ref) => {
-            Ok(scope.seal_value(scope.region.alloc_ktype_witnessed(kt_ref.clone()), None))
+            Ok(scope.seal_value(scope.brand().alloc_ktype_witnessed(kt_ref.clone()), None))
         }
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "UNION `{name}` schema references unsealed type `{missing}`",

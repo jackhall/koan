@@ -23,7 +23,7 @@ pub fn body_opaque<'a>(
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args));
 
-    let region = ctx.scope.region;
+    let region = ctx.scope.brand();
     let new_scope = region.alloc_scope(Scope::child_under_module(
         ctx.scope,
         format!("{} :| {}", m.path, s.path),
@@ -139,7 +139,7 @@ pub fn body_transparent<'a>(
     if let Err(e) = shape_check(s, m.child_scope()) {
         return Action::Done(Err(e));
     }
-    let region = ctx.scope.region;
+    let region = ctx.scope.brand();
     let new_module: &'a Module<'a> = region.alloc_module(Module::new(
         format!("{} :! {}", m.path, s.path),
         m.child_scope(),

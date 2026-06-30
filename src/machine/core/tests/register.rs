@@ -19,8 +19,8 @@ use super::{body_no_op, unit_signature};
 fn bind_value_errors_on_same_scope_rebind() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let v1 = region.region().alloc_object(KObject::Number(1.0));
-    let v2 = region.region().alloc_object(KObject::Number(2.0));
+    let v1 = region.brand().alloc_object(KObject::Number(1.0));
+    let v2 = region.brand().alloc_object(KObject::Number(2.0));
     scope
         .bind_value("x".to_string(), v1, BindingIndex::BUILTIN)
         .unwrap();
@@ -37,12 +37,12 @@ fn bind_value_errors_on_same_scope_rebind() {
 fn bind_value_allows_shadowing_in_child_scope() {
     let region = FrameStorage::run_root();
     let outer = run_root_bare(&region);
-    let v1 = region.region().alloc_object(KObject::Number(1.0));
+    let v1 = region.brand().alloc_object(KObject::Number(1.0));
     outer
         .bind_value("x".to_string(), v1, BindingIndex::BUILTIN)
         .unwrap();
-    let inner = region.region().alloc_scope(outer.child_for_call());
-    let v2 = region.region().alloc_object(KObject::Number(2.0));
+    let inner = region.brand().alloc_scope(outer.child_for_call());
+    let v2 = region.brand().alloc_object(KObject::Number(2.0));
     inner
         .bind_value("x".to_string(), v2, BindingIndex::BUILTIN)
         .unwrap();
@@ -54,7 +54,7 @@ fn bind_value_allows_shadowing_in_child_scope() {
 fn close_marks_scope_and_is_idempotent_reads_still_work() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let v = region.region().alloc_object(KObject::Number(1.0));
+    let v = region.brand().alloc_object(KObject::Number(1.0));
     scope
         .bind_value("x".to_string(), v, BindingIndex::BUILTIN)
         .unwrap();
@@ -74,7 +74,7 @@ fn bind_after_close_panics() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
     scope.close();
-    let v = region.region().alloc_object(KObject::Number(1.0));
+    let v = region.brand().alloc_object(KObject::Number(1.0));
     let _ = scope.bind_value("x".to_string(), v, BindingIndex::BUILTIN);
 }
 
@@ -83,8 +83,8 @@ fn close_is_per_scope_open_child_still_binds() {
     let region = FrameStorage::run_root();
     let outer = run_root_bare(&region);
     outer.close();
-    let inner = region.region().alloc_scope(outer.child_for_call());
-    let v = region.region().alloc_object(KObject::Number(2.0));
+    let inner = region.brand().alloc_scope(outer.child_for_call());
+    let v = region.brand().alloc_object(KObject::Number(2.0));
     inner
         .bind_value("x".to_string(), v, BindingIndex::BUILTIN)
         .unwrap();
@@ -96,21 +96,21 @@ fn close_is_per_scope_open_child_still_binds() {
 fn register_function_dedupes_exact_signature() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let f1 = region.region().alloc_function(KFunction::new(
+    let f1 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj1 = region.region().alloc_object(KObject::KFunction(f1));
+    let obj1 = region.brand().alloc_object(KObject::KFunction(f1));
     scope
         .register_function("FOO".to_string(), f1, obj1, BindingIndex::BUILTIN)
         .unwrap();
-    let f2 = region.region().alloc_function(KFunction::new(
+    let f2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj2 = region.region().alloc_object(KObject::KFunction(f2));
+    let obj2 = region.brand().alloc_object(KObject::KFunction(f2));
     let err = scope
         .register_function("FOO".to_string(), f2, obj2, BindingIndex::BUILTIN)
         .unwrap_err();
@@ -127,21 +127,21 @@ fn register_function_dedupes_exact_signature() {
 fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let f1 = region.region().alloc_function(KFunction::new(
+    let f1 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj1 = region.region().alloc_object(KObject::KFunction(f1));
+    let obj1 = region.brand().alloc_object(KObject::KFunction(f1));
     scope
         .register_function("FOO".to_string(), f1, obj1, BindingIndex::BUILTIN)
         .unwrap();
-    let f2 = region.region().alloc_function(KFunction::new(
+    let f2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj2 = region.region().alloc_object(KObject::KFunction(f2));
+    let obj2 = region.brand().alloc_object(KObject::KFunction(f2));
     let err = scope
         .bind_value("OTHER_NAME".to_string(), obj2, BindingIndex::BUILTIN)
         .unwrap_err();
@@ -158,13 +158,13 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
 fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let f = region.region().alloc_function(KFunction::new(
+    let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj1 = region.region().alloc_object(KObject::KFunction(f));
-    let obj2 = region.region().alloc_object(KObject::KFunction(f));
+    let obj1 = region.brand().alloc_object(KObject::KFunction(f));
+    let obj2 = region.brand().alloc_object(KObject::KFunction(f));
     scope
         .bind_value("FIRST".to_string(), obj1, BindingIndex::BUILTIN)
         .unwrap();
@@ -199,14 +199,14 @@ fn register_function_allows_overload_with_different_arg_types() {
     };
     let f1 =
         region
-            .region()
+            .brand()
             .alloc_function(KFunction::new(sig_num, Body::Builtin(body_no_op), scope));
     let f2 =
         region
-            .region()
+            .brand()
             .alloc_function(KFunction::new(sig_str, Body::Builtin(body_no_op), scope));
-    let obj1 = region.region().alloc_object(KObject::KFunction(f1));
-    let obj2 = region.region().alloc_object(KObject::KFunction(f2));
+    let obj1 = region.brand().alloc_object(KObject::KFunction(f1));
+    let obj2 = region.brand().alloc_object(KObject::KFunction(f2));
     scope
         .register_function("BAR".to_string(), f1, obj1, BindingIndex::BUILTIN)
         .unwrap();
@@ -221,16 +221,16 @@ fn register_function_allows_overload_with_different_arg_types() {
 fn register_function_coexists_with_same_name_value() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let v = region.region().alloc_object(KObject::Number(1.0));
+    let v = region.brand().alloc_object(KObject::Number(1.0));
     scope
         .bind_value("FOO".to_string(), v, BindingIndex::BUILTIN)
         .unwrap();
-    let f = region.region().alloc_function(KFunction::new(
+    let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = region.region().alloc_object(KObject::KFunction(f));
+    let obj = region.brand().alloc_object(KObject::KFunction(f));
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::BUILTIN)
         .expect("bare FN registration must not collide with a same-name value");
@@ -263,11 +263,11 @@ fn resolve_returns_placeholder_when_only_placeholder_exists() {
 fn resolve_stops_at_first_hit_does_not_descend_outer() {
     let region = FrameStorage::run_root();
     let outer = run_root_bare(&region);
-    let v = region.region().alloc_object(KObject::Number(1.0));
+    let v = region.brand().alloc_object(KObject::Number(1.0));
     outer
         .bind_value("x".to_string(), v, BindingIndex::BUILTIN)
         .unwrap();
-    let inner = region.region().alloc_scope(outer.child_for_call());
+    let inner = region.brand().alloc_scope(outer.child_for_call());
     inner
         .install_placeholder("x".to_string(), NodeId(3), BindingIndex::BUILTIN)
         .unwrap();
@@ -291,7 +291,7 @@ fn bind_value_clears_own_placeholder() {
     scope
         .install_placeholder("x".to_string(), NodeId(2), BindingIndex::BUILTIN)
         .unwrap();
-    let v = region.region().alloc_object(KObject::Number(42.0));
+    let v = region.brand().alloc_object(KObject::Number(42.0));
     scope
         .bind_value("x".to_string(), v, BindingIndex::BUILTIN)
         .unwrap();
@@ -309,7 +309,7 @@ fn visibility_chain_none_sees_every_entry() {
     use std::rc::Rc;
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let v = region.region().alloc_object(KObject::Number(7.0));
+    let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
         .bind_value("late".to_string(), v, BindingIndex::value(99))
         .unwrap();
@@ -329,7 +329,7 @@ fn visibility_strict_less_than_hides_later_sibling() {
     use std::rc::Rc;
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let v = region.region().alloc_object(KObject::Number(7.0));
+    let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
         .bind_value("later".to_string(), v, BindingIndex::value(5))
         .unwrap();
@@ -347,7 +347,7 @@ fn visibility_strict_less_than_admits_earlier_sibling() {
     use std::rc::Rc;
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let v = region.region().alloc_object(KObject::Number(7.0));
+    let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
         .bind_value("earlier".to_string(), v, BindingIndex::value(2))
         .unwrap();
@@ -364,7 +364,7 @@ fn visibility_self_index_hidden_under_strict_less_than() {
     use std::rc::Rc;
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let v = region.region().alloc_object(KObject::Number(7.0));
+    let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
         .bind_value("self_idx".to_string(), v, BindingIndex::value(3))
         .unwrap();

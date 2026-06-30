@@ -122,7 +122,7 @@ fn apply_constructor<'step>(
                     tag,
                 };
                 let scope = ctx.current_scope();
-                let carrier = scope.region.alloc_ktype_witnessed(variant);
+                let carrier = scope.brand().alloc_ktype_witnessed(variant);
                 return Outcome::DoneWitnessed(scope.seal_type(carrier));
             }
             // Positional construction: `Outcome (Error "x")` (paren-group body). Tagged

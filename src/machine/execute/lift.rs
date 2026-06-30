@@ -1,4 +1,4 @@
-use crate::machine::core::KoanRegion;
+use crate::machine::core::RegionBrand;
 use crate::machine::model::Carried;
 
 /// The workload's value-relocation hook: structurally copy a [`Carried`] into `dest`'s region so the
@@ -17,7 +17,7 @@ use crate::machine::model::Carried;
 /// two stay separate.
 pub(in crate::machine::execute) fn relocate_carried<'b>(
     value: Carried<'b>,
-    dest: &'b KoanRegion,
+    dest: RegionBrand<'b>,
 ) -> Carried<'b> {
     match value {
         Carried::Object(v) => Carried::Object(dest.alloc_object(v.deep_clone())),

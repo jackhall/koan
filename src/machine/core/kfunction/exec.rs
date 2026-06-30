@@ -27,7 +27,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::{BindingIndex, CallFrame, KError, KErrorKind, KoanRegion};
+use crate::machine::core::{BindingIndex, CallFrame, KError, KErrorKind, RegionBrand};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     elaborate_type_identifier, DeferredReturn, ElabResult, Elaborator, KType, Record, ReturnType,
@@ -109,7 +109,7 @@ pub enum PerCallReturn<'step> {
 /// unaffected — it rides the value channel's witness set like a returned closure.)
 pub(crate) fn home_return_type<'a>(
     kt: &KType<'_>,
-    region: &'a KoanRegion,
+    region: RegionBrand<'a>,
 ) -> Result<&'a KType<'a>, KError> {
     if matches!(kt, KType::Module { .. }) {
         return Err(KError::new(KErrorKind::ShapeError(
@@ -154,7 +154,7 @@ where
     // this runs.
     let bind = ctx.region.with_scope(|child| -> Result<(), KError> {
         let cells: Record<Held> = args.map(|carried| Held::from_carried(*carried));
-        let args_record = child.region.alloc_object(KObject::record_of_held(cells));
+        let args_record = child.brand().alloc_object(KObject::record_of_held(cells));
         if let KObject::Record(cells, _types) = args_record {
             for (name, cell) in cells.iter() {
                 match cell {
@@ -217,7 +217,7 @@ where
                     // `'ast: 'step` bound coerces the `&'ast` region down): the contract `ret` must not
                     // out-claim a caller-region scope borrow a resolved param type embeds — see
                     // `home_return_type`.
-                    let captured_region: &'step KoanRegion = func.captured_scope().region;
+                    let captured_region: RegionBrand<'step> = func.captured_scope().brand();
                     let homed = ctx.region.with_scope(|child| {
                         let mut elaborator = Elaborator::new(child);
                         let kt = match elaborate_type_identifier(&mut elaborator, type_expr) {

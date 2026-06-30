@@ -142,7 +142,7 @@ impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn relocate_terminal(
         &self,
         producer: NodeId,
-        dest: &crate::machine::core::KoanRegion,
+        dest: crate::machine::core::RegionBrand<'_>,
         dest_witness: FrameSet,
     ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
         let dest = Witnessed::<RegionRefFamily, FrameSet>::new(dest, dest_witness);

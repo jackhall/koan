@@ -24,7 +24,7 @@ fn resolve_type_walks_outer_chain_and_returns_none_past_root() {
     let region = FrameStorage::run_root();
     let root = run_root_bare(&region);
     root.register_type("Foo".into(), KType::Number, BindingIndex::BUILTIN);
-    let child = region.region().alloc_scope(Scope::child_under(root));
+    let child = region.brand().alloc_scope(Scope::child_under(root));
     assert!(matches!(child.resolve_type("Foo"), Some(KType::Number)));
     assert!(
         child.resolve_type("Nope").is_none(),
@@ -39,7 +39,7 @@ fn resolve_type_inner_scope_shadows_outer() {
     // User (non-BUILTIN) types: a builtin is unshadowable and would resolve root-first,
     // so this exercises the user-vs-user innermost-wins walk.
     root.register_type("Foo".into(), KType::Number, BindingIndex::value(1));
-    let child = region.region().alloc_scope(Scope::child_under(root));
+    let child = region.brand().alloc_scope(Scope::child_under(root));
     child.register_type("Foo".into(), KType::Str, BindingIndex::value(1));
     assert!(matches!(child.resolve_type("Foo"), Some(KType::Str)));
     assert!(matches!(root.resolve_type("Foo"), Some(KType::Number)));

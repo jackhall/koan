@@ -235,7 +235,7 @@ pub(super) fn invoke<'step>(
                 // the cart keeps live — same home as the `Type` form's `PerCall.ret`. A concrete
                 // module return type is rejected (see `home_return_type`); every other resolved type
                 // is owned / `Rc` data the clone re-homes past the dying frame.
-                let ret_ref = match home_return_type(kt, picked.captured_scope().region) {
+                let ret_ref = match home_return_type(kt, picked.captured_scope().brand()) {
                     Ok(r) => r,
                     Err(e) => return Outcome::Done(Err(e)),
                 };
@@ -300,7 +300,7 @@ fn run_action_builtin<'step>(
     });
     let args_obj: &'step KObject<'step> = view
         .current_scope()
-        .region
+        .brand()
         .alloc_object(KObject::record_of_held(cells));
     let frame = view.current_frame();
     let chain = view.current_lexical_chain();
@@ -335,7 +335,7 @@ fn extract_carried_args<'step>(
             ExpressionPart::Literal(_) => {
                 let object = view
                     .current_scope()
-                    .region
+                    .brand()
                     .alloc_object(part.value.resolve());
                 args.push(Carried::Object(object));
             }

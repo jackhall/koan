@@ -48,13 +48,13 @@ fn finalize_newtype<'a>(
     member.fill(NominalSchema::NewType(Box::new(repr)));
     let set = Rc::new(RecursiveSet::new(vec![member]));
     let identity = KType::SetRef { set, index: 0 };
-    let kt_ref: &'a KType = scope.region.alloc_ktype(identity);
+    let kt_ref: &'a KType = scope.brand().alloc_ktype(identity);
     match scope
         .bindings()
         .try_register_type(&name, kt_ref, bind_index)
     {
         Ok(ApplyOutcome::Applied) => {
-            Ok(scope.seal_value(scope.region.alloc_ktype_witnessed(kt_ref.clone()), None))
+            Ok(scope.seal_value(scope.brand().alloc_ktype_witnessed(kt_ref.clone()), None))
         }
         // Finalize sites run post-dep-finish outside the re-entrant hot path, so borrow
         // contention here is a programming error. Surface as a structured error rather
@@ -106,7 +106,7 @@ fn finalize_record_newtype<'a>(
     );
     match outcome {
         SealOutcome::Sealed(kt_ref) => {
-            Ok(scope.seal_value(scope.region.alloc_ktype_witnessed(kt_ref.clone()), None))
+            Ok(scope.seal_value(scope.brand().alloc_ktype_witnessed(kt_ref.clone()), None))
         }
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE `{name}` record repr references unsealed type `{missing}`",

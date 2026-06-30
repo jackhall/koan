@@ -72,7 +72,7 @@ pub fn body<'a>(
     let module_bindings = module.child_scope().bindings();
     let child: &'a Scope<'a> = ctx
         .scope
-        .region
+        .brand()
         .alloc_scope(Scope::child_transparent(ctx.scope, module_bindings));
     let finish: AwaitContinue<'a> = Box::new(move |_fctx, results| {
         // The body block's final statement value is the USING result.

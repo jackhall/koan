@@ -87,7 +87,7 @@ mod action_bodies {
         let elem = crate::try_action!(require_ktype(ctx.args, "elem"));
         let carrier = ctx
             .scope
-            .region
+            .brand()
             .alloc_ktype_witnessed(KType::List(Box::new(elem)));
         Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
     }
@@ -97,7 +97,7 @@ mod action_bodies {
         let v = crate::try_action!(require_ktype(ctx.args, "v"));
         let carrier = ctx
             .scope
-            .region
+            .brand()
             .alloc_ktype_witnessed(KType::Dict(Box::new(k), Box::new(v)));
         Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
     }
@@ -130,7 +130,7 @@ mod action_bodies {
         }
         let carrier = ctx
             .scope
-            .region
+            .brand()
             .alloc_ktype_witnessed(KType::ConstructorApply {
                 ctor: Box::new(ctor),
                 args: vec![applied],
@@ -173,7 +173,7 @@ fn build_carrier<'a>(
             let kt = finalize_carrier(fields, ret, kind);
             Action::DoneWitnessed(
                 ctx.scope
-                    .seal_value(ctx.scope.region.alloc_ktype_witnessed(kt), None),
+                    .seal_value(ctx.scope.brand().alloc_ktype_witnessed(kt), None),
             )
         }
         FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
@@ -192,7 +192,7 @@ fn build_carrier<'a>(
             None,
             Box::new(move |scope, fields| {
                 let kt = finalize_carrier(fields, ret, kind);
-                Ok(scope.seal_value(scope.region.alloc_ktype_witnessed(kt), None))
+                Ok(scope.seal_value(scope.brand().alloc_ktype_witnessed(kt), None))
             }),
         ),
     }

@@ -39,7 +39,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
         };
         let allocated = _sched
             .current_scope()
-            .region
+            .brand()
             .alloc_object(KObject::KString(format!("{a}+{b}")));
         Outcome::Done(Ok(Carried::Object(allocated)))
     });
@@ -75,7 +75,7 @@ fn dep_finish_short_circuits_on_dep_error() {
     store.clear_node(dep_err);
     let _ = store.pop_next();
     let _ = store.pop_next();
-    let value = region.region().alloc_object(KObject::Number(99.0));
+    let value = region.brand().alloc_object(KObject::Number(99.0));
     store.set_result(dep_ok, Ok(Carried::Object(value)));
     store.set_result(
         dep_err,
@@ -119,7 +119,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
         let finish: AwaitContinue<'run> = Box::new(|fctx, _results| {
             let v = fctx
                 .scope
-                .region
+                .brand()
                 .alloc_object(KObject::KString("from-combine".into()));
             Action::Done(Ok(Carried::Object(v)))
         });

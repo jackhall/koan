@@ -13,14 +13,14 @@ fn module_child_scope_transmute_does_not_dangle() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(sink()));
     let module = region
-        .region()
+        .brand()
         .alloc_module(Module::new("Test".into(), scope));
     let recovered = module.child_scope();
     assert!(ptr::eq(recovered, scope));
     // Re-borrow after a sibling alloc — tree borrows is sensitive to interleaved
     // mutation under live shared borrows.
     let _other = region
-        .region()
+        .brand()
         .alloc_object(crate::machine::model::values::KObject::Number(1.0));
     let recovered2 = module.child_scope();
     assert!(ptr::eq(recovered2, scope));
@@ -34,12 +34,12 @@ fn signature_decl_scope_transmute_does_not_dangle() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(sink()));
     let sig = region
-        .region()
+        .brand()
         .alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
     let recovered = sig.decl_scope();
     assert!(ptr::eq(recovered, scope));
     let _other = region
-        .region()
+        .brand()
         .alloc_object(crate::machine::model::values::KObject::Number(1.0));
     let recovered2 = sig.decl_scope();
     assert!(ptr::eq(recovered2, scope));
@@ -52,7 +52,7 @@ fn signature_decl_scope_transmute_does_not_dangle() {
 fn module_type_members_refcell_mutation_with_held_module_ref() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(sink()));
-    let module = region.region().alloc_module(Module::new("M".into(), scope));
+    let module = region.brand().alloc_module(Module::new("M".into(), scope));
     let scope_id = module.scope_id();
     {
         let mut tm = module.type_members.borrow_mut();
@@ -80,7 +80,7 @@ fn module_type_members_refcell_mutation_with_held_module_ref() {
 fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(sink()));
-    let module = region.region().alloc_module(Module::new("M".into(), scope));
+    let module = region.brand().alloc_module(Module::new("M".into(), scope));
     let scope_id = module.scope_id();
     {
         let mut tags = module.slot_type_tags.borrow_mut();

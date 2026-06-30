@@ -86,7 +86,7 @@ pub fn body<'a>(
              `(VAL {name}: <Type>)` instead of `(LET {name} = <example-value>)`",
         ))));
     }
-    let region = ctx.scope.region;
+    let region = ctx.scope.brand();
     if let Some(kt) = type_for_types_map {
         let is_type_constructor = matches!(
             &kt,

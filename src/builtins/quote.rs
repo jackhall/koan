@@ -25,7 +25,7 @@ pub fn body<'a>(
     );
     let carrier = ctx
         .scope
-        .region
+        .brand()
         .alloc_object_witnessed(KObject::KExpression(expr));
     Action::DoneWitnessed(carrier)
 }

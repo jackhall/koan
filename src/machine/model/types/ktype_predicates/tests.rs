@@ -164,8 +164,9 @@ fn record_disjoint_fields_incomparable() {
 /// literal admits any record slot shape-only.
 #[test]
 fn record_value_admission_and_matches() {
-    use crate::machine::core::KoanRegion;
-    let region = KoanRegion::new();
+    use crate::machine::core::FrameStorage;
+    let storage = FrameStorage::run_root();
+    let region = storage.brand();
     let value: &KObject<'_> = region.alloc_object(KObject::record(Record::from_pairs(vec![
         ("x".to_string(), KObject::Number(1.0)),
         ("y".to_string(), KObject::KString("a".into())),
@@ -200,10 +201,10 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let t = KType::OfKind(KKind::AnyType);
-    let kt_number: &KType<'_> = region.region().alloc_ktype(KType::Number);
-    let kt_str: &KType<'_> = region.region().alloc_ktype(KType::Str);
-    let kt_bool: &KType<'_> = region.region().alloc_ktype(KType::Bool);
-    let kt_null: &KType<'_> = region.region().alloc_ktype(KType::Null);
+    let kt_number: &KType<'_> = region.brand().alloc_ktype(KType::Number);
+    let kt_str: &KType<'_> = region.brand().alloc_ktype(KType::Str);
+    let kt_bool: &KType<'_> = region.brand().alloc_ktype(KType::Bool);
+    let kt_null: &KType<'_> = region.brand().alloc_ktype(KType::Null);
     assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_number))));
     assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_str))));
     assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_bool))));
@@ -215,36 +216,36 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         ScopeId::SENTINEL,
         NominalSchema::Tagged(HashMap::new()),
     );
-    let tagged_token: &KType<'_> = region.region().alloc_ktype(KType::SetRef {
+    let tagged_token: &KType<'_> = region.brand().alloc_ktype(KType::SetRef {
         set: tagged_set,
         index: 0,
     });
     let struct_token: &KType<'_> = region
-        .region()
+        .brand()
         .alloc_ktype(record_newtype_setref("Point", ScopeId::SENTINEL));
     assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(tagged_token))));
     assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(struct_token))));
     let child = region
-        .region()
+        .brand()
         .alloc_scope(crate::machine::Scope::child_under_module(
             scope,
             "IntMod".into(),
         ));
     let module = region
-        .region()
+        .brand()
         .alloc_module(Module::new("IntMod".into(), child));
-    let kt_module: &KType<'_> = region.region().alloc_ktype(KType::Module { module });
+    let kt_module: &KType<'_> = region.brand().alloc_ktype(KType::Module { module });
     assert!(!t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_module))));
     let sig = region
-        .region()
+        .brand()
         .alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
-    let kt_sig: &KType<'_> = region.region().alloc_ktype(KType::Signature {
+    let kt_sig: &KType<'_> = region.brand().alloc_ktype(KType::Signature {
         sig,
         pinned_slots: Vec::new(),
     });
     assert!(!t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_sig))));
-    let n: &KObject<'_> = region.region().alloc_object(KObject::Number(7.0));
-    let s: &KObject<'_> = region.region().alloc_object(KObject::KString("hi".into()));
+    let n: &KObject<'_> = region.brand().alloc_object(KObject::Number(7.0));
+    let s: &KObject<'_> = region.brand().alloc_object(KObject::KString("hi".into()));
     assert!(!t.accepts_part(&ExpressionPart::Spliced(Carried::Object(n))));
     assert!(!t.accepts_part(&ExpressionPart::Spliced(Carried::Object(s))));
 }
@@ -255,8 +256,9 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
 /// the runtime `Wrapped` *instance* entirely; `OfKind(Proper)` subsumes the NewType type.
 #[test]
 fn of_kind_nominal_is_type_channel_only() {
-    use crate::machine::core::KoanRegion;
-    let region = KoanRegion::new();
+    use crate::machine::core::FrameStorage;
+    let storage = FrameStorage::run_root();
+    let region = storage.brand();
     let newtype_ty = KType::OfKind(KKind::NewType);
 
     // The NewType *type value* — admitted in the type channel.
@@ -332,7 +334,7 @@ fn is_type_denoting_table() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let sig = region
-        .region()
+        .brand()
         .alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
     let sb = KType::Signature {
         sig,
@@ -389,22 +391,22 @@ fn is_more_specific_for_pinned_signature_bound() {
     let scope = default_scope(&region, Box::new(std::io::sink()));
     // Two distinct decl_scopes → two distinct `sig_id`s.
     let ordered_scope = region
-        .region()
+        .brand()
         .alloc_scope(crate::machine::Scope::child_under_sig(
             scope,
             "OrderedSig".into(),
         ));
     let hashed_scope = region
-        .region()
+        .brand()
         .alloc_scope(crate::machine::Scope::child_under_sig(
             scope,
             "HashedSig".into(),
         ));
     let ordered = region
-        .region()
+        .brand()
         .alloc_signature(ModuleSignature::new("OrderedSig".into(), ordered_scope));
     let hashed = region
-        .region()
+        .brand()
         .alloc_signature(ModuleSignature::new("HashedSig".into(), hashed_scope));
 
     let bare = KType::Signature {

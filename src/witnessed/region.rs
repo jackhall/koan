@@ -6,8 +6,10 @@
 //! and records its address. Two surfaces re-anchor that store: the brand-confined
 //! [`alloc`](Region::alloc) hands the freshly-stored value to a `for<'b>` closure (so it enters
 //! circulation only wrapped by the Witnessed/Sealed abstraction, never as a bare region reference),
-//! and the transitional [`alloc_resident`](Region::alloc_resident) re-anchors it to the caller's
-//! lifetime as a bare `&'a` for the callers not yet witnessed. No cycle gate: a stored value holds no
+//! and [`alloc_resident`](Region::alloc_resident) re-anchors it to the caller's `'a` as a co-located
+//! `&'a` (content == borrow == `'a`, the tight no-free-lifetime shape). Both are reachable only
+//! through a [`RegionBrand`](crate::machine::core::RegionBrand) — a bare `&Region` has no allocation
+//! surface at all. No cycle gate: a stored value holds no
 //! owning `Rc` back to a region (a closure / future / module is a bare borrow into its defining
 //! region, kept alive by its carrier's witness set), so storing it where requested can never form an
 //! allocation back-edge. [`Region::storage`] is private and `store` is the only path that reaches it
@@ -24,7 +26,7 @@ use std::cell::RefCell;
 
 use typed_arena::Arena;
 
-use super::{erase_to_static, reattach_ref_with, with_branded_ref, Reattachable};
+use super::{erase_to_static, with_branded_ref, Reattachable};
 
 /// A workload's declaration of what a [`Region`] stores for it. `Storage` is the bundle of
 /// typed sub-arenas the frame owns; the workload's [`Stored`] impls project each family out of it.
@@ -128,18 +130,25 @@ impl<W: StorageProfile> Region<W> {
         with_branded_ref::<K, R>(self.store::<K>(value), project)
     }
 
-    /// The transitional bare-`&'a` allocation: store `value` — its input lifetime forgotten by
-    /// [`store`](Self::store) — then re-anchor the store to the caller's `'a` through the
-    /// witness-bounded [`reattach_ref_with`], with `self` (the region the value now lives in) as the
-    /// pin. Because the store erases the input, `value` is accepted at **any** lifetime, so a caller
-    /// relocating a longer-lived value into this region hands it straight in rather than pre-shortening
-    /// it to the region borrow. The surface the not-yet-witnessed callers route; the brand-confined
-    /// [`alloc`](Self::alloc) is its witnessed replacement, and confining this leaf behind a branded
-    /// region handle (so a bare `&Region` cannot reach it) is the access-verb item's close. Carries no
-    /// `unsafe`: the result borrow is capped at `&'a self`, so no `'static`-claiming reference escapes
-    /// the frame's own borrow.
+    /// The co-located resident allocation: store `value` — its input lifetime forgotten by
+    /// [`store`](Self::store), so `value` is accepted at **any** lifetime (a caller relocating a
+    /// longer-lived value hands it straight in) — then re-anchor the stored reference to the caller's
+    /// `'a` through the single audited [`retype`](super::retype). The result is `&'a K::At<'a>`:
+    /// **content == borrow == `'a`**, the tightest shape, with no free content lifetime a caller could
+    /// widen past the pin. The `&'a self` borrow is what makes it sound — the region pins the pointee
+    /// for the whole of `'a`, so the re-anchored reference cannot out-claim its backing.
+    ///
+    /// Reachable only through a [`RegionBrand`](crate::machine::core::RegionBrand)'s `alloc_*` wrappers
+    /// (the co-located residents: a registered `&KType`, a child `&Scope`); the witnessed terminals go
+    /// through the brand-confined [`alloc`](Self::alloc). A bare `&Region` exposes neither.
     pub(crate) fn alloc_resident<'a, K: Stored<W>>(&'a self, value: K::At<'_>) -> &'a K::At<'a> {
-        reattach_ref_with::<K, _>(self.store::<K>(value), self)
+        let stored: &'a K::At<'static> = self.store::<K>(value);
+        // SAFETY: lifetime-only retype of a single-lifetime family (the `Reattachable` contract); a
+        // reference is a thin/fat pointer whose layout is identical across the content lifetime. The
+        // output is `&'a K::At<'a>` (content == borrow == `'a`), and the `&'a self` borrow keeps the
+        // region — hence the pointee — live for all of `'a`, so the re-anchored reference cannot dangle
+        // and, having no free content lifetime, cannot be widened past the pin.
+        unsafe { super::retype::<&'a K::At<'static>, &'a K::At<'a>>(stored) }
     }
 }
 

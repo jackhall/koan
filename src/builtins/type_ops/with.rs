@@ -70,7 +70,7 @@ pub fn body<'a>(
             }
         }
     }
-    let carrier = ctx.scope.region.alloc_ktype_witnessed(KType::Signature {
+    let carrier = ctx.scope.brand().alloc_ktype_witnessed(KType::Signature {
         sig: s,
         pinned_slots: pinned,
     });

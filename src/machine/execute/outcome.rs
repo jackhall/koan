@@ -222,7 +222,7 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
         for r in results {
             match r {
                 Ok(t) => {
-                    values.push(relocate_carried(t.value, view.current_scope().region));
+                    values.push(relocate_carried(t.value, view.current_scope().brand()));
                     // The dep's own carrier (un-relocated, naming its reach) rides alongside the
                     // relocated value so a call-committing finish threads it to the body. Borrowed —
                     // a finish that keeps a carrier `duplicate`s it.
@@ -287,7 +287,7 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
             // for a value-reading finish (TRY-WITH's `it` bind), and hand the producer's own carrier
             // alongside for a witnessed finish (CATCH folds it via `transfer_into`).
             Ok(t) => Ok(CatchOk {
-                value: relocate_carried(t.value, view.current_scope().region),
+                value: relocate_carried(t.value, view.current_scope().brand()),
                 carrier: t.carrier.duplicate(),
             }),
             // Frameless: the recovery-site dispatch attaches its own frame.
@@ -332,7 +332,7 @@ mod erased_continuation_tests {
         let region = FrameStorage::run_root();
         let scope = default_scope(&region, Box::new(std::io::sink()));
         // The captured value lives in the run region — the ancestor the cart's `outer` chain pins.
-        let captured: &KObject = region.region().alloc_object(KObject::Number(7.0));
+        let captured: &KObject = region.brand().alloc_object(KObject::Number(7.0));
         // The cart `Rc` held live to the end of the test witnesses the open below.
         let cart = Rc::new(CallFrame::new_test(scope, None));
 
@@ -359,7 +359,7 @@ mod erased_continuation_tests {
                 assert!(matches!(out, Outcome::Done(Err(_))));
             });
         // Mutate the region through a sibling pointer after the brand to catch a stacked-borrow regression.
-        let _other = region.region().alloc_object(KObject::Number(8.0));
+        let _other = region.brand().alloc_object(KObject::Number(8.0));
         assert!(matches!(captured, KObject::Number(n) if *n == 7.0));
     }
 }

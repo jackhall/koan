@@ -89,7 +89,7 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
         body_a,
         BindingIndex::value(1),
     );
-    let inner = region.region().alloc_scope(outer.child_for_call());
+    let inner = region.brand().alloc_scope(outer.child_for_call());
     register_builtin(inner, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
     register_builtin(inner, "AN", two_slot_sig(KType::Any, KType::Number), body_b);
     let expr = KExpression::new(vec![
@@ -282,7 +282,7 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
         BindingIndex::value(1),
     );
 
-    let inner = region.region().alloc_scope(outer.child_for_call());
+    let inner = region.brand().alloc_scope(outer.child_for_call());
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("MARK".into())),
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
@@ -318,7 +318,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
         two_slot_sig(KType::Number, KType::Number),
         body_a,
     );
-    let inner = region.region().alloc_scope(outer.child_for_call());
+    let inner = region.brand().alloc_scope(outer.child_for_call());
     register_builtin(
         inner,
         "inner_plus",
@@ -358,7 +358,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
         one_slot_sig("v", KType::Identifier),
         body_a,
     );
-    let inner = region.region().alloc_scope(outer.child_for_call());
+    let inner = region.brand().alloc_scope(outer.child_for_call());
     // Inner `:Number` overload: the unbound bare name rejects its shape, so the
     // inner scope's only contribution is a dead lean (must not terminate).
     register_builtin(inner, "inner_num", one_slot_sig("v", KType::Number), body_b);
@@ -408,10 +408,10 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     };
     let pick_num_fn =
         region
-            .region()
+            .brand()
             .alloc_function(KFunction::new(pick_num, Body::Builtin(body_a), scope));
     let pick_num_obj = region
-        .region()
+        .brand()
         .alloc_object(KObject::KFunction(pick_num_fn));
     scope
         .register_function(
@@ -456,12 +456,12 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             }),
         ],
     };
-    let sibling = region.region().alloc_function(KFunction::new(
+    let sibling = region.brand().alloc_function(KFunction::new(
         pick_str,
         Body::Builtin(super::body_no_op),
         scope,
     ));
-    let sibling_obj = region.region().alloc_object(KObject::KFunction(sibling));
+    let sibling_obj = region.brand().alloc_object(KObject::KFunction(sibling));
     scope
         .register_function(
             "pick_str".to_string(),

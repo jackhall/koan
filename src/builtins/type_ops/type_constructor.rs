@@ -48,7 +48,7 @@ pub fn body<'a>(
     let set = Rc::new(RecursiveSet::new(vec![member]));
     let carrier = ctx
         .scope
-        .region
+        .brand()
         .alloc_ktype_witnessed(KType::SetRef { set, index: 0 });
     Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
 }

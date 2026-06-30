@@ -89,7 +89,7 @@ pub fn body<'a>(
 
     let narrowed = Record::from_pairs(narrowed_pairs);
     let result = KObject::record_with_type(Rc::clone(fields), narrowed);
-    let carrier = ctx.scope.region.alloc_object_witnessed(result);
+    let carrier = ctx.scope.brand().alloc_object_witnessed(result);
     // The projection `Rc`-shares the record's backing field values, so it reaches whatever the
     // `record` operand reaches. Seal it under the read-site home frame with the record carrier's
     // foreign reach folded in, so every region the shared backing borrows into outlives the

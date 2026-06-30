@@ -69,7 +69,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         BindingIndex::value(1),
     );
 
-    let inner = region.region().alloc_scope(outer.child_for_call());
+    let inner = region.brand().alloc_scope(outer.child_for_call());
     let inner_sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![

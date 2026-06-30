@@ -219,7 +219,7 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     // outer SIG's error is a combine-propagated shape error and doesn't carry
     // the inner diagnostic text.
     use crate::machine::Scope;
-    let sig_scope = region.region().alloc_scope(Scope::child_under_sig(
+    let sig_scope = region.brand().alloc_scope(Scope::child_under_sig(
         scope,
         "SyntheticForTest".to_string(),
     ));

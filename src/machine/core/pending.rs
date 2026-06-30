@@ -160,12 +160,13 @@ impl<'a> Default for PendingQueue<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::core::arena::KoanRegion;
+    use crate::machine::core::arena::FrameStorage;
     use crate::machine::model::types::KType;
 
     #[test]
     fn defer_type_queues_and_drain_replays_into_types() {
-        let region = KoanRegion::new();
+        let storage = FrameStorage::run_root();
+        let region = storage.brand();
         let bindings: Bindings<'_> = Bindings::new();
         let queue: PendingQueue<'_> = PendingQueue::new();
         let kt = region.alloc_ktype(KType::Number);

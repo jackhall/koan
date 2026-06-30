@@ -34,7 +34,7 @@ fn arithmetic_group() -> OperatorGroup {
 fn register_then_resolve_group_by_probe() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let group = region.region().alloc_operator_group(arithmetic_group());
+    let group = region.brand().alloc_operator_group(arithmetic_group());
     // A module registers the powerset; "- +" is the sorted-joined probe for a chain
     // mixing both operators.
     scope
@@ -52,7 +52,7 @@ fn register_then_resolve_group_by_probe() {
 fn undeclared_probe_misses() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let group = region.region().alloc_operator_group(arithmetic_group());
+    let group = region.brand().alloc_operator_group(arithmetic_group());
     scope
         .register_operator_group("+".to_string(), group, BindingIndex::value(1))
         .unwrap();
@@ -64,7 +64,7 @@ fn undeclared_probe_misses() {
 fn cross_group_probe_misses() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let group = region.region().alloc_operator_group(arithmetic_group());
+    let group = region.brand().alloc_operator_group(arithmetic_group());
     // Only the within-group subsets are registered.
     scope
         .register_operator_group("+".to_string(), group, BindingIndex::value(1))
@@ -86,9 +86,9 @@ fn cross_group_probe_misses() {
 fn innermost_scope_shadows_outer() {
     let region = FrameStorage::run_root();
     let outer = run_root_bare(&region);
-    let inner = region.region().alloc_scope(outer.child_for_call());
+    let inner = region.brand().alloc_scope(outer.child_for_call());
 
-    let outer_group = region.region().alloc_operator_group(arithmetic_group());
+    let outer_group = region.brand().alloc_operator_group(arithmetic_group());
     let mut inner_members = HashMap::new();
     inner_members.insert(
         "+".to_string(),
@@ -98,7 +98,7 @@ fn innermost_scope_shadows_outer() {
         },
     );
     let inner_group = region
-        .region()
+        .brand()
         .alloc_operator_group(OperatorGroup::new(inner_members));
 
     outer
@@ -129,7 +129,7 @@ fn innermost_scope_shadows_outer() {
 fn visibility_cutoff_hides_later_sibling_registration() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let group = region.region().alloc_operator_group(arithmetic_group());
+    let group = region.brand().alloc_operator_group(arithmetic_group());
     scope
         .register_operator_group("+".to_string(), group, BindingIndex::value(5))
         .unwrap();

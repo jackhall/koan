@@ -16,60 +16,60 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let scope = run_root_silent(&region);
     // Real signature so the slot's `sig.sig_id()` is the one modules `mark_satisfies`.
     let sig_scope = region
-        .region()
+        .brand()
         .alloc_scope(crate::machine::Scope::child_under_sig(
             scope,
             "OrderedSig".into(),
         ));
     let sig = region
-        .region()
+        .brand()
         .alloc_signature(ModuleSignature::new("OrderedSig".into(), sig_scope));
     let sig_id = sig.sig_id();
 
     let child_a = region
-        .region()
+        .brand()
         .alloc_scope(crate::machine::Scope::child_under_module(
             scope,
             "NumPinned".into(),
         ));
     let m_num: &Module<'_> = region
-        .region()
+        .brand()
         .alloc_module(Module::new("NumPinned".into(), child_a));
     m_num
         .type_members
         .borrow_mut()
         .insert("Type".into(), KType::Number);
     m_num.mark_satisfies(sig_id);
-    let m_num_obj = region.region().alloc_ktype(KType::Module { module: m_num });
+    let m_num_obj = region.brand().alloc_ktype(KType::Module { module: m_num });
 
     let child_b = region
-        .region()
+        .brand()
         .alloc_scope(crate::machine::Scope::child_under_module(
             scope,
             "StrPinned".into(),
         ));
     let m_str: &Module<'_> = region
-        .region()
+        .brand()
         .alloc_module(Module::new("StrPinned".into(), child_b));
     m_str
         .type_members
         .borrow_mut()
         .insert("Type".into(), KType::Str);
     m_str.mark_satisfies(sig_id);
-    let m_str_obj = region.region().alloc_ktype(KType::Module { module: m_str });
+    let m_str_obj = region.brand().alloc_ktype(KType::Module { module: m_str });
 
     let child_c = region
-        .region()
+        .brand()
         .alloc_scope(crate::machine::Scope::child_under_module(
             scope,
             "NoTypePin".into(),
         ));
     let m_none: &Module<'_> = region
-        .region()
+        .brand()
         .alloc_module(Module::new("NoTypePin".into(), child_c));
     m_none.mark_satisfies(sig_id);
     let m_none_obj = region
-        .region()
+        .brand()
         .alloc_ktype(KType::Module { module: m_none });
 
     let slot = KType::Signature {
@@ -85,13 +85,13 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     assert!(!slot.accepts_part(&ExpressionPart::Spliced(Carried::Type(m_none_obj))));
 
     let child_d = region
-        .region()
+        .brand()
         .alloc_scope(crate::machine::Scope::child_under_module(
             scope,
             "Unascribed".into(),
         ));
     let m_unascribed: &Module<'_> = region
-        .region()
+        .brand()
         .alloc_module(Module::new("Unascribed".into(), child_d));
     m_unascribed
         .type_members
@@ -99,7 +99,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .insert("Type".into(), KType::Number);
     // No mark_satisfies: compatible_sigs stays empty, so the sig-membership gate trips
     // before the pin comparison.
-    let m_unascribed_obj = region.region().alloc_ktype(KType::Module {
+    let m_unascribed_obj = region.brand().alloc_ktype(KType::Module {
         module: m_unascribed,
     });
     assert!(!slot.accepts_part(&ExpressionPart::Spliced(Carried::Type(m_unascribed_obj))));

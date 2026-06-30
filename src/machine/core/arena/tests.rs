@@ -93,7 +93,7 @@ fn with_scope_opens_child_scope_at_brand() {
     assert_eq!(id, frame.scope_id());
     // In-place bind + lookup, all at the brand `'b` (value allocated via the opened scope's region).
     frame.with_scope(|s| {
-        let v = s.region.alloc_object(KObject::Number(7.0));
+        let v = s.brand().alloc_object(KObject::Number(7.0));
         s.bind_value("k".to_string(), v, BindingIndex::BUILTIN)
             .unwrap();
         assert!(matches!(s.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
@@ -108,7 +108,8 @@ fn with_scope_opens_child_scope_at_brand() {
 fn with_scope_relocates_seed_value_into_brand() {
     // The caller value is a deep clone of a value resident in its own, longer-lived region —
     // mirroring the matched `it` / a bound arg.
-    let caller_region = KoanRegion::new();
+    let caller_storage = FrameStorage::run_root();
+    let caller_region = caller_storage.brand();
     let it_value: KObject<'_> = caller_region
         .alloc_object(KObject::Number(99.0))
         .deep_clone();
@@ -118,33 +119,12 @@ fn with_scope_relocates_seed_value_into_brand() {
     frame.with_scope(|child| {
         // `alloc_object` erases the caller-`'a` input and re-homes it at the frame region, so no
         // pre-shortening is needed.
-        let it_obj = child.region.alloc_object(it_value);
+        let it_obj = child.brand().alloc_object(it_value);
         child
             .bind_value("it".to_string(), it_obj, BindingIndex::BUILTIN)
             .unwrap();
         assert!(matches!(child.lookup("it"), Some(KObject::Number(n)) if *n == 99.0));
     });
-}
-
-/// `SealedExtern::attach` — the now-callerless borrow-bounded scope re-anchor kept for the
-/// single-open-verb follow-up. Pins the witness-bounded `reattach_ref_with` shape directly on the
-/// frame's child-scope carrier: a borrow capped at the witness `Rc` with a free content lifetime,
-/// distinct from `with_scope`'s `for<'b>` brand (borrow == content). Read within the witness borrow,
-/// then alloc + bind into the re-anchored scope's region.
-#[test]
-fn sealed_extern_attach_bounded_reanchor() {
-    let region = FrameStorage::run_root();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
-    let carrier = frame.scope_sealed();
-    let storage = frame.storage_rc();
-    let child: &Scope<'_> = carrier.attach(&storage);
-    assert!(child.outer().is_some());
-    let v = child.region.alloc_object(KObject::Number(5.0));
-    child
-        .bind_value("a".to_string(), v, BindingIndex::BUILTIN)
-        .unwrap();
-    assert!(matches!(child.lookup("a"), Some(KObject::Number(n)) if *n == 5.0));
 }
 
 /// The opened child scope's re-borrow stays valid when the region is mutated through a sibling
@@ -156,24 +136,28 @@ fn call_frame_scope_survives_subsequent_alloc() {
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame = CallFrame::new_test(scope, None);
     frame.with_scope(|s| {
-        let _new = s.region.alloc_object(KObject::Number(1.0));
-        assert!(std::ptr::eq(s.region, frame.region()));
+        let _new = s.brand().alloc_object(KObject::Number(1.0));
+        assert!(std::ptr::eq(s.region(), frame.region()));
     });
 }
 
 /// Raw-pointer roundtrip inside the brand: lifetime-anchor an extracted `*const KoanRegion` and
-/// `*const Scope<'_>` from the opened child scope, then mutate via one ref while the other stays live.
+/// `*const Scope<'_>` from the opened child scope, then mutate via the scope's brand while the
+/// reconstructed region reference stays live.
 #[test]
 fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
     frame.with_scope(|child| {
-        let region_ptr: *const KoanRegion = child.region;
+        let region_ptr: *const KoanRegion = child.region();
         let scope_ptr: *const Scope<'_> = child;
         let inner_region: &KoanRegion = unsafe { &*(region_ptr as *const _) };
         let child_ref: &Scope<'_> = unsafe { &*(scope_ptr as *const _) };
-        let it_obj: &KObject<'_> = inner_region.alloc_object(KObject::Number(42.0));
+        // Alloc through the reconstructed scope's brand while `inner_region` (the raw-region roundtrip)
+        // stays live — the same region under two reconstructed references.
+        let it_obj: &KObject<'_> = child_ref.brand().alloc_object(KObject::Number(42.0));
+        assert!(std::ptr::eq(inner_region, child_ref.region()));
         child_ref
             .bind_value("it".to_string(), it_obj, BindingIndex::BUILTIN)
             .unwrap();
@@ -198,8 +182,8 @@ fn call_frame_chained_outer_frame_walkable() {
             .outer()
             .expect("inner's child scope must have an outer");
         assert!(std::ptr::eq(
-            outer_scope.region,
-            inner_child.outer().unwrap().region
+            outer_scope.region(),
+            inner_child.outer().unwrap().region()
         ));
         assert!(outer_scope.outer().is_some());
     });
@@ -210,7 +194,8 @@ fn call_frame_chained_outer_frame_walkable() {
 /// Pins that tree-borrows shape.
 #[test]
 fn region_alloc_while_prior_ref_live() {
-    let a = KoanRegion::new();
+    let storage = FrameStorage::run_root();
+    let a = storage.brand();
     let r1 = a.alloc_object(KObject::Number(1.0));
     let r2 = a.alloc_object(KObject::Number(2.0));
     assert!(matches!(r1, KObject::Number(n) if *n == 1.0));
@@ -220,11 +205,12 @@ fn region_alloc_while_prior_ref_live() {
 /// `alloc_ktype` returns a region-lifetime `&KType` and bumps `alloc_count` by one.
 #[test]
 fn alloc_ktype_returns_region_lifetime_ref_and_counts() {
-    let a = KoanRegion::new();
-    let baseline = a.alloc_count();
+    let storage = FrameStorage::run_root();
+    let a = storage.brand();
+    let baseline = a.region().alloc_count();
     let t: &KType = a.alloc_ktype(KType::Number);
     assert!(matches!(t, KType::Number));
-    assert_eq!(a.alloc_count(), baseline + 1);
+    assert_eq!(a.region().alloc_count(), baseline + 1);
 }
 
 /// Pins the reset transmute pair (`&Scope<'_> → &Scope<'static>` outer cast plus the
@@ -235,7 +221,7 @@ fn call_frame_try_reset_for_tail_round_trip() {
     let outer_region = FrameStorage::run_root();
     let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
     let mut frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
-    let _pre = frame.region().alloc_object(KObject::Number(1.0));
+    let _pre = frame.brand().alloc_object(KObject::Number(1.0));
     assert!(frame.region().alloc_count() >= 1);
 
     let did_reset = frame.try_reset_for_tail_test(outer_scope);
@@ -246,7 +232,7 @@ fn call_frame_try_reset_for_tail_round_trip() {
 
     // After reset, a fresh alloc via the opened scope's region and a bind on that scope coexist.
     frame.with_scope(|child| {
-        let v = child.region.alloc_object(KObject::Number(42.0));
+        let v = child.brand().alloc_object(KObject::Number(42.0));
         child
             .bind_value("k".to_string(), v, BindingIndex::BUILTIN)
             .unwrap();
@@ -288,7 +274,7 @@ fn call_frame_try_reset_for_tail_allows_reset_under_escaped_storage() {
     let outer_region = FrameStorage::run_root();
     let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
     let mut frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
-    let _escaped = frame.region().alloc_object(KObject::Number(7.0));
+    let _escaped = frame.brand().alloc_object(KObject::Number(7.0));
     let pre_alloc_count = frame.region().alloc_count();
     let pre_storage_addr = frame.region() as *const KoanRegion as usize;
 
@@ -407,7 +393,7 @@ fn alloc_witnessed_merge_folds_an_independent_foreign_value() {
 /// production family the object-family construction inversion uses lives in the execute layer; this
 /// is the spike stand-in that proves the carrier round-trips and the fold composition is sound.
 struct AggBuildFamily;
-crate::witnessed::reattachable!(AggBuildFamily => (&'r KoanRegion, Vec<Held<'r>>));
+crate::witnessed::reattachable!(AggBuildFamily => (RegionBrand<'r>, Vec<Held<'r>>));
 
 /// Spike for the **aggregate** construction inversion: a list / dict / record built from several dep
 /// producers — the shape the object family folds with shipped verbs only (no new substrate
@@ -437,7 +423,7 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     // The consumer's own frame: the region the finished list node lands in.
     let dest_frame = FrameStorage::run_root();
     // `yoke` the empty accumulator (the dest region + no cells yet) into the dest frame's region.
-    let acc0: Witnessed<AggBuildFamily, FrameSet> = Witnessed::<AggBuildFamily, FrameSet>::yoke(
+    let acc0: Witnessed<AggBuildFamily, FrameSet> = KoanRegion::yoke_branded::<AggBuildFamily, _>(
         FrameSet::singleton(Rc::clone(&dest_frame)),
         |region| (region, Vec::new()),
     );
@@ -534,7 +520,8 @@ fn fold_foreign_omits_the_home_frame_and_keeps_foreign_reach() {
 /// its region backing is live.
 #[test]
 fn alloc_engine_brand_coexists_with_sibling_alloc() {
-    let region = KoanRegion::new();
+    let storage = FrameStorage::run_root();
+    let region = storage.region();
     // The engine stores `value`, hands the brand-fresh `&'b KObject<'b>` to the closure, and lets only
     // the carrier escape — `Witnessed::resident` (the empty-witness constructor) names no `'b`.
     let carrier: Witnessed<CarriedFamily, FrameSet> = region
@@ -543,7 +530,7 @@ fn alloc_engine_brand_coexists_with_sibling_alloc() {
         });
     // A sibling alloc into the same region coexists — the membership-table write and the prior store
     // do not alias under tree borrows.
-    let sibling = region.alloc_object(KObject::Number(2.0));
+    let sibling = storage.brand().alloc_object(KObject::Number(2.0));
     // Read the escaped carrier back while `region` (its backing) is live.
     let got = carrier.with(|c| match *c {
         Carried::Object(KObject::Number(n)) => *n,
@@ -569,7 +556,7 @@ fn empty_witness_carrier_survives_producer_shell_reset_after_fold() {
 
     // Born foreign-reach-only (empty): the active frame is excluded at the alloc site.
     let carrier: Witnessed<CarriedFamily, FrameSet> =
-        frame.region().alloc_object_witnessed(KObject::Number(7.0));
+        frame.brand().alloc_object_witnessed(KObject::Number(7.0));
     assert!(
         carrier.witness().is_empty(),
         "a region-pure carrier is born under the empty set",

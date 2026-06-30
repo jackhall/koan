@@ -73,7 +73,7 @@ impl<'run> KoanRuntime<'run> {
                 // copied there and the result re-sealed under the root's own reached sources (the run
                 // region's `dest_witness` is empty — it outlives the run, so needs no held pin),
                 // dropping the per-call frame the producer kept the terminal in.
-                if let Ok(witnessed) = self.relocate_terminal(id, root.region, FrameSet::empty()) {
+                if let Ok(witnessed) = self.relocate_terminal(id, root.brand(), FrameSet::empty()) {
                     // Deposit the rehomed terminal's reach (a returned closure's / module's captured
                     // regions, named on the carrier with the producer frame already dropped by the
                     // relocate) onto the run-root scope's reach-set. The run root lives in the run

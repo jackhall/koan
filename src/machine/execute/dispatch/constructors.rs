@@ -170,7 +170,7 @@ fn finish_witnessed<'step>(
     terminals: &[&DepTerminal<'step>],
 ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     let scope = view.current_scope();
-    let region = scope.region;
+    let region = scope.brand();
     let dest_frame = scope
         .region_owner()
         .upgrade()

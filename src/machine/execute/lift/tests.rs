@@ -30,12 +30,12 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
             },
             Body::Builtin(|ctx| {
                 crate::machine::core::kfunction::action::Action::Done(Ok(Carried::Object(
-                    ctx.scope.region.alloc_object(KObject::Null),
+                    ctx.scope.brand().alloc_object(KObject::Null),
                 )))
             }),
             child,
         );
-        home.region().alloc_function(kf)
+        home.brand().alloc_function(kf)
     })
 }
 
@@ -48,8 +48,8 @@ fn object_top_node_relocates_into_dest() {
     let source = CallFrame::new_test(scope, None);
     let dest = CallFrame::new_test(scope, None);
 
-    let obj: &KObject = source.region().alloc_object(KObject::Number(2.5));
-    let relocated = relocate_carried(Carried::Object(obj), dest.region());
+    let obj: &KObject = source.brand().alloc_object(KObject::Number(2.5));
+    let relocated = relocate_carried(Carried::Object(obj), dest.brand());
     match relocated {
         Carried::Object(r) => {
             assert!(dest.region().owns_object(r), "relocated node lives in dest");
@@ -80,11 +80,11 @@ fn list_relocation_shares_inner_rc() {
         Held::Object(KObject::Number(2.0)),
     ]);
     let list: &KObject = source
-        .region()
+        .brand()
         .alloc_object(KObject::list_with_type(Rc::clone(&items), KType::Any));
     let before = Rc::strong_count(&items);
 
-    let relocated = relocate_carried(Carried::Object(list), dest.region());
+    let relocated = relocate_carried(Carried::Object(list), dest.brand());
     match relocated {
         Carried::Object(r @ KObject::List(out, _)) => {
             assert!(
@@ -123,13 +123,13 @@ fn dict_relocation_shares_inner_rc() {
         Held::Object(KObject::Number(1.0)),
     );
     let entries = Rc::new(map);
-    let dict: &KObject = source.region().alloc_object(KObject::dict_with_type(
+    let dict: &KObject = source.brand().alloc_object(KObject::dict_with_type(
         Rc::clone(&entries),
         KType::Any,
         KType::Any,
     ));
 
-    let relocated = relocate_carried(Carried::Object(dict), dest.region());
+    let relocated = relocate_carried(Carried::Object(dict), dest.brand());
     match relocated {
         Carried::Object(r @ KObject::Dict(out, _, _)) => {
             assert!(
@@ -163,7 +163,7 @@ fn tagged_relocation_shares_value_and_set_rc() {
         ScopeId::next(),
         NominalSchema::Tagged(std::collections::HashMap::new()),
     );
-    let tagged: &KObject = source.region().alloc_object(KObject::Tagged {
+    let tagged: &KObject = source.brand().alloc_object(KObject::Tagged {
         tag: "Just".into(),
         value: Rc::clone(&inner),
         set: Rc::clone(&set),
@@ -171,7 +171,7 @@ fn tagged_relocation_shares_value_and_set_rc() {
         type_args: Rc::new(vec![]),
     });
 
-    let relocated = relocate_carried(Carried::Object(tagged), dest.region());
+    let relocated = relocate_carried(Carried::Object(tagged), dest.brand());
     match relocated {
         Carried::Object(
             r @ KObject::Tagged {
@@ -205,9 +205,9 @@ fn kfunction_borrow_preserved_verbatim() {
     let dest = CallFrame::new_test(scope, None);
 
     let kf_ref = alloc_local_kf(&source);
-    let obj: &KObject = source.region().alloc_object(KObject::KFunction(kf_ref));
+    let obj: &KObject = source.brand().alloc_object(KObject::KFunction(kf_ref));
 
-    let relocated = relocate_carried(Carried::Object(obj), dest.region());
+    let relocated = relocate_carried(Carried::Object(obj), dest.brand());
     match relocated {
         Carried::Object(r @ KObject::KFunction(f)) => {
             assert!(
@@ -242,9 +242,9 @@ fn kfuture_relocation_preserves_function_borrow() {
         function: kf_ref,
         args: Record::new(),
     };
-    let obj: &KObject = source.region().alloc_object(KObject::KFuture(future));
+    let obj: &KObject = source.brand().alloc_object(KObject::KFuture(future));
 
-    let relocated = relocate_carried(Carried::Object(obj), dest.region());
+    let relocated = relocate_carried(Carried::Object(obj), dest.brand());
     match relocated {
         Carried::Object(r @ KObject::KFuture(fut)) => {
             assert!(
@@ -289,7 +289,7 @@ fn type_recursive_setref_relocates_and_navigates() {
     };
     let before = Rc::strong_count(&set);
 
-    let relocated = relocate_carried(Carried::Type(&type_value), dest.region());
+    let relocated = relocate_carried(Carried::Type(&type_value), dest.brand());
     assert_eq!(
         Rc::strong_count(&set),
         before + 1,

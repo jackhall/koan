@@ -79,7 +79,7 @@ pub(super) fn bare_type_leaf<'step, 'b>(
             // payload, so identity holds) and re-home through the region-pure witnessed surface, then
             // seal — a `KType::Module` folds its child reach. The clone stays inside `Region`'s
             // `resident`, so no asserted wrap is needed.
-            Outcome::DoneWitnessed(s.seal_type(s.region.alloc_ktype_witnessed(kt.clone())))
+            Outcome::DoneWitnessed(s.seal_type(s.brand().alloc_ktype_witnessed(kt.clone())))
         }
         TypeLeafCarrier::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS

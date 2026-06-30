@@ -19,7 +19,7 @@ fn value_language_leaf_names_layering() {
     scope
         .bind_value(
             "Gee".into(),
-            region.region().alloc_object(KObject::Number(7.0)),
+            region.brand().alloc_object(KObject::Number(7.0)),
             BindingIndex::BUILTIN,
         )
         .expect("bind_value");
@@ -59,7 +59,7 @@ fn recursive_group_member_lowers_to_recursive_ref() {
         NominalMember::pending("B".into(), parent.id, KKind::NewType),
     ]));
     let child = region
-        .region()
+        .brand()
         .alloc_scope(Scope::child_recursive_group(parent, set));
     let mut el = Elaborator::new(child);
     match elaborate_type_identifier(&mut el, &leaf("B")) {

@@ -12,7 +12,7 @@ use crate::source::Spanned;
 fn resolve_name_part_identifier_resolved() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let bound = region.region().alloc_object(KObject::Number(7.0));
+    let bound = region.brand().alloc_object(KObject::Number(7.0));
     scope
         .bind_value("x".to_string(), bound, BindingIndex::BUILTIN)
         .unwrap();

@@ -51,7 +51,7 @@ impl<'step> Scope<'step> {
             ElabResult::Done(kt) => {
                 let pending = FinalizeGate { scope: self }.pending_producers(&kt);
                 if pending.is_empty() {
-                    let kt_ref: &'step KType<'step> = self.region.alloc_ktype(kt);
+                    let kt_ref: &'step KType<'step> = self.brand().alloc_ktype(kt);
                     self.type_identifier_memo_insert(te.clone(), cutoff, kt_ref);
                     TypeIdentifierResolution::Done(kt_ref)
                 } else {
@@ -92,7 +92,7 @@ pub(crate) fn resolve_type_leaf_carrier<'step>(
 ) -> TypeLeafCarrier<'step> {
     match scope.resolve_type_identifier(t, chain) {
         TypeIdentifierResolution::Done(kt) => {
-            TypeLeafCarrier::Resolved(scope.region.alloc_ktype(kt.clone()))
+            TypeLeafCarrier::Resolved(scope.brand().alloc_ktype(kt.clone()))
         }
         TypeIdentifierResolution::Park(producers) => TypeLeafCarrier::Park(producers),
         TypeIdentifierResolution::Unbound(message) => TypeLeafCarrier::Unbound(message),

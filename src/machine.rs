@@ -14,8 +14,8 @@ pub use core::kfunction::{Body, KFunction, NodeId};
 pub(crate) use core::ValueCarrierResolution;
 pub use core::{
     BindingIndex, Bindings, CallFrame, FrameSet, FrameStorage, FunctionLookup, KError, KErrorKind,
-    KFuture, KoanRegion, LexicalFrame, RegionTypeFamily, Resolution, Scope, ScopeId, ScopeKind,
-    TraceFrame,
+    KFuture, KoanRegion, LexicalFrame, RegionBrand, RegionTypeFamily, Resolution, Scope, ScopeId,
+    ScopeKind, TraceFrame,
 };
 pub use execute::{
     interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime, NameOutcome,

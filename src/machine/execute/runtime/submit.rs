@@ -29,7 +29,7 @@ fn cart_chain_reaches_region(cart_scope: &Scope<'_>, target: &KoanRegion) -> boo
     let target = target as *const KoanRegion as *const ();
     let mut cur = Some(cart_scope);
     while let Some(s) = cur {
-        if std::ptr::eq(s.region as *const KoanRegion as *const (), target) {
+        if std::ptr::eq(s.region() as *const KoanRegion as *const (), target) {
             return true;
         }
         cur = s.outer();
@@ -126,7 +126,7 @@ impl<'run> KoanRuntime<'run> {
             if f.with_scope(|fs| scopes_eq(fs, scope)) {
                 return NodeScope::Yoked;
             }
-            if f.with_scope(|fs| cart_chain_reaches_region(fs, scope.region)) {
+            if f.with_scope(|fs| cart_chain_reaches_region(fs, scope.region())) {
                 return NodeScope::YokedChild(SealedExtern::<ScopeRefFamily>::erase(scope));
             }
             unreachable!("a framed submission's scope is the cart's own or a cart-ancestor child");

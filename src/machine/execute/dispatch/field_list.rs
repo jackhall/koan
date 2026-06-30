@@ -187,7 +187,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
     fn fold<'step>(scope: &Scope<'step>, pairs: Vec<(String, KType<'step>)>) -> Outcome<'step> {
         let record = Record::from_pairs(pairs);
         let carrier = scope
-            .region
+            .brand()
             .alloc_ktype_witnessed(KType::Record(Box::new(record)));
         Outcome::DoneWitnessed(scope.seal_value(carrier, None))
     }

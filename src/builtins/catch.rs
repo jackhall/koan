@@ -43,7 +43,7 @@ pub fn body<'a>(
     };
     use crate::machine::model::values::CarriedFamily;
     use crate::machine::model::Carried;
-    use crate::machine::{FrameSet, RegionTypeFamily};
+    use crate::machine::{FrameSet, KoanRegion, RegionTypeFamily};
     use crate::witnessed::Witnessed;
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", "expr"));
     // Capture the prelude `Result` member identity at body time so the CATCH value shares the
@@ -71,7 +71,7 @@ pub fn body<'a>(
         // Build the `Result` `Tagged` **inside the witness closure** so it names every region the
         // wrapped value reaches. The `Result` `SetRef` identity is type-channel data the scope's frame
         // pins (its `outer` chain); it crosses the build brand as a [`RegionTypeFamily`] operand.
-        let region = fctx.scope.region;
+        let region = fctx.scope.brand();
         let frame = scope_frame(fctx.scope);
         let identity: &KType<'a> = region.alloc_ktype(KType::SetRef {
             set: Rc::clone(&result_set),
@@ -100,7 +100,7 @@ pub fn body<'a>(
             // The error payload is built region-pure into the scope region (it reaches no foreign
             // region); `yoke` it, then `merge` the identity operand to wrap it as `Result::Error`.
             Err(e) => {
-                let payload = Witnessed::<CarriedFamily, FrameSet>::yoke(
+                let payload = KoanRegion::alloc_witnessed(
                     FrameSet::singleton(frame),
                     |region| Carried::Object(region.alloc_object(e.to_tagged(region))),
                 );

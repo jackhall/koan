@@ -84,7 +84,7 @@ pub(crate) fn register_builtin_full<'a>(
     binder_bucket: Option<crate::machine::core::kfunction::BinderBucketFn>,
     is_functor: bool,
 ) {
-    let region = scope.region;
+    let region = scope.brand();
     let f: &'a KFunction<'a> = region.alloc_function(KFunction::with_binder_and_functor(
         signature,
         Body::Builtin(body),
@@ -119,7 +119,7 @@ pub(crate) fn register_overload_at<'a>(
     body: crate::machine::core::kfunction::ActionFn,
     index: BindingIndex,
 ) {
-    let region = scope.region;
+    let region = scope.brand();
     let f: &'a KFunction<'a> = region.alloc_function(KFunction::with_binder_and_functor(
         signature,
         Body::Builtin(body),
@@ -147,7 +147,7 @@ pub fn default_scope<'a>(
     out: Box<dyn std::io::Write + 'a>,
 ) -> &'a Scope<'a> {
     let scope = run_storage
-        .region()
+        .brand()
         .alloc_scope(Scope::run_root(run_storage, None, out));
 
     scope.register_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
@@ -209,5 +209,5 @@ pub fn default_scope<'a>(
     type_ops::register(scope);
     parameterized_types::register(scope);
 
-    run_storage.region().alloc_scope(Scope::run_child(scope))
+    run_storage.brand().alloc_scope(Scope::run_child(scope))
 }

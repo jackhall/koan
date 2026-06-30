@@ -718,21 +718,6 @@ impl<T: Reattachable> SealedExtern<T> {
         }
     }
 
-    /// The stored `'static`-erased carrier, by value — the hook a **borrow-bounded** re-anchor uses
-    /// where the rank-2 [`open`](Self::open) cannot. `open` hands its carrier at a fresh `for<'b>`
-    /// brand (borrow == content == `'b`), so a value built from it cannot escape; a holder that must
-    /// re-expose a *reference* family at a borrow `'w` with a **free** content `'b` (a frame's child
-    /// scope alloc'd-and-returned at the cart lifetime) instead feeds this carrier to the
-    /// witness-bounded [`reattach_ref_with`]. Bounded to `T::At<'static>: Copy` (a thin reference) and
-    /// `pub(crate)` so the only callers are the co-located, witness-bounded re-anchors that immediately
-    /// cap the `'static`; the witness bound at the use site is what keeps it sound.
-    pub(crate) fn static_carrier(&self) -> T::At<'static>
-    where
-        T::At<'static>: Copy,
-    {
-        self.value.inner
-    }
-
     /// Open the externally-witnessed carrier at a **rank-2** (`for<'b>`) brand — the **consuming,
     /// externally-witnessed** destination verb, the witness-supplied twin of [`Sealed::open`]. The
     /// carrier is re-anchored to a fresh existential `'b` and handed **by value** to a closure whose

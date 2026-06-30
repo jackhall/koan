@@ -13,7 +13,7 @@ fn free_reclaims_owned_subtree() {
     let region = FrameStorage::run_root();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
-    let value: &KObject = region.region().alloc_object(KObject::Number(42.0));
+    let value: &KObject = region.brand().alloc_object(KObject::Number(42.0));
     let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
     let s0 = sched.add(mk_dispatch(), root);
     let s1 = sched.add(mk_dispatch(), root);
@@ -77,7 +77,7 @@ fn free_skips_live_slot_and_is_idempotent() {
     assert_eq!(sched.scheduler().free_list_len(), 0);
 
     sched.scheduler_mut().clear_node(s);
-    let value: &KObject = region.region().alloc_object(KObject::Number(1.0));
+    let value: &KObject = region.brand().alloc_object(KObject::Number(1.0));
     sched
         .scheduler_mut()
         .set_result(s, Ok(Carried::Object(value)));
@@ -98,7 +98,7 @@ fn free_does_not_recurse_through_notify_edges() {
     let region = FrameStorage::run_root();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
-    let value: &KObject = region.region().alloc_object(KObject::Number(7.0));
+    let value: &KObject = region.brand().alloc_object(KObject::Number(7.0));
     let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
     let s_owner = sched.add(mk_dispatch(), root);
     let s_owned = sched.add(mk_dispatch(), root);

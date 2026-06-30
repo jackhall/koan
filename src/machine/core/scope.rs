@@ -6,7 +6,7 @@ use crate::machine::model::types::RecursiveSet;
 
 use crate::machine::model::ast::KExpression;
 
-use super::arena::{FrameSet, FrameStorage, KoanRegion};
+use super::arena::{FrameSet, FrameStorage, KoanRegion, RegionBrand};
 pub use super::bindings::Resolution;
 use super::bindings::{ApplyOutcome, BindingIndex, Bindings};
 use super::kerror::{KError, KErrorKind};
@@ -63,7 +63,12 @@ pub struct Scope<'a> {
     root: Option<&'a Scope<'a>>,
     bindings: ScopeBindings<'a>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
-    pub region: &'a KoanRegion,
+    /// The region this scope lives in, held as its [`RegionBrand`] allocation capability — minted at
+    /// region-open and inherited by same-region children. Allocation sites reach it through
+    /// [`Self::brand`]; identity compares read the bare region through [`Self::region`]. Storing the
+    /// brand (not a bare `&KoanRegion`) is what lets a scope hand out the alloc capability without a
+    /// forgeable constructor: nothing can turn the bare `region()` back into a brand.
+    brand: RegionBrand<'a>,
     /// Owning-on-upgrade handle to the [`FrameStorage`] whose region this scope lives in — the
     /// "scope bundled with its storage." Read via [`Self::region_owner`] to recover a captured
     /// function's / module's region owner (the frame a consumer retains so an escaping value
@@ -170,7 +175,7 @@ impl<'a> Scope<'a> {
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(Some(out)),
             // Region borrow and owning `Weak` both derive from the one run `storage` handle.
-            region: storage.region(),
+            brand: storage.brand(),
             region_owner: Rc::downgrade(storage),
             id: ScopeId::next(),
             pending: PendingQueue::new(),
@@ -181,10 +186,23 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// The [`FrameStorage`] (cloned `Weak`) whose region this scope lives in — see [`Self::region`]'s
+    /// The [`FrameStorage`] (cloned `Weak`) whose region this scope lives in — see [`Self::brand`]'s
     /// sibling field. Upgrades to the owning `Rc` whenever the region is live.
     pub(crate) fn region_owner(&self) -> Weak<FrameStorage> {
         self.region_owner.clone()
+    }
+
+    /// The bare region this scope lives in — for identity compares (`ptr::eq`, region-pointer
+    /// membership). Read-only: a bare `&KoanRegion` cannot allocate, so handing it out opens no hole.
+    pub fn region(&self) -> &'a KoanRegion {
+        self.brand.region()
+    }
+
+    /// The scope's [`RegionBrand`] allocation capability — the handle every alloc site into this
+    /// scope's region routes (`scope.brand().alloc_object(…)`). Inherited unchanged by same-region
+    /// children; minted at region-open for a region-boundary scope.
+    pub(crate) fn brand(&self) -> RegionBrand<'a> {
+        self.brand
     }
 
     /// Mark this scope closed: its defining block / frame has finished, so no further bind is legal and
@@ -234,7 +252,7 @@ impl<'a> Scope<'a> {
                 home.as_ref().is_some_and(|h| h.pins_region(region))
                     || self
                         .ancestors()
-                        .any(|scope| std::ptr::eq(scope.region, region))
+                        .any(|scope| std::ptr::eq(scope.region(), region))
             });
     }
 
@@ -270,7 +288,7 @@ impl<'a> Scope<'a> {
             root: outer.root,
             bindings,
             out: RefCell::new(None),
-            region: outer.region,
+            brand: outer.brand,
             region_owner: outer.region_owner.clone(),
             id: ScopeId::next(),
             pending: PendingQueue::new(),
@@ -311,7 +329,7 @@ impl<'a> Scope<'a> {
             bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             // Both the region borrow and the owning `Weak` come from the one `storage` handle.
-            region: storage.region(),
+            brand: storage.brand(),
             region_owner: Rc::downgrade(storage),
             id: ScopeId::next(),
             pending: PendingQueue::new(),
@@ -577,7 +595,7 @@ impl<'a> Scope<'a> {
             return;
         }
         self.assert_open(&name);
-        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.region.alloc_ktype(ktype);
+        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.brand().alloc_ktype(ktype);
         match self.bindings.get().try_register_type(&name, kt_ref, index) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref, index),
@@ -626,7 +644,7 @@ impl<'a> Scope<'a> {
         if self.shadows_builtin_type(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.region.alloc_ktype(ktype);
+        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.brand().alloc_ktype(ktype);
         match self
             .bindings
             .get()
@@ -660,7 +678,7 @@ impl<'a> Scope<'a> {
             self.write_target().preinstall_identity(name, ktype, index);
             return;
         }
-        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.region.alloc_ktype(ktype);
+        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.brand().alloc_ktype(ktype);
         match self.bindings.get().try_register_type(&name, kt_ref, index) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => panic!(

@@ -22,7 +22,7 @@ pub fn body<'a>(
     // bundled here.
     let carrier = ctx
         .scope
-        .region
+        .brand()
         .alloc_object_witnessed(KObject::KString(rendered));
     Action::DoneWitnessed(carrier)
 }

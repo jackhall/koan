@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ErasedContract;
 use crate::machine::model::values::CarriedFamily;
-use crate::machine::{FrameSet, KError, KErrorKind, KoanRegion, NodeId};
+use crate::machine::{FrameSet, KError, KErrorKind, NodeId, RegionBrand};
 use crate::witnessed::{erase_to_static, reattachable, seal_option, MergeWitness, SealedExtern};
 
 use super::dispatch::SchedulerView;
@@ -25,17 +25,18 @@ mod run_tests;
 #[cfg(test)]
 mod tests;
 
-/// `Reattachable` family for a `&KoanRegion` — the destination-region carrier the consumer-pull lift's
-/// `read_lifted` feeds to [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into) when it
-/// re-anchors a relocated value at the destination's lifetime. The step's own `dest` region rides the
-/// opened scope (`scope.region`) rather than a separate carrier, so this family backs only the
-/// relocate seam. Layout-invariant: `&'r KoanRegion` is a thin pointer whose representation never
-/// depends on `'r`.
+/// `Reattachable` family for a destination region's [`RegionBrand`] — the destination-region carrier
+/// the consumer-pull lift's `read_lifted` feeds to
+/// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into) when it re-anchors a relocated
+/// value at the destination's lifetime, allocating the copy through the brand. The step's own `dest`
+/// brand rides the opened scope (`scope.brand()`) rather than a separate carrier, so this family backs
+/// only the relocate seam. Layout-invariant: a [`RegionBrand`] is a thin pointer whose representation
+/// never depends on `'r`.
 pub(in crate::machine::execute) struct RegionRefFamily;
 
-// `&'r KoanRegion` is one type generic only in `'r` (a thin reference); its layout is identical for
-// every `'r`, so the shared `reattachable!` macro discharges the obligation.
-reattachable!(RegionRefFamily => &'r KoanRegion);
+// `RegionBrand<'r>` is one type generic only in `'r` (a thin reference newtype); its layout is
+// identical for every `'r`, so the shared `reattachable!` macro discharges the obligation.
+reattachable!(RegionRefFamily => RegionBrand<'r>);
 
 /// `Reattachable` family for the step's **dep slice** — the producer terminals read out, erased, and
 /// zipped into the step `open` so they arrive at the brand `'b` alongside the continuation. This is
@@ -224,7 +225,7 @@ impl<'run> KoanRuntime<'run> {
                     // value-copy finish, the construction inversion's `transfer_into` fold for an
                     // aggregate (which relocates once and names every reached region on the carrier).
                     // The lift itself no longer pre-relocates.
-                    let dest: &KoanRegion = scope.region;
+                    let dest: RegionBrand = scope.brand();
                     let outcome = continuation(
                         &SchedulerView::new(&self.sched, &self.ambient, scope),
                         &dep_sources,

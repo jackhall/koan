@@ -17,30 +17,27 @@ use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{KError, Scope};
 use crate::parse::parse;
 use crate::scheduler::NodeId;
-use crate::witnessed::reattach_ref_with;
 
 use super::default_scope;
 
 /// Extract a top-level terminal at the scope lifetime `'a`. The terminal is opened at a rank-2 brand
-/// and its inner reference re-anchored to `'a` — a safe `reattach_ref_with` witnessed by the
-/// `scope.region` borrow — inside the open. A returned closure / module rides a bare borrow into its
-/// per-call region, so (like the production drain) fold the slot's witness onto `scope`'s reach-set:
-/// the caller drops the scheduler right after this returns, and `scope` outlives it, so its reach-set
-/// keeps every region the result reaches alive. Test-only — production code reads inside the open
-/// without a fixed escape lifetime.
+/// and its value **copied out** into `scope`'s region through the brand — a deep clone re-homed at
+/// `'a` (the same relocation [`relocate_carried`](crate::machine::execute) does across a dep edge),
+/// so nothing branded escapes the open. A returned closure / module's deep clone preserves the bare
+/// borrow into its per-call region, so (like the production drain) fold the slot's witness onto
+/// `scope`'s reach-set: the caller drops the scheduler right after this returns, and `scope` outlives
+/// it, so its reach-set keeps every region the result reaches alive. Test-only — production code reads
+/// inside the open without a fixed escape lifetime.
 pub(crate) fn extract_terminal<'a>(
     sched: &KoanRuntime<'a>,
     scope: &'a Scope<'a>,
     id: NodeId,
 ) -> Carried<'a> {
+    let brand = scope.brand();
     let value = sched
         .read_result_with(id, |live| match live {
-            Carried::Object(obj) => {
-                Carried::Object(reattach_ref_with::<KObject<'static>, _>(obj, scope.region))
-            }
-            Carried::Type(kt) => {
-                Carried::Type(reattach_ref_with::<KType<'static>, _>(kt, scope.region))
-            }
+            Carried::Object(obj) => Carried::Object(brand.alloc_object(obj.deep_clone())),
+            Carried::Type(kt) => Carried::Type(brand.alloc_ktype(kt.clone())),
         })
         .expect("terminal should be a value, not an error");
     scope.fold_reach(&sched.dep_witness(id));
@@ -77,7 +74,7 @@ pub(crate) fn run_root_silent<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scop
 /// tests that drive dispatch (establishing a run frame via `ensure_run_frame`) work the same as
 /// pure scope-machinery tests that never reach the escape path.
 pub(crate) fn run_root_bare<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<'a> {
-    run_storage.region().alloc_scope(Scope::run_root(
+    run_storage.brand().alloc_scope(Scope::run_root(
         run_storage,
         None,
         Box::new(std::io::sink()),
@@ -180,7 +177,7 @@ pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
 /// Allocate a labeled marker object on `scope`'s region. Dispatch tests register builtins
 /// whose bodies return distinct markers so the test can assert which overload won.
 pub(crate) fn marker<'a>(scope: &Scope<'a>, label: &'static str) -> &'a KObject<'a> {
-    scope.region.alloc_object(KObject::KString(label.into()))
+    scope.brand().alloc_object(KObject::KString(label.into()))
 }
 
 /// Build a one-argument signature (`<name: kt>`) returning `Any`.
