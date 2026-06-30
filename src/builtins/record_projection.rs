@@ -31,7 +31,6 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_object, require_kexpression, Action};
-    use crate::machine::model::Carried;
 
     let fields_expr = crate::try_action!(require_kexpression(ctx.args, "FROM", "fields"));
 
@@ -90,15 +89,12 @@ pub fn body<'a>(
 
     let narrowed = Record::from_pairs(narrowed_pairs);
     let result = KObject::record_with_type(Rc::clone(fields), narrowed);
-    let obj = ctx.scope.region.alloc_object(result);
+    let carrier = ctx.scope.region.alloc_object_witnessed(result);
     // The projection `Rc`-shares the record's backing field values, so it reaches whatever the
     // `record` operand reaches. Seal it under the read-site home frame with the record carrier's
     // foreign reach folded in, so every region the shared backing borrows into outlives the
     // projection — the object-family terminal replacing the relocate-seam reconstruction.
-    Action::DoneWitnessed(
-        ctx.scope
-            .seal_value(Carried::Object(obj), ctx.arg_carrier("record")),
-    )
+    Action::DoneWitnessed(ctx.scope.seal_value(carrier, ctx.arg_carrier("record")))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

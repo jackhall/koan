@@ -54,8 +54,7 @@ fn finalize_newtype<'a>(
         .try_register_type(&name, kt_ref, bind_index)
     {
         Ok(ApplyOutcome::Applied) => {
-            let kt = scope.region.alloc_ktype(kt_ref.clone());
-            Ok(scope.seal_value(Carried::Type(kt), None))
+            Ok(scope.seal_value(scope.region.alloc_ktype_witnessed(kt_ref.clone()), None))
         }
         // Finalize sites run post-dep-finish outside the re-entrant hot path, so borrow
         // contention here is a programming error. Surface as a structured error rather
@@ -107,8 +106,7 @@ fn finalize_record_newtype<'a>(
     );
     match outcome {
         SealOutcome::Sealed(kt_ref) => {
-            let kt = scope.region.alloc_ktype(kt_ref.clone());
-            Ok(scope.seal_value(Carried::Type(kt), None))
+            Ok(scope.seal_value(scope.region.alloc_ktype_witnessed(kt_ref.clone()), None))
         }
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE `{name}` record repr references unsealed type `{missing}`",

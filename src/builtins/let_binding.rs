@@ -103,15 +103,14 @@ pub fn body<'a>(
         } else {
             kt
         };
-        let kt_ref: &'a KType<'a> = region.alloc_ktype(kt.clone());
-        if let Err(e) = ctx.scope.register_user_type(name, kt, bind_index) {
+        if let Err(e) = ctx.scope.register_user_type(name, kt.clone(), bind_index) {
             return done_err(e);
         }
         // Deposit the bound type's reach onto the scope's reach-set so an identity reaching a foreign
         // region (a module returned from a call, naming a child scope in the now-dying producer frame)
         // outlives the binding — the type-channel analogue of the value-arm fold below. `fold_reach`
         // omits the home frame, so a region-pure / ancestor-resident type deposits nothing.
-        let carrier = ctx.scope.seal_type(Carried::Type(kt_ref));
+        let carrier = ctx.scope.seal_type(region.alloc_ktype_witnessed(kt));
         ctx.scope.fold_reach(carrier.witness());
         Action::DoneWitnessed(carrier)
     } else {

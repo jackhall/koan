@@ -204,10 +204,10 @@ fn access_type_member<'a>(
         KType::Signature { sig: s, .. } => {
             let decl = s.decl_scope();
             if let Some(Resolution::Value(obj)) = decl.bindings().lookup_value(field, None) {
-                return Ok(decl.seal_value(Carried::Object(obj), None));
+                return Ok(decl.seal_value(Witnessed::resident(Carried::Object(obj)), None));
             }
             if let Some(kt) = decl.resolve_type(field) {
-                return Ok(decl.seal_type(Carried::Type(decl.region.alloc_ktype(kt.clone()))));
+                return Ok(decl.seal_type(decl.region.alloc_ktype_witnessed(kt.clone())));
             }
             Err(KError::new(KErrorKind::ShapeError(format!(
                 "signature `{}` has no member `{}`",
@@ -247,11 +247,11 @@ fn access_field<'a>(
         KObject::Wrapped { inner, type_id } => match inner.get() {
             KObject::Record(values, _) => match values.get(field) {
                 Some(Held::Object(value)) => Ok(scope.seal_value(
-                    Carried::Object(scope.region.alloc_object(value.deep_clone())),
+                    scope.region.alloc_object_witnessed(value.deep_clone()),
                     embedded,
                 )),
                 Some(Held::Type(kt)) => {
-                    Ok(scope.seal_type(Carried::Type(scope.region.alloc_ktype(kt.clone()))))
+                    Ok(scope.seal_type(scope.region.alloc_ktype_witnessed(kt.clone())))
                 }
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",
@@ -296,7 +296,7 @@ fn access_module_member<'a>(
 ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     let module_scope = m.child_scope();
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
-        return Ok(module_scope.seal_type(Carried::Type(module_scope.region.alloc_ktype(kt))));
+        return Ok(module_scope.seal_type(module_scope.region.alloc_ktype_witnessed(kt)));
     }
     // A value member lives in the module's region; it seals under the module scope's home frame,
     // which transitively pins the module's reach-set — so the read value (or its re-tag carrier)
@@ -304,18 +304,18 @@ fn access_module_member<'a>(
     if let Some(Resolution::Value(obj)) = module_scope.bindings().lookup_value(field, None) {
         if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
             let type_id = module_scope.region.alloc_ktype(tag);
-            let wrapped = module_scope.region.alloc_object(KObject::Wrapped {
-                inner: NonWrappedRef::peel(obj),
-                type_id,
-            });
-            return Ok(module_scope.seal_value(Carried::Object(wrapped), None));
+            let carrier = module_scope
+                .region
+                .alloc_object_witnessed(KObject::Wrapped {
+                    inner: NonWrappedRef::peel(obj),
+                    type_id,
+                });
+            return Ok(module_scope.seal_value(carrier, None));
         }
-        return Ok(module_scope.seal_value(Carried::Object(obj), None));
+        return Ok(module_scope.seal_value(Witnessed::resident(Carried::Object(obj)), None));
     }
     if let Some(kt) = module_scope.resolve_type(field) {
-        return Ok(
-            module_scope.seal_type(Carried::Type(module_scope.region.alloc_ktype(kt.clone())))
-        );
+        return Ok(module_scope.seal_type(module_scope.region.alloc_ktype_witnessed(kt.clone())));
     }
     Err(KError::new(KErrorKind::ShapeError(format!(
         "module `{}` has no member `{}`",

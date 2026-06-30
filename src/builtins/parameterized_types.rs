@@ -52,13 +52,12 @@ impl CarrierKind {
 /// `KFunction` / `KFunctor` identity in a `Carried::Type`. Shared by the synchronous and
 /// dep-finish paths.
 fn finalize_carrier<'a>(
-    scope: &Scope<'a>,
     fields: Vec<(String, KType<'a>)>,
     ret: KType<'a>,
     kind: CarrierKind,
-) -> &'a KType<'a> {
+) -> KType<'a> {
     let record = Record::from_pairs(fields);
-    let kt = match kind {
+    match kind {
         // A `:(FUNCTOR …)` type-position annotation is a shape, not a bound
         // callable, so it carries no body.
         CarrierKind::Functor => KType::KFunctor {
@@ -70,8 +69,7 @@ fn finalize_carrier<'a>(
             params: record,
             ret: Box::new(ret),
         },
-    };
-    scope.region.alloc_ktype(kt)
+    }
 }
 
 /// `Action`-harness twins of the type-constructor bodies. LIST/MAP/AS fold resolved type args
@@ -81,24 +79,27 @@ mod action_bodies {
     use super::{build_carrier, CarrierKind};
     use crate::machine::core::kfunction::action::{require_ktype, Action, BodyCtx};
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
-    use crate::machine::model::values::Carried;
+
     use crate::machine::model::KType;
     use crate::machine::{KError, KErrorKind};
 
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let elem = crate::try_action!(require_ktype(ctx.args, "elem"));
-        let kt = ctx.scope.region.alloc_ktype(KType::List(Box::new(elem)));
-        Action::DoneWitnessed(ctx.scope.seal_value(Carried::Type(kt), None))
+        let carrier = ctx
+            .scope
+            .region
+            .alloc_ktype_witnessed(KType::List(Box::new(elem)));
+        Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let k = crate::try_action!(require_ktype(ctx.args, "k"));
         let v = crate::try_action!(require_ktype(ctx.args, "v"));
-        let kt = ctx
+        let carrier = ctx
             .scope
             .region
-            .alloc_ktype(KType::Dict(Box::new(k), Box::new(v)));
-        Action::DoneWitnessed(ctx.scope.seal_value(Carried::Type(kt), None))
+            .alloc_ktype_witnessed(KType::Dict(Box::new(k), Box::new(v)));
+        Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
     }
 
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -127,11 +128,14 @@ mod action_bodies {
                 ctor.name(),
             )))));
         }
-        let kt = ctx.scope.region.alloc_ktype(KType::ConstructorApply {
-            ctor: Box::new(ctor),
-            args: vec![applied],
-        });
-        Action::DoneWitnessed(ctx.scope.seal_value(Carried::Type(kt), None))
+        let carrier = ctx
+            .scope
+            .region
+            .alloc_ktype_witnessed(KType::ConstructorApply {
+                ctor: Box::new(ctor),
+                args: vec![applied],
+            });
+        Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
     }
 
     pub(super) fn body_fn<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -154,7 +158,7 @@ fn build_carrier<'a>(
     kind: CarrierKind,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, require_ktype, Action};
-    use crate::machine::model::values::Carried;
+
     let sig_expr = crate::try_action!(require_kexpression(ctx.args, "FN", sig_slot));
     let ret = crate::try_action!(require_ktype(ctx.args, ret_slot));
     let mut elaborator = Elaborator::new(ctx.scope);
@@ -166,8 +170,11 @@ fn build_carrier<'a>(
         None,
     ) {
         FieldListOutcome::Done(fields) => {
-            let kt = finalize_carrier(ctx.scope, fields, ret, kind);
-            Action::DoneWitnessed(ctx.scope.seal_value(Carried::Type(kt), None))
+            let kt = finalize_carrier(fields, ret, kind);
+            Action::DoneWitnessed(
+                ctx.scope
+                    .seal_value(ctx.scope.region.alloc_ktype_witnessed(kt), None),
+            )
         }
         FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
@@ -184,8 +191,8 @@ fn build_carrier<'a>(
             None,
             None,
             Box::new(move |scope, fields| {
-                let kt = finalize_carrier(scope, fields, ret, kind);
-                Ok(scope.seal_value(Carried::Type(kt), None))
+                let kt = finalize_carrier(fields, ret, kind);
+                Ok(scope.seal_value(scope.region.alloc_ktype_witnessed(kt), None))
             }),
         ),
     }

@@ -306,7 +306,9 @@ impl<'step> KoanRuntime<'step> {
                 // chain — `seal_type` yokes it (a `KType::Module` folds its child reach), co-located by
                 // the brand, never an asserted bundle. The value case is handled above via the
                 // binding-scope carrier, so this is reached only for a `Type` carrier.
-                NameOutcome::Resolved(c) => Some(Slot::Static(Sealed::seal(s.seal_type(c)))),
+                NameOutcome::Resolved(c) => Some(Slot::Static(Sealed::seal(
+                    s.seal_type(Witnessed::resident(c)),
+                ))),
                 NameOutcome::Parked(producer) => {
                     let pos = park_producers.len();
                     park_producers.push(producer);

@@ -5,7 +5,7 @@ use crate::machine::model::types::{
     finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalSchema, SchemaSealResult,
     SealOutcome,
 };
-use crate::machine::model::values::{Carried, CarriedFamily};
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope, TraceFrame};
 use crate::witnessed::Witnessed;
@@ -50,8 +50,7 @@ fn finalize_union<'a>(
     );
     match outcome {
         SealOutcome::Sealed(kt_ref) => {
-            let kt = scope.region.alloc_ktype(kt_ref.clone());
-            Ok(scope.seal_value(Carried::Type(kt), None))
+            Ok(scope.seal_value(scope.region.alloc_ktype_witnessed(kt_ref.clone()), None))
         }
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "UNION `{name}` schema references unsealed type `{missing}`",
@@ -115,10 +114,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use super::Carried;
     use crate::builtins::test_support::{parse_one, run_one_err, run_one_type, run_root_silent};
     use crate::machine::core::FrameStorage;
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
+    use crate::machine::model::values::Carried;
     use crate::machine::model::KType;
     use crate::machine::{BindingIndex, KErrorKind, Scope};
 

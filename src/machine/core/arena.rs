@@ -265,6 +265,24 @@ impl Region<KoanStorageProfile> {
         self.alloc::<KObject<'static>, _>(value, |live| Witnessed::resident(Carried::Object(live)))
     }
 
+    /// The witnessed-allocation surface for an **owned, region-pure** type — the type-channel twin of
+    /// [`alloc_object_witnessed`](Self::alloc_object_witnessed). Born witnessed by the **empty**
+    /// (foreign-reach-only) set: the brand-confined [`alloc`](Region::alloc) stores `value` and hands
+    /// the freshly-stored `&'b KType<'b>` to the closure, which bundles it through
+    /// [`Witnessed::resident`]. The producing frame is folded in only at the seal/close (the
+    /// scope-reach seal), so a region-resident type never strong-owns its own frame.
+    ///
+    /// Region-pure is the precondition: a `KType` built fresh inside the brand referencing no other
+    /// region — owned data, or a borrow this region already pins. A `KType::Module` reaches its child
+    /// scope's region, so it is born here empty and folds that reach through
+    /// [`Scope::seal_module`](crate::machine::core::Scope) rather than naming it on this surface.
+    pub(crate) fn alloc_ktype_witnessed(
+        &self,
+        value: KType<'_>,
+    ) -> Witnessed<CarriedFamily, FrameSet> {
+        self.alloc::<KType<'static>, _>(value, |live| Witnessed::resident(Carried::Type(live)))
+    }
+
     pub fn alloc_scope<'a>(&'a self, s: Scope<'_>) -> &'a Scope<'a> {
         self.alloc_resident::<Scope<'static>>(s)
     }

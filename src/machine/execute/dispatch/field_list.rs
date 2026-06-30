@@ -16,7 +16,7 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
 };
-use crate::machine::model::values::{Carried, CarriedFamily};
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{KType, Record};
 use crate::machine::{FrameSet, KError, KErrorKind, NodeId, Scope, TraceFrame};
 use crate::witnessed::Witnessed;
@@ -186,8 +186,10 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
 ) -> Outcome<'step> {
     fn fold<'step>(scope: &Scope<'step>, pairs: Vec<(String, KType<'step>)>) -> Outcome<'step> {
         let record = Record::from_pairs(pairs);
-        let kt = scope.region.alloc_ktype(KType::Record(Box::new(record)));
-        Outcome::DoneWitnessed(scope.seal_value(Carried::Type(kt), None))
+        let carrier = scope
+            .region
+            .alloc_ktype_witnessed(KType::Record(Box::new(record)));
+        Outcome::DoneWitnessed(scope.seal_value(carrier, None))
     }
     let mut elaborator = Elaborator::new(view.current_scope()).with_chain(chain.clone());
     match parse_typed_field_list_via_elaborator(

@@ -24,7 +24,6 @@ pub fn body<'a>(
     use crate::machine::core::kfunction::action::{
         require_bare_type_name, require_kexpression, Action, AwaitContinue, Dep, DepPlacement,
     };
-    use crate::machine::model::Carried;
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "MODULE"));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", "body"));
@@ -42,8 +41,8 @@ pub fn body<'a>(
         child_scope.close();
         // Idempotent-finalize guard: a re-bound name short-circuits.
         if let Some(kt) = fctx.scope.bindings().lookup_type(&name_for_finish, None) {
-            let module_obj = fctx.scope.region.alloc_ktype(kt.clone());
-            return Action::DoneWitnessed(fctx.scope.seal_module(Carried::Type(module_obj)));
+            let carrier = fctx.scope.region.alloc_ktype_witnessed(kt.clone());
+            return Action::DoneWitnessed(fctx.scope.seal_module(carrier));
         }
         let module: &'a Module<'a> = fctx
             .scope
@@ -68,8 +67,8 @@ pub fn body<'a>(
             .register_type_upsert(name_for_finish.clone(), identity, bind_index)
         {
             Ok(kt_ref) => {
-                let module_obj = fctx.scope.region.alloc_ktype(kt_ref.clone());
-                Action::DoneWitnessed(fctx.scope.seal_module(Carried::Type(module_obj)))
+                let carrier = fctx.scope.region.alloc_ktype_witnessed(kt_ref.clone());
+                Action::DoneWitnessed(fctx.scope.seal_module(carrier))
             }
             Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                 "<module>",

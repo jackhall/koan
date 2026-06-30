@@ -15,6 +15,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
 use crate::machine::{FrameSet, KError, KErrorKind, Resolution, ValueCarrierResolution};
 use crate::source::Spanned;
+use crate::witnessed::Witnessed;
 
 use super::super::DepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
@@ -74,7 +75,9 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         // A resolved type leaf seals under `s` (the scope it was resolved against): a `KType::Module`
         // folds its child-scope reach via `seal_type`, every owned / ancestor-pinned variant rides
         // `s`'s home frame — born co-located rather than bare-reattached to the step region.
-        TypeLeafCarrier::Resolved(kt) => Outcome::DoneWitnessed(s.seal_type(Carried::Type(kt))),
+        TypeLeafCarrier::Resolved(kt) => {
+            Outcome::DoneWitnessed(s.seal_type(Witnessed::resident(Carried::Type(kt))))
+        }
         TypeLeafCarrier::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS
         // through the bridge, so a bare leaf parks on exactly one producer; park on it and

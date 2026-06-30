@@ -20,7 +20,6 @@ pub fn body_opaque<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::Action;
-    use crate::machine::model::Carried;
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args));
 
@@ -124,8 +123,8 @@ pub fn body_opaque<'a>(
 
     new_module.mark_satisfies(s.sig_id());
 
-    let module_obj: &'a KType<'a> = region.alloc_ktype(KType::Module { module: new_module });
-    Action::DoneWitnessed(ctx.scope.seal_module(Carried::Type(module_obj)))
+    let carrier = region.alloc_ktype_witnessed(KType::Module { module: new_module });
+    Action::DoneWitnessed(ctx.scope.seal_module(carrier))
 }
 
 /// `<m:Module> :! <s:Signature>` — transparent ascription. Shape-checks against the source's
@@ -135,7 +134,6 @@ pub fn body_transparent<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::Action;
-    use crate::machine::model::Carried;
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args));
     if let Err(e) = shape_check(s, m.child_scope()) {
@@ -147,8 +145,8 @@ pub fn body_transparent<'a>(
         m.child_scope(),
     ));
     new_module.mark_satisfies(s.sig_id());
-    let module_obj: &'a KType<'a> = region.alloc_ktype(KType::Module { module: new_module });
-    Action::DoneWitnessed(ctx.scope.seal_module(Carried::Type(module_obj)))
+    let carrier = region.alloc_ktype_witnessed(KType::Module { module: new_module });
+    Action::DoneWitnessed(ctx.scope.seal_module(carrier))
 }
 
 /// Read the `m:Module` / `s:Signature` operands from the `BodyCtx::args` type channel, producing

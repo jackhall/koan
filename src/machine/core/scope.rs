@@ -17,7 +17,7 @@ use super::scope_ptr::recouple_scope;
 use crate::machine::core::kfunction::{KFunction, NodeId};
 use crate::machine::model::types::Record;
 use crate::machine::model::values::{ArgValue, Carried, CarriedFamily, KObject};
-use crate::witnessed::{reattach_with, Sealed, Witnessed};
+use crate::witnessed::{Sealed, Witnessed};
 
 /// A resolved-but-not-yet-executed call: the original expression, the chosen `KFunction`,
 /// and the resolved argument record from `KFunction::bind`. Unit of deferred work in dispatch.
@@ -784,21 +784,25 @@ impl<'a> Scope<'a> {
     /// pinned by its binding scope (its value lives in this region and its foreign reach is in this
     /// scope's sealed reach-set).
     fn bound_value_carrier(&self, obj: &'a KObject<'a>) -> Witnessed<CarriedFamily, FrameSet> {
-        self.seal_value(Carried::Object(obj), None)
+        // `obj` already lives in this scope's region with its foreign reach in this scope's reach-set,
+        // so wrap it under the empty (foreign-reach-only) set; `seal_value` folds the home frame that
+        // pins both the value and that reach.
+        self.seal_value(Witnessed::resident(Carried::Object(obj)), None)
     }
 
-    /// Seal a value living **in this scope's region** as a carrier naming its reach. The witness is
-    /// this scope's home frame, co-located for the re-anchor; because the scope's sealed reach-set
-    /// lives in that same region, holding the home frame transitively pins every foreign region the
-    /// value reaches, so a single-frame witness names the full reach. An `embedded` carrier — a
-    /// computed value the sealed value was projected out of, whose reach the read-site frame may not
-    /// pin (an attr field of a delivered `Wrapped`, a FROM record's shared backing) — folds its
-    /// foreign reach on top, omitting any frame the home already pins (see [`FrameSet::fold_foreign`]).
-    /// Built via `yoke` + [`reattach_with`] (the co-located pre-existing-value pattern, as
-    /// [`fn_def`](crate::builtins) homes its `KFunction`), so it carries no asserted `Witnessed::new`.
+    /// Fold this scope's home frame onto an already-witnessed `carrier` whose value lives **in this
+    /// scope's region** — the seal that names a constructed value's reach. The carrier arrives born
+    /// under the empty (foreign-reach-only) set from the witnessed alloc; sealing folds the home frame,
+    /// and because the scope's sealed reach-set lives in that same region, holding the home transitively
+    /// pins every foreign region the value reaches, so a single-frame fold names the full reach. An
+    /// `embedded` carrier — a computed value the sealed value was projected out of, whose reach the
+    /// read-site frame may not pin (an attr field of a delivered `Wrapped`, a FROM record's shared
+    /// backing) — folds its foreign reach on top, omitting any frame the home already pins (see
+    /// [`FrameSet::fold_foreign`]). Folds onto the received carrier via [`Witnessed::reseal_under`], so
+    /// it carries no `reattach_with` re-anchor of an externally-built value.
     pub(crate) fn seal_value(
         &self,
-        value: Carried<'a>,
+        carrier: Witnessed<CarriedFamily, FrameSet>,
         embedded: Option<&Sealed<CarriedFamily, FrameSet>>,
     ) -> Witnessed<CarriedFamily, FrameSet> {
         let home = self
@@ -806,61 +810,70 @@ impl<'a> Scope<'a> {
             .upgrade()
             .expect("the sealing scope's region owner is held while its value is read");
         let mut witness = FrameSet::singleton(home.clone());
-        if let Some(carrier) = embedded {
-            witness.fold_foreign(carrier.witness(), Some(&home));
+        if let Some(embedded) = embedded {
+            witness.fold_foreign(embedded.witness(), Some(&home));
         }
-        Witnessed::<CarriedFamily, FrameSet>::yoke(witness, |region| {
-            reattach_with::<CarriedFamily, _>(value, region)
-        })
+        carrier.reseal_under(witness)
     }
 
-    /// Seal a `KType::Module` value living **in this scope's region** as a carrier naming its full
-    /// reach. Like [`Self::seal_value`] the base witness is this scope's home frame, but a module
-    /// rides a bare borrow into its **child scope's** region — co-located for a freshly-built module
-    /// (`MODULE`, opaque `:|`), foreign for a transparent `:!` view of a source module — so the
-    /// witness also folds the child scope's home frame and its sealed reach-set, omitting any frame
-    /// the home already pins (see [`FrameSet::fold_foreign`]). The relocated module identity then
-    /// outlives its producer with every region it reaches named on the carrier, never reconstructed
-    /// from the value. Built via `yoke` + [`reattach_with`] like `seal_value`, so it carries no
-    /// asserted `Witnessed::new`.
-    pub(crate) fn seal_module(&self, module_kt: Carried<'a>) -> Witnessed<CarriedFamily, FrameSet> {
-        let child = match module_kt {
-            Carried::Type(crate::machine::model::types::KType::Module { module }) => {
-                module.child_scope()
-            }
-            _ => unreachable!("seal_module requires a Carried::Type(KType::Module)"),
-        };
+    /// Fold this scope's home frame **plus the module's child-scope reach** onto an already-witnessed
+    /// `carrier` holding a `KType::Module` value — the [`Self::seal_value`] analogue for a module.
+    /// Like `seal_value` the base fold is this scope's home frame, but a module rides a bare borrow
+    /// into its **child scope's** region — co-located for a freshly-built module (`MODULE`, opaque
+    /// `:|`), foreign for a transparent `:!` view of a source module — so the fold also names the
+    /// child scope's home frame and its sealed reach-set, omitting any frame the home already pins
+    /// (see [`FrameSet::fold_foreign`]). The carrier is read once via [`Witnessed::with`] to recover
+    /// the child scope, then resealed under the combined set; the relocated module identity outlives
+    /// its producer with every region it reaches named on the carrier, never reconstructed from the
+    /// value.
+    pub(crate) fn seal_module(
+        &self,
+        carrier: Witnessed<CarriedFamily, FrameSet>,
+    ) -> Witnessed<CarriedFamily, FrameSet> {
         let home = self
             .region_owner()
             .upgrade()
             .expect("the sealing scope's region owner is held while its module is read");
-        let mut witness = FrameSet::singleton(home.clone());
-        // The child scope lives in its own region; pin that frame plus every region the child's
-        // bindings reach, omitting anything the producer home already keeps alive (so a co-located
-        // module folds nothing extra, a transparent view pins the source's region and reach).
-        if let Some(child_home) = child.region_owner().upgrade() {
-            witness.fold_foreign(&FrameSet::singleton(child_home), Some(&home));
-        }
-        let child_reach = child.reach.borrow();
-        witness.fold_foreign(&child_reach, Some(&home));
-        drop(child_reach);
-        Witnessed::<CarriedFamily, FrameSet>::yoke(witness, |region| {
-            reattach_with::<CarriedFamily, _>(module_kt, region)
-        })
+        // Read the module to fold its child scope's frame plus every region the child's bindings
+        // reach, omitting anything the producer home already keeps alive (so a co-located module folds
+        // nothing extra, a transparent view pins the source's region and reach).
+        let witness = carrier.with(|carried| {
+            let Carried::Type(crate::machine::model::types::KType::Module { module }) = carried
+            else {
+                unreachable!("seal_module requires a Carried::Type(KType::Module)");
+            };
+            let child = module.child_scope();
+            let mut witness = FrameSet::singleton(home.clone());
+            if let Some(child_home) = child.region_owner().upgrade() {
+                witness.fold_foreign(&FrameSet::singleton(child_home), Some(&home));
+            }
+            witness.fold_foreign(&child.reach.borrow(), Some(&home));
+            witness
+        });
+        carrier.reseal_under(witness)
     }
 
-    /// Seal a **resolved** type value (a `LET` alias RHS, an `ATTR` type member, a bare type leaf)
-    /// as a carrier naming its reach. A `KType::Module` routes [`Self::seal_module`] (it reaches its
-    /// child scope's region); every other variant is owned data or borrows a region this scope's home
-    /// frame already pins (a lexical ancestor on the `outer` chain, or this scope's own region), so
-    /// [`Self::seal_value`] under the home frame names its full reach. The dispatcher the resolution
-    /// sites use so a projected nested module is sealed Module-correctly without each site branching.
-    pub(crate) fn seal_type(&self, kt: Carried<'a>) -> Witnessed<CarriedFamily, FrameSet> {
-        match kt {
-            Carried::Type(crate::machine::model::types::KType::Module { .. }) => {
-                self.seal_module(kt)
-            }
-            _ => self.seal_value(kt, None),
+    /// Fold this scope's reach onto an already-witnessed `carrier` holding a **resolved** type value
+    /// (a `LET` alias RHS, an `ATTR` type member, a bare type leaf). A `KType::Module` routes
+    /// [`Self::seal_module`] (it reaches its child scope's region); every other variant is owned data
+    /// or borrows a region this scope's home frame already pins (a lexical ancestor on the `outer`
+    /// chain, or this scope's own region), so [`Self::seal_value`] under the home frame names its full
+    /// reach. The dispatcher the resolution sites use so a projected nested module is sealed
+    /// Module-correctly without each site branching; the carrier is peeked once via [`Witnessed::with`]
+    /// to pick the arm.
+    pub(crate) fn seal_type(
+        &self,
+        carrier: Witnessed<CarriedFamily, FrameSet>,
+    ) -> Witnessed<CarriedFamily, FrameSet> {
+        if carrier.with(|kt| {
+            matches!(
+                kt,
+                Carried::Type(crate::machine::model::types::KType::Module { .. })
+            )
+        }) {
+            self.seal_module(carrier)
+        } else {
+            self.seal_value(carrier, None)
         }
     }
 

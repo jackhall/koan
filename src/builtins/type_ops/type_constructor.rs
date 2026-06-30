@@ -16,7 +16,7 @@ pub fn body<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_held, arg_type, Action};
     use crate::machine::model::values::Held;
-    use crate::machine::model::Carried;
+
     use crate::machine::{KError, KErrorKind};
 
     let param_kt = match arg_type(ctx.args, "param") {
@@ -46,11 +46,11 @@ pub fn body<'a>(
         param_names: vec![param],
     });
     let set = Rc::new(RecursiveSet::new(vec![member]));
-    let kt = ctx
+    let carrier = ctx
         .scope
         .region
-        .alloc_ktype(KType::SetRef { set, index: 0 });
-    Action::DoneWitnessed(ctx.scope.seal_value(Carried::Type(kt), None))
+        .alloc_ktype_witnessed(KType::SetRef { set, index: 0 });
+    Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
 }
 
 #[cfg(test)]

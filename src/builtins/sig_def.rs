@@ -26,7 +26,6 @@ pub fn body<'a>(
     use crate::machine::core::kfunction::action::{
         require_bare_type_name, require_kexpression, Action, AwaitContinue, Dep, DepPlacement,
     };
-    use crate::machine::model::Carried;
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "SIG"));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "SIG", "body"));
@@ -54,10 +53,10 @@ pub fn body<'a>(
             .scope
             .register_type_upsert(name_for_finish.clone(), identity, bind_index)
         {
-            Ok(kt_ref) => {
-                let kt = fctx.scope.region.alloc_ktype(kt_ref.clone());
-                Action::DoneWitnessed(fctx.scope.seal_value(Carried::Type(kt), None))
-            }
+            Ok(kt_ref) => Action::DoneWitnessed(fctx.scope.seal_value(
+                fctx.scope.region.alloc_ktype_witnessed(kt_ref.clone()),
+                None,
+            )),
             Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                 "<signature>",
                 format!("SIG {} body", name_for_finish),

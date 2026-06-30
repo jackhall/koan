@@ -21,7 +21,6 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_held, arg_object, arg_type, Action};
-    use crate::machine::model::Carried;
 
     let done_err = |e: KError| Action::Done(Err(e));
     let s = match arg_type(ctx.args, "sig") {
@@ -71,11 +70,11 @@ pub fn body<'a>(
             }
         }
     }
-    let kt = ctx.scope.region.alloc_ktype(KType::Signature {
+    let carrier = ctx.scope.region.alloc_ktype_witnessed(KType::Signature {
         sig: s,
         pinned_slots: pinned,
     });
-    Action::DoneWitnessed(ctx.scope.seal_value(Carried::Type(kt), None))
+    Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
 }
 
 #[cfg(test)]

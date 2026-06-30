@@ -537,8 +537,8 @@ fn alloc_engine_brand_coexists_with_sibling_alloc() {
     let region = KoanRegion::new();
     // The engine stores `value`, hands the brand-fresh `&'b KObject<'b>` to the closure, and lets only
     // the carrier escape — `Witnessed::resident` (the empty-witness constructor) names no `'b`.
-    let carrier: Witnessed<CarriedFamily, FrameSet> =
-        region.alloc::<KObject<'static>, _>(KObject::Number(1.0), |live| {
+    let carrier: Witnessed<CarriedFamily, FrameSet> = region
+        .alloc::<KObject<'static>, _>(KObject::Number(1.0), |live| {
             Witnessed::resident(Carried::Object(live))
         });
     // A sibling alloc into the same region coexists — the membership-table write and the prior store

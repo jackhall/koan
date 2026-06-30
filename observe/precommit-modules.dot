@@ -374,7 +374,6 @@ digraph {
     "koan::builtins::parameterized_types" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::machine::model::types" [label="uses", style="dashed"];
-    "koan::builtins::parameterized_types" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::print" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::print" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::print" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
@@ -591,7 +590,6 @@ digraph {
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::dispatch::constructors" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::dispatch::ctx" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::source" [label="uses", style="dashed"];
@@ -721,6 +719,7 @@ digraph {
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::single_poll" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::single_poll" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::submit" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::submit" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::submit" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
